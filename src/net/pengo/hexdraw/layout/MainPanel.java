@@ -1,4 +1,29 @@
 /*
+
+Qubero, binary editor
+http://www.qubero.org
+Copyright (C) 2002-2004 Peter Halasz
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+The GNU General Public License is distributed with this application, or is
+available at:
+- http://www.qubero.org/license.html
+- http://www.gnu.org/copyleft/gpl.html
+- or by writing to Free Software Foundation, Inc., 
+  59 Temple Place - Suite 330, Boston, MA  02111-1307, USA. 
+
+*/
+
+/*
  * MainPanel.java
  *
  * Will layout the Spacers. Allow adding/removing of spacers, Organise them into pages or sections. Split display, 
@@ -37,7 +62,7 @@ import net.pengo.splash.SimplySizedFont;
 
 /**
  *
- * @author  Que
+ * @author Peter Halasz
  */
 public class MainPanel extends JPanel implements BitSelectionListener, ActiveFileListener, ActionListHolder, MouseListener, MouseMotionListener {
     /**
@@ -67,15 +92,15 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     public void loadDefaults() {
     	col.clear();
     	
-    	TextTileSet tiles = new TextTileSet(hexFont, false);
-    	
-    	UnitSpacer unit = new UnitSpacer(tiles);
-    	col.addColumn(unit, 32);
     	
     	CodePage437 dosTiles= new CodePage437(dosFont, false);
     	UnitSpacer dosUnit = new UnitSpacer(dosTiles);
     	col.addColumn(dosUnit, 16);    	
     	
+    	TextTileSet tiles = new TextTileSet(hexFont, false);
+    	UnitSpacer unit = new UnitSpacer(tiles);
+    	col.addColumn(unit, 32);
+
     	AsciiTileSet asciiTiles = new AsciiTileSet(hexFont, false); // unicode?
     	UnitSpacer asciiUnit = new UnitSpacer(asciiTiles);
     	col.addColumn(asciiUnit, 16);
@@ -193,7 +218,8 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	
     	//System.out.println("d.getBitLength():" + d.getBitLength());
     	spacer.paint(g, activeFile.getActive().getData(), 
-    			new BitSegment(new BitCursor(), d.getBitLength()) );
+    			new BitSegment(new BitCursor(), d.getBitLength()),
+				selection);
     }
 
 	public void activeChanged(ActiveFileEvent e) {
@@ -228,40 +254,31 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	
 	// ************** MOUSE EVENTS ************** 
 	public void mouseClicked(MouseEvent e) {
-		
-		//FIXME: should do different things if you click on a selected thing or not
-
 		int clicks = e.getClickCount();
 		BitCursor len = activeFile.getActive().getData().getBitLength();
 		
-		if (clicks==1) {
-			
-			BitCursor clickbit = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.nearest, len );
-			
-			System.out.println("clicked (nearest): " + clickbit);
-			
-			if (e.isShiftDown()) {
-				selection.setLeadSelectionIndex(clickbit);
-			} else if (e.isControlDown()) {
-				selection.setAnchor(clickbit);
-			} else {
-				selection.clearSelection();
-				selection.setAnchor(clickbit);
-			}
-			
-			
-		} else if (clicks==2) {
+		if (clicks==2) {
 			BitCursor clickLeft = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.before, len );
 			BitCursor clickRight = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.after, len );
 			
+			//System.out.println("clicked between: " + clickLeft + " and " + clickRight);
+			
+			if (clickLeft == null || clickRight == null)
+				return;
+			
 			if (e.isControlDown()) {
-				selection.addSelectionInterval(new BitSegment(clickLeft, clickRight));
-				selection.setAnchor(clickLeft); //FIXME: is this needed?
+				selection.addSelectionInterval(new DirectionalSegment(clickLeft, clickRight));
 				
-				selection.setAnchor(clickLeft);
+//				selection.setAnchor(clickLeft);
+//				selection.setLeadSelectionIndex(clickRight);
+				
+				repaint();
+			} else if (e.isShiftDown()) {
+				//fixme: left or right depends on which direction you're coming from
 				selection.setLeadSelectionIndex(clickRight);
 			} else {
 				selection.setSelectionInterval(new DirectionalSegment(clickLeft, clickRight));
+				repaint();
 			}
 			
 		}
@@ -275,16 +292,59 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 
 	}
 	public void mousePressed(MouseEvent e) {
-		// TODO Auto-generated method stub
+		selection.setValueIsAdjusting(true);
 
+		
+		//FIXME: should do different things if you click on a selected thing or not
+
+		int clicks = e.getClickCount();
+		BitCursor len = activeFile.getActive().getData().getBitLength();
+		
+		BitCursor clickbit = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.nearest, len );
+		
+		//System.out.println("clicked (nearest): " + clickbit);
+		
+		if (clickbit==null)
+			return;
+		
+		if (e.isShiftDown()) {
+			//System.out.println("shift-click: setLeadSelectionIndex()");
+			selection.setLeadSelectionIndex(clickbit);
+			repaint();
+		} else if (e.isControlDown()) {
+			//System.out.println("ctrl-click: setAnchor()");
+			selection.setAnchor(clickbit);
+			repaint();
+		} else {
+			//System.out.println("click: setSelectionInterval()");
+//				selection.setSelectionInterval(new DirectionalSegment(clickbit, clickbit));
+
+			selection.clearSelection();
+			selection.setAnchor(clickbit);
+			
+			repaint();
+		}
+			
+		
 	}
 	public void mouseReleased(MouseEvent e) {
-		// TODO Auto-generated method stub
+		selection.setValueIsAdjusting(false);
 
 	}
     
 	public void mouseDragged(MouseEvent e) {
-		// TODO Auto-generated method stub
+		BitCursor len = activeFile.getActive().getData().getBitLength();
+		BitCursor clickbit = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.nearest, len );
+		
+		//System.out.println("clicked (nearest): " + clickbit);
+		
+		if (clickbit==null)
+			return;
+		
+
+		selection.setLeadSelectionIndex(clickbit);
+			
+		repaint();
 
 	}
 	public void mouseMoved(MouseEvent e) {

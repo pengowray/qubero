@@ -49,6 +49,7 @@ initial chunk types to support:
    http://www.w3.org/TR/xmlschema-2/#built-in-datatypes
    http://www.w3.org/TR/owl-guide/#Datatypes1
    XML binary compression: http://www.w3.org/2001/tag/issues.html#binaryXML-30
+ - XML-binary Optimized Packaging: http://www.w3.org/TR/2005/REC-xop10-20050125/
  - Simple Outline XML (SOX): http://www.langdale.com.au/SOX/
  - python's pickled objects
    see also: http://www.brpreiss.com/books/opus7/
@@ -471,6 +472,7 @@ silly/fun stuff:
    http://homepages.cwi.nl/~dik/english/codes/80col.html  (and parent page)
    punched tags, magnetic tapes, character recognition codes, morse codes (e.g. japanese morse code)
    http://homepages.cwi.nl/~dik/english/codes/
+ - freeciv's tiles (square, iso, and hexagonal)
 
 academic: (ideas from uni)
  - cladograms (and phylogenetic tree)
