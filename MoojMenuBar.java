@@ -36,11 +36,7 @@ class MoojMenuBar extends JMenuBar {
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("Edit");
-	nowmenu.add( new JMenuItem(new AbstractAction("Make Editable") { 
-            public void actionPerformed(ActionEvent e) { 
-                gui.setEditable(true);
-            }
-        }));
+        nowmenu.add("no undo.").setEnabled(false);
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("View");

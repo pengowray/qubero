@@ -30,6 +30,22 @@ class TransparentData extends Data {
         return new TransparentData(sourceData, start, length);
     }
 
+    /** shift is how far to shift the view of the source data. used for deletes */
+    public Data getSourceShiftedSelection(long start, long length, long shiftSource) {
+        // xxx: check bounds? in super method too..
+        return new ShiftedData(start, length, shiftSource, sourceData);
+    }
+    
+    public Data getStartShiftedSelection(long start, long length, long shiftStart) {
+        // xxx: check bounds? in super method too..
+        return new ShiftedData(sourceData, start, length, shiftStart);
+    }
+    
+    public Data getStartShiftedSelection(long shiftStart) {
+        return new ShiftedData(sourceData, getStart(), getLength(), shiftStart);
+    }    
+    
+    
     public long getStart() {
         return start;
     }

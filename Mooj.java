@@ -1,9 +1,8 @@
 import java.io.*;
-import javax.swing.JLabel;
 
 public class Mooj {
-
     public static void main(String[] arg) {
+        Splash.show();
         if (arg.length == 0) {
             ////arg = new String[] {"C:\\My Documents\\project-moojasm\\HexEditorGUI.class"}; // Mooj.class
             //rd = new DemoFileChunk();

@@ -6,16 +6,25 @@
 
 /**
  *
- * @author  administrator
+ * @author  Peter Halasz
  */
-public class SelectionResource extends Resource {
-    final protected Data sel;
+import javax.swing.*;
+
+public class SelectionResource extends Resource implements LongListSelectionListener {
+    //final protected Data sel;
     
-    public SelectionResource(OpenFile openFile, Data sel) {
+    public SelectionResource(OpenFile openFile) {
 	super(openFile);
-        this.sel = sel;
     }
     
+    public JMenu getJMenu() {
+        JMenu m = new JMenu(this.getClass().getName());
+        m.add(this.getClass().getName());
+        return m;
+    }
+    
+    
+    /*
     public Data getData() {
         return sel;
     }
@@ -27,14 +36,18 @@ public class SelectionResource extends Resource {
         
         return sel.getTransparentData();
     }
+    */
     
+    //xxx; reimplement?
+    /*
     public boolean equals(SelectionResource o) {
         if (o == this)
             return true;
         
+        openFile.getSelectionModel().eq
         return (sel.getStart() == o.sel.getStart() && sel.getLength() == o.sel.getLength());
     }
-    
+     
     public boolean equals(Object o) {
         if (o == this)
             return true;
@@ -45,4 +58,14 @@ public class SelectionResource extends Resource {
         
         return false;
     }
+    */
+    
+    /**
+     * Called whenever the value of the selection changes.
+     * @param e the event that characterizes the change.
+     *
+     */
+    public void valueChanged(LongListSelectionEvent e) {
+    }
+    
 }

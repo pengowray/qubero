@@ -14,15 +14,21 @@ abstract class Data implements Comparable {
      */
     //abstract public int getData(byte[] b, int off);
     
-    //XXX: throw out of bounds thing
+    //xxx: remove this method!
     public Data getSelection(long start, long length) {
         return new TransparentData(this, start, length);
     }
     
+    //xxx: NYI
+    //public Data getSelectionData(SelectionModel sm) {
+    //    return new DiffData(sm);
+    //}
+    
+    //XXX: throw out of bounds thing
     public TransparentData getTransparentData() {
         return getTransparentData(getStart(), getLength());
     }
-
+    
     public TransparentData getTransparentData(long start, long length) {
         return new TransparentData(this, start, length);
     }

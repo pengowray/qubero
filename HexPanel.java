@@ -7,6 +7,7 @@ import java.awt.geom.*;
 import java.io.*;
 import java.awt.dnd.*;
 import java.awt.datatransfer.*;
+import java.math.*;
 
 class HexPanel extends JPanel implements OpenFileListener, Scrollable, DropTargetListener { 
     protected OpenFile openFile = null;
@@ -111,7 +112,7 @@ class HexPanel extends JPanel implements OpenFileListener, Scrollable, DropTarge
         
         long MAX_PREC = 16777216;
         if (height > Integer.MAX_VALUE) {
-            System.out.println("Note: Very long file being displayed. Display height of " + height + " > Integer.MAX_VALUE (" + Integer.MAX_VALUE + ")" );
+            System.out.println("Warning: Very long file being displayed. Display height of " + height + " > Integer.MAX_VALUE (" + Integer.MAX_VALUE + ")" );
             System.out.println("      Size is " + (float)((double)height/Integer.MAX_VALUE)*100 + "% of Integer.MAX_VALUE" );
             System.out.println("      Size is " + (float)((double)height/MAX_PREC)*100 + "% of Max precise display height" );
         } else if (height > MAX_PREC ) {
@@ -415,12 +416,16 @@ class HexPanel extends JPanel implements OpenFileListener, Scrollable, DropTarge
                 // draw line of hex
                 boolean selected;
                 if (i+j >= selStart && i+j < selEnd) {
-                    g.setColor(Color.blue);
                     selected = true;
                 } else {
-                    g.setColor(Color.black);
                     selected = false;
                 }
+                if (selected) {
+                    g.setColor( new Color(170,170,255) ); // xxx: cache
+                    g.fillRect( lineStart + hexStart[j], (int)(lineHeight*linenum), hexStart[j+1]-hexStart[j], lineHeight);  //XXX: precision loss!
+                    g.fillRect( lineStart + hexStart[j], (int)(lineHeight*linenum), hexStart[j+1]-hexStart[j], lineHeight);  //XXX: precision loss!
+                }
+                g.setColor(Color.black);
                 g.drawString( byte2hex(b), lineStart + hexStart[j], (int)(charAscent + lineHeight*linenum)); //XXX: precision loss!
                 //g.drawString( byte2hex(b), (float)lineStart + hexStart[j], (float)(charAscent + lineHeight*linenum)); //XXX: precision loss?
                 
@@ -454,6 +459,11 @@ class HexPanel extends JPanel implements OpenFileListener, Scrollable, DropTarge
                     }
                     
                 } else {
+                    if (selected) {
+                        g.setColor( new Color(170,170,255) ); // xxx: cache
+                        g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j), (int)(lineHeight*linenum), charWidth, lineHeight); //XXX: precision loss!
+                    }
+                    g.setColor( Color.black ); 
                     g.drawString( byte2ascii(b), lineStart + hexStart[hexPerLine] + (charWidth*j), (int)(lineHeight*linenum + charAscent) ); //XXX: precision loss!
                 }
 		//ascii.append(byte2ascii(b));
@@ -461,12 +471,9 @@ class HexPanel extends JPanel implements OpenFileListener, Scrollable, DropTarge
 	    g.setColor(Color.black);
 
             // draw address:
-            String addr = i+":  ";
+            String addr = BigInteger.valueOf(i).toString(16)+":  ";
             g.setColor(Color.darkGray);
             g.drawString( addr,lineStart - fm.stringWidth(addr),(int)(lineHeight*linenum + charAscent)); //XXX: precision loss!
-            if ((long)lineHeight*linenum + charAscent > Integer.MAX_VALUE) {
-                System.out.println("Error! losing precision when drawStringing");
-            }
             linenum++;
         }
     }

@@ -12,6 +12,7 @@ class HexEditorGUI {
 
     protected JFrame jframe;
     protected HexPanel hexpanel;
+    protected HexTable hextable;
     protected JLabel statusbar;
     protected MoojTree moojtree;
     protected MoojMenuBar mmb;
@@ -50,23 +51,35 @@ class HexEditorGUI {
         
 	// CREATE THE COMPONENTS
 	moojtree = MoojTree.create(openFile);
-	hexpanel = new HexPanel(openFile);
+	//hexpanel = new HexPanel(openFile);
+        //LineRepeater hexpanel2 = new LineRepeater(openFile.getData());
+        //HexTable hexpanel3 = new HexTable(openFile.getData());
+        HexTable hexpanel = new HexTable(openFile);
 	statusbar = new JLabel("Mooj Data Modeller and Hex Editor");
 	mmb = new MoojMenuBar(this);
 
 	// ARRANGE THEM IN A FRAME
-        jframe = new JFrame(openFile + titleSuffix );
+        jframe = new JFrame(openFile + titleSuffix) {
+            public void paint(Graphics g) {
+                super.paint(g);
+                FontMetricsCache.singleton().lendGraphics(g); //xxx: only need to do this once?
+            }
+        };
+        
         jframe.setIconImage(icon);
 	jframe.setJMenuBar(mmb);
         JScrollPane sp_hexpanel = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, 
 						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        //JScrollPane sp_hexpanel = new JScrollPane(hextable, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, 
+	//					  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         sp_hexpanel.getViewport().setBackground(Color.white); //XXX: doesn't work!
         
         JScrollPane sp_moojtree = new JScrollPane(moojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, 
 						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         
 	JSplitPane splitpane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sp_moojtree, sp_hexpanel);
-        splitpane.setResizeWeight(1);
+        //splitpane.setResizeWeight(1);
+        //splitpane.setResizeWeight(.5);
 
         //jframe.setContentPane(sp_hexpanel);
         
@@ -81,6 +94,7 @@ class HexEditorGUI {
         int FRAMEBORDER = 15; //XXX: cant work this out properly :/
         int treewidth = jframe.getWidth() - 
             (FRAMEBORDER + sp_hexpanel.getVerticalScrollBar().getWidth() + hexpanel.getPreferredSize().width + splitpane.getDividerSize());
+        
         //int treewidth = c.getWidth() - hexpanel.getWidth();
         splitpane.setDividerLocation(treewidth);
 
@@ -195,6 +209,7 @@ class HexEditorGUI {
         hexpanel.setGreyMode(mode);
     }
     
+    /*
     public void setEditable(boolean editable) {
         if (editable) {
             Data oldData = openFile.getData();
@@ -206,6 +221,7 @@ class HexEditorGUI {
             //xxx: not reversible!
         }
     }
+    */
     
     public Image getIcon() {
         return icon;

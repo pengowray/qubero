@@ -10,14 +10,15 @@ import java.io.*;
  * //XXX: needs to be renamed (e.g. OpenFileNode or TopFileNode or something)
  */
 
-class OpenFile { // previously did extend DefaultMutableTreeNode
+class OpenFile implements LongListSelectionListener { // previously did extend DefaultMutableTreeNode
+    
     protected Data rawdata;
     
     protected EventListenerList listenerList = new EventListenerList();
-   
-    protected HexPanel hexpanel; //XXX: allow multiple?
 
-    protected SelectionResource selection;
+    protected SelectionResource selectionResource; // was called 'selection'
+    protected boolean isSelectiomResourcePublished = false;
+    protected LongListSelectionModel selectionModel;
     
     protected String filename;
     
@@ -112,6 +113,50 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         }
     }
     
+    public void setSelectionModel(LongListSelectionModel selectionModel) {
+        if (this.selectionModel != null) {
+            this.selectionModel.removeLongListSelectionListener(this);
+        }
+        
+        this.selectionModel = selectionModel;
+        selectionModel.addLongListSelectionListener(this);
+        isSelectiomResourcePublished = false;
+        
+        updateSelectionResource();
+    }
+    
+    public LongListSelectionModel getSelectionModel() {
+        return selectionModel;
+    }
+
+    /**
+     * Called whenever the value of the selection changes.
+     * @param e the event that characterizes the change.
+     *
+     */
+    public void valueChanged(LongListSelectionEvent e) {
+        // OpenFile now responsible for creating the selection resource ?
+        if (!e.getValueIsAdjusting()) {
+            updateSelectionResource();
+            
+        }
+    }
+    
+    
+    protected void updateSelectionResource() {
+        if (selectionModel.isSelectionEmpty() && isSelectiomResourcePublished) {
+            isSelectiomResourcePublished = false;
+            fireResourceRemoved(this,"Selection",selectionResource);
+        } else if (!selectionModel.isSelectionEmpty() && !isSelectiomResourcePublished) {
+            if (selectionResource == null) {
+                selectionResource = new SelectionResource(this);
+            }
+            isSelectiomResourcePublished = true;
+            fireResourceAdded(this,"Selection",selectionResource);
+        }
+    }
+
+    /*
     protected void fireSelectionMade(Object source, SelectionResource resource) {
         Object[] listeners = listenerList.getListenerList();
         SelectionEvent event = null;
@@ -144,6 +189,7 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         }
     }
 
+    
     public void setSelection(Object source, Data data){
         setSelection(source, new DefaultSelectionResource(this, data));
     }
@@ -180,6 +226,7 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         fireSelectionCleared(source);
         
     }
+    */
 
     public void addBreak(Object source, DefinitionResource defRes) {
         definitionResList.add(defRes);
@@ -257,6 +304,5 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
     public String toString() {
 	return rawdata.toString();
     }
-
 
 }
