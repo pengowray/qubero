@@ -28,8 +28,8 @@ public class DemoData extends ArrayData {
     
     public DemoData(Image logo) {
         super();
-        byte[] msg = "welcome to mooj!".getBytes();
-        byte[] boiler = "Mooj (c) 2002 Peter Halasz".getBytes();
+        byte[] msg = "Welcome to Qubero!".getBytes();
+        byte[] boiler = "Qubero (c) 2002-2004 Peter Halasz".getBytes();
         int length = 1024 + boiler.length;
 
 	byteArray = new byte[length];

@@ -6,10 +6,12 @@
 
 package net.pengo.dependency;
 
+import net.pengo.resource.*;
+
 public class DefaultDepLink
 {
-    private QNode source;
-    private QNode sink;
+    private Resource source;
+    private Resource sink;
     
     /**
      * Constructor
@@ -17,7 +19,7 @@ public class DefaultDepLink
      * @param    source              a  QNode
      * @param    sink                a  QNode
      */
-    public DefaultDepLink(QNode source, QNode sink) {
+    public DefaultDepLink(Resource source, Resource sink) {
 	this.source = source;
 	this.sink = sink;
     }
@@ -27,7 +29,7 @@ public class DefaultDepLink
      *
      * @param    Source              a  QNode
      */
-    public void setSource(QNode source) {
+    public void setSource(Resource source) {
 	this.source = source;
     }
     
@@ -36,7 +38,7 @@ public class DefaultDepLink
      *
      * @return    a  QNode
      */
-    public QNode getSource() {
+    public Resource getSource() {
 	return source;
     }
     
@@ -45,7 +47,7 @@ public class DefaultDepLink
      *
      * @param    Sink                a  QNode
      */
-    public void setSink(QNode sink) {
+    public void setSink(Resource sink) {
 	this.sink = sink;
     }
     
@@ -54,7 +56,7 @@ public class DefaultDepLink
      *
      * @return    a  QNode
      */
-    public QNode getSink() {
+    public Resource getSink() {
 	return sink;
     }
 }

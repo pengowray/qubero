@@ -5,9 +5,6 @@
  */
 
 package net.pengo.resource;
-import java.util.List;
-import net.pengo.app.OpenFile;
-import net.pengo.selection.LongListSelectionModel;
 
 //xxx: should just be an interface.
 

@@ -18,8 +18,11 @@ public class NamePage extends EditablePage {
     private Resource res;
     private JTextField inputField;
     
-    /** Creates a new instance of ValuePage */
-    public NamePage(Resource res, AbstractResourcePropertiesForm form) {
+     public NamePage(Resource res) {
+         this(res, null);
+     }
+     
+    public NamePage(Resource res, PropertiesForm form) {
         super(form);
         this.res = res;
         this.form = form;

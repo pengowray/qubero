@@ -8,7 +8,6 @@ package net.pengo.resource;
 
 import net.pengo.app.OpenFile;
 import net.pengo.data.SelectionData;
-import net.pengo.dependency.QNode;
 import net.pengo.selection.LongListSelectionModel;
 
 public class DefaultSelectionResource extends SelectionResource
@@ -22,10 +21,10 @@ public class DefaultSelectionResource extends SelectionResource
             getSelection().addLongListSelectionListener(this);
 	}
 
-	public QNode[] getSources()
+	public Resource[] getSources()
 	{
 		//xxx: umm.. this acts as a primative?
-		return new QNode[]{};
+		return new Resource[]{};
 	}
 	
 	public void setSelection(LongListSelectionModel sel) {

@@ -6,8 +6,7 @@
 
 package net.pengo.resource;
 
-import net.pengo.dependency.QNode;
-import net.pengo.propertyEditor.BooleanPrimativeResourcePropertiesForm;
+import net.pengo.propertyEditor.ResourceForm;
 
 
 public class BooleanPrimativeResource  extends BooleanResource
@@ -18,9 +17,9 @@ public class BooleanPrimativeResource  extends BooleanResource
         this.value = value;
     }
     
-    public QNode[] getSources() {
+    public Resource[] getSources() {
         // primatives can have no sources.
-        return new QNode[]{};
+        return new Resource[]{};
     }
     
     public boolean isPrimative() {
@@ -34,10 +33,13 @@ public class BooleanPrimativeResource  extends BooleanResource
     public void setValue(boolean b) {
         value = b;
     }
-    
+
+    /*
     public void editProperties() {
-        new BooleanPrimativeResourcePropertiesForm(this).show();
+        //new BooleanPrimativeResourcePropertiesForm(this).show();
+        new ResourceForm(this).show();
     }
+    */
     
 }
 

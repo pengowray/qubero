@@ -36,6 +36,7 @@
     <!-- Put everything in ${build} into the ${dist-bin-file} -->
     <jar jarfile="${dist-bin-file}"   basedir="${build}" manifest="mf.txt"/>
     <jar jarfile="${dist-latest-bin}" basedir="${build}" manifest="mf.txt"/>
+    
   </target>
 
   <target name="backup" depends="compile"

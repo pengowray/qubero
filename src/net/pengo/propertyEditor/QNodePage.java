@@ -8,15 +8,15 @@ package net.pengo.propertyEditor;
 
 import javax.swing.JTextPane;
 
-import net.pengo.resource.QNodeResource;
+import net.pengo.resource.Resource;
 
 
 
 public class QNodePage extends PropertyPage {
-    private QNodeResource res;
+    private Resource res;
     
     /** Creates a new instance of SummaryPage */
-    public QNodePage(QNodeResource res) {
+    public QNodePage(Resource res) {
         super();
         this.res = res;
         build();

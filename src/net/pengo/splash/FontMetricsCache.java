@@ -19,8 +19,14 @@ public class FontMetricsCache {
         fontMap = new HashMap();
         allFound = true;
         
+        //***********
         // put registrations here:
+        
         registerFontToFind("hex", new Font("Monospaced", Font.PLAIN, 11) );
+        registerFontToFind("hex.big", new Font("Monospaced", Font.PLAIN, 15) );
+        
+        //***********
+        
     }
 
     public static FontMetricsCache singleton() {
@@ -44,6 +50,7 @@ public class FontMetricsCache {
             }
         }
         allFound = true;
+        //System.out.println("all found:" + allFound);
     }
     
     /** register a font you will later need the font metrics for.
@@ -56,18 +63,22 @@ public class FontMetricsCache {
         
         fontMap.put(f, null);
         allFound = false;
+        //System.out.println("added \"" + name + "\" -- " + f);
     }
     
     public FontMetrics getFontMetrics(String name) {
         //FIXME: block until font comes in?
+        //System.out.println("getting metrics" + name);
         return (FontMetrics)fontMap.get((Font)fontNameMap.get(name));
     }
     
     public FontMetrics getFontMetrics(Font f) {
+        //System.out.println("getting metrics" + f);
         return (FontMetrics)fontMap.get(f);
     }
     
     public Font getFont(String name) {
+        //System.out.println("getting font" + name);
         return (Font)fontNameMap.get(name);
     }
 }

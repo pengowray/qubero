@@ -8,7 +8,7 @@ import net.pengo.pointer.ResourceRegistry;
  *
  */
 
-public abstract class DefinitionResource extends QNodeResource //implements DependencyListener
+public abstract class DefinitionResource extends Resource //implements DependencyListener
 {
 
     //Subresources must be definition resources?

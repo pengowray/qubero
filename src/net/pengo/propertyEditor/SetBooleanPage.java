@@ -20,7 +20,11 @@ public class SetBooleanPage extends EditablePage {
     private JComboBox type;
     
     /** Creates a new instance of SetBooleanPage */
-    public SetBooleanPage(BooleanResource boolRes, AbstractResourcePropertiesForm form) {
+    public SetBooleanPage(BooleanResource boolRes) {
+        this(boolRes, null);
+    }
+    
+    public SetBooleanPage(BooleanResource boolRes, PropertiesForm form) {
         super(form);
         this.boolRes = boolRes;
 

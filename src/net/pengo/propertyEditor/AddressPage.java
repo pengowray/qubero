@@ -7,7 +7,7 @@
 package net.pengo.propertyEditor;
 
 import net.pengo.resource.AddressedResource;
-import net.pengo.resource.QNodeResource;
+import net.pengo.resource.Resource;
 import net.pengo.resource.SelectionResource;
 
 /**
@@ -19,8 +19,11 @@ import net.pengo.resource.SelectionResource;
 public class AddressPage extends MethodSelectionPage {
     private AddressedResource res;
     
-    /** Creates a new instance of AddressPage */
-    public AddressPage(AddressedResource res, AbstractResourcePropertiesForm form) {
+    public AddressPage(AddressedResource res){
+        this(res,null);
+    }
+    
+    public AddressPage(AddressedResource res, PropertiesForm form) {
         super(form, new PropertyPage[] {
                 new SimpleAddressPage(res,form), 
                 new TextOnlyPage("Multi-selection","NYI"),
@@ -31,11 +34,12 @@ public class AddressPage extends MethodSelectionPage {
         
         build();
     }
+
     
     public void buildOp() {
         if (res != null && modded == false) {
             SelectionResource sel = res.getSelectionResource();
-            if (sel.isOwner((QNodeResource)res)) {
+            if (((Resource)res).isOwner(res.getSelectionResource())) {
 	            if (sel.getSelection().getSegmentCount() > 1) {
 	                setSelected(1);
 	            }

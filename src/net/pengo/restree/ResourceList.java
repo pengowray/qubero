@@ -1,7 +1,13 @@
 /**
  * ResourceList.java
  *
- * @author Created by Omnicore CodeGuide
+ * (as oppposed to ListResource)
+ * 
+ *  A list which will update trees automatically as items are added and removed.
+ * 
+ *  A ResourceFactory is used to turn objects into tree nodes
+ *
+ * @author Peter Halasz
  */
 
 package net.pengo.restree;
@@ -22,7 +28,6 @@ public class ResourceList implements List {
     String name;
     private List list;
     private ResourceFactory resFact;
-    
     private Map parentTree = new HashMap(); // parent nodes for this resource list. MutableTreeNode->JTree. MutableTreeNode must not be modified by any other objects besides this.
     
     public ResourceList(List list) {

@@ -16,13 +16,17 @@ import javax.swing.event.DocumentListener;
  * @author  Peter Halasz
  */
 public abstract class EditablePage extends PropertyPage implements DocumentListener  {
-    protected AbstractResourcePropertiesForm form;
+    protected PropertiesForm form;
     protected boolean modded = false;
     private boolean building = false; // if updating, ignore mods
     
     /** Creates a new instance of Class */
-    public EditablePage(AbstractResourcePropertiesForm form) {
-        this.form = form;
+    public EditablePage() {
+        // note: form must be set before use
+    }
+    
+    public EditablePage(PropertiesForm form) {
+       setForm(form);
     }
     
     public void save() {
@@ -43,7 +47,7 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
     public void mod() {
         if (!building) {
             modded = true;
-            form.mod();
+            form.mod(this);
         }
     }
     
@@ -65,7 +69,6 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
         mod();
     }
     
-    
     protected ActionListener getSaveActionListener() {
         return new ActionListener() {
             public void actionPerformed(ActionEvent e) {
@@ -84,4 +87,12 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
     
     
     
+    public PropertiesForm getForm() {
+        return form;
+    }
+
+    public void setForm(PropertiesForm form) {
+        this.form = form;
+    }
+
 }

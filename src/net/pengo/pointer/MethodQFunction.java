@@ -8,8 +8,8 @@ package net.pengo.pointer;
 
 import java.lang.reflect.Method;
 
-import net.pengo.dependency.QNode;
-import net.pengo.resource.QNodeResource;
+import net.pengo.resource.Resource;
+import net.pengo.resource.Resource;
 
 /**
  * @author Smiley
@@ -37,11 +37,11 @@ public class MethodQFunction extends QFunction {
         //Class ret = m.getReturnType();
     }
 
-    public void invoke(SmartPointer result, QNodeResource obj, QNodeResource[] param){
+    public void invoke(SmartPointer result, Resource obj, Resource[] param){
         try {
             Object ret;
             ret = method.invoke(obj, param);
-            result.setValue((QNodeResource)ret);
+            result.setValue((Resource)ret);
         } catch (Exception e) {
             //FIXME
             e.printStackTrace();
@@ -55,7 +55,7 @@ public class MethodQFunction extends QFunction {
         return method.getParameterTypes();
     }
 
-    public QNode[] getSources() {
+    public Resource[] getSources() {
         return null;
     }
 

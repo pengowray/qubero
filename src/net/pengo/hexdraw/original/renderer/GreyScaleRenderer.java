@@ -4,18 +4,17 @@ import java.awt.Color;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 
-import net.pengo.hexdraw.original.HexPanel;
+import net.pengo.hexdraw.original.Place;
 
 public class GreyScaleRenderer extends SeperatorRenderer {
 
-    public GreyScaleRenderer(HexPanel hexpanel, boolean render) {
-        super(hexpanel, render);
-        setEnabled(render);
+    public GreyScaleRenderer(FontMetrics fm, int columnCount, boolean render) {
+        super(fm, columnCount, render);
     }
 
-    public int renderBytes( Graphics g, long lineNumber,
+    public void renderBytes( Graphics g, long lineNumber,
             byte ba[], int baOffset, int baLength, boolean selecta[],
-            int columnWidth ) {
+            Place cursor) {
     	//// draw grey scale:
         FontMetrics fm = g.getFontMetrics();
         
@@ -35,11 +34,20 @@ public class GreyScaleRenderer extends SeperatorRenderer {
 	        g.fillRect(i *charsWidth, 0, charsWidth, charsHeight);
         }
         
-        return columnWidth * charsWidth;
+        //return columnCount * charsWidth;
     }
+
+    public int getWidth() {
+        return fm.getHeight() * columnCount;
+    }    
+    
+    public long whereAmI(int x, int y, long lineAddress){
+        //height is same as width (square pieces)
+        return lineAddress + (x / fm.getHeight());
+    }     
     
     public String toString() {
-        return "Grey scale";
+        return "Grey scale (unsigned)";
     }
 
 }

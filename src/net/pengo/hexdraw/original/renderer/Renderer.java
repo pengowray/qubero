@@ -1,28 +1,37 @@
 package net.pengo.hexdraw.original.renderer;
 
+import java.awt.FontMetrics;
 import java.awt.Graphics;
+
+import net.pengo.hexdraw.original.Place;
 
 public interface Renderer {
 
-    public int renderBytes( Graphics g, long lineNumber,
+    public void renderBytes( Graphics g, long lineNumber,
             byte ba[], int baOffset, int baLength, boolean selecta[],
-            int columnWidth );
+            Place cursor);
+    
+    public int getWidth();
         
     public boolean isEnabled();
     public void setEnabled(boolean render);
         
     public String toString();
-
+    
+    public void addRendererListener(RendererListener l);
+    public void removeRendererListener(RendererListener l);
+    
+    public long whereAmI(int x, int y, long lineAddress);
+    
+    public void setColumnCount(int cc);
+    public void setFontMetrics(FontMetrics fm);
 }
 
 
 /*
- * todo two things
+ * todo 
  * 
- * 1) allow proper canvase drawing size, either by
+ * 1) allow proper canvase drawing size, by
  *   a) g.setClipBounds like I am doing, demonstrate shinking, it shrinks drawing range.
- *   b) does scrollbar size/horizontal position manage the size of the panel viewort ?
- *      where is create(x,y) called from ?
- * 2) repaint is being called, but its not always accurate, resize fixes, or hard refresh.
  * 
  */

@@ -2,36 +2,61 @@ package net.pengo.hexdraw.original.renderer;
 
 import java.awt.FontMetrics;
 import java.awt.Graphics;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 
 import net.pengo.hexdraw.original.HexPanel;
+import net.pengo.hexdraw.original.Place;
 
 public class SeperatorRenderer implements Renderer {
 
     private	String seperator = "  ";
     
     private boolean	render;
-    private HexPanel hexpanel;
+    private HexPanel hexpanel; // for repainting
+    protected List listeners = new ArrayList();
+    protected FontMetrics fm;
+    protected int columnCount; 
     
-    public int renderBytes( Graphics g, long lineNumber,
-            byte ba[], int baOffset, int baLength, boolean selecta[],
-            int columnWidth ) {
-    	FontMetrics fm = g.getFontMetrics();
-        g.drawString(seperator, 0, fm.getAscent() );
-        return fm.bytesWidth(seperator.getBytes(), 0, seperator.length()); 
-    }
-    
-    
-    public SeperatorRenderer(HexPanel hexpanel, boolean render) {
-        super();
-        this.hexpanel = hexpanel;
+    public SeperatorRenderer(FontMetrics fm, int columnCount, boolean render) {
+        setFontMetrics(fm);
+        setColumnCount(columnCount);
         setEnabled(render);
     }
+    
+    public void setFontMetrics(FontMetrics fm) {
+       this.fm = fm;
+       updateWidth();
+    }
+
+    public void setColumnCount(int columnCount) {
+        this.columnCount = columnCount;
+        updateWidth();
+    }
+    
+    public void renderBytes( Graphics g, long lineNumber,
+            byte ba[], int baOffset, int baLength, boolean selecta[],
+            Place cursor) {
+    	FontMetrics fm = g.getFontMetrics();
+        g.drawString(seperator, 0, fm.getAscent() );
+        //return fm.bytesWidth(seperator.getBytes(), 0, seperator.length()); 
+    }
+
+    public int getWidth() {
+        return fm.stringWidth(seperator);
+    }
+    
+    public long whereAmI(int x, int y, long lineAddress){
+        return -1;
+    }
+    
     public boolean isEnabled() {
         return render;
     }
     public void setEnabled(boolean render) {
         this.render = render;
-        hexpanel.repaint();
+        updateEnabled();
    	}
     
     public HexPanel getPanel() {
@@ -42,6 +67,39 @@ public class SeperatorRenderer implements Renderer {
         return "_";
     }
 
+    public void addRendererListener(RendererListener l) {
+        listeners.add(l);
+    }
+    
+    public void removeRendererListener(RendererListener l) {
+        listeners.remove(l);
+    }
+    
+    /** call when width is changed */
+    protected void updateWidth() {
+        for (Iterator iter = listeners.iterator(); iter.hasNext();) {
+            RendererListener l = (RendererListener)iter.next();
+            l.rendererWidthUpdated();
+        }
+    }
+    
+    /** call when display is changed (but not width) */
+    protected void updateDisplay(){
+        for (Iterator iter = listeners.iterator(); iter.hasNext();) {
+            RendererListener l = (RendererListener)iter.next();
+            l.rendererDisplayUpdated();
+        }
+    }
+
+
+    protected void updateEnabled(){
+        for (Iterator iter = listeners.iterator(); iter.hasNext();) {
+            RendererListener l = (RendererListener)iter.next();
+            l.rendererEnabledUpdated(this);
+        }
+    }
+    
+    //public int 
 }
 
 

@@ -16,7 +16,6 @@ package net.pengo.resource;
 import javax.swing.JMenu;
 import javax.swing.JSeparator;
 
-import net.pengo.dependency.QNode;
 import net.pengo.pointer.JavaPointer;
 
 /**
@@ -32,8 +31,8 @@ public class DefaultDefinitionResource extends DefinitionResource implements Add
     
     //final protected LongListSelectionModel sel;
     
-    public QNode[] getSources() {
-        return new QNode[]{};
+    public Resource[] getSources() {
+        return new Resource[]{};
     }
     
     public void editProperties(){};
@@ -52,7 +51,7 @@ public class DefaultDefinitionResource extends DefinitionResource implements Add
     }
     
     public String valueDesc() {
-        return selResP.evalute().valueDesc();
+        return selResP.evaluate().valueDesc();
     }    
     
     public void doubleClickAction() {
@@ -69,7 +68,7 @@ public class DefaultDefinitionResource extends DefinitionResource implements Add
     
     
     
-    public void removeSink(QNode sink) {
+    public void removeSink(Resource sink) {
         sinkCount--;
     }
     
@@ -77,12 +76,12 @@ public class DefaultDefinitionResource extends DefinitionResource implements Add
         return sinkCount;
     }
     
-    public void addSink(QNode sink) {
+    public void addSink(Resource sink) {
         sinkCount++;
     }
 
     public SelectionResource getSelectionResource() {
-        return (SelectionResource)selResP.evalute();
+        return (SelectionResource)selResP.evaluate();
     }
     
     public void setSelectionResource(SelectionResource selRes) {

@@ -19,7 +19,7 @@ public class SetTypePage extends EditablePage {
     private JComboBox type;
     
     /** Creates a new instance of SummaryPage */
-    public SetTypePage(IntAddressedResource res, AbstractResourcePropertiesForm form) {
+    public SetTypePage(IntAddressedResource res, PropertiesForm form) {
         super(form);
         this.res = res;
 

@@ -22,7 +22,7 @@ public class SimpleAddressPage extends EditablePage {
     private JTextField addressField;
     private JTextField lengthField;
     
-    public SimpleAddressPage(AddressedResource res, AbstractResourcePropertiesForm form) {
+    public SimpleAddressPage(AddressedResource res, PropertiesForm form) {
         super(form);
         this.res = res;
         

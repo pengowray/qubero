@@ -6,7 +6,6 @@
  */
 package net.pengo.resource;
 
-import net.pengo.dependency.QNode;
 import net.pengo.pointer.JavaPointer;
 import net.pengo.pointer.MethodQFunction;
 import net.pengo.pointer.SmartPointer;
@@ -23,7 +22,7 @@ public class ListResource extends DefinitionResource {
     public final MethodQFunction elementAt = new MethodQFunction();
     public final MethodQFunction setElement = new MethodQFunction();
     
-    private QNodeResource[] array;
+    private Resource[] array;
     
     /**
      * @param openFile
@@ -35,7 +34,7 @@ public class ListResource extends DefinitionResource {
 		this.length.setValue(length);
 		
 		//FIXME: array length limited to int sizes
-		array = new QNodeResource[length.getValue().intValue()];
+		array = new Resource[length.getValue().intValue()];
 
 		elementAt.setName("element at");
 		elementAt.addSink(this);
@@ -45,7 +44,7 @@ public class ListResource extends DefinitionResource {
 		
 		try {
 		    elementAt.setValue(getClass().getMethod("elementAt",new Class[]{IntResource.class}));
-		    setElement.setValue(getClass().getMethod("setElement",new Class[]{IntResource.class, QNodeResource.class}));
+		    setElement.setValue(getClass().getMethod("setElement",new Class[]{IntResource.class, Resource.class}));
 		} catch (NoSuchMethodException e) {
             //FIXME: in theory, should be caught happen compile time
             // TODO: handle exception
@@ -54,11 +53,11 @@ public class ListResource extends DefinitionResource {
         
     }
     
-    public QNodeResource elementAt(IntResource index) {
+    public Resource elementAt(IntResource index) {
         return array[index.getValue().intValue()];
     }
 
-    public void setElement(IntResource index, QNodeResource value) {
+    public void setElement(IntResource index, Resource value) {
         array[index.getValue().intValue()] = value;
     }
 
@@ -70,12 +69,8 @@ public class ListResource extends DefinitionResource {
 
     }
 
-    /* (non-Javadoc)
-     * @see net.pengo.dependency.QNode#getSources()
-     */
-    public QNode[] getSources() {
-        // TODO Auto-generated method stub
-        return null;
+    public Resource[] getSources() {
+        return new Resource[] { length };
     }
 
 }

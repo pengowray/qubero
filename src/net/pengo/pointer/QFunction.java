@@ -6,13 +6,13 @@
  */
 package net.pengo.pointer;
 
-import net.pengo.resource.QNodeResource;
+import net.pengo.resource.Resource;
 
 /**
  * @author Smiley
  *
  */
-abstract public class QFunction extends QNodeResource {
+abstract public class QFunction extends Resource {
 
     /**
      * @param openFile
@@ -29,10 +29,10 @@ abstract public class QFunction extends QNodeResource {
     //FIXME: add access bits (public/protected/etc)
     //FIXME: add continuation as a param
     
-    abstract public void invoke(SmartPointer result, QNodeResource obj, QNodeResource[] param);
+    abstract public void invoke(SmartPointer result, Resource obj, Resource[] param);
     
     /** for your convenience */
-    public SmartPointer invoke(QNodeResource obj, QNodeResource[] param){
+    public SmartPointer invoke(Resource obj, Resource[] param){
         SmartPointer sp = new SmartPointer();
         invoke(sp, obj, param);
         return sp;

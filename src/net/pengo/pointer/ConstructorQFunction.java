@@ -9,8 +9,8 @@ package net.pengo.pointer;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 
-import net.pengo.dependency.QNode;
-import net.pengo.resource.QNodeResource;
+import net.pengo.resource.Resource;
+import net.pengo.resource.Resource;
 
 /**
  * @author Peter Halasz
@@ -32,9 +32,9 @@ public class ConstructorQFunction extends QFunction {
     
     
     /* obj always = null */
-    public void invoke(SmartPointer result, QNodeResource obj, QNodeResource[] param) {
+    public void invoke(SmartPointer result, Resource obj, Resource[] param) {
         try {
-            result.setValue((QNodeResource)cons.newInstance(param));
+            result.setValue((Resource)cons.newInstance(param));
         } catch (InstantiationException e) {
             // TODO: handle exception
             e.printStackTrace();
@@ -50,7 +50,7 @@ public class ConstructorQFunction extends QFunction {
         return cons.getParameterTypes();
     }
 
-    public QNode[] getSources() {
+    public Resource[] getSources() {
         // TODO Auto-generated method stub
         return null;
     }

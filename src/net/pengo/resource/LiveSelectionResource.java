@@ -18,7 +18,6 @@ import net.pengo.data.DataEvent;
 import net.pengo.data.DemoData;
 import net.pengo.data.DiffData;
 import net.pengo.data.SelectionData;
-import net.pengo.dependency.QNode;
 import net.pengo.selection.LongListSelectionModel;
 import net.pengo.selection.Segment;
 
@@ -36,10 +35,10 @@ public class LiveSelectionResource extends SelectionResource implements OpenFile
         return openFile.getSelectionModel();
     }    
     
-    public QNode[] getSources()
+    public Resource[] getSources()
     {
         //  xxx:
-        return new QNode[]{};
+        return new Resource[]{};
     }
     public SelectionData getSelectionData() {
         if (selData == null)
@@ -58,7 +57,7 @@ public class LiveSelectionResource extends SelectionResource implements OpenFile
 
         TypeRegistry.instance().giveConversionActions(menu, toDefaultSelectionResource());
         menu.add(new JSeparator());
-        
+        /*
         Action addToTemplate = new AbstractAction("Add to template (ugh! replace!!)") {
             public void actionPerformed(ActionEvent e) {
                 LongListSelectionModel selection = (LongListSelectionModel)(getOpenFile().getSelectionModel().clone());
@@ -68,6 +67,7 @@ public class LiveSelectionResource extends SelectionResource implements OpenFile
             }
         };
         menu.add(addToTemplate);
+        */
         
         final Data data = getOpenFile().getData();
         if (data instanceof DiffData) {

@@ -10,24 +10,23 @@ package net.pengo.resource;
 
 import net.pengo.app.OpenFile;
 import net.pengo.data.SelectionData;
-import net.pengo.dependency.QNode;
 import net.pengo.selection.LongListSelectionModel;
 import net.pengo.selection.SimpleLongListSelectionModel;
 
 public class AddressResource extends SelectionResource
 {
-	
-
-	public QNode[] getSources()
-	{
-		return new QNode[]{address, length};
-	}
-	
+    
     private IntResource address;
     private IntResource length;
 
     private LongListSelectionModel sel;
     private SelectionData selData; // cache thing
+    
+	public Resource[] getSources()
+	{
+		return new Resource[]{address, length};
+	}
+
     
     AddressResource(OpenFile of, IntResource address, IntResource length) {
         super(of);
@@ -88,9 +87,6 @@ public class AddressResource extends SelectionResource
         return getSelection().toString();
     }
 
-    /* (non-Javadoc)
-     * @see net.pengo.resource.QNodeResource#editProperties()
-     */
 
 }
 

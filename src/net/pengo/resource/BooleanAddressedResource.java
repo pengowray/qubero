@@ -12,9 +12,7 @@ import java.io.InputStream;
 import net.pengo.data.ArrayData;
 import net.pengo.data.Data;
 import net.pengo.data.SelectionData;
-import net.pengo.dependency.QNode;
 import net.pengo.pointer.JavaPointer;
-import net.pengo.propertyEditor.BooleanAddressedResourcePropertiesForm;
 
 public class BooleanAddressedResource extends BooleanResource implements AddressedResource {
     public final JavaPointer selResP = new JavaPointer("net.pengo.resource.SelectionResource"); //private SelectionResource selRes;
@@ -27,13 +25,16 @@ public class BooleanAddressedResource extends BooleanResource implements Address
     }
     public BooleanAddressedResource(SelectionResource selRes, IntResource rbit) {
         selResP.addSink(this);
+        selResP.setName("Selection");
+        
         rbitP.addSink(this);
+        rbitP.setName("Bit index");
         setSelectionResource(selRes);
         setRbit(rbit);
     }
     
-    public QNode[] getSources() {
-	return new QNode[]{selResP,rbitP};
+    public Resource[] getSources() {
+	return new Resource[]{selResP,rbitP};
     }
     
     public net.pengo.restree.ResourceList getSubResources() {
@@ -45,7 +46,7 @@ public class BooleanAddressedResource extends BooleanResource implements Address
     }
     
     public IntResource getRbit() {
-	return (IntResource)rbitP.evalute();
+	return (IntResource)rbitP.evaluate();
     }
     
     public JavaPointer getRbitPointer() {
@@ -53,7 +54,7 @@ public class BooleanAddressedResource extends BooleanResource implements Address
     }
 
     public SelectionResource getSelectionResource() {
-        return (SelectionResource)selResP.evalute();
+        return (SelectionResource)selResP.evaluate();
     }
     
     public void setSelectionResource(SelectionResource selRes) {
@@ -124,9 +125,11 @@ public class BooleanAddressedResource extends BooleanResource implements Address
         
     }
     
+    /*
     public void editProperties() {
-	new BooleanAddressedResourcePropertiesForm(this).show();
+        new BooleanAddressedResourcePropertiesForm(this).show();
     }
+    */
     
     public void doubleClickAction() {
         super.doubleClickAction();

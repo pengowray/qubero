@@ -9,12 +9,14 @@ package net.pengo.resource;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.util.List;
 
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.JMenu;
 import javax.swing.JSeparator;
 
+import net.pengo.propertyEditor.IntValuePage;
 import net.pengo.restree.ResourceList;
 
 /**
@@ -51,10 +53,21 @@ abstract public class IntResource extends DefinitionResource {
             }
         };
         m.add(editAction);
+        
+        Action pointerAction = new AbstractAction("Create pointer") {
+            public void actionPerformed(ActionEvent e){
+                System.out.println("you want fries with that? ...maybe next time");
+            }
+        };
+        m.add(pointerAction);        
     }
     
-    /** bring up editor */
-    abstract public void editProperties();
+    /** @return list of PropertyPage's */ 
+    public List getPrimaryPages() {
+        List pp = super.getPrimaryPages();
+        pp.add(new IntValuePage(this));
+        return pp;
+    }
     
     public long toLong() {
         return getValue().longValue();

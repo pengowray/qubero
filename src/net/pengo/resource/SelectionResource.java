@@ -12,14 +12,13 @@ package net.pengo.resource;
 import net.pengo.app.OpenFile;
 import net.pengo.data.Data;
 import net.pengo.data.SelectionData;
-import net.pengo.dependency.QNode;
 import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
 import net.pengo.selection.LongListSelectionModel;
 
 //acts as a wrapper for LongListSelectionModel.
 
-abstract public class SelectionResource extends QNodeResource implements LongListSelectionListener, QNode {
+abstract public class SelectionResource extends Resource implements LongListSelectionListener {
 
     protected OpenFile openFile;
     
@@ -40,13 +39,13 @@ abstract public class SelectionResource extends QNodeResource implements LongLis
      * @param e the event that characterizes the change.
      *
      */
-    public void valueChanged(LongListSelectionEvent e) {
-	if (e.getValueIsAdjusting()) {
-	    return;
-	}
-        
-	updated();
-    }
+     public void valueChanged(LongListSelectionEvent e) {
+         if (e.getValueIsAdjusting()) {
+             return;
+         }
+         
+         updated();
+     }
     
     abstract public void updated();
     

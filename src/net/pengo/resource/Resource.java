@@ -1,13 +1,19 @@
 package net.pengo.resource;
 import java.awt.event.ActionEvent;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import javax.swing.AbstractAction;
-import javax.swing.Action;
 import javax.swing.Icon;
 import javax.swing.JMenu;
 import javax.swing.JSeparator;
 
-import net.pengo.app.OpenFile;
+import net.pengo.propertyEditor.NamePage;
+import net.pengo.propertyEditor.ResourceForm;
+
 /*
  * MoojNode.java
  *
@@ -20,6 +26,7 @@ import net.pengo.app.OpenFile;
 public abstract class Resource {
 
     protected String name;
+    private Set sinkSet = new HashSet();
     
     public Resource(){
         super();
@@ -47,7 +54,37 @@ public abstract class Resource {
                 }
         );
         
+        Resource[] res = getSources();
+        if (res != null && res.length > 0) {
+            JMenu resMenu = new JMenu("Resources");
+            for (int i = 0; i < res.length; i++) {
+                Resource node = (Resource)res[i];
+                String name = node.getName();
+                if (!node.isOwner(this))
+                    name += " (used by " + node.getSinkCount() + ")";
+                resMenu.add(node+"");
+            }
+            
+            m.add(resMenu);
+            
+        }        
+        m.add(new JSeparator());
         
+        m.add(
+                new AbstractAction("Property editor...") {
+                    public void actionPerformed(ActionEvent e) {
+                        editProperties();
+                    }
+                }
+        );
+        
+    }
+    
+    /** @return list of PropertyPage's */ 
+    public List getPrimaryPages() {
+        List pp = new ArrayList();
+        pp.add(new NamePage(this));
+        return pp;
     }
     
     public JMenu getJMenu() {
@@ -110,13 +147,17 @@ public abstract class Resource {
             pointer = "(*)";
         }
         
+        return nameOrType() + pointer + "=" + valueDesc();
+    }
+    
+    /** does not include a value */
+    public String nameOrType(){
         if (getName() == null) {
-            name = getTypeName() + pointer + "=" + valueDesc();
+            return getTypeName();
         } else {
-            name = "\"" + getName() + "\"" + pointer + "=" + valueDesc();
+            return "\"" + getName() + "\"";
         }
         
-        return name;
     }
     
     /** a description of the (evalutated) value stored by this resource */
@@ -142,4 +183,69 @@ public abstract class Resource {
         
         return shortName;
     }    
+
+    
+    // qnode things
+    
+    abstract public Resource[] getSources();
+
+    
+    public int getSinkCount(){
+        return sinkSet.size();
+    }
+    
+    public void addSink(Resource sink){
+        sinkSet.add(sink);
+    }
+    
+    public void removeSink(Resource sink){
+        sinkSet.remove(sink);
+    }
+    
+    //fixme: future versions will have a more complete assignment/conversion API
+    public boolean isAssignableFrom(Class cl) {
+        return (this.getClass().isAssignableFrom(cl));
+    }
+    
+    //fixme: is name correct? is assignableTo really opposite to assignableFrom
+    public boolean isAssignableTo(Class cl) {
+        return (cl.isAssignableFrom(this.getClass()));
+    }
+    
+    //for classes that act as direct references. getValue() will evalute the references.
+    public boolean isReference() {
+        return false;
+    }
+    
+    //evalute, was getValue()
+    public Resource evaluate() {
+        return this;
+    }
+    
+    public void editProperties() {
+        new ResourceForm(this).show();
+    }
+    
+    //quoted
+    public Resource getPrimarySource() {
+        return this;
+    }
+    
+    // is this the owner? owners should edit values directly rather than selecting pointers from drop downs
+    public boolean isOwner(Resource qnr) {
+        List srcs = Arrays.asList(this.getSources());
+        if (qnr.getSinkCount() == 1 &&
+                (srcs.contains(qnr) 
+                        //||  // or check if parent is owner maybe or something
+                )) {
+            return true;
+        }
+        
+        //System.out.println("sinks: " + qnr.getSinkCount());
+        return false;
+    }    
+    
+    
+    // listener stuff? etc etc
+    
 }

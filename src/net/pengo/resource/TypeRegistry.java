@@ -15,6 +15,7 @@ import javax.swing.AbstractAction;
 import javax.swing.JMenu;
 
 import net.pengo.pointer.ConstructorQFunction;
+import net.pengo.pointer.JavaPointer;
 import net.pengo.pointer.QFunction;
 import net.pengo.pointer.SmartPointer;
 
@@ -52,7 +53,8 @@ public class TypeRegistry {
         return new QFunction[] {
                 getConstructorsForSelections(BooleanAddressedResource.class)[0],
                 getConstructorsForSelections(IntAddressedResource.class)[0],
-                getConstructorsForSelections(MagicNumberResource.class)[0]
+                getConstructorsForSelections(MagicNumberResource.class)[0],
+                //getConstructorsForSelections(JavaPointer.class)[0]
         };
     }
     
@@ -70,7 +72,7 @@ public class TypeRegistry {
             cfp[i]=new ConstructorQFunction();
             //cfp[i].addSink(this);
             cfp[i].setValue(con);
-            cfp[i].setName("create " + theClass.getName()); //?
+            cfp[i].setName("create " + Resource.shortTypeName(theClass)); //?
         }
         
         return cfp;
@@ -109,9 +111,12 @@ public class TypeRegistry {
             final SelectionResource selection = sel;
             AbstractAction aa = new AbstractAction(function.getName()) {
                 public void actionPerformed(ActionEvent e) {
-                    SmartPointer sp = function.invoke(null, new QNodeResource[]{selection});
-                    QNodeResource qr = sp.evalute(); //FIXME: shouldn't be needed
+                    SmartPointer sp = function.invoke(null, new Resource[]{selection});
+                    Resource qr = sp.evaluate(); //FIXME: shouldn't be needed
                     selection.getOpenFile().getDefinitionList().add(qr);
+                    
+                    //FIXME: do or dont do?
+                    qr.editProperties();
                 }
             };
             menu.add(aa);

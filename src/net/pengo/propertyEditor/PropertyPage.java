@@ -8,6 +8,8 @@ package net.pengo.propertyEditor;
 
 
 import javax.swing.JPanel;
+
+import net.pengo.resource.Resource;
 /**
  *
  * @author  Smiley
@@ -16,6 +18,7 @@ public abstract class PropertyPage extends JPanel {
     //fixme: maybe have a standard template layout someday?
     //fixme: make into a resource listener!
     
+
     /** Creates a new instance of PropertyPage */
     public PropertyPage() {
         super();
@@ -32,15 +35,18 @@ public abstract class PropertyPage extends JPanel {
     // call when the page is modified, so it knows it should be saved.
     // can also be called if the page is selected by MethodSelectionPage
     public void mod() {
-	return;
+        return;
     }
 
 	// checks that properties are OK and ready to be sxtracted.
     public boolean isValid() {
         return true; // success
     }
+
     
     abstract public String toString();
     
-    
+    public void setForm(PropertiesForm form){}
+
+
 }

@@ -6,10 +6,12 @@
 
 package net.pengo.dependency;
 
+import net.pengo.resource.*;
+
 public interface DepLink
 {
-    public QNode getSource();
-    public QNode getSink();
+    public Resource getSource();
+    public Resource getSink();
 }
 
 

@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-import net.pengo.resource.QNodeResource;
+import net.pengo.resource.Resource;
 
 public class ResourceRegistry {
     static private ResourceRegistry singleton;
@@ -39,7 +39,7 @@ public class ResourceRegistry {
     private List reg = new ArrayList(); // of WeakRefernces to QNodeResource's
     
     
-    public void add(QNodeResource qnr) {
+    public void add(Resource qnr) {
         //SmartPointer sp = new JavaPointer(dr.getOpenFile(), dr.getClass());
         
         //xxx: can't do this because class might not be initialized yet
@@ -56,7 +56,7 @@ public class ResourceRegistry {
 	
 	while (it.hasNext()) {
 	    WeakReference wr = (WeakReference)it.next();
-	    QNodeResource sp = (QNodeResource)wr.get();
+	    Resource sp = (Resource)wr.get();
 	    if (sp!=null) {
 		allOfType.add(sp);
 	    }
@@ -71,7 +71,7 @@ public class ResourceRegistry {
 	
 	while (it.hasNext()) {
 	    WeakReference wr = (WeakReference)it.next();
-	    QNodeResource sp = (QNodeResource)wr.get();
+	    Resource sp = (Resource)wr.get();
 	    if (sp!=null) {
 		if (sp.isAssignableTo(cl))
 		    allOfType.add(sp);

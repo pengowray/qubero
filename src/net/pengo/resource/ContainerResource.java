@@ -42,5 +42,20 @@ public class ContainerResource extends Resource
 	public boolean isPointer() {
 	    return true;
 	}
+
+    /* (non-Javadoc)
+     * @see net.pengo.resource.Resource#getSources()
+     */
+    public Resource[] getSources() {
+        return new Resource[]{};
+    }
+
+    /* (non-Javadoc)
+     * @see net.pengo.resource.Resource#editProperties()
+     */
+    public void editProperties() {
+        // TODO Auto-generated method stub
+        
+    }
 }
 

@@ -21,7 +21,11 @@ public class IntValuePage extends EditablePage {
     private JTextField inputField;
     
     /** Creates a new instance of ValuePage */
-    public IntValuePage(IntResource res, AbstractResourcePropertiesForm form) {
+    public IntValuePage(IntResource res) {
+        this(res, null);
+    }
+    
+    public IntValuePage(IntResource res, PropertiesForm form) {
         super(form);
         this.res = res;
         this.form = form;
@@ -37,12 +41,12 @@ public class IntValuePage extends EditablePage {
     
     
     public void saveOp() {
-	try {
-	    res.setValue(inputField.getText());
-	} catch (IOException e ) {
-	    //fixme
-	    e.printStackTrace();
-	}
+        try {
+            res.setValue(inputField.getText());
+        } catch (IOException e ) {
+            //fixme
+            e.printStackTrace();
+        }
     }
     
     public void buildOp() {

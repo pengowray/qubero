@@ -12,7 +12,7 @@ public class IntSelectorPage extends EditablePage
 {
     private IntAddressedResource  res;
     
-    public IntSelectorPage(IntAddressedResource res, AbstractResourcePropertiesForm form) {
+    public IntSelectorPage(IntAddressedResource res, PropertiesForm form) {
 	super(form);
 	this.res = res;
 	

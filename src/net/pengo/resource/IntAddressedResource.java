@@ -13,14 +13,13 @@ import java.util.Arrays;
 import net.pengo.data.ArrayData;
 import net.pengo.data.Data;
 import net.pengo.data.SelectionData;
-import net.pengo.dependency.QNode;
 import net.pengo.pointer.JavaPointer;
 import net.pengo.pointer.SmartPointer;
-import net.pengo.propertyEditor.IntAddressedResourcePropertiesForm;
+import net.pengo.propertyEditor.ResourceForm;
 
 public class IntAddressedResource extends IntResource implements AddressedResource {
-    private SmartPointer signedResP = new JavaPointer("net.pengo.resource.IntResource"); //private IntResource signedRes;
     private SmartPointer selResP = new JavaPointer("net.pengo.resource.SelectionResource"); //private SelectionResource selRes;
+    private SmartPointer signedResP = new JavaPointer("net.pengo.resource.IntResource"); //private IntResource signedRes;
     private SmartPointer allowResizeP  = new JavaPointer("net.pengo.resource.BooleanResource");
     
     //fixme: separate "allowShrink" and "allowGrow"?
@@ -39,16 +38,16 @@ public class IntAddressedResource extends IntResource implements AddressedResour
     public IntAddressedResource(SelectionResource selRes, IntResource signedRes) {
         super();
         
-        signedResP.setName("Signed");
+        selResP.addSink(this);
         selResP.setName("Selection");
-        allowResizeP.setName("Allow resize");
+        setSelectionResource(selRes);
         
         signedResP.addSink(this);
-        selResP.addSink(this);
-        allowResizeP.addSink(this);
-        
-        setSelectionResource(selRes);
+        signedResP.setName("Negatives");
         setSignedRes(signedRes);
+        
+        allowResizeP.addSink(this);
+        allowResizeP.setName("Allow resize");
         setAllowResize(new BooleanPrimativeResource(false));
         
         //new IntAddressedResourcePropertiesForm(this).show();
@@ -58,17 +57,17 @@ public class IntAddressedResource extends IntResource implements AddressedResour
         this(selRes, new IntPrimativeResource((long)signed));
     }
     
-    public QNode[] getSources() {
-        return new QNode[]{signedResP, selResP, allowResizeP};
+    public Resource[] getSources() {
+        return new Resource[]{selResP, signedResP, allowResizeP};
     }
     
     //fixme: does this make the above redundant? this is dodgy.
     public JavaPointer[] getJPointers() {
-        return new JavaPointer[]{(JavaPointer)signedResP, (JavaPointer)selResP, (JavaPointer)allowResizeP};
+        return new JavaPointer[]{(JavaPointer)selResP, (JavaPointer)signedResP, (JavaPointer)allowResizeP};
     }
     
     public SelectionResource getSelectionResource() {
-        return (SelectionResource)selResP.evalute();
+        return (SelectionResource)selResP.evaluate();
     }
     
     public void setSelectionResource(SelectionResource selRes) {
@@ -76,7 +75,7 @@ public class IntAddressedResource extends IntResource implements AddressedResour
     }
     
     public IntResource getSignedRes() {
-        return (IntResource)signedResP.evalute();
+        return (IntResource)signedResP.evaluate();
     }
     
     public void setSignedRes(IntResource signedRes) {
@@ -94,7 +93,7 @@ public class IntAddressedResource extends IntResource implements AddressedResour
     }
     
     public BooleanResource getAllowResize() {
-        return (BooleanResource)allowResizeP.evalute();
+        return (BooleanResource)allowResizeP.evaluate();
     }
     
     public void setAllowResize(BooleanResource allowResize) {
@@ -299,7 +298,7 @@ public class IntAddressedResource extends IntResource implements AddressedResour
     }
     
     public void editProperties() {
-        new IntAddressedResourcePropertiesForm(this).show();
+        new ResourceForm(this).show();
     }
     
     

@@ -16,6 +16,7 @@ import javax.swing.JTextField;
 
 import net.pengo.pointer.JavaPointer;
 import net.pengo.resource.BooleanAddressedResource;
+import net.pengo.resource.ResourceSelectorForm;
 
 /**
  *
@@ -26,7 +27,7 @@ public class BooleanRbitPage extends EditablePage {
     private BooleanAddressedResource res;
     private JTextField inputField;
     
-    public BooleanRbitPage(BooleanAddressedResource res, AbstractResourcePropertiesForm form) {
+    public BooleanRbitPage(BooleanAddressedResource res, PropertiesForm form) {
         super(form);
         this.res = res;
         this.form = form;
@@ -38,12 +39,14 @@ public class BooleanRbitPage extends EditablePage {
         inputField.getDocument().addDocumentListener( this );
         
         JButton pointerButton = new JButton("...");
-        
+        //FIXME: "..."
+        /*
         pointerButton.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
                 new ResourceSelectorForm(BooleanRbitPage.this.res.getRbitPointer()).show();
             }
         });
+        */
         
         add(inputField);
         add(pointerButton);

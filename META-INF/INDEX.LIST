@@ -1,6 +1,6 @@
 JarIndex-Version: 1.0
 
-Qubero-20040107-1653-backup.jar
+Qubero-20040116-1237-backup.jar
 net/pengo/hexdraw
 eclipse/bin/net/pengo/splash
 eclipse/bin/net/pengo/selection
@@ -74,3 +74,6 @@ mooj16.gif
 mooj2.bat
 mooj32.gif
 mooj32.ico
+qubero-rgbwave.png
+qubero_bits.png
+simple_screenshot.png

@@ -13,6 +13,8 @@ import javax.swing.event.EventListenerList;
 import net.pengo.data.Data;
 import net.pengo.data.DataListener;
 import net.pengo.data.EditableData;
+import net.pengo.pointer.JavaPointer;
+import net.pengo.pointer.SmartPointer;
 import net.pengo.resource.LiveSelectionResource;
 import net.pengo.resource.OpenFileResourceFactory;
 import net.pengo.resource.Resource;
@@ -33,7 +35,7 @@ import net.pengo.selection.SegmentalLongListSelectionModel;
  * see also ActiveFile
  */
 
-public class OpenFile implements LongListSelectionListener { // previously did extend DefaultMutableTreeNode
+public class OpenFile extends Resource implements LongListSelectionListener { // previously did extend DefaultMutableTreeNode
     protected Data rawdata;
     protected String filename;
     protected MetaSelectionModel selectionModel;
@@ -44,7 +46,11 @@ public class OpenFile implements LongListSelectionListener { // previously did e
     private ResourceList rootResList;
     private List definitionResList = new ResourceList(Collections.synchronizedList(new LinkedList()), resFact , "Definitions") ;
     private List selectionDetails = new ResourceList(Collections.synchronizedList(new LinkedList()), resFact , "Selection details");
-    private LiveSelectionResource liveSelection;
+
+	//fixme: eventually replace liveSelection (LiveSelectionResource) with SmartPointer.. and replace metaselectionmodel thing
+    //final public SmartPointer selection = new JavaPointer("net.pengo.resource.LiveSelectionResource");
+ 
+    public final LiveSelectionResource liveSelection = new LiveSelectionResource(this);
     
     private ActiveFile af;
     /** 
@@ -62,7 +68,8 @@ public class OpenFile implements LongListSelectionListener { // previously did e
         rootResList.add(definitionResList);
         rootResList.add(selectionDetails);
         addLongListSelectionListener(this);
-        liveSelection = new LiveSelectionResource(this);
+		//selection.setValue(live);
+
         getResourceList().add(liveSelection); //fixme: should this be here?
     }
     
@@ -201,6 +208,7 @@ public class OpenFile implements LongListSelectionListener { // previously did e
     }
     
     public void setSelectionModel(LongListSelectionModel sm) {
+//
         if (selectionModel == null) {
             selectionModel = new MetaSelectionModel(sm);
             selectionModel.addLongListSelectionListener(this);
@@ -273,6 +281,19 @@ public class OpenFile implements LongListSelectionListener { // previously did e
      */
     public void valueChanged(LongListSelectionEvent e) {
         // TODO
+    }
+
+    /* (non-Javadoc)
+     * @see net.pengo.resource.Resource#getSources()
+     */
+    public Resource[] getSources() {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    public void editProperties() {
+        // TODO Auto-generated method stub
+        
     }
     
 }

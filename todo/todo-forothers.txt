@@ -197,6 +197,10 @@ Saman (8/8/03)
     <pengo> game roms?
     <waltervn> yeah
     <waltervn> I use this one: http://www.geocities.com/noprgress/patchrom.html which is ok but unfortunately it's closed source
+    <waltervn> patchrom can do some nifty things, like automatically detect pointers and pointer blocks
+  - <waltervn> 'relative' search would be cool too :)
+    <waltervn> so searching for "abc" would also find "123" "def" etc ;)
+  - 2:54 AM 1/13/2004 <waltervn> I'll be happy to be a beta tester when the time comes ;)
 
 slava #java
 slava is ~slava@CPE0080ad77a020-CM.cpe.net.cable.rogers.com * Slava
@@ -212,3 +216,79 @@ pr3d4t0r using irc.freenode.net http://freenode.net/
 pr3d4t0r is an identified user
  - java bytecode expert
  - e.g. http://eugeneciurana.com/personal/Kernel_partial.txt
+
+geist: 5:43 PM 1/11/2004
+geist is ~geist@tkgeisel.com * Travis Geiselbrecht
+geist on #osdev 
+geist using irc.freenode.net http://freenode.net/
+geist is an identified user
+ - http://www.macprogramadores.org/beos/tutoriales/TUP/DiskProbe.gif
+ - diskprobe
+   well, it wasn't actually all that fancy, but it was totally designed to operate on disks
+   so it looked at a sector at a time, had a little box at the top where you could type in sector number or raw address
+   and it jumped right to it
+ - and you could set bookmarks and use alt-number or whatnot to jump back to where you were
+ - diskprobe was just super fast did it's job
+ - if qubero can be that slick, I'm all over it
+ - oh and the scrub slider was totally important
+ - it updated really really quickly so you could scrub around and try to eyeball certain structures
+ - yeah but I think you could configure it to be offset
+
+Forge #philosophy oz.org 1/11/2004
+<Forge> more like card game engine... using xml as a configuration script for it to "plug in" new games
+<Forge> erm more new game rules I guess is better phrasing
+
+Suzanne_ is ~suzanne@170-215-243-14.bras01.mdl.ny.frontiernet.net * suzanne
+Suzanne_ on #osdev 
+ - APL (weirdo symbol language): http://www.aplusdev.org/keyboard.html
+
+
+crunge is ~crunge@adsl-66-122-244-72.dsl.sndg02.pacbell.net * crunge
+crunge on #java #gentoo 
+crunge using irc.freenode.net http://freenode.net/
+10:31 PM 1/14/2004
+ - <crunge> pengo: best hex editor I ever used was called 'fix'.. it displayed, at most, 256 bytes a time displayed them left to right in 3 lines, had the (extended) ASCII then below it the high nibble in hex then below that the low nibble in hex
+<crunge> pengo: think it was originally made for fixing stuff from dbase but I'm not sure
+<crunge> pengo: make something like that and I will love you forever
+<crunge> pengo: well, for that all I have to do is send an email to a friend of mine that surely has it... it'd be nice to see more that 256 bytes a time though =)
+<crunge> well, imagine this: 4 rows. Each row has 3 lines. Each row/line has 64 columns. The top line of each row show the ascii value, the bottom two lines show the hex. Shouldn't be too hard to make a screenshot in your mind =)
+ - <crunge> Ah... ever played with Xaos?
+   <pengo> umm.. dont think so
+   <crunge> real time zooming/panning fractal viewer
+   <pengo> ahh used similiar
+   <crunge> one of the neat things is that it has a filter to output 24bit color instead of just indexed...
+   <pengo> cool
+   <crunge> where each of the RGB values is involved in the fractal plotting, not just an image format change
+   <pengo> nice
+   <crunge> Something I'd like to see is a program to convert a TGA that xaos spits out and map RGB to XYZ/ZYX/etc, and read the image the image like we read english (or some other user-selected way) and output each pixel as a 3D vertice, 3D point along a poly line, or parameters for a 3D bezier curve
+---
+<crunge> You know all these "document management systems" that are supposed to be able to index your XML documents automagically?
+[21:53:48] <crunge> store and index I mean
+[21:54:06] <pengo> no, but go on :)
+[21:55:15] <crunge> If such a thing existed and worked well, with a reliable querying system (possibly like the little that I've seen of LDAP), couldn't one just use serialization to XML to store/retrieve objects in this database w/o having to write JDBC code to dehydrate and reconstitute your objects?
+[21:55:31] <deluxe_247> hmmm
+[21:55:38] <deluxe_247> I think there is a project that already does that
+[21:55:39] <deluxe_247> xindice
+[21:55:47] <crunge> I'll take a look
+[21:56:02] <deluxe_247> you could use something like castor
+[21:56:02] <crunge> just seems like a 'duh' concept to me
+[21:56:17] * crunge starts googling
+[21:56:17] <pengo> is there a "standard" way to send a compressed+indexed xml file?
+[21:56:20] <deluxe_247> really not that great of an idea with things like CMP, Hibernate, JDO
+[21:57:03] <deluxe_247> anyone of those + castor-xml will acheive the same thing as xindice but with less overhead
+[21:57:19] <crunge> deluxe_247: I'm thinking more about my non-mission-critical small-time apps that may have a couple hundred records across a dozen tables
+[21:57:37] <deluxe_247> hibernate
+[21:57:41] * false (~dh@213-35-166-41-dsl.kjj.estpak.ee) Quit ("Fhtagn-Nagh Yog Sothoth")
+[21:57:46] <deluxe_247> but y the xml neccesity?
+[21:57:51] * false (~dh@213-35-166-41-dsl.kjj.estpak.ee) has joined #java
+[21:58:08] <crunge> no xml necessity.
+[21:58:15] <deluxe_247> then user hibernate
+[21:58:18] <deluxe_247> err use
+[21:58:21] <deluxe_247> or JDO
+[21:58:46] <crunge> I'm just saying I hate writing code to build objects out of SQL queries and vice versa
+[21:58:46] <deluxe_247> with hibernate you create mapping files from objects -> db tables
+[21:58:53] <crunge> don't mind the query part
+[21:58:58] <deluxe_247> then you will love hibernate
+[21:59:00] <deluxe_247> www.hibernate.org
+[21:59:19] <crunge> deluxe_247: I'll check it out, thanks
+

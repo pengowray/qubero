@@ -6,10 +6,9 @@
 
 package net.pengo.resource;
 
-import net.pengo.dependency.QNode;
 import net.pengo.pointer.JavaPointer;
 import net.pengo.pointer.SmartPointer;
-import net.pengo.propertyEditor.MagicNumberForm;
+import net.pengo.propertyEditor.ResourceForm;
 
 public class MagicNumberResource extends DefinitionResource implements AddressedResource {
 
@@ -41,14 +40,14 @@ public class MagicNumberResource extends DefinitionResource implements Addressed
      * @see net.pengo.resource.DefinitionResource#editProperties()
      */
     public void editProperties() {
-        new MagicNumberForm(this).show();
+        new ResourceForm(this).show();
     }
 
     /* (non-Javadoc)
      * @see net.pengo.resource.QNodeResource#getSources()
      */
-    public QNode[] getSources() {
-        return new QNode[] { sel, magic};
+    public Resource[] getSources() {
+        return new Resource[] { sel, magic};
     }
     
     public JavaPointer[] getJPointers() {
@@ -59,7 +58,7 @@ public class MagicNumberResource extends DefinitionResource implements Addressed
      * @see net.pengo.resource.AddressedResource#getSelectionResource()
      */
     public SelectionResource getSelectionResource() {
-        return (SelectionResource)sel.evalute();
+        return (SelectionResource)sel.evaluate();
     }
 
     /* (non-Javadoc)

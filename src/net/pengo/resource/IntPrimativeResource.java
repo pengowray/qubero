@@ -8,12 +8,10 @@ package net.pengo.resource;
 
 import java.math.BigInteger;
 
-import net.pengo.dependency.QNode;
-import net.pengo.propertyEditor.IntPrimativeResourcePropertiesForm;
+import net.pengo.propertyEditor.ResourceForm;
 
 public class IntPrimativeResource extends IntResource
 {
-    
     
     private BigInteger value;
     
@@ -29,10 +27,10 @@ public class IntPrimativeResource extends IntResource
         return true;
     }
     
-    public QNode[] getSources()
+    public Resource[] getSources()
     {
         // primatives can have no sources, (and are defined by their value?)
-        return new QNode[]{};
+        return new Resource[]{};
     }
     
     public BigInteger getValue() {
@@ -41,10 +39,6 @@ public class IntPrimativeResource extends IntResource
     
     public void setValue(BigInteger value) {
         value = this.value;
-    }
-    
-    public void editProperties() {
-        new IntPrimativeResourcePropertiesForm(this).show();
     }
     
 }

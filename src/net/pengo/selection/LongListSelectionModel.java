@@ -15,7 +15,6 @@
 
 package net.pengo.selection;
 
-import javax.swing.event.*;
 
 /**
  * This interface represents the current state of the

@@ -4,26 +4,25 @@ import java.awt.Color;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 
-import net.pengo.hexdraw.original.HexPanel;
+import net.pengo.hexdraw.original.Place;
 
 public class RGBRenderer extends SeperatorRenderer {
     int colourChannels = 4;
     
-    public RGBRenderer(HexPanel hexpanel, int colourChannels, boolean render) {
-        super(hexpanel, render);
-        setEnabled(render);
+    public RGBRenderer(FontMetrics fm, int columnCount, int colourChannels, boolean render) {
+        super(fm,columnCount,render);
+
         this.colourChannels = colourChannels;
     }
     
-    public RGBRenderer(HexPanel hexpanel, boolean render) {
-        this(hexpanel,3,render);
+    public RGBRenderer(FontMetrics fm, int columnCount, boolean render) {
+        this(fm,columnCount,3,render);
     }
 
-    public int renderBytes( Graphics g, long lineNumber,
+    public void renderBytes( Graphics g, long lineNumber,
             byte ba[], int baOffset, int baLength, boolean selecta[],
-            int columnWidth ) {
+            Place cursor) {
     	//// draw side wave form:
-        FontMetrics fm = g.getFontMetrics();
         
         int charsHeight = fm.getHeight();        
         int barWidth = charsHeight;
@@ -39,7 +38,7 @@ public class RGBRenderer extends SeperatorRenderer {
 
 			offset = i * colourChannels;	        
             float xPt = (float)barWidth / 255.0f / colourChannels; // y point distance
-	        float yPt = colourChannels * (float)charsHeight / (float)columnWidth; // y point distance
+	        float yPt = colourChannels * (float)charsHeight / (float)columnCount; // y point distance
 	        //int waveOffset = (int) (charsHeight + (yPt*i));
 	        
 	        for (int j = 0; j < colourChannels; j++) {
@@ -55,11 +54,21 @@ public class RGBRenderer extends SeperatorRenderer {
 			g.fillRect(0, (int)(i *yPt), barWidth, (int)(yPt+.5));
         }
         //g.drawLine(0, waveTopHeight+waveOffset, 0+coll, waveTopHeight+waveOffset);
-        return barWidth;
+        //return barWidth;
     }
     
+    public int getWidth() {
+        return fm.getHeight();
+    }
+    
+    public long whereAmI(int x, int y, long lineAddress){
+        int charsHeight = fm.getHeight(); 
+        float yPt = colourChannels * (float)charsHeight / (float)columnCount;
+        
+        return (int)(y / yPt) + lineAddress;
+    }    
     public String toString() {
-        return "RGB" + colourChannels;
+        return "RGB " + colourChannels + " (unsigned)";
     }
 
 }

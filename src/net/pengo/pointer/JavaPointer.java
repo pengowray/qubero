@@ -9,7 +9,7 @@
 
 package net.pengo.pointer;
 
-import net.pengo.resource.QNodeResource;
+import net.pengo.resource.Resource;
 
 public class JavaPointer extends SmartPointer {
     private String classname;
@@ -32,23 +32,27 @@ public class JavaPointer extends SmartPointer {
     }
     
     
-    public String toString() {
-        if (getName()==null)
-            return "JavaPointer to " + getPrimarySource() + " (" + 
-            	 getTypeName() + ")";
+    public String valueDesc() {
         
-        // + " = " + evalute() 
+        String desc = evaluate().valueDesc();
         
-        return getName();
+        if (value.getName()==null)
+            if (value.isPointer())
+                return "(->"+desc+")";
+            else
+                return "("+desc+")";
+        else
+            if (value.isPointer())
+                return value.getName() + " (->" + desc + ")";
+            else
+                return value.getName() + " (" + desc + ")";
     }
-
-
     
     public Class getType() {
         return type;
     }
     
-    public void setValue(QNodeResource value) {
+    public void setValue(Resource value) {
         
         //fixme: need proper handling.
         //note: this replaces compile time checking with runtime checking. fixme: fix with assertions?
@@ -59,8 +63,8 @@ public class JavaPointer extends SmartPointer {
         super.setValue(value);
     }
     
-    public boolean isValidValue(QNodeResource value) {
-        return type.isInstance(value.evalute());
+    public boolean isValidValue(Resource value) {
+        return type.isInstance(value.evaluate());
     }
     
     public boolean isAssignableFrom(Class cl) {

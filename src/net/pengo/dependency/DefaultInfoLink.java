@@ -6,13 +6,15 @@
 
 package net.pengo.dependency;
 
+import net.pengo.resource.*;
+
 public class DefaultInfoLink implements InfoLink {
     public String verbA2B;
     public String verbB2A;
-    public QNode nodeA;
-    public QNode nodeB;
+    public Resource nodeA;
+    public Resource nodeB;
     
-    public DefaultInfoLink(String verbA2B, String verbB2A, QNode nodeA, QNode nodeB) {
+    public DefaultInfoLink(String verbA2B, String verbB2A, Resource nodeA, Resource nodeB) {
 	this.verbA2B = verbA2B;
 	this.verbB2A = verbB2A;
 	this.nodeA = nodeA;
@@ -60,7 +62,7 @@ public class DefaultInfoLink implements InfoLink {
      *
      * @param    NodeA               an InfoNode
      */
-    public void setNodeA(QNode nodeA) {
+    public void setNodeA(Resource nodeA) {
 	this.nodeA = nodeA;
     }
     
@@ -69,7 +71,7 @@ public class DefaultInfoLink implements InfoLink {
      *
      * @return    an InfoNode
      */
-    public QNode getNodeA() {
+    public Resource getNodeA() {
 	return nodeA;
     }
     
@@ -78,7 +80,7 @@ public class DefaultInfoLink implements InfoLink {
      *
      * @param    NodeB               an InfoNode
      */
-    public void setNodeB(QNode nodeB) {
+    public void setNodeB(Resource nodeB) {
 	this.nodeB = nodeB;
     }
     
@@ -87,7 +89,7 @@ public class DefaultInfoLink implements InfoLink {
      *
      * @return    an InfoNode
      */
-    public QNode getNodeB() {
+    public Resource getNodeB() {
 	return nodeB;
     }
     

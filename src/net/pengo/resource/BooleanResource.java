@@ -6,7 +6,9 @@
 
 package net.pengo.resource;
 
-import net.pengo.propertyEditor.BooleanPrimativeResourcePropertiesForm;
+import java.util.List;
+
+import net.pengo.propertyEditor.SetBooleanPage;
 
 /**
  *
@@ -22,13 +24,20 @@ abstract public class BooleanResource extends DefinitionResource {
 
     abstract public boolean isPrimative();
     
+    /*
     public void editProperties() {
         new BooleanPrimativeResourcePropertiesForm(BooleanResource.this).show();
     }
+    */
     
     public String valueDesc() {
-        return getValue() +"";
+        return getValue()+"";
     }    
 
-    
+    /** @return list of PropertyPage's */ 
+    public List getPrimaryPages() {
+        List pp = super.getPrimaryPages();
+        pp.add(new SetBooleanPage(this));
+        return pp;
+    }    
 }
