@@ -118,21 +118,27 @@ Log started Aug 21 2002:
  2003-09-29  AddressedResouce, BooleanAddressedResouce, IntAddressedResouce, AddressedResourceRegistry
              BooleanPrimativeResource, IntPrimativeResource
              Started on MetaSelectionModel
- 
+ 2003-09-30  MetaSelectionModel complete and debugged
+             Ant build.xml started
+ 	     AddressPage and MethodSelectionPage debugged
+ 	     
  see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
 priority/immediate features todo:
+2003-09-30
+ - AddressedResouce must be changed into a method (e.g. isAddressedResource() or getSubResources() )
+ - changing an addressed resource's selection (in property editor) should have the selection shown in the editor also (at least if the resource is already selected)
 2003-09-29
- - double clicking on an AddressedResouce doesn't always select it (MetaSelectionModel will solve it)
+ X double clicking on an AddressedResouce doesn't always select it (MetaSelectionModel will solve it)
 2003-09-26
- - AddressPage2 needs work, now that MethodSelection is available.
+ X AddressPage needs work, now that MethodSelection is available.
  - make an About menu
  - get New/Open/Close in standard order
  - start to think about saving definitions
 2003-09-23
  - need standard way of attaching "Mod" listener to swing elements in form pages
- - want it so address values can be changed to (int) references
+ X want it so address values can be changed to (int) references
  - value field must be programmable.
  2003-09-16
  - make a new class "HolesRemovedData" to simplify modifications on data that has gaps in it.
@@ -158,12 +164,12 @@ priority/immediate features todo:
  2003-07-09
  - growing the file doesn't allow new chunk to be selected
  - make hexpanel's repaint more accurate
- - force notify for selections (for when they are first used). this means simple selection needs to able to to notify.
+ X force notify for selections (for when they are first used). this means simple selection needs to able to notify.
  2003-07-05
- - make a resource model ala selection model
+ X make a resource model ala selection model [???]
  - iterator for all selected addresses in any selection model
- - make hexpanel use selection model for active selection too
- - show multi selection's segments in tree
+ X make hexpanel use selection model for active selection too
+ X show multi selection's segments in tree
  2003-07-02:
  - finish ColumnGroup and the column groups
  - SelectionData needs to be part of Data (instead of New Sel Data)
