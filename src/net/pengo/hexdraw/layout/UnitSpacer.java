@@ -35,10 +35,13 @@ package net.pengo.hexdraw.layout;
 
 import java.awt.Color;
 import java.awt.Graphics;
+import java.awt.Rectangle;
+
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 import net.pengo.bitSelection.SegmentalBitSelectionModel;
 import net.pengo.data.Data;
+import net.pengo.hexdraw.layout.SuperSpacer.Round;
 import net.pengo.splash.SimpleSize;
 
 /**
@@ -93,33 +96,44 @@ public class UnitSpacer extends SingleSpacer {
 		return 0;
 	}
     
-    public BitCursor bitIsHere(long x, long y, Round round, BitCursor bits) {
+    public LayoutCursor bitIsHere(long x, long y, Round round, BitCursor bits, LayoutCursor lc) {
     	if (bits.equals(BitCursor.zero))
-    		return BitCursor.zero;
+    		return LayoutCursor.unactiveCursor();
     	
-    	if (round == Round.before)
-    		return BitCursor.zero;
+    	if (round == Round.before) {
+    		calcBlinky(lc);
+    		return lc;
     	
-    	else if (round == Round.after)
-    		return bitCount;
+    	} else if (round == Round.after) {
+    		lc.setBitLocation(lc.getBitLocation().add(bitCount));
+    		lc.setX(lc.getX() + getMaxPixelWidth());
+    		calcBlinky(lc);
+    		return lc;
     	
-		else {
-			//Round.nearest
+    	} else {
+			assert round == Round.nearest;
 			if (x <= getPixelWidth(bits)/2) {
-				return BitCursor.zero;
+	    		calcBlinky(lc);
+				return lc;
 			} else {
-				return bitCount;
+	    		lc.setBitLocation(lc.getBitLocation().add(bitCount));
+	    		lc.setX(lc.getX() + getMaxPixelWidth());
+	    		calcBlinky(lc);
+	    		return lc;
 			}
 		}
     }
-    
+
+    protected void calcBlinky(LayoutCursor lc) {
+    	lc.setBlinkyLocation(new Rectangle((int)lc.getX(), (int)lc.getY(), 1, (int)getMaxPixelHeight()));
+    }
     //public abstract SpacerIterator iterator(); // Iterator<SuperSpacer>
     //public abstract SpacerIterator iterator(long first);
     
     //public Point whereGoes(long sub);
     //public Point whereGoes(BitCursor bit);
     
-    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel) {
+    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
 
     	//System.out.print('/');
         if (seg.getLength().equals(new BitCursor())) // fixme: optimise
@@ -140,11 +154,17 @@ public class UnitSpacer extends SingleSpacer {
     		//	System.out.println("negative!");a
     		//boolean selected = sel.isSelectedIndex(seg.firstIndex) && sel.isSelectedIndex(seg.lastIndex.subtract(BitCursor.oneBit));
     		boolean selected = sel.isSelectedIndex(seg.firstIndex) && sel.isSelectedIndex(seg.lastIndex);
+    		boolean activeSelection = curs.isActive();
     		
     		if (selected) {
+    			Color c = g.getColor();
     			g.setColor( new Color(170,170,255) );
-    			g.fillRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
-    			g.setColor( Color.black);
+    			if (activeSelection) {
+    				g.fillRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
+    			} else {
+    				g.drawRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
+    			}
+    			g.setColor( c );
 			}
     		
     		tileSet.draw(g, redbits);

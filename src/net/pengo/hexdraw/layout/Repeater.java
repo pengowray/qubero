@@ -128,48 +128,46 @@ public class Repeater extends MultiSpacer {
 		return getMainRepeater(bits).getBitCount(bits).add(getLeftover(bits));
 	}
 
-	public BitCursor bitIsHere(long x, long y, SuperSpacer.Round r, BitCursor bits) {
+	public LayoutCursor bitIsHere(long x, long y, SuperSpacer.Round r, BitCursor bits, LayoutCursor lc) {
 		if (isHorizontal()) {
 			long width = getMainRepeater(bits).getPixelWidth(bits);
 			if (x >= 0 && x < width) {
-				return getMainRepeater(bits).bitIsHere(x, y, r, bits);
+				return getMainRepeater(bits).bitIsHere(x, y, r, bits, lc);
 			} else if (x >= width && x < width + contents.getPixelWidth(getLeftover(bits))) {
 				BitCursor leftover = getLeftover(bits);
 				if (leftover.equals(BitCursor.zero))
-					return null;
-				
-				BitCursor location = contents.bitIsHere(x-width, y, r, leftover);
-				if (location == null)
-					return null;
-				
-				return getMainRepeater(bits).getBitCount(bits).add(location);
+					return LayoutCursor.unactiveCursor();
+
+				lc.setX(lc.getX() + width);
+				lc = contents.bitIsHere(x-width, y, r, leftover, lc);
+				lc.setBitLocation(lc.getBitLocation().add(getMainRepeater(bits).getBitCount(bits)));
+				return lc;
 			}
 			
 		} else {
 			long height = getMainRepeater(bits).getPixelHeight(bits);
 			if (y >= 0 && y < height) {
-				return getMainRepeater(bits).bitIsHere(x, y, r, bits);
+				return getMainRepeater(bits).bitIsHere(x, y, r, bits, lc);
 			} else if (y >= height && y < height + contents.getPixelHeight(getLeftover(bits))) {
 				BitCursor leftover = getLeftover(bits);
 				if (leftover.equals(BitCursor.zero))
-					return null;
-				
-				BitCursor location = contents.bitIsHere(x, y-height, r, leftover);
-				if (location == null)
-					return null;
-				
-				return getMainRepeater(bits).getBitCount(bits).add(location);
+					return LayoutCursor.unactiveCursor();
+
+				lc.setY(lc.getY() + height);
+				lc = contents.bitIsHere(x, y-height, r, leftover, lc);
+				lc.setBitLocation(lc.getBitLocation().add(getMainRepeater(bits).getBitCount(bits)));
+				return lc;
 			}
 		}
 		return null;
 	}
 
-	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel) {
+	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
 		BitCursor len = seg.getLength();
 		
 		//FIXME: should cut short segment for main repeater? not really needed because number of repeats is worked out
 		RepeatSpacerSimple main = getMainRepeater(len);
-		main.paint(g,d,seg, sel);
+		main.paint(g,d,seg, sel, curs);
 		
 		BitCursor leftover = getLeftover(len);
 		if (leftover.equals(BitCursor.zero))
@@ -181,7 +179,7 @@ public class Repeater extends MultiSpacer {
 		
 		BitSegment leftoverSeg = new BitSegment( seg.lastIndex.subtract(leftover), seg.lastIndex);
 
-		contents.paint(g, d, leftoverSeg, sel);
+		contents.paint(g, d, leftoverSeg, sel, curs);
 		
 		g.translate((int)-tranX, (int)-tranY);
 	}

@@ -4,3 +4,6 @@
 dist/**
 build/**
 src/**/*.class
+/package\ cache/**
+/_darcs/**
+/.svn/**

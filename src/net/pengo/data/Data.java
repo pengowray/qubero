@@ -108,7 +108,7 @@ public abstract class Data implements Comparable {
     // FIXME: rename to just "dataStream()"
     public InputStream getDataStream(long offset) throws IOException {
         InputStream i = dataStream();
-        i.skip((int)offset); // precision!
+        i.skip(offset);
         return i;
     }
     

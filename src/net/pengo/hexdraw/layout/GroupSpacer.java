@@ -145,7 +145,7 @@ public class GroupSpacer extends MultiSpacer {
     
     //also need a wordIsHere and lineIsHere
     //x and y are relative to this component. i.e. 0,0 is top left of this.
-    public BitCursor bitIsHere(long x, long y, Round round, BitCursor bits) {
+    public LayoutCursor bitIsHere(long x, long y, Round round, BitCursor bits, LayoutCursor lc) {
         //fixme: cache locations in tree
     	
     	if (isHorizontal()) {
@@ -155,7 +155,9 @@ public class GroupSpacer extends MultiSpacer {
 	        for (SuperSpacer s : contents) {
 	            nextOffset = xOffset + s.getPixelWidth(bits);
 	            if (x >= xOffset && x < nextOffset) {
-	                return s.bitIsHere(x - xOffset, y, round, bits);
+	            	lc.getPathList().add(s);
+	            	lc.setX(lc.getX() + xOffset);
+	                return s.bitIsHere(x - xOffset, y, round, bits, lc);
 	            }
 	            
 	            xOffset = nextOffset;
@@ -168,15 +170,19 @@ public class GroupSpacer extends MultiSpacer {
 	        for (SuperSpacer s : contents) {
 	            nextOffset =yOffset +  s.getPixelHeight(bits);
 	            if (y >= yOffset && y < nextOffset) {
-	                return s.bitIsHere(x, y - yOffset, round, bits);
+	            	lc.getPathList().add(s);
+	            	lc.setY(lc.getY() + yOffset);
+	                return s.bitIsHere(x, y - yOffset, round, bits, lc);
 	            }
 	            
 	            yOffset = nextOffset;
 	        }
 
         }
+    	
+    	// failure! 
+    	return LayoutCursor.unactiveCursor();
         
-        return null; //fixme: error.. should have been in here?
     }
     
     public SpacerIterator iterator() {
@@ -279,7 +285,7 @@ public class GroupSpacer extends MultiSpacer {
     //public abstract Point whereGoes(BitCursor bit);
     
     // 0,0 is top left
-    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel) {
+    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
         BitCursor len = seg.getLength();
         int totalXChange = 0;
         int totalYChange = 0;
@@ -301,7 +307,9 @@ public class GroupSpacer extends MultiSpacer {
             totalYChange += i.getYChange();
             
             //if (seg.getLength().compareTo())
-            sp.paint(g, d, seg, sel);
+            //FIXME: check null
+            sp.paint(g, d, seg, sel, curs.descend(sp));
+
         }
         
         g.translate(-totalXChange, -totalYChange);
@@ -329,5 +337,14 @@ public class GroupSpacer extends MultiSpacer {
 		for (SuperSpacer c : contents) {
 			c.setSimpleSize(s);
 		}
+	}
+	
+	public String toString() {
+		String r = "GroupSpacer:" + hashCode() + " horizontal:" + horizontal + " items("+ contents.length +"): "; 
+
+		for (int i=0; i<contents.length; i++)
+			r+= "[" + i + "]:" + contents[i] + ", ";
+		
+		return r;
 	}
 }

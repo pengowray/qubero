@@ -19,6 +19,8 @@ Qubero is: (subtitle)
  - Understands Digital! / understanding binary / your format
  - Human Readable Binary
  - open binary
+ - Binary Infinity, the binary side, binary-face, binary bedrock
+
 
 Definition interface is powerful because it does:
  - give meaning to raw data

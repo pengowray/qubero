@@ -1,10 +1,7 @@
 JarIndex-Version: 1.0
 
-Qubero-20050131-1210-backup.jar
+Qubero-20050206-2323-backup.jar
 extras
-jbuilder
-nbproject
-nbproject/private
 net
 net/pengo
 net/pengo/app
@@ -26,7 +23,6 @@ net/pengo/resource
 net/pengo/restree
 net/pengo/selection
 net/pengo/splash
-package cache
 src
 src/net
 src/net/pengo
@@ -49,33 +45,8 @@ src/net/pengo/resource
 src/net/pengo/restree
 src/net/pengo/selection
 src/net/pengo/splash
-svn
-svn/src
-svn/src/net
-svn/src/net/pengo
-svn/src/net/pengo/app
-svn/src/net/pengo/bitSelection
-svn/src/net/pengo/data
-svn/src/net/pengo/dependency
-svn/src/net/pengo/hexdraw
-svn/src/net/pengo/hexdraw/layout
-svn/src/net/pengo/hexdraw/lineRepeater
-svn/src/net/pengo/hexdraw/original
-svn/src/net/pengo/hexdraw/original/renderer
-svn/src/net/pengo/hexdraw/tabled
-svn/src/net/pengo/layer
-svn/src/net/pengo/listEditor
-svn/src/net/pengo/noncode
-svn/src/net/pengo/pointer
-svn/src/net/pengo/propertyEditor
-svn/src/net/pengo/resource
-svn/src/net/pengo/restree
-svn/src/net/pengo/selection
-svn/src/net/pengo/splash
 todo
 backup.bat
 build-custom.xml
-build.xml
 dist.bat
-dpush.bat
 

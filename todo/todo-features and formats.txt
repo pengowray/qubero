@@ -473,6 +473,11 @@ silly/fun stuff:
    punched tags, magnetic tapes, character recognition codes, morse codes (e.g. japanese morse code)
    http://homepages.cwi.nl/~dik/english/codes/
  - freeciv's tiles (square, iso, and hexagonal)
+ - basic cryptanalysis:
+   http://www.umich.edu/~umich/fm-34-40-2/
+ - steganography and steganalysis
+   "steganographic techniques also have peaceful applications, including: in-band captioning; integration of multiple media for convenient and reliable storage, management, and transmission; embedding executables for function control; error correction; and version upgrading."
+   http://www.acmqueue.com/modules.php?name=Content&pa=showpage&pid=241&page=1
 
 academic: (ideas from uni)
  - cladograms (and phylogenetic tree)

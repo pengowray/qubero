@@ -32,6 +32,9 @@ available at:
 package net.pengo.hexdraw.layout;
 
 import java.awt.Graphics;
+import java.awt.Rectangle;
+import java.util.LinkedList;
+import java.util.List;
 
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
@@ -60,6 +63,20 @@ public abstract class SuperSpacer {
     public abstract long getPixelWidth(BitCursor bits);
     public abstract long getPixelHeight(BitCursor bits);
 
+    /* create a path to the clicked selection */
+    public LayoutCursor layoutCursor(long x, long y, Round round, BitCursor bits) {
+    	LayoutCursor lc = new LayoutCursor();
+    	bitIsHere(x,y,round,bits,lc);
+
+		return lc;
+    }
+	
+    /* add to the list with path info for this layout doodad. */
+    protected List cursorPath(List path) {
+    	// return contents.cursorPath(path);
+    	return path;
+    }
+    
     /** the max or default width/height */
     //public abstract long getMaxPixelWidth();
     //public abstract long getMaxPixelHeight();
@@ -67,17 +84,25 @@ public abstract class SuperSpacer {
     public abstract BitCursor getBitCount(BitCursor bits);
     
     //public abstract long subIsHere(int x, int y, Round round);
-    public abstract BitCursor bitIsHere(long x, long y, Round round, BitCursor bits);
     
+    /**
+     * @param x 
+     * @param y
+     * @param round
+     * @param bits
+     * @param lc the path taken to reach the active selection. should isolate the column selected. mutable. add to the end of path as you go.
+     * @return lc as is, or with modifications, or a LayoutCursor.unactiveCursor() for null
+     */
+    public abstract LayoutCursor bitIsHere(long x, long y, Round round, BitCursor bits, LayoutCursor lc);
+
     //public abstract SpacerIterator iterator(); // Iterator<SuperSpacer>
     //public abstract SpacerIterator iterator(long first);
     
     //public abstract Point whereGoes(long sub);
     //public abstract Point whereGoes(BitCursor bit);
     
-    public abstract void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel);
+    public abstract void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs);
     
-
 	public abstract void setSimpleSize(SimpleSize s);
 	
 	protected static long doRound(double f, net.pengo.hexdraw.layout.SuperSpacer.Round r) {
@@ -89,7 +114,8 @@ public abstract class SuperSpacer {
 		
 		// (r == Round.nearest)
 		return (long)Math.round(f);		
-}
+		
+	}
 
 	
 }

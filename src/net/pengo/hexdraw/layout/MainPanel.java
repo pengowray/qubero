@@ -34,8 +34,10 @@ available at:
 
 package net.pengo.hexdraw.layout;
 
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics;
+import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
@@ -45,6 +47,8 @@ import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
+import javax.swing.Scrollable;
+import javax.swing.SwingConstants;
 
 import net.pengo.app.ActionListHolder;
 import net.pengo.app.ActiveFile;
@@ -64,20 +68,24 @@ import net.pengo.splash.SimplySizedFont;
  *
  * @author Peter Halasz
  */
-public class MainPanel extends JPanel implements BitSelectionListener, ActiveFileListener, ActionListHolder, MouseListener, MouseMotionListener {
+public class MainPanel extends JPanel implements BitSelectionListener, ActiveFileListener, ActionListHolder, MouseListener, MouseMotionListener, Scrollable  {
     /**
 	 * Comment for <code>serialVersionUID</code>
 	 */
 	private static final long serialVersionUID = 1L;
 	
 	//private List<Spacer> spacerlist = new LinkedList<Spacer>();
-	private SuperSpacer spacer;
+	
+	
     private SimplySizedFont hexFont = new SimplySizedFont("hex");
     private SimplySizedFont dosFont = new SimplySizedFont("dos");
     private SimplySizedFont unicode = new SimplySizedFont("unicode");
+    
+    private SuperSpacer spacer;
     private SimpleSize size = new SimpleSize();
     private ActiveFile activeFile;
     private SegmentalBitSelectionModel selection = new SegmentalBitSelectionModel();
+    private LayoutCursor layoutCursor;
     
     private Columns col = new Columns();
     
@@ -92,7 +100,6 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     public void loadDefaults() {
     	col.clear();
     	
-    	
     	CodePage437 dosTiles= new CodePage437(dosFont, false);
     	UnitSpacer dosUnit = new UnitSpacer(dosTiles);
     	col.addColumn(dosUnit, 16);    	
@@ -105,8 +112,10 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	UnitSpacer asciiUnit = new UnitSpacer(asciiTiles);
     	col.addColumn(asciiUnit, 16);
 
-       spacer = col.toColumnGroup();
+        spacer = col.toColumnGroup();
        
+        System.out.println("main spacer: " + spacer);
+        
     	recalc();
     }
     
@@ -163,7 +172,7 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	if (activeFile == null)
     		return;
     	
-    	BitCursor len = activeFile.getActive().getData().getBitLength();
+    	BitCursor len = len();
     	Dimension size = new Dimension((int) spacer.getPixelWidth(len), (int) spacer.getPixelHeight(len));
     	setMinimumSize(size);
     	setMaximumSize(size);
@@ -174,8 +183,9 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	invalidate();
     	repaint();
     }
-    
-    
+    private BitCursor len() {
+    	return activeFile.getActive().getData().getBitLength();
+    }
     /* work out how to lay everything out again.. after changes to layout properties*/
     private void repack() {
     	
@@ -219,7 +229,12 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	//System.out.println("d.getBitLength():" + d.getBitLength());
     	spacer.paint(g, activeFile.getActive().getData(), 
     			new BitSegment(new BitCursor(), d.getBitLength()),
-				selection);
+				selection, getLayoutCursor().descender());
+    	
+    	g.setColor(Color.red);
+    	Rectangle blinky = getLayoutCursor().getBlinkyLocation();
+    	if (blinky != null)
+    		g.fillRect(blinky.x, blinky.y, blinky.width, blinky.height);
     }
 
 	public void activeChanged(ActiveFileEvent e) {
@@ -255,11 +270,14 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	// ************** MOUSE EVENTS ************** 
 	public void mouseClicked(MouseEvent e) {
 		int clicks = e.getClickCount();
-		BitCursor len = activeFile.getActive().getData().getBitLength();
+		BitCursor len = len();
 		
 		if (clicks==2) {
-			BitCursor clickLeft = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.before, len );
-			BitCursor clickRight = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.after, len );
+			LayoutCursor cursLeft = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.before, len);
+			LayoutCursor cursRight = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.after, len);
+			BitCursor clickLeft = cursLeft.getBitLocation();
+			BitCursor clickRight = cursRight.getBitLocation();
+			setLayoutCursor(cursRight);
 			
 			//System.out.println("clicked between: " + clickLeft + " and " + clickRight);
 			
@@ -294,18 +312,21 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	public void mousePressed(MouseEvent e) {
 		selection.setValueIsAdjusting(true);
 
-		
 		//FIXME: should do different things if you click on a selected thing or not
-
-		int clicks = e.getClickCount();
-		BitCursor len = activeFile.getActive().getData().getBitLength();
 		
-		BitCursor clickbit = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.nearest, len );
+		int clicks = e.getClickCount();
+		BitCursor len = len();
+
+		LayoutCursor cursClick = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.nearest, len);
+		BitCursor clickbit = cursClick.getBitLocation();
 		
 		//System.out.println("clicked (nearest): " + clickbit);
 		
-		if (clickbit==null)
+		if (clickbit==null) {
 			return;
+		} else {
+			setLayoutCursor(cursClick);
+		}
 		
 		if (e.isShiftDown()) {
 			//System.out.println("shift-click: setLeadSelectionIndex()");
@@ -333,15 +354,18 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	}
     
 	public void mouseDragged(MouseEvent e) {
-		BitCursor len = activeFile.getActive().getData().getBitLength();
-		BitCursor clickbit = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.nearest, len );
-		
+
+		//FIXME: check that mouse drags are on the same path
+
+		LayoutCursor cursClick = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.nearest, len());
+		BitCursor clickbit = cursClick.getBitLocation();
+
 		//System.out.println("clicked (nearest): " + clickbit);
 		
 		if (clickbit==null)
 			return;
 		
-
+		setLayoutCursor(cursClick);
 		selection.setLeadSelectionIndex(clickbit);
 			
 		repaint();
@@ -350,5 +374,49 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	public void mouseMoved(MouseEvent e) {
 		// TODO Auto-generated method stub
 
+	}
+	public LayoutCursor getLayoutCursor() {
+		if (layoutCursor == null)
+			return LayoutCursor.unactiveCursor();
+		
+		return layoutCursor;
+	}
+	public void setLayoutCursor(LayoutCursor layoutCursor) {
+		System.out.println("layout cursor:" + layoutCursor);
+		this.layoutCursor = layoutCursor;
+	}
+
+
+	public Dimension getPreferredScrollableViewportSize() {
+		//FIXME: i dunno
+		return new Dimension((int)spacer.getPixelWidth(len()), (int)spacer.getPixelHeight(len()));
+	}
+
+
+
+
+	public boolean getScrollableTracksViewportWidth() {
+		return false;
+	}
+
+
+	public boolean getScrollableTracksViewportHeight() {
+		return false;
+	}
+
+	public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
+		if (layoutCursor != null) {
+			// use the actively selected column to work out scroll speed
+		}
+		
+		if (orientation == SwingConstants.VERTICAL) {
+			return hexFont.getFontMetrics().getHeight();
+		} else {
+			return hexFont.getFontMetrics().getMaxAdvance();
+		}
+	}
+
+	public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
+		return 4 * getScrollableUnitIncrement(visibleRect, orientation, direction);
 	}
 }

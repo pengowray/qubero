@@ -128,8 +128,8 @@ public class RepeatSpacerSimple extends MultiSpacer {
 	 * @see net.pengo.hexdraw.layout.SuperSpacer#bitIsHere(long, long, ,
 	 *         net.pengo.bitSelection.BitCursor)
 	 */
-	public BitCursor bitIsHere(long x, long y,
-			net.pengo.hexdraw.layout.SuperSpacer.Round r, BitCursor bits) {
+	public LayoutCursor bitIsHere(long x, long y,
+			net.pengo.hexdraw.layout.SuperSpacer.Round r, BitCursor bits, LayoutCursor lc) {
 		
 		if (isHorizontal()) {
 			    //FIXME: check both y too
@@ -139,16 +139,20 @@ public class RepeatSpacerSimple extends MultiSpacer {
 	            	//if we're catching the event here.. FIXME: NYI	
 	            	
 	            	where = doRound( (float) x /one, r) ;
-	            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
-	            	return bitLocation;
+	            	lc.setX(lc.getX() + where);
+	            	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
+	            	//XXX: do we need to add it? can't we just set it?
+	            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation ));
+	            	return lc;
 	            } else {
 	            	where =  x /one; // round down, let contents do real rounding
 	            	long xOffset = one * where;
-	            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
-		            BitCursor contentLoc = contents.bitIsHere(x-xOffset,y,r,bits(bits));
-		            
-		            return bitLocation.add(contentLoc);
-	            	
+	            	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
+		            lc.setX(lc.getX()+xOffset);
+	            	lc = contents.bitIsHere(x-xOffset,y,r,bits(bits),lc);
+	            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation));
+					
+		            return lc;
 	            }
 	            
     	} else {
@@ -157,22 +161,28 @@ public class RepeatSpacerSimple extends MultiSpacer {
             if (false) {
             	//if we're catching the event here.. FIXME: NYI	
             	
-            	where = doRound( (float) x /one, r) ;
-            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
-            	return bitLocation;
+            	where = doRound( (float) y /one, r) ;
+            	lc.setY(lc.getY() + where);
+            	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
+            	//XXX: do we need to add it? can't we just set it?
+            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation ));
+            	return lc;
+
             } else {
             	where =  y /one; // round down, let contents do real rounding
             	long yOffset = one * where;
-            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
-	            BitCursor contentLoc = contents.bitIsHere(x,y-yOffset,r,bits(bits));
-	            
-	            return bitLocation.add(contentLoc);
+            	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
+	            lc.setY(lc.getY()+yOffset);
+            	lc = contents.bitIsHere(x,y-yOffset,r,bits(bits),lc);
+            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation));
+				
+	            return lc;
             }
     	}
 		
 	}
 	
-	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel) {
+	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
 		BitCursor length = seg.getLength();
 		// check for empty
 		if (length.equals(BitCursor.zero))
@@ -244,7 +254,7 @@ public class RepeatSpacerSimple extends MultiSpacer {
 			BitCursor segStart = segEnd;
 			segEnd = segStart.add(bitLength);
 			
-			contents.paint(g, d, new BitSegment(segStart, segEnd), sel);
+			contents.paint(g, d, new BitSegment(segStart, segEnd), sel, curs);
 			
 			g.translate(xPixels, yPixels);
 			totalXChange += xPixels; 
