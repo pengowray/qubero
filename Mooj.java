@@ -7,7 +7,7 @@ public class Mooj {
     public static void main(String[] arg) {
         // read in file
         if (arg.length == 0)
-            arg = new String[] {"C:\\Peter\\project-moojasm\\HexEditorGUI.class"}; // Mooj.class
+            arg = new String[] {"C:\\My Documents\\project-moojasm\\HexEditorGUI.class"}; // Mooj.class
 
         new Mooj( arg[0] ).start();
     }

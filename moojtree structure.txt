@@ -1,0 +1,23 @@
+root
+ file
+ current view(s)
+  the raw data
+  sections
+   selection
+   definition
+   edited area
+   custom type def
+   folders (later maybe)
+   views
+ clipboard
+ filesystem
+  file
+
+Starting out: 15/08/2002
+ Mooj creates a SimpleFileChunk, and a wrapping OpenFileNode (was DefNode)
+ Mooj triggers HexView() on OpenFileNode
+ OpenFileNode.HexView() loads HexEditorGUI (xxx: in future, may latch on to existing HexEditorGUI for MDI)
+ All operations go via OpenFileNode (e.g. selection, definiton, etc)
+ Updates about OpenFileNode are learnt about via subscription.
+ xxx: in future an OpenFileNode may have mutliple SplitView's each SplitView can have its own selections / menu.. but this gets messy.
+ 

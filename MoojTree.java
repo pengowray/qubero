@@ -55,22 +55,37 @@ class MoojTree extends JTree {
 	});
 
 	// popup menu
+        // XXX: take menu from SectionedNode.getPopupMenu()
 	MouseListener ml = new MouseAdapter() {
 		public void mousePressed(MouseEvent e) {
 		    final int selRow = thisTree.getRowForLocation(e.getX(), e.getY());
 		    final TreePath selPath = thisTree.getPathForLocation(e.getX(), e.getY());
+                    final Object[] o = selPath.getPath();
+                    final Object selected = o[o.length-1];
 
 		    if(selRow != -1) {
 			if(e.isPopupTrigger() || e.isMetaDown() ) {//XXX: popup trigger is never true? why?
-			    JMenu pop = new JMenu("test");
-			    Action aa = new AddToTemplateAction(selPath);
-			    Action da = new DeleteDefinitionAction(selPath);
-			    Action ia = new InfoAction(selPath);
-			    pop.add(aa);
-			    pop.add(da);
-			    pop.add(ia);
-			    pop.add(new JMenuItem("sock puppets are fun!"));
-			    JPopupMenu popup = pop.getPopupMenu();
+                            JPopupMenu popup;
+                            if (selected instanceof SectionedNode) {
+                                popup = ((SectionedNode)selected).getPopupMenu();
+                            } else {
+                                // default popup menu
+                                // XXX: should there be a default?
+                                JMenu pop = new JMenu("test");
+                                Action aa = new AddToTemplateAction(selPath);
+                                Action da = new DeleteDefinitionAction(selPath);
+                                Action ia = new InfoAction(selPath);
+                                //Action mua = new MoveUpAction(selPath);
+                                //Action mda = new MoveDownAction(selPath);
+                                pop.add(aa);
+                                pop.add(da);
+                                pop.add(ia);
+                                //pop.add(mua);
+                                //pop.add(mda);
+                                pop.add(new JSeparator());
+                                pop.add(new JMenuItem("sock puppets are fun!"));
+                                popup = pop.getPopupMenu();
+                            }
 			    popup.show(thisTree, e.getX(), e.getY());
 			}
 		    }
@@ -81,6 +96,7 @@ class MoojTree extends JTree {
 	// rename (edit) element:
 	treemodel.addTreeModelListener(new TreeModelListener() {
 	    public void treeNodesChanged(TreeModelEvent e) {
+		//XXX: this is broken. changed node becomes a string!
 		Object[] path = e.getPath();
 		Object object = path[path.length-1];
 		if (object instanceof RawDataSelection) {
@@ -161,6 +177,9 @@ class AddToTemplateAction extends AbstractAction {
     }
 }
 
+
+
+
 class DeleteDefinitionAction extends AbstractAction {
     protected TreePath selPath;
 
@@ -212,3 +231,52 @@ class InfoAction extends AbstractAction {
 	}
     }
 }
+
+/*
+abstract class NodeAction extends AbstractAction() {
+
+    public PathAction (String name, Icon icon, TreePath selPath) {
+	super(name, icon);
+	this.selPath = selPath;
+    }
+
+    public PathAction (String name, TreePath selPath) {
+	super(name);
+	this.selPath = selPath;
+    }
+}
+
+
+// do something with a tree node.
+abstract class NodeVisitor {
+    public NodeAction (TreePath selPath) {
+	this.selPath = selPath;
+    }
+
+    public void actionPerformed(TreePath selPath) {
+	Object[] path = selPath.getPath();
+	Object object = selPath.getLastPathComponent();
+	Object userObject = null;
+
+	if (object instanceof DefaultMutableTreeNode) {
+	    userObject = ((DefaultMutableTreeNode)object).getUserObject();
+
+	    if (userObject instanceof RawDataSelection) {
+		RawDataSelection raw = (RawDataSelection)userObject;
+		DefNode defnode = raw.getDefNode();
+		
+		
+		defnode.deleteDefinition((DefaultMutableTreeNode)object);
+		actionPerformedOnDefinition(e, raw); //XXX: blah
+	    }
+	}
+    }
+
+    public void visitSelection(RawDataSelection raw){}
+
+    public void visitDefinition(RawDataSelection raw){}
+
+    public void visitEditedArea(ActionEvent e, RawDataSelection raw){}
+
+}
+*/

@@ -5,17 +5,27 @@ view, edit, create java bytecode + automation
 get it right later
 """
 
-to do right now:
- - selection at end of large file
+to do first:
+ - documentation
+ - fix bug: rename of item destroys it
+ - context sensitive context-menu on tree
+ - when right clicking a (non-selected) item on tree, show a dotted outline selection 
+ - add new definitions to END (not beginning)
+ - fix bug: delete definition from selection header causes problems.
+ - make all menus work
+ - allow right click on hex area
+ - bug: slow selection at end of large file
+ - wheel jumps too slow
  - scrollbar doesn't update immediately on opening file
  - arrow key movement
- - show selection in ascii
+ - show selection on ascii side [hollow box]
  - EDIT hex / ascii
  - DnD tree elements
  - status messages
  - save/open template definitions
  - bigger west pane for tree
  - new selection: auto open up tree
+ - highlighting colour scheme
 
 soon after:
  - select a template area by clicking it on the hex side
@@ -25,25 +35,26 @@ soon after:
 read this:
  - http://tunes.org/files/papers/Arrow_Introduction_v8.htm
 
-for v0.1
+for v0.2
  - sequential + recursive + random access + dependant + compression definitions of parts of file (xml defintion)
  - scoped type definition with inheritance
  - external main definition file
- - hex display 
+D hex display 
  - highlighting of parts (outline) and errors (red)
- - display: tree of parts
+D display: tree of parts
  - table of constants
  - names for chunks, types
  - array/table numbering systems
  - search / jump
  - text only display
 
-for v0.2
+for v0.3
  - expandable view (.jar, compressed bits)
  - more file formats
  - more views
  - more chunk types
  - less java dependant?
+ - hex edit clipboard 
 
 initial chunk types to support:
  - internal types: template references
@@ -61,6 +72,8 @@ initial chunk types to support:
  - table of constants
  - xml: types and stuff at least
  - python's pickled objects
+ - truncated types (last 8 bits of a 32-bit float?)
+ - Math.BigNumber
 
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
@@ -78,18 +91,34 @@ future versions:
  - file location as part of definition
  - new english words for hex. Wunex, Texo, Treex, Forx, Fivex, Sixer .. Aten, Blev, Curlve, Dirxeen, Exorte, Fixte, Texan (ten is bigger in texas)
  - design new characters for hex (incorporating roman numerals, x's, japanese, and standard arabic)
+ - OCR for dvd and tv subtitles and screen captures
+ - OCR for taxes, books, etc
+ - OCR for musical notation
+ - allow pipes to mooj. e.g:   dir | mooj.exe
+ - monitor files + show changes.. help working out file formats
+ - treat filename and path as part of the file's data (metadata)
+ - get data off the web
+ - sequencer (allow triplets in 4/4)
+ - database connectivity
+ - self describing document -> .exe / .class / applet / javascript
+ - natural language guessing
+ - sort data
+ - template + datasource merges
+ - web service (upload file to display as hex.html or hex.gif)
+ - very large file support for all formats!
 
 future formats:
  - parse .java files too?
+ - java tracestack messages/details
  - Extended Backus-Naur Form (EBNF) notation support
  - mame images and sounds!
  - excel types + formats + equations
  - python types
  - different javascript styles
- - self describing document -> .exe / .class / applet / javascript
- - human language guessing
- - gif / jpg / png
- - rar / zip / ace
+ - gif / jpg / png / psd / corel
+ - rar / zip / ace / bz2 / lzh / lzw / lzx / tar / z
+ - encrypted files (pgp, etc)
+ - LaTeX
  - flash
  - javadoc viewer/editor!
  - decompiler (nasm.octium.net / intel.com / x86.org)
@@ -97,9 +126,39 @@ future formats:
  - virus detection/definitions (e.g. norton)
  - configuration files (.ini + unix, including new quota files)
  - DVD + subtitles
- - fat12/fat16 (ask rob_ert). Fat32, NTFS, etc.
- - resource fork (mac)
-  
+ - fat12/fat16 (ask rob_ert.. or ww). Fat32, NTFS, EXT2, etc.
+ - CIF Easy CD Creator image 
+ - ISO: based on the ISO 9660 CD-ROM file system standard 
+ - resource fork (mac) .RS_
+ - b-trees [eks's homepage: http://void-core.2y.net/ ]
+ - comms app histories (icq data / irc logs / outlook / eudora / lotus / etc)
+ - midi + kar + mod + other musical notations
+ - w3c: CSS, DOM, HTTP, URL/URI, SVG, SMIL, SOAP, XLink, XFORMS...
+ - weights and measures (metric->imperial,etc)
+ - web logs
+ - email address + email format + news
+ - fonts! ttf, etc.
+ - windows registry
+ - standard schedule/calendar format?
+ - Comma-delimited ASCII file
+ - CER / CRT Certificate file (MIME x-x509-ca-cert) 
+ - wordnet files, microsoft/wordperfect/openoffice dictionary files
+ - DLL(Dynamic-link library file)
+ - DST Embroidery machines graphic file 
+ - HEX Macintosh BinHex 2.0 file 
+ - LWZ Linguistically enhanced sound file (Microsoft)  ??
+ - more file extensions: http://whatis.techtarget.com/fileFormatA/
+ - MOV Movie (QuickTime for Microsoft Windows) 
+ - RTF Rich Text Format document 
+ - VCF Virtual card file  
+ - database types (oracle, postgres, etc)
+ - roman numerals
+ - PNM is a image file format, it can encode truecolor images (PPM), grayscale images (PGM) and black/white ones (PBM) (unix)
+ - dna sequences
+ - [file/data] sizes (kb / mb / other powers of 1024)
+ - core dumps: <gremlin> -rw-------  1 grem  grem   503140352 Jun  5 18:17 tcsh.core
+ - windows .url, .lnk, .pif
+
 programs to obsolete:
  - notepad + wordpad
  - kde's hex editor
@@ -108,10 +167,19 @@ programs to obsolete:
  - new locus
  - outlook
  - excel
+ - telemate
+
+projects to synergise with:
+ - wine
+ - linux / bsd
+ - compression utilities (share libraries if possible)
 
 silly stuff:
  - xmodem end-escape sequence fixing
  - ansi music! 
+ - DOS logs (xxx: how to add "invisible" timestamps?)
+ - how much does that number resemble someone randomly hitting the keyboard
+   [Miffy: NSA-STD 102328292302    TTY logging of remote user commands with time stamps.]
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
@@ -160,12 +228,17 @@ hexworkshop.com
 ben's suggestions:
  - replace large area with "0x20" or a pattern, etc
  - postscript / pdf
- - shockwave flash, asn1 (multiple spec)
+ - shockwave flash
+ - asn1 (multiple spec)
  - asn1 -> c
  - 40-bit rc4
- - ** search for this: iso-3309 (www.iso.ch browse product store, 35.100.20)
+ - iso-3309 (www.iso.ch browse product store, 35.100.20) -- cannot find
  - russian fbi fed pdf 
  - bus: streaming data
  - mpeg4 (for dad)
  - WGS 84 (Earth coordinates)
  - divx
+ - externalist set of ontological enumerations
+
+soel's idea:
+ - financial transactions (linked to revolving bank account), video game style

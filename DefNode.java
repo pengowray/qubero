@@ -5,30 +5,36 @@ import javax.swing.event.*;
 /**
  * Node used by MoojTree containing display information for a file/definition.
  * also to be uesd by HexPanel?
+ * //XXX: needs to be renamed (e.g. OpenFileNode or TopFileNode or something)
  */
 
 class DefNode extends DefaultMutableTreeNode {
     protected RawData rawdata;
-    protected DefaultTreeModel def;
-    protected DefaultMutableTreeNode selectionHeader = null; // the header/heading node for the current selection
-    protected DefaultMutableTreeNode definitionHeader = null; // the header node for the definition
-    protected RawDataSelection currentSelection = null;
-    protected DefaultMutableTreeNode currentSelectionNode = null;
     protected DefaultTreeModel parentTreeModel; // the tree model this is part of. XXX: multiple?
+
+    protected DefSection selectionHeader; // the header/heading node for the current selection
+    protected DefSection definitionHeader; // the header node for the definition
     protected HexPanel hexpanel; //XXX: allow multiple?
 
     /**
      * def may be null. in future rawdata may be null too (to indicate an empty file).
      */
-    public DefNode(RawData rawdata, DefaultTreeModel def) {
+    public DefNode(RawData rawdata, DefaultTreeModel parentTreeModel) {
 	super(rawdata.toString());
 	this.rawdata = rawdata;
-	this.def = def;
+	this.parentTreeModel = parentTreeModel;
+        
+        selectionHeader = new DefSection("Selection");
+        selectionHeader.setTreeModel(parentTreeModel, this, 0);
+        definitionHeader = new DefSection("Definition");
+        definitionHeader.setTreeModel(parentTreeModel, this, 1);
+        
     }
 
     public void setParentTreeModel(DefaultTreeModel parentTreeModel) {
 	this.parentTreeModel = parentTreeModel;
 	//XXX: rebuild self within this model?
+        //XXX: must alert DefSections (HeaderSections)
     }
 
     public DefaultTreeModel getParentTreeModel() {
@@ -52,6 +58,10 @@ class DefNode extends DefaultMutableTreeNode {
     }
 
     public void setSelection(RawDataSelection sel){
+        SectionedSelectionNode ssn = new SectionedSelectionNode(sel); //XXX: DefSection should be responsible for wrapping
+        selectionHeader.setContents(ssn);
+        
+        /*
 	DefaultMutableTreeNode oldSelectionNode	= currentSelectionNode;
 
 	if (selectionHeader == null) {
@@ -69,11 +79,14 @@ class DefNode extends DefaultMutableTreeNode {
 
 	//XXX: put this back!
 	//makeVisible(new TreePath(new Object[]{topnode,selectionHeader,currentSelectionNode}));
+        */
     }
 
 
     // MoojTree rename (edit) of node / converting selection to a definition:
     public void definitionMade(RawDataSelection sel) {
+        //XXX: pending
+        /*
 	DefaultMutableTreeNode oldSelectionNode	= currentSelectionNode;
 
 	if (definitionHeader == null) {
@@ -85,6 +98,7 @@ class DefNode extends DefaultMutableTreeNode {
 	parentTreeModel.insertNodeInto(definitionNode, definitionHeader, 0);
 
 	//makeVisible(new TreePath(new Object[]{topnode,selectionHeader,currentSelectionNode}));
+        */
     }
     
     public void deleteDefinition(MutableTreeNode sel) {
@@ -93,7 +107,9 @@ class DefNode extends DefaultMutableTreeNode {
     }
 
     public RawDataSelection getSelection(){
-	return currentSelection;
+        //XXX pending
+        return null;
+	//return currentSelection;
     }
 
     public RawData getRawData() {
