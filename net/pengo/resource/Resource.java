@@ -68,7 +68,7 @@ public abstract class Resource {
     
     // default action when double-clicked (e.g in a list)
     public void doubleClickAction() {
-        System.out.println(this + "\n  " + this.getClass() + " -- " + openFile + " -- children: " + getChildren().length);
+        System.out.println(this + "\n  " + this.getClass() + " -- children: " + getChildren().length);
     }
     /*
     // call after updating children

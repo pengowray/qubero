@@ -1,13 +1,16 @@
 moojasm todo.txt
 
+"bedrock"
 "templatation"
+templater
+binary data language and modeller.
 binary data modelling spreadsheet and database.
 the photoshop of hex editors.
 view, edit, create java bytecode + automation
 visual code editor
 the editor editor (lame)
 base edit
-"bedrock"
+
 
 """get it working first
 get it right later
@@ -84,17 +87,32 @@ Log started Aug 21 2002:
              Apply button enabling only on modification.
              Removed errors in unused classes: Commented out / made abstract
  2003-07-11  fixed-length unsigned integers
+             show properties page when creating an int resource
  2003-07-12  ResourceSortedSet (for the breaks)
              added ValuePage and AddressPage (needs work).
              fixed-length 2's comp integers
              fixed -1 reading bug in SelectionData
-
+ 2003-07-13  auto use overwrite instead of insertReplace when possible
+ 2003-07-23  MDI work. ResourceList now has customisable ResourceFactory (rather than an OpenFile)
+             ResourceList no longer uses OpenFile
+             ResourceFactory made non-static + split into DefaultResourceFactory and OpenFileResourceFactory
+ 2003-07-24  everything compiling again for MDI. runs with no errors. MDI is almost there.
+ 2003-07-26  MDI works
+             new OpenFileResource
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
 priority/immediate features todo:
- 2003-07-10
- - show properties page when creating an int resource
+ 
+ 2003-07-24
+ X quite obviously, the resources menu is slightly broken
+ - ResourceList and SortedSetList are missing features, and need to be given a common superclass
+ - ResourceList does not refresh properly when given a new ResourceFactory
+ 2003-07-12
+ - edit a data source in a new window or tab
+ - many int types dont allow fixed-length
+ - setting fixed-length on/off in properties
+ - order of save from properties: value must be saved AFTER int type. (or both done together?)
  2003-07-09
  - growing the file doesn't allow new chunk to be selected
  - make hexpanel's repaint more accurate

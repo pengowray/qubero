@@ -16,7 +16,7 @@ import javax.swing.tree.DefaultTreeModel;
 import net.pengo.app.OpenFile;
 import net.pengo.resource.Resource;
 import net.pengo.resource.ResourceFactory;
-import net.pengo.resource.ListResource;
+import net.pengo.resource.CollectionResource;
 
 /**
  *
@@ -24,21 +24,40 @@ import net.pengo.resource.ListResource;
  */
 public class ResourceSortedSet implements SortedSet {
     private SortedSet list;
-    private OpenFile openFile;
+    private ResourceFactory resFact;
     private String name;
 
     private Map parentTree = new HashMap(); // parent nodes for this resource list. MutableTreeNode->JTree. MutableTreeNode must not be modified by any other objects besides this.
     
     /** Creates a new instance of ResourceSortedSet */
-    public ResourceSortedSet(SortedSet set, OpenFile openFile, String name) {
+    public ResourceSortedSet(SortedSet set, ResourceFactory resFact, String name) {
 	this.list = set;
-	this.openFile = openFile;
+	setResourceFactory(resFact);
 	this.name = name;
     }
 
-    public void setOpenFile(OpenFile openFile) {
-	//fixme: can this screw things up?
-	this.openFile = openFile;
+    public ResourceSortedSet(SortedSet set, OpenFile openFile, String name) {
+	this.list = set;
+	setResourceFactory(openFile);
+	this.name = name;
+    }
+
+    // for your convinence
+    public void setResourceFactory(OpenFile of) {
+	if (of == null) {
+	    setResourceFactory((ResourceFactory)null);
+	} else {
+	    setResourceFactory(of.getResourceFactory());
+	}
+    }
+
+    public void setResourceFactory(ResourceFactory resFact) {
+	if (resFact == null) {
+	    resFact = ResourceFactory.getDefault();
+	}
+	
+	this.resFact = resFact;
+	refreshTree();
     }
 
     public String toString() {
@@ -97,7 +116,7 @@ public class ResourceSortedSet implements SortedSet {
     }
     
     private void insertNode(MutableTreeNode parent, Object childObject, SimpleResTree jt, int index) {
-	Resource resourceObject = ResourceFactory.wrap(childObject, openFile);
+	Resource resourceObject = resFact.wrap(childObject);
 	DefaultTreeModel tm = (DefaultTreeModel)jt.getModel();
 	DefaultMutableTreeNode child = new DefaultMutableTreeNode(resourceObject);
 	
@@ -115,6 +134,9 @@ public class ResourceSortedSet implements SortedSet {
 	} else if (childObject instanceof ResourceSortedSet) {
             ResourceSortedSet childResList = (ResourceSortedSet)childObject;
             childResList.addParent(parent, childNode);
+        } else if (childObject instanceof OpenFile) {
+	    ResourceList childResList = ((OpenFile)childObject).getResourceList(); //fixme: unused?
+	    childResList.addParent(parent, childNode);
         }
     }
     
@@ -125,7 +147,7 @@ public class ResourceSortedSet implements SortedSet {
             Object obj = it.next();
 	    DefaultTreeModel tm = (DefaultTreeModel)rt.getModel();
 	    //p.insert(child, i); // not much good.
-	    insertNode(p, obj, rt, i); 
+	    insertNode(p, obj, rt, i);
             i++;
 	}
 	

@@ -6,15 +6,15 @@
 
 package net.pengo.resource;
 
+import java.util.Collection;
 import java.util.List;
 import net.pengo.app.OpenFile;
-import net.pengo.restree.ResourceList;
 
 // a resource that has sub resources
-public class ListResource extends Resource
+public class CollectionResource extends Resource
 {
-	List resourceList;
-	public ListResource(List resourceList, OpenFile openFile) {
+	Collection resourceList;
+	public CollectionResource(Collection resourceList, OpenFile openFile) {
 		super(openFile);
 		this.resourceList = resourceList;
     }

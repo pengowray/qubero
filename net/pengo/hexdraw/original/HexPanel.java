@@ -16,33 +16,19 @@ import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.event.MouseInputAdapter;
 import net.pengo.data.Data;
-import net.pengo.data.EditEvent;
+import net.pengo.data.DataEvent;
+import net.pengo.data.DataListener;
 import net.pengo.data.EmptyData;
-import net.pengo.resource.ResourceEvent;
-import net.pengo.resource.ResourceListener;
+import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
 import net.pengo.selection.LongListSelectionModel;
-import net.pengo.selection.LongListSelectionEvent;
 
 //FIXME: openFile's resources should be considered in rendering ?
 
-public class HexPanel extends JPanel implements OpenFileListener, Scrollable, LongListSelectionListener, DropTargetListener  {
+public class HexPanel extends JPanel implements DataListener, ActiveFileListener, OpenFileListener, Scrollable, LongListSelectionListener, DropTargetListener  {
     
-    
-    /**
-     * Called whenever the value of the selection changes.
-     * @param e the event that characterizes the change.
-     */
-    public void valueChanged(LongListSelectionEvent e)  {
-	
-	//LongListSelectionModel sm = openFile.getSelectionModel();
-	//repaintHex(sm.getMinSelectionIndex(), sm.getMaxSelectionIndex());
-	
-	repaint();
-    }
-    
-    
-    protected OpenFile openFile = null;
+    private ActiveFile activeFile = null;
+    protected OpenFile openFile = null; // == activeFile.getActive()
     protected Data root;
     protected long rootLength; // cached value to check if it's changed size.
     
@@ -63,8 +49,6 @@ public class HexPanel extends JPanel implements OpenFileListener, Scrollable, Lo
     //protected Data selection = null;
     //protected SegmentalLongListSelectionModel selectionModel = new SegmentalLongListSelectionModel();
     
-    protected int cursor = -1;
-    
     private boolean draggingMode = false; // mouse is currently dragging a selection
     //    private boolean published = false; // has the current selection been published?
     
@@ -73,28 +57,13 @@ public class HexPanel extends JPanel implements OpenFileListener, Scrollable, Lo
     
     private int greyMode = 0;
     
-    public void click(long hclick, MouseEvent e) {
-	if (e.isShiftDown())  {
-	    //getSelectionModel().setLeadSelectionIndex(hclick);
-	    changeSelection(hclick, false, true);
-	}
-	else if (e.isControlDown())  {
-	    //getSelectionModel().addSelectionInterval(hclick,hclick);
-	    changeSelection(hclick, true, false);
-	}
-	else  {
-	    //getSelectionModel().setSelectionInterval(hclick,hclick);
-	    changeSelection(hclick, false, false);
-	}
-    }
-    
-    public HexPanel(OpenFile openFile)  {
+    public HexPanel(ActiveFile activeFile)  {
 	super();
 	setBackground(Color.white);
-	
-	setOpenFile(openFile);
-	//openFile.addResourceListener(this);
-	openFile.addLongListSelectionListener(this);
+
+	this.activeFile = activeFile;
+	activeFile.addActiveFileListener(this);
+	setOpenFile(activeFile.getActive());
 	
 	// MOUSE ROUTINES
 	
@@ -152,6 +121,66 @@ public class HexPanel extends JPanel implements OpenFileListener, Scrollable, Lo
 	
     }
     
+    public void openFileNameChanged(ActiveFileEvent e) {
+	// do nothing
+    }
+    
+    public void openFileRemoved(ActiveFileEvent e) {
+	// do nothing
+    }
+    
+    public void openFileAdded(ActiveFileEvent e) {
+	// do nothing
+    }
+    
+    public void closedOpenFile(ActiveFileEvent e) {
+	// do nothing
+    }
+    
+    public boolean readyToCloseOpenFile(ActiveFileEvent e) {
+	return true;
+    }
+    
+    public void activeChanged(ActiveFileEvent e) {
+	setOpenFile(activeFile.getActive());
+    }
+    
+
+    
+    
+    // triggered when data changes
+    public void dataUpdate(DataEvent e) {
+	repaint();
+    }
+    
+    /**
+     * Called whenever the value of the selection changes.
+     * @param e the event that characterizes the change.
+     */
+    public void valueChanged(LongListSelectionEvent e)  {
+	
+	//LongListSelectionModel sm = openFile.getSelectionModel();
+	//repaintHex(sm.getMinSelectionIndex(), sm.getMaxSelectionIndex());
+	
+	repaint();
+    }
+
+    public void click(long hclick, MouseEvent e) {
+	if (e.isShiftDown())  {
+	    //getSelectionModel().setLeadSelectionIndex(hclick);
+	    changeSelection(hclick, false, true);
+	}
+	else if (e.isControlDown())  {
+	    //getSelectionModel().addSelectionInterval(hclick,hclick);
+	    changeSelection(hclick, true, false);
+	}
+	else  {
+	    //getSelectionModel().setSelectionInterval(hclick,hclick);
+	    changeSelection(hclick, false, false);
+	}
+    }
+    
+
     public void changeSelection(long index, boolean toggle, boolean extend)  {
 	//super.changeSelection(rowIndex, columnIndex, toggle, extend);
 	LongListSelectionModel sm  = getSelectionModel();
@@ -181,18 +210,22 @@ public class HexPanel extends JPanel implements OpenFileListener, Scrollable, Lo
     }
     
     
-    public void setOpenFile(OpenFile openFile)  {
+    private void setOpenFile(OpenFile openFile)  {
 	if (this.openFile != null)  {
 	    this.openFile.removeOpenFileListener(this);
+	    this.openFile.removeLongListSelectionListener(this);
+	    this.openFile.removeDataListener(this);
 	}
 	
 	this.openFile = openFile;
 	this.root = openFile.getData();
 	getSelectionModel().clearSelection();
-	cursor = -1;
 	rootLength = root.getLength();
 	
 	openFile.addOpenFileListener(this);
+	//openFile.addResourceListener(this);
+	openFile.addLongListSelectionListener(this);
+	openFile.addDataListener(this);
 	
 	reCalcDim();
 	
@@ -651,10 +684,10 @@ public class HexPanel extends JPanel implements OpenFileListener, Scrollable, Lo
 	
     }
     
-    public void dataEdited(EditEvent e)  {
+    public void dataEdited(DataEvent e)  {
     }
     
-    public void dataLengthChanged(EditEvent e)  {
+    public void dataLengthChanged(DataEvent e)  {
     }
     
     public void fileSaved(FileEvent e)  {

@@ -16,23 +16,46 @@ import net.pengo.app.OpenFile;
 import net.pengo.resource.Resource;
 import net.pengo.resource.ResourceFactory;
 import javax.swing.tree.DefaultTreeModel;
-import net.pengo.resource.ListResource;
+import net.pengo.resource.CollectionResource;
 
 public class ResourceList implements List {
     String name;
     private List list;
-    private OpenFile openFile; //fixme: do we really need this?
+    private ResourceFactory resFact;
 
     private Map parentTree = new HashMap(); // parent nodes for this resource list. MutableTreeNode->JTree. MutableTreeNode must not be modified by any other objects besides this.
 
     public ResourceList(List list) {
-	this(list, null, null);
+	this(list, (ResourceFactory)null, null);
     }
     
+    public ResourceList(List list, ResourceFactory resFact, String name) {
+	this.list = list;
+	setResourceFactory(resFact);
+	this.name = name;
+    }
+
     public ResourceList(List list, OpenFile openFile, String name) {
 	this.list = list;
-	this.openFile = openFile;
+	setResourceFactory(openFile);
 	this.name = name;
+    }
+    
+    // for your convinence
+    public void setResourceFactory(OpenFile of) {
+	if (of == null) {
+	    setResourceFactory((ResourceFactory)null);
+	} else {
+	    setResourceFactory(of.getResourceFactory());
+	}
+    }
+    
+    public void setResourceFactory(ResourceFactory resFact) {
+	//fixme: what about rebuilding the tree?
+	if (resFact == null) {
+	    resFact = ResourceFactory.getDefault();
+	}
+	this.resFact = resFact;
     }
     
     public String toString() {
@@ -41,11 +64,6 @@ public class ResourceList implements List {
 	}
 	
 	return name;
-    }
-    
-    public void setOpenFile(OpenFile openFile) {
-	//fixme: can this screw things up?
-	this.openFile = openFile;
     }
     
     public ListIterator listIterator() {
@@ -86,7 +104,7 @@ public class ResourceList implements List {
     }
     
     private void insertNode(MutableTreeNode parent, Object childObject, SimpleResTree jt, int index) {
-	Resource resourceObject = ResourceFactory.wrap(childObject, openFile);
+	Resource resourceObject = resFact.wrap(childObject);
 	DefaultTreeModel tm = (DefaultTreeModel)jt.getModel();
 	DefaultMutableTreeNode child = new DefaultMutableTreeNode(resourceObject);
 	
@@ -116,6 +134,9 @@ public class ResourceList implements List {
 	} else if (childObject instanceof ResourceSortedSet) {
             ResourceSortedSet childResList = (ResourceSortedSet)childObject;
             childResList.addParent(parent, childNode);
+        } else if (childObject instanceof OpenFile) {
+	    ResourceList childResList = ((OpenFile)childObject).getResourceList(); //fixme: unused?
+	    childResList.addParent(parent, childNode);
         }
     }
     
@@ -124,9 +145,9 @@ public class ResourceList implements List {
         int i=0;
         for (Iterator it=list.iterator(); it.hasNext(); ) {
             Object obj = it.next();
-	    DefaultTreeModel tm = (DefaultTreeModel)rt.getModel();
+	    //DefaultTreeModel tm = (DefaultTreeModel)rt.getModel();
 	    //p.insert(child, i); // not much good.
-	    insertNode(p, obj, rt, i); 
+	    insertNode(p, obj, rt, i);
             i++;
 	}
 	
@@ -224,7 +245,7 @@ public class ResourceList implements List {
     }
     
     public boolean containsAll(Collection c) {
-	return containsAll(c);
+	return list.containsAll(c);
     }
     
     public int size() {
@@ -232,7 +253,7 @@ public class ResourceList implements List {
     }
     
     public int indexOf(Object o) {
-	return indexOf(o);
+	return list.indexOf(o);
     }
     
     public boolean retainAll(Collection c) {

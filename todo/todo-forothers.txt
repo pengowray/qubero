@@ -80,6 +80,9 @@ quantis on #osdev (03 May 2003)
  - <quantis> i.e trying to make linker files a lot easier to understand
  - <quantis> and try and get it so it can do really lowlevel stuff that most hll cant
 
+air:
+<air> pengo: table programming
+<air> http://www.geocities.com/tablizer/top.htm
 data modelling tools + terms:
  - http://datamodel.org/
 
@@ -170,3 +173,4 @@ make money with:
  - flagged images. (online textbook suppliments.)
  - image analogies style 3D skin for renderings (for movies)
  - monitor ebay / stockmarket / weather / horses (and correlate:) )
+

@@ -1,0 +1,15 @@
+Bedrock is a binary-data modeller, based around the user interface of a hexidecimal editor. Its power comes from the ability to give meaning to raw data, including defining functions to 
+
+Source code is not yet available and is currently pure Java. User interface is (currently) Swing.
+
+Features (complete or mostly complete):
+ - layered data sources. Keep data sources and views on separate layers. e.g. Easy movement and editing of changes
+ - plug-in new views for templated data
+ - inbuilt support for integers (any size). Unsigned, signed and other formats (currently sizes must be a mutliple of 8 bits)
+ - multiple undo
+ - scalible. Can chop and change very large files (2gig) with a small memory footprint.
+ - native diff file support: save "changes only" to a diff file, or keep backup as a diff.
+
+Still in progress:
+ - text mode (currently only swing)
+ - not yet optimized for small files.

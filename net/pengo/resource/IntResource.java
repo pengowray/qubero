@@ -50,13 +50,13 @@ public class IntResource extends DefinitionResource {
     }
     
     public JMenu getJMenu() {
-        final IntResource This = this;
         final OpenFile openFile = this.openFile;
         
   	JMenu menu = new JMenu("Example");
         Action deleteAction = new AbstractAction("Delete") {
             public void actionPerformed(ActionEvent e) {
-                getOpenFile().deleteDefinition(e.getSource(), This);
+                //getOpenFile().deleteDefinition(e.getSource(), This);
+		getOpenFile().getDefinitionList().remove(IntResource.this);
             }
         };
 	menu.add(deleteAction);
@@ -64,7 +64,12 @@ public class IntResource extends DefinitionResource {
         Action untypeAction = new AbstractAction("Convert to untyped definition") {
             public void actionPerformed(ActionEvent e) {
                 DefaultDefinitionResource res = new DefaultDefinitionResource(openFile, sel);
-                openFile.definitionChange(e.getSource(), This, res); // xxx
+                //openFile.definitionChange(e.getSource(), This, res);
+		List l = getOpenFile().getDefinitionList();
+		int index = l.indexOf(IntResource.this);
+		l.remove(index);
+		l.add(index, res);
+		
             }
         };
 	menu.add(untypeAction);
@@ -73,12 +78,11 @@ public class IntResource extends DefinitionResource {
             public void actionPerformed(ActionEvent e){
                 BigInteger data = IntResource.this.getValue();
                 new IntInputBox("Edit value","New value:",data.toString(),IntResource.this).show();
-                
             }
         };
         menu.add(editAction);
 
-        
+        /*
         Action unsignAction = new AbstractAction("Convert to unsigned") {
             public void actionPerformed(ActionEvent e) {
                 IntResource.this.setSigned(IntResource.UNSIGNED);
@@ -118,6 +122,7 @@ public class IntResource extends DefinitionResource {
             }
         };
 	menu.add(propAction);
+	 */
         //JPopupMenu popup = menu.getPopupMenu();
 	return menu;
         
@@ -181,10 +186,6 @@ public class IntResource extends DefinitionResource {
                                 while (padcount < data.length && data[padcount] == -1) {
                                     padcount++;
                                 }
-                                System.out.println("pad count: " + padcount + " first 2 bytes: " + data[0] + ", " + data[1] );
-                                for (int i=0; i<data.length; i++) {
-                                    System.out.println(i + ": " + data[i] + " == -1? " + (data[i]==-1) );
-                                }
                                 if (padcount == 0) {
                                     return new BigInteger(data);
                                 } else if (padcount == data.length) {
@@ -196,7 +197,7 @@ public class IntResource extends DefinitionResource {
                                     System.out.println( trimmed );
                                     return new BigInteger(trimmed);
                                 }
-                            } else {                          
+                            } else {
                                 return new BigInteger(data);
                             }
 			}
@@ -291,7 +292,7 @@ public class IntResource extends DefinitionResource {
                 if (paddingNeeded == 0) {
                     return data;
                 } else if (paddingNeeded > 0) {
-                    byte pad = (bigInt.signum() == -1 ? (byte)-1 : (byte)0); 
+                    byte pad = (bigInt.signum() == -1 ? (byte)-1 : (byte)0);
                     byte[] padded = new byte[(int)selData.getLength()];
                     System.arraycopy(data, 0, padded, paddingNeeded, data.length);
                     Arrays.fill(padded, 0, paddingNeeded, pad);

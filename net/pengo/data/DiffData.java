@@ -4,16 +4,20 @@
  * Created on 31 August 2002, 13:30
  */
 package net.pengo.data;
-import java.util.*;
-
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import net.pengo.app.Cursor;
 import net.pengo.app.OpenFile;
-import net.pengo.resource.DefaultDefinitionResource;
+import net.pengo.resource.ResourceFactory;
 import net.pengo.restree.ResourceList;
 import net.pengo.restree.ResourceSortedSet;
-import net.pengo.selection.*;
+import net.pengo.selection.LongListSelectionModel;
+import net.pengo.selection.Segment;
 
 /**
  *
@@ -22,17 +26,19 @@ import net.pengo.selection.*;
 public class DiffData extends EditableData {
     protected OpenFile openFile;
     protected Data source;
-    protected List modList;
-    protected SortedSet breakList;
+    protected ResourceList modList;
+    protected ResourceSortedSet breakList;
     
+    //protected ResourceList resModList; // List
+    //protected ResourceSortedSet resBreakList; // SortedSet
+
     protected LinkedList streamList;
     protected boolean streamFlow = true;
     
     /** Creates a new instance of DiffData */
     public DiffData(OpenFile openFile, Data source) {
         this.source = source;
-        setOpenFile(openFile);
-        breakList = new ResourceSortedSet(Collections.synchronizedSortedSet(new TreeSet()), openFile, "Breaks");
+	setOpenFile(openFile);
         calcSourceBreaks();
     }
     
@@ -41,22 +47,31 @@ public class DiffData extends EditableData {
     }
     
     public void setOpenFile(OpenFile openFile) {
+	if (breakList == null) {
+	    breakList =
+		new ResourceSortedSet(Collections.synchronizedSortedSet(new TreeSet()), openFile, "Breaks");
+	}
+	
+	if (modList == null) {
+	    modList =
+		new ResourceList(new LinkedList(), openFile, "Undo Wishlist");
+	}
+	
         if (this.openFile != null) {
             //fixme
             openFile.getResourceList().remove(modList);
             openFile.getResourceList().remove(breakList);
-        }
+	}
         this.openFile = openFile;
-		
-        modList = new ResourceList(new LinkedList(), openFile, "Undo Wishlist"); //new LinkedList();
-		
-        if (openFile != null) {
-            ((ResourceList)modList).setOpenFile(openFile);
-            openFile.getResourceList().add(modList);
 
-            ((ResourceSortedSet)breakList).setOpenFile(openFile);
+        if (openFile != null) {
+            openFile.getResourceList().add(modList);
             openFile.getResourceList().add(breakList);
-        }
+	}
+	
+	modList.setResourceFactory(openFile);
+	breakList.setResourceFactory(openFile);
+
     }
     
     public InputStream dataStream() {
@@ -111,8 +126,7 @@ public class DiffData extends EditableData {
             modList.add(mod);
             mod.apply();
         }
-	//fixme: need to tell openFile about refresh
-        //openFile.refresh();
+        fireDataUpdated(this, mod);
     }
 
 
@@ -321,11 +335,11 @@ public class DiffData extends EditableData {
         }
     }
     
-    abstract class Mod {
-        abstract public void apply();
+    public abstract class Mod {
+        protected abstract void apply();
     }
     
-    class InsertMod extends Mod {
+    public class InsertMod extends Mod {
         Data data;
 
         /** use data's start */
@@ -333,7 +347,7 @@ public class DiffData extends EditableData {
             this.data = data;
         }
         
-        public void apply() {
+        protected void apply() {
             DiffData.this.moveEnd(new Cursor(data.getStart()), data.getLength());
             DiffData.this.breakList.add(data);
         }
@@ -345,7 +359,7 @@ public class DiffData extends EditableData {
         
     }
 
-    class DelMod extends Mod {
+    public class DelMod extends Mod {
         long offset;
         long deleteLength;
         
@@ -356,7 +370,7 @@ public class DiffData extends EditableData {
             this.deleteLength = deleteLength;
         }
         
-        public void apply() {
+        protected void apply() {
             Cursor endCur = new Cursor(offset+deleteLength);
             DiffData.this.deleteRange(new Cursor(offset), endCur);
             DiffData.this.moveEnd(endCur, -deleteLength);
@@ -366,7 +380,7 @@ public class DiffData extends EditableData {
             return "DelMod offset: " + offset + " deleteLength: " + deleteLength;
         }
     }
-    class OverwriteMod extends Mod {
+    public class OverwriteMod extends Mod {
         Data data;
 
         /** use data's start */
@@ -374,7 +388,7 @@ public class DiffData extends EditableData {
             this.data = data;
         }
         
-        public void apply() {
+        protected void apply() {
             DiffData.this.deleteRange(new Cursor(data.getStart()), new Cursor(data.getStart()+data.getLength()));
             DiffData.this.breakList.add(data);
         }

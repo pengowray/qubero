@@ -278,11 +278,11 @@ public class ResTree extends JTree implements ResourceListener, OpenFileListener
 		}
     }
     
-    public void dataEdited(EditEvent e)
+    public void dataEdited(DataEvent e)
 	{
     }
     
-    public void dataLengthChanged(EditEvent e)
+    public void dataLengthChanged(DataEvent e)
 	{
     }
     

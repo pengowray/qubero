@@ -194,6 +194,7 @@ future formats:
  - gif / jpg / png / psd / bmp / ico / mac images / corel / digital camera's raw format
  - multi-resolution graphics collages (e.g. image with zoom hotspots)
  - LTI-Lib Computer Vision Library: image processing and computer vision, sign language and gesture recognition (LGPL)n
+   VIPS free image processing system "half way between Excel and Photoshop": http://www.vips.ecs.soton.ac.uk/
    http://ltilib.sourceforge.net/doc/homepage/index.shtml
  - jpeg: auto use same compression (work out current compression, even variable compression from photoshop)
  - rar / zip / jar / ace / bz2 / lzh / lzw / lzx / tar / z / gzip / cpio / ar / compress / pack / PAK (quake?) / cloop / zlib_deflate / zoo / arc / lzo / lzop / LIBZ / arj / cab / / ace / tar / GZip / UUE / ISO

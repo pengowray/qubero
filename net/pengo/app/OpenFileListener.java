@@ -23,8 +23,8 @@ public interface OpenFileListener extends java.util.EventListener {
 
     public void selectionCopied(ClipboardEvent e);
         
-    public void dataEdited(EditEvent e);
-    public void dataLengthChanged(EditEvent e);
+    public void dataEdited(DataEvent e);
+    public void dataLengthChanged(DataEvent e);
     
     //FIXME: remove  made/removed events (use resource listener instead)
     
