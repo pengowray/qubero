@@ -2,6 +2,8 @@
  * AddressResource.java
  *
  * @author Created by Omnicore CodeGuide
+ *
+ * a restricted sort of SelectionResource
  */
 
 package net.pengo.resource;
@@ -9,15 +11,16 @@ package net.pengo.resource;
 import net.pengo.app.*;
 import net.pengo.selection.*;
 import net.pengo.data.*;
-import net.pengo.propertyEditor.*;
+
 
 import java.util.*;
 
-public class AddressResource extends Resource {
+public class AddressResource extends SelectionResource {
     private IntResource address;
     private IntResource length;
-    
-    private List dependantsList;
+
+    private LongListSelectionModel sel;
+    private SelectionData selData; // cache thing
     
     AddressResource(OpenFile of, IntResource address, IntResource length) {
         super(of);
@@ -28,15 +31,49 @@ public class AddressResource extends Resource {
         //length.addDependent(this);
     }
     
-    //public void dependencyChanged(Resource changed) {
-        
-    //}
+    public void setAddress(IntResource startAddress) {
+	this.address = startAddress;
+	updated();
+    }
+
+    public void setLength(IntResource length) {
+	this.length = length;
+	updated();
+    }
     
-    public LongListSelectionModel toSelection() {
+    public IntResource getAddress() {
+	return address;
+    }
+    
+    public IntResource getLength() {
+	return length;
+    }
+    
+    public LongListSelectionModel getSelection() {
         long firstIndex = address.toLong();
         long lastIndex = firstIndex + length.toLong() -1;
         return new SimpleLongListSelectionModel(firstIndex, lastIndex);
     }
+
+    public SelectionData getSelectionData() {
+        if (selData == null)
+            selData = new SelectionData(getSelection(), openFile.getData());
+            
+        return selData;
+    }
+
+    
+    public void updated() {
+	sel = null;
+        selData = null;
+    }
+    
+    
+    //private List dependantsList; //fixme: pending
+    //public void dependencyChanged(Resource changed) {}
+
+    
+
     
     public String toString() {
         return "Pointer@" + Long.toString(address.getSelectionResource().getSelectionData().getStart(), 16) +" -> address:" + address.getValue().toString(16) + " = " + toSelection();

@@ -20,6 +20,11 @@ import java.awt.event.ActionEvent;
  */
 public class DefaultDefinitionResource extends DefinitionResource {
     
+    public void editProperties() {
+	// TODO
+    }
+    
+    
     final protected LongListSelectionModel sel;
 
     public DefaultDefinitionResource(OpenFile openFile, LongListSelectionModel sel) {
@@ -40,26 +45,28 @@ public class DefaultDefinitionResource extends DefinitionResource {
         };
 	menu.add(deleteAction);
         
-        Action intAction = new AbstractAction("Convert to int") {
+        Action intAction = new AbstractAction("Convert to integer") {
             public void actionPerformed(ActionEvent e) {
-                IntResource intRes = new IntResource(openFile, new DefaultSelectionResource(openFile, sel), IntResource.TWOS_COMP);
+                IntResource intRes = new IntAddressedResource(openFile, new DefaultSelectionResource(openFile, sel), IntResource.TWOS_COMP);
                 //openFile.definitionChange(e.getSource(), This, intRes); // xxx
 		List l = getOpenFile().getDefinitionList();
 		int index = l.indexOf(DefaultDefinitionResource.this);
 		l.remove(index);
 		l.add(index, intRes);
+		intRes.editProperties();
             }
         };
 	menu.add(intAction);
 
         Action boolAction = new AbstractAction("Convert to boolean") {
             public void actionPerformed(ActionEvent e) {
-                BooleanResource boolRes = new BooleanResource(openFile, new DefaultSelectionResource(openFile, sel), 0);
+                BooleanResource boolRes = new BooleanAddressedResource(openFile, new DefaultSelectionResource(openFile, sel), new IntPrimativeResource(openFile, 0));
                 //openFile.definitionChange(e.getSource(), This, intRes); // xxx
 		List l = getOpenFile().getDefinitionList();
 		int index = l.indexOf(DefaultDefinitionResource.this);
 		l.remove(index);
 		l.add(index, boolRes);
+		boolRes.editProperties();
             }
         };
 	menu.add(boolAction);

@@ -17,6 +17,7 @@ import javax.swing.*;
 import javax.swing.text.*;
 import javax.swing.event.*;
 import java.awt.event.*;
+import java.io.IOException;
 /**
  *
  * @author  Smiley
@@ -26,7 +27,7 @@ public class ValuePage extends EditablePage {
     private JTextField inputField;
     
     /** Creates a new instance of ValuePage */
-    public ValuePage(IntResource res, IntResourcePropertiesForm form) {
+    public ValuePage(IntResource res, AbstractResourcePropertiesForm form) {
         super(form);
         this.res = res;
         this.form = form;
@@ -42,7 +43,12 @@ public class ValuePage extends EditablePage {
     
     
     public void saveOp() {
-        res.setValue(inputField.getText());
+	try {
+	    res.setValue(inputField.getText());
+	} catch (IOException e ) {
+	    //fixme
+	    e.printStackTrace();
+	}
     }
     
     public void buildOp() {
@@ -52,9 +58,9 @@ public class ValuePage extends EditablePage {
     public boolean isValid() {
         //fixme
         return true; // success
-    }    
+    }
     
     public String toString() {
         return "Value";
-    }    
+    }
 }

@@ -12,11 +12,13 @@ public abstract class DefinitionResource extends Resource {
 	super(openFile);
     }
     
-    //fixme: replaces "getCildren" or is this different? 
+    //fixme: replaces "getCildren" or is this different?
     //Subresources must be definition resources?
     //i.e. part of the "state" ?
     abstract public ResourceList getSubResources();
 
     abstract public JMenu getJMenu();
+    
+    abstract public void editProperties();
 
 }

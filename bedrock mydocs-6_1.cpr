@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project version="Sapphire.1">
+    <SourceDirectories>
+        <Directory relativePath="" absolutePath="D:\mydocs\project-moojasm\"/>
+    </SourceDirectories>
+    <ProjectDirectories>
+        <Directory relativePath="" absolutePath="D:\mydocs\project-moojasm\"/>
+    </ProjectDirectories>
+    <LibraryClassDirectories/>
+    <Target relativePath="net/pengo/app/Mooj.java" absolutePath="D:\mydocs\project-moojasm\net\pengo\app\Mooj.java" java2DebugVmType="classic"/>
+    <CompilerOptions targetVM="1.3" generateDebugInfo="true" showCompilerWarnings="false" showDeprecationWarnings="false" languageVersion="JAVA_1_1" maximumHeapSize="128" otherOptions=""/>
+    <BuildExclusionPattern>CVS</BuildExclusionPattern>
+    <BuildExclusionPattern>SCCS</BuildExclusionPattern>
+    <Ant useAnt="false" additionalVmArguments="" buildTargets="" rebuildTargets="" additionalArguments="">
+        <AdditionalClasspaths/>
+        <BuildFile absolutePath=""/>
+        <WorkingDirectory absolutePath=""/>
+    </Ant>
+    <CompilationMappings>
+        <CompilationMapping type="COMPILATION" filter=""/>
+    </CompilationMappings>
+    <VersionControl system="NONE"/>
+    <FileEncoding encoding="windows-1252" outputEncoding="windows-1252"/>
+</Project>

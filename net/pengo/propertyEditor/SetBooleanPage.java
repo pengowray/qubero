@@ -45,13 +45,8 @@ public class SetBooleanPage extends EditablePage {
     }
     
     public void buildOp() {
-        try {
-            int selection = (boolRes.getValue() ? 1:0);
-            type.setSelectedIndex( selection  );
-        } catch (java.io.IOException e) {
-            //xxx
-            e.printStackTrace();
-        }
+	int selection = (boolRes.getValue() ? 1:0);
+	type.setSelectedIndex( selection  );
     }
     
     public String toString() {

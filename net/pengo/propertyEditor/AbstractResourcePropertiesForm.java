@@ -38,7 +38,7 @@ import java.awt.event.ActionEvent;
  */
 abstract public class AbstractResourcePropertiesForm extends JFrame {
     //private OpenFile openFile;
-    private IntResource intRes;
+    //private IntResource intRes;
     public JSplitPane sp;
     public JTree nav;
     //private ActionListener modListener;

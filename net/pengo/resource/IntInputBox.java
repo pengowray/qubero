@@ -11,11 +11,12 @@ import java.awt.*;
 import javax.swing.*;
 import javax.swing.event.*;
 import java.awt.event.ActionEvent;
+import java.io.IOException;
 
 /**
- * in future: umm. this should be a lot more customizable.. give user a choice 
- * of input styles (text, hex, binary, pointer, formula, immediate calculations) 
- * and show the resulting value in a number of formats, or at least the type's 
+ * in future: umm. this should be a lot more customizable.. give user a choice
+ * of input styles (text, hex, binary, pointer, formula, immediate calculations)
+ * and show the resulting value in a number of formats, or at least the type's
  * format.
  *
  * @author  administrator
@@ -45,7 +46,7 @@ public class IntInputBox extends JFrame {
         pack();
         
         AbstractAction okaction = new AbstractAction() {
-            public void actionPerformed(ActionEvent e) { 
+            public void actionPerformed(ActionEvent e) {
                 String retStr = inputField.getText();
                 int retInt;
                 try {
@@ -54,13 +55,18 @@ public class IntInputBox extends JFrame {
                     modRes.setValue(retStr);
                     close();
                 } catch (NumberFormatException nfe) {
-                    System.out.println("Invalid!");
-                }
+                    //fixme:
+		    System.out.println("Invalid!");
+                } catch (IOException ioe) {
+		    //fixme:
+		    System.out.println("error!");
+		    ioe.printStackTrace();
+		}
             }
         };
 
         cancel.addActionListener(new AbstractAction() {
-            public void actionPerformed(ActionEvent e) { 
+            public void actionPerformed(ActionEvent e) {
                 close();
             }
         });

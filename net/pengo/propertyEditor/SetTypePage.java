@@ -22,11 +22,11 @@ import java.awt.event.*;
  * @author  Smiley
  */
 public class SetTypePage extends EditablePage {
-    private IntResource res;
+    private IntAddressedResource  res;
     private JComboBox type;
     
     /** Creates a new instance of SummaryPage */
-    public SetTypePage(IntResource res, AbstractResourcePropertiesForm form) {
+    public SetTypePage(IntAddressedResource res, AbstractResourcePropertiesForm form) {
         super(form);
         this.res = res;
 

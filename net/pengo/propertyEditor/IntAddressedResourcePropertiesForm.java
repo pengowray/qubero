@@ -25,9 +25,9 @@ import java.awt.event.ActionEvent;
  *
  * @author  Smiley
  */
-public class IntResourcePropertiesForm extends AbstractResourcePropertiesForm {
+public class IntAddressedResourcePropertiesForm extends AbstractResourcePropertiesForm {
     //private OpenFile openFile;
-    private IntResource intRes;
+    private IntAddressedResource intRes;
    
     //String name;
     //private Data value;
@@ -42,7 +42,7 @@ public class IntResourcePropertiesForm extends AbstractResourcePropertiesForm {
 //    }
     
     
-    public IntResourcePropertiesForm(IntResource intRes) {
+    public IntAddressedResourcePropertiesForm(IntAddressedResource intRes) {
         super();
         this.intRes = intRes;
     }
@@ -52,10 +52,10 @@ public class IntResourcePropertiesForm extends AbstractResourcePropertiesForm {
         return new PropertyPage[] {
             new SummaryPage(intRes),
             new SetTypePage(intRes, this),
-            new SizePage(intRes, this),
             new ValuePage(intRes, this),
             new AddressPage(intRes, this),
-			new AddressPage2(intRes, this)
+	    //new AddressPage2(intRes, this)
+	    new TextOnlyPage("About","Bedrock Operator (c) 2003 Peter Halasz")
         };
     }
     

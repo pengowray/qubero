@@ -10,7 +10,7 @@ view, edit, create java bytecode + automation
 visual code editor
 the editor editor (lame)
 base edit
-
+hex project
 
 """get it working first
 get it right later
@@ -115,11 +115,16 @@ Log started Aug 21 2002:
  2003-09-24  Radios on View menu
  2003-09-26  OpenClassAction now opens a random file from rt.jar
              MethodSelection to choose between pages (methods of entry)
+ 2003-09-29  AddressedResouce, BooleanAddressedResouce, IntAddressedResouce, AddressedResourceRegistry
+             BooleanPrimativeResource, IntPrimativeResource
+             Started on MetaSelectionModel
  
  see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
 priority/immediate features todo:
+2003-09-29
+ - double clicking on an AddressedResouce doesn't always select it (MetaSelectionModel will solve it)
 2003-09-26
  - AddressPage2 needs work, now that MethodSelection is available.
  - make an About menu

@@ -18,6 +18,7 @@ import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
 import net.pengo.selection.LongListSelectionModel;
 import net.pengo.selection.SegmentalLongListSelectionModel;
+import net.pengo.selection.SimpleLongListSelectionModel;
 
 /**
  * Node used by MoojTree containing display information for a file/definition.
@@ -47,6 +48,7 @@ public class OpenFile implements LongListSelectionListener { // previously did e
     private ResourceList rootResList;
     private List definitionResList = new ResourceList(Collections.synchronizedList(new LinkedList()), resFact , "Definitions") ;
     private List selectionDetails = new ResourceList(Collections.synchronizedList(new LinkedList()), resFact , "Selection details");
+    private LiveSelectionResource liveSelection;
     
     private ActiveFile af;
     /**
@@ -64,7 +66,8 @@ public class OpenFile implements LongListSelectionListener { // previously did e
 	rootResList.add(definitionResList);
 	rootResList.add(selectionDetails);
 	addLongListSelectionListener(this);
-        getResourceList().add(new LiveSelectionResource(this)); // adds selection. //xxx: should this be here?
+	liveSelection = new LiveSelectionResource(this)
+        getResourceList().add(liveSelection); // adds selection. //xxx: should this be here?
     }
     
     public ActiveFile getActiveFile() {
@@ -203,6 +206,7 @@ public class OpenFile implements LongListSelectionListener { // previously did e
 	}
     }
     
+    //fixme: perhaps "SegmentalLongListSelectionModel" should replaced with "EditableLongListSelectionModel"
     public void setSelectionModel(LongListSelectionModel selectionModel) {
 	//System.out.println("Setting selection model..." + selectionModel);
 	
@@ -213,21 +217,29 @@ public class OpenFile implements LongListSelectionListener { // previously did e
 	    //fireResourceRemoved(this,"Selection",this.selectionResource);
         }
         
+	if (selectionModel instanceof SimpleLongListSelectionModel) {
+	    selectionModel = ((SimpleLongListSelectionModel)selectionModel).toSegmental();
+	}
+	
 	this.selectionModel = selectionModel;
 	selectionModel.setEventListenerList(listenerList);
 	if (selectionModel == null ) { // || selectionModel.isSelectionEmpty()
 	    return;
 	}
+	
+	
         
 	//selectionResource = new LiveSelectionResource(this); //fixme: probably unnecessary
 	//fireResourceAdded(this,"Selection",selectionResource);
 	
         // no longer needed.
-        //getResourceList().add(this.selectionModel);	
+        //getResourceList().add(this.selectionModel);
         
 	//fixme: better way to fire?
-	selectionModel.setValueIsAdjusting(false);
-	selectionModel.setValueIsAdjusting(true);
+	//selectionModel.setValueIsAdjusting(false);
+	//selectionModel.setValueIsAdjusting(true);
+	
+	liveSelection.updated();
 	
     }
     

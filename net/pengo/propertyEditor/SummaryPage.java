@@ -22,9 +22,10 @@ import java.awt.event.ActionEvent;
  * @author  Smiley
  */
 public class SummaryPage extends PropertyPage {
-    private IntResource res;
+    private IntAddressedResource res;
+    
     /** Creates a new instance of SummaryPage */
-    public SummaryPage(IntResource res) {
+    public SummaryPage(IntAddressedResource res) {
         super();
         this.res = res;
         build();

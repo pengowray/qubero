@@ -23,6 +23,12 @@ public class SimpleLongListSelectionModel implements LongListSelectionModel {
         this.firstIndex = firstIndex;
         this.lastIndex = lastIndex;
     }
+    
+    public SegmentalLongListSelectionModel toSegmental() {
+	SegmentalLongListSelectionModel segmental = new SegmentalLongListSelectionModel();
+	segmental.addSelectionInterval(firstIndex, lastIndex);
+	return segmental;
+    }
 
 	public void setEventListenerList(EventListenerList listenerList) {
 		return; // no changes get made.

@@ -28,6 +28,24 @@ abstract public class SelectionResource extends Resource implements LongListSele
 
      abstract public SelectionData getSelectionData();
      
+    /**
+     * Called whenever the value of the selection changes.
+     * @param e the event that characterizes the change.
+     *
+     */
+    public void valueChanged(LongListSelectionEvent e) {
+	if (e.getValueIsAdjusting()) {
+	    return;
+	}
+        
+	updated();
+    }
+    
+    abstract public void updated();
+    
+
+    
+
     //FIXME:; reimplement?
     /*
      public boolean equals(SelectionResource o) {
@@ -49,21 +67,5 @@ abstract public class SelectionResource extends Resource implements LongListSele
      return false;
      }
      */
-    
-    /**
-     * Called whenever the value of the selection changes.
-     * @param e the event that characterizes the change.
-     *
-     */
-    public void valueChanged(LongListSelectionEvent e) {
-	if (e.getValueIsAdjusting()) {
-	    return;
-	}
         
-	updated();
-    }
-    
-    abstract public void updated();
-    
-    
 }

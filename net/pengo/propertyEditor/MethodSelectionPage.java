@@ -15,7 +15,7 @@ import java.awt.event.ActionEvent;
 
 
 
-public class MethodSelection extends EditablePage
+public class MethodSelectionPage extends EditablePage
 {
 	
 	private PropertyPage[] page;
@@ -25,8 +25,7 @@ public class MethodSelection extends EditablePage
 
 	private JPanel main;
 	
-	
-	public MethodSelection(AbstractResourcePropertiesForm form, PropertyPage[] page, String name) {
+	public MethodSelectionPage(AbstractResourcePropertiesForm form, PropertyPage[] page, String name) {
 		super(form);
 		this.page = page;
 		this.name = name;
@@ -37,7 +36,7 @@ public class MethodSelection extends EditablePage
 		selectBox.addActionListener( new ActionListener() {
 				public void actionPerformed(ActionEvent e)
 				{
-					setSelected(MethodSelection.this.selectBox.getSelectedIndex());
+					setSelected(MethodSelectionPage.this.selectBox.getSelectedIndex());
 				}
 			});
 		selectBox.setSelectedIndex(selected);
@@ -62,10 +61,15 @@ public class MethodSelection extends EditablePage
 		}
 	}
 	
-	
-	protected void saveOp()
+	public void save() {
+	    // save regardless of if it's modded
+	    saveOp();
+	}
+    
+    protected void saveOp()
 	{
-		getSelected().save();
+	    System.out.println("saving: " + getSelected());
+	    getSelected().save();
 	}
 	
 	public void buildOp()

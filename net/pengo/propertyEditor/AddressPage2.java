@@ -10,11 +10,14 @@ import net.pengo.resource.*;
 
 
 
-public class AddressPage2 extends MethodSelection
+public class AddressPage2 extends MethodSelectionPage
 {
 	//AbstractResourcePropertiesForm
-	public AddressPage2 (IntResource intRes, IntResourcePropertiesForm form) {
-		super(form, new PropertyPage[]{new SummaryPage(intRes), new ValuePage(intRes, form) }, "Address Pagez");
+	public AddressPage2 (AddressedResource intRes, IntAddressedResourcePropertiesForm form) {
+		super(form, new PropertyPage[]{
+		    new SummaryPage(intRes),
+			new ValuePage(intRes, form) },
+			    "Address Pagez");
 	}
 }
 
