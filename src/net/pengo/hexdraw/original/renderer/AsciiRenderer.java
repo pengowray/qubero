@@ -22,17 +22,18 @@ public class AsciiRenderer extends SeperatorRenderer {
         
     }
     
-    public int renderBytes( Graphics g, int hexStart[], long lineNumber, byte ba[], boolean selecta[], int length ) {
+    public int renderBytes( Graphics g, long lineNumber,
+            byte ba[], int baOffset, int baLength, boolean selecta[],
+            int columnWidth ){
+
         //// draw ascii:
-        
-        
         FontMetrics fm = g.getFontMetrics();
         
         int charsWidth = fm.charWidth('w'); 
         int charsHeight = fm.getHeight();
         
         
-        for ( int i=0; i < length; i++ ) {
+        for ( int i=0; i < baLength; i++ ) {
             if (selecta[i])  {
                 //g.setColor( GUI.selectionColor() );
                 g.setColor( new Color(170,170,255) ); // FIXME: cache
@@ -40,10 +41,11 @@ public class AsciiRenderer extends SeperatorRenderer {
             }
             g.setColor(Color.black);
             //g.setColor(Color.darkGray);
-            g.drawString( byte2ascii(ba[i]), i * charsWidth, fm.getAscent()); //FIXME: precision loss!
+            g.drawString( byte2ascii(ba[baOffset+i]), i * charsWidth, fm.getAscent()); //FIXME: precision loss!
         }
         
-        return length * charsWidth;
+        //return ba.length * charsWidth;
+        return columnWidth * charsWidth;
     }
     
     public String toString() {

@@ -13,7 +13,9 @@ public class AddressRenderer extends SeperatorRenderer {
         super(hexpanel, render);
         setEnabled(render);
     }
-    public int renderBytes( Graphics g, int hexStart[], long lineNumber, byte ba[], boolean selecta[], int length ) {
+    public int renderBytes( Graphics g, long lineNumber,
+            byte ba[], int baOffset, int baLength, boolean selecta[],
+            int columnWidth ) {
         //// draw address:
         g.setColor(Color.darkGray);
         FontMetrics fm = g.getFontMetrics();

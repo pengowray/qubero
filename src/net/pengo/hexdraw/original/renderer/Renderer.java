@@ -4,8 +4,10 @@ import java.awt.Graphics;
 
 public interface Renderer {
 
-    public int renderBytes( Graphics g, int hexStart[], long lineNumber, byte ba[], boolean selecta[], int length );
-    
+    public int renderBytes( Graphics g, long lineNumber,
+            byte ba[], int baOffset, int baLength, boolean selecta[],
+            int columnWidth );
+        
     public boolean isEnabled();
     public void setEnabled(boolean render);
         

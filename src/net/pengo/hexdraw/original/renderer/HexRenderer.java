@@ -7,7 +7,7 @@ import java.awt.Graphics;
 import net.pengo.hexdraw.original.HexPanel;
 
 public class HexRenderer extends SeperatorRenderer {
-
+// add groupings width
     public HexRenderer(HexPanel hexpanel, boolean render) {
         super(hexpanel, render);
         setEnabled(render);
@@ -23,7 +23,9 @@ public class HexRenderer extends SeperatorRenderer {
     }
     
     
-    public int renderBytes( Graphics g, int hexStart[], long lineNumber, byte ba[], boolean selecta[], int length ) {
+    public int renderBytes( Graphics g, long lineNumber,
+            				byte ba[], int baOffset, int baLength, boolean selecta[],
+            				int columnWidth ) {
         //// draw hex:
         
         FontMetrics fm = g.getFontMetrics();
@@ -33,7 +35,7 @@ public class HexRenderer extends SeperatorRenderer {
         //( length >0 ? hexStart[1]-hexStart[0] : 0 );
         //g.drawString(addr, 0,  );
         
-        for ( int i=0; i < length; i++ ) {
+        for ( int i=0; i < baLength; i++ ) {
             if (selecta[i])  {
                 //g.setColor( GUI.selectionColor() );
                 g.setColor( new Color(170,170,255) );
@@ -41,10 +43,10 @@ public class HexRenderer extends SeperatorRenderer {
             }
             g.setColor(Color.black);
             //g.setColor(Color.darkGray);
-            g.drawString( byte2hex(ba[i]), i * charsWidth, fm.getAscent());
+            g.drawString( byte2hex(ba[baOffset+i]), i * charsWidth, fm.getAscent());
         }
         
-        return length * charsWidth;
+        return columnWidth * charsWidth;
         //// draw address:
         //FontMetrics fm = g.getFontMetrics();
         //String addr = BigInteger.valueOf(lineNumber * length).toString(16)+":";

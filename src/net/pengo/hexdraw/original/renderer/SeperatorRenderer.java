@@ -12,8 +12,10 @@ public class SeperatorRenderer implements Renderer {
     private boolean	render;
     private HexPanel hexpanel;
     
-    public int renderBytes( Graphics g, int hextStart[], long lineNumber, byte ba[], boolean selecta[], int length ) {
-        FontMetrics fm = g.getFontMetrics();
+    public int renderBytes( Graphics g, long lineNumber,
+            byte ba[], int baOffset, int baLength, boolean selecta[],
+            int columnWidth ) {
+    	FontMetrics fm = g.getFontMetrics();
         g.drawString(seperator, 0, fm.getAscent() );
         return fm.bytesWidth(seperator.getBytes(), 0, seperator.length()); 
     }

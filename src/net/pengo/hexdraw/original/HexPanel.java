@@ -39,7 +39,7 @@ import net.pengo.hexdraw.original.renderer.GreyScaleRenderer;
 import net.pengo.hexdraw.original.renderer.HexRenderer;
 import net.pengo.hexdraw.original.renderer.Renderer;
 import net.pengo.hexdraw.original.renderer.SeperatorRenderer;
-import net.pengo.hexdraw.original.renderer.WaveRGBRenderer;
+import net.pengo.hexdraw.original.renderer.RGBRenderer;
 import net.pengo.hexdraw.original.renderer.WaveRenderer;
 import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
@@ -155,10 +155,21 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 	        new AsciiRenderer(this, false),
 	        new SeperatorRenderer(this, true),
 	        new GreyScaleRenderer(this, false),
+	        new SeperatorRenderer(this, true),
 	        new GreyScale2Renderer(this, true),
 	        new SeperatorRenderer(this, true),
-	        new WaveRenderer(this, false),
-	        new WaveRGBRenderer(this, false),
+	        new RGBRenderer(this, 2, false), // 2 channel
+	        new RGBRenderer(this, 3, false),
+	        new RGBRenderer(this, 4, false),
+	        new RGBRenderer(this, 5, false),
+	        new SeperatorRenderer(this, true),
+	        new WaveRenderer(this, 1, false),
+	        new WaveRenderer(this, 2, false), 
+	        new WaveRenderer(this, 4, false), 
+	        new WaveRenderer(this, 8, true),  // 8 bit
+	        new WaveRenderer(this, 16, false), 
+	        new WaveRenderer(this, 24, true), 
+	        new WaveRenderer(this, 32, false), 
 	};
 	
 	// do reflection here.. later..
@@ -602,7 +613,7 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         if (endByte > root.getLength())
             endByte = root.getLength();
         
-        long linenum = start;
+        long offset = start;
         long lastHex = finish*hexPerLine;
         //long selStart = -1;
         //long selEnd = -1;
@@ -612,7 +623,7 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         byte ba[] = new byte[hexPerLine]; // current bytes
         
 		int totalRenderWidth, segmentWidth; 
-		long i;
+
 		int index, count;
 	    Renderer renderer;
 	    
@@ -622,13 +633,14 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         try  {
             InputStream data = root.getDataStream(startByte,endByte-startByte);
             
-            for (linenum = start*hexPerLine; linenum < len && linenum <=lastHex; linenum+=hexPerLine) { // line (y)
+            for (offset = start*hexPerLine; offset < len && offset <=lastHex; offset+=hexPerLine) { // line (y)
                 // calc characters to draw on this line (jlen). Can't be moreo than hexPerLine.
-                count = (int)((len-linenum >= hexPerLine ? hexPerLine : len-linenum));
+                count = (int)((len-offset >= hexPerLine ? hexPerLine : len-offset));
 				totalRenderWidth = 0;
  	
 
                 try  {
+                  //FIXME: data.readad(ba, 0, count) should work! but sometimes returning -1 
                   //count = data.read(ba, 0, count); // read bytes into ba[]
 				  data.read(ba); // read bytes into ba[]
 				  //count = data.read(ba); // read bytes into ba[]
@@ -653,14 +665,14 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 				//g.setClip( 0, (int)(linenum), width, charsHeight ); // possible problems with large i[ndex]
 
 				for ( index=0; index < selecta.length; index++) {	//setup selection
-                	selecta[index] = openFile.getSelectionModel().isSelectedIndex(((int)linenum *charsHeight) +index);
+                	selecta[index] = openFile.getSelectionModel().isSelectedIndex(((int)offset *charsHeight) +index);
 				}
 				
 				for ( index=0; index < renderers.length; index++) {	//render each renderer
                     renderer = renderers[index];
 					if (renderer != null && renderer.isEnabled()) {
 						segmentWidth = 
-						    renderer.renderBytes( g, hexStart, linenum, ba, selecta, count );
+						    renderer.renderBytes( g, offset, ba, 0, count, selecta, 16 );
 						totalRenderWidth += segmentWidth;
 		                g.translate( segmentWidth, 0 );
 					}
