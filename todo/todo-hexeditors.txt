@@ -1,0 +1,104 @@
+embrace and obsolete:
+ AXE (Advanced Hex Editor 2.0 from Kahei Co)
+ - Views: Graphical (bitmap)
+ - resizable bytes-per-row (shows number as you stretch it)
+ - Search for graphics?
+ - operations (eg subtract, modulo, shift, binary-or, invert...)
+ - find regularities in the data
+ - search
+ - base converter utility
+ - Continued obsoleteness: XStruct.ini (via support for .ini files + dynamic structure creation)
+
+HT http://hte.sourceforge.net/status.htm
+ - File Formats: PE, ELF, COFF, LE, MZ, NE
+ - Entropy info
+ - Code analyser
+ - paste to file
+ - show clipboard
+ - Views: console/cursors/"TurboVision-like" (= Borland's Text-app Lib)
+ - multiple views (per file)
+ - view list
+ - Future: A archives, LX, M$, OBJ...)
+ - Future: search/replace/regex
+
+BIEW http://biew.sourceforge.net/en/biew.html
+ - similar to HT? same codebase?
+ - replace/use: TDUMP, EXEHDR, DUMPEXE, NewExe Disasm,
+ - "also quite good text viewer with russian codepage convertor"
+
+hexworkshop.com
+ - Checksum-8...64, CRC-16, CRC-16 CCITT, CRC-32, MD2/4/5, SHA1, mn: ECC (memory)
+ - Date, DOS Time/Date, time_t, binary...
+ - red highlighting of changed data
+ - character filters: ASCII, DOS, EBCDIC, Macintosh, Window, and Unicode character set
+ - output to customizable hex dumps, RTF, HTML, Java, C (MN: java/c choose for size or readability (mixed hex+strings+comments?) or maintainability (eg function to put it together?) or set format or for NetBeans, IDE-editor-style, so editing must be done in Mooj)
+ - drag and drop
+ - physical disk editing
+ - mutli-level undo
+ - operations: Byte Flip, ~, <<, >>, |, &, +/-, +, -, *, /, %
+ - "Paste Special"
+ - binary compare between files
+ - View Character Distributions (and export results)
+ - Util/help: character tables, data-types and ranges
+ - command line options (readonly, offset, select)
+
+WinHack 2.00
+ - make a tool to automate this sort of thing: http://www.strategyplanet.com/rctuk/tid/development/hexedit.html (RollerCoaster Tycoon)
+
+WinHex
+   http://www.x-ways.net/winhex/index-m.html
+   http://www.sf-soft.de/winhex/index-m.html
+ - very sophisticated editor, ugly interface
+ - templating!
+   user contributed templates: http://www.sf-soft.de/winhex/templates/index.html
+   ask users for permission to use their templates?
+ - disk editing: knows directory/file
+ - ram editing: select process
+ - disk cloning
+ - programmers' API
+ - scripting (seperate to api)
+ - 128-bit encryption, checksums, CRC32, hashes (MD5, SHA-1, ...)
+ - contains headers for a bunch of file types (file retreval tool)
+ - types:
+    * 8-bit integer, signed
+    * 8-bit integer, unsigned
+    * 16-bit integer, signed
+    * 16-bit integer, unsigned
+    * 32-bit integer, signed
+    * 32-bit integer, unsigned
+    * 64-bit integer, signed
+    * Binary digits
+    * Float (=Single)
+    * Real
+    * Double
+    * Long double (=Extended)
+    * Intel assembler opcodes (ASM)
+    * MS-DOS date & time (32-bit)
+    * Win32 FILETIME (64-bit)
+    * OLE 2.0 date & time (64-bit)
+    * ANSI SQL date & time (64-bit)
+    * UNIX/C/FORTRAN date & time, secs (32-bit)
+    * UNIX/C/FORTRAN date & time, mins (32-bit)
+    * Java date & time (64-bit)
+ # Erase (wipe) confidential files securely, hard drive cleansing  to protect your privacy
+ # Import all clipboard formats, incl. ASCII hex values
+ # Convert between binary, hex ASCII, Intel Hex, and Motorola S
+ # Character sets: ANSI ASCII, IBM ASCII, EBCDIC, (Unicode)
+ # Instant window switching. Printing. Random-number generator.
+ # Supports files >4 GB. Very fast. Easy to use. Extensive online help. (more)
+ - Bates-number Files: Bates-numbers all the files within a given folder and its subfolders for discovery or evidentiary use. A constant prefix (up to 13 characters long) and a unique serial number are inserted between the filename and the extension in a way attorneys label paper documents for later accurate identification and reference.
+ - Simultaneous Search: A parallel search facility, that lets you specify a virtually unlimited list of search terms
+
+DiskProbe (BeOS)
+by Robert Polic
+ - views hex in blocks: 512 or 2048 bytes. alt-arrow to move between blocks.
+ - horizontal scroller for block
+ - print (have not tested)
+ - bookmarks
+
+Learning By Simulation
+ - http://www.vias.org/simulations/simusoft_asciicode.html
+
+big list:
+http://esca.atomki.hu/paradise/simtel/msdos/binaryed.html
+http://esca.atomki.hu/paradise/simtel/win95/editor.html (search for hex or binary)

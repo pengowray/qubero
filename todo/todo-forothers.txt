@@ -1,0 +1,325 @@
+ben's suggestions (miffy):
+ - replace large area with "0x20" or a pattern, etc
+ - postscript / pdf
+ - shockwave flash
+ - asn1 (multiple spec)
+ - asn1 -> c
+ - 40-bit rc4
+ - iso-3309 (www.iso.ch browse product store, 35.100.20) -- cannot find
+ - russian fbi fed pdf
+ - bus: streaming data
+ - WGS 84 (Earth coordinates) (how about melways refs too!)
+ - divx
+ - externalist set of ontological enumerations
+ - openGL stuff
+ - DMG mac(?) Disk Image file
+ - patent database
+ - Do you know what program people use to make graph sheets?
+   Like charts, and pie stuff, etc..
+   AND NOT FUCKING EXCEL.
+
+data:
+ - mpeg4 (for dad)
+
+soel's idea:
+ - financial transactions (linked to revolving bank account), video game style
+ - cogs, mechanical engineering, toys, jewellery design...
+
+orchy's ideas
+ - superimposed character-flicking ascii driver
+
+^Lister^ is Meeeeeowth@vw10579.iprimus.net.au * The Slob Who Walks
+^Lister^ on @#Dark_Thoughts @#m
+ 2002-09-06 austnet
+  - <^Lister^> ne1 know a program i can use to interpret xpi files?
+  - <pengo_brainrot> xpi?
+  - <^Lister^> xp install files
+  - <^Lister^> XPInstall Install type
+
+wossname is wossname@HSE-QuebecCity-ppp81867.qc.sympatico.ca * seb
+wossname on #osdev #asm #assembler #nasm #kagezpro #cprogramming #fluffichan #dunder #codeleft #ypn
+ 2002-09-07 opn
+ - <wossname> a self-disassembling bootsector is what the world needs
+ - <pengo> wossname: i'll add that to my features list
+
+Jim Kent: (bioinformatics)
+ - http://www.oreillynet.com/pub/a/network/2002/12/10/kent.html
+ - There is still quite a bit of useful data that can and should be mass produced: genome wide microarray data, cellular localization of all genes, a dozen animal genomes for comparative genomics, immunoprecipitations with each gene followed by mass spec to see what interacts with what, etc.
+
+Paul T-101:
+ - Ripper / encoder / splitter / player / subtitler / distributor / player / stretcher / cropper / live stream processor / stream joiner
+ - Have ready for 15 April 2004 (added Jan 2003)
+
+Bren Fridge:
+ - Measurability of golf ball's impact on moon's orbit
+
+Ak_at (sid)
+ - <ak_at> i would love to have an omni editor you could change the scope of .. like zoom process and the into threads
+ - <ak_at> with real time editing
+ - <ak_at> i wish the future could understand "hints" instead of having to be explained everything in the most rediculouse detail
+ - <ak_at> and the omni logic engine capable of counting only in primes
+
+Artemis (twodogs / Damien)
+ - verifiability / provability of algorithm
+   see http://isabelle.in.tum.de/
+ - rubic's cubes and varients
+ - tantrix puzzle game
+ - 12 sided sphere with light/buttons. press button to toggle surrounding ones.
+
+Craig Huggins (Cehbab):
+ - Popup book editor
+ - XML language <iXML?>
+ - integrate: XML parser (craig's own), HTML requestor (from PhD).
+ - projects: wap (onyaphone)
+ - 3d game: quake3 character format, custom map formats (doomish, quake-ish, tiles), openGL, scripting language
+ - mpeg4 low-bandwidth video conf (for mobiles)
+ - netmeeting video conf
+ - "COMPILE BUTTON" [due: 29/02/2004]
+    <cehbab> and i changed your task.
+    [16:18:46] <cehbab> it now has to be red, in some way.
+    [16:18:49] <cehbab> :)
+    [16:18:53] <cehbab> busy boy.
+    [16:18:54] <pengo> damn you and your spec changes!
+    [16:19:03] <pengo> i'll have to make a whole colour framework for that!
+    [16:19:09] <cehbab> yes. i'll formally lodge it later, through babelfish..
+ - png, color of pixel
+ - [2003-12-15]:
+    <cehbab> whens quebero released..
+    <cehbab> then i can morph someone elses game into what I want :)
+    <cehbab> well thats when mines gunna be done, only a little later.
+    <cehbab> after i get you to make a tutorial on converting other ppls games into an online rpg with quebero, in 7 easy steps :)
+    <cehbab> busy boy :)
+    <cehbab> id like it as a pdf please.
+ - <pengo> but honestly.. how can you improve on mario?
+    <cehbab> online ?
+    <cehbab> on a dreamcast!
+    <pengo> damn
+    <pengo> more for my todo list
+    <cehbab> like bomberman.. i like bomberman.
+    <cehbab> how about a bomberman online, 2d, with a huge chat forum.. you challenge ppl.
+    <cehbab> knockout round championships and so on :)
+    <cehbab> maybe scrollable..
+    <cehbab> maybe not bomberman graphics.. pick a theme. clowns :).. knights.
+    <cehbab> but bomberman style play!.
+    <pengo> i'm starting to see the down side to promising a tool that does everything
+ - MOD template [2003-12-18]
+   <cehbab> you'd be surprised how hard it is to make a mod player correctly..
+   <cehbab> lucky mines not correct :).
+   <cehbab> because im not into standards and all that :)
+   <cehbab> so its not all that simple as it seems.
+   <cehbab> its a good doco though :)
+   <cehbab> im interested in the file formats.. that helps you :)
+   <cehbab> i figured all that out.. :). can give you templates now for qubin :)
+   <cehbab> once templates are invented.
+ - 3D formats [2003-12-18]
+   <cehbab> qubero would also be good for converting 3d model formats.. they'll all the same, just different layouts and headers.
+   <cehbab> theres a bunch, all similar again.. ;)
+
+quantis@cg166.halls.umist.ac.uk * jason mcginty
+quantis on #osdev (03 May 2003)
+ - <quantis> writing a system program language
+ - <quantis> im trying to write a compiler that can generate a muiltiboot compatiable kernel
+ - <quantis> i.e trying to make linker files a lot easier to understand
+ - <quantis> and try and get it so it can do really lowlevel stuff that most hll cant
+
+air:
+<air> pengo: table programming
+<air> http://www.geocities.com/tablizer/top.htm
+data modelling tools + terms:
+ - http://datamodel.org/
+brix features: http://brix-os.sourceforge.net/?p0=status
+
+
+<ree>
+ - remote access (have the display be external)
+ - <ree> it'd be cool to have a distributed networked hex editor
+
+bevin:
+ <Bevin> http://www.caucho.com/hessian/
+ <Bevin> just added that to RIFE
+
+hellz_hunter is ~abra@pcp02481317pcs.spedwy01.in.comcast.net * cadabra
+hellz_hunter on #math
+ <hellz_hunter> how do u convert an integer to an ip address?
+ <hellz_hunter> so how does 2130706433 == 127.0.0.1?
+
+other projects / pages:
+ - http://opendocman.sourceforge.net - OpenDocMan is a full featured Web-based document management system designed to conform to ISO 17025/IEC
+ - http://tboudet.free.fr/hexdiff/
+ - http://public.kitware.com/VTK
+ - Open Source Computer Vision Library: http://www.intel.com/research/mrl/research/opencv/
+ - NR-grep: http://www.dcc.uchile.cl/~gnavarro/pubcode/
+ - http://razor.bindview.com/tools/fenris/
+ - Panorama Tools: http://www.fh-furtwangen.de/~dersch/
+ - CCured: http://manju.cs.berkeley.edu/ccured/
+ - vips: http://www.vips.ecs.soton.ac.uk/
+ - fft and optimization: http://www.fftw.org/
+ - Memory Pool System: http://www.ravenbrook.com/project/mps/
+ - http://tunes.org/files/papers/Arrow_Introduction_v8.htm
+ - http://www.nu2.nu/bootcd/
+ - http://wouter.fov120.com/proglang/index.html  -- graphical languages
+ - http://ll2.ai.mit.edu/
+ - http://www.informatik.tu-darmstadt.de/TI/LiDIA/ (anticommercial maths library)
+ - http://mathcs.holycross.edu/~ahwang/current/ePiX.html - GPL maths plotting library /
+ - http://xanadu.com.au/
+ - http://kos.enix.org/docs.php?lang=en
+ - http://astronomy.swin.edu.au/~pbourke/geomformats/
+ - http://www.arkaos.net/
+
+Artemis / Two dogs:
+ - Pill timer with presets
+
+GNU Help Wanted Items:
+ - http://savannah.gnu.org/people/?group=tasklist
+
+Mur:
+ - Mayan Calendar [2003-07-03]
+	mur is born "5 Ben 6 Cumku" according to maya calendar
+	[23:11:42] <pengo> 3d software screws with your head :(
+	[23:12:33] * mur is born 12.18.9.14.13
+	[23:40:38] <mur> http://www.michielb.nl/maya/calendar.html
+ - <mur> will you add easter-egg tetris to it? :) [2003-14-12]
+   <pengo> yes
+   <pengo> just for you
+- spectrum selection
+<mur> one question, in the middle picture there are those bars, but you have selected some text, and it makes the blue, why are there the colours if they are not important while edited?
+ - dna:
+<mur> it'd be interesting if you had so much customizability that you coudl map certain values to T, G, C and A etc. and then even specify the spectrum, how it works
+<mur> pengo, and it'd be cool if it woudul be possible to organize the order of data (spectrums, values etc)<mur> like, if you were analysing DNA in it, you are probably more interested in other things than how many line breaks the file has
+<mur> it'd be interesting use for qubero, if you coudl compare 5 DNA raw data next to each other, select part and if it showed differences
+[22:46:56] <mur> i think select shoudl be more of highlight than to show selection
+[22:47:47] <mur> you could perhaps try how it woudl work if the spectrum selections had bars next to spectrum and so that you coudl see the spectrum<mur> hmm that woudl make it more different to interpret the spectrum
+[22:52:17] <mur> related to TGAC etc, you might have "adjust characterset" function
+[22:53:02] <mur> and "set of preferences" which woudl have the predefined or saved preferences of displaying information, charactersets etc
+
+
+gab:
+<gab> did you try to compile it with gcj+SwingWT ?
+
+
+Mathis:
+  <Mathis> you could also use nasm or gas or wasm or tasm or masm
+  <Mathis> nasm is nice
+
+Saman (8/8/03)
+ - Fridge 2003: 4 options
+ - more uplifting music (sade)
+ - Windows but better
+ - "Enhance" button (NASA technology)
+ 
+ waltervn #dreamcastdev (2003-12-14):
+  - <waltervn> I could use a good rom hacking tool for linux ;)
+    <pengo> game roms?
+    <waltervn> yeah
+    <waltervn> I use this one: http://www.geocities.com/noprgress/patchrom.html which is ok but unfortunately it's closed source
+    <waltervn> patchrom can do some nifty things, like automatically detect pointers and pointer blocks
+  - <waltervn> 'relative' search would be cool too :)
+    <waltervn> so searching for "abc" would also find "123" "def" etc ;)
+  - 2:54 AM 1/13/2004 <waltervn> I'll be happy to be a beta tester when the time comes ;)
+
+slava #java
+slava is ~slava@CPE0080ad77a020-CM.cpe.net.cable.rogers.com * Slava
+slava on #forth #lisp @#jedit #math #opengl #java 
+slava is an identified user
+ - continuations (e.g. as in ruby)
+ - i think every programmer should have at least a passing familiarity with prolog and scheme.
+   also forth.
+
+pr3d4t0r is ~Eugene@h-69-3-31-82.SNVACAID.covad.net * "irc.freenode.net"
+pr3d4t0r on #java 
+pr3d4t0r using irc.freenode.net http://freenode.net/
+pr3d4t0r is an identified user
+ - java bytecode expert
+ - e.g. http://eugeneciurana.com/personal/Kernel_partial.txt
+
+geist: 5:43 PM 1/11/2004
+geist is ~geist@tkgeisel.com * Travis Geiselbrecht
+geist on #osdev 
+geist using irc.freenode.net http://freenode.net/
+geist is an identified user
+ - http://www.macprogramadores.org/beos/tutoriales/TUP/DiskProbe.gif
+ - diskprobe
+   well, it wasn't actually all that fancy, but it was totally designed to operate on disks
+   so it looked at a sector at a time, had a little box at the top where you could type in sector number or raw address
+   and it jumped right to it
+ - and you could set bookmarks and use alt-number or whatnot to jump back to where you were
+ - diskprobe was just super fast did it's job
+ - if qubero can be that slick, I'm all over it
+ - oh and the scrub slider was totally important
+ - it updated really really quickly so you could scrub around and try to eyeball certain structures
+ - yeah but I think you could configure it to be offset
+2004-11-19
+[16:31:52] * geist just found a kickass hex editor for windows called winhex
+[16:31:55] <geist> it is fantastic
+[16:36:34] <vlad902> What's good about it?
+[16:48:38] <geist> it has a ton of data recovery tools
+[16:48:52] <geist> one of it's big things it lets you do is poke around on physical media
+[16:48:57] <geist> and it understands a bunch of filesystems
+[16:49:19] <geist> and you can gather stat5istics about bytes in use, etc
+[16:49:28] <geist> I dunno, it's just a really nice package. does precisely what I want
+
+Forge #philosophy oz.org 1/11/2004
+<Forge> more like card game engine... using xml as a configuration script for it to "plug in" new games
+<Forge> erm more new game rules I guess is better phrasing
+
+Suzanne_ is ~suzanne@170-215-243-14.bras01.mdl.ny.frontiernet.net * suzanne
+Suzanne_ on #osdev 
+ - APL (weirdo symbol language): http://www.aplusdev.org/keyboard.html
+
+
+crunge is ~crunge@adsl-66-122-244-72.dsl.sndg02.pacbell.net * crunge
+crunge on #java #gentoo 
+crunge using irc.freenode.net http://freenode.net/
+10:31 PM 1/14/2004
+ - <crunge> pengo: best hex editor I ever used was called 'fix'.. it displayed, at most, 256 bytes a time displayed them left to right in 3 lines, had the (extended) ASCII then below it the high nibble in hex then below that the low nibble in hex
+<crunge> pengo: think it was originally made for fixing stuff from dbase but I'm not sure
+<crunge> pengo: make something like that and I will love you forever
+<crunge> pengo: well, for that all I have to do is send an email to a friend of mine that surely has it... it'd be nice to see more that 256 bytes a time though =)
+<crunge> well, imagine this: 4 rows. Each row has 3 lines. Each row/line has 64 columns. The top line of each row show the ascii value, the bottom two lines show the hex. Shouldn't be too hard to make a screenshot in your mind =)
+ - <crunge> Ah... ever played with Xaos?
+   <pengo> umm.. dont think so
+   <crunge> real time zooming/panning fractal viewer
+   <pengo> ahh used similiar
+   <crunge> one of the neat things is that it has a filter to output 24bit color instead of just indexed...
+   <pengo> cool
+   <crunge> where each of the RGB values is involved in the fractal plotting, not just an image format change
+   <pengo> nice
+   <crunge> Something I'd like to see is a program to convert a TGA that xaos spits out and map RGB to XYZ/ZYX/etc, and read the image the image like we read english (or some other user-selected way) and output each pixel as a 3D vertice, 3D point along a poly line, or parameters for a 3D bezier curve
+---
+<crunge> You know all these "document management systems" that are supposed to be able to index your XML documents automagically?
+[21:53:48] <crunge> store and index I mean
+[21:54:06] <pengo> no, but go on :)
+[21:55:15] <crunge> If such a thing existed and worked well, with a reliable querying system (possibly like the little that I've seen of LDAP), couldn't one just use serialization to XML to store/retrieve objects in this database w/o having to write JDBC code to dehydrate and reconstitute your objects?
+[21:55:31] <deluxe_247> hmmm
+[21:55:38] <deluxe_247> I think there is a project that already does that
+[21:55:39] <deluxe_247> xindice
+[21:55:47] <crunge> I'll take a look
+[21:56:02] <deluxe_247> you could use something like castor
+[21:56:02] <crunge> just seems like a 'duh' concept to me
+[21:56:17] * crunge starts googling
+[21:56:17] <pengo> is there a "standard" way to send a compressed+indexed xml file?
+[21:56:20] <deluxe_247> really not that great of an idea with things like CMP, Hibernate, JDO
+[21:57:03] <deluxe_247> anyone of those + castor-xml will acheive the same thing as xindice but with less overhead
+[21:57:19] <crunge> deluxe_247: I'm thinking more about my non-mission-critical small-time apps that may have a couple hundred records across a dozen tables
+[21:57:37] <deluxe_247> hibernate
+[21:57:41] * false (~dh@213-35-166-41-dsl.kjj.estpak.ee) Quit ("Fhtagn-Nagh Yog Sothoth")
+[21:57:46] <deluxe_247> but y the xml neccesity?
+[21:57:51] * false (~dh@213-35-166-41-dsl.kjj.estpak.ee) has joined #java
+[21:58:08] <crunge> no xml necessity.
+[21:58:15] <deluxe_247> then user hibernate
+[21:58:18] <deluxe_247> err use
+[21:58:21] <deluxe_247> or JDO
+[21:58:46] <crunge> I'm just saying I hate writing code to build objects out of SQL queries and vice versa
+[21:58:46] <deluxe_247> with hibernate you create mapping files from objects -> db tables
+[21:58:53] <crunge> don't mind the query part
+[21:58:58] <deluxe_247> then you will love hibernate
+[21:59:00] <deluxe_247> www.hibernate.org
+[21:59:19] <crunge> deluxe_247: I'll check it out, thanks
+
+mrd is abcdefghij@pcp201395pcs.uprtnw01.nj.comcast.net * Mike
+mrd on #osdev 
+mrd using irc.freenode.net http://freenode.net/
+ - <mrd> I think that'd be nice: len, str = get_string();
+   <pengo> mrd: maybe i could do that with my casting engine
+   <pengo> for the casting.. if len and str are defined as an int and a byte array.. then get_string() could return a struct which can be cast into len and str.. programmer confirms via the IDE that's what they meant if it's ambiguous.. blah.. yeah it works cool :)
+ - <mrd> a suggestion, make an ability to add invisible tokens to numbers. I hate having numbers like 1000000 in code. it'd be nice to write 1_000_000 or 1,000,000 or something

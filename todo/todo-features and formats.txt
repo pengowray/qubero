@@ -1,0 +1,450 @@
+for v0.2
+ - sequential + recursive + random access + dependent + compression definitions of parts of file
+ - defintion -> xml -> definition
+ - scoped type definition with inheritance
+ - external main definition file
+D hex display
+ - highlighting of parts (outline) and errors (red)
+D display: tree of parts
+ - table of constants
+ - names for chunks, types
+ - array/table numbering systems
+ - search / jump
+ - subsection editing (e.g. only display one definition or range)
+ - backup files as .diff + save changes as diff (or patch and .reg files or cvs or rcs)
+
+for v0.3
+ - use java.nio ByteBuffer + Channels
+ - "command line" commands / macros
+ - keyboard editing (no mouse)
+ - expandable view (.jar, compressed bits)
+ - more file formats
+ - views
+ - more data/resource types
+ - less java dependant?
+ - hex edit clipboard
+ - percentages (pie graph) of data types used in a file (total and bytes)
+ - overview/summary view: show whole file as one screen w/ areas of text/binary/etc
+ 
+for 0.4
+ - BRASS (bedrock altered state server).
+ - text only display
+ 
+initial chunk types to support:
+ - internal types: template references
+ - internal types: variables (defined within/from the template)
+ - java bytecode types (edit and display): int, long, reference, etc.
+ - java types: char, short, boolean, unicode
+ -  http://java.sun.com/docs/books/vmspec/2nd-edition/html/ClassFile.doc.html
+   class file types: u1, u2, u4,
+   infos: cp_info, field_info, method_info, attribute_info
+   arrays: count then array
+   magic numbers: (eg 0xCAFEBABE)
+   flags (w/ conflict rules)
+   Fully Qualified Class and Interface Names "java/lang/String"
+   Descriptors (4.3)
+ - table of constants
+ - xml + schema: types, patterns, restrictions, enumerations, list types, unions, etc.
+ - Simple Outline XML (SOX): http://www.langdale.com.au/SOX/
+ - python's pickled objects
+   see also: http://www.brpreiss.com/books/opus7/
+ - PyProtocols: http://peak.telecommunity.com/PyProtocols.html
+ - truncated types (last 8 bits of a 32-bit float?)
+ - Math.BigNumber
+ - roman numerals (ascii and unicode, u/lcase)
+ - chinese/japanese numerals + dates
+ - regex's + regex helper + tr (unix) +
+   Regular Expression Graphing Program: http://www.oualline.com/sw/index.html
+ - DataBuffer's special unsigned types
+ - stacks, and other standard structures + stack equiv's
+ - [file/data] sizes (kb / mb / other powers of 1024)
+ - partial byte ints (e.g. 3 bit int)
+ - binary coded decimal (packed decimal) http://wombat.doc.ic.ac.uk/foldoc/foldoc.cgi?packed+decimal
+ - from Chunk.java: recordset, Flags, NarrativeSequence, OverviewDisplayChunk
+ - end of line: PC (0D 0A), Mac, Unix, [IBM Mainframe's] NEL (0D 85), Unicode line separator character (#x2028),
+ - metadata descriptors: uninitialized data, null, Reserved, bad (sector), unknown, loading, cached/offline, (un)synchronized, copy, linked, unformatted,
+ - hidden/unaddressable data: data which doesnt add to the address number, and is unaddressable (thru the user's current view), usually grey or red or small print.. distinguished from "real data"
+   e.g. checksums at the end of the line, overlapped data (extra columns either side to give continuity), data from the original source (e.g. zipped data), diff data, secondary addressing scheme, superscripts and superscripts
+ - form elements with scripting (e.g database entry)
+ - multiple addressing schemes/methods
+ - User Validation / Access Control Lists (ACL) / Appliable to chunks of data
+ - floating point
+   http://developers.slashdot.org/article.pl?sid=03/06/26/0044223&mode=thread&tid=126&tid=156
+   http://docs.sun.com/source/806-3568/ncg_goldberg.html
+   http://www.math.byu.edu/~schow/work/IEEEFloatingPoint.htm
+  - arbitrary precision floating point / fixed point floating point:
+   <air> u can create float types with (a:range 0.0 1.0 delta 0.1)      (like ada)
+   <air> all floats have a precision
+   http://adahome.com/Ammo/cpp2ada.html#1.1
+   type Fixed is delta 0.1 range -1.0 .. 1.0;w
+
+future versions:
+ - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
+ - links and soft copies of referenced specs (+ evidence based "broken" links)
+ - pdf, html, xml for above
+ - multi-threaded loading: jump ahead of current part being parsed when possible
+ - partial/background loading: only load what's displayed (large files especially)
+ - XML editor
+ - standard (and non-standard) methods of conversion between types
+ - rules: (e.g. uniqueness)
+ - simultaneous versions / instances
+ - partial locking (or loading just what isn't locked)
+ - lambda
+ - java convention checker
+ - java comment editor (preserve ** boxes + wrap)
+ - java security awareness
+ - file location + surrounding files as part of definition (metadata)
+ - new english words for hex. Wunex, Texo, Treex, Forx, Fivex, Sixer, Sexen, Eix, Ninex, Aten, Blev, Curlve, Dirxeen, Exorte, Fixte, Texan (ten is bigger in texas).
+   In section 4.1 of The Art of Computer Programming, Donald Knuth describes:
+    ...a prominent Swedish-American civil engineer named John W. Nystrom [who] decided to... [devise] a complete system of numeration, weights, and measures based on radix-16 arithmetic. He wrote, "I am not afraid, or do not hesitate, to advocate a binary system of arithmetic and metrology. I know I have nature on my side; if I do not succeed to impress upon you its utility and great importance to mankind, it will reflect that much less credit on our generation, upon our scientific men and philosophers." Nystrom devised special means for pronouncing hexadecimal numbers; for example, [0xC0160] was to be read "vybong, bysanton." His entire system was called the Tonal System, and it is described in J. Franklin Inst. 46 (1863), 263-275, 337,348, 402-407.
+   "able, baker, charlie, dog, easy, fox". (aviation notation?)
+   "dek" for A, "el" for B, "zen" for C, "tris" for D, "cat" for E, and "kink" for F. -- http://everything2.com/index.pl?lastnode_id=124&node_id=1170622
+   Alpha (also spelled Alfa), Bravo, Charlie, Delta, Echo, Foxtrot
+ - design new characters for hex (incorporating roman numerals, x's, japanese, and standard arabic)
+ - OCR for dvd and tv subtitles and screen captures
+ - OCR for taxes(?), books, etc
+ - OCR for musical notation
+ - allow pipes to mooj. e.g:   dir | mooj.exe
+ - monitor files + show changes.. help working out file formats
+ - treat filename and path as part of the file's data (metadata)
+ - get data off the web
+ - sequencer (allow triplets in 4/4)
+ - database connectivity
+ - self describing document -> .exe / .class / .jar / applet / javascript
+ - natural language guessing
+ - sort data
+ - template + datasource merges
+ - web service (upload file to display as hex.html or hex.gif)
+ - very large file support for all formats!
+ - currency
+ - ICL / RMI
+ - Conflict Resolution wizard
+ - projects
+ - "Previews" of transformations
+ - file system analysis (e.g. "this looks like a windows install disk")
+ - character map
+ - photoshop plugins
+ - qbit/quantum calculations.
+ - i18n
+ - find by change -- e.g. save game cheats. allow checksum style operations for large files to allow fast checks (less overhead) but more steps in narrowing down (i.e. did this region change, we'll just watch it next time) how would this work? i'm not sure.
+ - rewrite mooj with itself
+ - plugin architecture
+ - external editors (via command line)
+ - altered state server (ASS): aka. flattening file server. display .mooj files as flat files via ftp/nfs
+ - artificial neural network patterns
+ - complex numbers, real/imaginary
+ - typical cryptography operations and symbols (xor?)
+ - masks / serial numbers (e.g xxx-xxxx-xxx). Stored with and without the -'s.
+ - C string literals (escaped).. \n \t \\ etc \nnn \xHH \cx
+ - knuth-compatible (everything in art of programming)
+ - database tables / ER diagrams
+ - comms tools: share templates, search. p2p.
+ - patent destroyer: patented algorithm search (from old software, pre-dating the patent)
+ - format template as plain text, suitable for email / usenet
+ - tree-based "diffdata" for random insertion
+ - <wli> (1) functional models (e.g. Haskell) (2) logic models (e.g. Prolog/Mercury) (3) string models (e.g. SNOBOL) (4) object models (e.g. Smalltalk) (5) state machine models (e.g. Charity)
+   <wli> (1) functional models are useful for reasoning, metareasoning, and pure computation
+   <wli> (2) logic models are useful for automated search, metareasoning, proof, and logic computations
+   <wli> (3) string models are useful for string manipulation and character-oriented stimulus-response patterns that are aggregated into patterns
+   <wli> (4) object models are useful for stimulus response patterns subdividable into specific inter-object message transmissions and layered decomposition
+   <wli> (5) state machine models are most useful for asynchronous message reception and complex but flat structured message reception + state transition models.
+ - statistical data: quantitive (continuous/discrete), categorical (ordinal, nominal), etc...
+ - browser plugin / plugger compatibility
+ - flowcharts
+ - scheduler (e.g. class timetable, train timetable, priorities, urgency, costs, conflicts, goals, and for realtime scheduling--include time taken for better estimates)
+ - expression expander (for human readability), show what each expression expands out to mean. allow tables of expanded expressions. e.g. chr$(x) would give you an ascii chart
+ - poetry/word suggestor: random words, genre words (poetry, scientific), markov chain words, word with same base, synonyms, etc. Fridge Magnet poetry with Drag'n'Drog
+ - data over time viewer: e.g. stocks, top 40, whatever
+ - filesystem extender: restore cut off filenames
+ - name shrinking engine (e.g. remove vowels, names to initials, common abbrev's, MixedCase, Numbers, Remove unimportant words, etc)
+ - game theory engine
+ - Security Through Obscurity
+ - topologies (match sticks, boxes, dungeon walls and rooms, hex, rectangular, donut...)
+ - collaboration / communications
+ - sorting algorithms (quick, bubble), styles (AaBb, abcABC), demo (ala Sortdemo/Showsort)
+ - passwords: ******'d or (hidden) or no display, etc.
+ - text field editing.. shortcut support to recognise phrases / sentences for ctrl-arrow and double/triple click. eg. "http://""web"."addresses"."com", "I.N.I.T.I.A.L.S", "Dr." "Smith" (not a sentence break). User definable too within a large text (eg with xml markup) <word>AK_AT</word> or <word>Onclinx</word>-<word>Vierin</word> (Onclinx-Vierin)
+ - show pipe throughput / throttle (limit bandwidth)
+ - dictionary (spell check) / thesaurus / hyphenation support (pref. taken from another open project)
+ - playlist editor (see playlist editor.txt)
+ - flashcards (see above)
+ - smart tables: format data into a human readable table:
+   o find commonalities, headings, etc
+   o icon view. e.g. data about the elements should auto-generate a periodic table.
+   icon view also for: japanese kana, pokemon, sign lang, TLDs (.au .at ..), ascii chart, tcp ports
+ - physical jumper switch designer: prevent symmetrical differences, use fixed number of jumpers (or set range. e.g if there's space for one ), use different numbers only for less used options, code mapping to data structure
+ - cached data tables. all calculated select between lazy init / cached / stored / calc every time / cache size / automatic / init speed vs run speed vs memory use vs hdd use / priorities between caches / customisable intelligent caching algorithms
+ - per-CPU variables
+ - event model data: lisenter, event object, source, handler/register?
+ - java's image/graphics classes
+ - labelled diagrams (auto find best place for labels and connecting lines, or photo+drawing-with-labelled outlines style)
+ - document workflow
+ - Constraint Programming: http://kti.ms.mff.cuni.cz/~bartak/constraints/
+
+stuff that small freshmeat projects do:
+ - drivers (connect to/integrate/rip from): [proprietory] hardware/protocols/data stores
+ - perform single tasks: simplify (rewrite) an API/smaller footprint/less code/easier interface/specific language
+ - parse/verify/check/monitor/report on/track/record: configuration/syntax/firewall/cpu/disk/clock
+ - catalog/index/speed up: mp3's, tar.gz's on a tape, disks
+ - make interactive/realtime/live: languages
+ - render to screen/make human readable/help learn: graphs/graphics/flash cards
+ - process: audio/plugins
+ - emulate/recreate/simulate: existing applications or games
+ - convert
+
+future formats:
+ - plain text
+ - unicode (see International Components for Unicode (IBM))
+ - parse .java files too?
+ - java tracestack messages/details
+ - .jad : text/vnd.sun.j2me.app-descriptor
+ - Extended Backus-Naur Form (EBNF) notation support
+ - mame images and sounds! (find similar with GIFT)
+ - excel types + formats + equations
+ - python types + pickle + ZODB (oodb)
+ - different javascript styles
+ - gif / jpg / png / psd / bmp / ico / mac images / corel / digital camera's raw format
+ - multi-resolution graphics collages (e.g. image with zoom hotspots)
+ - LTI-Lib Computer Vision Library: image processing and computer vision, sign language and gesture recognition (LGPL)n
+   VIPS free image processing system "half way between Excel and Photoshop": http://www.vips.ecs.soton.ac.uk/
+   http://ltilib.sourceforge.net/doc/homepage/index.shtml
+ - jpeg: auto use same compression (work out current compression, even variable compression from photoshop)
+ - rar / zip / jar / ace / bz2 / lzh / lzw / lzx / tar / z / gzip / cpio / ar / compress / pack / PAK (quake?) / cloop / zlib_deflate / zoo / arc / lzo / lzop / LIBZ / arj / cab / / ace / tar / GZip / UUE / ISO
+   speed (adding/removing/decompressing), features and size comparison for above
+ - encrypted files (pgp, css, etc,
+ - LaTeX
+ - flash
+ - javadoc viewer/editor!
+ - decompiler (nasm.octium.net / intel.com / x86.org / linux: nm / ld / as )
+ - various flashroms
+ - virus detection/definitions (e.g. norton)
+ - configuration files (.ini + unix, including new quota files)
+ - DVD + subtitles + VCD (.VCD, .DAT)
+ - fat12/fat16 (ask rob_ert.. or ww). Fat32, NTFS, EXT2, etc.
+ - CIF Easy CD Creator image
+ - ISO: the ISO 9660 CD-ROM file system standard
+ - CD pit predictor. See where data would physically lay on a burnt CD.
+ - CD Sculpter: Also burn coasters with a picture of Tux sculpted from short and long pits
+ - resource fork (mac) .RS_
+ - b-trees [eks's homepage: http://void-core.2y.net/ ]
+ - comms app histories (icq data / irc logs / outlook / eudora / lotus / etc)
+ - midi + kar + mod + other musical notations: Finale .MUS 2002, MusicXML, Nokia Ringtone
+    see keykit: http://nosuch.com/keykit/
+    also: http://www.gutenberg.net/music/
+ - w3c: CSS, DOM, HTTP, URL/URI, SVG, SMIL, SOAP, XLink, XFORMS...
+ - weights and measures (metric->imperial,dB,etc) google calculator
+ - web logs
+ - email address + email format + news
+ - fonts! ttf, etc.
+ - windows registry
+ - standard schedule/calendar format?
+ - Comma-delimited ASCII file
+ - CER / CRT Certificate file (MIME x-x509-ca-cert)
+ - wordnet files, microsoft/wordperfect/openoffice/molliza/linux (sq) dictionary files
+ - opencyc.org / cyc.com KB
+ - DLL(Dynamic-link library file)
+ - DST Embroidery machines graphic file
+ - HEX Macintosh BinHex 2.0 file
+ - LWZ Linguistically enhanced sound file (Microsoft)  ??
+ - more file extensions: http://whatis.techtarget.com/fileFormatA/
+ - MOV Movie / QuickTime
+ - ms office / openoffice / oasis / doc / rtf / etc
+ - RTF Rich Text Format document
+ - VCF Virtual card file
+ - database types (oracle, postgres, etc)
+ - PNM is a image file format, it can encode truecolor images (PPM), grayscale images (PGM) and black/white ones (PBM) (unix)
+ - dna sequences: GFF: http://www.sanger.ac.uk/Software/formats/GFF/GFF_Spec.shtml
+ - dna: GDB: http://gdb.wehi.edu.au/gdb/gdbDataModel.html ?
+ - dna sequences: CAF, Read Naming
+ - dna: Acedb, Genotator (richer formats?), HMMER, EXBLX, GeneWise, GCG (scan/tandem)
+ - core dumps: <gremlin> -rw-------  1 grem  grem   503140352 Jun  5 18:17 tcsh.core
+ - windows .url, .lnk, .pif
+ - google search: format specification document
+ - GUIDO Music Notation Format
+ - Generic Diff Format Specification
+ - Gettext (.po) catalogs [poEdit]
+ - key map (telemate, mame)
+ - fax data
+ - bar codes (even as graphics) + link to product information
+ - Various Mime Types (esepcially as in java.awt.datatransfer.DataFlavor)
+ - various game maps (whatever's popular near release date)
+ - mobile phone sim cards
+ - linux packages: rpm, deb, src, tgz(tar.gz,dpak,pkg), apt-rpm, jbl, uhu
+   http://distrowatch.planetmirror.com/stats.php
+ - EDI Electronic Data Interchange
+   http://www.ietf.org/rfc/rfc3335.txt
+ - vga memory map
+ - existing file indexes (view + use) e.g. unix locate, fast find, glimps,
+ - all programming languages!
+ - boardgames / puzzles / space invaders
+ - chess / chess scoresheets / board states (including extra state data for special moves) / file+rank notation / chess rules editor
+ - electronics
+ - sql / define tables / rows / columns / transactions
+ - plant/animal/biological taxonomies
+ - command line arguments parsing / options / generic argv + args parser / --help generator / dos and unix formats
+   Option-Parsing Libraries -- http://www.python.org/sigs/getopt-sig/compare.html
+ - objdump
+ - POV-Ray / povray
+ - library: dewey decimal / MAchine Readable Cataloging (MARC)
+ - output from unix 'od', 'nl',
+ - astrology / astronomy formats and charts
+ - teletext
+ - The DMX 512 standard (USITT DMX 512 - 1990) -- theatre lighting control. Being revised by "The Entertainment Services and Technology Association" (ESTA)
+ - Midi Show Control (MSC) : It provides show control functions, like syncronising sound and lighting with pyro. This is used BIG TIME in the theme park industry.
+ - game controllor configure: image of keyboard / joystick / controller with labels for what each key/button does. also select and drag to move a bunch of keys around the keyboard. support multiple keyboard layouts. load/save/share settings.
+ - console save games / memory card format (ps2/dreamcast/xbox...).
+ - name (title, first, last, initial, full)
+ - address (number, street, postcode..., divide into parts, validate, normalize, historical-- eg postcode used to exist...)
+ - domain names (valid, available, whois, historical)
+ - recipe management / database (auto calories, nutrition, categorise (vego, vegan...), variants, guess cooking times..)
+ - Universal Dive Computer Format (UDCF)
+ - persistence frameworks (Hibernate, Castor, and OJB)
+ - Microsoft Tape Format which is used by NT Backup.
+ - credit card checks.. see CCVS (Credit Card Verification System)
+ - vcard
+ - ipv6 structures
+ - CORBA/IDL/ORB/IIOP
+ - automation: infrared control signals (remote control) + LED monitoring via camera
+ - java beans (eg edit variable via get/set methods)
+ - callerID format
+ - Mozilla's Internet Keywords
+ - Haystack (personal information manager)
+ - "disk sherif" type applications that undo changes to hard drives
+ - hibernate: http://www.hibernate.org
+ - mail boxes.. import/export/convert various email boxen.. Pine, Evolution, Outlook, Eudora, Sylpheed, Thunderbird, etc
+ - juice (byte code bytecode from UoC): http://www.modulaware.com/mdlt69.htm
+
+Content Management Systems: http://lwn.net/Articles/34007
+  (see also: Open Source Content Management (OSCOM) Conference http://www.oscom.org/ )
+  OSCOM Matrix of CMS projects. http://www.oscom.org/matrix/index.html
+ Midgard	http://www.midgard-project.org/
+ Mason	http://masonhq.com/
+ Zope	http://www.zope.org/
+ Slashcode	http://slashcode.com/
+ Scoop	http://scoop.kuro5hin.org/
+ PHP-Nuke, PostNuke and PHPSlash
+ Cofax ("Content Object Factory") http://www.cofax.org
+ Enterprise Content Management System http://www.redhat.com/software/rhea/cms/
+ OpenACS http://openacs.org/
+ tikiwiki http://tikiwiki.sourceforge.net/
+ Bricolage http://bricolage.cc/
+ WebGUI http://www.plainblack.com/webgui
+ OpenCms http://www.opencms.org/opencms/en/
+ OpensourceCMS http://www.opensourcecms.com/
+
+priority programs to obsolete (in order):
+ - hex editors
+ - java decompiler (javap)
+ - diff tools (see below for list)
+ - excel + open spreadsheets functionality (check out calc's java api stuff)
+ - text formatters: vim, emacs
+ - source code formatters: leo [literate programming]
+ - table formatting (word/excel, html, smart/auto formatting)
+ - text editors: notepad + wordpad
+ - graphics editors: photoshop
+ - document editors: word processors, latex, pagemaker(etc), sgml tools
+ - databases: oracle, sqlserver, access, postgresql, ...
+ - partial downloads (kazaa, winmx, getright...)
+ - gnutella protocols
+
+other programs to obsolete:
+ - office
+ - oracle
+ - new locus
+ - outlook
+ - telemate
+ - windows
+ - everything
+
+projects to synergise with:
+ - wine
+ - linux / bsd
+ - reiserFS / namesys
+ - compression utilities (share libraries if possible)
+ - JavaCC
+
+visualisers/debuggers/disassemblers:
+ - Data Display Debugger: http://www.gnu.org/software/ddd/
+
+diff tools:
+ - diffutils
+ - cvs, cmp, bitkeeper
+ - http://meld.sourceforge.net/  "Meld is a GNOME 2 visual diff and merge tool"
+ - emacs "ediff" tool
+ - http://xxdiff.sourceforge.net/
+ - http://vim.sourceforge.net/htmldoc/diff.html
+ - darcs: http://abridgegame.org/darcs/ (good theory in manual)
+ - monotone: http://www.venge.net/monotone/
+ - Jigsaw Download (jigdo) http://home.in.tum.de/~atterer/jigdo/ (.template + .jigdo + half finished .iso.tmp files)
+
+silly/fun stuff:
+ - xmodem end-escape sequence fixing
+ - modem init string
+ - ansi music!
+ - ansi animation / 2400 emulation
+ - DOS logs (xxx: how to add "invisible" timestamps?)
+ - how much does that number resemble someone randomly hitting the keyboard
+   [Miffy: NSA-STD 102328292302    TTY logging of remote user commands with time stamps.]
+ - old text modes (with colours and symbols and codes): C64, ZX81, Spectrum, Apple ][, Atari (ATASCII or ATari-ASCII), Radio Shack Color Computer, Tandy
+ - backwards filter
+ - data format used by maths lego page: (LDRAW .DAT)
+   http://www.lipsons.pwp.blueyonder.co.uk/mathlego.htm
+   work out 3x1 piece blocks for it too
+ - fractals
+ - geometry (n-dimensional)
+ - speak the hex (naturally. calc time between sounds, record each sound in 3-4 different positions, place emphasis on chosen parts)
+ - pi, the constant, as a "pseudo" large file, scroll to any point. Viewable as ascii numbers or as base-2. maybe only base-2. might be too slow too.
+ - morse code
+ - reversi/othello/iagno board and ai strategy designer:
+   base strategy on:
+    short term number of tiles
+    tracing game through to end
+    enemy prediction (combined with above or counter-move strategy) (match strategy with your own)
+    [symetrical] part of board weighting
+    reversability calculator (e.g. if you have an L shape around one corner (0,0), putting a piece at (1,1) can't be reversed),
+    stage of game (turns)
+    number/ratio of pieces (e.g. so as to try to get lots of pieces when you have few)
+    strategy/factor combiners: weightings and neural network, if-then-else/case, fittingness of a model)
+    experimental: try something just to see how human reacts
+ - laser show / vector graphics / plotter
+ - http://icfpcontest.cse.ogi.edu/ : make "winning entries" for all old competitions
+ - mazes
+ - knots
+ - alphabet soup: http://www.theory.org/artprojects/alphabetsoup/
+ - rubik's cube: http://www.math.umass.edu/~mreid/Rubik/optimal_solver.html
+ - cat/dog chips IDs
+ - "connection" games + rule editor: http://directory.google.com/Top/Games/Board_Games/Abstract/Connection_Games/ + Dominoes on Acid
+ - pack of cards and card games
+ - crosswords / find-a-word
+ - cellular automata
+   http://www.alcyone.com/pyos/cage/
+ - stereographs
+ - traffic flow modelling
+ - Treemaps for space-constrained visualization of hierarchies
+   http://www.cs.umd.edu/hcil/treemap-history/index.shtml
+ - XML tag underlining ala Conglomerate: www.conglomerate.org
+ - dos "mode code"
+
+academic: (ideas from uni)
+ - cladograms (and phylogenetic tree)
+ - Crystallography and Mineral Crystal Systems notation
+ - peroidic table (see also: smart table)
+ - chemistry! (atoms/compounds/ions/periodic table)
+   lewis dot notation
+   empirical formulas
+   3D diagrams/drawings of chemical structure
+   Wedge-and-dash notation
+   Sawhorse notation
+   Newman projection (Melvin S Newman, Ohio State Uni in 1950's)
+   http://cdk.sourceforge.net
+   http://www.idiom.com/~tomi/kmol.html
+   http://software.freshmeat.net/projects/vp7wkp/
+   max perutz's 1948(?) drawing
+   ascii chemical diagrams
+ - that physics lab software
+ - biotechnology software
+ - exam paper "OCR" multichoice test scanner
+ - symbolic algebra:
+	http://www.xs4all.nl/~apinkus/yacas.html
+	http://www.detachedsolutions.com/symbolic/ [ti83+]
+

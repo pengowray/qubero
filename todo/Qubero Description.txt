@@ -1,0 +1,69 @@
+Name:
+ - Qubero (quartz bedrock) (BRQ/QUBERO)
+ - quartz syntax (QSYN)
+ - templatation / templater
+ - hexellent
+ 
+Qubero is: (subtitle)
+ - Buzzword: Table based, declarative, optimisable, OO, visualising, vertical development, compiling, bean-like, templating, collaborative
+ - Noun: compiler/modeller/development environment/architecture/technology/assembler
+ - Vertical Modeller/Assembler VMA
+ - Visual templating compiler
+ - MACS (Model/Assemble/Compile/Sculpt)
+ - a binary-data modeller
+ - an application sculptor
+ - based around the user interface of a hexidecimal editor.
+ - spreadsheet and database.
+ - the photoshop of hex editors.
+ - data driven low-ceremony development tool with multiple perspectives. :/
+
+Definition interface is powerful because it does:
+ - give meaning to raw data
+ - allow definitions of addresses and regions
+ - support a wide range of data types found in any data
+ - support limitless custom data types
+ - support custom data polymorphism
+ - include defining functions to.... blah
+
+More Buzzwords (IBM): 
+http://www-106.ibm.com/developerworks/blogs/dw_blog_comments.jspa?blog=353&entry=65870&ca=dgr-lnxw01FutureTools
+ - MDA, Model Driven Architecture, i.e. UML
+ - Business-driven development.. [IT is a] bottleneck in their ability to innovate
+ - Greater transparency in the software development process: Auditing, traceability, and accountability.  
+    "provable quality standards", e.g. Sarbanes-Oxley (Enron securities law), BASEL2 (Capital requirements for banks, operational risk)
+    "transparency...of prcoess, design, realization, etc."
+ - RAD using new programming models. 
+    "CASE tools and 4GLs solved part of the problem": but have their own challenges: e.g., proprietary runtime layers, non-standard artifacts, lack of openness to integrate with other systems and services, inflexible high-ceremony design approaches, and so on
+    low-ceremony
+ - pure gold: "We can raise the abstraction of programming model to be closer to the end-users' mental model of their problem space and use the patterns and frameworks to transform that to the solutions space for today's technologies."
+ - generative programming
+ - Collaboration among individuals and teams: problem: "friction between individuals and teams"
+ - multiple perspectives, multi-dimentional problems, balanced decision
+
+Source code is not yet available and is currently pure Java. User interface is (currently) Swing.
+
+Features (complete or mostly complete):
+ - layered data sources. Keep data sources and views on separate layers. e.g. Easy movement and editing of changes
+ - plug-in new views for templated data
+ - inbuilt support for integers (any size). Unsigned, signed and other formats (currently sizes must be a mutliple of 8 bits)
+ - multiple undo
+ - scalible. Can chop and change very large files (> 2gig) with a small memory footprint.
+ - native diff file support: save "changes only" to a diff file, or keep backup as a diff.
+ 
+ Goals:
+  - user interfaces to become consitantly defined, and consistant things can be changed easily (blah)
+  - Empower all users to become valuable players in the software development process
+  - Encorporate definitions to give use to legacy data, source, and binaries to
+  - Interface correctly with legacy systems, but not be tied to legacy internally
+  - allow rapid growth: new areas of definition to be built by many
+  - encourage humans to communicate more broadly and deeply in all mediums
+  - allow humans to choose what they want to see and hear,
+      while making them aware of the choices
+  - promote global awareness and change
+  - to make all levels and processes within software human-viewable, and to allow "manual override"
+  - open source.. truly open to all, minimal barriers
+
+
+Others:
+<gab> so that's a kind of binary-file reverse engineering tool right ?
+Sid's friend.. bob? "so it's like the matrix"

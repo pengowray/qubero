@@ -1,0 +1,94 @@
+<project name="Qubero" default="dist" basedir=".">
+    <description>
+        Build Qubero.
+    </description>
+  <!-- set global properties for this build -->
+  <property name="src" location="src"/>
+  <property name="build" location="build/classes"/>
+  <property name="dist"  location="dist"/>
+
+  <target name="init">
+    <!-- Create the time stamp -->
+    <tstamp>
+       <format property="stamp" pattern="yyyyMMdd-HHmm"/>
+    </tstamp>
+    <property name="dist-bin-file"  value="${dist}/Qubero-${stamp}-bin.jar"/>
+    <property name="dist-backup-file"  value="${dist}/Qubero-${stamp}-backup.jar"/>
+    <property name="dist-latest-bin"  value="${dist}/latest/qubero-bin.jar"/>
+    <property name="manifest"  value="extras/mf.txt"/>
+    <property name="backup-exclude" value="extras/jar-excludes.txt"/>
+    <property name="noncode-path" value="net/pengo/noncode"/>
+ 
+
+    <!-- Create the build directory structure used by compile -->
+    <mkdir dir="${build}"/>
+  </target>
+
+  <target name="compile" depends="init"
+        description="compile the source " >
+    <!-- Compile the java code from ${src} into ${build} -->
+
+    <javac srcdir="${src}" destdir="${build}"/>
+    <!-- i wish:  <javac srcdir="${src}" destdir="${build}" target="1.4" source="1.5" /> -->
+
+    <!--<copy file="extras/mooj32.png" todir="${build}"/>-->
+
+    <!-- copy across noncode resources -->
+    <mkdir dir="${build}/${noncode-path}"/>
+    <copy todir="${build}/${noncode-path}">
+       <fileset dir="${src}/${noncode-path}"/>
+    </copy>
+  </target>
+
+  <target name="dist" depends="compile"
+        description="generate the distribution" >
+    <!-- Create the distribution directory -->
+    <mkdir dir="${dist}"/>
+    <mkdir dir="${dist}/latest"/>
+
+    <!-- Put everything in ${build} into the ${dist-bin-file} -->
+    <jar jarfile="${dist-bin-file}"   basedir="${build}" manifest="${manifest}"/>
+    <jar jarfile="${dist-latest-bin}" basedir="${build}" manifest="${manifest}"/>
+
+    <!-- save date and size to text files... not _really_ needed.. but when qubero has a version number... -->
+    <!-- <copy todir="${dist-latest-bin}"  -->
+  </target>
+
+  <target name="backup" depends="compile"
+        description="generates a backup" >
+    <!-- Create the distribution directory -->
+    <mkdir dir="${dist}"/>
+    <!-- Put everything into ${dist-backup-file} -->
+    <jar jarfile="${dist-backup-file}"
+        manifest="${manifest}"
+        excludesfile="${backup-exclude}"
+	basedir="."/>
+
+    <!-- Include the build, to make it an executable jar -->
+    <jar jarfile="${dist-backup-file}" basedir="${build}" update="true" index="true"/>
+  </target>
+
+  <target name="distribute_backup" depends="backup"
+          description="distribute backup to ftp + other hdd">
+          <!-- pending -->
+  </target>
+
+  <target name="execute" depends="compile"
+	  description="run Qubero">
+    <java classname="net.pengo.app.Mooj" fork="true">
+         <classpath>
+           <!-- pathelement location="${dist}/Bedrock-${stamp}-bin.jar"/ -->
+           <pathelement path="${java.class.path}"/>
+           <pathelement path="${build}"/>
+         </classpath>
+    </java>
+  </target>
+
+
+  <target name="clean"
+        description="clean up" >
+    <!-- Delete the ${build} and ${dist} directory trees -->
+    <delete dir="${build}"/>
+    <delete dir="${dist}"/>
+  </target>
+</project>
