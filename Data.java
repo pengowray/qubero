@@ -4,7 +4,7 @@ import java.io.*;
  * RawData is a fixed length chunk of data. e.g. a binary file, or an area of memory.
  */
 abstract class Data implements Comparable {
-    // xxx: replace with ByteBuffer ?
+    // xxy: replace with ByteBuffer ? - no doesn't support long indexes
     abstract public long getLength();
     
     /**
@@ -42,6 +42,7 @@ abstract class Data implements Comparable {
         return new ShiftedData(this, start, length, shiftStart);
     }
     
+    //
     public Data getStartShiftedSelection(long shiftStart) {
         return new ShiftedData(this, getStart(), getLength(), shiftStart);
     }    
@@ -54,13 +55,16 @@ abstract class Data implements Comparable {
     //public Chunk getMultpleSelection(...);    
     
     public String toString() {
-        return "raw data";
+        return "data";
     }
         
     public String getType() {
-        return "Raw data";
+        return "data";
     }
 
+    /*
+     * too many convinience methods.. remove some:
+     *
     // start is relative to the board.
     abstract public InputStream getDataStream(long start, long length);
 
@@ -70,6 +74,7 @@ abstract class Data implements Comparable {
         i.skip((int)offset); // precision!
         return i;
     }
+    */
 
     abstract public InputStream getDataStream();
     
@@ -80,6 +85,28 @@ abstract class Data implements Comparable {
             }
             byte[] b = new byte[(int)getLength()];
             getDataStream().read(b);
+            return b;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return new byte[(int)getLength()];
+            // XXX throw
+        }
+    }
+    
+    // untested.. probably unneeded.
+    public byte[] getBytes(long start, int length) {
+        try {
+            byte[] b = new byte[length];
+            InputStream stream = getDataStream();
+            if (start >= getStart()) {
+                long skipped = stream.skip(getStart() - start);
+                if (skipped != length) {
+                    //xxx: error i guess
+                }
+            } else {
+                throw new IOException("tried to getBytes from before the start");
+            }
+            stream.read(b);
             return b;
         } catch (IOException e) {
             e.printStackTrace();
@@ -118,7 +145,7 @@ abstract class Data implements Comparable {
     }
 
     public int compareTo(Cursor obj) {
-        System.out.println("comparing data with a..." + obj.getClass() + " ok! " + obj);
+        //System.out.println("comparing data with a..." + obj.getClass() + " ok! " + obj);
         return -(obj.compareTo(this));
     }
 

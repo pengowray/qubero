@@ -671,6 +671,23 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
             changeSelection(newMin, newMax, oldMin, oldMax, false);
         }
     }
+    
+    //xxx: this sucks but will be replaced when this class is rewritten
+    public long[] getSelectionIndexes() {
+        long[] indexes = new long[(int)(getMaxSelectionIndex() - getMinSelectionIndex())];
+        int arraypos = 0;
+        for (int last = 0; last != -1; last = value.nextSetBit(last)) {
+            indexes[arraypos] = last;
+            arraypos++;
+        }
+        
+        long[] cpy = new long[arraypos];
+        System.arraycopy(indexes, 0, cpy, 0, arraypos);
+        
+        return cpy;
+    }
+        
+    
 }
 
 

@@ -53,9 +53,19 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
     }
     
     // get the actual selection model
-    // xxx: this class really should just extend a selection model
+    // xxx: this class really should just extend a selection model.. no, want to be able to change it
     public LongListSelectionModel getSelectionModel() {
         return lsm;
+    }
+
+    public void setSelectionModel(LongListSelectionModel lsm) {
+        if (this.lsm == lsm)
+            return;
+            
+        this.lsm = lsm;
+        //xxx: trigger something or copy contents of lsm out or something!
+        //xxx: copy listeners from old lsm at least
+        //xxx: separate setSelection method (not model)
     }
     
     
@@ -73,6 +83,7 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
     
     /** Tells listeners that a column was removed from the model.  */
     public void columnRemoved(TableColumnModelEvent e) {
+        
     }
     
     /** 

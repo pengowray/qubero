@@ -3,19 +3,21 @@ import javax.swing.*;
 import javax.swing.event.*;
 import java.awt.event.ActionEvent;
 
+//xxx: LiveSelectionResource?
 class DefaultSelectionResource extends SelectionResource {
-    public DefaultSelectionResource(OpenFile openFile, Data sel) {
-	super(openFile, sel);
+    public DefaultSelectionResource(OpenFile openFile) {
+	super(openFile);
     }
 
     public JMenu getJMenu() {
         final SelectionResource This = this;
         
-  	JMenu menu = new JMenu("Example");
+  	JMenu menu = new JMenu("Selection");
         Action addToTemplate = new AbstractAction("Add to template") {
             public void actionPerformed(ActionEvent e) {
-                DefaultDefinitionResource defRes = new DefaultDefinitionResource(openFile, sel);
-                getOpenFile().addDefinition(this, defRes);
+                LongListSelectionModel selection = (LongListSelectionModel)getOpenFile().getSelectionModel().clone();
+                DefaultDefinitionResource def = new DefaultDefinitionResource(selection);
+                getOpenFile().addDefinition(this, def);
             }
         };
 	menu.add(addToTemplate);
@@ -24,16 +26,21 @@ class DefaultSelectionResource extends SelectionResource {
         if (data instanceof DiffData) {
             Action delAction = new AbstractAction("Delete selected hex") {
                 public void actionPerformed(ActionEvent e) {
-                    getOpenFile().clearSelection(this);
-                    ((DiffData)data).delete(sel.getStart(), sel.getLength());
+                    //getOpenFile().clearSelection(this);
+                    //((DiffData)data).delete(sel.getStart(), sel.getLength());
+                    LongListSelectionModel selection = getOpenFile().getSelectionModel();
+                    getOpenFile().getData().delete(selection);
                 }
             };
             menu.add(delAction);
 
-            Action insAction = new AbstractAction("Insert 00randomFF") {
+            //xxx: does not require a selection, just a lead selection index
+            Action insAction = new AbstractAction("Insert 00randomFF (len:64)") {
                 public void actionPerformed(ActionEvent e) {
-                    getOpenFile().clearSelection(this);
-                    ((DiffData)data).insert( sel.getStart(), new DemoData((int)sel.getLength())); //xxx: possible precision loss
+                    //getOpenFile().clearSelection(this);
+                    //((DiffData)data).insert( sel.getStart(), new DemoData((int)sel.getLength())); //xxx: possible precision loss
+                    long pos = getOpenFile().getSelectionModel().getLeadSelectionIndex();
+                    getOpenFile().getData().insert(pos, new DemoData(64));
                 }
             };
             menu.add(insAction);
@@ -45,6 +52,8 @@ class DefaultSelectionResource extends SelectionResource {
                 }
             };
             menu.add(replaceAction);
+            
+            //xxx: paste
         }
 
         
@@ -52,9 +61,12 @@ class DefaultSelectionResource extends SelectionResource {
 	return menu;
     }
     
-    public void clickAction() {
+    /*
+    //xxx: redundant for live selection. selection is already selected.
+    public void doubleClickAction() {
         getOpenFile().setSelection(this, sel);
     }
+     */
 
     // how to respond to a rename event
     public void rename(String name) {

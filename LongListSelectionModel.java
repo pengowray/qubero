@@ -5,7 +5,9 @@
  * Copyright 2002 Sun Microsystems, Inc. All rights reserved.
  * SUN PROPRIETARY/CONFIDENTIAL. Use is subject to license terms.
  *
- * Changes by Peter Halasz
+ * Changes by Peter Halasz:
+ *  - extends clonable
+ *  - all index changed to long (from int)
  */
 
 //package javax.swing;
@@ -29,7 +31,7 @@ import javax.swing.event.*;
  * @see DefaultListSelectionModel
  */
 
-public interface LongListSelectionModel
+public interface LongListSelectionModel extends Cloneable
 {
     /**
      * A value for the selectionMode property: select one list index
@@ -55,7 +57,9 @@ public interface LongListSelectionModel
      */
     int MULTIPLE_INTERVAL_SELECTION = 2;
 
-
+    // return all selected indexes
+    public long[] getSelectionIndexes();
+    
     /** 
      * Change the selection to be between index0 and index1 inclusive.
      * If this represents a change to the current selection, then

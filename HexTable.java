@@ -11,7 +11,7 @@ import java.awt.Color;
  *
  * @author  administrator
  */
-public class HexTable extends JTable {
+public class HexTable extends JTable implements ResourceListener {
     protected OpenFile openFile;
     
     private final static int hexColumns = 16; //xxx: shouldn't be static
@@ -132,6 +132,32 @@ public class HexTable extends JTable {
            //return super.isCellSelected(row, column);
         }
            
+    }
+    
+    //xxx: make the resource listener a separate/sub class?
+    public void resourceAdded(ResourceEvent e) {
+        if (e.getSource() == this)
+            return;
+        
+        //ResourceRemoved(this,"Selection",selectionResource);
+        if (! e.getCategory().equals("Selection"))
+            return;
+        
+        unifiedSelectionModel.setSelectionModel(openFile.getSelectionModel())
+        
+        
+    }
+    
+    public void resourceMoved(ResourceEvent e) {
+    }
+    
+    public void resourcePropertyChanged(ResourceEvent e) {
+    }
+    
+    public void resourceRemoved(ResourceEvent e) {
+    }
+    
+    public void resourceTypeChanged(ResourceEvent e) {
     }
     
 }

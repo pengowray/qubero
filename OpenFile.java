@@ -298,7 +298,6 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
             //xxx: throw a wobbly.
             return null;
         }
-            
     }
     
     public String toString() {

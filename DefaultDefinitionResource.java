@@ -15,9 +15,9 @@ import java.awt.event.ActionEvent;
  */
 public class DefaultDefinitionResource extends DefinitionResource {
     
-    final protected Data sel;
+    final protected LongListSelectionModel sel;
 
-    public DefaultDefinitionResource(OpenFile openFile, Data sel) {
+    public DefaultDefinitionResource(OpenFile openFile, LongListSelectionModel sel) {
 	super(openFile);
         this.sel = sel;
     }
@@ -37,7 +37,8 @@ public class DefaultDefinitionResource extends DefinitionResource {
         Action intAction = new AbstractAction("Convert to int") {
             public void actionPerformed(ActionEvent e) {
                 //IntResource intRes = new IntResource(sel,4,IntResource.ONES_COMP);
-                IntResource intRes = new IntResource(openFile, sel,(int)sel.getLength(),IntResource.TWOS_COMP); //xxx possible precision loss
+                //IntResource intRes = new IntResource(openFile, sel,(int)sel.getLength(), IntResource.TWOS_COMP); //xxx possible precision loss
+                IntResource intRes = new IntResource(openFile, sel, IntResource.TWOS_COMP);
                 openFile.definitionChange(e.getSource(), This, intRes); // xxx
             }
         };
@@ -58,7 +59,7 @@ public class DefaultDefinitionResource extends DefinitionResource {
         return "untyped " + sel.toString();
     }
     
-    public void clickAction() {
+    public void doubleClickAction() {
         getOpenFile().setSelection(this, sel);
     }
    

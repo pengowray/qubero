@@ -22,21 +22,25 @@ public class IntResource extends DefinitionResource {
     final static int TWOS_COMP = 2;
     final static int SIGN_MAG = 3;
     
-    //XXX: little endian, big endian (2 byte only?)
+    //XXX: little endian, big endian (2 byte only?), network byte order, local byte order
     
-    int length;
+    //int length; //xxx: allow fixed length
     int signed;
-    Data sel;
+    LongListSelectionModel sel;
+    SelectionData selData;
     
-    public IntResource(OpenFile openFile, Data sel, int length, int signed) {
+    //public IntResource(OpenFile openFile, LongListSelectionModel sel, int length, int signed) {
+    public IntResource(OpenFile openFile, LongListSelectionModel sel, int length, int signed) {
         super(openFile);
+        /*
         if (sel.getLength() != length) {
             // wrong length. set length.
             // XXX: error checking!
             sel = sel.getSelection(sel.getStart(), (long)length);
         }
+         */
         this.sel = sel; // note: may be replaced as above
-        this.length = length;
+        //this.length = length;
         this.signed = signed;
     }
     
@@ -109,12 +113,16 @@ public class IntResource extends DefinitionResource {
         return "int " + sel.toString();
     }
 
-    public void clickAction() {
-        openFile.setSelection(this, sel);
+    public void doubleClickAction() {
+        openFile.setSelectionModel(sel);
     }
     
     public BigInteger getValue() {
-        byte[] data = sel.getDataStreamAsArray();
+        //byte[] data = sel.getDataStreamAsArray();
+        if (selData == null)
+            selData = new SelectionData(sel, openFile.getData());
+        
+        byte[] data = selData.getDataStreamAsArray();
         if (data.length == 0) {
             return BigInteger.ZERO;
         } if (signed == UNSIGNED) {

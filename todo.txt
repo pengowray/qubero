@@ -7,7 +7,7 @@ view, edit, create java bytecode + automation
 
 """get it working first
 get it right later
-but start working now
+start working now
 """
 
 Log started Aug 21 2002:
@@ -57,11 +57,21 @@ Log started Aug 21 2002:
  2002-11-09  HexTable selection now selects in the right shape
  2002-11-10  created DefaultLongListSelectionModel / LongListSelectionModel / LongListSelectionEvent / LongListSelectionListener 
              selection now triggers events (as before)
+ 2002-11-18  SelectionData created. various other fixes.
 
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
 priority/immediate features:
+ - get old stuff working again
+ - make DefaultLongListSelectionModel really "long".
+ - put HexTables together to make them long too (combined with UnifiedSelectionModel)
+ - MULTIPLE_INTERVAL_SELECTION editing modes:
+    fixed length
+    overflow mode (+ overflow / length indicators / combined overflow indicator / string terminator)
+    block pattern 
+ - background "color"/pattern: revealed when holes are made or new stuff added
+ - new long demo: blocks of 8 bytes of the first byte's address.
  - save
  - undo
  - layers
@@ -95,6 +105,7 @@ UI to do:
  - header lines (eg "1 Megabyte", "10 Megabytes", or "1st Megabyte"?)
 
 bugs:
+ - column widths calculations
  - making an integer smaller shouldn't (automatically) reduce its byte count
  - changing the size of an integer SHOULD change its DEFINED size too (and not just grow/shrink the board)
  - require warnings and options for both of the above. (including an option to only have, say, 4 and 8 byte ints and not 5)
@@ -162,7 +173,7 @@ initial chunk types to support:
  - partial byte ints (e.g. 3 bit int)
  - from Chunk.java: recordset, Flags, NarrativeSequence, OverviewDisplayChunk
  - end of line: PC (0D 0A), Mac, Unix, [IBM Mainframe's] NEL (0D 85), Unicode line separator character (#x2028), 
- - uninitialized data
+ - special data types: uninitialized data, null, Reserved, bad (sector) ... 
  
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
@@ -207,7 +218,7 @@ future versions:
  - photoshop plugins
  - qbit/quantum calculations. 
  - i18n
- - find by change -- e.g. save game cheats
+ - find by change -- e.g. save game cheats. allow checksum style operations for large files to allow fast checks (less overhead) but more steps in narrowing down (i.e. did this region change, we'll just watch it next time) how would this work? i'm not sure.
  - rewrite mooj with itself
  - plugin architecture
  - external editors (via command line)
@@ -221,6 +232,8 @@ future versions:
  - database tables / ER diagrams
  - comms tools: share templates, search. p2p.
  - patent destroyer: patented algorithm search (from old software, pre-dating the patent)
+ - format template as plain text, suitable for email / usenet
+ - tree-based "diffdata" for random insertion
 
 future formats:
  - plain text
@@ -233,7 +246,7 @@ future formats:
  - python types + pickle + ZODB (oodb)
  - different javascript styles
  - gif / jpg / png / psd / corel
- - rar / zip / jar / ace / bz2 / lzh / lzw / lzx / tar / z / gzip
+ - rar / zip / jar / ace / bz2 / lzh / lzw / lzx / tar / z / gzip / cpio / ar
  - encrypted files (pgp, etc)
  - LaTeX
  - flash
@@ -290,14 +303,19 @@ future formats:
  - various game maps (whatever's popular near release date)
  - mobile phone sim cards
  - linux packages: rpm, deb, src, tgz(tar.gz,dpak,pkg), apt-rpm, jbl, uhu
-   <distrowatch.planetmirror.com/stats.php>
+   http://distrowatch.planetmirror.com/stats.php
  - EDI Electronic Data Interchange
    http://www.ietf.org/rfc/rfc3335.txt
  - vga memory map
- - existing file indexes (view + use) e.g. unix locate + fast find
+ - existing file indexes (view + use) e.g. unix locate, fast find, glimps, 
  - all programming languages!
  - boardgames / puzzles / chess / space invaders
  - electronics
+ - sql / define tables / rows / columns / transactions
+ - plant/animal/biological taxonomies 
+ - command line arguments parsing / options / generic argv + args parser / --help generator
+ - objdump
+ - POV-ray
 
 priority programs to obsolete:
  - notepad + wordpad
@@ -333,11 +351,12 @@ silly/fun stuff:
  - backwards filter
  - data format used by maths lego page: (LDRAW .DAT)
    http://www.lipsons.pwp.blueyonder.co.uk/mathlego.htm
+   work out 3x1 piece blocks for it too
  - fractals
  - geometry (n-dimensional)
  - chemistry! (atoms/compounds/ions...)
  - speak the hex (naturally. calc time between sounds, record each sound in 3-4 different positions, place emphasis on chosen parts)
- - pi, the constant, as a "pseudo" large file, scroll to any point. Viewable as ascii numbers or as base-2.
+ - pi, the constant, as a "pseudo" large file, scroll to any point. Viewable as ascii numbers or as base-2. maybe only base-2. might be too slow too.
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
@@ -423,6 +442,11 @@ data modelling tools + terms:
 other projects / pages:
  - Memory Pool System: http://www.ravenbrook.com/project/mps/
  - http://tunes.org/files/papers/Arrow_Introduction_v8.htm
+ - http://www.nu2.nu/bootcd/
+ - http://wouter.fov120.com/proglang/index.html  -- graphical languages
+ - http://ll2.ai.mit.edu/
+ - http://www.informatik.tu-darmstadt.de/TI/LiDIA/ (anticommercial maths library)
+ - http://xanadu.com.au/
 
 win:
  - http://icfpcontest.cse.ogi.edu/ in 2003
