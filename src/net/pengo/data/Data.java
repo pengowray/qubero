@@ -208,8 +208,10 @@ public abstract class Data implements Comparable {
         
         int mask = (int)(-1) >>> xBit // leftGap.. -1 = 0xFFFFFFFF
                  & (int)(-1) << rightShift; //rightGap;
+        
+        //System.out.println("mask:" + Integer.toBinaryString(mask) + " xBit/leftgap:" + xBit + " rightShift:" + rightShift);
 
-        int bytesInUnit = 1+ ((unitSize+xBit)/8); // how many bytes will we need to read
+        int bytesInUnit = (int) Math.ceil((unitSize+xBit)/8.0); // how many bytes will we need to read
 
         //System.out.println("reading " + xByte);
         byte[] bytes = readByteArray(xByte, bytesInUnit);
@@ -220,8 +222,12 @@ public abstract class Data implements Comparable {
         }
 
         int maskedBytes = readBytes & mask;
-
+        
         int rShiftedBytes = maskedBytes >>> rightShift;
+        
+//        System.out.println("real orignal:\n" + Integer.toBinaryString(bytes[0] & 0xFF));
+//        System.out.println("read orignal:\n" + Integer.toBinaryString(readBytes));
+//        System.out.println("original:\n" + Integer.toBinaryString(maskedBytes) + " \nshifted:\n" +  Integer.toBinaryString(rShiftedBytes) + " rightShift:" + rightShift + " bytesInUnit:" + bytesInUnit);
 
         /*
         System.out.println("xByte=" + xByte + " xBit=" + xBit + " bytesInUnit=" + bytesInUnit + " mask=" + Integer.toBinaryString(mask) + "b" + 

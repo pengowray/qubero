@@ -77,7 +77,8 @@ public class UnitSpacer extends SingleSpacer {
     //public Point whereGoes(BitCursor bit);
     
     public void paint(Graphics g, Data d, BitSegment seg) {
-    	
+
+    	//System.out.print('/');
         if (seg.getLength().equals(new BitCursor())) // fixme: optimise
         	return;
 
@@ -91,11 +92,16 @@ public class UnitSpacer extends SingleSpacer {
     		//System.out.println("old seg:" + seg + " tile.bitCount:" + bitCount + " cropped:" + croppedSeg);
     		}
     		
-    		tileSet.draw(g, d.readBitsToInt(seg));
+    		int redbits = d.readBitsToInt(seg);
+    		//if (redbits < 0)
+    		//	System.out.println("negative!");
+    		
+    		tileSet.draw(g, redbits);
 		} catch (Exception e) {
 			// TODO: handle exception
 			e.printStackTrace();
 		}
+		//System.out.print('/');
     	
     }
     

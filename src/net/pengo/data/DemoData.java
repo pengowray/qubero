@@ -65,25 +65,12 @@ public class DemoData extends ArrayData {
         addData(fourByteSpectrum());
         addData("Random data");
         addData(randomData(256));
-        addData("Hexadecimal digits of pi"); // Sample digits for hexa decimal digits of pi (excludes the 3)
+        addData("Binary digits of pi: three point"); // Sample digits for hexa decimal digits of pi (excludes the 3)
         addData(pi());
         addData("Logo");
         addData(logo());
-        addData("Qubero (c) 2002-2004 Peter Halasz");
+        addData("Qubero (c) 2002-2005 Peter Halasz".getBytes());
         
-        //int length = header.length + 1024 + footer.length;
-        
-        
-        // copy message into the middle
-        //System.arraycopy(msg, 0, byteArray, (256-msg.length)/2, msg.length); // actual middle
-        
-        
-        
-        // logo
-        
-        
-        
-        //System.arraycopy(boiler, 0, byteArray, byteArray.length - boiler.length, boiler.length);
     }
     
     private byte[] hexSpectrum() {
@@ -191,7 +178,7 @@ public class DemoData extends ArrayData {
         "4AEE7B54A41DC25A59B59C30D5392AF26013C5D1B023286085" +
         "F0CA417918B8DB38EF8E79DCB0603A180E6C9E0E8BB01E8A3E" +
         "D71577C1BD314B2778AF2FDA55605C60E65525F3AA55AB9457" +
-        "48986263E8144055CA396A2AAB10B6B4CC5C341141E8CEA154";
+        "48986263E8144055CA396A2AAB10B6"; // "48986263E8144055CA396A2AAB10B6B4CC5C341141E8CEA154";
         
         return new BigInteger(pi,16).toByteArray();
         

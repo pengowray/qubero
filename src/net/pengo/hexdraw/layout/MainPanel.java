@@ -11,7 +11,6 @@ package net.pengo.hexdraw.layout;
 
 import java.awt.Dimension;
 import java.awt.Graphics;
-
 import javax.swing.JPanel;
 
 import net.pengo.app.ActiveFile;
@@ -42,19 +41,28 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     public MainPanel(ActiveFile activeFile) {
     	loadDefaults();
         setActiveFile(activeFile);
+        
     }
 
     public void loadDefaults() {
     	defaultSize = 12;
     	TextTileSet tiles = new TextTileSet("hex", false);
     	UnitSpacer unit = new UnitSpacer(tiles);
+    	
+    	AsciiTileSet asciiTiles = new AsciiTileSet("hex", false);
+    	UnitSpacer asciiUnit = new UnitSpacer(asciiTiles);
 
         RepeatSpacer row = new RepeatSpacer();
         row.setHorizontal(true);
         row.setContents(unit);
         row.setMaxRepeats(32);
         
-    	GroupSpacer rowWrap = new GroupSpacer();
+        RepeatSpacer asciiRow = new RepeatSpacer();
+        asciiRow.setHorizontal(true);
+        asciiRow.setContents(asciiUnit);
+        asciiRow.setMaxRepeats(16);
+        
+        GroupSpacer rowWrap = new GroupSpacer();
     	rowWrap.setContents(new SuperSpacer[] { row } );
     	rowWrap.setLength(new BitCursor(16,0));
     	//rowWrap.setHorizontal(false); // n/a
@@ -64,10 +72,12 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
         //column.setContents(rowWrap);
         column.setContents(row);
         
-
+        RepeatSpacer asciiColumn = new RepeatSpacer();
+        asciiColumn.setHorizontal(false);
+        asciiColumn.setContents(asciiRow);
 
     	SuperSpacer[] pageContents = new SuperSpacer[] { 
-        		column, column };
+        		column, asciiColumn };
 
     	GroupSpacer page = new GroupSpacer();
     	page.setContents(pageContents);
@@ -75,9 +85,9 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	//page.setLength(new BitCursor(0,4)); //shouldn't need...? or should it?-
     	page.setHorizontal(true);
         
-        //spacer = page;
+       spacer = page;
         
-        spacer = column;
+       //spacer = column;
         
         //spacer = row;
         
@@ -171,13 +181,15 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     }
     
     public void paintComponent(Graphics g) {
+
     	super.paintComponent(g);
-    	
+
     	Data d = activeFile.getActive().getData();
     	
-    	//d.
+    	System.out.println("d.getBitLength():" + d.getBitLength());
     	spacer.paint(g, activeFile.getActive().getData(), 
     			new BitSegment(new BitCursor(), d.getBitLength()) );
+    	
     }
 
 	public void activeChanged(ActiveFileEvent e) {

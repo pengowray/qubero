@@ -279,6 +279,9 @@ public class GUI implements ActiveFileListener {
         }
         catch (IOException e) {
             e.printStackTrace();
+            
+            
+
         }
     }
     

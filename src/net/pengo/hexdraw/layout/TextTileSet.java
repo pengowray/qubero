@@ -108,11 +108,8 @@ public class TextTileSet extends TileSet {
         g.setFont(getFont());
         //fixme: antialias..
         
-        //System.out.println("tile=" + tile);
-        if (tile > alphabet.length()) {
-        	System.out.println("tile=" + tile);
-        }
-        char ch = alphabet.charAt(tile);
+        //System.out.println("tile=" + tile);got 
+        char ch = tileChar(tile);
         int xOffset = 0;
         
         // Force monospacing (centered)
@@ -125,4 +122,9 @@ public class TextTileSet extends TileSet {
         g.drawString(ch+"", xOffset, fm.getAscent());
         //g.drawString(tile+"", 0, fm.getDescent()); // temp
     }
+    
+    protected char tileChar(int tile) {
+    	return alphabet.charAt(tile);
+    }
+    
 }

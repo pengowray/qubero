@@ -11,6 +11,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.SortedSet;
 import java.util.TreeSet;
+
 import net.pengo.app.Cursor;
 import net.pengo.app.OpenFile;
 import net.pengo.restree.ResourceList;
@@ -73,8 +74,19 @@ public class DiffData extends EditableData {
 
     }
     
-    public InputStream dataStream() {
-        return new DiffData.DiffDataInputStream();
+    /** optimisation / quick fix */ 
+    // FIXME: make this work for other cases
+    public byte[] readByteArray(long start, int length) throws IOException {
+    	if (modList.isEmpty()) {
+    		return source.readByteArray(start, length);
+    	}
+    	
+    	return super.readByteArray(start, length);
+    }
+    
+    public InputStream dataStream() throws IOException {
+    	//return new DiffData.DiffDataInputStream();
+        return new DiffData.DiffDataInputStream(0, getLength());
     }
     
     public InputStream getDataStream(long offset) {
@@ -261,12 +273,26 @@ public class DiffData extends EditableData {
         Iterator breakIt;
         InputStream stream;
         long pos;
+        
         long cdsrem; // current data stream's remaining bytes.
-        Data currentData; // here only for debug
+        
+        long length; // FIXME: not actually used
+        
+        Data currentData; // was here only for debug, now needed for skip.
         //FIXME: should we really need to check if we've run out out bytes via .getLength() ?? this is only needed for TransparentData's laziness-- ignoring of spec length
         
         // start is relative to the board.
         public DiffDataInputStream(long start, long length) throws IOException {
+        	setLength(length);
+        	setPos(start);
+        }
+        
+        private void setLength(long length) {
+        	this.length = length;
+        	
+        }
+        
+        private void setPos(long start) throws IOException {
             pos = start;
             Cursor cur = new Cursor(start);
             breakIt = breakList.tailSet(cur).iterator();
@@ -282,14 +308,34 @@ public class DiffData extends EditableData {
             }
         }
         
-        public DiffDataInputStream() {
-            //streamList.add(new WeakReference(this));
-            breakIt = breakList.iterator(); //FIXME: no good.
-            pos = getStart();
+        public long skip(long n) throws IOException {
+        	setPos(pos+n);
+        	
+        	return n;
+        	
+//        	if (n==0)
+//        		return 0;
+//        	
+//        	pos += n;
+//        	
+//        	Cursor divider = new Cursor(pos);
+//        	SortedSet top = breakList.headSet(divider);
+//        	Data newData = (Data)breakList.last();
+//        	
+//        	cdsrem = newData.getStart() + newData.getLength() - pos;
+//        		
+//        	if (newData != currentData) {
+//        		newData.getDataStream(pos);
+//        	}
+//        	
+//        	 
+//        		
+//        	return n;
         }
 
         public int read() throws IOException {
             // get first stream
+        	
              if (stream == null && nextStream() == false) {
                     return -1;
              }

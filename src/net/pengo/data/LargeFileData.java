@@ -57,11 +57,14 @@ public class LargeFileData extends Data {
     }    
     
     public InputStream getDataStream(long offset, long length) {
+    	System.out.println("getDataStream (skip)");
+    	//new Error("using old getDataStream method").printStackTrace();
         //FIXME: keep alive a FileInputStream. (or bank of them)
-    //FIXME: o/s dependant watch file for changes
+    	//FIXME: o/s dependant watch file for changes
         try {
             FileInputStream fis = new FileInputStream(file);
             fis.skip(offset);
+            
             return fis;
         } catch (FileNotFoundException e) {
             e.printStackTrace();
@@ -71,5 +74,21 @@ public class LargeFileData extends Data {
             return null;
         }
     }
-    
+
+    /* should be preferred to getDataStream, i hope */
+    public byte[] readByteArray(long start, int length) throws IOException {
+    	//System.out.println("readByteArray (seek)");
+        try {
+        	RandomAccessFile raf = new RandomAccessFile(file, "r");
+        	raf.seek(start); // need to subtract getStart() like in parent? dont think so?
+        	byte[] b = new byte[length];
+        	raf.readFully(b);
+        	return b;
+            
+        } catch (IOException e) {
+            e.printStackTrace();
+            return new byte[(int)getLength()];
+            // XXX throw
+        }
+    }    
 }

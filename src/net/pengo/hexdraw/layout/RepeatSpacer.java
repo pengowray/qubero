@@ -86,7 +86,25 @@ public class RepeatSpacer extends MultiSpacer {
         //si.init(rangeFirstIndex, rangeLastIndex);
         //si.init(range, startPos);
         
+        /*
+        System.out.println("Creating iterator: " + seg);
+        debugPrint(new RepeatSpacerIterator(seg));
+        RepeatSpacerIterator test = new RepeatSpacerIterator(seg);
+        test.skip(startPos);
+        if (startPos != 0) {
+	        System.out.println("Again, skipping to: " + startPos);
+	        debugPrint(test);
+        }
+        */
+        
         return si;
+    }
+    
+    private void debugPrint(RepeatSpacerIterator i){
+    	while (i.hasNext()) {
+    		SuperSpacer ss = i.next();
+    		System.out.println("i:" + i.currentIndex() + " seg:" +i.currentSegment() +" count:" + i.getBitCount() );
+    	}
     }
 
 	public SuperSpacer getContents() {
@@ -135,7 +153,7 @@ public class RepeatSpacer extends MultiSpacer {
 
     public void paint(Graphics g, Data d, BitSegment seg) {
     	
-    	System.out.println("init: " + seg);
+    	System.out.println(seg + " being painted..");
 		
         RepeatSpacerIterator i;
         BitCursor length = seg.getLength();
@@ -145,7 +163,6 @@ public class RepeatSpacer extends MultiSpacer {
         int startTranslateX = 0;
         int startTranslateY = 0;
 
-        System.out.println("check zero..");
 		
         // check for empty
         if (length.equals(BitCursor.zero))
@@ -153,7 +170,7 @@ public class RepeatSpacer extends MultiSpacer {
         
         //System.out.println(this.getClass().getName() + " start printing: " + seg);
         
-        System.out.println("get clip..");
+        
         
         Rectangle clip = g.getClipBounds();
         if (clip.getMaxX() < 0 || clip.getMinX() > getPixelWidth(length))
@@ -161,7 +178,7 @@ public class RepeatSpacer extends MultiSpacer {
         
         if (clip.getMaxY() < 0 || clip.getMinY() > getPixelHeight(length))
         	return;
-        System.out.println("4..");	
+        
         if (horizontal) {
                     	
             long one = contents.getPixelWidth(length);
@@ -172,20 +189,14 @@ public class RepeatSpacer extends MultiSpacer {
 	            //startTranslateX = (int) (clip.getMinX() * first);
 	            startTranslateX = (int) (one * first);
         	}
-        	
-        	System.out.println("5..");
 	            
             i = iterator(first, seg);
-
-            System.out.println("6..");
             
         	if (clip.getMaxX() > 0) {
-	            i.setEndCrop((long) (clip.getMaxX()/one + 2)); // cleaner rounding up?
+	            i.setEndCrop((long) (clip.getMaxX()/one )); // +1 cleaner rounding up?
         	}
             
         } else {
-            
-        	System.out.println("7..");
         	
             long one = contents.getPixelHeight(length);
             long first = 0;
@@ -195,18 +206,14 @@ public class RepeatSpacer extends MultiSpacer {
 	            startTranslateY = (int) (one * first);
         	}
         	
-        	System.out.println("8..");
-        	
         	i = iterator(first, seg);
 
         	if (clip.getMaxY() > 0) {
-	            i.setEndCrop((long) (clip.getMaxY()/one + 2)); // cleaner rounding up?
+	            i.setEndCrop((long) (clip.getMaxY()/one )); // +1 ? cleaner rounding up?
         	}
 	            
             
         }
-        
-        System.out.println("9..");
         
         g.translate(startTranslateX, startTranslateY);
         totalXChange += startTranslateX;
@@ -219,9 +226,8 @@ public class RepeatSpacer extends MultiSpacer {
 //        System.out.println("  last: " + last + " X-change:" + totalXChange + " Y-change:" + totalYChange);
         //System.out.println("---");
         
-        System.out.println("10..");
         while (i.hasNext()) {
-        	System.out.println("11..");
+        	//System.out.print(".");
             //System.out.println(" index:" + i.currentIndex() + "of ?, current segment:" + i.currentSegment() ); // + "/" + last
             
             SuperSpacer sp = i.next();
@@ -229,14 +235,15 @@ public class RepeatSpacer extends MultiSpacer {
             //BitSegment currentSeg = i.currentSegment();
             
             if (i.currentIndex() >= 0) {
-	            
 	            sp.paint(g, d, i.currentSegment());
 	            
 	            if (horizontal) {
+	            	//System.out.print("h");
 	            	long dist = contents.getPixelWidth(i.getBitCount());
 	            	g.translate((int)dist, 0);
 	            	totalXChange += dist;	            	
 	            } else {
+	            	//System.out.print("v");
 	            	long dist = contents.getPixelHeight(i.getBitCount());
 	            	g.translate(0, (int)dist);
 	            	totalYChange += dist;	            	
@@ -253,7 +260,6 @@ public class RepeatSpacer extends MultiSpacer {
 
         }
         
-        System.out.println("12..");
         //System.out.println("---");
 
         //System.out.println("Move back, XChange:" + i.getXChange() + " YChange:" + i.getYChange());
@@ -297,7 +303,6 @@ public class RepeatSpacer extends MultiSpacer {
         BitCursor finalContentBits; // bits in the last repetition of contents
         
         Point next = null;
-        BitCursor nextBitStart = null;
         
         public RepeatSpacerIterator(BitSegment range) {
         	//this.rangeFirstIndex = rangeFirstIndex;
@@ -330,39 +335,35 @@ public class RepeatSpacer extends MultiSpacer {
         	repeatedContentBits = contents.getBitCount(range.getLength());
         	finalContentBits = range.getLength().mod(repeatedContentBits);
         	
-        	long lastPos = range.getLength().divide(repeatedContentBits);
+        	long lastPos = range.getLength().divide(repeatedContentBits) -1;
         	if (! finalContentBits.equals(BitCursor.zero)) {
+        		//System.out.println("***extra bit on " + range + " len:" + finalContentBits + " vs:" + repeatedContentBits);
         		++lastPos;
+        	} else {
+        		finalContentBits = repeatedContentBits;
         	}
-        			
+        	
+        	//System.out.println("lastPos:" + lastPos + " for range:" + range);
+        
         	lastPosCalc = lastPos;
         }
-//
-//        public boolean hasNext(BitCursor bits) {
-//            if (bits.equals(BitCursor.zero))
-//            	return false;
-//            
-//            // return hasNext();
-//            if (maxRepeats != -1 && pos >= maxRepeats)
-//            	return false;
-//            
-//            //System.out.println("RepeatSpacer has next if " + nextBitStart + " < " + bits + " result:" + nextBitStart.compareTo(bits));
-//            if (rangeLastIndex != null && getNextBitStart(bits).compareTo(rangeLastIndex) > 0)
-//                return false;
-//            
-//            return true;
-//        }
         
         public boolean hasNext() {
         	//maxRepeats from parent class (RepeatSpacer)
-            if (maxRepeats != -1 && pos >= maxRepeats)
+            if (maxRepeats != -1 && pos >= maxRepeats) {
+            	System.out.println("max rep");
             	return false;
+            }
             
-            if (lastPosCalc != -1 && pos >= lastPosCalc) // tho should never be -1
+            if (lastPosCalc != -1 && pos >= lastPosCalc) { // tho should never be -1 
+            	System.out.println("max pos");
             	return false;
+            }
             
-            if (lastPosCrop != -1 && pos >= lastPosCrop)
+            if (lastPosCrop != -1 && pos >= lastPosCrop) {
+            	System.out.println("max crop");
             	return false;
+            }
             
             return true;
         }
@@ -377,30 +378,16 @@ public class RepeatSpacer extends MultiSpacer {
 			
 			bitOffset = bitOffset.add( addbits );
 			  
-	      	System.out.println("Skipping:" + n + " bits-per-step:" + bits(1) + " bits:" + addbits + " old pos:" + pos + " new pos:" + (pos+n));
+	      	// System.out.println("Skipping:" + n + " bits-per-step:" + bits(1) + " bits:" + addbits + " old pos:" + pos + " new pos:" + (pos+n));
 
 	      	pos+=n;
 	      	
-        	
-        	
-        	//for(long i=0; i<n; i++) {
-        	//	next();
-        	//}
         }
         
         
         public BitSegment currentSegment() {
         	return new BitSegment(getBitOffset(), getBitOffset().add(bits()));
-        }
-        	
-        
-        public BitCursor getNextBitStart(BitCursor bits) {
-            if (nextBitStart == null)
-            	nextBitStart = bitOffset.add( contents.getBitCount(bits) ).addBits(1);
-            
-            return nextBitStart;
-        }
-
+        }        	
         
         /* sets the cursor so that the next() will go to the startPos (nextPos) */
 //        public void jumpToNext(long nextPos, BitCursor bits) {
@@ -457,14 +444,19 @@ public class RepeatSpacer extends MultiSpacer {
         }
         
         //bits for this pos
-        protected BitCursor bits(long pos) { 
-        	if (pos == lastPosCalc)
+        protected BitCursor bits(long pos) {
+        	if (pos == lastPosCalc) {
+        		//System.out.println("--------test: " + finalContentBits + " pos:" + pos + " range:" + range);
         		return finalContentBits;
+        	}
         	
-        	if (pos > lastPosCalc || pos < 0)
+        	if (pos > lastPosCalc || pos < 0) {
         		//FIXME: give warning?
+        		System.out.println("00000----test==" + repeatedContentBits);
         		return BitCursor.zero;
+        	}
         	
+        	//System.out.println("+++++----test==" + repeatedContentBits);
         	return repeatedContentBits;
         }
 	
