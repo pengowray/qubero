@@ -5,24 +5,31 @@ import java.util.*;
 import java.awt.event.*;
 
 
-class MoojTree extends JTree {
-    protected HexPanel hexpanel = null;
-
+class MoojTree extends JTree implements ResourceListener {
     protected DefaultTreeModel treemodel;
     protected DefaultMutableTreeNode topnode; // the top node of the tree on the left, which the data goes under
 
-    protected List defNodeList = new ArrayList(); // nodes for the display of data definitions + their selection
-    protected final MoojTree thisTree = this;
+    protected List openFileList = new ArrayList(); // open files to display (+ their resources)
+    protected List topNodeList = new ArrayList(); // TreeNode wrapped versions of above. keep in sync.
+    
+    protected List resList = new ArrayList(); // resources
+    protected List resNodeList = new ArrayList(); // resources as nodes
+
+    protected final MoojTree thisTree = this; // needed for mouse adapter
+
 
     // constructor
-    public static MoojTree create(DefNode defnode) {
-        DefaultMutableTreeNode topnode = new DefaultMutableTreeNode("mooj",true);
-
-	DefaultTreeModel treemodel = new DefaultTreeModel(topnode);
-	return new MoojTree(treemodel, defnode, topnode);
+    public static MoojTree create() {
+        return create(null);
     }
 
-    private MoojTree(DefaultTreeModel treemodel, DefNode defnode, DefaultMutableTreeNode topnode) {
+    public static MoojTree create(OpenFile openFile) {
+        DefaultMutableTreeNode topnode = new DefaultMutableTreeNode("mooj",true);
+	DefaultTreeModel treemodel = new DefaultTreeModel(topnode);
+	return new MoojTree(openFile, treemodel, topnode);
+    }
+
+    private MoojTree(OpenFile openFile, DefaultTreeModel treemodel, DefaultMutableTreeNode topnode) {
 	super(treemodel);
 
 	this.treemodel = treemodel;
@@ -34,23 +41,23 @@ class MoojTree extends JTree {
 	setShowsRootHandles(true);
 	setEditable(true);
 
-        addDefNode(defnode);
+        if (openFile != null)
+            addOpenFile(openFile);
 
 
 	// click on tree:
 	addTreeSelectionListener(new TreeSelectionListener() {
 	    public void valueChanged(TreeSelectionEvent treeEvent) {
 		DefaultMutableTreeNode node = (DefaultMutableTreeNode)getLastSelectedPathComponent();
-
 		if (node == null)
 		    return;
 
-		Object nodeInfo = node.getUserObject();
-
-		if (nodeInfo instanceof RawDataSelection){
-		    hexpanel.setSelection((RawDataSelection)nodeInfo);
+		Object innerSelected = node.getUserObject();
+                if (innerSelected instanceof Resource){
+                    System.out.println("debug2: " + innerSelected);
+                    Resource res = (Resource)innerSelected;
+                    res.clickAction();
 		}
-
 	    }
 	});
 
@@ -60,14 +67,27 @@ class MoojTree extends JTree {
 		public void mousePressed(MouseEvent e) {
 		    final int selRow = thisTree.getRowForLocation(e.getX(), e.getY());
 		    final TreePath selPath = thisTree.getPathForLocation(e.getX(), e.getY());
+                    if (selPath == null)
+                        return;
+                    
                     final Object[] o = selPath.getPath();
-                    final Object selected = o[o.length-1];
+                    final DefaultMutableTreeNode selected = (DefaultMutableTreeNode)o[o.length-1];
+                    final Object innerSelected = selected.getUserObject();
 
 		    if(selRow != -1) {
-			if(e.isPopupTrigger() || e.isMetaDown() ) {//XXX: popup trigger is never true? why?
+                        if (e.getClickCount() == 2 && e.isMetaDown() == false) {
+                            if (innerSelected instanceof Resource){
+                                Resource res = (Resource)innerSelected;
+                                res.doubleClickAction();
+                            }
+                        } else if (e.isPopupTrigger() || e.isMetaDown() ) {//XXX: popup trigger is never true? why?
                             JPopupMenu popup;
-                            if (selected instanceof SectionedNode) {
-                                popup = ((SectionedNode)selected).getPopupMenu();
+                            /* // put this back if Resource becomes a type of DefaultMutableTreeNode (unlikely)
+                            if (selected instanceof Resource) {
+                                popup = ((Resource)selected).getJMenu().getPopupMenu();
+                            } else */
+                             if (innerSelected instanceof Resource) {
+                                popup = ((Resource)innerSelected).getJMenu().getPopupMenu();
                             } else {
                                 // default popup menu
                                 // XXX: should there be a default?
@@ -104,9 +124,9 @@ class MoojTree extends JTree {
 		    //if (path.length >= 2 && path[]);
 
 		    RawDataSelection raw = (RawDataSelection)object;
-		    DefNode defnode = raw.getDefNode();
+		    OpenFile of = raw.getOpenFile();
 		    
-		    defnode.definitionMade(raw);
+		    of.addDefinition(this, raw);
 		    //defnode.clearSelection();
 		}
 	    }
@@ -118,66 +138,70 @@ class MoojTree extends JTree {
     }
 
     // add a viewed file, effectively:
-    public void addDefNode(DefNode defNode) {
-	//XXX: error checking
-	defNode.setParentTreeModel(treemodel);
-	defNodeList.add(defNode);
-	treemodel.insertNodeInto(defNode, topnode, 0); // XXX: put at end, not begining?
+    public void addOpenFile(OpenFile openFile) {
+	//XXX: error checking?
+
+        openFile.addResourceListener(this);
+	openFileList.add(openFile);
+        
+        // wrap it!
+        DefaultMutableTreeNode openFileNode = new DefaultMutableTreeNode(openFile,true);
+        topNodeList.add(openFileNode);
+        
+	treemodel.insertNodeInto(openFileNode, topnode, topnode.getChildCount()); 
 	//setRootVisible(false); // uncomment! grr.
     }
 
-    public void removeDefNode(DefNode defNode) {
-	if (defNode == null) 
+    public void removeOpenFile(OpenFile openFile) {
+	if (openFile == null) 
 	    return;
 
-	defNodeList.remove(defNode);
-	treemodel.removeNodeFromParent(defNode);
-	if (defNodeList.isEmpty()) {
+        openFile.removeResourceListener(this);
+	int index = openFileList.indexOf(openFile);
+        openFileList.remove(index);
+        DefaultMutableTreeNode treenode = (DefaultMutableTreeNode)topNodeList.remove(index);
+        treemodel.removeNodeFromParent(treenode);
+        
+	if (openFileList.isEmpty()) {
 	    setRootVisible(true);
 	}
     }
-
-    public void setHexPanel(HexPanel hexpanel) {
-	this.hexpanel = hexpanel;
+    
+    public void resourceAdded(ResourceEvent e) {
+        //xxx: shouldn't really ignore category, but will for now
+        Resource res = e.getResource();
+        String cat = e.getCategory();
+        OpenFile of = res.getOpenFile();
+        
+        DefaultMutableTreeNode resNode = new DefaultMutableTreeNode(res); //XXX: need res.canHaveChildren()?
+        
+        resList.add(res);
+        resNodeList.add(resNode);
+        
+        int index = openFileList.indexOf(of);
+        DefaultMutableTreeNode treenode = (DefaultMutableTreeNode)topNodeList.get(index);
+        treemodel.insertNodeInto(resNode,treenode,treenode.getChildCount()); // XXX: position should be explicit        
     }
+    
+    public void resourceChanged(ResourceEvent e) {
+    }    
 
+    public void resourceMoved(ResourceEvent e) {
+    }
+    
+    public void resourceRemoved(ResourceEvent e) {
+        Resource res = e.getResource();
+        String cat = e.getCategory();
+        OpenFile of = res.getOpenFile();
+        int index = resList.indexOf(res);
+        Object resNode = resNodeList.get( index );
+        
+        treemodel.removeNodeFromParent((MutableTreeNode)resNode);
+        resList.remove(index);
+        resNodeList.remove(index);
+    }
+    
 }
-
-
-
-class AddToTemplateAction extends AbstractAction {
-    protected TreePath selPath;
-
-    public AddToTemplateAction(TreePath selPath) {
-	super("Add to template");
-	this.selPath = selPath;
-    }
-
-    public void actionPerformed(ActionEvent e) {
-	//XXX: this code is almost duplicated from above
-	Object[] path = selPath.getPath();
-	Object object = selPath.getLastPathComponent();
-	Object userObject = null;
-
-	if (object instanceof DefaultMutableTreeNode) {
-	    userObject = ((DefaultMutableTreeNode)object).getUserObject();
-	}
-
-	if (userObject instanceof RawDataSelection) {
-	    //XXX: different menus for selection and definition
-	    //if (path.length >= 2 && path[]);
-	    
-	    RawDataSelection raw = (RawDataSelection)userObject;
-	    DefNode defnode = raw.getDefNode();
-	    
-	    defnode.definitionMade(raw);
-	    //defnode.clearSelection();
-	}
-	
-    }
-}
-
-
 
 
 class DeleteDefinitionAction extends AbstractAction {
@@ -189,6 +213,7 @@ class DeleteDefinitionAction extends AbstractAction {
     }
 
     public void actionPerformed(ActionEvent e) {
+        /*
 	//XXX: this code is almost duplicated from above
 	Object[] path = selPath.getPath();
 	Object object = selPath.getLastPathComponent();
@@ -208,6 +233,7 @@ class DeleteDefinitionAction extends AbstractAction {
 		//defnode.clearSelection();
 	    }
 	}
+        */
 
     }
 }

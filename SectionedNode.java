@@ -4,8 +4,13 @@ import javax.swing.tree.*;
 import javax.swing.event.*;
 
 /**
- * A node belonging to a DefSection
+ * A node belonging to a SectionHeader
  */
+
+
+ // obsoleted by "Resource"
+
+
 interface SectionedNode extends MutableTreeNode {
 
     public JPopupMenu getPopupMenu();

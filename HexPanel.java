@@ -4,8 +4,8 @@ import java.awt.event.*;
 import javax.swing.*;
 import javax.swing.tree.*;
 
-class HexPanel extends JPanel {
-    protected DefNode defnode = null;
+class HexPanel extends JPanel implements OpenFileListener {
+    protected OpenFile openFile = null;
     protected RawData root;
     
     protected boolean dimensionsCalculated = false;
@@ -27,52 +27,12 @@ class HexPanel extends JPanel {
     private boolean published = false; // has the current selection been published? 
     
     Font font = new Font("Monospaced", Font.PLAIN, 11); // antialias?
-    
-    public int hexFromClick(int x, int y) {
 
-        int hx = -1;
-        int hy = -1;
-
-        for (int h=0; h<hexStart.length; h++) {
-            if (x >= lineStart+hexStart[h] && x <= lineStart+hexStart[h]+unitWidth) {
-                hx = h;
-                break;
-            }
-        }
-        if (hx == -1) {
-            // not found
-            return -1;
-        }
-
-        hy = y / lineHeight;
-
-        return (hy * hexPerLine) + hx;      
-    }
-
-    public void setDefNode(DefNode defnode) {
-	if (this.defnode != null) {
-	    this.defnode.removeHexPanel(this); // old def node
-	}
-
-	this.defnode = defnode;
-        this.root = defnode.getRawData();
-	selection = null;
-	cursor = -1;
-
-        defnode.addHexPanel(this);
-
-        dimensionsCalculated = false;
-	calcDim();
-
-	//XXX: need to repaint scrollbars too
-	repaint();
-    }
-    
-    public HexPanel(DefNode defnode) {
+    public HexPanel(OpenFile openFile) {
 	super();
-	setDefNode(defnode);
+	setOpenFile(openFile);
 	
-        //XXX: defnode should be used in rendering
+        //XXX: openFile's resources should be considered in rendering ?
 
 	// MOUSE ROUTINES
 
@@ -122,7 +82,49 @@ class HexPanel extends JPanel {
         });
         
     }
-        
+    
+    public void setOpenFile(OpenFile openFile) {
+	if (this.openFile != null) {
+	    this.openFile.removeOpenFileListener(this);
+	}
+
+	this.openFile = openFile;
+        this.root = openFile.getRawData();
+	selection = null;
+	cursor = -1;
+
+        openFile.addOpenFileListener(this);
+
+        dimensionsCalculated = false;
+	calcDim();
+
+	//XXX: need to repaint scrollbars too
+	repaint();
+    }
+    
+    public int hexFromClick(int x, int y) {
+
+        int hx = -1;
+        int hy = -1;
+
+        for (int h=0; h<hexStart.length; h++) {
+            if (x >= lineStart+hexStart[h] && x <= lineStart+hexStart[h]+unitWidth) {
+                hx = h;
+                break;
+            }
+        }
+        if (hx == -1) {
+            // not found
+            return -1;
+        }
+
+        hy = y / lineHeight;
+
+        return (hy * hexPerLine) + hx;      
+    }
+
+    
+ 
     public RawDataSelection getSelection() {
 	return selection;
     }
@@ -137,7 +139,7 @@ class HexPanel extends JPanel {
 	this.selection = sel;
 
 	if (publish==true) {
-	    defnode.selectionMade( new SelectionEvent(selection) );
+	    openFile.setSelection(this, selection);
 	    published = true;
 	} else {
 	    published = false;
@@ -151,7 +153,7 @@ class HexPanel extends JPanel {
 	setSelection(offset, len, true);
     }
     public void setSelection(int offset, int len, boolean publish) {
-        setSelection(new RawDataSelection(defnode, offset, len), publish);
+        setSelection(new RawDataSelection(openFile, offset, len), publish);
     }
 
     public int getHeight() {
@@ -335,4 +337,35 @@ class HexPanel extends JPanel {
             + (l < 0x0a ? (char)('0'+l) : (char)('a'+l-10) )
             + (r < 0x0a ? (char)('0'+r) : (char)('a'+r-10) );
     }
+    
+    public void dataEdited(EditEvent e) {
+    }
+    
+    public void dataLengthChanged(EditEvent e) {
+    }
+    
+    public void definitionMade(DefinitionEvent e) {
+    }
+    
+    public void definitionRemoved(DefinitionEvent e) {
+    }
+    
+    public void fileSaved(FileEvent e) {
+    }
+    
+    public void selectionCopied(ClipboardEvent e) {
+    }
+    
+    public void selectionMade(SelectionEvent e) {
+        if (e.getSource() == this) {
+            return;
+        }
+        
+        setSelection(e.getRawDataSelection(), true);
+    }
+    
+    public void selectionRemoved(SelectionEvent e) {
+        //XXX
+    }
+    
 }

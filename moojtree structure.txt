@@ -2,13 +2,15 @@ root
  file
  current view(s)
   the raw data
-  sections
+  resources (was: section)
    selection
    definition
    edited area
    custom type def
    folders (later maybe)
    views
+   locks (locked areas + actual mutexes etc)
+   currently open/editing
  clipboard
  filesystem
   file

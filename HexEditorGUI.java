@@ -7,7 +7,7 @@ import java.io.*;
 
 /** HexEditorGUI creates and coordinates all the graphical components. */
 class HexEditorGUI {
-    protected DefNode defnode; // the current nodedef being worked on
+    protected OpenFile openFile; // the current nodedef being worked on
 
     protected JFrame jframe;
     protected HexPanel hexpanel;
@@ -17,8 +17,8 @@ class HexEditorGUI {
 
     protected ExitAction exitAction;
 
-    public HexEditorGUI(RawData startData){
-        this.defnode = new DefNode(startData, null);
+    public HexEditorGUI(OpenFile openFile){
+        this.openFile = openFile;
 	
         start();
     }
@@ -27,16 +27,13 @@ class HexEditorGUI {
         //XXX: in future use a renderer factory
 
 	// CREATE THE COMPONENTS
-	moojtree = MoojTree.create(defnode);
-	hexpanel = new HexPanel(defnode);
+	moojtree = MoojTree.create(openFile);
+	hexpanel = new HexPanel(openFile);
 	statusbar = new JLabel();
 	mmb = new MoojMenuBar(this);
 
-	// CONNECT THEM TOGETHER
-	moojtree.setHexPanel(hexpanel);
-
 	// ARRANGE THEM IN A FRAME
-        jframe = new JFrame(defnode + " - Mooj" );
+        jframe = new JFrame(openFile + " - Mooj" );
 	jframe.setJMenuBar(mmb);
         JScrollPane sp_hexpanel = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, 
 						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);      
@@ -89,13 +86,15 @@ class HexEditorGUI {
 	open(new File(filename));
     }
 
-    public void open(File file) {
+    public void open(File file) { //XXX
+        /*
 	SimpleFileChunk raw = new SimpleFileChunk(file);
 	DefNode defnode = new DefNode(raw,null);
 	moojtree.removeDefNode(this.defnode);
 	moojtree.addDefNode(defnode);
 	hexpanel.setDefNode(defnode);
 	this.defnode = defnode;
+        */
     }
 
     public void quit() {
@@ -114,43 +113,3 @@ class HexEditorGUI {
     }
 }
 
-class ExitAction extends AbstractAction {
-    HexEditorGUI gui;
-    public ExitAction(HexEditorGUI gui){
-	super("Exit");
-	this.gui = gui;
-    }
-    public void actionPerformed(ActionEvent e) { 
-	gui.quit();
-    }
-}
-
-class OpenAction extends AbstractAction {
-    HexEditorGUI gui;
-    public OpenAction(HexEditorGUI gui){
-	super("Open");
-	this.gui = gui;
-    }
-    public void actionPerformed(ActionEvent e) { 
-	gui.open();
-    }
-}
-
-/*
-//XXX: delete
-class SelectionEvent {
-    protected RawDataSelection sel;
-    
-    public SelectionEvent(RawDataSelection sel) {
-        this.sel = sel;
-    }
-    
-    public RawDataSelection getSelection() {
-        return sel;
-    }
-
-    public String toString() {
-	return sel.toString();
-    }
-}
-*/

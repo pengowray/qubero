@@ -2,34 +2,26 @@ import java.io.*;
 import javax.swing.JLabel;
 
 public class Mooj {
-    private SimpleFileChunk root;
+    private OpenFile of;
 
     public static void main(String[] arg) {
         // read in file
         if (arg.length == 0)
             arg = new String[] {"C:\\My Documents\\project-moojasm\\HexEditorGUI.class"}; // Mooj.class
 
-        new Mooj( arg[0] ).start();
+        new Mooj( arg[0] );
     }
 
     public Mooj(String filename) {
-        root = new SimpleFileChunk(filename);
-        
+        SimpleFileChunk sfc = new SimpleFileChunk(filename);
+        this.of = new OpenFile(sfc);
+        start();
     }
 
     protected void start() {
-        new HexEditorGUI(root);
+        new HexEditorGUI(of);
     }
 
-    //XXX: remove this:
-    public String getRootName() {
-        return root.toString();
-    }
-
-    //XXX: remove this:
-    public Chunk getRootChunk() {
-        return root;
-    }
 }
 
 

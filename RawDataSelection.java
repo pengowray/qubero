@@ -1,12 +1,20 @@
 class RawDataSelection extends RawData {
     //XXX: should listen for updates from its source data (rawdata)
-    protected DefNode defnode = null; // may be left null
+    protected OpenFile openFile = null; // may be left null
     protected RawData sourceData;
     protected int start;
     protected int length;
     protected byte data[] = null;
     protected String name = null;
     
+    public RawDataSelection(OpenFile openFile, int start, int length) {
+	this.openFile = openFile;
+	this.sourceData = openFile.getRawData();
+        this.start = start;
+        this.length = length;
+        //XXX: validate data?
+    }
+
     public int getStart() {
         return start;
     }
@@ -26,14 +34,6 @@ class RawDataSelection extends RawData {
         }
         
         return false;    
-    }
-    
-    public RawDataSelection(DefNode defnode, int start, int length) {
-	this.defnode = defnode;
-	this.sourceData = defnode.getRawData();
-        this.start = start;
-        this.length = length;
-        //XXX: validate data?
     }
 
     public RawDataSelection(RawData sourceData, int start, int length) {
@@ -76,8 +76,8 @@ class RawDataSelection extends RawData {
         return data;
     }
 
-    public DefNode getDefNode() {
-	return defnode;
+    public OpenFile getOpenFile() {
+	return openFile;
     }
 
 }

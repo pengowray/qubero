@@ -8,13 +8,17 @@ import javax.swing.event.*;
  * and the commands for adding sectioned nodes, and creating a tree view, and reorganizing sectioned nodes.
  */
 
-//XXX: rename to SectionHeader?
+// was: HeaderDef
 
 // MAKE IT WORK FIRST. 
 
 // SECOND MAKE IT WORK WELL.
 
-class DefSection {
+
+// --- This Class is Obsolete. ---
+
+
+class SectionHeader {
     protected String name;
     protected DefaultMutableTreeNode sectionHeader; // the section header node
 
@@ -29,7 +33,7 @@ class DefSection {
     
     //XXX: needed: option to auto-hide section when it is empty.
 
-    public DefSection(String name) {
+    public SectionHeader(String name) {
 	this.name = name;
 	sectionHeader = new DefaultMutableTreeNode(name,true);
     }
