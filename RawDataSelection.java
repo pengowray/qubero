@@ -52,7 +52,7 @@ class RawDataSelection extends RawData {
     }
 
     public String getShortDesc() {
-	return "[" + start + "-" + (start+length) + "]";
+	return "[" + start + "-" + (start+length-1) + "]";
     }
 
     public void setName(String name) {

@@ -5,14 +5,20 @@ import javax.swing.*;
 import javax.swing.tree.*;
 
 class MoojMenuBar extends JMenuBar {
-    protected HexEditorGUI gui;
+    protected final HexEditorGUI gui;
     public MoojMenuBar(HexEditorGUI gui) {
 	super();
 	this.gui = gui;
-	JMenu nowmenu; // temp menu holder
-
+        setup();
+    }
+    protected void setup() {
+        JMenu nowmenu; // temp menu holder
 	nowmenu = new JMenu("File");
-	nowmenu.add( new JMenuItem("New"));
+	nowmenu.add( new JMenuItem(new AbstractAction("Close") {
+            public void actionPerformed(ActionEvent e) { 
+                gui.closeAll();
+            }
+        }));
 	nowmenu.add( new JMenuItem(new OpenAction(gui))); // "Open"
 	nowmenu.add( new JMenuItem("Save"));
 	nowmenu.add( new JMenuItem("Save as..."));
@@ -25,7 +31,17 @@ class MoojMenuBar extends JMenuBar {
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("View");
-	this.add(nowmenu);
+	nowmenu.add( new JMenuItem(new AbstractAction("ASCII") {
+            public void actionPerformed(ActionEvent e) { 
+                gui.setGreyMode(false);
+            }
+        }));
+        this.add(nowmenu);
+	nowmenu.add( new JMenuItem(new AbstractAction("Grey scale") {
+            public void actionPerformed(ActionEvent e) { 
+                gui.setGreyMode(true);
+            }
+        }));
 
 	nowmenu = new JMenu("Go");
 	this.add(nowmenu);

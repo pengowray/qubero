@@ -9,6 +9,7 @@ import javax.swing.*;
 
 public abstract class Resource {
     protected OpenFile openFile;
+    
     public static final Object[] NO_CHILDREN = new Object[0];
     
     public Resource(OpenFile openFile){

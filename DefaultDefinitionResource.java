@@ -1,0 +1,57 @@
+/*
+ * DefaultDefinitionResource.java
+ *
+ * Created on 21 August 2002, 18:18
+ */
+
+import java.util.*;
+import javax.swing.*;
+import javax.swing.event.*;
+import java.awt.event.ActionEvent;
+
+/**
+ *
+ * @author  administrator
+ */
+public class DefaultDefinitionResource extends DefinitionResource {
+    
+    final protected RawDataSelection sel;
+
+    public DefaultDefinitionResource(RawDataSelection sel) {
+	super(sel.getOpenFile());
+        this.sel = sel;
+    }
+
+    public JMenu getJMenu() {
+        final DefaultDefinitionResource This = this;
+        final OpenFile openFile = this.openFile;
+        
+  	JMenu menu = new JMenu("Example");
+        Action deleteAction = new AbstractAction("Delete") {
+            public void actionPerformed(ActionEvent e) {
+                getOpenFile().deleteDefinition(e.getSource(), This);
+            }
+        };
+	menu.add(deleteAction);
+        
+        Action intAction = new AbstractAction("Convert to int") {
+            public void actionPerformed(ActionEvent e) {
+                IntResource intRes = new IntResource(sel,4,IntResource.ONES_COMP);
+                openFile.definitionChange(e.getSource(), This, intRes); // xxx
+            }
+        };
+	menu.add(intAction);
+        
+	//JPopupMenu popup = menu.getPopupMenu();
+	return menu;
+    }
+    
+    public String toString() {
+        return "untyped " + sel.toString();
+    }
+    
+    public void clickAction() {
+        getOpenFile().setSelection(this, sel);
+    }
+   
+}

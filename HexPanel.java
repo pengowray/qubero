@@ -3,6 +3,7 @@ import javax.swing.event.*;
 import java.awt.event.*;
 import javax.swing.*;
 import javax.swing.tree.*;
+import java.awt.geom.*;
 
 class HexPanel extends JPanel implements OpenFileListener {
     protected OpenFile openFile = null;
@@ -18,7 +19,8 @@ class HexPanel extends JPanel implements OpenFileListener {
     protected int lineHeight; // height of one line of hex
     protected int totalLines;
     protected boolean charSizeKnown = false;
-    protected int charWidth = 8, charHeight = 14; // probable sizes(?)
+    //protected int charWidth = 8, charHeight = 14; // laptop sizes
+    protected int charWidth = 7, charHeight = 16, charAscent = 12; // probable sizes(?)
     
     protected RawDataSelection selection = null;
     protected int cursor = -1;
@@ -27,6 +29,8 @@ class HexPanel extends JPanel implements OpenFileListener {
     private boolean published = false; // has the current selection been published? 
     
     Font font = new Font("Monospaced", Font.PLAIN, 11); // antialias?
+    
+    private boolean greyMode = false;
 
     public HexPanel(OpenFile openFile) {
 	super();
@@ -97,9 +101,21 @@ class HexPanel extends JPanel implements OpenFileListener {
 
         dimensionsCalculated = false;
 	calcDim();
-
-	//XXX: need to repaint scrollbars too
-	repaint();
+        
+        //repaint scrollbars
+        cleanUp();
+    }
+    
+    protected void cleanUp() {
+        //repaint scrollbars (xxx: better way?)
+        invalidate();
+        JRootPane rootpane = this.getRootPane(); 
+        if (rootpane != null) {
+            rootpane.validate();
+            rootpane.repaint();
+        }
+        //repaint();
+       
     }
     
     public int hexFromClick(int x, int y) {
@@ -136,6 +152,7 @@ class HexPanel extends JPanel implements OpenFileListener {
     public synchronized void setSelection(RawDataSelection sel, boolean publish) {
 	if (sel.equals(selection) && (publish==false || published==true)) return;
 
+        RawDataSelection oldSel = this.selection;
 	this.selection = sel;
 
 	if (publish==true) {
@@ -145,8 +162,24 @@ class HexPanel extends JPanel implements OpenFileListener {
 	    published = false;
 	}
 
-        repaint(); //XXX: repaint only necessary areas!
+        
+        int minC, maxC; // min and max characters changed
+        if (oldSel != null) { 
+            int nselStart = sel.getStart();
+            int oselStart = oldSel.getStart();
+            int nselEnd = nselStart + sel.getLength();
+            int oselEnd = oselStart + oldSel.getLength();
+            minC = (nselStart<oselStart ? nselStart : oselStart);
+            maxC = (nselEnd>oselEnd ? nselEnd : oselEnd);
+        } else {
+            minC = sel.getStart();
+            maxC = minC + sel.getLength();
+        }
 
+        //repaint only necessary areas
+        //xxx: this just gets converted back to hex units again, so why bother?
+        //xxx: doesn't trim X-ways
+        repaint(0, (minC/hexPerLine)*lineHeight, width, ((maxC/hexPerLine)+1)*(lineHeight)); 
     }
 
     public void setSelection(int offset, int len) {
@@ -203,9 +236,16 @@ class HexPanel extends JPanel implements OpenFileListener {
             return;
 
 	if (charSizeKnown == false) {
+            int oldCharWidth = charWidth;
+            int oldCharHeight = charHeight;
+            int oldCharAscent = charAscent;
 	    charWidth = fm.charWidth('W');
 	    charHeight = fm.getHeight();
+            charAscent = fm.getAscent();
 	    charSizeKnown = true;
+            if (oldCharWidth != charWidth || oldCharHeight != charHeight || oldCharAscent != charAscent ) {
+                System.out.println("Note: screen character size different to expected: " + charWidth  + "x" + charHeight + ",ascent:" + charAscent +  " instead of expected: " + oldCharWidth  + "x" + oldCharHeight + ",ascent:" + oldCharAscent);
+            }
 	}
 
 	calcDim(charWidth, charHeight);
@@ -259,19 +299,30 @@ class HexPanel extends JPanel implements OpenFileListener {
         int top, bot;
         Rectangle clipRect = g.getClipBounds();
         if (clipRect != null) {
-            //If it's more efficient, draw only the area
-            //specified by clipRect.
-            //Top-leftmost point = (clipRect.x, clipRect.y)
-            //Width, height = clipRect.width, clipRect.height
-            //g.setColor(Color.white);
-            //g.fillRect(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+            //If it's more efficient, draw only the area specified by clipRect.
+            g.setColor(Color.white);
+            g.fillRect(clipRect.x, clipRect.y, clipRect.x+clipRect.width, clipRect.y+clipRect.height);
+            
+            /*
+            g.setColor(Color.pink);
+            g.drawRect(clipRect.x, clipRect.y, clipRect.x+clipRect.width-1, clipRect.y+clipRect.height-1);
+            g.setColor(Color.red);
+            g.drawLine(clipRect.x, clipRect.y, clipRect.x+clipRect.width-1, clipRect.y); // top
+            g.setColor(Color.green);
+            g.drawLine(clipRect.x, clipRect.y+clipRect.height-1, clipRect.x+clipRect.width-1, clipRect.y+clipRect.height-1); // bot
+            */
             
             top = clipRect.y / lineHeight;
             bot = (clipRect.y + clipRect.height) / lineHeight + 1;
+            
+            
         } else {
             top = 0;
             bot = totalLines;
             //Paint the entire component.
+            g.setColor(Color.white);
+            g.fillRect(0, 0, width, height);
+            System.out.println("Warning: Whole hexpanel component got painted! that shouldn't really happen.");
         }
       
         paintLines(g,top,bot);
@@ -280,10 +331,13 @@ class HexPanel extends JPanel implements OpenFileListener {
         /** paint each hex unit from start to finish */
     public void paintLines(Graphics g, int start, int finish) {
         //System.out.println("painting from " + start + "(" + start*hexPerLine + ") to " + finish + "(" + finish*hexPerLine + ")");
-        
         g.setFont(font);
         FontMetrics fm = g.getFontMetrics();
         
+        if (start < 0) {
+            start = 0;
+        }
+
         int len = root.getLength(); 
         byte[] data = root.getData();
         int linenum = start;
@@ -295,29 +349,47 @@ class HexPanel extends JPanel implements OpenFileListener {
 	    selStart = selection.getStart();
 	    selEnd = selStart + selection.getLength();
 	}
-
+        
+     
         for (int i = start*hexPerLine; i < len && i <=lastHex; i += hexPerLine) { // line (y)
-            linenum++;
 	    StringBuffer ascii = new StringBuffer(16);
             
             int jlen = (len-i >= hexPerLine ? hexPerLine : len-i);
             for (int j=0; j < jlen; j++) { // unit (x)
                 // draw line of hex
+                boolean selected;
                 if (i+j >= selStart && i+j < selEnd) {
-                    g.setColor(Color.magenta);
+                    g.setColor(Color.blue);
+                    selected = true;
                 } else {
                     g.setColor(Color.black);
+                    selected = false;
                 }
-                g.drawString( byte2hex(data[i+j]), lineStart + hexStart[j], lineHeight*linenum);
-		ascii.append(byte2ascii(data[i+j]));
+                g.drawString( byte2hex(data[i+j]), lineStart + hexStart[j], charAscent + lineHeight*linenum);
+                if (greyMode) {
+                    int col = ~((int)data[i+j]) & 0xff; // the "gamma" of grey squares
+                    if (selected) {
+                        g.setColor(new Color(col/3*2,col/3*2,col/2+128));
+                    } else {
+                        g.setColor(new Color(col,col,col));
+                    }
+                    g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j), lineHeight*linenum, charWidth-1, lineHeight-1);
+                    
+                    //g.setColor(Color.red);
+                    //g.drawString( byte2ascii(data[i+j]), lineStart + hexStart[hexPerLine] + (charWidth*j), charAscent + lineHeight*linenum );
+                } else {
+                    g.drawString( byte2ascii(data[i+j]), lineStart + hexStart[hexPerLine] + (charWidth*j), charAscent + lineHeight*linenum );
+                }
+		//ascii.append(byte2ascii(data[i+j]));
             }
 	    g.setColor(Color.black);
-	    g.drawString(ascii.toString(), lineStart + hexStart[hexPerLine], lineHeight*linenum); //XXX: magicnumber
-            
+
             // draw address:
             String addr = i+":  ";
-            g.setColor(Color.blue);
-            g.drawString( addr,lineStart - fm.stringWidth(addr),lineHeight*linenum);
+            g.setColor(Color.darkGray);
+            g.drawString( addr,lineStart - fm.stringWidth(addr),charAscent + lineHeight*linenum);
+            
+            linenum++;
         }
     }
     
@@ -329,15 +401,6 @@ class HexPanel extends JPanel implements OpenFileListener {
 
     }
 
-    public static String byte2hex(byte b) {
-        int l = ((int)b & 0xf0) >> 4;
-        int r = (int)b & 0x0f;
-
-        return "" 
-            + (l < 0x0a ? (char)('0'+l) : (char)('a'+l-10) )
-            + (r < 0x0a ? (char)('0'+r) : (char)('a'+r-10) );
-    }
-    
     public void dataEdited(EditEvent e) {
     }
     
@@ -353,6 +416,9 @@ class HexPanel extends JPanel implements OpenFileListener {
     public void fileSaved(FileEvent e) {
     }
     
+    public void fileClosed(FileEvent e) {
+        setOpenFile(new OpenFile(new NewFileChunk()));
+    }
     public void selectionCopied(ClipboardEvent e) {
     }
     
@@ -366,6 +432,21 @@ class HexPanel extends JPanel implements OpenFileListener {
     
     public void selectionRemoved(SelectionEvent e) {
         //XXX
+    }
+
+    public void setGreyMode(boolean mode) {
+        greyMode = mode;
+        repaint();
+        //XXXXXXXXXXX
+    }
+
+    public static String byte2hex(byte b) {
+        int l = ((int)b & 0xf0) >> 4;
+        int r = (int)b & 0x0f;
+
+        return "" 
+            + (l < 0x0a ? (char)('0'+l) : (char)('a'+l-10) )
+            + (r < 0x0a ? (char)('0'+r) : (char)('a'+r-10) );
     }
     
 }

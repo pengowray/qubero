@@ -11,10 +11,13 @@ class SelectionResource extends Resource {
     }
 
     public JMenu getJMenu() {
+        final SelectionResource This = this;
+        
   	JMenu menu = new JMenu("Example");
         Action addToTemplate = new AbstractAction("Add to template") {
             public void actionPerformed(ActionEvent e) {
-                getOpenFile().addDefinition(this, sel);
+                DefaultDefinitionResource defRes = new DefaultDefinitionResource(sel);
+                getOpenFile().addDefinition(this, defRes);
             }
         };
 	menu.add(addToTemplate);

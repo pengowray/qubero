@@ -3,9 +3,9 @@ import javax.swing.tree.*;
 import javax.swing.event.*;
 import java.util.*;
 import java.awt.event.*;
+import java.beans.*;
 
-
-class MoojTree extends JTree implements ResourceListener {
+class MoojTree extends JTree implements ResourceListener, OpenFileListener {
     protected DefaultTreeModel treemodel;
     protected DefaultMutableTreeNode topnode; // the top node of the tree on the left, which the data goes under
 
@@ -31,7 +31,7 @@ class MoojTree extends JTree implements ResourceListener {
 
     private MoojTree(OpenFile openFile, DefaultTreeModel treemodel, DefaultMutableTreeNode topnode) {
 	super(treemodel);
-
+        
 	this.treemodel = treemodel;
 	this.topnode = topnode;
 
@@ -40,6 +40,8 @@ class MoojTree extends JTree implements ResourceListener {
 	//setRootVisible(false); //XXX: re-enable.. Why won't it work?
 	setShowsRootHandles(true);
 	setEditable(true);
+
+        //testRenameTest(); // debugging
 
         if (openFile != null)
             addOpenFile(openFile);
@@ -54,7 +56,6 @@ class MoojTree extends JTree implements ResourceListener {
 
 		Object innerSelected = node.getUserObject();
                 if (innerSelected instanceof Resource){
-                    System.out.println("debug2: " + innerSelected);
                     Resource res = (Resource)innerSelected;
                     res.clickAction();
 		}
@@ -81,6 +82,8 @@ class MoojTree extends JTree implements ResourceListener {
                                 res.doubleClickAction();
                             }
                         } else if (e.isPopupTrigger() || e.isMetaDown() ) {//XXX: popup trigger is never true? why?
+                            setLeadSelectionPath(new TreePath(o)); // highlight (ant trail) selection. XXX: doesn't always work
+                            setAnchorSelectionPath(new TreePath(o)); // highlight selection. XXX: doesn't always work
                             JPopupMenu popup;
                             /* // put this back if Resource becomes a type of DefaultMutableTreeNode (unlikely)
                             if (selected instanceof Resource) {
@@ -112,29 +115,26 @@ class MoojTree extends JTree implements ResourceListener {
 		}
 	    };
 	addMouseListener(ml);
- 
-	// rename (edit) element:
-	treemodel.addTreeModelListener(new TreeModelListener() {
-	    public void treeNodesChanged(TreeModelEvent e) {
-		//XXX: this is broken. changed node becomes a string!
-		Object[] path = e.getPath();
-		Object object = path[path.length-1];
-		if (object instanceof RawDataSelection) {
-		    //XXX: check that it's a selection (not a definition)
-		    //if (path.length >= 2 && path[]);
 
-		    RawDataSelection raw = (RawDataSelection)object;
-		    OpenFile of = raw.getOpenFile();
-		    
-		    of.addDefinition(this, raw);
-		    //defnode.clearSelection();
-		}
-	    }
-	    public void treeNodesInserted(TreeModelEvent e){}
-	    public void treeNodesRemoved(TreeModelEvent e){}
-	    public void treeStructureChanged(TreeModelEvent e){}
-	});
-
+    }
+    
+    // find out what's happening when someone renames a tree element!
+    public void testRenameTest() {
+        if (getCellEditor() != null) {
+            System.out.println( "ed: " + getCellEditor() + " .. " + getCellEditor().getCellEditorValue());
+        }
+        
+        this.addPropertyChangeListener( new PropertyChangeListener(){
+            public void propertyChange(PropertyChangeEvent evt) {
+                System.out.println(evt.getPropertyName() + " -- " + evt.getOldValue() + " -> " + evt.getNewValue());
+            }
+        });
+        
+        this.addVetoableChangeListener( new VetoableChangeListener(){
+            public void vetoableChange(PropertyChangeEvent evt)  {
+                System.out.println("Vetoable! " + evt.getPropertyName() + " -- " + evt.getOldValue() + " -> " + evt.getNewValue());
+            }
+        });
     }
 
     // add a viewed file, effectively:
@@ -142,6 +142,7 @@ class MoojTree extends JTree implements ResourceListener {
 	//XXX: error checking?
 
         openFile.addResourceListener(this);
+        openFile.addOpenFileListener(this);
 	openFileList.add(openFile);
         
         // wrap it!
@@ -151,12 +152,18 @@ class MoojTree extends JTree implements ResourceListener {
 	treemodel.insertNodeInto(openFileNode, topnode, topnode.getChildCount()); 
 	//setRootVisible(false); // uncomment! grr.
     }
+    
+    public void fileClosed(FileEvent e) {
+        removeOpenFile(e.getOpenFile());
+    }
+
 
     public void removeOpenFile(OpenFile openFile) {
-	if (openFile == null) 
+	if (openFile == null)
 	    return;
 
         openFile.removeResourceListener(this);
+        openFile.removeOpenFileListener(this);
 	int index = openFileList.indexOf(openFile);
         openFileList.remove(index);
         DefaultMutableTreeNode treenode = (DefaultMutableTreeNode)topNodeList.remove(index);
@@ -183,9 +190,6 @@ class MoojTree extends JTree implements ResourceListener {
         treemodel.insertNodeInto(resNode,treenode,treenode.getChildCount()); // XXX: position should be explicit        
     }
     
-    public void resourceChanged(ResourceEvent e) {
-    }    
-
     public void resourceMoved(ResourceEvent e) {
     }
     
@@ -199,6 +203,36 @@ class MoojTree extends JTree implements ResourceListener {
         treemodel.removeNodeFromParent((MutableTreeNode)resNode);
         resList.remove(index);
         resNodeList.remove(index);
+    }
+    
+    public void dataEdited(EditEvent e) {
+    }
+    
+    public void dataLengthChanged(EditEvent e) {
+    }
+    
+    public void definitionMade(DefinitionEvent e) {
+    }
+    
+    public void definitionRemoved(DefinitionEvent e) {
+    }
+    
+    public void fileSaved(FileEvent e) {
+    }
+    
+    public void selectionCopied(ClipboardEvent e) {
+    }
+    
+    public void selectionMade(SelectionEvent e) {
+    }
+    
+    public void selectionRemoved(SelectionEvent e) {
+    }
+    
+    public void resourcePropertyChanged(ResourceEvent e) {
+    }
+    
+    public void resourceTypeChanged(ResourceEvent e) {
     }
     
 }

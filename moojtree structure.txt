@@ -11,6 +11,7 @@ root
    views
    locks (locked areas + actual mutexes etc)
    currently open/editing
+   errors
  clipboard
  filesystem
   file

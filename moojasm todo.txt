@@ -5,32 +5,36 @@ view, edit, create java bytecode + automation
 get it right later
 """
 
-to do first:
- - documentation
- - fix bug: rename of item destroys it
- - context sensitive context-menu on tree
- - when right clicking a (non-selected) item on tree, show a dotted outline selection 
- - add new definitions to END (not beginning)
- - fix bug: delete definition from selection header causes problems.
- - make all menus work
- - allow right click on hex area
- - bug: slow selection at end of large file
- - wheel jumps too slow
- - scrollbar doesn't update immediately on opening file
- - arrow key movement
- - show selection on ascii side [hollow box]
- - EDIT hex / ascii
- - DnD tree elements
- - status messages
+Log started Aug 21 2002:
+ 2002-08-21: Added types (int only for now)
+             Added grey mode
+             Corrected ascent bug.. characters were at wrong Y position
+
+priority features:
+ - definitions
  - save/open template definitions
+ - EDIT hex / ascii
+ - make all menus work
+ - documentation
+ - status messages
+ - partial/background loading: only load what's displayed (large files especially)
+ - multiple documents open (mdi-ish)
+
+UI:
+ - allow right click on hex area
+ - wheel jumps too slow
+ - arrow key movement
+ - show selection on ascii side as a hollow box
  - bigger west pane for tree
  - new selection: auto open up tree
  - highlighting colour scheme
-
-soon after:
+ D*when right clicking a (non-selected) item on tree, show a dotted outline selection 
+ - DnD tree elements
  - select a template area by clicking it on the hex side
- - empty hex pane when nothing open
- - multiple documents open (mdi-ish)
+
+bugs:
+ - bug: end bit of first file opened is dodgy until resize or open of new file (this is due to incorrect guess of font size)
+ - fix bug: rename of item destroys it
 
 read this:
  - http://tunes.org/files/papers/Arrow_Introduction_v8.htm
@@ -65,7 +69,7 @@ initial chunk types to support:
    class file types: u1, u2, u4, 
    infos: cp_info, field_info, method_info, attribute_info
    arrays: count then array
-   magic numbers: (eg OxCAFEBABE)
+   magic numbers: (eg 0xCAFEBABE)
    flags (w/ conflict rules)
    Fully Qualified Class and Interface Names "java/lang/String"
    Descriptors (4.3)
@@ -74,6 +78,8 @@ initial chunk types to support:
  - python's pickled objects
  - truncated types (last 8 bits of a 32-bit float?)
  - Math.BigNumber
+ - roman numerals (ascii and unicode)
+ - regex's
 
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
@@ -92,7 +98,7 @@ future versions:
  - new english words for hex. Wunex, Texo, Treex, Forx, Fivex, Sixer .. Aten, Blev, Curlve, Dirxeen, Exorte, Fixte, Texan (ten is bigger in texas)
  - design new characters for hex (incorporating roman numerals, x's, japanese, and standard arabic)
  - OCR for dvd and tv subtitles and screen captures
- - OCR for taxes, books, etc
+ - OCR for taxes(?), books, etc
  - OCR for musical notation
  - allow pipes to mooj. e.g:   dir | mooj.exe
  - monitor files + show changes.. help working out file formats
@@ -113,10 +119,10 @@ future formats:
  - Extended Backus-Naur Form (EBNF) notation support
  - mame images and sounds!
  - excel types + formats + equations
- - python types
+ - python types + pickle + ZODB (oodb)
  - different javascript styles
  - gif / jpg / png / psd / corel
- - rar / zip / ace / bz2 / lzh / lzw / lzx / tar / z
+ - rar / zip / ace / bz2 / lzh / lzw / lzx / tar / z / gzip
  - encrypted files (pgp, etc)
  - LaTeX
  - flash
@@ -143,21 +149,26 @@ future formats:
  - Comma-delimited ASCII file
  - CER / CRT Certificate file (MIME x-x509-ca-cert) 
  - wordnet files, microsoft/wordperfect/openoffice dictionary files
+ - opencyc.org / cyc.com KB
  - DLL(Dynamic-link library file)
  - DST Embroidery machines graphic file 
  - HEX Macintosh BinHex 2.0 file 
  - LWZ Linguistically enhanced sound file (Microsoft)  ??
  - more file extensions: http://whatis.techtarget.com/fileFormatA/
- - MOV Movie (QuickTime for Microsoft Windows) 
+ - MOV Movie / QuickTime
  - RTF Rich Text Format document 
  - VCF Virtual card file  
  - database types (oracle, postgres, etc)
- - roman numerals
  - PNM is a image file format, it can encode truecolor images (PPM), grayscale images (PGM) and black/white ones (PBM) (unix)
  - dna sequences
  - [file/data] sizes (kb / mb / other powers of 1024)
  - core dumps: <gremlin> -rw-------  1 grem  grem   503140352 Jun  5 18:17 tcsh.core
  - windows .url, .lnk, .pif
+ - google search: format specification document
+ - GUIDO Music Notation Format
+ - Generic Diff Format Specification
+ - Gettext (.po) catalogs [poEdit]
+ - key map (telemate, mame)
 
 programs to obsolete:
  - notepad + wordpad
@@ -168,6 +179,8 @@ programs to obsolete:
  - outlook
  - excel
  - telemate
+ - windows
+ - everything!
 
 projects to synergise with:
  - wine
@@ -177,6 +190,7 @@ projects to synergise with:
 silly stuff:
  - xmodem end-escape sequence fixing
  - ansi music! 
+ - ansi animation / 2400 emulation
  - DOS logs (xxx: how to add "invisible" timestamps?)
  - how much does that number resemble someone randomly hitting the keyboard
    [Miffy: NSA-STD 102328292302    TTY logging of remote user commands with time stamps.]

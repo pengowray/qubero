@@ -86,15 +86,21 @@ class HexEditorGUI {
 	open(new File(filename));
     }
 
-    public void open(File file) { //XXX
-        /*
+    public void open(File file) { 
+        
+        closeAll();
+        
 	SimpleFileChunk raw = new SimpleFileChunk(file);
-	DefNode defnode = new DefNode(raw,null);
-	moojtree.removeDefNode(this.defnode);
-	moojtree.addDefNode(defnode);
-	hexpanel.setDefNode(defnode);
-	this.defnode = defnode;
-        */
+	OpenFile of = new OpenFile(raw);
+	this.openFile = of;
+        hexpanel.setOpenFile(of);
+        moojtree.addOpenFile(of);
+        jframe.setTitle(of.toString());
+        //mmb.setOpenFile(of); // menu bar
+    }
+    
+    public void closeAll() {
+        openFile.close(this); //XXX: confirm close?!
     }
 
     public void quit() {
@@ -111,5 +117,10 @@ class HexEditorGUI {
 	    jframe.setSize(height,niceHeight);
 	}
     }
+    
+    public void setGreyMode(boolean mode) {
+        hexpanel.setGreyMode(mode);
+    }
+    
 }
 

@@ -9,10 +9,15 @@
  * @author  administrator
  */
 public class FileEvent extends java.util.EventObject {
+    protected OpenFile openFile;
     
-    /** Creates a new instance of ClipboardEvent */
-    public FileEvent(Object source) {
+    public FileEvent(Object source, OpenFile openFile) {
         super(source);
+        this.openFile = openFile;
+    }
+    
+    public OpenFile getOpenFile() {
+        return openFile;
     }
     
 }

@@ -13,10 +13,11 @@ public interface OpenFileListener extends java.util.EventListener {
 
     
     public void fileSaved(FileEvent e);
+    public void fileClosed(FileEvent e);
     
     public void selectionMade(SelectionEvent e);
     public void selectionRemoved(SelectionEvent e); // no longer selected
-    
+
     public void selectionCopied(ClipboardEvent e);
     
     public void definitionMade(DefinitionEvent e);
@@ -25,6 +26,9 @@ public interface OpenFileListener extends java.util.EventListener {
     public void dataEdited(EditEvent e);
     public void dataLengthChanged(EditEvent e);
     
-    //XXX: events to allow vetoing?
-    //XXX: split this up some
+    //XXX: remove  made/removed events (use resource listener instead)
+    
+    //XXX: vetoable events?
+    //XXX: split this up some?
+    
 }

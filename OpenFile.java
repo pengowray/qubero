@@ -19,8 +19,8 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
     protected SelectionResource selectionRes;
     protected RawDataSelection selection; //XXX: do we really need both?
     
-    protected List definitionList = new LinkedList();
-    protected List definitionResList = new LinkedList(); //XXX: do we really need both?
+    //protected List definitionList = new LinkedList(); // (do we really need both?)
+    protected List definitionResList = new LinkedList(); 
     
     /**
      * def may be null. in future rawdata may be null too (to indicate an empty file).
@@ -77,6 +77,39 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
             }
         }
     }
+    
+    protected void fireFileSaved(Object source) {
+        Object[] listeners = listenerList.getListenerList();
+        FileEvent event = null;
+        for (int i = listeners.length-2; i>=0; i-=2) {
+            if (listeners[i]==OpenFileListener.class) {
+                // Lazily create the event:
+                if (event == null) {
+                    if (source == null)
+                        source = this;
+                    event = new FileEvent(source,this);
+                }
+                ((OpenFileListener)listeners[i+1]).fileSaved(event);
+            }
+        }
+    }
+    
+    protected void fireFileClosed(Object source) {
+        Object[] listeners = listenerList.getListenerList();
+        FileEvent event = null;
+        for (int i = listeners.length-2; i>=0; i-=2) {
+            if (listeners[i]==OpenFileListener.class) {
+                // Lazily create the event:
+                if (event == null) {
+                    if (source == null)
+                        source = this;
+                    event = new FileEvent(source,this);
+                }
+                ((OpenFileListener)listeners[i+1]).fileClosed(event);
+            }
+        }
+    }
+    
 
     protected void fireSelectionMade(Object source, RawDataSelection resource) {
         Object[] listeners = listenerList.getListenerList();
@@ -93,7 +126,8 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
             }
         }
     }
-
+    
+   /*
     protected void fireDefinitionMade(Object source, RawDataSelection resource) {
         Object[] listeners = listenerList.getListenerList();
         DefinitionEvent event = null;
@@ -109,7 +143,22 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
             }
         }
     }
-    
+    protected void fireDefinitionRemoved(Object source, RawDataSelection resource) {
+        Object[] listeners = listenerList.getListenerList();
+        DefinitionEvent event = null;
+        for (int i = listeners.length-2; i>=0; i-=2) {
+            if (listeners[i]==OpenFileListener.class) {
+                // Lazily create the event:
+                if (event == null) {
+                    if (source == null)
+                        source = this;
+                    event = new DefinitionEvent(source,resource);
+                }
+                ((OpenFileListener)listeners[i+1]).definitionRemoved(event);
+            }
+        }
+    }
+    */
     public void setSelection(Object source, RawDataSelection sel){
         // check that RawDataSelection is valid..
         if (sel.getOpenFile() != this)
@@ -131,22 +180,41 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
 
 
     // MoojTree rename (edit) of node / converting selection to a definition:
-    public void addDefinition(Object source, RawDataSelection sel) {
-        DefinitionResource defRes = new DefinitionResource(sel);
-        definitionList.add(sel);
+    public void addDefinition(Object source, DefinitionResource defRes) {
+        //DefinitionResource defRes = new DefaultDefinitionResource(sel);
+        //definitionList.add(sel);
         definitionResList.add(defRes);
         fireResourceAdded(source,"Definition",defRes);
-        fireDefinitionMade(source,sel);
+        //fireDefinitionMade(source,sel);
     }
     
-    public void deleteDefinition(Object source, RawDataSelection sel) {
-        //NYI
+    public void deleteDefinition(Object source, DefinitionResource defRes) {
+        //int loc = definitionList.indexOf(sel);
+        //definitionList.remove(loc);
+        //DefinitionResource defRes = (DefinitionResource)definitionResList.remove(loc);
+        definitionResList.remove(defRes);
+        
+        fireResourceRemoved(source,"Definition",defRes);
+        //fireDefinitionRemoved(source,sel);
+    }
+    
+    public void definitionChange(Object source, DefinitionResource oldRes, DefinitionResource newRes) {
+        //XXX lazy poo
+        deleteDefinition(source, oldRes);
+        addDefinition(source, newRes);
     }
 
     public RawDataSelection getSelection(){
         //XXX pending
         return null;
 	//return currentSelection;
+    }
+    
+    public void close(Object source) {
+        fireFileClosed(source);
+        // should we do anything else??
+        //XXX: confirm changes?
+        //XXX: throw exceptions??
     }
 
     public RawData getRawData() {
