@@ -7,7 +7,8 @@ import java.io.*;
 /**
  * Node used by MoojTree containing display information for a file/definition.
  * also to be uesd by HexPanel?
- * //XXX: needs to be renamed (e.g. OpenFileNode or TopFileNode or something)
+ *
+ * see also CurrentOpenFile
  */
 
 class OpenFile implements LongListSelectionListener { // previously did extend DefaultMutableTreeNode
@@ -23,7 +24,7 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
     protected String filename;
     
     //protected List definitionList = new LinkedList(); // (do we really need both?)
-    protected List definitionResList = new LinkedList(); 
+    protected List definitionResList = new LinkedList();
     
     /**
      * def may be null. in future rawdata may be null too (to indicate an empty file).

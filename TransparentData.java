@@ -99,16 +99,18 @@ class TransparentData extends Data {
         return "selection";
     }
 
-    public InputStream getDataStream() {
+    
+    public InputStream getDataStream() throws IOException {
         return sourceData.getDataStream(start, length);
     }
     
-    public InputStream getDataStream(long offset) {
+    
+    public InputStream getDataStream(long offset) throws IOException {
         return sourceData.getDataStream(start+offset, length-offset);
     }
     
     // offset is relative to the board, not object's start.
-    public InputStream getDataStream(long start, long len) {
+    public InputStream getDataStream(long start, long len) throws IOException {
         if (start+len > this.start+length) { 
             throw new IllegalArgumentException("End of requested stream is after end of object\nthis:" + this + " sourceData:" + sourceData + " request:" + start + "-" + (start+len));
         }
@@ -117,6 +119,7 @@ class TransparentData extends Data {
         }
         return sourceData.getDataStream(start, len);
     }
+    
     
     
 }

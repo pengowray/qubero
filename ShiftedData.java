@@ -32,6 +32,7 @@ public class ShiftedData extends Data {
         if (length < 0)
             throw new IllegalArgumentException("Negative length");
     }
+
     /** shift is how far to shift the view of the source data. used for deletes */
     public Data getSourceShiftedSelection(long start, long length, long shiftSource) {
         return new ShiftedData(start, length, shiftSource + shift, sourceData);
@@ -61,15 +62,15 @@ public class ShiftedData extends Data {
     }    
 
 
-    public InputStream getDataStream() {
+    public InputStream getDataStream() throws IOException {
         return sourceData.getDataStream(start+shift, length); 
     }
     
-    public InputStream getDataStream(long offset) {
+    public InputStream getDataStream(long offset) throws IOException {
         return sourceData.getDataStream(this.start+offset+shift, getLength() - offset);
     }
     
-    public InputStream getDataStream(long start, long len) {
+    public InputStream getDataStream(long start, long len) throws IOException {
         return sourceData.getDataStream(start+shift, len);
     }
     

@@ -15,7 +15,9 @@ abstract class Data implements Comparable {
     //abstract public int getData(byte[] b, int off);
     
     //xxx: remove this method!
+    //tho it might be useful. 
     public Data getSelection(long start, long length) {
+        System.out.println("Using deprecated method maybe: public Data getSelection(long start, long length) \n of Data");
         return new TransparentData(this, start, length);
     }
     
@@ -25,27 +27,32 @@ abstract class Data implements Comparable {
     //}
     
     //XXX: throw out of bounds thing
+    //xxx: REMOVE: this function really shouldn't be needed? just returns 'this"
     public TransparentData getTransparentData() {
+        System.out.println("Using _very_ deprecated method: public Data getSelection(long start, long length) \n of Data");
         return getTransparentData(getStart(), getLength());
     }
     
+    //xxx: rename to subdata()
     public TransparentData getTransparentData(long start, long length) {
         return new TransparentData(this, start, length);
     }
     
     /** shift is how far to shift the view of the source data. used for deletes */
+    //xxx: rename to slideSourcetSubdata()
     public Data getSourceShiftedSelection(long start, long length, long shiftSource) {
         return new ShiftedData(start, length, shiftSource, this);
     }
     
+    //xxx: rename to shiftStartSubdata()
     public Data getStartShiftedSelection(long start, long length, long shiftStart) {
         return new ShiftedData(this, start, length, shiftStart);
     }
     
-    //
+    //xxx: rename to shiftStart()
     public Data getStartShiftedSelection(long shiftStart) {
         return new ShiftedData(this, getStart(), getLength(), shiftStart);
-    }    
+    }
 
     /** first piece of data is where? */
     public long getStart() {
@@ -67,22 +74,27 @@ abstract class Data implements Comparable {
      * too many convinience methods.. remove some:
      */
     // start is relative to the board.
+    // xxx: rename to just "dataStream()"
     public InputStream getDataStream(long start, long length)  throws IOException {
         //xxx: check for errors
         return getDataStream(start - getStart());
     }
 
     // offset is relative to the start of the object.
+    // xxx: rename to just "dataStream()"
     public InputStream getDataStream(long offset) throws IOException {
         InputStream i = getDataStream();
         i.skip((int)offset); // precision!
         return i;
     }
+    
     ///////////////////// remove to here
 
-    abstract public InputStream getDataStream();
+    // xxx: rename to just "dataStream()"
+    abstract public InputStream getDataStream() throws IOException;
     
-    public byte[] getDataStreamAsArray() { // throws IOException 
+    // xxx: rename to "readByteArray"
+    public byte[] getDataStreamAsArray() throws IOException {
         try {
             if (getLength() > Integer.MAX_VALUE){
                 throw new IllegalArgumentException("Data too large to fit into an array.");
@@ -98,6 +110,8 @@ abstract class Data implements Comparable {
     }
     
     // untested.. probably unneeded.
+    // xxx: on error returns as much as has been read
+    // xxx: rename to "readByteArray"
     public byte[] getBytes(long start, int length) {
         try {
             byte[] b = new byte[length];

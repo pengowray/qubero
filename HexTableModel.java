@@ -4,6 +4,7 @@
  * Created on 12 September 2002, 13:26
  */
 import java.io.*;
+import java.util.*;
 /**
  *
  * @author  administrator
@@ -14,19 +15,39 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
     private int preHexColumns = 1;
     private int hexColumns; // given by constructor
     private int afterHexColumns = 0;
-    private int columns;
+    private int columns = -1; // lazy init
     private int rows;
     private Data data;
     private HexTable parent;
-    private ColumnGroupManager cgm;
+    //private ColumnGroupManager cgm;
+    private ArrayList cgm; // ColumnGroupManager
     
     /** Creates a new instance of HexTableModel */
     public HexTableModel(Data data, int hexColumns) {
-	ColumnGroupManager cgm = new ColumnGroupManager(hexColumns);
+	super();
+	this.hexColumns = hexColumns;
+	this.data = data;
+	cgm = new ArrayList(hexColumns);
 	cgm.add(1).add(2).add(3);
-	this(data, hexColumns, cgm);
+	columns = preHexColumns + hexColumns + afterHexColumns; //xxx: all columns should be managed by cgm
     }
-	/** Creates a new instance of HexTableModel */
+    
+    public int getColumnCount() {
+	if (columns != -1)
+	    return columns;
+	
+	int cols = 0;
+	for (Iterator i = cgm.iterator(); i.hasNext(); ) {
+	    ColumnGroup cg = (ColumnGroup)i.next();
+	    cols += cg.getColumnCount();
+	}
+	
+	columns = cols;
+	return columns;
+    }
+    
+    /** Creates a new instance of HexTableModel */
+    /*
     public HexTableModel(Data data, int hexColumns, ColumnGroupManager cgm) {
         super();
         this.data = data;
@@ -38,6 +59,7 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
     public void setColGroupManager(ColumnGroupManager cgm){
 	this.cgm = cgm;
     }
+     */
     
 
     
@@ -62,10 +84,6 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
      */
     public Class getColumnClass(int columnIndex) {
         return "".getClass(); //xxx: for now
-    }
-    
-    public int getColumnCount() {
-        return columns;
     }
     
     public int getRowCount() {
