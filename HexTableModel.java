@@ -9,6 +9,12 @@ import java.io.*;
  * @author  administrator
  */
 public class HexTableModel extends javax.swing.table.AbstractTableModel {
+    public static final int COLGROUP_ADDR = 1;
+    public static final int COLGROUP_HEX = 2;
+    public static final int COLGROUP_ASCII = 3;
+    public static final int COLGROUP_GREY = 4;
+    
+    
     private int preHexColumns = 1;
     private int hexColumns; // given by constructor
     private int afterHexColumns = 0;
@@ -53,7 +59,7 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
     }
     
     public int getRowCount() {
-        int ret = (int)(data.getLength() / hexColumns); //xxx: loss of precision 
+        int ret = (int)(data.getLength() / hexColumns); //xxx: loss of precision
         if (data.getLength() % hexColumns > 0) {
             // half row
             ret = ret + 1;
@@ -95,8 +101,8 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
         int l = ((int)b & 0xf0) >> 4;
         int r = (int)b & 0x0f;
 
-        return "" 
+        return ""
             + (l < 0x0a ? (char)('0'+l) : (char)('a'+l-10) )
             + (r < 0x0a ? (char)('0'+r) : (char)('a'+r-10) );
-    }    
+    }
 }
