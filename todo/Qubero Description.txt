@@ -16,6 +16,9 @@ Qubero is: (subtitle)
  - spreadsheet and database.
  - the photoshop of hex editors.
  - data driven low-ceremony development tool with multiple perspectives. :/
+ - Understands Digital! / understanding binary / your format
+ - Human Readable Binary
+ - open binary
 
 Definition interface is powerful because it does:
  - give meaning to raw data

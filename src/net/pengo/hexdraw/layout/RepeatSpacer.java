@@ -50,6 +50,8 @@ public class RepeatSpacer extends MultiSpacer {
             if (maxRepeats != -1 && allButLast > maxRepeats)
             	return maxRepeats * one;
             
+            
+            
             long length = one * allButLast + contents.getPixelWidth(lastOne);
             return length;
             
@@ -83,8 +85,6 @@ public class RepeatSpacer extends MultiSpacer {
     public RepeatSpacerIterator iterator(long startPos, BitSegment seg) {
     	RepeatSpacerIterator si = new RepeatSpacerIterator(seg);
         si.skip(startPos);
-        //si.init(rangeFirstIndex, rangeLastIndex);
-        //si.init(range, startPos);
         
         /*
         System.out.println("Creating iterator: " + seg);
@@ -170,8 +170,6 @@ public class RepeatSpacer extends MultiSpacer {
         
         //System.out.println(this.getClass().getName() + " start printing: " + seg);
         
-        
-        
         Rectangle clip = g.getClipBounds();
         if (clip.getMaxX() < 0 || clip.getMinX() > getPixelWidth(length))
         	return;
@@ -185,15 +183,20 @@ public class RepeatSpacer extends MultiSpacer {
             long first = 0;
             
         	if (clip.getMinX() > 0) {
-	            first = (long) clip.getMinX()/one;
+	            first = (long) (clip.getMinX()/one);
 	            //startTranslateX = (int) (clip.getMinX() * first);
 	            startTranslateX = (int) (one * first);
+	            
+        	} else {
+        		//	all ok.
         	}
 	            
             i = iterator(first, seg);
             
+            System.out.println("first: " + first + " startX:" + startTranslateX + " clipMinX:" + clip.getMinX() + " i.lastPosCalc:" + i.lastPosCalc + " i.current:" + i.currentIndex());
+            
         	if (clip.getMaxX() > 0) {
-	            i.setEndCrop((long) (clip.getMaxX()/one )); // +1 cleaner rounding up?
+	            i.setEndCrop((long) (clip.getMaxX()/one ) +1); // +1 cleaner rounding up?
         	}
             
         } else {
@@ -202,14 +205,14 @@ public class RepeatSpacer extends MultiSpacer {
             long first = 0;
             
         	if (clip.getMinY() > 0) {
-	            first = (long) clip.getMinY()/one;
+	            first = (long) (clip.getMinY()/one);
 	            startTranslateY = (int) (one * first);
         	}
         	
         	i = iterator(first, seg);
 
         	if (clip.getMaxY() > 0) {
-	            i.setEndCrop((long) (clip.getMaxY()/one )); // +1 ? cleaner rounding up?
+	            i.setEndCrop((long) (clip.getMaxY()/one ) +1); // +1 ? cleaner rounding up?
         	}
 	            
             
@@ -246,13 +249,16 @@ public class RepeatSpacer extends MultiSpacer {
 	            	//System.out.print("v");
 	            	long dist = contents.getPixelHeight(i.getBitCount());
 	            	g.translate(0, (int)dist);
-	            	totalYChange += dist;	            	
+	            	totalYChange += dist;
 	            }
             
 //	            g.translate(i.getXChange(), i.getYChange());
 //	            totalXChange += i.getXChange();
 //	            totalYChange += i.getYChange();
-	          	//System.out.println("XChange:" + i.getXChange() + " YChange:" + i.getYChange());
+	          	//System.out.println("XChange:" + contents.getPixelWidth(i.getBitCount()) + " YChange:" + contents.getPixelHeight(i.getBitCount()));
+            } else {
+            	//ERROR SHOULD NOT OCCUR
+            	System.out.print("error: -1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1");
             }
             
             //fixme: check boundries
@@ -343,7 +349,7 @@ public class RepeatSpacer extends MultiSpacer {
         		finalContentBits = repeatedContentBits;
         	}
         	
-        	//System.out.println("lastPos:" + lastPos + " for range:" + range);
+        	System.out.println("lastPos:" + lastPos + " for range:" + range);
         
         	lastPosCalc = lastPos;
         }
@@ -368,65 +374,37 @@ public class RepeatSpacer extends MultiSpacer {
             return true;
         }
         
+        public BitSegment currentSegment() {
+        	return new BitSegment(getBitOffset(), getBitOffset().add(bits()));
+        }        	
+
         public void skip(long n) {
         	//XXX: do this better!
 
+        	if (n<0)
+        		new Exception("negative skip!").printStackTrace();
+        	
         	if (n==0) //FIXME: this happens too often, fix calling code
         		return; 
         	
-        	BitCursor addbits = bits(1).multiply( (int)n );
-			
+        	if (pos == -1) {
+        		n--;
+        		if (n==0)
+            		return;
+        	}
+        	
+        	
+        	
+        	BitCursor addbits = repeatedContentBits.multiply( (int)n );
+        	
 			bitOffset = bitOffset.add( addbits );
 			  
 	      	// System.out.println("Skipping:" + n + " bits-per-step:" + bits(1) + " bits:" + addbits + " old pos:" + pos + " new pos:" + (pos+n));
 
 	      	pos+=n;
-	      	
         }
         
-        
-        public BitSegment currentSegment() {
-        	return new BitSegment(getBitOffset(), getBitOffset().add(bits()));
-        }        	
-        
-        /* sets the cursor so that the next() will go to the startPos (nextPos) */
-//        public void jumpToNext(long nextPos, BitCursor bits) {
-//            pos = nextPos-1;
-//            
-//            if (nextPos < 0) {
-//            	//System.out.println();
-//            	new Exception("jump to negative pos:" + nextPos).printStackTrace();
-//            }
-//
-//            if (nextPos > 0) {
-//            	BitCursor offset = contents.getBitCount(bits).multiply((int)pos); //fixme: long->int
-//                if (range != null) {
-//                	bitOffset = range.firstIndex.add(offset);
-//                } else {
-//                	bitOffset = offset;
-//                }
-//            }
-//            
-//            //System.out.println("jumping to:" + bitOffset);
-//            //fixme: should be more accurate for last repetition?
-//            next = null;
-//            nextBitStart = null;
-//        }
-        
         public SuperSpacer next() {
-//			  if (pos < 0) {
-//			  	//should negative pos be allowed? if so this is probably not the best way to handle it
-//			  	new Exception("negative position").printStackTrace();
-//			  }
-			  
-//		  if (horizontal) {
-//		      xChange = (int)contents.getPixelWidth(bits()); // if horizontal spacer
-//		      totalXChange += xChange;
-//		  } else {
-//		      yChange = (int)contents.getPixelHeight(bits());
-//		      totalYChange += yChange;
-//		  }
-
 			  bitOffset = bitOffset.add(bits());
 			  
 	      	  pos++;
@@ -445,12 +423,16 @@ public class RepeatSpacer extends MultiSpacer {
         
         //bits for this pos
         protected BitCursor bits(long pos) {
+        	if (pos < 0) {
+        		return BitCursor.zero;
+        	}
+
         	if (pos == lastPosCalc) {
         		//System.out.println("--------test: " + finalContentBits + " pos:" + pos + " range:" + range);
         		return finalContentBits;
         	}
         	
-        	if (pos > lastPosCalc || pos < 0) {
+        	if (pos > lastPosCalc) {
         		//FIXME: give warning?
         		System.out.println("00000----test==" + repeatedContentBits);
         		return BitCursor.zero;
@@ -478,37 +460,6 @@ public class RepeatSpacer extends MultiSpacer {
             return pos;
         }
         
-//        public Point currentStartPoint() {
-//            return new Point(xChange, yChange);
-//        }
-        
-//        public Point nextStartPoint(BitCursor bits) {
-//            if (pos < 0)
-//                return new Point(0,0);
-//                
-//            if (next == null) {
-//                if (horizontal) {
-//                    next = new Point(xChange + (int)contents.getPixelWidth(bits), yChange); //fixme: warning long->int
-//                } else {
-//                    next = new Point(xChange, yChange + (int)contents.getPixelHeight(bits)); //fixme: warning long->int
-//                }
-//            }
-//            
-//            return next;
-//        }
-        
-//        public int getXChange() {
-//            return xChange;
-//        }
-//        public int getYChange() {
-//            return yChange;
-//        }
-//        public int getTotalXChange() {
-//            return totalXChange;
-//        }
-//        public int getTotalYChange() {
-//            return totalYChange;
-//        }
 	}    
 	
 }

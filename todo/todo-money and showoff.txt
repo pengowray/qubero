@@ -26,10 +26,12 @@ show off by:
  - linux NTFS writable + backtrack
  - windows archive viewer that opens archives into a new drive (double clicking on C:\myzip.zip opens up in X:\myzip.zip\ or just X:\ like a removable drive. eject when done.). much like DAEMON tools for an .iso.
  - Linux downloader/installer/distribution(+software) selector/customizer
+ - contact list manager: sync between thunderbird / outlook / mobile phones / etc. understand capibilities of each contact list type
+ - website: wikifier. enter a url and have lots of words turned into links to wikipedia. Or edit a wikipedia page with cool javascript stuff.
 
 make money with:
  - donations (to encourage open sourcing)
- - mp3 editor (and ogg, bonk, wav, etc)
+ - mp3 editor (and ogg, bonk, wav, flac, ape, etc)
  - reason thing
  - live media stream control
  - web database tool (database, w3c standards, ass, ACLs)

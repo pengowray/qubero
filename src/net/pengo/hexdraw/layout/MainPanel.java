@@ -52,12 +52,12 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	AsciiTileSet asciiTiles = new AsciiTileSet("hex", false);
     	UnitSpacer asciiUnit = new UnitSpacer(asciiTiles);
 
-        RepeatSpacer row = new RepeatSpacer();
+    	Repeater row = new Repeater();
         row.setHorizontal(true);
         row.setContents(unit);
         row.setMaxRepeats(32);
         
-        RepeatSpacer asciiRow = new RepeatSpacer();
+        Repeater asciiRow = new Repeater();
         asciiRow.setHorizontal(true);
         asciiRow.setContents(asciiUnit);
         asciiRow.setMaxRepeats(16);
@@ -67,12 +67,12 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	rowWrap.setLength(new BitCursor(16,0));
     	//rowWrap.setHorizontal(false); // n/a
 
-        RepeatSpacer column = new RepeatSpacer();
+        Repeater column = new Repeater();
         column.setHorizontal(false);
         //column.setContents(rowWrap);
         column.setContents(row);
         
-        RepeatSpacer asciiColumn = new RepeatSpacer();
+        Repeater asciiColumn = new Repeater();
         asciiColumn.setHorizontal(false);
         asciiColumn.setContents(asciiRow);
 
@@ -181,15 +181,14 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     }
     
     public void paintComponent(Graphics g) {
-
+    	//System.out.println("---------------");
     	super.paintComponent(g);
 
     	Data d = activeFile.getActive().getData();
     	
-    	System.out.println("d.getBitLength():" + d.getBitLength());
+    	//System.out.println("d.getBitLength():" + d.getBitLength());
     	spacer.paint(g, activeFile.getActive().getData(), 
     			new BitSegment(new BitCursor(), d.getBitLength()) );
-    	
     }
 
 	public void activeChanged(ActiveFileEvent e) {

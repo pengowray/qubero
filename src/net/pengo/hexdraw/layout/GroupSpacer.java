@@ -77,9 +77,9 @@ public class GroupSpacer extends MultiSpacer {
     	if (bits.equals(BitCursor.zero))
     		return 0;    	
     	
-        if (bits.equals(getBitCount(bits))) {
+        //if (bits.equals(getBitCount(bits))) {
             //return cached value
-        }
+        //}
 
         if (!horizontal) {
             // get total
@@ -111,7 +111,7 @@ public class GroupSpacer extends MultiSpacer {
     // AKA max bit count
     public BitCursor getBitCount(BitCursor bits) {
     	return getLength();
-        //return length;
+    	//FIXME: return getLength(bits);
     }
     
     //public long subIsHere(int x, int y, Round round);
@@ -263,8 +263,10 @@ public class GroupSpacer extends MultiSpacer {
     }
     
 	public BitCursor getLength() {
-		if (length == null)
-			System.out.println("error: length not set on GroupSpacer!");
+		if (length == null) {
+			//System.out.println("error: length not set on GroupSpacer!");
+			new Exception("error: length not set on GroupSpacer!").printStackTrace();
+		}
 		
 		return length;
 	}
