@@ -1,6 +1,0 @@
-**/filesystem.attributes
-**/.nbattrs
-**/.#*
-dist/**
-build/**
-src/**/*.class
