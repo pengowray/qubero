@@ -49,48 +49,74 @@ public class ActiveFile {
     public void removeActiveFileListener(ActiveFileListener l) {
 	listeners.remove(l);
     }
-    public void closeAll(Object source) {
+    public boolean closeAll(Object source) {
+	//fixme: should check that all can be closed before closing any
 	for (Iterator i = available.iterator(); i.hasNext(); ) {
 	    OpenFile of = (OpenFile)i.next();
-	    close(of, source);
+
+	    ActiveFileEvent e = new ActiveFileEvent(source, this, of);
+	    for (Iterator it=listeners.iterator(); it.hasNext(); ) {
+		ActiveFileListener l = (ActiveFileListener)it.next();
+		if (!l.readyToCloseOpenFile(e)) {
+		    //fixme: should jump to this file and warn
+		    return false;
+		}
+	    }
 	}
+	
+	for (Iterator i = available.iterator(); i.hasNext(); ) {
+	    OpenFile of = (OpenFile)i.next();
+	    boolean success = close(of, source);
+	    if (!success)
+		return false;
+	    
+	    //i.remove(); //fixme. can't be done with ResourceList's iterator yet
+	    
+	    ActiveFileEvent e = new ActiveFileEvent(source, this, of);
+	    for (Iterator it=listeners.iterator(); it.hasNext(); ) {
+		ActiveFileListener l = (ActiveFileListener)it.next();
+		l.closedOpenFile(e);
+	    }
+	}
+	
+	available.clear();
+	    
+	setActive(null, source);
+	return true;
     }
     
     // closes the file and remove from list
     public boolean close(OpenFile closeFile, Object source) {
-	//fixme: not complete
+	if (closeFile == null)
+	    return false;
+	
+	if (!available.contains(closeFile))
+	    //throw new IllegalArgumentException("file to close is not even open");
+	    return false;
+
         if (closeFile == active) {
 	    setActive(null, source);
 	}
 	
-	if (!available.contains(closeFile)) {
-	    //fixme: not really illegal argument ?
-	    throw new IllegalArgumentException("file to close is not even open");
-	}
-
-	boolean ready = true;
 	ActiveFileEvent e = new ActiveFileEvent(source, this, active);
-	for (Iterator i=listeners.iterator(); i.hasNext() && ready==true; ) {
+	for (Iterator i=listeners.iterator(); i.hasNext(); ) {
 	    ActiveFileListener l = (ActiveFileListener)i.next();
 	    if (!l.readyToCloseOpenFile(e)) {
-		ready = false;
+		System.out.println("not ready to close");
+		return false;
 	    }
 	}
-	
-        //close it now!
-        if (!ready) {
-            System.out.println("not ready to close");
-            return false;
-        }
             
-        closeFile.setActiveFile(null);
-	boolean done = active.close(source);
+        //closeFile.setActiveFile(null);
+	boolean done = closeFile.close(source);
 	
         if (!done) {
             System.out.println("failed to close");
             return false;
         }
-        
+	
+        available.remove(closeFile);
+	
         for (Iterator i=listeners.iterator(); i.hasNext(); ) {
             ActiveFileListener l = (ActiveFileListener)i.next();
             l.closedOpenFile(e);

@@ -29,6 +29,9 @@ public class OpenFileResourceFactory extends ResourceFactory {
 	
 	if (o instanceof Collection)
 	    return wrap((Collection)o);
+        
+        //if (o instanceof Selection)
+         //   return wrap
 
 	return new ContainerResource(o, openFile);
     }

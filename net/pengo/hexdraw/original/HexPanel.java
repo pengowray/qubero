@@ -69,6 +69,7 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 	
 	addMouseListener(
 	    new MouseInputAdapter()  {
+		
 		public void mousePressed(MouseEvent e)  {
 		    // e.getModifiers(); // FIXME: later.
 		    long hclick = hexFromClick( e.getX(), e.getY() );
@@ -94,17 +95,20 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 		    }
 		    
 		}
-		/*
+		
 		public void mouseClicked(MouseEvent e)  {
-		    long hclick = hexFromClick( e.getX(), e.getY() );
-		    if (hclick != -1)  {
-			click(hclick, e);
-			//changeSelection(hclick, false, false);
+		    int clicks = e.getClickCount();
+		    if (clicks == 2) {
+		    	long hclick = hexFromClick( e.getX(), e.getY() );
+			if (hclick != -1)  {
+			    startEdit(hclick);
+			}
+			
+		    //getSelectionModel().setValueIsAdjusting(false);
+		    //draggingMode = false;
 		    }
-		    getSelectionModel().setValueIsAdjusting(false);
-		    draggingMode = false;
 		}
-		 */
+		
 	    }
 	);
 	
@@ -145,8 +149,10 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 	setOpenFile(activeFile.getActive());
     }
     
-
-    
+    private void startEdit(long pos) {
+	//Fixme: TODO
+	System.out.println("now (not really) editing at: " + pos);
+    }
     
     // triggered when data changes
     public void dataUpdate(DataEvent e) {
@@ -218,15 +224,18 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 	}
 	
 	this.openFile = openFile;
-	this.root = openFile.getData();
-	getSelectionModel().clearSelection();
+	if (openFile == null) {
+	    this.root = new EmptyData();
+	} else {
+	    this.root = openFile.getData();
+	    openFile.addOpenFileListener(this);
+	    //openFile.addResourceListener(this);
+	    openFile.addLongListSelectionListener(this);
+	    openFile.addDataListener(this);
+	}
+	
+	//getSelectionModel().clearSelection();
 	rootLength = root.getLength();
-	
-	openFile.addOpenFileListener(this);
-	//openFile.addResourceListener(this);
-	openFile.addLongListSelectionListener(this);
-	openFile.addDataListener(this);
-	
 	reCalcDim();
 	
 	long MAX_PREC = 16777216;
@@ -271,23 +280,6 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 	    hex = rootLength-1;
 	
 	return hex;
-    }
-    
-    private void setSelection(long selectionFirst, long selectionLast)  {
-	/*
-	 if (this.activeSelectionFirst == selectionFirst && this.activeSelectionLast == selectionLast)
-	 {
-	 return;
-	 }
-	 
-	 activeSelectionFirst = selectionFirst;
-	 activeSelectionLast = selectionLast;
-	 published = false;
-	 */
-	
-	getSelectionModel().setSelectionInterval(selectionFirst, selectionLast);
-	
-	//repaintAfterNewSelection(activeSelectionFirst, activeSelectionLast);
     }
     
     /*
@@ -337,17 +329,6 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     }
     
     /*
-     
-     public Data getSelection()
-     {
-     return selection;
-     }
-     
-     public void setSelection(TransparentData sel)
-     {
-     setSelection(sel, true);
-     }
-     
      
      public synchronized void setSelection(Data sel, boolean publish)
      {

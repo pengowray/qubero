@@ -17,18 +17,25 @@ public class MoojMenuBar extends JMenuBar {
         JMenu nowmenu; // temp menu holder
 	nowmenu = new JMenu("File");
 	nowmenu.add( new JMenuItem(new AbstractAction("Close") {
-            public void actionPerformed(ActionEvent e) { 
+            public void actionPerformed(ActionEvent e) {
+		gui.closeActive();
+                //gui.closeAll();
+            }
+        }));
+	nowmenu.add( new JMenuItem(new AbstractAction("Close all") {
+            public void actionPerformed(ActionEvent e) {
                 gui.closeAll();
             }
         }));
-	nowmenu.add( new JMenuItem(new AbstractAction("Open") { 
-            public void actionPerformed(ActionEvent e) { 
+	
+	nowmenu.add( new JMenuItem(new AbstractAction("Open") {
+            public void actionPerformed(ActionEvent e) {
                 gui.open();
             }
         }));
 	nowmenu.add( new JMenuItem("Save")).setEnabled(false);
 	nowmenu.add( new JMenuItem(new AbstractAction("Save as...") {
-            public void actionPerformed(ActionEvent e) { 
+            public void actionPerformed(ActionEvent e) {
                 gui.saveAs();
             }
         }));
@@ -43,17 +50,17 @@ public class MoojMenuBar extends JMenuBar {
 
 	nowmenu = new JMenu("View");
 	nowmenu.add( new JMenuItem(new AbstractAction("ASCII") {
-            public void actionPerformed(ActionEvent e) { 
+            public void actionPerformed(ActionEvent e) {
                 gui.setGreyMode(0);
             }
         }));
 	nowmenu.add( new JMenuItem(new AbstractAction("Grey scale") {
-            public void actionPerformed(ActionEvent e) { 
+            public void actionPerformed(ActionEvent e) {
                 gui.setGreyMode(1);
             }
         }));
 	nowmenu.add( new JMenuItem(new AbstractAction("Grey scale II") {
-            public void actionPerformed(ActionEvent e) { 
+            public void actionPerformed(ActionEvent e) {
                 gui.setGreyMode(2);
             }
         }));

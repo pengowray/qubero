@@ -56,7 +56,6 @@ public class SimpleResTree extends JTree {
     
     private SimpleResTree(ActiveFile activeFile, DefaultTreeModel treemodel, DefaultMutableTreeNode topnode) {
 	super(treemodel);
-	
 	this.treemodel = treemodel;
 	this.topnode = topnode;
 	

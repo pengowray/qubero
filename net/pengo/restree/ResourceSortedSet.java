@@ -135,7 +135,7 @@ public class ResourceSortedSet implements SortedSet {
             ResourceSortedSet childResList = (ResourceSortedSet)childObject;
             childResList.addParent(parent, childNode);
         } else if (childObject instanceof OpenFile) {
-	    ResourceList childResList = ((OpenFile)childObject).getResourceList(); //fixme: unused?
+	    ResourceList childResList = ((OpenFile)childObject).getResourceList();
 	    childResList.addParent(parent, childNode);
         }
     }

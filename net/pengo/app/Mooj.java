@@ -12,7 +12,6 @@ public class Mooj {
             //rd = new DemoFileChunk();
             //OpenFile of = new OpenFile(rd);
             //new HexEditorGUI(of);
-	    System.out.println("mooji");
             new GUI();
             
         } else {

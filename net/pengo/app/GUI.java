@@ -200,6 +200,11 @@ public class GUI implements ActiveFileListener {
 	activeFile.closeAll(this); //FIXME: confirm close?!
 	jframe.setTitle("Mooj");
     }
+
+    public void closeActive() {
+	activeFile.close(activeFile.getActive(), this); //FIXME: confirm close?!
+	jframe.setTitle("Mooj");
+    }
     
     public void saveAs() {
 	try {

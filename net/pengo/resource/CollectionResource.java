@@ -18,6 +18,10 @@ public class CollectionResource extends Resource
 		super(openFile);
 		this.resourceList = resourceList;
     }
+        
+        public Collection getCollection() {
+            return resourceList;
+        }
 	
 	public Object[] getChildren() {
 		return resourceList.toArray();

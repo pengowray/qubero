@@ -333,6 +333,17 @@ public class IntResource extends DefinitionResource {
     public int getSigned() {
         return signed;
     }
+    
+    public long toLong() {
+        //fixme!! ARARGHARHH bogus error checking.
+        //fixme: converts to a bloody String and back again
+        try {
+            return Long.parseLong( getValue().toString() );
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+    
 
     /* no longer used */
     public static byte[] intToByte(int i) {

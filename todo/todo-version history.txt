@@ -99,11 +99,18 @@ Log started Aug 21 2002:
  2003-07-24  everything compiling again for MDI. runs with no errors. MDI is almost there.
  2003-07-26  MDI works
              new OpenFileResource
+ 2003-07-27  file|close now works too :)
+ 
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
 priority/immediate features todo:
- 
+ 2003-07-27
+ - "new >" menu from resources (especially for address resources)
+ - seperate out real (defintions) resources from other crap resources?
+ - with a file-linked data source, you can't save (because you wipe its source)
+ - add "close" to OpenFile tree context menu
+ - break up hexpanel, to allow separation of hex + ascii, for selection and editing
  2003-07-24
  X quite obviously, the resources menu is slightly broken
  - ResourceList and SortedSetList are missing features, and need to be given a common superclass

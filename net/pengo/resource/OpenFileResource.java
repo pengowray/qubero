@@ -25,9 +25,9 @@ public class OpenFileResource extends CollectionResource {
     }
 
     public void doubleClickAction() {
+	super.doubleClickAction();
         getOpenFile().makeActive(this);
-        System.out.println(this + "\n  " + this.getClass() + " -- children: " + getChildren().length);
-    }    
+    }
     public String toString() {
             return getOpenFile().toString();
     }
