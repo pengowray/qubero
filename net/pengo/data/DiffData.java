@@ -4,14 +4,16 @@
  * Created on 31 August 2002, 13:30
  */
 package net.pengo.data;
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.resource.*;
-
-
-import java.io.*;
 import java.util.*;
-import java.lang.ref.*;
+
+import java.io.IOException;
+import java.io.InputStream;
+import net.pengo.app.Cursor;
+import net.pengo.app.OpenFile;
+import net.pengo.resource.DefaultDefinitionResource;
+import net.pengo.restree.ResourceList;
+import net.pengo.selection.LongListSelectionModel;
+import net.pengo.selection.SimpleLongListSelectionModel;
 
 /**
  *
@@ -30,9 +32,8 @@ public class DiffData extends EditableData {
     
     /** Creates a new instance of DiffData */
     public DiffData(OpenFile openFile, Data source) {
-        this.openFile = openFile;
         this.source = source;
-        modList = new LinkedList();
+		setOpenFile(openFile);
         calcSourceBreaks();
     }
     
@@ -42,9 +43,20 @@ public class DiffData extends EditableData {
     
     public void setOpenFile(OpenFile openFile) {
         if (this.openFile != null) {
-            clearBreakResList();
+			//fixme
+			openFile.getResourceList().remove(modList);
+			//openFile.getResourceList().remove(breakList);
+            //clearBreakResList();
         }
         this.openFile = openFile;
+		
+		modList = new ResourceList(new LinkedList(), openFile, "Undo Wishlist"); //new LinkedList();
+		
+        if (openFile != null) {
+			((ResourceList)modList).setOpenFile(openFile);
+			openFile.getResourceList().add(modList);
+			
+		}
     }
     
     public InputStream dataStream() {
@@ -75,7 +87,7 @@ public class DiffData extends EditableData {
 
     public void delete(LongListSelectionModel selection) {
         //FIXME: wrong wrong wrong
-        addMod(new DelMod(selection.getMinSelectionIndex(), selection.getMaxSelectionIndex()));
+        addMod(new DelMod(selection.getMinSelectionIndex(), selection.getMaxSelectionIndex()-selection.getMinSelectionIndex()+1 ));
     }
     
     public void insert(Data data) {
@@ -151,10 +163,10 @@ public class DiffData extends EditableData {
         breakList = Collections.synchronizedSortedSet(new TreeSet());
         breakList.add(source);
         
-        for (int a = modList.size()-1; a >= 0; a--) {
-            Mod mod = (Mod)modList.get(a);
-            mod.apply();
-        }
+		for (int a = modList.size()-1; a >= 0; a--) {
+			Mod mod = (Mod)modList.get(a);
+			mod.apply();
+		}
         
         debugOut();
     }
@@ -235,6 +247,8 @@ public class DiffData extends EditableData {
         for (Iterator i = c.iterator(); i.hasNext(); ) {
             Object o = i.next();
             //System.out.println(" - " + a + ": " + o);
+			//openFile.addMod(this, new ContainerResource(o, openFile));
+			
             a++;
         }
     }
@@ -253,7 +267,7 @@ public class DiffData extends EditableData {
             Object o = i.next();
             //DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, (Data)o);
             Data d = (Data)o;
-            DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, new SimpleLongListSelectionModel(d.getStart(), d.getStart()+d.getLength()));
+            DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, new SimpleLongListSelectionModel(d.getStart(), d.getStart()+d.getLength()-1));
             
             openFile.addBreak(this, ddr);
             breakResList.add(ddr);

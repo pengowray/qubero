@@ -74,12 +74,26 @@ Log started Aug 21 2002:
              fixed data's readByteArray(long, int)
              SelectionData now works.
  2003-07-04  hexpanel accepts new selections now (can double click on resources in restree to hilite again)
- 
+ 2003-07-05  fixed old bug: can no longer select past end of hex
+             scalability: click on hex now calculated up to long
+ 2003-07-06  started work on ResourceList + SimpleResTree
+ 2003-07-08  ResourceList + SimpleResTree working. Multiselection in HexPanel.
+ 2003-07-09  Multiselection really working now. And really debugged.
+             OpenFile can handle SelectionListeners.
+             
  
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
 priority/immediate features todo:
+ 2003-07-09
+ - make hexpanel's repaint more accurate
+ - force notify for selections (for when they are first used). this means simple selection needs to able to to notify.
+ 2003-07-05
+ - make a resource model ala selection model
+ - iterator for all selected addresses in any selection model
+ - make hexpanel use selection model for active selection too
+ - show multi selection's segments in tree
  2003-07-02:
  - finish ColumnGroup and the column groups
  - SelectionData needs to be part of Data (instead of New Sel Data)

@@ -1,13 +1,13 @@
 package net.pengo.app;
-import net.pengo.selection.*;
-import net.pengo.resource.*;
-import net.pengo.data.*;
-
-import java.util.*;
-import javax.swing.*;
-import javax.swing.tree.*;
-import javax.swing.event.*;
 import java.io.*;
+import java.util.*;
+import net.pengo.resource.*;
+import net.pengo.selection.*;
+
+import javax.swing.event.EventListenerList;
+import net.pengo.data.Data;
+import net.pengo.data.EditableData;
+import net.pengo.restree.ResourceList;
 
 /**
  * Node used by MoojTree containing display information for a file/definition.
@@ -18,28 +18,69 @@ import java.io.*;
 
 class OpenFile implements LongListSelectionListener { // previously did extend DefaultMutableTreeNode
     
-    protected Data rawdata;
+    
+	/**
+	 * Called whenever the value of the selection changes.
+	 * @param e the event that characterizes the change.
+	 */
+	public void valueChanged(LongListSelectionEvent e)
+	{
+		// TODO
+	}
+	
+	protected Data rawdata;
     
     protected EventListenerList listenerList = new EventListenerList();
 	
-    protected DefaultSelectionResource selectionResource; // was called 'selection'
-    protected boolean isSelectiomResourcePublished = false;
+    protected LiveSelectionResource selectionResource; // was called 'selection'
+    protected boolean isSelectionResourcePublished = false;
     protected LongListSelectionModel selectionModel;
     
     protected String filename;
-    
+	
+	private ResourceList rootResList = new ResourceList(new ArrayList(), this, "Root");
+	
     //protected List definitionList = new LinkedList(); // (do we really need both?)
-    protected List definitionResList = new LinkedList();
-    
+    protected List definitionResList = new ResourceList(Collections.synchronizedList(new LinkedList()), this, "Definitions") ;
+    protected List breakResList = new ResourceList(Collections.synchronizedList(new LinkedList()), this, "Breaks");
+    private List selectionDetails = new ResourceList(Collections.synchronizedList(new LinkedList()), this, "Selection details");
+	
     /**
 	 * def may be null. in future rawdata may be null too (to indicate an empty file).
 	 */
     public OpenFile(Data rawdata)
 	{
 		this.rawdata = rawdata;
+		rootResList.add(definitionResList);
+		rootResList.add(breakResList);
+		rootResList.add(selectionDetails);
+		addLongListSelectionListener(this);
+    }
+
+    // register with this instead of with the actual LongListSelection. Tho both should work I guess.
+    public void addLongListSelectionListener(LongListSelectionListener l)
+	{
+		listenerList.add(LongListSelectionListener.class, l);
     }
 	
+    //
+    public void removeLongListSelectionListener(LongListSelectionListener l)
+	{
+		listenerList.remove(LongListSelectionListener.class, l);
+    }
 	
+	public List getDefinitionList() {
+		return definitionResList;
+	}
+	
+	public List getSelectionDetails() {
+		return selectionDetails;
+	}
+
+	public ResourceList getResourceList() {
+		return rootResList;
+	}
+		
     public void addResourceListener(ResourceListener l)
 	{
 		listenerList.add(ResourceListener.class, l);
@@ -145,66 +186,44 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
     
     public void setSelectionModel(LongListSelectionModel selectionModel)
 	{
+		//System.out.println("Setting selection model..." + selectionModel);
+		
 		if (this.selectionModel != null) // && this.selectionModel != selectionModel
 		{
 			this.selectionModel.removeLongListSelectionListener(this);
-			fireResourceRemoved(this,"Selection",this.selectionResource);
+			getResourceList().remove(this.selectionModel);
+			//fireResourceRemoved(this,"Selection",this.selectionResource);
 		}
 		
 		this.selectionModel = selectionModel;
-		selectionModel.addLongListSelectionListener(this);
-		isSelectiomResourcePublished = false;
+		selectionModel.setEventListenerList(listenerList);
 		
-		updateSelectionResource();
-    }
+		if (selectionModel == null ) { // || selectionModel.isSelectionEmpty()
+			return;
+		}
+		
+		selectionResource = new LiveSelectionResource(this); //fixme: probably unnecessary
+		//fireResourceAdded(this,"Selection",selectionResource);
+		
+		getResourceList().add(this.selectionModel);
+
+		//fixme: better way to fire?
+		selectionModel.setValueIsAdjusting(false);
+		selectionModel.setValueIsAdjusting(true);
+		
+	    }
     
     public LongListSelectionModel getSelectionModel()
 	{
-		if (!isSelectionModel())
+		if (selectionModel == null)
 		{
-			selectionModel = new SegmentalLongListSelectionModel();
+			setSelectionModel(new SegmentalLongListSelectionModel());
 		}
 		return selectionModel;
     }
 	
-	public boolean isSelectionModel()
-	{
-		return (selectionModel != null);
-	}
-	
-    /**
-	 * Called whenever the value of the selection changes.
-	 * @param e the event that characterizes the change.
-	 *
-	 */
-    public void valueChanged(LongListSelectionEvent e)
-	{
-		// OpenFile now responsible for creating the selection resource ?
-		if (!e.getValueIsAdjusting())
-		{
-			updateSelectionResource();
-			
-		}
-    }
     
     
-    private void updateSelectionResource()
-	{
-		if (selectionModel.isSelectionEmpty() && isSelectiomResourcePublished)
-		{
-			isSelectiomResourcePublished = false;
-			fireResourceRemoved(this,"Selection",selectionResource);
-		}
-		else if (!selectionModel.isSelectionEmpty() && !isSelectiomResourcePublished)
-		{
-			if (selectionResource == null)
-			{
-				selectionResource = new DefaultSelectionResource(this);
-			}
-			isSelectiomResourcePublished = true;
-			fireResourceAdded(this,"Selection",selectionResource);
-		}
-    }
 	
     /*
 	 protected void fireSelectionMade(Object source, SelectionResource resource) {
@@ -278,10 +297,14 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
 	 }
 	 */
 	
+
+	
+	
+	
     public void addBreak(Object source, DefinitionResource defRes)
 	{
-		definitionResList.add(defRes);
-		fireResourceAdded(source,"Break",defRes);
+		breakResList.add(defRes);
+		//fireResourceAdded(source,"Break",defRes);
     }
 	
     public void deleteBreak(Object source, DefinitionResource defRes)
@@ -289,7 +312,8 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
 		boolean success = definitionResList.remove(defRes);
 		if (success)
 		{
-			fireResourceRemoved(source,"Break",defRes);
+			breakResList.add(defRes);
+			//fireResourceRemoved(source,"Break",defRes);
 		}
 		else
 		{
@@ -301,7 +325,7 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
     public void addDefinition(Object source, DefinitionResource defRes)
 	{
 		definitionResList.add(defRes);
-		fireResourceAdded(source,"Definition",defRes);
+		//fireResourceAdded(source,"Definition",defRes);
     }
     
     public void deleteDefinition(Object source, DefinitionResource defRes)

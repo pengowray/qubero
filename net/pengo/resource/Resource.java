@@ -2,10 +2,11 @@ package net.pengo.resource;
 import net.pengo.app.*;
 
 import javax.swing.*;
+import java.awt.event.ActionEvent;
 /*
  * MoojNode.java
  *
- * 
+ *
  *
  * Created on 1 August 2002, 13:25
  */
@@ -31,7 +32,18 @@ public abstract class Resource {
     }
     
     public JMenu getJMenu() {
-        return null;
+		JMenu menu = new JMenu("Default");
+		Action defaultAction = new AbstractAction("Double click action") {
+			public void actionPerformed(ActionEvent e) {
+				Resource.this.doubleClickAction();
+			}
+		};
+		menu.add(defaultAction);
+
+		//Action action2 = new InfoAction();
+			
+		return menu;
+			
         //return new JMenu(this.getClass().getName());
     }
     
@@ -56,7 +68,7 @@ public abstract class Resource {
     
     // default action when double-clicked (e.g in a list)
     public void doubleClickAction() {
-        System.out.println(this.getClass() + " -- " + openFile + " -- children: " + getChildren().length);
+        System.out.println(this + "\n  " + this.getClass() + " -- " + openFile + " -- children: " + getChildren().length);
     }
     /*
     // call after updating children

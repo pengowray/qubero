@@ -60,10 +60,20 @@ public interface LongListSelectionModel extends Cloneable
      */
     int MULTIPLE_INTERVAL_SELECTION = 2;
 
+	// so another object can take control of listeners.
+	public void setEventListenerList(EventListenerList listenerList);
+	public EventListenerList getEventListenerList();
+	
+	// number of segments. only more than 1 for MULTIPLE_INTERVAL_SELECTION
+	public long getSegmentCount();
+
+	// return all segments
+	public Segment[] getSegments();
+	
     // return all selected indexes
     public long[] getSelectionIndexes();
     
-    /**
+	/**
      * Change the selection to be between index0 and index1 inclusive.
      * If this represents a change to the current selection, then
      * notify each ListSelectionListener. Note that index0 doesn't have

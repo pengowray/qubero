@@ -1,25 +1,17 @@
 package net.pengo.app;
 import java.awt.*;
+import javax.swing.*;
+import net.pengo.data.*;
 
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
-import javax.swing.JFileChooser;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import net.pengo.data.Data;
-import net.pengo.data.DemoData;
-import net.pengo.data.DiffData;
-import net.pengo.data.EditableData;
-import net.pengo.data.LargeFileData;
-import net.pengo.hexdraw.lineRepeater.LineRepeater;
 import net.pengo.hexdraw.original.HexPanel;
 import net.pengo.hexdraw.tabled.HexTable;
 import net.pengo.restree.ResTree;
+import net.pengo.restree.SimpleResTree;
 import net.pengo.splash.FontMetricsCache;
 
 /** HexEditorGUI creates and coordinates all the graphical components. */
@@ -31,7 +23,8 @@ class GUI
     protected HexPanel hexpanel;
     protected HexTable hextable;
     protected JLabel statusbar;
-    protected ResTree moojtree;
+    //protected ResTree moojtree;
+	protected SimpleResTree simplemoojtree;
     protected MoojMenuBar mmb;
     protected Image icon;
 	
@@ -73,7 +66,8 @@ class GUI
 		setIcon();
 		
 		// CREATE THE COMPONENTS
-		moojtree = ResTree.create(openFile);
+		//moojtree = ResTree.create(openFile);
+		simplemoojtree = SimpleResTree.create(openFile);
 		
 		hexpanel = new HexPanel(openFile);
 		//HexTable hexpanel = new HexTable(openFile);
@@ -100,9 +94,12 @@ class GUI
 		//					  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
 		sp_hexpanel.getViewport().setBackground(Color.white); //FIXME: doesn't work!
 		
+		JScrollPane sp_moojtree = new JScrollPane(simplemoojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+												  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+		/*
 		JScrollPane sp_moojtree = new JScrollPane(moojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
 												  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
-		
+		 */
 		JSplitPane splitpane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sp_moojtree, sp_hexpanel);
 		//splitpane.setResizeWeight(1);
 		//splitpane.setResizeWeight(.5);
@@ -198,7 +195,7 @@ class GUI
 			closeAll();
 			this.openFile = of;
 			hexpanel.setOpenFile(of);
-			moojtree.addOpenFile(of);
+			simplemoojtree.addOpenFile(of);
 			jframe.setTitle(openFile.toString() + titleSuffix);
 		}
 		

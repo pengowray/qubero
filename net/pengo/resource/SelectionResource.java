@@ -19,50 +19,51 @@ public class SelectionResource extends Resource implements LongListSelectionList
     
     public SelectionResource(OpenFile openFile) {
 	super(openFile);
+	openFile.addLongListSelectionListener(this);
     }
     
     public JMenu getJMenu() {
-        JMenu m = new JMenu(this.getClass().getName());
-        m.add(this.getClass().getName());
-        return m;
+	JMenu m = new JMenu(this.getClass().getName());
+	m.add(this.getClass().getName());
+	return m;
     }
     
     
     /*
-    public Data getData() {
-        return sel;
-    }
-    
-    public TransparentData getTransparentData() {
-        if (sel instanceof TransparentData) {
-            return (TransparentData)sel;
-        }
-        
-        return sel.getTransparentData();
-    }
-    */
+     public Data getData() {
+     return sel;
+     }
+     
+     public TransparentData getTransparentData() {
+     if (sel instanceof TransparentData) {
+     return (TransparentData)sel;
+     }
+     
+     return sel.getTransparentData();
+     }
+     */
     
     //FIXME:; reimplement?
     /*
-    public boolean equals(SelectionResource o) {
-        if (o == this)
-            return true;
-        
-        openFile.getSelectionModel().eq
-        return (sel.getStart() == o.sel.getStart() && sel.getLength() == o.sel.getLength());
-    }
+     public boolean equals(SelectionResource o) {
+     if (o == this)
+     return true;
      
-    public boolean equals(Object o) {
-        if (o == this)
-            return true;
-        
-        if (o instanceof SelectionResource) {
-            return equals((SelectionResource)o);
-        }
-        
-        return false;
-    }
-    */
+     openFile.getSelectionModel().eq
+     return (sel.getStart() == o.sel.getStart() && sel.getLength() == o.sel.getLength());
+     }
+     
+     public boolean equals(Object o) {
+     if (o == this)
+     return true;
+     
+     if (o instanceof SelectionResource) {
+     return equals((SelectionResource)o);
+     }
+     
+     return false;
+     }
+     */
     
     /**
      * Called whenever the value of the selection changes.

@@ -195,8 +195,8 @@ public class IntResource extends DefinitionResource {
     
     public void setValue(String value) throws NumberFormatException {
         byte[] b = stringToByteArray(value);
-        openFile.getEditableData().insertReplace(sel,new ArrayData(b));
-        
+        openFile.getEditableData().insertReplace(sel, new ArrayData(b));
+        System.out.println("replacing: " + sel.getMinSelectionIndex() + "-" + sel.getMaxSelectionIndex());
     }
     
     public byte[] stringToByteArray(String value) {

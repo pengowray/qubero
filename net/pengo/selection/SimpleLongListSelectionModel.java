@@ -12,6 +12,8 @@
 package net.pengo.selection;
 
 
+import javax.swing.event.EventListenerList;
+
 public class SimpleLongListSelectionModel implements LongListSelectionModel {
     private long firstIndex;
     private long lastIndex;
@@ -21,7 +23,24 @@ public class SimpleLongListSelectionModel implements LongListSelectionModel {
         this.firstIndex = firstIndex;
         this.lastIndex = lastIndex;
     }
+
+	public void setEventListenerList(EventListenerList listenerList) {
+		return; // no changes get made.
+	}
+	
+	public EventListenerList getEventListenerList() {
+		return new EventListenerList();
+	}
+	
+	public long getSegmentCount() {
+		return 1;
+	}
+	
+	public Segment[] getSegments() {
+		return new Segment[] { new Segment(firstIndex, lastIndex) };
+	}
     
+	
     public void setValueIsAdjusting(boolean valueIsAdjusting) {
         // not allowed
         return;
