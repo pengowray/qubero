@@ -2,7 +2,7 @@ architectural changes todo:
 
 1. Dependency graph
 2. Resource split: GUI Control Factory, Tree Item Classes
-3. Functions: Assertions, Test inputs. Add/subtract. 
+3. Functions: Assertions, Test inputs. Add/subtract.
 4. Arrays/Tables
 5. Syntax/regex parser (classes)
 6. Casting engine - parameters, conditions/mask
@@ -19,5 +19,6 @@ Locking
 Transactions
 Frequency graph
 Installer
+
  - text mode (currently only swing)
  - not yet optimized for small files.

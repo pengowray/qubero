@@ -840,7 +840,21 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
     }
     
     
-    
+    public String toString() {
+        long segs = getSegmentCount();
+        if (segs==0){
+            return "empty";
+        } else if (segs == 1){
+            long size = getSelectionLength();
+            return size + " bytes"; 
+            //return getMinSelectionIndex() +"-"+ getMaxSelectionIndex();
+        } else {
+            return segs + " segs "; 
+            //+ size +" length";   
+        }
+        //String s =  ((getValueIsAdjusting()) ? "~" : "=") + value.toString();
+        //return getClass().getName() + " " + Integer.toString(hashCode()) + " " + s;
+    }
     
     
     

@@ -8,13 +8,11 @@
 
 package net.pengo.resource;
 
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-
-
-import java.util.*;
+import net.pengo.app.OpenFile;
+import net.pengo.data.SelectionData;
 import net.pengo.dependency.QNode;
+import net.pengo.selection.LongListSelectionModel;
+import net.pengo.selection.SimpleLongListSelectionModel;
 
 public class AddressResource extends SelectionResource
 {
@@ -84,9 +82,15 @@ public class AddressResource extends SelectionResource
     
 
     
-    public String toString() {
+    public String descValue() {
         //return "Pointer@" + Long.toString(address.getSelectionResource().getSelectionData().getStart(), 16) +" -> address:" + address.getValue().toString(16) + " = " + toSelection();
-	return "Pointer -> address:" + address.getValue().toString(16) + " = " + getSelection();
+        //return address.getValue().toString(16) + " = " + getSelection();
+        return getSelection().toString();
     }
+
+    /* (non-Javadoc)
+     * @see net.pengo.resource.QNodeResource#editProperties()
+     */
+
 }
 

@@ -1,16 +1,20 @@
 package net.pengo.app;
 import java.awt.*;
-import javax.swing.*;
-import net.pengo.data.*;
-
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+
+import javax.swing.*;
+
+import net.pengo.data.Data;
+import net.pengo.data.DemoData;
+import net.pengo.data.DiffData;
+import net.pengo.data.EditableData;
+import net.pengo.data.LargeFileData;
 import net.pengo.hexdraw.original.HexPanel;
 import net.pengo.hexdraw.tabled.HexTable;
-import net.pengo.restree.ResTree;
 import net.pengo.restree.SimpleResTree;
 import net.pengo.splash.FontMetricsCache;
 

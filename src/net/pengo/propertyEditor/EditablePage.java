@@ -6,15 +6,14 @@
 
 package net.pengo.propertyEditor;
 
-import java.util.*;
-import java.awt.*;
-import javax.swing.*;
-import javax.swing.text.*;
-import javax.swing.event.*;
-import java.awt.event.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 /**
  *
- * @author  13
+ * @author  Peter Halasz
  */
 public abstract class EditablePage extends PropertyPage implements DocumentListener  {
     protected AbstractResourcePropertiesForm form;
@@ -25,7 +24,7 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
     public EditablePage(AbstractResourcePropertiesForm form) {
         this.form = form;
     }
-
+    
     public void save() {
         if (modded) {
             saveOp();
@@ -33,7 +32,7 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
     }
     
     abstract protected void saveOp();
-            
+    
     public void build() {
         building = true;
         modded = false;
@@ -55,17 +54,17 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
     public void changedUpdate(DocumentEvent e) {
         mod();
     }
-
+    
     // DocumentListener
     public void insertUpdate(DocumentEvent e) {
         mod();
     }
-
+    
     // DocumentListener
     public void removeUpdate(DocumentEvent e) {
         mod();
     }
-
+    
     
     protected ActionListener getSaveActionListener() {
         return new ActionListener() {
@@ -74,7 +73,7 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
             }
         };
     }
-
+    
     protected ActionListener getModActionListener() {
         return new ActionListener() {
             public void actionPerformed(ActionEvent e) {
@@ -83,6 +82,6 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
         };
     }
     
-
+    
     
 }

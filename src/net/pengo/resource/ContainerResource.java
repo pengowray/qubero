@@ -9,14 +9,11 @@
 
 package net.pengo.resource;
 
-import net.pengo.app.OpenFile;
-
 public class ContainerResource extends Resource
 {
 	Object o;
 	
-	public ContainerResource(Object o, OpenFile openFile) {
-		super(openFile);
+	public ContainerResource(Object o) {
 		this.o = o;
 	}
 	
@@ -24,11 +21,26 @@ public class ContainerResource extends Resource
 		super.doubleClickAction();
         System.out.println("  " + o.getClass() + " -- " + o);
 	}
-	
-	public String toString() {
-		return "RES:" + o.toString();
+
+	public String valueDesc() {
+		return o.toString();
 	}
-		
-		
+
+//	public String getName() {
+//	    if (super.getName() == null) {
+//	        return o.toString();
+//	    }
+//	    
+//	    return super.getName();
+//	}
+	
+	public String getTypeName() {
+	    return shortTypeName(o.getClass());
+	}
+	
+	
+	public boolean isPointer() {
+	    return true;
+	}
 }
 

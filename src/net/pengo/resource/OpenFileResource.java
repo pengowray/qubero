@@ -6,30 +6,29 @@
 
 package net.pengo.resource;
 
-import net.pengo.app.*;
-import javax.swing.*;
-import java.awt.event.ActionEvent;
 import java.util.Collection;
-import java.util.List;
+
+import net.pengo.app.OpenFile;
 
 /**
  *
  * @author  Smiley
  */
 public class OpenFileResource extends CollectionResource {
-   
+    private OpenFile openFile;
+    
     /** Creates a new instance of OpenFileResource */
     public OpenFileResource(Collection resourceList, OpenFile openFile) {
-        super(resourceList, openFile);
-        
-    }
-
-    public void doubleClickAction() {
-	super.doubleClickAction();
-        getOpenFile().makeActive(this);
-    }
-    public String toString() {
-            return getOpenFile().toString();
+        super(resourceList);
+        this.openFile = openFile;
     }
     
+    public void doubleClickAction() {        
+        super.doubleClickAction();
+        openFile.makeActive(this);
+    }
+    
+    public String valueDesc() {
+        return openFile +": "+ resourceList.size() + " item(s)";
+    }    
 }

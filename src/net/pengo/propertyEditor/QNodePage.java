@@ -5,8 +5,9 @@
  */
 
 package net.pengo.propertyEditor;
-import net.pengo.dependency.QNode;
+
 import javax.swing.JTextPane;
+
 import net.pengo.resource.QNodeResource;
 
 

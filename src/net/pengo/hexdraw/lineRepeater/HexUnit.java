@@ -42,7 +42,7 @@ class HexUnit extends Component {
 
     public void paint(Graphics g, UnitInfo unit) {
         
-        if (unit.getState() == unit.EMPTY)
+        if (unit.getState() == UnitInfo.EMPTY)
             return;
         
         String str = unit.hexString();

@@ -6,19 +6,7 @@
 
 package net.pengo.resource;
 
-import java.io.*;
-import javax.swing.*;
-import javax.swing.event.*;
-import java.awt.event.ActionEvent;
-import java.util.*;
-import java.math.*;
-import java.io.IOException;
-
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-import net.pengo.propertyEditor.*;
-import net.pengo.restree.ResourceList;
+import net.pengo.propertyEditor.BooleanPrimativeResourcePropertiesForm;
 
 /**
  *
@@ -26,8 +14,7 @@ import net.pengo.restree.ResourceList;
  */
 abstract public class BooleanResource extends DefinitionResource {
 
-    public BooleanResource(OpenFile of) {
-	super(of);
+    public BooleanResource() {
     }
 
     abstract public boolean getValue();
@@ -35,53 +22,13 @@ abstract public class BooleanResource extends DefinitionResource {
 
     abstract public boolean isPrimative();
     
-    public JMenu getJMenu() {
-        //final OpenFile openFile = this.openFile;
-        
-  	JMenu menu = new JMenu("Menu");
-        
-        Action deleteAction = new AbstractAction("Delete") {
-            public void actionPerformed(ActionEvent e) {
-                //getOpenFile().deleteDefinition(e.getSource(), This);
-		getOpenFile().getDefinitionList().remove(BooleanResource.this);
-            }
-        };
-	menu.add(deleteAction);
-        
-	/*
-        Action untypeAction = new AbstractAction("Convert to untyped definition") {
-            public void actionPerformed(ActionEvent e) {
-                //fixme: selRes may be null.
-                DefaultDefinitionResource res = new DefaultDefinitionResource(openFile, selRes.getSelection());
-                //openFile.definitionChange(e.getSource(), This, res);
-		List l = getOpenFile().getDefinitionList();
-		int index = l.indexOf(BooleanResource.this);
-		l.remove(index);
-		l.add(index, res);
-		
-            }
-        };
-	menu.add(untypeAction);
-	 */
-	
-        Action propAction = new AbstractAction("Edit properties") {
-            public void actionPerformed(ActionEvent e) {
-                //fixme:
-                new BooleanPrimativeResourcePropertiesForm(BooleanResource.this).show();
-            }
-        };
-	menu.add(propAction);
-	 
-        //JPopupMenu popup = menu.getPopupMenu();
-	return menu;
+    public void editProperties() {
+        new BooleanPrimativeResourcePropertiesForm(BooleanResource.this).show();
     }
     
-    public ResourceList getSubResources() {
-	// TODO
-	return null;
-    }
-    
-    abstract public void editProperties();
+    public String valueDesc() {
+        return getValue() +"";
+    }    
 
     
 }

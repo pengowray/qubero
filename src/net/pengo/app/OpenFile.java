@@ -1,6 +1,4 @@
 package net.pengo.app;
-import net.pengo.resource.*;
-
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -9,18 +7,30 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+
 import javax.swing.event.EventListenerList;
+
 import net.pengo.data.Data;
 import net.pengo.data.DataListener;
 import net.pengo.data.EditableData;
+import net.pengo.resource.LiveSelectionResource;
+import net.pengo.resource.OpenFileResourceFactory;
+import net.pengo.resource.Resource;
+import net.pengo.resource.ResourceEvent;
+import net.pengo.resource.ResourceFactory;
+import net.pengo.resource.ResourceListener;
 import net.pengo.restree.ResourceList;
-import net.pengo.selection.*;
+import net.pengo.selection.LongListSelectionEvent;
+import net.pengo.selection.LongListSelectionListener;
+import net.pengo.selection.LongListSelectionModel;
+import net.pengo.selection.MetaSelectionModel;
+import net.pengo.selection.SegmentalLongListSelectionModel;
 
 /**
  * Node used by MoojTree containing display information for a file/definition.
- * also to be uesd by HexPanel?
+ * also to be used by HexPanel?
  *
- * see also CurrentOpenFile
+ * see also ActiveFile
  */
 
 public class OpenFile implements LongListSelectionListener { // previously did extend DefaultMutableTreeNode
@@ -29,7 +39,7 @@ public class OpenFile implements LongListSelectionListener { // previously did e
     protected MetaSelectionModel selectionModel;
     
     protected EventListenerList listenerList = new EventListenerList();
-
+    
     private final ResourceFactory resFact = new OpenFileResourceFactory(this);
     private ResourceList rootResList;
     private List definitionResList = new ResourceList(Collections.synchronizedList(new LinkedList()), resFact , "Definitions") ;
@@ -37,7 +47,7 @@ public class OpenFile implements LongListSelectionListener { // previously did e
     private LiveSelectionResource liveSelection;
     
     private ActiveFile af;
-    /**
+    /** 
      * def may be null. in future rawdata may be null too (to indicate an empty file).
      */
     
@@ -46,13 +56,13 @@ public class OpenFile implements LongListSelectionListener { // previously did e
     }
     
     public OpenFile(Data rawdata, ActiveFile af) {
-	this.rawdata = rawdata;
+        this.rawdata = rawdata;
         this.af = af;
         rootResList = new ResourceList(new ArrayList(), resFact , this+"");
-	rootResList.add(definitionResList);
-	rootResList.add(selectionDetails);
-	addLongListSelectionListener(this);
-	liveSelection = new LiveSelectionResource(this);
+        rootResList.add(definitionResList);
+        rootResList.add(selectionDetails);
+        addLongListSelectionListener(this);
+        liveSelection = new LiveSelectionResource(this);
         getResourceList().add(liveSelection); //fixme: should this be here?
     }
     
@@ -61,208 +71,208 @@ public class OpenFile implements LongListSelectionListener { // previously did e
     }
     
     public void setActiveFile(ActiveFile af) {
-        this.af = af;;
+        this.af = af;
     }
     
     public void makeActive(Object source) {
         af.setActive(this, source);
     }
-
+    
     public ResourceFactory getResourceFactory() {
-	return resFact;
+        return resFact;
     }
     
     public void addDataListener(DataListener l) {
-	if (rawdata instanceof EditableData) {
-	    ((EditableData)rawdata).addDataListener(l);
-	}
-	//fixme: else ignore, wont be any changes?
+        if (rawdata instanceof EditableData) {
+            ((EditableData)rawdata).addDataListener(l);
+        }
+        //fixme: else ignore, wont be any changes?
     }
     
     public void removeDataListener(DataListener l) {
-	if (rawdata instanceof EditableData) {
-	    ((EditableData)rawdata).removeDataListener(l);
-	}
-	//fixme: else ignore, wont be any changes?
+        if (rawdata instanceof EditableData) {
+            ((EditableData)rawdata).removeDataListener(l);
+        }
+        //FIXME: else ignore, wont be any changes?
     }
     
     //* use this method rather than doing it on the selection directly */
     public void addLongListSelectionListener(LongListSelectionListener l) {
-	getSelectionModel().addLongListSelectionListener(l);
+        getSelectionModel().addLongListSelectionListener(l);
     }
     
     public void removeLongListSelectionListener(LongListSelectionListener l) {
-	getSelectionModel().removeLongListSelectionListener(l);
+        getSelectionModel().removeLongListSelectionListener(l);
     }
     
     public List getDefinitionList() {
-	return definitionResList;
+        return definitionResList;
     }
     
     public List getSelectionDetails() {
-	return selectionDetails;
+        return selectionDetails;
     }
     
     public ResourceList getResourceList() {
-	return rootResList;
+        return rootResList;
     }
     
     public void addResourceListener(ResourceListener l) {
-	listenerList.add(ResourceListener.class, l);
+        listenerList.add(ResourceListener.class, l);
     }
     
     public void removeResourceListener(ResourceListener l) {
-	listenerList.remove(ResourceListener.class, l);
+        listenerList.remove(ResourceListener.class, l);
     }
     
     public void addOpenFileListener(OpenFileListener l) {
-	listenerList.add(OpenFileListener.class, l);
+        listenerList.add(OpenFileListener.class, l);
     }
     
     public void removeOpenFileListener(OpenFileListener l) {
-	listenerList.remove(OpenFileListener.class, l);
+        listenerList.remove(OpenFileListener.class, l);
     }
     
     protected void fireResourceAdded(Object source, String category, Resource resource) {
-	Object[] listeners = listenerList.getListenerList();
-	ResourceEvent event = null;
-	for (int i = listeners.length-2; i>=0; i-=2) {
-	    if (listeners[i]==ResourceListener.class) {
-		// Lazily create the event:
-		if (event == null) {
-		    if (source == null) // is this normal behaviour?
-			source = this;
-		    event = new ResourceEvent(this,category,resource);
-		}
-		((ResourceListener)listeners[i+1]).resourceAdded(event);
-	    }
-	}
+        Object[] listeners = listenerList.getListenerList();
+        ResourceEvent event = null;
+        for (int i = listeners.length-2; i>=0; i-=2) {
+            if (listeners[i]==ResourceListener.class) {
+                // Lazily create the event:
+                if (event == null) {
+                    if (source == null) // is this normal behaviour?
+                        source = this;
+                    event = new ResourceEvent(source,this,category,resource);
+                }
+                ((ResourceListener)listeners[i+1]).resourceAdded(event);
+            }
+        }
     }
     
     protected void fireResourceRemoved(Object source, String category, Resource resource) {
-	if (resource == null)
-	    return;
-	
-	Object[] listeners = listenerList.getListenerList();
-	ResourceEvent event = null;
-	for (int i = listeners.length-2; i>=0; i-=2) {
-	    if (listeners[i]==ResourceListener.class) {
-		// Lazily create the event:
-		if (event == null) {
-		    if (source == null)
-			source = this;
-		    event = new ResourceEvent(source,category,resource);
-		}
-		((ResourceListener)listeners[i+1]).resourceRemoved(event);
-	    }
-	}
+        if (resource == null)
+            return;
+        
+        Object[] listeners = listenerList.getListenerList();
+        ResourceEvent event = null;
+        for (int i = listeners.length-2; i>=0; i-=2) {
+            if (listeners[i]==ResourceListener.class) {
+                // Lazily create the event:
+                if (event == null) {
+                    if (source == null)
+                        source = this;
+                    event = new ResourceEvent(source,this,category,resource);
+                }
+                ((ResourceListener)listeners[i+1]).resourceRemoved(event);
+            }
+        }
     }
     
     protected void fireFileSaved(Object source) {
-	Object[] listeners = listenerList.getListenerList();
-	FileEvent event = null;
-	for (int i = listeners.length-2; i>=0; i-=2) {
-	    if (listeners[i]==OpenFileListener.class) {
-		// Lazily create the event:
-		if (event == null) {
-		    if (source == null)
-			source = this;
-		    event = new FileEvent(source,this);
-		}
-		((OpenFileListener)listeners[i+1]).fileSaved(event);
-	    }
-	}
+        Object[] listeners = listenerList.getListenerList();
+        FileEvent event = null;
+        for (int i = listeners.length-2; i>=0; i-=2) {
+            if (listeners[i]==OpenFileListener.class) {
+                // Lazily create the event:
+                if (event == null) {
+                    if (source == null)
+                        source = this;
+                    event = new FileEvent(source,this);
+                }
+                ((OpenFileListener)listeners[i+1]).fileSaved(event);
+            }
+        }
     }
     
     protected void fireFileClosed(Object source) {
-	Object[] listeners = listenerList.getListenerList();
-	FileEvent event = null;
-	for (int i = listeners.length-2; i>=0; i-=2) {
-	    if (listeners[i]==OpenFileListener.class) {
-		// Lazily create the event:
-		if (event == null) {
-		    if (source == null)
-			source = this;
-		    event = new FileEvent(source,this);
-		}
-		((OpenFileListener)listeners[i+1]).fileClosed(event);
-	    }
-	}
+        Object[] listeners = listenerList.getListenerList();
+        FileEvent event = null;
+        for (int i = listeners.length-2; i>=0; i-=2) {
+            if (listeners[i]==OpenFileListener.class) {
+                // Lazily create the event:
+                if (event == null) {
+                    if (source == null)
+                        source = this;
+                    event = new FileEvent(source,this);
+                }
+                ((OpenFileListener)listeners[i+1]).fileClosed(event);
+            }
+        }
     }
     
     public void setSelectionModel(LongListSelectionModel sm) {
-	if (selectionModel == null) {
-	    selectionModel = new MetaSelectionModel(sm);
-	    selectionModel.addLongListSelectionListener(this);
-	} else {
-	    selectionModel.setModel(sm);
-	}
-	
-	//liveSelection.updated();
+        if (selectionModel == null) {
+            selectionModel = new MetaSelectionModel(sm);
+            selectionModel.addLongListSelectionListener(this);
+        } else {
+            selectionModel.setModel(sm);
+        }
+        
+        //liveSelection.updated();
     }
     
     public LongListSelectionModel getSelectionModel() {
-	if (selectionModel == null) {
-	    setSelectionModel(new SegmentalLongListSelectionModel());
-	}
-	return selectionModel;
+        if (selectionModel == null) {
+            setSelectionModel(new SegmentalLongListSelectionModel());
+        }
+        return selectionModel;
     }
     
     public boolean close(Object source) {
-	//fixme fixme fixme
-	fireFileClosed(source);
-	// should we do anything else??
-	//FIXME: confirm changes?
-	//FIXME: throw exceptions??
-	return true;
+        //fixme fixme fixme
+        fireFileClosed(source);
+        // should we do anything else??
+        //FIXME: confirm changes?
+        //FIXME: throw exceptions??
+        return true;
     }
     
     public void saveAs(Object source, File filename) throws IOException {
-	//FIXME: use a pipe?
-	InputStream in = rawdata.dataStream();
-	FileOutputStream out = new FileOutputStream(filename, false);
-	
-	int c;
-	while ((c = in.read()) != -1) {
-	    out.write(c);
-	}
-	
-	out.close();
-	
-	fireFileSaved(source);
+        //FIXME: use a pipe?
+        InputStream in = rawdata.dataStream();
+        FileOutputStream out = new FileOutputStream(filename, false);
+        
+        int c;
+        while ((c = in.read()) != -1) {
+            out.write(c);
+        }
+        
+        out.close();
+        
+        fireFileSaved(source);
     }
     
     public Data getData() {
-	return rawdata;
+        return rawdata;
     }
     
     public void setData(Data data) {
-	//FIXME: should trigger a few things
-	this.rawdata = rawdata;
+        //FIXME: should trigger a few things
+        this.rawdata = data;
     }
     
     public EditableData getEditableData() {
-	//FIXME: this is ugly as shit
-	if (rawdata instanceof EditableData) {
-	    return (EditableData)rawdata;
-	}
-	else {
-	    
-	    //FIXME: throw a wobbly.
-	    return null;
-	}
+        //FIXME: this is ugly as shit
+        if (rawdata instanceof EditableData) {
+            return (EditableData)rawdata;
+        }
+        else {
+            
+            //FIXME: throw a wobbly.
+            return null;
+        }
     }
     
     public String toString() {
-	return rawdata.toString();
+        return rawdata.toString();
     }
-
+    
     /**
      * Called whenever the value of the selection changes.
      * @param e the event that characterizes the change.
      */
     public void valueChanged(LongListSelectionEvent e) {
-	// TODO
+        // TODO
     }
     
 }

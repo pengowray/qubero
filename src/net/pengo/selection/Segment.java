@@ -17,6 +17,6 @@ public class Segment extends Index
     }
     
 	public String toString() {
-		return "Segment " + firstIndex + "-" + lastIndex;
+		return firstIndex + "-" + lastIndex;
 	}
 }

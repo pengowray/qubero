@@ -10,8 +10,6 @@ D display: tree of parts
  - names for chunks, types
  - array/table numbering systems
  - search / jump
- - text only display
- - overview/summary view: show whole file as one screen w/ areas of text/binary/etc
  - subsection editing (e.g. only display one definition or range)
  - backup files as .diff + save changes as diff (or patch and .reg files or cvs or rcs)
 
@@ -26,10 +24,12 @@ for v0.3
  - less java dependant?
  - hex edit clipboard
  - percentages (pie graph) of data types used in a file (total and bytes)
-
+ - overview/summary view: show whole file as one screen w/ areas of text/binary/etc
+ 
 for 0.4
  - BRASS (bedrock altered state server).
-
+ - text only display
+ 
 initial chunk types to support:
  - internal types: template references
  - internal types: variables (defined within/from the template)
@@ -71,6 +71,7 @@ initial chunk types to support:
  - floating point
    http://developers.slashdot.org/article.pl?sid=03/06/26/0044223&mode=thread&tid=126&tid=156
    http://docs.sun.com/source/806-3568/ncg_goldberg.html
+   http://www.math.byu.edu/~schow/work/IEEEFloatingPoint.htm
   - arbitrary precision floating point / fixed point floating point:
    <air> u can create float types with (a:range 0.0 1.0 delta 0.1)      (like ada)
    <air> all floats have a precision
@@ -310,6 +311,8 @@ future formats:
  - Haystack (personal information manager)
  - "disk sherif" type applications that undo changes to hard drives
  - hibernate: http://www.hibernate.org
+ - mail boxes.. import/export/convert various email boxen.. Pine, Evolution, Outlook, Eudora, Sylpheed, Thunderbird, etc
+ - juice (byte code from UoC): http://www.modulaware.com/mdlt69.htm
 
 Content Management Systems: http://lwn.net/Articles/34007
   (see also: Open Source Content Management (OSCOM) Conference http://www.oscom.org/ )
@@ -420,6 +423,7 @@ silly/fun stuff:
  - Treemaps for space-constrained visualization of hierarchies
    http://www.cs.umd.edu/hcil/treemap-history/index.shtml
  - XML tag underlining ala Conglomerate: www.conglomerate.org
+ - dos "mode code"
 
 academic: (ideas from uni)
  - cladograms (and phylogenetic tree)

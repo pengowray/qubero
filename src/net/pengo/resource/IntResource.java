@@ -6,25 +6,22 @@
 
 package net.pengo.resource;
 
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-import net.pengo.propertyEditor.*;
-import net.pengo.restree.ResourceList;
-
-import java.util.*;
-import javax.swing.*;
-import javax.swing.event.*;
 import java.awt.event.ActionEvent;
-import java.math.*;
 import java.io.IOException;
+import java.math.BigInteger;
+
+import javax.swing.AbstractAction;
+import javax.swing.Action;
+import javax.swing.JMenu;
+import javax.swing.JSeparator;
+
+import net.pengo.restree.ResourceList;
 
 /**
  *
  * @author  administrator
  */
 abstract public class IntResource extends DefinitionResource {
-    // final protected TransparentData sel; // from Super
     /** Creates a new instance of IntResource */
     
     public final static int UNSIGNED  = 0;
@@ -32,45 +29,20 @@ abstract public class IntResource extends DefinitionResource {
     public final static int TWOS_COMP = 2;
     public final static int SIGN_MAG = 3;
     public final static int UNUSED_SIGN_BIT = 4; //fixme: NYI: Positive signed. e.g. 0-127 only
-
+    
     //FIXME: little endian, big endian (2 byte only?), network byte order, local byte order
     
-    //fixme: all these must be put in the subresource
-
-    public IntResource(OpenFile of) {
-	super(of);
+    //FIXME: all these must be put in the subresource
+    
+    public IntResource() {
+        super();
     }
     
     abstract public boolean isPrimative();
     
-    public JMenu getJMenu() {
-        //final OpenFile openFile = this.openFile;
-        
-  	JMenu menu = new JMenu("Menu");
-        
-        Action deleteAction = new AbstractAction("Delete") {
-            public void actionPerformed(ActionEvent e) {
-                //getOpenFile().deleteDefinition(e.getSource(), This);
-		getOpenFile().getDefinitionList().remove(IntResource.this);
-            }
-        };
-	menu.add(deleteAction);
-        
-	//fixme: auto add for AddressedResources
-        /*
-	Action untypeAction = new AbstractAction("Convert to untyped definition") {
-            public void actionPerformed(ActionEvent e) {
-                //DefaultDefinitionResource res = new DefaultDefinitionResource(openFile, sel);
-                DefaultDefinitionResource res = new DefaultDefinitionResource(openFile, selRes.getSelection()); // change to above when DefaultDefinitionResource is fixed
-		List l = getOpenFile().getDefinitionList();
-		int index = l.indexOf(IntResource.this);
-		l.remove(index);
-		l.add(index, res);
-		
-            }
-        };
-	menu.add(untypeAction);
-	 */
+    public void giveActions(JMenu m) {
+        super.giveActions(m);
+        m.add(new JSeparator());
         
         Action editAction = new AbstractAction("Edit value") {
             public void actionPerformed(ActionEvent e){
@@ -78,32 +50,16 @@ abstract public class IntResource extends DefinitionResource {
                 new IntInputBox("Edit value","New value:",data.toString(),IntResource.this).show();
             }
         };
-        menu.add(editAction);
-
-        Action propAction = new AbstractAction("Edit properties") {
-            public void actionPerformed(ActionEvent e) {
-		editProperties();
-            }
-        };
-	menu.add(propAction);
-	 
-        //JPopupMenu popup = menu.getPopupMenu();
-	return menu;
-        
+        m.add(editAction);
     }
     
     /** bring up editor */
     abstract public void editProperties();
-
-    public String toString() {
-        return "int = " + getValue(); // sel.toString();
-    }
-
     
     public long toLong() {
-	return getValue().longValue();
+        return getValue().longValue();
     }
-
+    
     abstract public BigInteger getValue();
     
     public void setValue(String value) throws NumberFormatException, IOException {
@@ -139,6 +95,10 @@ abstract public class IntResource extends DefinitionResource {
     
     public ResourceList getSubResources() {
         return null;
+    }
+    
+    public String valueDesc(){
+        return getValue().toString();    
     }
     
 }

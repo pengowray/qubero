@@ -17,7 +17,7 @@ public class InfoAction extends AbstractAction
 	
     public InfoAction(TreePath selPath)
 	{
-		super("Show info (Debug)");
+		super("Node info");
 		this.selPath = selPath;
     }
 	

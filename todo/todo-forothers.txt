@@ -102,6 +102,18 @@ Craig Huggins (Cehbab):
     <cehbab> maybe not bomberman graphics.. pick a theme. clowns :).. knights.
     <cehbab> but bomberman style play!.
     <pengo> i'm starting to see the down side to promising a tool that does everything
+ - MOD template [2003-12-18]
+   <cehbab> you'd be surprised how hard it is to make a mod player correctly..
+   <cehbab> lucky mines not correct :).
+   <cehbab> because im not into standards and all that :)
+   <cehbab> so its not all that simple as it seems.
+   <cehbab> its a good doco though :)
+   <cehbab> im interested in the file formats.. that helps you :)
+   <cehbab> i figured all that out.. :). can give you templates now for qubin :)
+   <cehbab> once templates are invented.
+ - 3D formats [2003-12-18]
+   <cehbab> qubero would also be good for converting 3d model formats.. they'll all the same, just different layouts and headers.
+   <cehbab> theres a bunch, all similar again.. ;)
 
 quantis@cg166.halls.umist.ac.uk * jason mcginty
 quantis on #osdev (03 May 2003)
@@ -186,3 +198,17 @@ Saman (8/8/03)
     <waltervn> yeah
     <waltervn> I use this one: http://www.geocities.com/noprgress/patchrom.html which is ok but unfortunately it's closed source
 
+slava #java
+slava is ~slava@CPE0080ad77a020-CM.cpe.net.cable.rogers.com * Slava
+slava on #forth #lisp @#jedit #math #opengl #java 
+slava is an identified user
+ - continuations (e.g. as in ruby)
+ - i think every programmer should have at least a passing familiarity with prolog and scheme.
+   also forth.
+
+pr3d4t0r is ~Eugene@h-69-3-31-82.SNVACAID.covad.net * "irc.freenode.net"
+pr3d4t0r on #java 
+pr3d4t0r using irc.freenode.net http://freenode.net/
+pr3d4t0r is an identified user
+ - java bytecode expert
+ - e.g. http://eugeneciurana.com/personal/Kernel_partial.txt

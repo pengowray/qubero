@@ -1,14 +1,38 @@
 package net.pengo.restree;
-import net.pengo.app.*;
-import net.pengo.data.*;
-import net.pengo.resource.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseListener;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
+import java.beans.VetoableChangeListener;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.List;
 
-import javax.swing.*;
-import javax.swing.tree.*;
-import javax.swing.event.*;
-import java.util.*;
-import java.awt.event.*;
-import java.beans.*;
+import javax.swing.AbstractAction;
+import javax.swing.Action;
+import javax.swing.JMenu;
+import javax.swing.JPopupMenu;
+import javax.swing.JSeparator;
+import javax.swing.JTree;
+import javax.swing.event.TreeSelectionEvent;
+import javax.swing.event.TreeSelectionListener;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.MutableTreeNode;
+import javax.swing.tree.TreePath;
+import javax.swing.tree.TreeSelectionModel;
+
+import net.pengo.app.ClipboardEvent;
+import net.pengo.app.FileEvent;
+import net.pengo.app.OpenFile;
+import net.pengo.app.OpenFileListener;
+import net.pengo.app.SelectionEvent;
+import net.pengo.data.DataEvent;
+import net.pengo.resource.Resource;
+import net.pengo.resource.ResourceEvent;
+import net.pengo.resource.ResourceListener;
 
 public class ResTree extends JTree implements ResourceListener, OpenFileListener
 {
@@ -123,6 +147,7 @@ public class ResTree extends JTree implements ResourceListener, OpenFileListener
 							// default popup menu
 							JMenu pop = new JMenu("default menu");
 							Action ia = new InfoAction(selPath);
+							pop.add(new JSeparator());
 							pop.add(ia);
 							popup = pop.getPopupMenu();
 							popup.show(thisTree, e.getX(), e.getY());
@@ -208,7 +233,7 @@ public class ResTree extends JTree implements ResourceListener, OpenFileListener
 		//FIXME: shouldn't really ignore category, but will for now
 		Resource res = e.getResource();
 		String cat = e.getCategory();
-		OpenFile of = res.getOpenFile();
+		OpenFile of = e.getOpenFile();
 		
 		DefaultMutableTreeNode resNode = new DefaultMutableTreeNode(res); //FIXME: need res.canHaveChildren()?
 		
@@ -256,7 +281,7 @@ public class ResTree extends JTree implements ResourceListener, OpenFileListener
 	{
 		Resource res = e.getResource();
 		String cat = e.getCategory();
-		OpenFile of = res.getOpenFile();
+		OpenFile of = e.getOpenFile();
 		int index = resList.indexOf(res);
 		if (index < 0)
 			return;

@@ -34,3 +34,16 @@ Features (complete or mostly complete):
  - multiple undo
  - scalible. Can chop and change very large files (> 2gig) with a small memory footprint.
  - native diff file support: save "changes only" to a diff file, or keep backup as a diff.
+ 
+ Goals:
+  - user interfaces to become consitantly defined, and consistant things can be changed easily (blah)
+  - Empower all users to become valuable players in the software development process
+  - Encorporate definitions to give use to legacy data, source, and binaries to
+  - Interface correctly with legacy systems, but not be tied to legacy internally
+  - allow rapid growth: new areas of definition to be built by many
+  - encourage humans to communicate more broadly and deeply in all mediums
+  - allow humans to choose what they want to see and hear,
+      while making them aware of the choices
+  - promote global awareness and change
+  - to make all levels and processes within software human-viewable, and to allow "manual override"
+  - open source.. truly open to all, minimal barriers

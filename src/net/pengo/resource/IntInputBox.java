@@ -6,12 +6,16 @@
 package net.pengo.resource;
 
 
-import java.util.*;
-import java.awt.*;
-import javax.swing.*;
-import javax.swing.event.*;
+import java.awt.Container;
+import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
+
+import javax.swing.AbstractAction;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JTextField;
 
 /**
  * in future: umm. this should be a lot more customizable.. give user a choice
@@ -48,7 +52,6 @@ public class IntInputBox extends JFrame {
         AbstractAction okaction = new AbstractAction() {
             public void actionPerformed(ActionEvent e) {
                 String retStr = inputField.getText();
-                int retInt;
                 try {
                     //retInt = Integer.parseInt(retStr);
                     //FIXME: pay attention to integer size and type!

@@ -1,11 +1,8 @@
 
 package net.pengo.propertyEditor;
 
+import net.pengo.resource.BooleanAddressedResource;
 
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-import net.pengo.resource.*;
 /**
  *
  * @author  Peter Halasz
@@ -22,10 +19,11 @@ public class BooleanAddressedResourcePropertiesForm extends AbstractResourceProp
     
     protected PropertyPage[] getMenu() {
         return new PropertyPage[] {
-	    new SetBooleanPage(boolRes, this),
-		new AddressPage(boolRes, this),
-		new BooleanRbitPage(boolRes, this),
-		new QNodePage(boolRes),
+                new NamePage(boolRes, this),
+                new SetBooleanPage(boolRes, this),
+                new AddressPage(boolRes, this),
+                new BooleanRbitPage(boolRes, this),
+                new QNodePage(boolRes),
         };
     }
     

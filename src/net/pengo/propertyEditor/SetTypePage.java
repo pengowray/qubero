@@ -5,17 +5,10 @@
  */
 
 package net.pengo.propertyEditor;
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-import net.pengo.resource.*;
+import javax.swing.JComboBox;
+import javax.swing.JLabel;
 
-import java.util.*;
-import java.awt.*;
-import javax.swing.*;
-import javax.swing.text.*;
-import javax.swing.event.*;
-import java.awt.event.*;
+import net.pengo.resource.IntAddressedResource;
 
 /**
  *

@@ -6,31 +6,28 @@
 
 package net.pengo.resource;
 
-import java.io.*;
-import javax.swing.*;
-import javax.swing.event.*;
-import java.awt.event.ActionEvent;
-import java.util.*;
-import java.math.*;
 import java.io.IOException;
+import java.io.InputStream;
 
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-import net.pengo.propertyEditor.*;
+import net.pengo.data.ArrayData;
+import net.pengo.data.Data;
+import net.pengo.data.SelectionData;
 import net.pengo.dependency.QNode;
 import net.pengo.pointer.JavaPointer;
+import net.pengo.propertyEditor.BooleanAddressedResourcePropertiesForm;
 
 public class BooleanAddressedResource extends BooleanResource implements AddressedResource {
-    private JavaPointer selResP = new JavaPointer(getOpenFile(), "net.pengo.resource.SelectionResource"); //private SelectionResource selRes;
-    private JavaPointer rbitP = new JavaPointer(getOpenFile(), "net.pengo.resource.IntResource"); //private IntResource rbit;
+    public final JavaPointer selResP = new JavaPointer("net.pengo.resource.SelectionResource"); //private SelectionResource selRes;
+    public final JavaPointer rbitP = new JavaPointer("net.pengo.resource.IntResource"); //private IntResource rbit;
     
     /** Creates a new instance of BooleanResource */
     
-    public BooleanAddressedResource(OpenFile of, SelectionResource selRes, IntResource rbit) {
-        super(of);
-	selResP.addSink(this);
-	rbitP.addSink(this);
+    public BooleanAddressedResource(SelectionResource selRes) {
+        this(selRes, new IntPrimativeResource(0));
+    }
+    public BooleanAddressedResource(SelectionResource selRes, IntResource rbit) {
+        selResP.addSink(this);
+        rbitP.addSink(this);
         setSelectionResource(selRes);
         setRbit(rbit);
     }
@@ -60,7 +57,7 @@ public class BooleanAddressedResource extends BooleanResource implements Address
     }
     
     public void setSelectionResource(SelectionResource selRes) {
-	selResP.setValue(selRes);
+        selResP.setValue(selRes);
     }
     
     public boolean isPrimative() {
@@ -97,7 +94,7 @@ public class BooleanAddressedResource extends BooleanResource implements Address
 	    int myBit = (int)(whichBit%8);
 	    
 	    SelectionData selData = getSelectionResource().getSelectionData();
-	    long start = selData.getStart();
+	    //long start = selData.getStart();
 	    //byte[] valueBytes = selData.readByteArray(start, myByte+1); //xxx: fingers crossed
 	    byte[] valueBytes = selData.readByteArray(); //xxx: shouldn't take the whole thing you pig
 	    
@@ -117,7 +114,8 @@ public class BooleanAddressedResource extends BooleanResource implements Address
 	    
 	    Data newdata = new ArrayData(valueBytes);
 	    //xxx: this is new.. must be changed in IntResource too
-	    openFile.getEditableData().insertReplace(getSelectionResource().getSelection(), newdata);
+	    //openFile.getEditableData().insertReplace(getSelectionResource().getSelection(), newdata);
+	    getSelectionResource().insertReplace(newdata);
         } catch (java.io.IOException e) {
 	    //fixme
 	    e.printStackTrace();
@@ -131,9 +129,8 @@ public class BooleanAddressedResource extends BooleanResource implements Address
     }
     
     public void doubleClickAction() {
-	//LongListSelectionModel selection = (LongListSelectionModel)selRes.getSelection().clone();
-	LongListSelectionModel selection = getSelectionResource().getSelection();
-        openFile.setSelectionModel(selection);
+        super.doubleClickAction();
+        getSelectionResource().makeActive();
     }
     
 }

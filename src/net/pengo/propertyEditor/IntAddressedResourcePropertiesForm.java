@@ -8,20 +8,9 @@
 
 package net.pengo.propertyEditor;
 
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
+ 
 import net.pengo.resource.*;
 
-import java.util.*;
-import java.awt.*;
-import java.awt.event.*;
-import javax.swing.*;
-import javax.swing.text.*;
-import javax.swing.tree.*;
-import javax.swing.event.*;
-import java.awt.event.ActionEvent;
-import net.pengo.pointer.JavaPointer;
 /**
  *
  * @author  Smiley
@@ -53,6 +42,7 @@ public class IntAddressedResourcePropertiesForm extends AbstractResourceProperti
 	    //JavaPointer jp = intRes.getJPointers()[0];
 	    pagecache = new PropertyPage[] {
 		new SummaryPage(intRes),
+		new NamePage(intRes, this),
 		new SetTypePage(intRes, this),
 		new IntValuePage(intRes, this),
 		new AddressPage(intRes, this),

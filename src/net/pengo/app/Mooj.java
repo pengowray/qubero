@@ -1,8 +1,8 @@
 package net.pengo.app;
-import net.pengo.splash.*;
-import net.pengo.data.*;
 
-import java.io.*;
+import net.pengo.data.Data;
+import net.pengo.data.LargeFileData;
+import net.pengo.splash.Splash;
 
 public class Mooj {
     public static void main(String[] arg) {
@@ -30,44 +30,46 @@ public class Mooj {
  * user-customisable and dynamic. e.g. "zoom" level of detail. Perhaps file format specific
  * views will become necessary also.
  */
-class View {
-    
-}
+
+//class View {
+//    
+//}
+
 
 /**
  * This presentation displays only hexidecimal values.
  */
-class PlainHexView extends View {
-    
-}
+//class PlainHexView extends View {
+//    
+//}
 
 /**
  * This presentation favours displaying hexidecimal values over "friendlier" formats.
  */
-class HexView {
-    
-}
+//class HexView {
+//    
+//}
 
 /**
  * This presentation favours displaying high level information over lower level (eg hex) formats.
  */
-class HighView {
-    
-}
+//class HighView {
+//    
+//}
 
 /**
  * Display multiple levels: formatted for printing.
  */
-class PrintView {
-    
-}
+//class PrintView {
+//    
+//}
 
 /**
  * In the debug view, everything is shown.
  */
-class DebugView extends View {
-    
-}
+//class DebugView extends View {
+//    
+//}
 
 /**
  * Provides the rendering engines which do the dirty work.

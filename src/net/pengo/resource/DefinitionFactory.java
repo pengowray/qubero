@@ -19,8 +19,7 @@ import net.pengo.restree.ResourceList;
 abstract class DefinitionFactory extends DefinitionResource {
     List resourceList;
 	
-    public DefinitionFactory(OpenFile of, List resourceList) {
-        super(of);
+    public DefinitionFactory(List resourceList) {
 		this.resourceList = resourceList;
     }
     

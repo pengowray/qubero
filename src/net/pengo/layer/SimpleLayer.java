@@ -11,7 +11,8 @@
  * @author  administrator
  */
 package net.pengo.layer;
-import net.pengo.app.*;
+
+import net.pengo.app.OpenFile;
 
 abstract public class SimpleLayer {
     OpenFile openFile;

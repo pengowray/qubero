@@ -121,7 +121,8 @@ Log started Aug 21 2002:
  2003-12-11  started SmartPointer
  2003-12-14  JavaPointer
  2003-12-15  ResourceRegistry, ResourceListPage, and stuff.
-
+ 2003-12-20  SimpleResTree - disabled cell editing
+ 
  see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 

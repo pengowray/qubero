@@ -162,6 +162,11 @@ public class MetaSelectionModel implements LongListSelectionModel, LongListSelec
 	}
     }
     
+    public String toString() {
+        String s = m.toString() + "(*)";
+        //return getClass().getName() + " " + Integer.toString(hashCode()) + " " + s;
+        return s;
+    }
     
     
 }

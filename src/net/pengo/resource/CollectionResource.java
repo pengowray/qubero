@@ -7,16 +7,13 @@
 package net.pengo.resource;
 
 import java.util.Collection;
-import java.util.List;
-import net.pengo.app.OpenFile;
 
 // a resource that has sub resources
 public class CollectionResource extends Resource
 {
     Collection resourceList;
     
-    public CollectionResource(Collection resourceList, OpenFile openFile) {
-        super(openFile);
+    public CollectionResource(Collection resourceList) {
         this.resourceList = resourceList;
     }
         
@@ -24,13 +21,24 @@ public class CollectionResource extends Resource
         return resourceList;
     }
 
-    public Object[] getChildren() {
-        return resourceList.toArray();
-    }
-
-    public String toString() {
-        return resourceList.toString();
-    }
+//    public String toString() {
+//        return resourceList.toString();
+//    }
 	
+    public String valueDesc() {
+        return resourceList.size() + " item(s)";
+    }
+    
+    public String getName() {
+        if (super.getName() == null) {
+            return resourceList.toString();
+        }
+        
+        return super.getName();
+    }
+    
+    public boolean isPointer() {
+        return true;
+    }
 }
 

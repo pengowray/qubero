@@ -19,19 +19,20 @@ package net.pengo.propertyEditor;
  * another attempt at IntInputBox
  */
 
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-
-
-import java.util.*;
-import java.awt.*;
-import java.awt.event.*;
-import javax.swing.*;
-import javax.swing.text.*;
-import javax.swing.tree.*;
-import javax.swing.event.*;
+import java.awt.BorderLayout;
+import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.JSplitPane;
+import javax.swing.JTree;
+import javax.swing.event.TreeSelectionEvent;
+import javax.swing.event.TreeSelectionListener;
+import javax.swing.tree.DefaultMutableTreeNode;
+
 /**
  *
  * @author  Smiley

@@ -6,11 +6,10 @@
 
 package net.pengo.resource;
 
-import net.pengo.data.*;
 import net.pengo.app.OpenFile;
-import net.pengo.selection.LongListSelectionEvent;
-import net.pengo.selection.LongListSelectionModel;
+import net.pengo.data.SelectionData;
 import net.pengo.dependency.QNode;
+import net.pengo.selection.LongListSelectionModel;
 
 public class DefaultSelectionResource extends SelectionResource
 {

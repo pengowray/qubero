@@ -20,6 +20,7 @@ public class IntPrimativeResourcePropertiesForm extends AbstractResourceProperti
     // override this.
     protected PropertyPage[] getMenu() {
         return new PropertyPage[] {
+            new NamePage(intRes, this),
             new IntValuePage(intRes, this),
 			new QNodePage(intRes)
         };

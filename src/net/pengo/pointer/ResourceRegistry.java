@@ -11,14 +11,13 @@
  */
 
 package net.pengo.pointer;
-import net.pengo.resource.*;
-import net.pengo.app.OpenFile;
 
-import java.lang.reflect.InvocationTargetException;
-import java.util.List;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.lang.ref.WeakReference;
+import java.util.List;
+
+import net.pengo.resource.QNodeResource;
 
 public class ResourceRegistry {
     static private ResourceRegistry singleton;
@@ -41,14 +40,14 @@ public class ResourceRegistry {
     
     
     public void add(QNodeResource qnr) {
-	//SmartPointer sp = new JavaPointer(dr.getOpenFile(), dr.getClass());
-	
-	//xxx: can't do this because class might not be initialized yet
-	//sp.setName("Autowrapper for: " + dr); //fixme: besides, it should update
-	
-	//sp.setName("Autowrapper"); //fixme
-
-	reg.add(new WeakReference(qnr));
+        //SmartPointer sp = new JavaPointer(dr.getOpenFile(), dr.getClass());
+        
+        //xxx: can't do this because class might not be initialized yet
+        //sp.setName("Autowrapper for: " + dr); //fixme: besides, it should update
+        
+        //sp.setName("Autowrapper"); //fixme
+        
+        reg.add(new WeakReference(qnr));
     }
     
     public List getAll() {

@@ -5,7 +5,6 @@
  */
 
 package net.pengo.resource;
-import net.pengo.app.OpenFile;
 
 
 
@@ -22,8 +21,8 @@ public class ArrayResource extends Resource {
     //2: DefinitionFactory drf; // different to a ResourceFactory
     
     /** Creates a new instance of ArrayResource */
-    public ArrayResource(OpenFile of) {
-        super(of);
+    public ArrayResource() {
+        super();
     }
     
 }

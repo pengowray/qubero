@@ -16,7 +16,9 @@ public class TextOnlyPage extends PropertyPage {
 	return name;
     }
     
-    public void save() {}
+    public void save() {
+        // does nothing (read only)
+    }
     
     
     public TextOnlyPage(String name, String text) {

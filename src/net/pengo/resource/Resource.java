@@ -1,8 +1,13 @@
 package net.pengo.resource;
-import net.pengo.app.*;
-
-import javax.swing.*;
 import java.awt.event.ActionEvent;
+
+import javax.swing.AbstractAction;
+import javax.swing.Action;
+import javax.swing.Icon;
+import javax.swing.JMenu;
+import javax.swing.JSeparator;
+
+import net.pengo.app.OpenFile;
 /*
  * MoojNode.java
  *
@@ -13,17 +18,14 @@ import java.awt.event.ActionEvent;
  */
 
 public abstract class Resource {
-    protected OpenFile openFile;
+
+    protected String name;
     
-    public static final Object[] NO_CHILDREN = new Object[0];
-    
-    public Resource(OpenFile openFile){
-        this.openFile = openFile;
+    public Resource(){
+        super();
     }
     
-    public OpenFile getOpenFile() {
-        return openFile;
-    }
+
     
     // to hide: override and make return true.
     // FIXME: replace with getDefaultResourceView()
@@ -32,29 +34,30 @@ public abstract class Resource {
         return false;
     }
     
+    public void giveActions(JMenu m) {
+        //Insert these lines in subtypes:
+        //super.giveActions(m);
+        //m.add(new JSeparator());
+        
+        m.add(
+                new AbstractAction("Double click action") {
+                    public void actionPerformed(ActionEvent e) {
+                        Resource.this.doubleClickAction();
+                    }
+                }
+        );
+        
+        
+    }
+    
     public JMenu getJMenu() {
 		JMenu menu = new JMenu("Default");
-		Action defaultAction = new AbstractAction("Double click action") {
-			public void actionPerformed(ActionEvent e) {
-				Resource.this.doubleClickAction();
-			}
-		};
-		menu.add(defaultAction);
-
-		//Action action2 = new InfoAction();
-			
+		giveActions(menu);
 		return menu;
-			
-        //return new JMenu(this.getClass().getName());
     }
     
 	//xxx: put this back in
 	//abstract public boolean isPrimative();
-	
-	//xxx: get rid of this
-    public Object[] getChildren() {
-        return NO_CHILDREN;
-    }
     
     public Icon getIcon() {
         return null;
@@ -73,7 +76,7 @@ public abstract class Resource {
     
     // default action when double-clicked (e.g in a list)
     public void doubleClickAction() {
-        System.out.println(this + "\n  " + this.getClass() + " -- children: " + getChildren().length);
+        System.out.println(this + "\n  " + this.getClass());
     }
     /*
     // call after updating children
@@ -86,4 +89,57 @@ public abstract class Resource {
         NodeManagerSingleton.getSingleton().nodeChanged(this);
     }
      */
+    
+    
+
+    public String getName() {
+        return name;
+    }
+
+    /**
+     * @param name The name to set.
+     */
+    public void setName(String name) {
+        this.name = name;
+    }
+    
+    public String toString() {
+        String name;
+        String pointer = "";
+        if (isPointer()) {
+            pointer = "(*)";
+        }
+        
+        if (getName() == null) {
+            name = getTypeName() + pointer + "=" + valueDesc();
+        } else {
+            name = "\"" + getName() + "\"" + pointer + "=" + valueDesc();
+        }
+        
+        return name;
+    }
+    
+    /** a description of the (evalutated) value stored by this resource */
+    public String valueDesc() {
+        return "none";
+    }
+
+    /** @return true if this a pointer or wrapper or reference or the like */ 
+    public boolean isPointer() {
+        return false;
+    }
+    
+    /** The name of the class. this will be replaced with Qubero specific types eventually;.
+     * @returns eg "IntResource" instead of "net.pengo.resource.IntResource" */
+    public String getTypeName(){
+        return shortTypeName(getClass());
+    }    
+
+    public static String shortTypeName(Class cl){
+        String name = cl.getName();
+        int dot = name.lastIndexOf(".");
+        String shortName = name.substring(dot+1); 
+        
+        return shortName;
+    }    
 }

@@ -6,18 +6,12 @@
 
 package net.pengo.propertyEditor;
 
-import net.pengo.app.*;
-import net.pengo.selection.*;
-import net.pengo.data.*;
-import net.pengo.resource.*;
-
-import java.util.*;
-import java.awt.*;
-import java.awt.event.*;
-import javax.swing.*;
-import javax.swing.text.*;
-import javax.swing.event.*;
 import java.io.IOException;
+
+import javax.swing.JLabel;
+import javax.swing.JTextField;
+
+import net.pengo.resource.IntResource;
 /**
  *
  * @author  Peter Halasz

@@ -11,9 +11,11 @@ package net.pengo.restree;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
+
 import javax.swing.Action;
 import javax.swing.JMenu;
 import javax.swing.JPopupMenu;
+import javax.swing.JSeparator;
 import javax.swing.JTree;
 import javax.swing.event.TreeSelectionEvent;
 import javax.swing.event.TreeSelectionListener;
@@ -21,8 +23,8 @@ import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
+
 import net.pengo.app.ActiveFile;
-import net.pengo.app.OpenFile;
 import net.pengo.resource.Resource;
 
 public class SimpleResTree extends JTree {
@@ -37,9 +39,9 @@ public class SimpleResTree extends JTree {
      *
      */
     
-    /*    public void addOpenFile(OpenFile of) {
-	of.getResourceList().addParent(this, topnode);
-     }*/
+//    public void addOpenFile(OpenFile of) {
+//        of.getResourceList().addParent(this, topnode);
+//    }
     
     /** can call only once */
     public void setActiveFile(ActiveFile of) {
@@ -71,7 +73,7 @@ public class SimpleResTree extends JTree {
 	
 	setRootVisible(true);
 	setShowsRootHandles(true);
-	setEditable(true);
+	setEditable(false); //FIXME: should allow name editing
 	
 	//treemodel.insertNodeInto(openFileNode, topnode, topnode.getChildCount());
 	
@@ -121,12 +123,13 @@ public class SimpleResTree extends JTree {
 			setLeadSelectionPath(new TreePath(o)); // highlight (ant trail) selection. FIXME: doesn't always work
 			setAnchorSelectionPath(new TreePath(o)); // highlight selection. FIXME: doesn't always work
 			JPopupMenu popup;
-			/* // put this back if Resource becomes a type of DefaultMutableTreeNode (unlikely)
-			 if (selected instanceof Resource) {
-			 popup = ((Resource)selected).getJMenu().getPopupMenu();
-			 } else */
+//			 // put this back if Resource becomes a type of DefaultMutableTreeNode (unlikely)
+//			 if (selected instanceof Resource) {
+//			 popup = ((Resource)selected).getJMenu().getPopupMenu();
+//			 } else 
 			if (innerSelected instanceof Resource) {
 			    popup = ((Resource)innerSelected).getJMenu().getPopupMenu();
+			    popup.add(new JSeparator());
 			    popup.add(new InfoAction(selPath));
 			    popup.show(SimpleResTree.this, e.getX(), e.getY());
 			}
