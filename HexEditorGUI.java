@@ -29,20 +29,36 @@ class HexEditorGUI {
 	// CREATE THE COMPONENTS
 	moojtree = MoojTree.create(openFile);
 	hexpanel = new HexPanel(openFile);
-	statusbar = new JLabel();
+	statusbar = new JLabel("Mooj Data Modeller and Hex Editor");
 	mmb = new MoojMenuBar(this);
 
 	// ARRANGE THEM IN A FRAME
         jframe = new JFrame(openFile + " - Mooj" );
 	jframe.setJMenuBar(mmb);
         JScrollPane sp_hexpanel = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, 
-						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);      
+						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        sp_hexpanel.getViewport().setBackground(Color.white); //XXX: doesn't work!
+        
         JScrollPane sp_moojtree = new JScrollPane(moojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, 
 						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        
 	JSplitPane splitpane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sp_moojtree, sp_hexpanel);
-	splitpane.resetToPreferredSizes();
-	jframe.getContentPane().add(splitpane, BorderLayout.CENTER);
-        jframe.getContentPane().add(statusbar, BorderLayout.SOUTH);
+        splitpane.setResizeWeight(1);
+
+        Container c = jframe.getContentPane();
+     	c.add(splitpane, BorderLayout.CENTER);
+        c.add(statusbar, BorderLayout.SOUTH);
+        
+        jframe.pack();
+	shrink(jframe);
+        
+        //splitpane.resetToPreferredSizes();
+        int FRAMEBORDER = 15; //XXX: cant work this out properly :/
+        int treewidth = jframe.getWidth() - 
+            (FRAMEBORDER + sp_hexpanel.getVerticalScrollBar().getWidth() + hexpanel.getPreferredSize().width + splitpane.getDividerSize());
+        //int treewidth = c.getWidth() - hexpanel.getWidth();
+        splitpane.setDividerLocation(treewidth);
+        jframe.setVisible(true);
 
         // SET UP EVENTS
         jframe.addWindowListener(new WindowAdapter() {
@@ -53,11 +69,7 @@ class HexEditorGUI {
         
 	// DISPLAY
 
-        jframe.pack();
-	shrink(jframe);
 
-        jframe.setVisible(true);
-  	hexpanel.setVisible(true);
     }
 
     //XXX: make this work again
@@ -110,12 +122,21 @@ class HexEditorGUI {
 
     public void shrink(JFrame jframe) {
 	//XXX: shrink size if too big (hack!)
+	int lowHeight = 50; 
 	int niceHeight = 500; 
+        int addWidth = 100; // give it an extra 100
 	int height = jframe.getHeight();
 	int width = jframe.getWidth();
 	if (height > niceHeight) {
-	    jframe.setSize(height,niceHeight);
+	    jframe.setSize(width+addWidth,niceHeight);
 	}
+        else if (height < lowHeight) {
+	    jframe.setSize(width+addWidth,lowHeight);
+	} else {
+	    jframe.setSize(width+addWidth,height);
+        }
+            
+        
     }
     
     public void setGreyMode(boolean mode) {

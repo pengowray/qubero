@@ -42,7 +42,14 @@ public class DefaultDefinitionResource extends DefinitionResource {
         };
 	menu.add(intAction);
         
-	//JPopupMenu popup = menu.getPopupMenu();
+        Action s2vAction = new AbstractAction("Set range to value...") {
+            public void actionPerformed(ActionEvent e) {
+                //new ByteEditor();
+            }
+        };
+	menu.add(s2vAction);
+
+        //JPopupMenu popup = menu.getPopupMenu();
 	return menu;
     }
     

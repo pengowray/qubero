@@ -60,6 +60,14 @@ public class IntResource extends DefinitionResource {
         };
 	menu.add(untypeAction);
         
+        Action editAction = new AbstractAction("Edit value") {
+            public void actionPerformed(ActionEvent e){
+                //box
+                //fire
+            }
+        };
+        menu.add(editAction);
+        
 	//JPopupMenu popup = menu.getPopupMenu();
 	return menu;
     }

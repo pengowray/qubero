@@ -5,12 +5,13 @@ import javax.swing.*;
 import javax.swing.tree.*;
 import java.awt.geom.*;
 
-class HexPanel extends JPanel implements OpenFileListener {
+class HexPanel extends JPanel implements OpenFileListener, Scrollable { 
     protected OpenFile openFile = null;
     protected RawData root;
     
     protected boolean dimensionsCalculated = false;
     protected int height; // height of entire "sheet" of hex
+    protected int viewportHeight = 500; // preferred viewport height
     protected int width; // width of entire "sheet" of hex
     protected int lineStart; // where does the first character start
     protected int hexPerLine = 16; // number of hex units shown per line
@@ -34,6 +35,8 @@ class HexPanel extends JPanel implements OpenFileListener {
 
     public HexPanel(OpenFile openFile) {
 	super();
+        setBackground(Color.white);
+        
 	setOpenFile(openFile);
 	
         //XXX: openFile's resources should be considered in rendering ?
@@ -101,21 +104,6 @@ class HexPanel extends JPanel implements OpenFileListener {
 
         dimensionsCalculated = false;
 	calcDim();
-        
-        //repaint scrollbars
-        cleanUp();
-    }
-    
-    protected void cleanUp() {
-        //repaint scrollbars (xxx: better way?)
-        invalidate();
-        JRootPane rootpane = this.getRootPane(); 
-        if (rootpane != null) {
-            rootpane.validate();
-            rootpane.repaint();
-        }
-        //repaint();
-       
     }
     
     public int hexFromClick(int x, int y) {
@@ -189,14 +177,6 @@ class HexPanel extends JPanel implements OpenFileListener {
         setSelection(new RawDataSelection(openFile, offset, len), publish);
     }
 
-    public int getHeight() {
-        return height;
-   }
-
-    public int getWidth() {
-	return width;
-    }
-    
     public Dimension getPreferredSize() {
         //FIXME: this is a hack!
 
@@ -206,10 +186,6 @@ class HexPanel extends JPanel implements OpenFileListener {
 
     public Dimension getMinimumSize() {
 	return getPreferredSize();
-    }
-
-    public Dimension getSize() {
-        return new Dimension(width, height);
     }
 
 
@@ -224,6 +200,8 @@ class HexPanel extends JPanel implements OpenFileListener {
         if (dimensionsCalculated == true)
             return;
 
+        //calcDim(getComponentGraphics().getFontMetrics(font)); // oops stupid no work
+        
 	calcDim(charWidth, charHeight); //XXX: may not have been worked out from FontMetrics
 	if (charSizeKnown == false) {
 	    // don't trust size until calculated with FontMetrics
@@ -243,8 +221,11 @@ class HexPanel extends JPanel implements OpenFileListener {
 	    charHeight = fm.getHeight();
             charAscent = fm.getAscent();
 	    charSizeKnown = true;
-            if (oldCharWidth != charWidth || oldCharHeight != charHeight || oldCharAscent != charAscent ) {
+            if (oldCharWidth != charWidth || oldCharHeight != charHeight) {
                 System.out.println("Note: screen character size different to expected: " + charWidth  + "x" + charHeight + ",ascent:" + charAscent +  " instead of expected: " + oldCharWidth  + "x" + oldCharHeight + ",ascent:" + oldCharAscent);
+            }
+            if (oldCharAscent != charAscent ) {
+                System.out.println("Note: character ascent different to expected: " + charAscent + " instead of expected: " + oldCharAscent);
             }
 	}
 
@@ -254,6 +235,9 @@ class HexPanel extends JPanel implements OpenFileListener {
     protected synchronized void calcDim(int charWidth, int charHeight) {
         if (dimensionsCalculated == true)
             return;
+
+        int oldHeight = height;
+        int oldWidth = width;
         
         lineHeight = charHeight;
         lineStart = charWidth * 12; // ought to be enough space for hex address
@@ -284,12 +268,16 @@ class HexPanel extends JPanel implements OpenFileListener {
         width = lineStart + hexStart[hexPerLine] + unitWidth + asciiWidth;
         dimensionsCalculated = true;
 
+        if (oldWidth != width || oldHeight != height) {
+            revalidate();
+        }
         //System.out.println("char: " + charWidth + "x" + charHeight + ". Dimensions: " + width + "x" + height +".");
     }
     
-    public void paint(Graphics g) {
-        super.paint(g); // not needed
+    public void paintComponent(Graphics g) {
+        super.paintComponent(g); // not needed
 	//System.out.println("paint called. " + g.getClipBounds());
+	//System.out.println("this dimens.. " + this.getSize());
         if (dimensionsCalculated==false) {
             g.setFont(font);            
             FontMetrics fm = g.getFontMetrics();
@@ -300,10 +288,9 @@ class HexPanel extends JPanel implements OpenFileListener {
         Rectangle clipRect = g.getClipBounds();
         if (clipRect != null) {
             //If it's more efficient, draw only the area specified by clipRect.
-            g.setColor(Color.white);
-            g.fillRect(clipRect.x, clipRect.y, clipRect.x+clipRect.width, clipRect.y+clipRect.height);
             
             /*
+            // box around the just painted area
             g.setColor(Color.pink);
             g.drawRect(clipRect.x, clipRect.y, clipRect.x+clipRect.width-1, clipRect.y+clipRect.height-1);
             g.setColor(Color.red);
@@ -314,14 +301,11 @@ class HexPanel extends JPanel implements OpenFileListener {
             
             top = clipRect.y / lineHeight;
             bot = (clipRect.y + clipRect.height) / lineHeight + 1;
-            
-            
+
         } else {
             top = 0;
             bot = totalLines;
             //Paint the entire component.
-            g.setColor(Color.white);
-            g.fillRect(0, 0, width, height);
             System.out.println("Warning: Whole hexpanel component got painted! that shouldn't really happen.");
         }
       
@@ -337,7 +321,7 @@ class HexPanel extends JPanel implements OpenFileListener {
         if (start < 0) {
             start = 0;
         }
-
+        
         int len = root.getLength(); 
         byte[] data = root.getData();
         int linenum = start;
@@ -406,13 +390,7 @@ class HexPanel extends JPanel implements OpenFileListener {
     
     public void dataLengthChanged(EditEvent e) {
     }
-    
-    public void definitionMade(DefinitionEvent e) {
-    }
-    
-    public void definitionRemoved(DefinitionEvent e) {
-    }
-    
+  
     public void fileSaved(FileEvent e) {
     }
     
@@ -448,5 +426,32 @@ class HexPanel extends JPanel implements OpenFileListener {
             + (l < 0x0a ? (char)('0'+l) : (char)('a'+l-10) )
             + (r < 0x0a ? (char)('0'+r) : (char)('a'+r-10) );
     }
+    
+    public java.awt.Dimension getPreferredScrollableViewportSize() {
+        return new Dimension(width, viewportHeight);
+    }    
+  
+    public int getScrollableBlockIncrement(java.awt.Rectangle visibleRect, int orientation, int direction) {
+        if (orientation == SwingConstants.VERTICAL) {
+            return visibleRect.height - lineHeight;
+        } else {
+            return visibleRect.width - unitWidth;
+        }
+    }
+    
+    public boolean getScrollableTracksViewportHeight() {
+        return false;
+    }
+    
+    public boolean getScrollableTracksViewportWidth() {
+        return false;
+    }
+    
+    public int getScrollableUnitIncrement(java.awt.Rectangle visibleRect, int orientation, int direction) {
+        if (orientation == SwingConstants.VERTICAL) {
+            return lineHeight;
+        } else {
+            return unitWidth;
+        }    }
     
 }

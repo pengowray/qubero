@@ -19,10 +19,7 @@ public interface OpenFileListener extends java.util.EventListener {
     public void selectionRemoved(SelectionEvent e); // no longer selected
 
     public void selectionCopied(ClipboardEvent e);
-    
-    public void definitionMade(DefinitionEvent e);
-    public void definitionRemoved(DefinitionEvent e);
-    
+        
     public void dataEdited(EditEvent e);
     public void dataLengthChanged(EditEvent e);
     

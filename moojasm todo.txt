@@ -1,4 +1,5 @@
-"templatation"
+"templatation" 
+binary data modelling software.
 view, edit, create java bytecode + automation
 
 """get it working first
@@ -9,8 +10,19 @@ Log started Aug 21 2002:
  2002-08-21: Added types (int only for now)
              Added grey mode
              Corrected ascent bug.. characters were at wrong Y position
+ 2002-08-22: Fixed scrolling units (goes in whole characters now)
+             Fixed main JFrame size bug
+             Introduced some other drawing bugs
+             Made jar'ing batch file
+ 2002-08-23: almost fixed drawing problems
+ 2002-08-24: fixed drawing problems.
+             fixed window sizing issues
 
-priority features:
+
+see also:
+ - C:\My Documents\notes-ideas+todo\hexeditor.txt
+
+priority features:  
  - definitions
  - save/open template definitions
  - EDIT hex / ascii
@@ -22,10 +34,10 @@ priority features:
 
 UI:
  - allow right click on hex area
- - wheel jumps too slow
+ D wheel jumps too slow
  - arrow key movement
  - show selection on ascii side as a hollow box
- - bigger west pane for tree
+ D bigger west pane for tree
  - new selection: auto open up tree
  - highlighting colour scheme
  D*when right clicking a (non-selected) item on tree, show a dotted outline selection 
@@ -33,7 +45,8 @@ UI:
  - select a template area by clicking it on the hex side
 
 bugs:
- - bug: end bit of first file opened is dodgy until resize or open of new file (this is due to incorrect guess of font size)
+ - scrollbar and menu freezes up sometimes
+ D bug: end bit of first file opened is dodgy until resize or open of new file (this is due to incorrect guess of font size)
  - fix bug: rename of item destroys it
 
 read this:
@@ -112,6 +125,11 @@ future versions:
  - template + datasource merges
  - web service (upload file to display as hex.html or hex.gif)
  - very large file support for all formats!
+ - currency
+ - ICL / RMI
+ - Conflict Resolution wizard
+ - projects
+
 
 future formats:
  - parse .java files too?
@@ -250,9 +268,13 @@ ben's suggestions:
  - russian fbi fed pdf 
  - bus: streaming data
  - mpeg4 (for dad)
- - WGS 84 (Earth coordinates)
+ - WGS 84 (Earth coordinates) (how about melways refs too!)
  - divx
  - externalist set of ontological enumerations
+ - openGL stuff
 
 soel's idea:
  - financial transactions (linked to revolving bank account), video game style
+
+data modelling tools + terms:
+ - http://datamodel.org/
