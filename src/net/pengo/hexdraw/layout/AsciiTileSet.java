@@ -38,10 +38,10 @@ public class AsciiTileSet extends TextTileSet {
     	return (char)tile;
     }
 
-
 	public boolean isHighbitMasked() {
 		return highbitMasked;
 	}
+	
 	public void setHighbitMasked(boolean highbitMasked) {
 		this.highbitMasked = highbitMasked;
 	}

@@ -53,4 +53,17 @@ public abstract class SuperSpacer {
     
 
 	public abstract void setSimpleSize(SimpleSize s);
+	
+	protected static long doRound(double f, net.pengo.hexdraw.layout.SuperSpacer.Round r) {
+		if (r == Round.before) {
+			return (long)Math.floor(f);
+		} else if (r == Round.after) {
+			return (long)Math.ceil(f);
+		}  
+		
+		// (r == Round.nearest)
+		return (long)Math.round(f);		
+}
+
+	
 }

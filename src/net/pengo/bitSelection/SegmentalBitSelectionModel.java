@@ -381,7 +381,12 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel {
 	if (intervalSet.isEmpty() && activeSelection == EMPTY_SEGMENT && activeAntiSelection == EMPTY_SEGMENT)
 	    return;
 	
-        BitSegment old = new BitSegment(getMinSelectionIndex(), getMaxSelectionIndex());
+	BitSegment old;
+	if (getMinSelectionIndex() == null || getMaxSelectionIndex() == null) {
+		old = new BitSegment(BitCursor.zero, BitCursor.zero);
+	} else {
+        old = new BitSegment(getMinSelectionIndex(), getMaxSelectionIndex());
+	}
         
 	intervalSet.clear();
 	isCacheValid = false;

@@ -93,7 +93,7 @@ public class Repeater extends MultiSpacer {
 		//if more than maxRepeats, no leftovers
 		long repeats = bits.divide(contentBits);
 		if (maxRepeats != -1 && repeats >= maxRepeats)
-			return bits.zero;
+			return BitCursor.zero;
 		
 		BitCursor leftover = bits.mod(contentBits);
 		return leftover;

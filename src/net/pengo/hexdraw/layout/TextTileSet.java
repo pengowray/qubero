@@ -13,6 +13,7 @@ package net.pengo.hexdraw.layout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
+import java.text.AttributedString;
 
 import net.pengo.splash.SimpleSize;
 import net.pengo.splash.SimplySizedFont;
@@ -112,16 +113,31 @@ public class TextTileSet extends TileSet {
         
         //System.out.println("tile=" + tile);got 
         char ch = tileChar(tile);
-        int xOffset = 0;
         
-        // Force monospacing (centered)
         if (fm.charWidth(ch) < maxWidth()) {
-            xOffset = (int) ((maxWidth() - fm.charWidth(ch)) / 2);
+            // Force monospacing (centered)
+            int xOffset = (int) ((maxWidth() - fm.charWidth(ch)) / 2);
+            g.drawString(ch+"", xOffset, fm.getAscent());
+        } else if (fm.charWidth(ch) > maxWidth()) {
+            // Squish wide letters
+        	//new AttributedCharacterIterator;
+        	//AttributedCharacterIterator.Attribute;
+        	AttributedString as = new AttributedString(ch+"", getFont().getAttributes());
+        	
+        	as.addAttribute(java.awt.font.TextAttribute.WIDTH, new Float(maxWidth() / (float)fm.charWidth(ch)));
+        	
+        	//System.out.println("not squishing to:" + new Float((float)fm.charWidth(ch) / maxWidth()));
+        	//System.out.println("squishing to:" + new Float(maxWidth() / (float)fm.charWidth(ch)));
+        	
+        	g.drawString(as.getIterator(), 0, fm.getAscent());
+        } else {
+        	g.drawString(ch+"", 0, fm.getAscent());
         }
+        	
         
         //System.out.println("charWidth[" + ch + "]=" + fm.charWidth(ch) + " maxWidth=" + maxWidth());
         
-        g.drawString(ch+"", xOffset, fm.getAscent());
+        
         //g.drawString(tile+"", 0, fm.getDescent()); // temp
     }
     

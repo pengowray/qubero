@@ -48,6 +48,8 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	//private List<Spacer> spacerlist = new LinkedList<Spacer>();
 	private SuperSpacer spacer;
     private SimplySizedFont hexFont = new SimplySizedFont("hex");
+    private SimplySizedFont dosFont = new SimplySizedFont("dos");
+    private SimplySizedFont unicode = new SimplySizedFont("unicode");
     private SimpleSize size = new SimpleSize();
     private ActiveFile activeFile;
     private SegmentalBitSelectionModel selection = new SegmentalBitSelectionModel();
@@ -57,6 +59,8 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     /** Creates a new instance of MainPanel */
     public MainPanel(ActiveFile activeFile) {
     	loadDefaults();
+    	this.addMouseListener(this);
+    	this.addMouseMotionListener(this);
         setActiveFile(activeFile);
     }
 
@@ -68,10 +72,14 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	UnitSpacer unit = new UnitSpacer(tiles);
     	col.addColumn(unit, 32);
     	
-    	AsciiTileSet asciiTiles = new AsciiTileSet(hexFont, false);
+    	CodePage437 dosTiles= new CodePage437(dosFont, false);
+    	UnitSpacer dosUnit = new UnitSpacer(dosTiles);
+    	col.addColumn(dosUnit, 16);    	
+    	
+    	AsciiTileSet asciiTiles = new AsciiTileSet(hexFont, false); // unicode?
     	UnitSpacer asciiUnit = new UnitSpacer(asciiTiles);
     	col.addColumn(asciiUnit, 16);
-    	
+
        spacer = col.toColumnGroup();
        
     	recalc();
@@ -229,6 +237,9 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 		if (clicks==1) {
 			
 			BitCursor clickbit = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.nearest, len );
+			
+			System.out.println("clicked (nearest): " + clickbit);
+			
 			if (e.isShiftDown()) {
 				selection.setLeadSelectionIndex(clickbit);
 			} else if (e.isControlDown()) {

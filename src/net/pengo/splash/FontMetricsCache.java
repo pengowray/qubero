@@ -42,6 +42,8 @@ public class FontMetricsCache {
         // put registrations here:
         
         registerFontGroup("hex", new Font("Monospaced", Font.BOLD, 11) );
+        
+        registerFontGroup("dos", new Font("Monospaced", Font.PLAIN, 11) );
 
         //fixme: should try: Lucida Sans Unicode, arial unicode ms, Microsoft Sans Serif, SansSerif
         registerFontGroup("unicode", new Font("Lucida Sans Unicode", Font.BOLD, 11) );

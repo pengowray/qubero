@@ -10,8 +10,8 @@ package net.pengo.splash;
  * @author Peter Halasz
  */
 public class SimpleSize {
-    private static final int defaultSimpleSize = 3;
-    private static float sizes[] = {6, 7, 8, 11, 14, 24, 48, 64, 127, 256}; //FIXME: make this a list, allow user to add to.
+    private static final int defaultSimpleSize = 5;
+    private static float sizes[] = {6, 7, 8, 11, 12, 14, 18, 24, 48, 64, 127, 256}; //FIXME: make this a list, allow user to add to.
     
     private int size;
 

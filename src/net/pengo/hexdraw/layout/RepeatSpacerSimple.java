@@ -106,12 +106,50 @@ public class RepeatSpacerSimple extends MultiSpacer {
 	 * @see net.pengo.hexdraw.layout.SuperSpacer#bitIsHere(long, long, ,
 	 *         net.pengo.bitSelection.BitCursor)
 	 */
-	public BitCursor bitIsHere(long arg0, long arg1,
-			net.pengo.hexdraw.layout.SuperSpacer.Round arg2, BitCursor arg3) {
-		// TODO Auto-generated method stub
-		return null;
+	public BitCursor bitIsHere(long x, long y,
+			net.pengo.hexdraw.layout.SuperSpacer.Round r, BitCursor bits) {
+		
+		
+		
+		if (isHorizontal()) {
+			    //FIXME: check both y too
+	    		long one = contents.getPixelWidth(bits(bits));
+	            long where;
+	            if (false) {
+	            	//if we're catching the event here.. FIXME: NYI	
+	            	
+	            	where = doRound( (float) x /one, r) ;
+	            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
+	            	return bitLocation;
+	            } else {
+	            	where =  x /one; // round down, let contents do real rounding
+	            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
+		            BitCursor contentLoc = contents.bitIsHere(x,y,r,bits(bits));
+		            
+		            return bitLocation.add(contentLoc);
+	            	
+	            }
+	            
+    	} else {
+    		long one = contents.getPixelHeight(bits(bits));
+            long where;
+            if (false) {
+            	//if we're catching the event here.. FIXME: NYI	
+            	
+            	where = doRound( (float) x /one, r) ;
+            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
+            	return bitLocation;
+            } else {
+            	where =  y /one; // round down, let contents do real rounding
+            	BitCursor bitLocation = (bits(bits)).multiply( (int) where );
+	            BitCursor contentLoc = contents.bitIsHere(x,y,r,bits(bits));
+	            
+	            return bitLocation.add(contentLoc);
+            }
+    	}
+		
 	}
-
+	
 	/*
 	 * (non-Javadoc)
 	 * 
