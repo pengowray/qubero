@@ -1,5 +1,6 @@
 "templatation" 
 binary data modelling software.
+the photoshop of hex editors.
 view, edit, create java bytecode + automation
 
 """get it working first
@@ -17,43 +18,76 @@ Log started Aug 21 2002:
  2002-08-23: almost fixed drawing problems
  2002-08-24: fixed drawing problems.
              fixed window sizing issues
-
-
+ 2002-08-25: start (simple) input box
+             updated: moojtree structure.txt
+ 2002-08-26: big file support (of length long)
+             created "demo file" for startup
+             mooj icon
+ 2002-08-27  int edit box now displays
+ 2002-08-28  int edit box now handles (4byte 2s_comp) ints properly :)
+ 2002-08-29  int edit box now handles any sized int, any complement
+             new selection: auto open up tree
+             tree has sections again
+ 2002-08-31  rename: RawDataSelection -> TransparentData
+             removed class: Chunk
+             rename: SimpleFileChunk -> SmallFileData
+             rename: DemoFileChunk -> DemoData
+             rename: FileChunk -> LargeFileData
+             rename: NewFileData -> EmptyData
+ 2002-09-01  edit mode!
+             new ShiftedData
+             new DiffData, starting to work.
+ 2002-09-04  debugging edit mode
+             SelectionResource now more important. Selections can be any data.
+             new Cursor type
+             new DefaultSelectionResource
+ 2002-09-05  debugged!
+             ShiftedData now works on large files at good speed too
+             
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
-priority features:  
+priority/imediate features:  
+ - calculate int min + max
+ - major refactoring (layers, editing policy, Chunks->DataSources etc)
  - definitions
  - save/open template definitions
  - EDIT hex / ascii
  - make all menus work
- - documentation
+ - documentation + read me
  - status messages
- - partial/background loading: only load what's displayed (large files especially)
  - multiple documents open (mdi-ish)
+ - throw exceptions
+ - clean up xxx's
+ - clean up demo file code
+ - "show System.out" in a window (menu option)
+ - Selections too reliant on TransparentData type. Should use any Data.
 
-UI:
+UI to do:
  - allow right click on hex area
- D wheel jumps too slow
- - arrow key movement
+1/2 arrow key movement
  - show selection on ascii side as a hollow box
- D bigger west pane for tree
- - new selection: auto open up tree
  - highlighting colour scheme
  D*when right clicking a (non-selected) item on tree, show a dotted outline selection 
  - DnD tree elements
  - select a template area by clicking it on the hex side
+ - header lines (eg "1 Megabyte", "10 Megabytes", or "1st Megabyte"?)
 
 bugs:
- - scrollbar and menu freezes up sometimes
- D bug: end bit of first file opened is dodgy until resize or open of new file (this is due to incorrect guess of font size)
+ - non-file does not throw exception [FileChunk]
  - fix bug: rename of item destroys it
+ - scrollbar and menu freezes up sometimes:
+   appears to happen in Netbeans too!
+ - overlap of lines on very big files: 
+   Bug ID: 4707774 Graphics.drawString( String, int, int ) not precise for large ints 
+   http://developer.java.sun.com/developer/bugParade/bugs/4707774.html
 
 read this:
  - http://tunes.org/files/papers/Arrow_Introduction_v8.htm
 
 for v0.2
- - sequential + recursive + random access + dependant + compression definitions of parts of file (xml defintion)
+ - sequential + recursive + random access + dependant + compression definitions of parts of file
+ - defintion -> xml -> definition
  - scoped type definition with inheritance
  - external main definition file
 D hex display 
@@ -64,8 +98,14 @@ D display: tree of parts
  - array/table numbering systems
  - search / jump
  - text only display
+ - overview view: show whole file as one screen w/ areas of text/binary/etc
+ - subsection editing (e.g. only display one definition or range)
+ - backup files as .diff + save changes as diff
+ - ASS (altered state server).
 
 for v0.3
+ - "command line" commands / macros
+ - keyboard editing (no mouse)
  - expandable view (.jar, compressed bits)
  - more file formats
  - more views
@@ -93,7 +133,13 @@ initial chunk types to support:
  - Math.BigNumber
  - roman numerals (ascii and unicode)
  - regex's
-
+ - DataBuffer's special unsigned types
+ - stacks, and other standard structures
+ - [file/data] sizes (kb / mb / other powers of 1024)
+ - partial byte ints (e.g. 3 bit int)
+ - from Chunk.java: recordset, Flags, NarrativeSequence, OverviewDisplayChunk
+ - pi, the constant, as a "pseudo" large file, scroll to any point.
+ 
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
  - links and soft copies of referenced specs (+ evidence based "broken" links)
@@ -106,8 +152,9 @@ future versions:
  - partial locking (or loading just what isn't locked)
  - lambda
  - java convention checker
+ - java comment editor (preserve ** boxes + wrap)
  - java security awareness
- - file location as part of definition
+ - file location + surrounding files as part of definition (metadata)
  - new english words for hex. Wunex, Texo, Treex, Forx, Fivex, Sixer .. Aten, Blev, Curlve, Dirxeen, Exorte, Fixte, Texan (ten is bigger in texas)
  - design new characters for hex (incorporating roman numerals, x's, japanese, and standard arabic)
  - OCR for dvd and tv subtitles and screen captures
@@ -119,7 +166,7 @@ future versions:
  - get data off the web
  - sequencer (allow triplets in 4/4)
  - database connectivity
- - self describing document -> .exe / .class / applet / javascript
+ - self describing document -> .exe / .class / .jar / applet / javascript
  - natural language guessing
  - sort data
  - template + datasource merges
@@ -129,7 +176,18 @@ future versions:
  - ICL / RMI
  - Conflict Resolution wizard
  - projects
-
+ - "Previews" of transformations
+ - file system analysis (e.g. "this looks like a windows install disk")
+ - character map
+ - photoshop plugins
+ - qbit/quantum calculations. 
+ - i18n
+ - find by change -- e.g. save game cheats
+ - rewrite mooj with itself
+ - plugin architecture
+ - external editors (via command line)
+ - altered state server (ASS): aka. flattening file server. display .mooj files as flat files via ftp/nfs
+ - artificial neural network patterns
 
 future formats:
  - parse .java files too?
@@ -140,7 +198,7 @@ future formats:
  - python types + pickle + ZODB (oodb)
  - different javascript styles
  - gif / jpg / png / psd / corel
- - rar / zip / ace / bz2 / lzh / lzw / lzx / tar / z / gzip
+ - rar / zip / jar / ace / bz2 / lzh / lzw / lzx / tar / z / gzip
  - encrypted files (pgp, etc)
  - LaTeX
  - flash
@@ -178,8 +236,10 @@ future formats:
  - VCF Virtual card file  
  - database types (oracle, postgres, etc)
  - PNM is a image file format, it can encode truecolor images (PPM), grayscale images (PGM) and black/white ones (PBM) (unix)
- - dna sequences
- - [file/data] sizes (kb / mb / other powers of 1024)
+ - dna sequences: GFF: http://www.sanger.ac.uk/Software/formats/GFF/GFF_Spec.shtml
+ - dna: GDB: http://gdb.wehi.edu.au/gdb/gdbDataModel.html ?
+ - dna sequences: CAF, Read Naming
+ - dna: Acedb, Genotator (richer formats?), HMMER, EXBLX, GeneWise, GCG (scan/tandem)
  - core dumps: <gremlin> -rw-------  1 grem  grem   503140352 Jun  5 18:17 tcsh.core
  - windows .url, .lnk, .pif
  - google search: format specification document
@@ -187,18 +247,25 @@ future formats:
  - Generic Diff Format Specification
  - Gettext (.po) catalogs [poEdit]
  - key map (telemate, mame)
+ - fax data
+ - bar codes (even as graphics) + link to product information
+ - Various Mime Types (esepcially as in java.awt.datatransfer.DataFlavor)
+ - various game maps (whatever's popular near release date)
 
-programs to obsolete:
+priority programs to obsolete:
  - notepad + wordpad
  - kde's hex editor
- - vim, etc
+ - vi, emacs
+ - excel
+ - leo [literate programming]`
+
+other programs to obsolete:
  - oracle
  - new locus
  - outlook
- - excel
  - telemate
  - windows
- - everything!
+ - everything
 
 projects to synergise with:
  - wine
@@ -212,6 +279,7 @@ silly stuff:
  - DOS logs (xxx: how to add "invisible" timestamps?)
  - how much does that number resemble someone randomly hitting the keyboard
    [Miffy: NSA-STD 102328292302    TTY logging of remote user commands with time stamps.]
+ - old text modes (with colours and symbols and codes): C64, ZX81, Spectrum, Apple ][...
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
@@ -272,9 +340,13 @@ ben's suggestions:
  - divx
  - externalist set of ontological enumerations
  - openGL stuff
+ - DMG mac(?) Disk Image file
 
 soel's idea:
  - financial transactions (linked to revolving bank account), video game style
 
 data modelling tools + terms:
  - http://datamodel.org/
+
+win:
+ - http://icfpcontest.cse.ogi.edu/ in 2003

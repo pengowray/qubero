@@ -10,14 +10,13 @@ import javax.swing.event.*;
  */
 
 class OpenFile { // previously did extend DefaultMutableTreeNode
-    protected RawData rawdata;
+    protected Data rawdata;
     
     protected EventListenerList listenerList = new EventListenerList();
    
     protected HexPanel hexpanel; //XXX: allow multiple?
 
-    protected SelectionResource selectionRes;
-    protected RawDataSelection selection; //XXX: do we really need both?
+    protected SelectionResource selection;
     
     //protected List definitionList = new LinkedList(); // (do we really need both?)
     protected List definitionResList = new LinkedList(); 
@@ -25,7 +24,7 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
     /**
      * def may be null. in future rawdata may be null too (to indicate an empty file).
      */
-    public OpenFile(RawData rawdata) {
+    public OpenFile(Data rawdata) {
 	this.rawdata = rawdata;
     }
 
@@ -110,8 +109,7 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         }
     }
     
-
-    protected void fireSelectionMade(Object source, RawDataSelection resource) {
+    protected void fireSelectionMade(Object source, SelectionResource resource) {
         Object[] listeners = listenerList.getListenerList();
         SelectionEvent event = null;
         for (int i = listeners.length-2; i>=0; i-=2) {
@@ -127,40 +125,28 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         }
     }
     
-   /*
-    protected void fireDefinitionMade(Object source, RawDataSelection resource) {
+    protected void fireSelectionCleared(Object source) {
         Object[] listeners = listenerList.getListenerList();
-        DefinitionEvent event = null;
+        SelectionEvent event = null;
         for (int i = listeners.length-2; i>=0; i-=2) {
             if (listeners[i]==OpenFileListener.class) {
                 // Lazily create the event:
                 if (event == null) {
                     if (source == null)
                         source = this;
-                    event = new DefinitionEvent(source,resource);
+                    event = new SelectionEvent(source,null);
                 }
-                ((OpenFileListener)listeners[i+1]).definitionMade(event);
+                ((OpenFileListener)listeners[i+1]).selectionCleared(event);
             }
         }
     }
-    protected void fireDefinitionRemoved(Object source, RawDataSelection resource) {
-        Object[] listeners = listenerList.getListenerList();
-        DefinitionEvent event = null;
-        for (int i = listeners.length-2; i>=0; i-=2) {
-            if (listeners[i]==OpenFileListener.class) {
-                // Lazily create the event:
-                if (event == null) {
-                    if (source == null)
-                        source = this;
-                    event = new DefinitionEvent(source,resource);
-                }
-                ((OpenFileListener)listeners[i+1]).definitionRemoved(event);
-            }
-        }
+
+    public void setSelection(Object source, Data data){
+        setSelection(source, new DefaultSelectionResource(this, data));
     }
-    */
-    public void setSelection(Object source, RawDataSelection sel){
-        // check that RawDataSelection is valid..
+
+    public void setSelection(Object source, SelectionResource sel){
+        // check that TransparentData is valid..
         if (sel.getOpenFile() != this)
             throw new IllegalArgumentException("Selection does not belong to this OpenFile");
         
@@ -168,34 +154,53 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
             return; // no need to do anything
         
         if (this.selection != null) {
-            fireResourceRemoved(source,"Selection",selectionRes);
+            fireResourceRemoved(source,"Selection",selection);
         }
             
+        //this.selection = sel;
         this.selection = sel;
-        this.selectionRes = new SelectionResource(sel);
         
-        fireResourceAdded(source,"Selection",selectionRes);
+        fireResourceAdded(source,"Selection",selection);
         fireSelectionMade(source,selection);
+        //fireSelectionMade(source,selection.getTransparentData());
     }
 
+    public void clearSelection(Object source){
+        if (this.selection == null)
+            return; // already clear
+        
+        SelectionResource oldSelRes = selection;
 
+        selection = null;
+        
+        fireResourceRemoved(source,"Selection",oldSelRes);
+        fireSelectionCleared(source);
+        
+    }
+
+    public void addBreak(Object source, DefinitionResource defRes) {
+        definitionResList.add(defRes);
+        fireResourceAdded(source,"Break",defRes);
+    }
+
+    public void deleteBreak(Object source, DefinitionResource defRes) {
+        boolean success = definitionResList.remove(defRes);
+        if (success) {
+            fireResourceRemoved(source,"Break",defRes);
+        } else {
+            System.out.println("you dick. src:" + source + " res:" + defRes);
+        }
+    }
+    
     // MoojTree rename (edit) of node / converting selection to a definition:
     public void addDefinition(Object source, DefinitionResource defRes) {
-        //DefinitionResource defRes = new DefaultDefinitionResource(sel);
-        //definitionList.add(sel);
         definitionResList.add(defRes);
         fireResourceAdded(source,"Definition",defRes);
-        //fireDefinitionMade(source,sel);
     }
     
     public void deleteDefinition(Object source, DefinitionResource defRes) {
-        //int loc = definitionList.indexOf(sel);
-        //definitionList.remove(loc);
-        //DefinitionResource defRes = (DefinitionResource)definitionResList.remove(loc);
         definitionResList.remove(defRes);
-        
         fireResourceRemoved(source,"Definition",defRes);
-        //fireDefinitionRemoved(source,sel);
     }
     
     public void definitionChange(Object source, DefinitionResource oldRes, DefinitionResource newRes) {
@@ -204,12 +209,6 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         addDefinition(source, newRes);
     }
 
-    public RawDataSelection getSelection(){
-        //XXX pending
-        return null;
-	//return currentSelection;
-    }
-    
     public void close(Object source) {
         fireFileClosed(source);
         // should we do anything else??
@@ -217,18 +216,17 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         //XXX: throw exceptions??
     }
 
-    public RawData getRawData() {
+    public Data getData() {
 	return rawdata;
     }
 
-    public void setRawData(RawData rawdata) {
+    public void setData(Data data) {
 	//XXX: should trigger a few things
 	this.rawdata = rawdata;
     }
 
     public String toString() {
-	return rawdata.toString() + "[file]";
-	//return "DefNode " + rawdata.toString();
+	return rawdata.toString();
     }
 
 

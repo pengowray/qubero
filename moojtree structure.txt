@@ -1,23 +1,47 @@
 root
  file
  current view(s)
-  the raw data
-  resources (was: section)
-   selection
-   definition
-   edited area
-   custom type def
-   folders (later maybe)
-   views
-   locks (locked areas + actual mutexes etc)
-   currently open/editing
-   errors
- clipboard
- filesystem
-  file
 
+ resources:
+   per view:
+    - show/hide layer
+    - rules for displaying types
+    - views for different areas
+
+   on a layer/folder.
+    - a mask
+    - default scope ? 
+    - resources (undo, edited area, errors, definitions)
+    - raw data
+    - greyed open: currently open/editing (like a mac, yeah?)
+    - "templated layer" vs "file layer"
+    - linked layers? / parent layer / master layer?
+
+   file layer (default layer):
+    - locks (locked areas + actual mutexes etc)
+    - file's raw data
+
+   floating on top:
+    - definitions+
+    - selection+
+    - bookmarks+
+
+   off the board:
+    - custom type def
+    - folders
+    - views
+    - file meta data (inc filename)
+    - currently open edit boxes?
+    - peripheral data sheets
+
+  other stuff:
+   - the file 
+   - filesystem (read)
+   - clipboard (see)
+
+ 
 Starting out: 15/08/2002
- Mooj creates a SimpleFileChunk, and a wrapping OpenFileNode (was DefNode)
+ Mooj creates a SimpleFileChunk, and a wrapping OpenFile
  Mooj triggers HexView() on OpenFileNode
  OpenFileNode.HexView() loads HexEditorGUI (xxx: in future, may latch on to existing HexEditorGUI for MDI)
  All operations go via OpenFileNode (e.g. selection, definiton, etc)

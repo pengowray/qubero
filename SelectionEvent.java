@@ -9,16 +9,20 @@
  * @author  administrator
  */
 class SelectionEvent extends java.util.EventObject {
-    protected RawDataSelection rds;
+    protected SelectionResource sr;
     
     /** Creates a new instance of SelectionEvent */
-    public SelectionEvent(Object source, RawDataSelection rds) {
+    public SelectionEvent(Object source, SelectionResource sr) {
         super(source);
-        this.rds = rds;
+        this.sr = sr;
     }
     
-    public RawDataSelection getRawDataSelection() {
-        return rds;
+    public TransparentData getTransparentData() {
+        return sr.getTransparentData();
+    }
+    
+    public SelectionResource getSelectionResource() {
+        return sr;
     }
     
 }

@@ -19,40 +19,58 @@ class MoojMenuBar extends JMenuBar {
                 gui.closeAll();
             }
         }));
-	nowmenu.add( new JMenuItem(new OpenAction(gui))); // "Open"
-	nowmenu.add( new JMenuItem("Save"));
-	nowmenu.add( new JMenuItem("Save as..."));
-	nowmenu.add( new JMenuItem("Print..."));
+	nowmenu.add( new JMenuItem(new AbstractAction("Open") { 
+            public void actionPerformed(ActionEvent e) { 
+                gui.open();
+            }
+        }));
+	nowmenu.add( new JMenuItem("Save")).setEnabled(false);
+	nowmenu.add( new JMenuItem("Save as...")).setEnabled(false);
+	nowmenu.add( new JMenuItem("Print...")).setEnabled(false);
 	nowmenu.add( new JSeparator() );
 	nowmenu.add( new JMenuItem(new ExitAction(gui))); // "Exit"
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("Edit");
+	nowmenu.add( new JMenuItem(new AbstractAction("Make Editable") { 
+            public void actionPerformed(ActionEvent e) { 
+                gui.setEditable(true);
+            }
+        }));
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("View");
 	nowmenu.add( new JMenuItem(new AbstractAction("ASCII") {
             public void actionPerformed(ActionEvent e) { 
-                gui.setGreyMode(false);
+                gui.setGreyMode(0);
+            }
+        }));
+	nowmenu.add( new JMenuItem(new AbstractAction("Grey scale") {
+            public void actionPerformed(ActionEvent e) { 
+                gui.setGreyMode(1);
+            }
+        }));
+	nowmenu.add( new JMenuItem(new AbstractAction("Grey scale II") {
+            public void actionPerformed(ActionEvent e) { 
+                gui.setGreyMode(2);
             }
         }));
         this.add(nowmenu);
-	nowmenu.add( new JMenuItem(new AbstractAction("Grey scale") {
-            public void actionPerformed(ActionEvent e) { 
-                gui.setGreyMode(true);
-            }
-        }));
 
-	nowmenu = new JMenu("Go");
+        nowmenu = new JMenu("Go");
+        nowmenu.add("no go.").setEnabled(false);
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("Tools");
+        nowmenu.add("no tool.").setEnabled(false);
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("Options");
+        nowmenu.add("no option.").setEnabled(false);
 	this.add(nowmenu);
 
 	nowmenu = new JMenu("Help");
+        nowmenu.add("no help.").setEnabled(false);
 	this.add(nowmenu);
     }
 

@@ -37,8 +37,8 @@ class MoojTree extends JTree implements ResourceListener, OpenFileListener {
 
 	getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION); //XXX: for now
 
-	//setRootVisible(false); //XXX: re-enable.. Why won't it work?
-	setShowsRootHandles(true);
+	setRootVisible(false);
+	setShowsRootHandles(false);
 	setEditable(true);
 
         //testRenameTest(); // debugging
@@ -46,19 +46,21 @@ class MoojTree extends JTree implements ResourceListener, OpenFileListener {
         if (openFile != null)
             addOpenFile(openFile);
 
-
 	// click on tree:
 	addTreeSelectionListener(new TreeSelectionListener() {
 	    public void valueChanged(TreeSelectionEvent treeEvent) {
 		DefaultMutableTreeNode node = (DefaultMutableTreeNode)getLastSelectedPathComponent();
-		if (node == null)
+		if (node == null) {
 		    return;
+                }
 
 		Object innerSelected = node.getUserObject();
                 if (innerSelected instanceof Resource){
                     Resource res = (Resource)innerSelected;
                     res.clickAction();
-		}
+		} else {
+                    // nothing
+                }
 	    }
 	});
 
@@ -91,25 +93,15 @@ class MoojTree extends JTree implements ResourceListener, OpenFileListener {
                             } else */
                              if (innerSelected instanceof Resource) {
                                 popup = ((Resource)innerSelected).getJMenu().getPopupMenu();
+                                popup.show(thisTree, e.getX(), e.getY());
                             } else {
                                 // default popup menu
-                                // XXX: should there be a default?
-                                JMenu pop = new JMenu("test");
-                                Action aa = new AddToTemplateAction(selPath);
-                                Action da = new DeleteDefinitionAction(selPath);
+                                JMenu pop = new JMenu("default menu");
                                 Action ia = new InfoAction(selPath);
-                                //Action mua = new MoveUpAction(selPath);
-                                //Action mda = new MoveDownAction(selPath);
-                                pop.add(aa);
-                                pop.add(da);
                                 pop.add(ia);
-                                //pop.add(mua);
-                                //pop.add(mda);
-                                pop.add(new JSeparator());
-                                pop.add(new JMenuItem("sock puppets are fun!"));
                                 popup = pop.getPopupMenu();
+                                popup.show(thisTree, e.getX(), e.getY());
                             }
-			    popup.show(thisTree, e.getX(), e.getY());
 			}
 		    }
 		}
@@ -150,7 +142,9 @@ class MoojTree extends JTree implements ResourceListener, OpenFileListener {
         topNodeList.add(openFileNode);
         
 	treemodel.insertNodeInto(openFileNode, topnode, topnode.getChildCount()); 
-	//setRootVisible(false); // uncomment! grr.
+        makeVisible(new TreePath(treemodel.getPathToRoot(openFileNode)));
+        
+	setRootVisible(false);
     }
     
     public void fileClosed(FileEvent e) {
@@ -186,8 +180,32 @@ class MoojTree extends JTree implements ResourceListener, OpenFileListener {
         resNodeList.add(resNode);
         
         int index = openFileList.indexOf(of);
-        DefaultMutableTreeNode treenode = (DefaultMutableTreeNode)topNodeList.get(index);
-        treemodel.insertNodeInto(resNode,treenode,treenode.getChildCount()); // XXX: position should be explicit        
+        DefaultMutableTreeNode openFileNode = (DefaultMutableTreeNode)topNodeList.get(index);
+        DefaultMutableTreeNode catNode = findOrAdd(openFileNode, cat);
+        
+        treemodel.insertNodeInto(resNode,catNode,catNode.getChildCount()); // XXX: position should be explicit
+        
+        makeVisible(new TreePath(treemodel.getPathToRoot(resNode)));
+    }
+    
+    protected DefaultMutableTreeNode findChild(DefaultMutableTreeNode parent, String child) {
+        for (Enumeration enum = parent.children(); enum.hasMoreElements(); ) {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode)enum.nextElement();
+            if (child.equals(node.getUserObject())){
+                return node;
+            }
+        }
+        return null;
+
+    }
+    protected DefaultMutableTreeNode findOrAdd(DefaultMutableTreeNode parent, String child) {
+        DefaultMutableTreeNode find = findChild(parent,child);
+        if (find != null)
+            return find;
+        
+        DefaultMutableTreeNode newChild = new DefaultMutableTreeNode(child);
+        treemodel.insertNodeInto(newChild,parent,parent.getChildCount());
+        return newChild;  
     }
     
     public void resourceMoved(ResourceEvent e) {
@@ -203,18 +221,20 @@ class MoojTree extends JTree implements ResourceListener, OpenFileListener {
         treemodel.removeNodeFromParent((MutableTreeNode)resNode);
         resList.remove(index);
         resNodeList.remove(index);
+
+        //xxx: could alternatively search up the path of the resource for the catNode
+        int ofIndex = openFileList.indexOf(of);
+        DefaultMutableTreeNode openFileNode = (DefaultMutableTreeNode)topNodeList.get(ofIndex);
+        DefaultMutableTreeNode catNode = findChild(openFileNode, cat);
+        if (catNode.getChildCount() == 0) {
+            treemodel.removeNodeFromParent(catNode);
+        }
     }
     
     public void dataEdited(EditEvent e) {
     }
     
     public void dataLengthChanged(EditEvent e) {
-    }
-    
-    public void definitionMade(DefinitionEvent e) {
-    }
-    
-    public void definitionRemoved(DefinitionEvent e) {
     }
     
     public void fileSaved(FileEvent e) {
@@ -226,7 +246,7 @@ class MoojTree extends JTree implements ResourceListener, OpenFileListener {
     public void selectionMade(SelectionEvent e) {
     }
     
-    public void selectionRemoved(SelectionEvent e) {
+    public void selectionCleared(SelectionEvent e) {
     }
     
     public void resourcePropertyChanged(ResourceEvent e) {
@@ -292,24 +312,10 @@ class InfoAction extends AbstractAction {
     }
 }
 
-/*
-abstract class NodeAction extends AbstractAction() {
-
-    public PathAction (String name, Icon icon, TreePath selPath) {
-	super(name, icon);
-	this.selPath = selPath;
-    }
-
-    public PathAction (String name, TreePath selPath) {
-	super(name);
-	this.selPath = selPath;
-    }
-}
-
-
 // do something with a tree node.
+/*
 abstract class NodeVisitor {
-    public NodeAction (TreePath selPath) {
+    public NodeVisitor (TreePath selPath) {
 	this.selPath = selPath;
     }
 

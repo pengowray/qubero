@@ -1,27 +1,31 @@
 import java.io.*;
 
 /** 
- * rudimentary file editing. no extending file size.
+ * rudimentary file editing. entire file is kept in an array.
  */
-class SimpleFileChunk extends RawData {
+class SmallFileData extends Data {
     protected File file;
     protected byte[] data = null;
     protected String name;
 
-    public SimpleFileChunk(File file) {
+    public SmallFileData(File file) {
 	this.file = file;
 	name = file.getName();
         readFileToMemory();
     }	
 
-    public SimpleFileChunk(String filename) {
+    public SmallFileData(String filename) {
         this(new File(filename));
     }
-
-    public byte[] getData() {
-        return data; // make copy?
+    
+    public InputStream getDataStream(long offset, long length) {
+        return new ByteArrayInputStream(data, (int)offset, (int)length); // no loss.
     }
 
+    public InputStream getDataStream(){
+        return new ByteArrayInputStream(data);
+    }
+    
     /**
     * reads the entire (hex) file to memory for quick access
     */
@@ -64,7 +68,7 @@ class SimpleFileChunk extends RawData {
     }
 
     // make long eventually?
-    public int getLength() {
+    public long getLength() {
         return data.length;
     }
 
@@ -75,5 +79,6 @@ class SimpleFileChunk extends RawData {
     public String getType() {
         return "file";
     }
+    
     
 }

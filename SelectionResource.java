@@ -1,45 +1,48 @@
-import java.util.*;
-import javax.swing.*;
-import javax.swing.event.*;
-import java.awt.event.ActionEvent;
+/*
+ * SelectionResource.java
+ *
+ * Created on 4 September 2002, 19:40
+ */
 
-class SelectionResource extends Resource {
-    final protected RawDataSelection sel; 
-    public SelectionResource(RawDataSelection sel) {
-	super(sel.getOpenFile());
+/**
+ *
+ * @author  administrator
+ */
+public class SelectionResource extends Resource {
+    final protected Data sel;
+    
+    public SelectionResource(OpenFile openFile, Data sel) {
+	super(openFile);
         this.sel = sel;
     }
-
-    public JMenu getJMenu() {
-        final SelectionResource This = this;
+    
+    public Data getData() {
+        return sel;
+    }
+    
+    public TransparentData getTransparentData() {
+        if (sel instanceof TransparentData) {
+            return (TransparentData)sel;
+        }
         
-  	JMenu menu = new JMenu("Example");
-        Action addToTemplate = new AbstractAction("Add to template") {
-            public void actionPerformed(ActionEvent e) {
-                DefaultDefinitionResource defRes = new DefaultDefinitionResource(sel);
-                getOpenFile().addDefinition(this, defRes);
-            }
-        };
-	menu.add(addToTemplate);
+        return sel.getTransparentData();
+    }
+    
+    public boolean equals(SelectionResource o) {
+        if (o == this)
+            return true;
         
-	menu.add(new JMenuItem("and stuff!"));
-	//JPopupMenu popup = menu.getPopupMenu();
-	return menu;
+        return (sel.getStart() == o.sel.getStart() && sel.getLength() == o.sel.getLength());
     }
     
-    public void clickAction() {
-        getOpenFile().setSelection(this, sel);
+    public boolean equals(Object o) {
+        if (o == this)
+            return true;
+        
+        if (o instanceof SelectionResource) {
+            return equals((SelectionResource)o);
+        }
+        
+        return false;
     }
-
-    // how to respond to a rename event
-    public void rename(String name) {
-	//XXX
-	return;
-    }
-    
-    public String toString() {
-        return sel.toString();
-    }
-    
-    
 }

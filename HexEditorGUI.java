@@ -4,6 +4,7 @@ import java.awt.event.*;
 import javax.swing.*;
 import javax.swing.tree.*;
 import java.io.*;
+import java.net.*;
 
 /** HexEditorGUI creates and coordinates all the graphical components. */
 class HexEditorGUI {
@@ -14,13 +15,27 @@ class HexEditorGUI {
     protected JLabel statusbar;
     protected MoojTree moojtree;
     protected MoojMenuBar mmb;
+    protected Image icon;
 
     protected ExitAction exitAction;
+    
+    protected String titleSuffix =  " - Mooj";
 
-    public HexEditorGUI(OpenFile openFile){
-        this.openFile = openFile;
-	
+    public HexEditorGUI() {
+        setIcon();
+        openFile = new OpenFile(new DemoData(icon));
         start();
+    }
+    public HexEditorGUI(OpenFile openFile){
+        setIcon();
+        this.openFile = openFile;
+        start();
+    }
+    
+    protected void setIcon() {
+        URL url = ClassLoader.getSystemResource("mooj32.png");
+        if (url != null)
+            icon = Toolkit.getDefaultToolkit().createImage(url);
     }
 
     protected void start() {
@@ -33,7 +48,8 @@ class HexEditorGUI {
 	mmb = new MoojMenuBar(this);
 
 	// ARRANGE THEM IN A FRAME
-        jframe = new JFrame(openFile + " - Mooj" );
+        jframe = new JFrame(openFile + titleSuffix );
+        jframe.setIconImage(icon);
 	jframe.setJMenuBar(mmb);
         JScrollPane sp_hexpanel = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, 
 						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
@@ -45,6 +61,8 @@ class HexEditorGUI {
 	JSplitPane splitpane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sp_moojtree, sp_hexpanel);
         splitpane.setResizeWeight(1);
 
+        //jframe.setContentPane(sp_hexpanel);
+        
         Container c = jframe.getContentPane();
      	c.add(splitpane, BorderLayout.CENTER);
         c.add(statusbar, BorderLayout.SOUTH);
@@ -58,8 +76,9 @@ class HexEditorGUI {
             (FRAMEBORDER + sp_hexpanel.getVerticalScrollBar().getWidth() + hexpanel.getPreferredSize().width + splitpane.getDividerSize());
         //int treewidth = c.getWidth() - hexpanel.getWidth();
         splitpane.setDividerLocation(treewidth);
-        jframe.setVisible(true);
 
+        jframe.setVisible(true);
+        
         // SET UP EVENTS
         jframe.addWindowListener(new WindowAdapter() {
             public void windowClosing(WindowEvent e) {
@@ -72,16 +91,7 @@ class HexEditorGUI {
 
     }
 
-    //XXX: make this work again
-    /*
-    public void selectionMade(SelectionEvent e) {
-	moojtree.selectionMade(e);
-	SetStatusMessage("Selection " + e);
-    }
-    */
-
     public void setStatusMessage(String msg) {
-        //XXX: in future, a MDI container might use same statusbar for multiple HexEditors and prepend the file name to the message.
 	statusbar.setText(msg);	
     }
 
@@ -99,15 +109,20 @@ class HexEditorGUI {
     }
 
     public void open(File file) { 
-        
+	LargeFileData raw = new LargeFileData(file);
+        open(raw);
+    }
+
+    public void open(Data raw) { 
+        open(new OpenFile(raw));
+    }
+    public void open(OpenFile of) { 
         closeAll();
         
-	SimpleFileChunk raw = new SimpleFileChunk(file);
-	OpenFile of = new OpenFile(raw);
 	this.openFile = of;
         hexpanel.setOpenFile(of);
         moojtree.addOpenFile(of);
-        jframe.setTitle(of.toString());
+        jframe.setTitle(of.toString() + titleSuffix);
         //mmb.setOpenFile(of); // menu bar
     }
     
@@ -123,7 +138,7 @@ class HexEditorGUI {
     public void shrink(JFrame jframe) {
 	//XXX: shrink size if too big (hack!)
 	int lowHeight = 50; 
-	int niceHeight = 500; 
+	int niceHeight = 500;
         int addWidth = 100; // give it an extra 100
 	int height = jframe.getHeight();
 	int width = jframe.getWidth();
@@ -135,12 +150,26 @@ class HexEditorGUI {
 	} else {
 	    jframe.setSize(width+addWidth,height);
         }
-            
-        
     }
     
-    public void setGreyMode(boolean mode) {
+    public void setGreyMode(int mode) {
         hexpanel.setGreyMode(mode);
+    }
+    
+    public void setEditable(boolean editable) {
+        if (editable) {
+            Data oldData = openFile.getData();
+            DiffData newData = new DiffData(openFile, oldData);
+            OpenFile newOpenFile = new OpenFile(newData);
+            newData.setOpenFile(newOpenFile);
+            open(newOpenFile);
+        } else {
+            //xxx: not reversible!
+        }
+    }
+    
+    public Image getIcon() {
+        return icon;
     }
     
 }

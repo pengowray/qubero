@@ -16,7 +16,7 @@ public interface OpenFileListener extends java.util.EventListener {
     public void fileClosed(FileEvent e);
     
     public void selectionMade(SelectionEvent e);
-    public void selectionRemoved(SelectionEvent e); // no longer selected
+    public void selectionCleared(SelectionEvent e);
 
     public void selectionCopied(ClipboardEvent e);
         

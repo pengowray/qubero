@@ -15,10 +15,10 @@ import java.awt.event.ActionEvent;
  */
 public class DefaultDefinitionResource extends DefinitionResource {
     
-    final protected RawDataSelection sel;
+    final protected Data sel;
 
-    public DefaultDefinitionResource(RawDataSelection sel) {
-	super(sel.getOpenFile());
+    public DefaultDefinitionResource(OpenFile openFile, Data sel) {
+	super(openFile);
         this.sel = sel;
     }
 
@@ -36,7 +36,8 @@ public class DefaultDefinitionResource extends DefinitionResource {
         
         Action intAction = new AbstractAction("Convert to int") {
             public void actionPerformed(ActionEvent e) {
-                IntResource intRes = new IntResource(sel,4,IntResource.ONES_COMP);
+                //IntResource intRes = new IntResource(sel,4,IntResource.ONES_COMP);
+                IntResource intRes = new IntResource(openFile, sel,(int)sel.getLength(),IntResource.TWOS_COMP); //xxx possible precision loss
                 openFile.definitionChange(e.getSource(), This, intRes); // xxx
             }
         };
