@@ -12,6 +12,8 @@ public abstract class EditableData extends Data {
     
     public abstract void delete(long offset, long length);
     
+    public abstract void delete(LongListSelectionModel selection);
+    
     public void insert(long offset, Data data) {
         data = data.getStartShiftedSelection(offset - data.getStart());
         insert(data);
@@ -26,8 +28,9 @@ public abstract class EditableData extends Data {
 
     public abstract void overwrite(Data data);
     
-    public void insertReplace(Data oldData, Data newData) {
-        delete(oldData.getStart(), oldData.getLength());
-        insert(oldData.getStart(), newData);
+    public void insertReplace(LongListSelectionModel selection, Data newData) {
+        //delete(oldData.getStart(), oldData.getLength());
+        delete(selection);
+        insert(selection.getAnchorSelectionIndex(), newData); //xxx: anchor or lead?
     }
 }

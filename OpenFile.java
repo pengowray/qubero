@@ -16,7 +16,7 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
     
     protected EventListenerList listenerList = new EventListenerList();
 
-    protected SelectionResource selectionResource; // was called 'selection'
+    protected DefaultSelectionResource selectionResource; // was called 'selection'
     protected boolean isSelectiomResourcePublished = false;
     protected LongListSelectionModel selectionModel;
     
@@ -116,6 +116,7 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
     public void setSelectionModel(LongListSelectionModel selectionModel) {
         if (this.selectionModel != null) {
             this.selectionModel.removeLongListSelectionListener(this);
+            fireResourceRemoved(this,"Selection",this.selectionResource);
         }
         
         this.selectionModel = selectionModel;
@@ -149,7 +150,7 @@ class OpenFile implements LongListSelectionListener { // previously did extend D
             fireResourceRemoved(this,"Selection",selectionResource);
         } else if (!selectionModel.isSelectionEmpty() && !isSelectiomResourcePublished) {
             if (selectionResource == null) {
-                selectionResource = new SelectionResource(this);
+                selectionResource = new DefaultSelectionResource(this);
             }
             isSelectiomResourcePublished = true;
             fireResourceAdded(this,"Selection",selectionResource);

@@ -17,9 +17,11 @@ class SelectionEvent extends java.util.EventObject {
         this.sr = sr;
     }
     
+    /*
     public TransparentData getTransparentData() {
         return sr.getTransparentData();
     }
+     */
     
     public SelectionResource getSelectionResource() {
         return sr;

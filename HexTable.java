@@ -143,7 +143,7 @@ public class HexTable extends JTable implements ResourceListener {
         if (! e.getCategory().equals("Selection"))
             return;
         
-        unifiedSelectionModel.setSelectionModel(openFile.getSelectionModel())
+        unifiedSelectionModel.setSelectionModel(openFile.getSelectionModel());
         
         
     }

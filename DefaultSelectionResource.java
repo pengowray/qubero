@@ -15,8 +15,8 @@ class DefaultSelectionResource extends SelectionResource {
   	JMenu menu = new JMenu("Selection");
         Action addToTemplate = new AbstractAction("Add to template") {
             public void actionPerformed(ActionEvent e) {
-                LongListSelectionModel selection = (LongListSelectionModel)getOpenFile().getSelectionModel().clone();
-                DefaultDefinitionResource def = new DefaultDefinitionResource(selection);
+                LongListSelectionModel selection = (LongListSelectionModel)(getOpenFile().getSelectionModel().clone());
+                DefaultDefinitionResource def = new DefaultDefinitionResource(getOpenFile(), selection);
                 getOpenFile().addDefinition(this, def);
             }
         };
@@ -29,7 +29,7 @@ class DefaultSelectionResource extends SelectionResource {
                     //getOpenFile().clearSelection(this);
                     //((DiffData)data).delete(sel.getStart(), sel.getLength());
                     LongListSelectionModel selection = getOpenFile().getSelectionModel();
-                    getOpenFile().getData().delete(selection);
+                    getOpenFile().getEditableData().delete(selection);
                 }
             };
             menu.add(delAction);
@@ -40,11 +40,13 @@ class DefaultSelectionResource extends SelectionResource {
                     //getOpenFile().clearSelection(this);
                     //((DiffData)data).insert( sel.getStart(), new DemoData((int)sel.getLength())); //xxx: possible precision loss
                     long pos = getOpenFile().getSelectionModel().getLeadSelectionIndex();
-                    getOpenFile().getData().insert(pos, new DemoData(64));
+                    getOpenFile().getEditableData().insert(pos, new DemoData(64));
                 }
             };
             menu.add(insAction);
 
+            //xxx: put this back:
+            /*
             Action replaceAction = new AbstractAction("replace with 00randomFF") {
                 public void actionPerformed(ActionEvent e) {
                     getOpenFile().clearSelection(this);
@@ -52,6 +54,7 @@ class DefaultSelectionResource extends SelectionResource {
                 }
             };
             menu.add(replaceAction);
+             */
             
             //xxx: paste
         }
@@ -74,9 +77,12 @@ class DefaultSelectionResource extends SelectionResource {
 	return;
     }
     
+    //xxx:
+    /*
     public String toString() {
         return sel.toString();
     }
+     */
     
     
 }

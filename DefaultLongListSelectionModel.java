@@ -21,7 +21,7 @@ import javax.swing.event.*;
 
 
 /**
- * Default data model for list selections. 
+ * Default data model for list selections.
  * <p>
  * <strong>Warning:</strong>
  * Serialized objects of this class will not be compatible with
@@ -38,7 +38,7 @@ import javax.swing.event.*;
  * @see ListSelectionModel
  */
 
-public class DefaultLongListSelectionModel implements LongListSelectionModel, Cloneable, Serializable
+public class DefaultLongListSelectionModel implements LongListSelectionModel, Serializable
 {
     private static final long MIN = -1;
     private static final long MAX = Long.MAX_VALUE;
@@ -49,10 +49,10 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
     private long leadIndex = -1;
     private long firstAdjustedIndex = MAX;
     private long lastAdjustedIndex = MIN;
-    private boolean isAdjusting = false; 
+    private boolean isAdjusting = false;
 
-    private long firstChangedIndex = MAX; 
-    private long lastChangedIndex = MIN; 
+    private long firstChangedIndex = MAX;
+    private long lastChangedIndex = MIN;
 
     private BitSet value = new BitSet(32);
     protected EventListenerList listenerList = new EventListenerList();
@@ -128,10 +128,10 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
     }
 
     /**
-     * Returns an array of all the list selection listeners 
+     * Returns an array of all the list selection listeners
      * registered on this <code>DefaultListSelectionModel</code>.
      *
-     * @return all of this model's <code>ListSelectionListener</code>s 
+     * @return all of this model's <code>ListSelectionListener</code>s
      *         or an empty
      *         array if no list selection listeners are currently registered
      *
@@ -146,11 +146,11 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
     }
 
     /**
-     * Notifies listeners that we have ended a series of adjustments. 
+     * Notifies listeners that we have ended a series of adjustments.
      */
-    protected void fireValueChanged(boolean isAdjusting) {  
+    protected void fireValueChanged(boolean isAdjusting) {
         if (lastChangedIndex == MIN) {
-	    return; 
+	    return;
 	}
 	/* Change the values before sending the event to the
 	 * listeners in case the event causes a listener to make
@@ -159,8 +159,8 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
 	long oldFirstChangedIndex = firstChangedIndex;
 	long oldLastChangedIndex = lastChangedIndex;
 	firstChangedIndex = MAX;
-	lastChangedIndex = MIN; 
-	fireValueChanged(oldFirstChangedIndex, oldLastChangedIndex, isAdjusting); 
+	lastChangedIndex = MIN;
+	fireValueChanged(oldFirstChangedIndex, oldLastChangedIndex, isAdjusting);
     }
 
 
@@ -197,15 +197,15 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
     }
 
     private void fireValueChanged() {
-	if (lastAdjustedIndex == MIN) { 
+	if (lastAdjustedIndex == MIN) {
 	    return;
 	}
-	/* If getValueAdjusting() is true, (eg. during a drag opereration) 
-	 * record the bounds of the changes so that, when the drag finishes (and 
-	 * setValueAdjusting(false) is called) we can post a single event 
-	 * with bounds covering all of these individual adjustments.  
-	 */ 
-	if (getValueIsAdjusting()) { 
+	/* If getValueAdjusting() is true, (eg. during a drag opereration)
+	 * record the bounds of the changes so that, when the drag finishes (and
+	 * setValueAdjusting(false) is called) we can post a single event
+	 * with bounds covering all of these individual adjustments.
+	 */
+	if (getValueIsAdjusting()) {
             firstChangedIndex = Math.min(firstChangedIndex, firstAdjustedIndex);
 	    lastChangedIndex = Math.max(lastChangedIndex, lastAdjustedIndex);
         }
@@ -216,7 +216,7 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
 	long oldFirstAdjustedIndex = firstAdjustedIndex;
 	long oldLastAdjustedIndex = lastAdjustedIndex;
 	firstAdjustedIndex = MAX;
-	lastAdjustedIndex = MIN; 
+	lastAdjustedIndex = MIN;
 
 	fireValueChanged(oldFirstAdjustedIndex, oldLastAdjustedIndex);
     }
@@ -256,8 +256,8 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
      *
      * @since 1.3
      */
-    public EventListener[] getListeners(Class listenerType) { 
-	return listenerList.getListeners(listenerType); 
+    public EventListener[] getListeners(Class listenerType) {
+	return listenerList.getListeners(listenerType);
     }
 
     // Updates first and last change indices
@@ -474,15 +474,15 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
         updateLeadAnchorIndices(index0, index1);
 
 	long clearMin = Math.min(index0, index1);
-	long clearMax = Math.max(index0, index1); 
+	long clearMax = Math.max(index0, index1);
 	long setMin = MAX;
 	long setMax = MIN;
 
-        // If the removal would produce to two disjoint selections in a mode 
-	// that only allows one, extend the removal to the end of the selection. 
-	if (getSelectionMode() != MULTIPLE_INTERVAL_SELECTION && 
+        // If the removal would produce to two disjoint selections in a mode
+	// that only allows one, extend the removal to the end of the selection.
+	if (getSelectionMode() != MULTIPLE_INTERVAL_SELECTION &&
 	       clearMin > minIndex && clearMax < maxIndex) {
-	    clearMax = maxIndex; 
+	    clearMax = maxIndex;
         }
 
         changeSelection(clearMin, clearMax, setMin, setMax);
@@ -490,16 +490,16 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
 
     private void setState(long index, boolean state) {
         if (state) {
-	    set(index); 
+	    set(index);
 	}
 	else {
-	    clear(index); 
+	    clear(index);
 	}
     }
 
     /**
-     * Insert length indices beginning before/after index. If the value 
-     * at index is itself selected, set all of the newly inserted 
+     * Insert length indices beginning before/after index. If the value
+     * at index is itself selected, set all of the newly inserted
      * items, otherwise leave them unselected. This method is typically
      * called to sync the selection model with a corresponding change
      * in the data model.
@@ -517,14 +517,14 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
 	 * insMinIndex).
 	 */
 	for(long i = maxIndex; i >= insMinIndex; i--) {
-	    setState(i + length, value.get((int)i)); 
+	    setState(i + length, value.get((int)i));
 	}
 
 	/* Initialize the newly inserted indices.
 	 */
-       	boolean setInsertedValues = value.get((int)index); 
-	for(long i = insMinIndex; i <= insMaxIndex; i++) { 
-	    setState(i, setInsertedValues); 
+       	boolean setInsertedValues = value.get((int)index);
+	for(long i = insMinIndex; i <= insMaxIndex; i++) {
+	    setState(i, setInsertedValues);
 	}
         fireValueChanged();
     }
@@ -546,7 +546,7 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
 	 * gap.
 	 */
 	for(long i = rmMinIndex; i <= maxIndex; i++) {
-	    setState(i, value.get((int)(i + gapLength))); 
+	    setState(i, value.get((int)(i + gapLength)));
 	}
         fireValueChanged();
     }
@@ -580,11 +580,17 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
      *    both (a) implement the Cloneable interface and (b) define a
      *    <code>clone</code> method.
      */
-    public Object clone() throws CloneNotSupportedException {
-	DefaultLongListSelectionModel clone = (DefaultLongListSelectionModel)super.clone();
-	clone.value = (BitSet)value.clone();
-	clone.listenerList = new EventListenerList();
-	return clone;
+    public Object clone() {
+        try {
+            DefaultLongListSelectionModel clone = (DefaultLongListSelectionModel)super.clone();
+            clone.value = (BitSet)value.clone();
+            clone.listenerList = new EventListenerList();
+            return clone;
+        } catch ( CloneNotSupportedException e) {
+            //xxx: hush hush
+            e.printStackTrace();
+            return null;
+        }
     }
 
     // implements javax.swing.ListSelectionModel
@@ -598,63 +604,63 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
     }
 
     /**
-     * Set the anchor selection index, leaving all selection values unchanged. 
-     * If leadAnchorNotificationEnabled is true, send a notification covering 
-     * the old and new anchor cells. 
+     * Set the anchor selection index, leaving all selection values unchanged.
+     * If leadAnchorNotificationEnabled is true, send a notification covering
+     * the old and new anchor cells.
      *
-     * @see #getAnchorSelectionIndex     
+     * @see #getAnchorSelectionIndex
      * @see #setLeadSelectionIndex
-     */   
-    public void setAnchorSelectionIndex(long anchorIndex) { 
-	updateLeadAnchorIndices(anchorIndex, this.leadIndex); 
+     */
+    public void setAnchorSelectionIndex(long anchorIndex) {
+	updateLeadAnchorIndices(anchorIndex, this.leadIndex);
         this.anchorIndex = anchorIndex;
-	fireValueChanged(); 
+	fireValueChanged();
     }
 
     /**
-     * Sets the lead selection index, ensuring that values between the 
-     * anchor and the new lead are either all selected or all deselected. 
-     * If the value at the anchor index is selected, first clear all the 
-     * values in the range [anchor, oldLeadIndex], then select all the values 
+     * Sets the lead selection index, ensuring that values between the
+     * anchor and the new lead are either all selected or all deselected.
+     * If the value at the anchor index is selected, first clear all the
+     * values in the range [anchor, oldLeadIndex], then select all the values
      * values in the range [anchor, newLeadIndex], where oldLeadIndex is the old
-     * leadIndex and newLeadIndex is the new one. 
-     * <p> 
-     * If the value at the anchor index is not selected, do the same thing in 
-     * reverse selecting values in the old range and deslecting values in the
-     * new one. 
+     * leadIndex and newLeadIndex is the new one.
      * <p>
-     * Generate a single event for this change and notify all listeners. 
-     * For the purposes of generating minimal bounds in this event, do the 
-     * operation in a single pass; that way the first and last index inside the 
-     * [Long]ListSelectionEvent that is broadcast will refer to cells that actually 
-     * changed value because of this method. If, instead, this operation were 
-     * done in two steps the effect on the selection state would be the same 
-     * but two events would be generated and the bounds around the changed 
-     * values would be wider, including cells that had been first cleared only 
-     * to later be set. 
+     * If the value at the anchor index is not selected, do the same thing in
+     * reverse selecting values in the old range and deslecting values in the
+     * new one.
+     * <p>
+     * Generate a single event for this change and notify all listeners.
+     * For the purposes of generating minimal bounds in this event, do the
+     * operation in a single pass; that way the first and last index inside the
+     * [Long]ListSelectionEvent that is broadcast will refer to cells that actually
+     * changed value because of this method. If, instead, this operation were
+     * done in two steps the effect on the selection state would be the same
+     * but two events would be generated and the bounds around the changed
+     * values would be wider, including cells that had been first cleared only
+     * to later be set.
      * <p>
      * This method can be used in the <code>mouseDragged</code> method
-     * of a UI class to extend a selection.  
+     * of a UI class to extend a selection.
      *
-     * @see #getLeadSelectionIndex     
+     * @see #getLeadSelectionIndex
      * @see #setAnchorSelectionIndex
-     */   
-    public void setLeadSelectionIndex(long leadIndex) { 
+     */
+    public void setLeadSelectionIndex(long leadIndex) {
         long anchorIndex = this.anchorIndex;
 
-	if ((anchorIndex == -1) || (leadIndex == -1)) { 
-	    return; 
+	if ((anchorIndex == -1) || (leadIndex == -1)) {
+	    return;
 	}
 
-	if (this.leadIndex == -1) { 
-	    this.leadIndex = leadIndex; 
+	if (this.leadIndex == -1) {
+	    this.leadIndex = leadIndex;
 	}
 
-	boolean shouldSelect = value.get((int)this.anchorIndex); 
+	boolean shouldSelect = value.get((int)this.anchorIndex);
 
-        if (getSelectionMode() == SINGLE_SELECTION) { 
+        if (getSelectionMode() == SINGLE_SELECTION) {
             anchorIndex = leadIndex;
-            shouldSelect = true; 
+            shouldSelect = true;
         }
 
         long oldMin = Math.min(this.anchorIndex, this.leadIndex);
@@ -662,7 +668,7 @@ public class DefaultLongListSelectionModel implements LongListSelectionModel, Cl
 	long newMin = Math.min(anchorIndex, leadIndex);
 	long newMax = Math.max(anchorIndex, leadIndex);
 
-	updateLeadAnchorIndices(anchorIndex, leadIndex); 
+	updateLeadAnchorIndices(anchorIndex, leadIndex);
 
         if (shouldSelect) {
             changeSelection(oldMin, oldMax, newMin, newMax);

@@ -62,11 +62,15 @@ abstract class Data implements Comparable {
         return "data";
     }
 
+    //////////////////////// cut
     /*
      * too many convinience methods.. remove some:
-     *
+     */
     // start is relative to the board.
-    abstract public InputStream getDataStream(long start, long length);
+    public InputStream getDataStream(long start, long length)  throws IOException {
+        //xxx: check for errors
+        return getDataStream(start - getStart());
+    }
 
     // offset is relative to the start of the object.
     public InputStream getDataStream(long offset) throws IOException {
@@ -74,7 +78,7 @@ abstract class Data implements Comparable {
         i.skip((int)offset); // precision!
         return i;
     }
-    */
+    ///////////////////// remove to here
 
     abstract public InputStream getDataStream();
     

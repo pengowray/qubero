@@ -66,6 +66,11 @@ public class DiffData extends EditableData {
     public void delete(long offset, long length) {
         addMod(new DelMod(offset, length));
     }
+
+    public void delete(LongListSelectionModel selection) {
+        //xxx: wrong wrong wrong
+        addMod(new DelMod(selection.getMinSelectionIndex(), selection.getMaxSelectionIndex()));
+    }
     
     public void insert(Data data) {
         addMod(new InsertMod(data));
@@ -75,9 +80,9 @@ public class DiffData extends EditableData {
         addMod(new OverwriteMod(data));
     }
     
-    public void insertReplace(Data oldData, Data newData) {
+    public void insertReplace(LongListSelectionModel selection, Data newData) {
         //xxx: optimize with new Mod class
-        super.insertReplace(oldData,newData);
+        super.insertReplace(selection,newData);
     }
     
     protected void addMod(Mod mod){
@@ -240,7 +245,10 @@ public class DiffData extends EditableData {
         
         for (Iterator i = breakList.iterator(); i.hasNext(); ) {
             Object o = i.next();
-            DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, (Data)o);
+            //DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, (Data)o);
+            Data d = (Data)o;
+            DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, new SimpleLongListSelectionModel(d.getStart(), d.getStart()+d.getLength()));
+            
             openFile.addBreak(this, ddr);
             breakResList.add(ddr);
             //a++;
@@ -261,6 +269,7 @@ public class DiffData extends EditableData {
             i.remove();
         }
     }
+    
     
     class DiffDataInputStream extends InputStream {
         Iterator breakIt;

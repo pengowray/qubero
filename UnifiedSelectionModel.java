@@ -21,7 +21,8 @@ import java.util.*;
 
 public class UnifiedSelectionModel implements TableColumnModelListener, ListSelectionListener, TableModelListener {
     int width, height;
-    LongListSelectionModel lsm = new DefaultLongListSelectionModel();
+    LongListSelectionModel lsm = new SegmentalLongListSelectionModel();
+    //LongListSelectionModel lsm = new DefaultLongListSelectionModel();
     
     //RowSelectionModel rsm;
     
@@ -86,7 +87,7 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
         
     }
     
-    /** 
+    /**
      * column change
      */
     public void columnSelectionChanged(ListSelectionEvent e) {
@@ -101,7 +102,7 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
             }
             colIsAdjusting = false;
         }
-        setSelection();
+        //setSelection();
     }
     
     /**
@@ -123,7 +124,7 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
         setSelection();
     }
     
-    /** 
+    /**
      * This fine grain notification tells listeners the exact range
      * of cells, rows, or columns that changed.
      * xxx: may not be neccesary to get this notification
@@ -140,17 +141,21 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
         int rowLead = jtable.getSelectionModel().getLeadSelectionIndex();
         int colAnchor = jtable.getColumnModel().getSelectionModel().getAnchorSelectionIndex();
         int colLead = jtable.getColumnModel().getSelectionModel().getLeadSelectionIndex();
-        
+	
         noAnchor = (rowAnchor == -1 || colAnchor == -1);
         noLead = (rowLead == -1 || colLead == -1);
         if (noLead && noAnchor) {
             return;
         } else if (noLead) {
+	    System.out.println("setting anchor");
             lsm.setAnchorSelectionIndex(rowAnchor * width + colAnchor);
         } else if (noAnchor) {
+	    System.out.println("setting lead");
             lsm.setLeadSelectionIndex(rowLead * width + colLead);
         } else {
-            lsm.setSelectionInterval( rowAnchor * width + colAnchor, rowLead * width + colLead );
+	    System.out.println("setting selection");
+            //lsm.setSelectionInterval( rowAnchor * width + colAnchor, rowLead * width + colLead );
+            lsm.addSelectionInterval( rowAnchor * width + colAnchor, rowLead * width + colLead );
         }
     }
     

@@ -1,7 +1,7 @@
 moojasm todo.txt
 
-"templatation" 
-binary data modelling software.
+"templatation"
+binary data modelling spreadsheet and database.
 the photoshop of hex editors.
 view, edit, create java bytecode + automation
 
@@ -55,9 +55,11 @@ Log started Aug 21 2002:
              LineRepeater complete (but faulty)
  2002-10-30  HexTable now displays with units aligned nicely (kinda)
  2002-11-09  HexTable selection now selects in the right shape
- 2002-11-10  created DefaultLongListSelectionModel / LongListSelectionModel / LongListSelectionEvent / LongListSelectionListener 
+ 2002-11-10  created DefaultLongListSelectionModel / LongListSelectionModel / LongListSelectionEvent / LongListSelectionListener
              selection now triggers events (as before)
  2002-11-18  SelectionData created. various other fixes.
+ 2002-11-19  Compiles/Runs again. lots of xxx's to fix.
+ 2002-11-25  SegmentalLongListSelectionModel finally complete (little debugging needed still)
 
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
@@ -65,17 +67,17 @@ see also:
 priority/immediate features:
  - get old stuff working again
  - make DefaultLongListSelectionModel really "long".
+ - EDIT hex / ascii
  - put HexTables together to make them long too (combined with UnifiedSelectionModel)
  - MULTIPLE_INTERVAL_SELECTION editing modes:
     fixed length
     overflow mode (+ overflow / length indicators / combined overflow indicator / string terminator)
-    block pattern 
+    block pattern
  - background "color"/pattern: revealed when holes are made or new stuff added
  - new long demo: blocks of 8 bytes of the first byte's address.
  - save
  - undo
  - layers
- - EDIT hex / ascii
  - ascii as unicode
  - duplicate hex (copy/paste)
  - error messages / throw exceptions
@@ -99,7 +101,7 @@ UI to do:
  - allow right click on hex area
  - show selection on ascii side as a hollow box
  - highlighting colour scheme
- D*when right clicking a (non-selected) item on tree, show a dotted outline selection 
+ D*when right clicking a (non-selected) item on tree, show a dotted outline selection
  - DnD tree elements
  - select a template area by clicking it on the hex side
  - header lines (eg "1 Megabyte", "10 Megabytes", or "1st Megabyte"?)
@@ -114,8 +116,8 @@ bugs:
  - Break resources don't "delete" properly.. sends wrong Category type.
  - fix bug: rename of item destroys it
  - "negative zero" for one's comp and sign magnitude
- - overlap of lines on very big files: 
-   Bug ID: 4707774 Graphics.drawString( String, int, int ) not precise for large ints 
+ - overlap of lines on very big files:
+   Bug ID: 4707774 Graphics.drawString( String, int, int ) not precise for large ints
    http://developer.java.sun.com/developer/bugParade/bugs/4707774.html
 
 for v0.2
@@ -123,7 +125,7 @@ for v0.2
  - defintion -> xml -> definition
  - scoped type definition with inheritance
  - external main definition file
-D hex display 
+D hex display
  - highlighting of parts (outline) and errors (red)
 D display: tree of parts
  - table of constants
@@ -133,7 +135,7 @@ D display: tree of parts
  - text only display
  - overview/summary view: show whole file as one screen w/ areas of text/binary/etc
  - subsection editing (e.g. only display one definition or range)
- - backup files as .diff + save changes as diff
+ - backup files as .diff + save changes as diff (or patch and .reg files or cvs or rcs)
  - ASS (altered state server).
 
 for v0.3
@@ -145,7 +147,7 @@ for v0.3
  - views
  - more data/resource types
  - less java dependant?
- - hex edit clipboard 
+ - hex edit clipboard
 
 initial chunk types to support:
  - internal types: template references
@@ -153,7 +155,7 @@ initial chunk types to support:
  - java bytecode types (edit and display): int, long, reference, etc.
  - java types: char, short, boolean, unicode
  -  http://java.sun.com/docs/books/vmspec/2nd-edition/html/ClassFile.doc.html
-   class file types: u1, u2, u4, 
+   class file types: u1, u2, u4,
    infos: cp_info, field_info, method_info, attribute_info
    arrays: count then array
    magic numbers: (eg 0xCAFEBABE)
@@ -166,14 +168,14 @@ initial chunk types to support:
  - truncated types (last 8 bits of a 32-bit float?)
  - Math.BigNumber
  - roman numerals (ascii and unicode)
- - regex's
+ - regex's + regex helper + tr (unix) +
  - DataBuffer's special unsigned types
- - stacks, and other standard structures
+ - stacks, and other standard structures + stack equiv's
  - [file/data] sizes (kb / mb / other powers of 1024)
  - partial byte ints (e.g. 3 bit int)
  - from Chunk.java: recordset, Flags, NarrativeSequence, OverviewDisplayChunk
- - end of line: PC (0D 0A), Mac, Unix, [IBM Mainframe's] NEL (0D 85), Unicode line separator character (#x2028), 
- - special data types: uninitialized data, null, Reserved, bad (sector) ... 
+ - end of line: PC (0D 0A), Mac, Unix, [IBM Mainframe's] NEL (0D 85), Unicode line separator character (#x2028),
+ - metadata descriptors: uninitialized data, null, Reserved, bad (sector), unknown, loading, cached/offline, (un)synchronized, copy, linked, unformatted,
  
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
@@ -216,7 +218,7 @@ future versions:
  - file system analysis (e.g. "this looks like a windows install disk")
  - character map
  - photoshop plugins
- - qbit/quantum calculations. 
+ - qbit/quantum calculations.
  - i18n
  - find by change -- e.g. save game cheats. allow checksum style operations for large files to allow fast checks (less overhead) but more steps in narrowing down (i.e. did this region change, we'll just watch it next time) how would this work? i'm not sure.
  - rewrite mooj with itself
@@ -234,6 +236,12 @@ future versions:
  - patent destroyer: patented algorithm search (from old software, pre-dating the patent)
  - format template as plain text, suitable for email / usenet
  - tree-based "diffdata" for random insertion
+ - <wli> (1) functional models (e.g. Haskell) (2) logic models (e.g. Prolog/Mercury) (3) string models (e.g. SNOBOL) (4) object models (e.g. Smalltalk) (5) state machine models (e.g. Charity)
+   <wli> (1) functional models are useful for reasoning, metareasoning, and pure computation
+   <wli> (2) logic models are useful for automated search, metareasoning, proof, and logic computations
+   <wli> (3) string models are useful for string manipulation and character-oriented stimulus-response patterns that are aggregated into patterns
+   <wli> (4) object models are useful for stimulus response patterns subdividable into specific inter-object message transmissions and layered decomposition
+   <wli> (5) state machine models are most useful for asynchronous message reception and complex but flat structured message reception + state transition models.
 
 future formats:
  - plain text
@@ -246,20 +254,20 @@ future formats:
  - python types + pickle + ZODB (oodb)
  - different javascript styles
  - gif / jpg / png / psd / corel
- - rar / zip / jar / ace / bz2 / lzh / lzw / lzx / tar / z / gzip / cpio / ar
+ - rar / zip / jar / ace / bz2 / lzh / lzw / lzx / tar / z / gzip / cpio / ar / compress / pack
  - encrypted files (pgp, etc)
  - LaTeX
  - flash
  - javadoc viewer/editor!
- - decompiler (nasm.octium.net / intel.com / x86.org)
+ - decompiler (nasm.octium.net / intel.com / x86.org / linux: nm / ld / as )
  - various flashroms
  - virus detection/definitions (e.g. norton)
  - configuration files (.ini + unix, including new quota files)
  - DVD + subtitles + VCD (.VCD, .DAT)
  - fat12/fat16 (ask rob_ert.. or ww). Fat32, NTFS, EXT2, etc.
- - CIF Easy CD Creator image 
- - ISO: the ISO 9660 CD-ROM file system standard 
- - CD pit predictor. See where data would physically lay on a burnt CD. 
+ - CIF Easy CD Creator image
+ - ISO: the ISO 9660 CD-ROM file system standard
+ - CD pit predictor. See where data would physically lay on a burnt CD.
  - CD Sculpter: Also burn coasters with a picture of Tux sculpted from short and long pits
  - resource fork (mac) .RS_
  - b-trees [eks's homepage: http://void-core.2y.net/ ]
@@ -273,17 +281,18 @@ future formats:
  - windows registry
  - standard schedule/calendar format?
  - Comma-delimited ASCII file
- - CER / CRT Certificate file (MIME x-x509-ca-cert) 
- - wordnet files, microsoft/wordperfect/openoffice dictionary files
+ - CER / CRT Certificate file (MIME x-x509-ca-cert)
+ - wordnet files, microsoft/wordperfect/openoffice/molliza/linux (sq) dictionary files
  - opencyc.org / cyc.com KB
  - DLL(Dynamic-link library file)
- - DST Embroidery machines graphic file 
- - HEX Macintosh BinHex 2.0 file 
+ - DST Embroidery machines graphic file
+ - HEX Macintosh BinHex 2.0 file
  - LWZ Linguistically enhanced sound file (Microsoft)  ??
  - more file extensions: http://whatis.techtarget.com/fileFormatA/
  - MOV Movie / QuickTime
- - RTF Rich Text Format document 
- - VCF Virtual card file  
+ - ms office / openoffice / oasis / doc / rtf / etc
+ - RTF Rich Text Format document
+ - VCF Virtual card file
  - database types (oracle, postgres, etc)
  - PNM is a image file format, it can encode truecolor images (PPM), grayscale images (PGM) and black/white ones (PBM) (unix)
  - dna sequences: GFF: http://www.sanger.ac.uk/Software/formats/GFF/GFF_Spec.shtml
@@ -307,15 +316,17 @@ future formats:
  - EDI Electronic Data Interchange
    http://www.ietf.org/rfc/rfc3335.txt
  - vga memory map
- - existing file indexes (view + use) e.g. unix locate, fast find, glimps, 
+ - existing file indexes (view + use) e.g. unix locate, fast find, glimps,
  - all programming languages!
  - boardgames / puzzles / chess / space invaders
  - electronics
  - sql / define tables / rows / columns / transactions
- - plant/animal/biological taxonomies 
+ - plant/animal/biological taxonomies
  - command line arguments parsing / options / generic argv + args parser / --help generator
  - objdump
  - POV-ray
+ - library dewey decimal
+ - output from unix 'od', 'nl',
 
 priority programs to obsolete:
  - notepad + wordpad
@@ -342,7 +353,7 @@ projects to synergise with:
 silly/fun stuff:
  - xmodem end-escape sequence fixing
  - modem init string
- - ansi music! 
+ - ansi music!
  - ansi animation / 2400 emulation
  - DOS logs (xxx: how to add "invisible" timestamps?)
  - how much does that number resemble someone randomly hitting the keyboard
@@ -357,6 +368,7 @@ silly/fun stuff:
  - chemistry! (atoms/compounds/ions...)
  - speak the hex (naturally. calc time between sounds, record each sound in 3-4 different positions, place emphasis on chosen parts)
  - pi, the constant, as a "pseudo" large file, scroll to any point. Viewable as ascii numbers or as base-2. maybe only base-2. might be too slow too.
+ - morse code
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
@@ -377,17 +389,17 @@ HT http://hte.sourceforge.net/status.htm
  - show clipboard
  - Views: console/cursors/"TurboVision-like" (= Borland's Text-app Lib)
  - multiple views (per file)
- - view list 
+ - view list
  - Future: A archives, LX, M$, OBJ...)
  - Future: search/replace/regex
 
 BIEW http://biew.sourceforge.net/en/biew.html
  - similar to HT? same codebase?
- - replace/use: TDUMP, EXEHDR, DUMPEXE, NewExe Disasm, 
+ - replace/use: TDUMP, EXEHDR, DUMPEXE, NewExe Disasm,
  - "also quite good text viewer with russian codepage convertor"
 
 hexworkshop.com
- - Checksum-8...64, CRC-16, CRC-16 CCITT, CRC-32, MD2/4/5, SHA1
+ - Checksum-8...64, CRC-16, CRC-16 CCITT, CRC-32, MD2/4/5, SHA1, mn: ECC (memory)
  - Date, DOS Time/Date, time_t, binary...
  - red highlighting of changed data
  - character filters: ASCII, DOS, EBCDIC, Macintosh, Window, and Unicode character set
@@ -395,10 +407,10 @@ hexworkshop.com
  - drag and drop
  - physical disk editing
  - mutli-level undo
- - operations: Byte Flip, ~, <<, >>, ~, |, &, +/-, +, -, *, /, % 
+ - operations: Byte Flip, ~, <<, >>, ~, |, &, +/-, +, -, *, /, %
  - "Paste Special"
  - binary compare between files
- - View Character Distributions and export results 
+ - View Character Distributions and export results
  - Util/help: character tables, data-types and ranges
  - command line options (readonly, offset, select)
 
@@ -410,7 +422,7 @@ ben's suggestions:
  - asn1 -> c
  - 40-bit rc4
  - iso-3309 (www.iso.ch browse product store, 35.100.20) -- cannot find
- - russian fbi fed pdf 
+ - russian fbi fed pdf
  - bus: streaming data
  - mpeg4 (for dad)
  - WGS 84 (Earth coordinates) (how about melways refs too!)
@@ -421,6 +433,7 @@ ben's suggestions:
 
 soel's idea:
  - financial transactions (linked to revolving bank account), video game style
+ - cogs, mechanical engineering, toys, jewellery design...
 
 ^Lister^ is Meeeeeowth@vw10579.iprimus.net.au * The Slob Who Walks
 ^Lister^ on @#Dark_Thoughts @#m
@@ -431,7 +444,7 @@ soel's idea:
   - <^Lister^> XPInstall Install type
 
 wossname is wossname@HSE-QuebecCity-ppp81867.qc.sympatico.ca * seb
-wossname on #osdev #asm #assembler #nasm #kagezpro #cprogramming #fluffichan #dunder #codeleft #ypn 
+wossname on #osdev #asm #assembler #nasm #kagezpro #cprogramming #fluffichan #dunder #codeleft #ypn
  2002-09-07 opn
  - <wossname> a self-disassembling bootsector is what the world needs
  - <pengo> wossname: i'll add that to my features list
@@ -447,6 +460,26 @@ other projects / pages:
  - http://ll2.ai.mit.edu/
  - http://www.informatik.tu-darmstadt.de/TI/LiDIA/ (anticommercial maths library)
  - http://xanadu.com.au/
+ - http://kos.enix.org/docs.php?lang=en
 
-win:
- - http://icfpcontest.cse.ogi.edu/ in 2003
+show off by:
+ - winning: http://icfpcontest.cse.ogi.edu/ in 2003
+ - getting slashdotted: e.g. compilation of mini-os's (with bochs + hex viewer + cd masterer) or for just being cool.
+ - (graphical) shell
+
+make money with:
+ - donations (to encourage open sourcing)
+ - mp3 editor (and ogg)
+ - reason thing
+ - live media stream control
+ - web database tool (database, w3c standards, ass, ACLs)
+ - jasm environment
+ - logistics database (Barcode, ocr, database, cash register, library...)
+ - document automation tool
+ - xml editor
+ - altered state server (ASS)
+ - communications software
+ - telecommunications software
+ - dual licence
+ - contract work
+ - sell a book

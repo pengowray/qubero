@@ -60,7 +60,7 @@ public class DefaultDefinitionResource extends DefinitionResource {
     }
     
     public void doubleClickAction() {
-        getOpenFile().setSelection(this, sel);
+        getOpenFile().setSelectionModel(sel);
     }
    
 }

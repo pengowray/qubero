@@ -258,4 +258,15 @@ public interface LongListSelectionModel extends Cloneable
      * @see #addListSelectionListener
      */  
     void removeLongListSelectionListener(LongListSelectionListener x);
+    
+    /**
+     * Returns a clone of this selection model with the same selection.
+     * <code>listenerLists</code> are not duplicated.
+     *
+     * @exception CloneNotSupportedException if the selection model does not
+     *    both (a) implement the Cloneable interface and (b) define a
+     *    <code>clone</code> method.
+     */
+    public Object clone() ; // throws CloneNotSupportedException
+    
 }

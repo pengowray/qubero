@@ -30,7 +30,7 @@ public class IntResource extends DefinitionResource {
     SelectionData selData;
     
     //public IntResource(OpenFile openFile, LongListSelectionModel sel, int length, int signed) {
-    public IntResource(OpenFile openFile, LongListSelectionModel sel, int length, int signed) {
+    public IntResource(OpenFile openFile, LongListSelectionModel sel, int signed) {
         super(openFile);
         /*
         if (sel.getLength() != length) {
