@@ -78,7 +78,29 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
         fireValueChanged(change.firstIndex, change.lastIndex);
     }
     
-   
+    /**
+     * Change the selection to be the set difference of the current selection
+     * and the indices between index0 and index1 inclusive.  If this represents
+     * a change to the current selection, then notify each
+     * ListSelectionListener.  Note that index0 doesn't have to be less
+     * than or equal to index1.
+     *
+     * @param index0 one end of the interval.
+     * @param index1 other end of the interval
+     * @see #addListSelectionListener
+     *
+     */
+    public void removeSelectionInterval(long index0, long index1) {
+	if (getSelectionMode() != MULTIPLE_INTERVAL_SELECTION) {
+	   //xxx: can't remove when there's nothing? hmm
+	}
+	
+	editIntervalSet();
+	Segment change = changeActiveSelectionInterval(index0, index1, true);
+        fireValueChanged(change.firstIndex, change.lastIndex);
+    }
+
+    
     private TreeSet viewIntervalSet() {
 	if (isIntervalsetUptodate)
 	    return intervalSet;
@@ -103,6 +125,7 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
 	    activeSelection = EMPTY_SEGMENT;
 	    activeAntiSelection = EMPTY_SEGMENT;
 	    isIntervalsetUptodate = true;
+	    isCacheValid = false;
 	}
 		
         return intervalSet;
@@ -123,19 +146,24 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
 	    Segment leftOverlap = findLeftOverlap(seg, false);
 	    Segment rightOverlap = findRightOverlap(seg, false);
 	    
-	    tofix.subSet(seg, new Index(seg.lastIndex)).clear(); // xxx: does this work? (remove all)
+	    Segment leftCut = null;
+	    Segment rightCut = null;
+	    
+	    tofix.subSet(seg, new Index(seg.lastIndex+1)).clear(); // xxx: does this work? (remove all)
 	    
 	    if (leftOverlap != null ) {
-		Segment leftCut = new Segment(leftOverlap.firstIndex, seg.firstIndex -1);
+		leftCut = new Segment(leftOverlap.firstIndex, seg.firstIndex -1);
 		tofix.remove(leftOverlap);
-		tofix.add(leftCut);
 	    }
 	    
 	    if (rightOverlap != null ) {
-		Segment rightCut = new Segment(seg.lastIndex +1, rightOverlap.lastIndex);
+		rightCut = new Segment(seg.lastIndex +1, rightOverlap.lastIndex);
 		tofix.remove(rightOverlap);
-		tofix.add(rightCut);
 	    }
+	    
+	    if (leftCut != null) tofix.add(leftCut);
+	    if (rightCut != null) tofix.add(rightCut);
+	    
 	}
 	
 	
@@ -156,7 +184,7 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
 		stretchedSeg = seg;
 	    }
     
-	    tofix.subSet(stretchedSeg, new Index(stretchedSeg.lastIndex)).clear(); // xxx: does this work? (remove all)
+	    tofix.subSet(stretchedSeg, new Index(stretchedSeg.lastIndex+1)).clear(); // xxx: does this work? (remove all)
 	    
 	    tofix.add( stretchedSeg );
 	}
@@ -168,10 +196,15 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
 	Segment oldActive;
 	Segment newActive;
 	
-	if (!anti) {
+	if (!activeSelectionIsAnti) {
 	    oldActive = activeSelection;
 	} else {
 	    oldActive = activeAntiSelection;
+	}
+	
+	if (activeSelectionIsAnti != anti) {
+	    // changing from anti to non-anti or vice versa, so fix old selection
+	    editIntervalSet();
 	}
 	
 
@@ -187,8 +220,11 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
 
 	if (!anti) {
 	    activeSelection = newActive;
+	    activeAntiSelection = EMPTY_SEGMENT;
 	    activeSelectionIsAnti = false;
+	    
 	} else {
+	    activeSelection = EMPTY_SEGMENT;
 	    activeAntiSelection = newActive;
 	    activeSelectionIsAnti = true;
 	}
@@ -241,22 +277,6 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
     }
 
     
-    /**
-     * Change the selection to be the set difference of the current selection
-     * and the indices between index0 and index1 inclusive.  If this represents
-     * a change to the current selection, then notify each
-     * ListSelectionListener.  Note that index0 doesn't have to be less
-     * than or equal to index1.
-     *
-     * @param index0 one end of the interval.
-     * @param index1 other end of the interval
-     * @see #addListSelectionListener
-     *
-     */
-    public void removeSelectionInterval(long index0, long index1) {
-	TreeSet tree = editIntervalSet();
-	activeAntiSelection = new Segment(index0, index1);
-    }
     
     
     /**
@@ -539,7 +559,6 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
      *
      */
     public void removeIndexInterval(long index0, long index1) {
-	//xxx
 	
     }
    
@@ -595,13 +614,10 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
 	    //xxx this can't be right. how to choose between multiple selections and not?
 	    
 	    editIntervalSet();
-	    boolean anti = isSelectedIndex(index);
-	    
-	    activeSelectionIsAnti = anti;
-	    //changeActiveSelectionInterval(index, leadIndex, anti);
 	    anchorIndex = index;
 	} else {
 	    //angeActiveSelectionInterval(index, leadIndex, false);
+	    //xxx: clear or something?
 	    anchorIndex = index;
 	}
 	

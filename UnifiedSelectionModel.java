@@ -21,6 +21,7 @@ import java.util.*;
 
 public class UnifiedSelectionModel implements TableColumnModelListener, ListSelectionListener, TableModelListener {
     int width, height;
+	
     LongListSelectionModel lsm = new SegmentalLongListSelectionModel();
     //LongListSelectionModel lsm = new DefaultLongListSelectionModel();
     
@@ -134,6 +135,7 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
     }
     
     protected void setSelection() {
+	/*
         boolean noAnchor = false; // if true, don't use anchor.
         boolean noLead = false;
         
@@ -157,10 +159,60 @@ public class UnifiedSelectionModel implements TableColumnModelListener, ListSele
             //lsm.setSelectionInterval( rowAnchor * width + colAnchor, rowLead * width + colLead );
             lsm.addSelectionInterval( rowAnchor * width + colAnchor, rowLead * width + colLead );
         }
+	 */
     }
     
     //additional method to be called by HexTable (or any extended JTable)
     public boolean isCellSelected(int row, int column) {
-        return lsm.isSelectedIndex(row * width + column);
+        return lsm.isSelectedIndex(index(row, column));
+    }
+	
+
+    public void setAnchorSelectionIndex(int rowIndex, int columnIndex) {
+	lsm.setAnchorSelectionIndex(index(rowIndex, columnIndex));
+	
+	// just to trigger events for redrawing of jtable
+	jtable.getSelectionModel().setAnchorSelectionIndex(rowIndex);
+        jtable.getColumnModel().getSelectionModel().setAnchorSelectionIndex(columnIndex);
+    }
+
+    public void setLeadSelectionIndex(int rowIndex, int columnIndex) {
+	lsm.setLeadSelectionIndex(index(rowIndex, columnIndex));
+
+	// just to trigger events for redrawing of jtable
+	jtable.getSelectionModel().setLeadSelectionIndex(rowIndex);
+        jtable.getColumnModel().getSelectionModel().setLeadSelectionIndex(columnIndex);
+    }
+    
+    public void removeSelectionInterval(int rowIndex0, int columnIndex0, int rowIndex1, int columnIndex1) {
+	lsm.removeSelectionInterval(index(rowIndex0, columnIndex0), index(rowIndex1, columnIndex1));
+
+	// just to trigger events for redrawing of jtable
+	jtable.getSelectionModel().removeSelectionInterval(rowIndex0, rowIndex1);
+        jtable.getColumnModel().getSelectionModel().removeSelectionInterval(columnIndex0, columnIndex1);
+    }
+    
+    public void addSelectionInterval(int rowIndex0, int columnIndex0, int rowIndex1, int columnIndex1) {
+	lsm.addSelectionInterval(index(rowIndex0, columnIndex0), index(rowIndex1, columnIndex1));
+
+	// just to trigger events for redrawing of jtable
+	jtable.getSelectionModel().addSelectionInterval(rowIndex0, rowIndex1);
+        jtable.getColumnModel().getSelectionModel().addSelectionInterval(columnIndex0, columnIndex1);
+    }
+
+    public void setSelectionInterval(int rowIndex0, int columnIndex0, int rowIndex1, int columnIndex1) {
+	lsm.setSelectionInterval(index(rowIndex0, columnIndex0), index(rowIndex1, columnIndex1));
+
+	// just to trigger events for redrawing of jtable
+	jtable.getSelectionModel().setSelectionInterval(rowIndex0, rowIndex1);
+        jtable.getColumnModel().getSelectionModel().setSelectionInterval(columnIndex0, columnIndex1);
+    }
+
+    protected long index(int row, int column) {
+	if (column > 0) {
+           return row * width + (column - 1);
+	} else {
+	    return -2; //xxx: not good?
+	}
     }
 }

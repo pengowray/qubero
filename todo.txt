@@ -60,11 +60,15 @@ Log started Aug 21 2002:
  2002-11-18  SelectionData created. various other fixes.
  2002-11-19  Compiles/Runs again. lots of xxx's to fix.
  2002-11-25  SegmentalLongListSelectionModel finally complete (little debugging needed still)
+ 2002-11-26  above debugged. can really do multiple selections now
 
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
-priority/immediate features:
+priority/immediate features todo:
+ - get rid of bit array usage from UnifiedSelection thing
+ - rectangular selections
+ - fix up array
  - get old stuff working again
  - make DefaultLongListSelectionModel really "long".
  - EDIT hex / ascii
