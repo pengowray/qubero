@@ -55,7 +55,9 @@ public class DemoData extends ArrayData {
         
         
         addData("Qubero Demo File");
-        addData(randomData(16));
+        addData("4-Bit Spectrum");
+        addData(hexSpectrum());
+        addData(hexSpectrum());
         addData("1-Byte Spectrum");
         addData(oneByteSpectrum());
         addData("32-bit integers counter");
@@ -79,6 +81,14 @@ public class DemoData extends ArrayData {
         
     
     //System.arraycopy(boiler, 0, byteArray, byteArray.length - boiler.length, boiler.length);
+}
+
+private byte[] hexSpectrum() {
+    //return new Long(0x01234567890abcdefL). // convert to byte array?.. 
+    
+    //hmm. just hard code i guess
+    //return new byte[]{0x00,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
+    return new byte[]{(byte)0x01,(byte)0x23,(byte)0x45,(byte)0x67,(byte)0x89,(byte)0xAB,(byte)0xCD,(byte)0xEF};
 }
 
 private byte[] oneByteSpectrum() {

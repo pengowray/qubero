@@ -2,9 +2,11 @@ package net.pengo.hexdraw.original;
 
 /* this is the original hex panel. updated to work with the new selection model. */
 
+import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
@@ -13,12 +15,18 @@ import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.datatransfer.Transferable;
 import java.awt.dnd.DropTargetListener;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JLabel;
 
 import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.event.MouseInputAdapter;
@@ -35,18 +43,7 @@ import net.pengo.data.Data;
 import net.pengo.data.DataEvent;
 import net.pengo.data.DataListener;
 import net.pengo.data.EmptyData;
-import net.pengo.hexdraw.original.renderer.AddressRenderer;
-import net.pengo.hexdraw.original.renderer.AsciiRenderer;
-import net.pengo.hexdraw.original.renderer.EditBox;
-import net.pengo.hexdraw.original.renderer.GreyScale2Renderer;
-import net.pengo.hexdraw.original.renderer.GreyScaleRenderer;
-import net.pengo.hexdraw.original.renderer.HexRenderer;
-import net.pengo.hexdraw.original.renderer.RGBRenderer;
-import net.pengo.hexdraw.original.renderer.RGBWave;
-import net.pengo.hexdraw.original.renderer.Renderer;
-import net.pengo.hexdraw.original.renderer.RendererListener;
-import net.pengo.hexdraw.original.renderer.SeperatorRenderer;
-import net.pengo.hexdraw.original.renderer.WaveRenderer;
+import net.pengo.hexdraw.original.renderer.*;
 import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
 import net.pengo.selection.LongListSelectionModel;
@@ -99,22 +96,37 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     protected EditBox editbox;
     protected Component editcom;
     
+    protected CommandLine commandLine;
+    
     public HexPanel(ActiveFile activeFile)  {
         super();
-        //setLayout(new OverlayLayout(this));
-        setLayout(null);
+        
+        this.activeFile = activeFile;
         
         setBackground(Color.white);
         setupRenderers();
         
-        this.activeFile = activeFile;
         activeFile.addActiveFileListener(this);
         setOpenFile(activeFile.getActive());
         setupMouse();
-        
         calcDim(); // must be called AFTER setup renderers
         
     }
+    
+    public void setCommandLine(CommandLine cmd) {
+        commandLine = cmd;
+    }
+    
+    public CommandLine getCommandLine(){
+        return commandLine;
+    }
+    
+    // umm.. maybe this is dumb. but it goes with getCommandPanel()
+    // also means we can extend this thing more easily..
+    public JPanel getPanel() {
+        return this;
+    }
+    
     
     public void setHexFont(Font font){
         //super.setFont(font);
@@ -209,26 +221,27 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         
         renderers = new Renderer[] {
             new AddressRenderer(fm, columns, false, 10), //base-10 address
-            new AddressRenderer(fm, columns, false, 16),
+            new AddressRenderer(fm, columns, true, 16),
             //new SeperatorRenderer(fm, columns, true),
-            new HexRenderer(fm, columns, true),
+            new HexRenderer(fm, columns, false),
             new HexRenderer(fm, columns, false, 10, false), // decimal (last false=no zeropad)
             new HexRenderer(fm, columns, false, 8, true), //octal
             new HexRenderer(fm, columns, false, 2, true), //binary
             new HexRenderer(fm, columns, false, 8, true, true, true), // c-flag
-            new HexRenderer(fm, columns, false, 16, true, true, true), // c-flag but hex
+            new HexRenderer(fm, columns, true, 16, true, true, true), // c-flag but hex
             new AsciiRenderer(fm, columns, true, true), // ascii
             new AsciiRenderer(fm, columns, false, false), // ascii (extended)
             //new SeperatorRenderer(fm, columns, true),
-            new GreyScaleRenderer(fm, columns, false), // reenable
-            //new SeperatorRenderer(fm, columns, false),
+            new UnicodeRenderer(fm, columns, false), // experimental alien code
+            new GreyScaleRenderer(fm, columns, false, 0), // no border
+            new GreyScaleRenderer(fm, columns, true, 1), // 1 px border
             new GreyScale2Renderer(fm, columns, false),
             //new SeperatorRenderer(fm, columns, true),
             new RGBRenderer(fm, columns, 2, false), // 2 channel
             new RGBRenderer(fm, columns, 3, false),
             new RGBRenderer(fm, columns, 4, false),
             new RGBRenderer(fm, columns, 5, false),
-            new WaveRenderer(fm, columns, 8, true),  // 8 bit
+            new WaveRenderer(fm, columns, 8, false),  // 8 bit
             new WaveRenderer(fm, columns, 16, false),
             new WaveRenderer(fm, columns, 24, false),
             new WaveRenderer(fm, columns, 32, false),
@@ -296,9 +309,22 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     }
     
     private void startEdit(Place pl) {
-        //Fixme: TODO
         //System.out.println("now (not really) editing at: " + pl.addr + " with " + pl.r);
         
+        getCommandLine().showReplace(pl.addr);
+        
+        // show edit box in hex panel.
+        //fixme: not finished. 
+        //showEditBox(pl);
+        
+    }
+    
+    
+    
+    private void showEditBox(Place pl) {
+        setLayout(null);
+
+        //fixme: not finished.
         if (editbox != null) {
             editbox.save(); // hmm
             editbox.done();
@@ -325,7 +351,6 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         System.out.println("font: " + font);
         
         validate();
-        
     }
     
     // triggered when data changes
@@ -421,8 +446,6 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         }
         
     }
-    
-    
     
     
     public Place hexFromClick(int x, int y)  {

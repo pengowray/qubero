@@ -1,26 +1,6 @@
 JarIndex-Version: 1.0
 
-Qubero-20041017-0258-backup.jar
-classes
-classes/extras
-classes/net
-classes/net/pengo
-classes/net/pengo/app
-classes/net/pengo/data
-classes/net/pengo/dependency
-classes/net/pengo/hexdraw
-classes/net/pengo/hexdraw/lineRepeater
-classes/net/pengo/hexdraw/original
-classes/net/pengo/hexdraw/original/renderer
-classes/net/pengo/hexdraw/tabled
-classes/net/pengo/layer
-classes/net/pengo/listEditor
-classes/net/pengo/pointer
-classes/net/pengo/propertyEditor
-classes/net/pengo/resource
-classes/net/pengo/restree
-classes/net/pengo/selection
-classes/net/pengo/splash
+Qubero-20041112-0531-backup.jar
 extras
 nbproject
 nbproject/private
@@ -36,6 +16,7 @@ net/pengo/hexdraw/original/renderer
 net/pengo/hexdraw/tabled
 net/pengo/layer
 net/pengo/listEditor
+net/pengo/noncode
 net/pengo/pointer
 net/pengo/propertyEditor
 net/pengo/resource
@@ -55,6 +36,7 @@ src/net/pengo/hexdraw/original/renderer
 src/net/pengo/hexdraw/tabled
 src/net/pengo/layer
 src/net/pengo/listEditor
+src/net/pengo/noncode
 src/net/pengo/pointer
 src/net/pengo/propertyEditor
 src/net/pengo/resource
@@ -65,6 +47,6 @@ backup.bat
 build-custom.xml
 build.xml
 dist.bat
+hs_err_pid2292.log
 manifest.mf
-mooj32.png
 

@@ -1,4 +1,5 @@
 package net.pengo.app;
+
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Container;
@@ -16,6 +17,7 @@ import java.net.URL;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 
@@ -24,6 +26,7 @@ import net.pengo.data.DemoData;
 import net.pengo.data.DiffData;
 import net.pengo.data.EditableData;
 import net.pengo.data.LargeFileData;
+import net.pengo.hexdraw.original.CommandLine;
 import net.pengo.hexdraw.original.HexPanel;
 import net.pengo.hexdraw.original.renderer.Renderer;
 import net.pengo.restree.SimpleResTree;
@@ -47,7 +50,9 @@ public class GUI implements ActiveFileListener {
     protected ExitAction exitAction;
     
     protected String titleSuffix =  "Qubero";
-    protected String logo = "mooj32.png";
+    protected String logo = "net/pengo/noncode/qubero32.png";
+    
+    protected CommandLine commandLine;
     
     public GUI() {
         setIcon();
@@ -66,20 +71,6 @@ public class GUI implements ActiveFileListener {
     public JFrame getJFrame() {
         return jframe;
     }
-    /*
-     public GUI(Data data)
-     {
-     open(data);
-     }
-     public GUI(EditableData data)
-     {
-     open(data);
-     }
-     public GUI(OpenFile openFile)
-     {
-     open(openFile);
-     }
-     */
     
     protected void setIcon() {
         if (icon != null)
@@ -102,10 +93,12 @@ public class GUI implements ActiveFileListener {
         simplemoojtree = SimpleResTree.create(activeFile);
         
         hexpanel = new HexPanel(activeFile); //
+        hexpanel.setCommandLine(getCommandLine());
         //hextable = new HexTable(activeFile);
         //LineRepeater hexpanel = new LineRepeater(openFile.getData());
         
-        statusbar = new JLabel("Qubero: Vertical Modeller/Assembler");
+        //statusbar = new JLabel("Qubero: Vertical Modeller/Assembler");
+        statusbar = new JLabel("Qubero Binary Editor");
         mmb = new MoojMenuBar(this);
         
         // ARRANGE THEM IN A FRAME
@@ -120,13 +113,13 @@ public class GUI implements ActiveFileListener {
         jframe.setJMenuBar(mmb);
         
         //change it here!!!:
-        JScrollPane sp_hexpanel = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
+        JScrollPane sp_hexpanel = new JScrollPane(hexpanel.getPanel(), JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
                 JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         //JScrollPane sp_hexpanel = new JScrollPane(hextable, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
         //					  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         sp_hexpanel.getViewport().setBackground(Color.white); //FIXME: doesn't work!
         
-        JScrollPane sp_moojtree = new JScrollPane(simplemoojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+            JScrollPane sp_moojtree = new JScrollPane(simplemoojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         /*z
         JScrollPane sp_moojtree = new JScrollPane(moojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
@@ -140,7 +133,13 @@ public class GUI implements ActiveFileListener {
         
         Container c = jframe.getContentPane();
         c.add(splitpane, BorderLayout.CENTER);
-        c.add(statusbar, BorderLayout.SOUTH);
+        
+        JPanel statusControl = new JPanel();
+        statusControl.setLayout(new BorderLayout());
+        statusControl.add(statusbar, BorderLayout.SOUTH);
+        statusControl.add(getCommandLine().getCommandPanel(), BorderLayout.NORTH);
+        
+        c.add(statusControl, BorderLayout.SOUTH);
         
         jframe.pack();
         shrink(jframe);
@@ -190,6 +189,14 @@ public class GUI implements ActiveFileListener {
         // DISPLAY
         
         
+    }
+    
+    public CommandLine getCommandLine() {
+        if (commandLine == null) {
+            commandLine = new CommandLine(activeFile);
+        }
+        
+        return commandLine;
     }
     
     public void setStatusMessage(String msg) {
@@ -367,6 +374,10 @@ public class GUI implements ActiveFileListener {
     
     public void setColumnCount(int count) {
         hexpanel.setColumnCount(count);
+    }
+    
+    public void hideCommandPanel() {
+        
     }
 }
 

@@ -31,6 +31,8 @@ public class SimpleResTree extends JTree {
     protected DefaultTreeModel treemodel;
     protected DefaultMutableTreeNode topnode;
     protected ActiveFile of;
+    
+    private final static String ROOT_NAME = "Debug tree";
 	
     /**
      * Method addOpenFile
@@ -51,7 +53,7 @@ public class SimpleResTree extends JTree {
 
     // the top node of the tree on the left, which the data goes under
     public static SimpleResTree create(ActiveFile activeFile) {
-	DefaultMutableTreeNode topnode = new DefaultMutableTreeNode("mooj",true);
+	DefaultMutableTreeNode topnode = new DefaultMutableTreeNode(ROOT_NAME,true);
 	DefaultTreeModel treemodel = new DefaultTreeModel(topnode);
 	return new SimpleResTree(activeFile, treemodel, topnode);
     }

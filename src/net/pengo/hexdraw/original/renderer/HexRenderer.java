@@ -21,7 +21,6 @@ public class HexRenderer extends SeperatorRenderer {
 
     private String specials = "\b\f\n\r\t\0\007\013";
     
-    
     public HexRenderer(FontMetrics fm, int columnCount, boolean render, int base, boolean zeropad,  boolean showPrintables, boolean showSpecials) {
         super(fm,columnCount,render);
         setBase(base);
@@ -79,7 +78,7 @@ public class HexRenderer extends SeperatorRenderer {
 	    else if (unsigned=='\r') hex = "\\r";
 	    else if (unsigned=='\t') hex = "\\t";
 	    else if (unsigned=='\0') hex = "\\0";
-	    else if (unsigned=='\007') hex = "\\a"; // note: \a is not in java
+	    else if (unsigned=='\007') hex = "\\a"; // note: \a is not in java (bel)
 	    else if (unsigned=='\013') hex = "\\v"; // 0x0b, note: \v is not in java
 	    else hex = "??"; // error
 	    dozeropad = false;
@@ -99,7 +98,6 @@ public class HexRenderer extends SeperatorRenderer {
             }
         }
         
-	
         return hex;
     }
         

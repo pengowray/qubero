@@ -4,7 +4,7 @@
     </description>
   <!-- set global properties for this build -->
   <property name="src" location="src"/>
-  <property name="build" location="build"/>
+  <property name="build" location="build/classes"/>
   <property name="dist"  location="dist"/>
 
   <target name="init">
@@ -17,6 +17,8 @@
     <property name="dist-latest-bin"  value="${dist}/latest/qubero-bin.jar"/>
     <property name="manifest"  value="extras/mf.txt"/>
     <property name="backup-exclude" value="extras/jar-excludes.txt"/>
+    <property name="noncode-path" value="net/pengo/noncode"/>
+ 
 
     <!-- Create the build directory structure used by compile -->
     <mkdir dir="${build}"/>
@@ -29,7 +31,13 @@
     <javac srcdir="${src}" destdir="${build}"/>
     <!-- i wish:  <javac srcdir="${src}" destdir="${build}" target="1.4" source="1.5" /> -->
 
-    <copy file="extras/mooj32.png" todir="${build}"/>
+    <!--<copy file="extras/mooj32.png" todir="${build}"/>-->
+
+    <!-- copy across noncode resources -->
+    <mkdir dir="${build}/${noncode-path}"/>
+    <copy todir="${build}/${noncode-path}">
+       <fileset dir="${src}/${noncode-path}"/>
+    </copy>
   </target>
 
   <target name="dist" depends="compile"

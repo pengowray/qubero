@@ -37,6 +37,8 @@ import net.pengo.resource.ResourceListener;
 
 public class ResTree extends JTree implements ResourceListener, OpenFileListener
 {
+    private final static String ROOT_NAME = "Debug tree"; // wrong place. try SimpleResTree
+    
     protected DefaultTreeModel treemodel;
     protected DefaultMutableTreeNode topnode; // the top node of the tree on the left, which the data goes under
 	
@@ -57,7 +59,7 @@ public class ResTree extends JTree implements ResourceListener, OpenFileListener
 	
     public static ResTree create(OpenFile openFile)
 	{
-		DefaultMutableTreeNode topnode = new DefaultMutableTreeNode("mooj",true);
+		DefaultMutableTreeNode topnode = new DefaultMutableTreeNode(ROOT_NAME,true);
 		DefaultTreeModel treemodel = new DefaultTreeModel(topnode);
 		return new ResTree(openFile, treemodel, topnode);
     }
