@@ -115,7 +115,6 @@ public class HexRenderer extends SeperatorRenderer {
             int charWidth = fm.charWidth('W');
 	        int[] spaceEvery = new int[] {1, 2, 4, 8};
 	        int[] spaceSize = new int[]  {charWidth*(maxChars()+1), 0, charWidth, charWidth };
-	        
 	        hexStart = new int[columnCount+1]; // where each hex starts on a line + where ascii starts
 	        
 	        int s = 0;

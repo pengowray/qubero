@@ -56,7 +56,7 @@ public class JavaType extends TypeResource {
         
         //used to be: may be overriden.. for example to use a static constructor, a factory or a singleton method
         
-        //FIXME: should use lazy init
+        //FIXME: should probably use lazy init
         Constructor[] constructor = theClass.getConstructors();
         ConstructorQFunction[] cfp = new ConstructorQFunction[constructor.length];
         for (int i = 0; i < constructor.length; i++) {

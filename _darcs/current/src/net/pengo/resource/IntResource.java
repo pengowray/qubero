@@ -26,7 +26,7 @@ import net.pengo.propertyEditor.PropertyPage;
  */
 abstract public class IntResource extends DefinitionResource {
     /** Creates a new instance of IntResource */
-    
+              
     public final static int UNSIGNED  = 0;
     public final static int ONES_COMP = 1;
     public final static int TWOS_COMP = 2;

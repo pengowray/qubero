@@ -109,7 +109,9 @@ public class TextTileSet extends TileSet {
         //fixme: antialias..
         
         //System.out.println("tile=" + tile);
-        
+        if (tile > alphabet.length()) {
+        	System.out.println("tile=" + tile);
+        }
         char ch = alphabet.charAt(tile);
         int xOffset = 0;
         

@@ -16,7 +16,7 @@ import net.pengo.data.Data;
  *
  * @author  Que
  */
-public class RepeatSpacer {
+public class RepeatSpacer extends MultiSpacer {
 
     private SuperSpacer contents;
     private boolean horizontal; //  layout contents horizontal or vertically 
@@ -32,7 +32,7 @@ public class RepeatSpacer {
     public long getPixelWidth(BitCursor bits) {
         
         if (horizontal) {
-            BitCursor contentBits = contents.getBitCount();
+            BitCursor contentBits = contents.getBitCount(bits);
             long one = contents.getPixelWidth(contentBits);
             long allButLast = bits.divide(contentBits);
             BitCursor lastOne = bits.mod(contentBits);
@@ -48,7 +48,7 @@ public class RepeatSpacer {
     public long getPixelHeight(BitCursor bits) {
         
         if (!horizontal) {
-            BitCursor contentBits = contents.getBitCount();
+            BitCursor contentBits = contents.getBitCount(bits);
             long one = contents.getPixelHeight(contentBits);
             long allButLast = bits.divide(contentBits);
             BitCursor lastOne = bits.mod(contentBits);
@@ -63,49 +63,6 @@ public class RepeatSpacer {
     
     
 
-    public void paint(Graphics g, Data d, BitSegment seg) {
-        SpacerIterator i;
-        BitCursor length = seg.getLength();
-        long last;
-        
-        if (horizontal) {
-            
-            long clipStart = (long)g.getClipBounds().getMinX();
-            long clipEnd = (long)g.getClipBounds().getMaxX();
-            long one = contents.getPixelWidth(length);
-            
-            //get first repetition within clip and number of reps needed
-            long first = clipStart/one;
-            last = clipEnd/one; //fixme: round up? don't think need to.
-            
-            i = iterator(first, length);
-            
-            //contents.getBitCount();
-            
-        } else {
-            
-            long clipStart = (long)g.getClipBounds().getMinY();
-            long clipEnd = (long)g.getClipBounds().getMaxY();
-            long one = contents.getPixelHeight(length);
-            
-            //get first repetition within clip and number of reps needed
-            long first = clipStart/one;
-            last = clipEnd/one; //fixme: round up? don't think need to.
-            
-            i = iterator(first, length);
-            
-        }
-        
-        g.translate(i.getTotalXChange(), i.getTotalYChange());
-        while (i.hasNext(length) && i.currentIndex() < last) {
-            SuperSpacer sp = i.next(length);
-            g.translate(i.getXChange(), i.getYChange());
-            sp.paint(g, d, seg);
-        }
-
-        g.translate(-i.getTotalXChange(), -i.getTotalYChange());
-    }
-    
     
     /** bits is how many bits we've got to work with total, not the size of the repeated contents. */
     public SpacerIterator iterator(long startPos, BitCursor bits) {
@@ -128,11 +85,15 @@ public class RepeatSpacer {
             Point next = null;
             
             public boolean hasNext(BitCursor bits) {
-                BitCursor nextBitStart = bitOffset.add( contents.getBitCount() );
-                if (nextBitStart.compareTo(bits) < 0) //fixme: <= 0 ?
-                    return true;
+                BitCursor nextBitStart = bitOffset.add( contents.getBitCount(bits) ).addBits(1); //fixme: hmm
+                //System.out.println("RepeatSpacer has next if " + nextBitStart + " < " + bits + " result:" + nextBitStart.compareTo(bits));
+                if (nextBitStart.compareTo(bits) >= 0) //fixme: > 0 ?
+                    return false;
                 
-                return false;
+                if (bits.equals(new BitCursor())) // fixme: optimise
+                	return false;
+                
+                return true;
             }
             
             /* sets the cursor so that the next() will go to the startPos */
@@ -150,6 +111,9 @@ public class RepeatSpacer {
                     } else {
                         totalYChange = (int) (contents.getPixelHeight(bits) * pos);
                     }
+                    
+                    bitOffset = contents.getBitCount(bits).multiply((int)pos); //fixme: long->int
+                    //fixme: should be more accurate for last repetition?
                 }
                 next = null;
                 
@@ -164,12 +128,16 @@ public class RepeatSpacer {
                         yChange = (int)contents.getPixelHeight(bits);
                         totalYChange += yChange;
                     }
-                    
-                    bitOffset = bitOffset.add( contents.getBitCount() );
+                    System.out.println("Adding: " + contents.getBitCount(bits));
+                    bitOffset = bitOffset.add( contents.getBitCount(bits) );
                     next = null;
                 }
-                
+                pos++;
                 return contents;
+            }
+            
+            public BitCursor getBitOffset(){
+            	return bitOffset;
             }
             
             public void remove() {
@@ -219,4 +187,96 @@ public class RepeatSpacer {
         };
     }    
     
+	public SuperSpacer getContents() {
+		return contents;
+	}
+	public void setContents(SuperSpacer contents) {
+		this.contents = contents;
+	}
+	public boolean isHorizontal() {
+		return horizontal;
+	}
+	public void setHorizontal(boolean horizontal) {
+		this.horizontal = horizontal;
+	}
+
+	public long getSubSpacerCount() {
+		return 1;
+	}
+
+	public BitCursor getBitCount(BitCursor bits) {
+		//contents.getBitCount(bits);
+		//do rounding? or just use all the bits?
+		return bits;
+
+	}
+
+	/* (non-Javadoc)
+	 * @see net.pengo.hexdraw.layout.SuperSpacer#bitIsHere(long, long, , net.pengo.bitSelection.BitCursor)
+	 */
+	public BitCursor bitIsHere(long arg0, long arg1, net.pengo.hexdraw.layout.SuperSpacer.Round arg2, BitCursor arg3) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+	
+
+    public void paint(Graphics g, Data d, BitSegment seg) {
+        SpacerIterator i;
+        BitCursor length = seg.getLength();
+        long last;
+        
+        // check for empty
+        if (length.equals(new BitCursor())) // fixme: optimise
+        	return;
+        
+        System.out.println(this.getClass().getName() + " start printing: " + seg);
+        
+        if (horizontal) {
+            
+            long clipStart = (long)g.getClipBounds().getMinX();
+            long clipEnd = (long)g.getClipBounds().getMaxX();
+            long one = contents.getPixelWidth(length);
+            
+            //get first repetition within clip and number of reps needed
+            long first = clipStart/one;
+            last = clipEnd/one; //fixme: round up? don't think need to.
+            
+            i = iterator(first, length);
+            
+            //contents.getBitCount();
+            
+        } else {
+            
+            long clipStart = (long)g.getClipBounds().getMinY();
+            long clipEnd = (long)g.getClipBounds().getMaxY();
+            long one = contents.getPixelHeight(length);
+            
+            //get first repetition within clip and number of reps needed
+            long first = clipStart/one;
+            last = clipEnd/one; //fixme: round up? don't think need to.
+            
+            i = iterator(first, length);
+            
+        }
+        
+        g.translate(i.getTotalXChange(), i.getTotalYChange());
+        BitSegment nextSeg = new BitSegment(seg.firstIndex, seg.firstIndex.add(length));
+        System.out.println("  initial:" + nextSeg + " length:" + length + " index:" + i.currentIndex() + "/" + last);
+        while (i.hasNext(length) && i.currentIndex() < last) {
+        	
+            System.out.println("  " + nextSeg + " length:" + length + " index:" + i.currentIndex() + "/" + last);
+            
+            SuperSpacer sp = i.next(length);
+            
+            g.translate(i.getXChange(), i.getYChange());
+            sp.paint(g, d, nextSeg);
+            
+            //fixme: check boundries
+            nextSeg = new BitSegment(i.getBitOffset(), seg.lastIndex);
+            
+        }
+
+        g.translate(-i.getTotalXChange(), -i.getTotalYChange());
+    }
+    	
 }

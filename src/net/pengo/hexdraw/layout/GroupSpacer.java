@@ -25,7 +25,7 @@ public class GroupSpacer extends MultiSpacer {
     
     // these spacers layed out vertically. they dont get repeated, unless inside a repeater spacer
     private SuperSpacer[] contents;
-    private BitCursor length;
+    private BitCursor length; //fixme: should this be auto from max length of contents?
     private boolean horizontal; //  layout contents horizontal or vertically 
     
     /** Creates a new instance of PageSpacer */
@@ -33,9 +33,15 @@ public class GroupSpacer extends MultiSpacer {
     public GroupSpacer() {
     }
     
-    public abstract long getSubSpacerCount();
+    public void setContents(SuperSpacer[] contents) {
+    	this.contents = contents;
+    }
     
-    public abstract long getDeepSubSpacerCount();
+    public long getSubSpacerCount() {
+    	return contents.length;
+    }
+    
+    //public abstract long getDeepSubSpacerCount();
     
     public long getPixelWidth(BitCursor bits) {
         //fixme: cache result
@@ -64,7 +70,7 @@ public class GroupSpacer extends MultiSpacer {
     }
     
     public long getPixelHeight(BitCursor bits) {
-        if (bits.equals(getBitCount())) {
+        if (bits.equals(getBitCount(bits))) {
             //return cached value
         }
 
@@ -96,7 +102,7 @@ public class GroupSpacer extends MultiSpacer {
     //}
     
     // AKA max bit count
-    public BitCursor getBitCount() {
+    public BitCursor getBitCount(BitCursor bits) {
         return length;
     }
     
@@ -132,10 +138,13 @@ public class GroupSpacer extends MultiSpacer {
             Point next = null;
             
             public boolean hasNext(BitCursor bits) {
-                if (pos >= contents.length)
-                    return false;
+                if (bits.equals(new BitCursor())) // fixme: optimise
+                	return false;
+            	
+                if (pos < contents.length-1 )
+                    return true;
                 
-                return true;
+                return false;
             }
             
             public void jumpToNext(long nextPos, BitCursor bits) {
@@ -200,24 +209,52 @@ public class GroupSpacer extends MultiSpacer {
             public int getTotalYChange() {
                 return totalYChange;
             }
+
+			public BitCursor getBitOffset() {
+				//fixme?
+				return new BitCursor();
+			}
             
         };
     }
     
-    public abstract Point whereGoes(long sub);
-    public abstract Point whereGoes(BitCursor bit);
+    //public abstract Point whereGoes(long sub);
+    //public abstract Point whereGoes(BitCursor bit);
     
     // 0,0 is top left
     public void paint(Graphics g, Data d, BitSegment seg) {
-        BitCursor length = seg.getLength();
+        BitCursor len = seg.getLength();
         
+        // check for empty
+        if (len.equals(new BitCursor())) // fixme: optimise
+        	return;
+        
+        //System.out.println(this.getClass().getName() + " start printing: " + seg);
+
         SpacerIterator i = iterator();
-        while (i.hasNext(length)) {
-            SuperSpacer sp = i.next(length);
+        while (i.hasNext(len)) {
+            SuperSpacer sp = i.next(len);
+            
+            //System.out.println("  " + sp + " seg:" + seg);
+            
             g.translate(i.getXChange(), i.getYChange());
+            //if (seg.getLength().compareTo())
             sp.paint(g, d, seg);
         }
         
         g.translate(-i.getTotalXChange(), -i.getTotalYChange());
     }
+    
+	public BitCursor getLength() {
+		return length;
+	}
+	public void setLength(BitCursor length) {
+		this.length = length;
+	}
+	public boolean isHorizontal() {
+		return horizontal;
+	}
+	public void setHorizontal(boolean horizontal) {
+		this.horizontal = horizontal;
+	}
 }

@@ -90,14 +90,14 @@ public class TypeRegistry {
 		AbstractAction aa = new AbstractAction(function.getName()) {
 
 		    public void actionPerformed(ActionEvent e) {
-			System.out.println("function:" + function.getName());
-			System.out.println("function TypeName():" + function.getTypeName());
-			System.out.println("function eval:" + function.evaluate());
+			//System.out.println("function:" + function.getName());
+			//System.out.println("function TypeName():" + function.getTypeName());
+			//System.out.println("function eval:" + function.evaluate());
 			SmartPointer sp = function.invoke(null, new Resource[]{selection});
 			Resource qr = sp.evaluate(); //FIXME: shouldn't be needed
 			selection.getOpenFile().getDefinitionList().add(qr);
 			//FIXME: do or dont do?
-			//qr.editProperties(); // not do for now
+			qr.editProperties(); // do, for now
 		    }
 		};
 		menu.add(aa);

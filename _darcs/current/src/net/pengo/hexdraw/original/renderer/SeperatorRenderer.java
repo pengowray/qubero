@@ -11,9 +11,9 @@ import net.pengo.hexdraw.original.Place;
 
 public class SeperatorRenderer implements Renderer {
 
-    private	String seperator = "  ";
+    private String seperator = "  ";
     
-    private boolean	render;
+    private boolean render;
     private HexPanel hexpanel; // for repainting
     protected List listeners = new ArrayList();
     protected FontMetrics fm;

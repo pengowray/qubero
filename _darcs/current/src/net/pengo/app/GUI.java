@@ -26,6 +26,7 @@ import net.pengo.data.DemoData;
 import net.pengo.data.DiffData;
 import net.pengo.data.EditableData;
 import net.pengo.data.LargeFileData;
+import net.pengo.hexdraw.layout.MainPanel;
 import net.pengo.hexdraw.original.CommandLine;
 import net.pengo.hexdraw.original.HexPanel;
 import net.pengo.hexdraw.original.renderer.Renderer;
@@ -113,7 +114,19 @@ public class GUI implements ActiveFileListener {
         jframe.setJMenuBar(mmb);
         
         //change it here!!!:
-        JScrollPane sp_hexpanel = new JScrollPane(hexpanel.getPanel(), JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
+       
+        //test..
+        JPanel hexpane = new JPanel(new BorderLayout());
+        hexpane.add(hexpanel.getPanel(), BorderLayout.EAST);
+        MainPanel spacerPanel = new MainPanel(activeFile);
+        //spacerPanel.setActiveFile(activeFile);
+        spacerPanel.loadDefaults();
+        hexpane.add(spacerPanel, BorderLayout.WEST);
+        //disregard the above..
+        hexpane = spacerPanel;
+        //hexpane.add(new HexPanel(activeFile), BorderLayout.WEST);
+        
+        JScrollPane sp_hexpanel = new JScrollPane(hexpane, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
                 JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         //JScrollPane sp_hexpanel = new JScrollPane(hextable, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
         //					  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);

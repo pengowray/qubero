@@ -9,6 +9,8 @@ import java.util.LinkedList;
 import java.util.List;
 
 import javax.swing.event.EventListenerList;
+import net.pengo.bitSelection.BitSelectionModel;
+import net.pengo.bitSelection.SegmentalBitSelectionModel;
 
 import net.pengo.data.Data;
 import net.pengo.data.DataListener;
@@ -37,6 +39,8 @@ public class OpenFile extends Resource implements LongListSelectionListener { //
     protected Data rawdata;
     protected String filename;
     protected MetaSelectionModel selectionModel;
+    
+    protected SegmentalBitSelectionModel selection;
     
     protected EventListenerList listenerList = new EventListenerList();
     
@@ -217,11 +221,25 @@ public class OpenFile extends Resource implements LongListSelectionListener { //
         //liveSelection.updated();
     }
     
+    /** old */
     public LongListSelectionModel getSelectionModel() {
         if (selectionModel == null) {
             setSelectionModel(new SegmentalLongListSelectionModel());
         }
         return selectionModel;
+    }
+
+    public SegmentalBitSelectionModel getSelection() {
+        if (selection == null) 
+            setSelection(new SegmentalBitSelectionModel());
+        
+        return selection;
+    }
+
+    public void setSelection(SegmentalBitSelectionModel sm) {
+        selection = sm;
+        
+        //liveSelection.updated();
     }
     
     public boolean close(Object source) {

@@ -32,4 +32,5 @@ public interface SpacerIterator  { // extends Iterator<SuperSpacer>
     
     public void jumpToNext(long nextPos, BitCursor bits);
     
+    public BitCursor getBitOffset();    
 }

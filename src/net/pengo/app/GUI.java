@@ -118,8 +118,8 @@ public class GUI implements ActiveFileListener {
         //test..
         JPanel hexpane = new JPanel(new BorderLayout());
         hexpane.add(hexpanel.getPanel(), BorderLayout.EAST);
-        MainPanel spacerPanel = new MainPanel();
-        spacerPanel.setActiveFile(activeFile);
+        MainPanel spacerPanel = new MainPanel(activeFile);
+        //spacerPanel.setActiveFile(activeFile);
         spacerPanel.loadDefaults();
         hexpane.add(spacerPanel, BorderLayout.WEST);
         //disregard the above..

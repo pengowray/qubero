@@ -116,7 +116,10 @@ public abstract class Data implements Comparable {
                 long skipped = stream.skip(toSkip);
                 if (skipped != toSkip) {
                     //FIXME: error i guess
-		    System.out.println("couldn't skip good");
+                	//throw new Exception("skip failed."); //System.out.println("couldn't skip good");
+                	//new Exception("skip failed. start:" + start + " length:" + length + " data_length():" + getLength()).printStackTrace();
+                	return new byte[length];
+//                	throw new Exception("skip failed."); //System.out.println("couldn't skip good");
                 }
             } else {
                 throw new IOException("tried to getBytes from before the start");
@@ -208,6 +211,7 @@ public abstract class Data implements Comparable {
 
         int bytesInUnit = 1+ ((unitSize+xBit)/8); // how many bytes will we need to read
 
+        System.out.println("reading " + xByte);
         byte[] bytes = readByteArray(xByte, bytesInUnit);
 
         int readBytes = 0;

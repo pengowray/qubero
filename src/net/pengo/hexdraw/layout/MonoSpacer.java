@@ -135,8 +135,8 @@ public class MonoSpacer extends Spacer {
         int ic = getItemCount(res);
         int width = getTileWidth(res);
         int height = getTileHeight();
-        int bitCount = getBitCount(res);
-        int lineBitCount = getBitCount(Resolution.line);
+        long bitCount = getBitCount(res);
+        long lineBitCount = getBitCount(Resolution.line);
         
         long symbolOffset = offset.toBits() / getBitCount(res);
         
@@ -191,7 +191,7 @@ public class MonoSpacer extends Spacer {
         //fixme: all pretty dodge
         //System.out.println("large resolution: " + r);
         int ic = getItemCount(r); // per row
-        int bitCount = getBitCount(r);
+        long bitCount = getBitCount(r);
         int width = getTileWidth(r);
         int height = getTileHeight();
 

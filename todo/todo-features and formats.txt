@@ -48,6 +48,7 @@ initial chunk types to support:
    especially: xsd:integer, xsd:string, xsd:hexBinary, xsd:base64Binary
    http://www.w3.org/TR/xmlschema-2/#built-in-datatypes
    http://www.w3.org/TR/owl-guide/#Datatypes1
+   XML binary compression: http://www.w3.org/2001/tag/issues.html#binaryXML-30
  - Simple Outline XML (SOX): http://www.langdale.com.au/SOX/
  - python's pickled objects
    see also: http://www.brpreiss.com/books/opus7/

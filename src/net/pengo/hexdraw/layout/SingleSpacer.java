@@ -20,11 +20,7 @@ public abstract class SingleSpacer extends SuperSpacer {
         return false;
     }
     
-    public long getCount() {
+    public long getSubSpacerCount() {
         return 1;
-    }
-    
-    public long getDeepCount() {
-        return getCount();
     }
 }

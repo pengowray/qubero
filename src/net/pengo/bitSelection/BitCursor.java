@@ -30,6 +30,8 @@ public class BitCursor implements Comparable {
         if (bitOffset > 7 || bitOffset < 0) {
             ret.byteOffset = ret.byteOffset + (bitOffset / 8);
             ret.bitOffset = (int)(bitOffset % 8);
+        } else {
+        	ret.bitOffset = (int)bitOffset;
         }
         ret.normalize();
         
@@ -120,6 +122,9 @@ public class BitCursor implements Comparable {
     }
     
     public boolean equals(BitCursor o) {
+    	if (o == null)
+    		return false;
+    	
         if (this.byteOffset == o.byteOffset && this.bitOffset == o.bitOffset)
             return true;
         
@@ -150,6 +155,9 @@ public class BitCursor implements Comparable {
     }
 
     public BitCursor add(BitCursor amount) {
+    	if (amount == null)
+    		return this; //fixme: warn?
+    	
         return new BitCursor(this.byteOffset + amount.byteOffset, this.bitOffset + amount.bitOffset );
     }
     
@@ -169,6 +177,6 @@ public class BitCursor implements Comparable {
     }
 
     public BitCursor mod(BitCursor mod) {
-        return BitCursor.newFromBits( this.toBits() % mod.toBits() );;
+        return BitCursor.newFromBits( this.toBits() % mod.toBits() );
     }
 }

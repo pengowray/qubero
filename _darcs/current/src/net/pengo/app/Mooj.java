@@ -11,8 +11,10 @@ public class Mooj {
     public static void main(String[] arg) {
             
             
+            
             try {
 
+                System.out.println("max: " + Byte.MAX_VALUE );
 	    //changeLookAndFeel();
             
 	    Splash.show();

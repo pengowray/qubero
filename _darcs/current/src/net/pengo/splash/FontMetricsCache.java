@@ -27,6 +27,7 @@ public class FontMetricsCache {
         
         registerFontToFind("hex.S", new Font("Monospaced", Font.BOLD, 8) );
         registerFontToFind("hex", new Font("Monospaced", Font.BOLD, 11) );
+        //    registerFontToFind("hex", new Font("Arial", Font.PLAIN, 44) ); // just testing
         registerFontToFind("hex.L", new Font("Monospaced", Font.BOLD, 14) );
         registerFontToFind("hex.XL", new Font("Monospaced", Font.BOLD, 24) );
         

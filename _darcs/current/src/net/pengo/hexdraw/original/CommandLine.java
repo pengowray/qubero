@@ -131,7 +131,7 @@ public class CommandLine implements ActiveFileListener {
     private byte[] parse(String s) {
         //FIXME: throws badly formatted something..
         try {
-            byte b = Byte.decode(s);
+            byte b = Byte.decode(s).byteValue();
             return new byte[] { b };
         } catch (NumberFormatException e) {
             return new byte[0];

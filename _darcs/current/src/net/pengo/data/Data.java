@@ -2,6 +2,8 @@ package net.pengo.data;
 import net.pengo.app.*;
 
 import java.io.*;
+import net.pengo.bitSelection.BitCursor;
+import net.pengo.bitSelection.BitSegment;
 
 /**
  * Data is a fixed length chunk of data. e.g. a binary file, or an area of memory.
@@ -9,6 +11,10 @@ import java.io.*;
 public abstract class Data implements Comparable {
     // xxy: replace with ByteBuffer ? - no doesn't support long indexes
     abstract public long getLength();
+    
+    public BitCursor getBitLength() {
+        return new BitCursor(getLength(), 0);
+    }
     
     /**
      * fill byte[] with data, starting at offset of the data itself (not the array).
@@ -110,7 +116,10 @@ public abstract class Data implements Comparable {
                 long skipped = stream.skip(toSkip);
                 if (skipped != toSkip) {
                     //FIXME: error i guess
-		    System.out.println("couldn't skip good");
+                	//throw new Exception("skip failed."); //System.out.println("couldn't skip good");
+                	//new Exception("skip failed. start:" + start + " length:" + length + " data_length():" + getLength()).printStackTrace();
+                	return new byte[length];
+//                	throw new Exception("skip failed."); //System.out.println("couldn't skip good");
                 }
             } else {
                 throw new IOException("tried to getBytes from before the start");
@@ -187,5 +196,100 @@ public abstract class Data implements Comparable {
     public boolean equals(Cursor obj) {
         return false;
     }
+    
+    public int readBitsToInt(BitSegment segment) throws IOException {
+        int BIT_COUNT = Integer.bitCount(-1); // 32
+        
+        int unitSize = (int)segment.getLength().toBits();
+        
+        long xByte = segment.firstIndex.getByteOffset(); // set initial byte
+        int xBit = segment.firstIndex.getBitOffset(); 
+        int rightShift = BIT_COUNT - unitSize - xBit; // how much data will need to be right shifted before being returned
+        
+        int mask = (int)(-1) >>> xBit // leftGap.. -1 = 0xFFFFFFFF
+                 & (int)(-1) << rightShift; //rightGap;
+
+        int bytesInUnit = 1+ ((unitSize+xBit)/8); // how many bytes will we need to read
+
+        System.out.println("reading " + xByte);
+        byte[] bytes = readByteArray(xByte, bytesInUnit);
+
+        int readBytes = 0;
+        for (int b=0; b<bytesInUnit; b++) {
+            readBytes |= (int)(bytes[b]) << (BIT_COUNT - 8 - (b*8));
+        }
+
+        int maskedBytes = readBytes & mask;
+
+        int rShiftedBytes = maskedBytes >>> rightShift;
+
+        /*
+        System.out.println("xByte=" + xByte + " xBit=" + xBit + " bytesInUnit=" + bytesInUnit + " mask=" + Integer.toBinaryString(mask) + "b" + 
+            " rightShift=" + rightShift + " bytesInUnit=" + bytesInUnit + " readBytes=" + Integer.toHexString(readBytes) + 
+            "h, " + Integer.toBinaryString(readBytes) + "b maskedBytes=" + Integer.toBinaryString(maskedBytes) + "b rShiftedBytes=" + Integer.toBinaryString(rShiftedBytes) + "b");
+        */
+
+        return rShiftedBytes;
+    }
+    
+    /* unitSize = number of bits to return in each int
+       startUnit = first unit to return (assuming all binary is in unitSize units
+     * bitOffset, can be any number
+     *
+     *fixme: maybe startByteOffset would be more useful than startUnit
+     *
+     *fixme: optimise for special cases like unitSize = 4 or 8
+     *
+     * @depricated use readBitsToInt //how do i do this relaly?
+     */
+    public int[] readIntArray(int unitSize, long startUnit, int bitOffset, int unitCount) throws IOException {
+        //fixme: no checking
+        //long xByte = (long) (  (startUnit * unitSize + bitOffset) / 8 ); // set initial byte
+        //int xBit = (int) ( (startUnit * unitSize + bitOffset) % 8 ); // set initial bit
+        int BIT_COUNT = Integer.bitCount(-1); // 32
+        
+        //int maxBytesUnit = // too difficult to calculate and better ways.... 1 gives 1, 2-9 gives 2, 10+ gives 3.. 
+        //System.out.println("unitSize=" + unitSize + " startUnit=" + startUnit + " unitCount=" + unitCount);
+        
+        int[] returnArray = new int[unitCount];
+        
+        for (int i=0; i < unitCount; i++) {
+            long xByte = (long) (  ((startUnit + i) * unitSize + bitOffset) / 8 ); // set initial byte
+            int xBit = (int) ( ((startUnit + i) * unitSize + bitOffset) % 8 ); // set initial bit
+            
+            //bits remaining in first byte = 8-xBit 
+            //loc of first bit is unitSize
+            //bits left to extract = unitSize
+            
+            int rightShift = BIT_COUNT - unitSize - xBit; // how much data will need to be right shifted before being returned
+            
+            int mask = (int)(-1) >>> xBit // leftGap.. -1 = 0xFFFFFFFF
+                     & (int)(-1) << rightShift; //rightGap;
+            
+            int bytesInUnit = 1+ ((unitSize+xBit)/8); // how many bytes will we need to read
+            
+            byte[] bytes = readByteArray(xByte, bytesInUnit);
+            
+            int readBytes = 0;
+            for (int b=0; b<bytesInUnit; b++) {
+                readBytes |= (int)(bytes[b]) << (BIT_COUNT - 8 - (b*8));
+            }
+            
+            int maskedBytes = readBytes & mask;
+            
+            int rShiftedBytes = maskedBytes >>> rightShift;
+            
+            /*
+            System.out.println("xByte=" + xByte + " xBit=" + xBit + " bytesInUnit=" + bytesInUnit + " mask=" + Integer.toBinaryString(mask) + "b" + 
+                " rightShift=" + rightShift + " bytesInUnit=" + bytesInUnit + " readBytes=" + Integer.toHexString(readBytes) + 
+                "h, " + Integer.toBinaryString(readBytes) + "b maskedBytes=" + Integer.toBinaryString(maskedBytes) + "b rShiftedBytes=" + Integer.toBinaryString(rShiftedBytes) + "b");
+            */
+            
+            returnArray[i] = rShiftedBytes;
+        }
+        
+        return returnArray;
+    }
+    
     
 }

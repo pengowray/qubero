@@ -698,19 +698,6 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
                     return;
                 }
                 
-                // draw line of hex
-                /*
-                boolean selected =
-                    openFile.getSelectionModel().isSelectedIndex(i+j) ||
-                    (i+j >= activeSelectionFirst && i+j <= activeSelectionLast);
-                 */
-                
-                //renderByte( Point p1, Point p2, int index, byte b, boolena selected);
-                
-                
-                //System.out.println("i:"+linenum +", lastHex:"+lastHex +", len:"+len +", count:"+count);
-                //g.setClip( 0, (int)(linenum), width, charHeight ); // possible problems with large i[ndex]
-                
                 for ( index=0; index < selecta.length; index++) {	//setup selection
                     selecta[index] = openFile.getSelectionModel().isSelectedIndex((int)offset+index);
                 }

@@ -26,21 +26,21 @@ public abstract class SuperSpacer {
     public abstract boolean isMulti();
     
     public abstract long getSubSpacerCount();
-    public abstract long getDeepSubSpacerCount();
+    //public abstract long getDeepSubSpacerCount();
     
     public abstract long getPixelWidth(BitCursor bits);
     public abstract long getPixelHeight(BitCursor bits);
     
-    public abstract BitCursor getBitCount();
+    public abstract BitCursor getBitCount(BitCursor bits);
     
-    public abstract long subIsHere(int x, int y, Round round);
+    //public abstract long subIsHere(int x, int y, Round round);
     public abstract BitCursor bitIsHere(long x, long y, Round round, BitCursor bits);
     
-    public abstract SpacerIterator iterator(); // Iterator<SuperSpacer>
+    //public abstract SpacerIterator iterator(); // Iterator<SuperSpacer>
     //public abstract SpacerIterator iterator(long first);
     
-    public abstract Point whereGoes(long sub);
-    public abstract Point whereGoes(BitCursor bit);
+    //public abstract Point whereGoes(long sub);
+    //public abstract Point whereGoes(BitCursor bit);
     
     public abstract void paint(Graphics g, Data d, BitSegment seg);
     
