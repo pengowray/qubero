@@ -40,7 +40,6 @@ initial chunk types to support:
    Descriptors (4.3)
  - table of constants
  - xml: types and stuff at least
- - that ugly notation used in specifications
  - python's pickled objects
 
 future versions:
@@ -67,6 +66,7 @@ future versions:
  - gif / jpg / png
  - flash
  - javadoc viewer/editor!
+ - decompiler (nasm.octium.net / intel.com / x86.org)
 
 programs to obsolete:
  - notepad + wordpad
@@ -83,7 +83,7 @@ silly stuff:
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
- - Headers: jpg, BMP JFIF(?), PCX, PS2 Char Stats(game), 
+    
  - Views: Graphical (bitmap)
  - resizable bytes-per-row (shows number as you stretch it)
  - Search for graphics?
@@ -93,7 +93,7 @@ embrace and obsolete:
  - base converter utility
  - Continued obsoleteness: XStruct.ini (via support for .ini files + dynamic structure creation)
 
- HT http://hte.sourceforge.net/status.htm
+HT http://hte.sourceforge.net/status.htm
  - File Formats: PE, ELF, COFF, LE, MZ, NE
  - Entropy info
  - Code analyser
@@ -109,3 +109,32 @@ BIEW http://biew.sourceforge.net/en/biew.html
  - similar to HT? same codebase?
  - replace/use: TDUMP, EXEHDR, DUMPEXE, NewExe Disasm, 
  - "also quite good text viewer with russian codepage convertor"
+
+hexworkshop.com
+ - Checksum-8...64, CRC-16, CRC-16 CCITT, CRC-32, MD2/4/5, SHA1
+ - Date, DOS Time/Date, time_t, binary...
+ - red highlighting of changed data
+ - character filters: ASCII, DOS, EBCDIC, Macintosh, Window, and Unicode character set
+ - output to customizable hex dumps, RTF, HTML, Java, C (MN: java/c choose for size or readability (mixed hex+strings?) or maintainability (eg function to put it together?) or set format)
+ - drag and drop
+ - physical disk editing
+ - mutli-level undo
+ - operations: Byte Flip, ~, <<, >>, ~, |, &, +/-, +, -, *, /, % 
+ - "Paste Special"
+ - binary compare between files
+ - View Character Distributions and export results 
+ - Util/help: character tables, data-types and ranges
+ - command line options (readonly, offset, select)
+
+ben's suggestions:
+ - replace large area with "0x20" or a pattern, etc
+ - postscript / pdf
+ - shockwave flash, asn1 (multiple spec)
+ - asn1 -> c
+ - 40-bit rc4
+ - ** search for this: iso-3309 (www.iso.ch browse product store, 35.100.20)
+ - russian fbi fed pdf 
+ - bus: streaming data
+ - mpeg4 (for dad)
+
+qi gong
