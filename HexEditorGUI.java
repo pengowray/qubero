@@ -8,13 +8,11 @@ import javax.swing.tree.*;
 class HexEditorGUI {
     protected RawData root; // the data being edited
     protected DefaultMutableTreeNode def; // the definition of that data
-    protected DefaultMutableTreeNode topnode; // the top node of the tree on the left, which the data goes under
-    protected RawDataSelection currentSelection;
-    protected DefaultMutableTreeNode currentSelectionNode = null;
-    
-    protected JTree tree;
-    protected JLabel statusbar;
+
     protected JFrame jframe;
+    protected HexPanel hexpanel;
+    protected JLabel statusbar;
+    protected MoojTree moojtree;
 
     public HexEditorGUI(RawData root){
         this.root = root;
@@ -23,44 +21,24 @@ class HexEditorGUI {
         start();
     }
 
+
     protected void start() {
         //XXX: in future use a renderer factory
 
         jframe = new JFrame(root + " - Mooj" );
         
-        
-        
-        HexPanelListener hpl = new HexPanelListener() {
-            public void selectionMade(SelectionEvent e) {
-                if (currentSelectionNode != null) {
-                    int x = topnode.getIndex(currentSelectionNode);
-                    if (x != -1) {
-                        topnode.remove(x);
-                    }
-                }
-                currentSelection = e.getSelection();
-                currentSelectionNode = new DefaultMutableTreeNode(currentSelection,false);
-                topnode.add(currentSelectionNode);
-                jframe.getContentPane().remove(tree);
-                tree = new JTree(topnode);
-                jframe.getContentPane().add(tree, BorderLayout.WEST);
-                statusbar.setText(".." + currentSelection);
-            }
-        };
-    
-        HexPanel hexpanel = new HexPanel(root,def,hpl);
-        statusbar = hexpanel.getStatusbar();
-        topnode = new DefaultMutableTreeNode("mooj",true);
-        topnode.add(def);
-      
-        tree = new JTree(topnode);
+	moojtree = MoojTree.create(def);
+	hexpanel = new HexPanel(root,def,moojtree); // XXX: hexpanel listener should be added in its own method
+	moojtree.setHexPanel(hexpanel);
 
+        statusbar = hexpanel.getStatusbar(); //XXX: hmm status bar creation here?
+	
         JScrollPane jsp = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         jframe.getContentPane().add(jsp, BorderLayout.CENTER);
 
         jframe.getContentPane().add(statusbar, BorderLayout.SOUTH);
         
-        jframe.getContentPane().add(tree, BorderLayout.WEST);
+        jframe.getContentPane().add(moojtree, BorderLayout.WEST);
         
         jframe.addWindowListener(new WindowAdapter() {
             public void windowClosing(WindowEvent e) {
@@ -106,15 +84,18 @@ class HexPanel extends JPanel {
     protected int height = 600; // height of entire "sheet" of hex
     protected int width = 448; // width of entire "sheet" of hex
     protected int lineStart; // where does the first character start
-    protected int hexPerLine = 32; // number of hex units shown per line
+    protected int hexPerLine = 16; // number of hex units shown per line
     protected int[] hexStart; // where each hex starts on a line.
     protected int unitWidth; // length of two characters, basically.
     protected int lineHeight; // height of one line of hex
     protected int totalLines;
     
-    protected int selectionStart = -1;
-    protected int selectionEnd = -1;
+    protected RawDataSelection selection = null;
+    //protected int selectionStart = -1;
+    //protected int selectionEnd = -1;
     protected int cursor = -1;
+
+    private boolean draggingMode = false;
     
     Font font = new Font("Monospaced", Font.PLAIN, 11); // antialias?
     
@@ -163,25 +144,44 @@ class HexPanel extends JPanel {
         this.def = def;
         this.hexPanelListener = hpl;
         
+	// mouse routines:
+
         addMouseListener(
             new MouseInputAdapter() {
                 public void mousePressed(MouseEvent e) {
-                    mouseClicked(e);
+                    // e.getModifiers(); // FIXME: later.
+                    int hclick = hexFromClick( e.getX(), e.getY() );
+                    if (hclick != -1) {
+                        setSelection(hclick, 1, false);
+			//statusbar.setText("pressing" + draggingMode);
+			draggingMode = true;
+                    } else {
+                        //statusbar.setText("pressed on nothing" + draggingMode);
+			draggingMode = false;
+                    }		    
+
                 }
+
+                public void mouseReleased(MouseEvent e) {
+                    // e.getModifiers(); // FIXME: later.
+		    if (draggingMode) {
+			setSelection(getSelection(), true);
+			//statusbar.setText("releasing");
+			draggingMode = false;
+		    }
+
+                }
+
                 public void mouseClicked(MouseEvent e) {
                     // e.getModifiers(); // FIXME: later.
                     int hclick = hexFromClick( e.getX(), e.getY() );
                     if (hclick != -1) {
-                        selectionStart = hclick;
-                        selectionEnd = hclick + 1;
-
-                        statusbar.setText("selected: " + selectionStart + " to " + selectionEnd);
-                        //XXX: this class should use selection class internally
-                        hexPanelListener.selectionMade( new SelectionEvent( getSelection() ) );
-                        repaint(); // fixme: repaint only necessary areas!
+                        setSelection(hclick, 1, true);
+                        //statusbar.setText("clicked" + draggingMode);
                     } else {
-                        statusbar.setText("clicked on nothing");
+                        //statusbar.setText("clicked on nothing" + draggingMode);
                     }
+		    draggingMode = false;
                 }
             }
         );
@@ -189,21 +189,13 @@ class HexPanel extends JPanel {
         addMouseMotionListener(new MouseInputAdapter() {
             public void mouseDragged(MouseEvent e) {
                 int hclick = hexFromClick( e.getX(), e.getY() );
-                if (hclick != -1) {
-                    if (selectionStart == -1) {
-                        selectionStart = hclick;
-                    } else {
-                        selectionEnd = hclick+1;
-                    }
-                    
-                    //statusbar.setText("selected: " + selectionStart + " to " + selectionEnd);
-                    hexPanelListener.selectionMade( new SelectionEvent( getSelection() ) );
-                    repaint(); // fixme: repaint only necessary areas!
-                    
+                if (draggingMode && hclick != -1) {
+		    int start = selection.getStart(); 
+		    setSelection(start, (hclick-start)+1, false );
+		    //statusbar.setText("dragged");    
                 } else {
-                    //statusbar.setText("dragged nowhere");    
-                    //selectionStart = -1;
-                    //selectionEnd = -1;
+                    //statusbar.setText("dragged nowhere. mode: " + draggingMode );    
+		    //selection = null;
                 }
         
             }
@@ -212,7 +204,32 @@ class HexPanel extends JPanel {
     }
         
     public RawDataSelection getSelection() {
-        return new RawDataSelection(root, selectionStart, selectionEnd-selectionStart);
+	return selection;
+    }
+
+    public void setSelection(RawDataSelection sel) {
+	setSelection(sel, true);
+    }
+
+    public void setSelection(RawDataSelection sel, boolean publish) {
+	if (sel.equals(selection)) return;
+
+	this.selection = sel;
+
+        repaint(); //XXX: repaint only necessary areas!
+
+	if (publish) {
+	    hexPanelListener.selectionMade( new SelectionEvent(selection) );
+	}
+
+
+    }
+
+    public void setSelection(int offset, int len) {
+	setSelection(offset, len, true);
+    }
+    public void setSelection(int offset, int len, boolean publish) {
+        setSelection(new RawDataSelection(root, offset, len), publish);
     }
 
     public int getHeight() {
@@ -313,13 +330,21 @@ class HexPanel extends JPanel {
         byte[] data = root.getData();
         int linenum = start;
         int lastHex = finish*hexPerLine;
+	int selStart = -1; 
+	int selEnd = -1; 
+
+	if (selection != null ) {
+	    selStart = selection.getStart();
+	    selEnd = selStart + selection.getLength();
+	}
+
         for (int i = start*hexPerLine; i < len && i <=lastHex; i += hexPerLine) {
             linenum++;
             
             int jlen = (len-i >= hexPerLine ? hexPerLine : len-i);
             for (int j=0; j < jlen; j++) {
                 // draw line of hex
-                if (i+j >= selectionStart && i+j < selectionEnd) {
+                if (i+j >= selStart && i+j < selEnd) {
                     g.setColor(Color.magenta);
                 } else {
                     g.setColor(Color.black);

@@ -75,7 +75,24 @@ class RawDataSelection extends RawData {
         return start;
     }
     
+    public int getLength() {
+        return length;
+    }
+
+    /*
+    public boolean equals(Object o){
+	if (o == null) { 
+	    return false;
+	} else {
+	    return super.equals(o);
+	}
+    }
+    */
+
     public boolean equals(RawDataSelection rds) {
+	if (rds == null) 
+	    return false;
+
         if (rds.start == this.start &&
                 rds.length == this.length &&
                 rds.rawdata == this.rawdata) {
@@ -109,9 +126,6 @@ class RawDataSelection extends RawData {
         return data;
     }
     
-    public int getLength() {
-        return length;
-    }
 }
 
 /** 
@@ -190,7 +204,6 @@ class DefaultDefinition extends DefaultMutableTreeNode implements Chunk {
     
     public DefaultDefinition (RawData rawdata) {
         super(rawdata, true);
-        add( new DefaultMutableTreeNode("silly child",false) );
     }
     
     public String toString() {

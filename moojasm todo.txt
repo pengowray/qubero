@@ -1,0 +1,82 @@
+"templatation"
+view, edit, create java bytecode + automation
+
+"""get it working first
+get it right later
+"""
+
+for v0.1
+ - sequential + recursive + random access + dependant + compression definitions of parts of file (xml defintion)
+ - scoped type definition with inheritance
+ - external main definition file
+ - hex display 
+ - highlighting of parts (outline) and errors (red)
+ - display: tree of parts
+ - table of constants
+ - names for chunks, types
+ - array/table numbering systems
+ - search / jump
+ - text only display
+
+for v0.2
+ - expandable view (.jar, compressed bits)
+ - more file formats
+ - more views
+ - more chunk types
+ - less java dependant?
+
+initial chunk types to support:
+ - internal types: template references
+ - internal types: variables (defined within/from the template)
+ - java bytecode types (edit and display): int, long, reference, etc.
+ - java types: char, short, boolean, unicode
+ -  http://java.sun.com/docs/books/vmspec/2nd-edition/html/ClassFile.doc.html
+   class file types: u1, u2, u4, 
+   infos: cp_info, field_info, method_info, attribute_info
+   arrays: count then array
+   magic numbers: (eg OxCAFEBABE)
+   flags (w/ conflict rules)
+   Fully Qualified Class and Interface Names "java/lang/String"
+   Descriptors (4.3)
+ - table of constants
+ - xml: types and stuff at least
+ - that ugly notation used in specifications
+ - python's pickled objects
+
+future versions:
+ - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
+ - links and soft copies of referenced specs (+ evidence based "broken" links)
+ - multi-threaded loading: jump ahead of current part being parsed when possible
+ - partial/background loading: only load what's displayed (large files especially)
+ - XML editor
+ - standard (and non-standard) methods of conversion between types
+ - rules: (e.g. uniqueness)
+ - simultaneous versions / instances
+ - partial locking (or loading just what isn't locked)
+ - lambda
+ - java convention checker
+ - java security awareness
+ - parse .java files too?
+ - Extended Backus-Naur Form (EBNF) notation support
+ - mame images and sounds!
+ - excel types + formats + equations
+ - python types
+ - different javascript styles
+ - self describing document -> .exe / .class / applet / javascript
+ - human language guessing
+ - gif / jpg / png
+ - flash
+ - javadoc viewer/editor!
+
+programs to obsolete:
+ - notepad + wordpad
+ - kde's hex editor
+ - vim, etc
+ - oracle
+ - new locus
+ - outlook
+ - excel
+
+silly stuff:
+ - xmodem end-escape sequence fixing
+ - ansi music! 
