@@ -7,6 +7,7 @@
 package net.pengo.propertyEditor;
 
 import net.pengo.resource.AddressedResource;
+import net.pengo.resource.QNodeResource;
 import net.pengo.resource.SelectionResource;
 
 /**
@@ -20,7 +21,12 @@ public class AddressPage extends MethodSelectionPage {
     
     /** Creates a new instance of AddressPage */
     public AddressPage(AddressedResource res, AbstractResourcePropertiesForm form) {
-        super(form, new PropertyPage[] {new SimpleAddressPage(res,form), new TextOnlyPage("Multi-selection","NYI"), new TextOnlyPage("Empty selection","NYI") }, "Address");
+        super(form, new PropertyPage[] {
+                new SimpleAddressPage(res,form), 
+                new TextOnlyPage("Multi-selection","NYI"),
+                new TextOnlyPage("Empty selection","NYI"),
+                new TextOnlyPage("Use another address","NYI")
+        }, "Address");
         this.res = res;
         
         build();
@@ -29,15 +35,18 @@ public class AddressPage extends MethodSelectionPage {
     public void buildOp() {
         if (res != null && modded == false) {
             SelectionResource sel = res.getSelectionResource();
-            
-            if (sel.getSelection().getSegmentCount() > 1) {
-                setSelected(1);
-            }
-            else if (sel.getSelection().getSegmentCount() == 0) {
-                setSelected(2);
-            }
-            else {
-                setSelected(0);
+            if (sel.isOwner((QNodeResource)res)) {
+	            if (sel.getSelection().getSegmentCount() > 1) {
+	                setSelected(1);
+	            }
+	            else if (sel.getSelection().getSegmentCount() == 0) {
+	                setSelected(2);
+	            }
+	            else {
+	                setSelected(0);
+	            }
+            } else {
+                setSelected(3);
             }
             
         }

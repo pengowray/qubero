@@ -1,12 +1,21 @@
 package net.pengo.app;
-import java.awt.*;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Container;
+import java.awt.Graphics;
+import java.awt.Image;
+import java.awt.Toolkit;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 
-import javax.swing.*;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
 
 import net.pengo.data.Data;
 import net.pengo.data.DemoData;
@@ -14,7 +23,7 @@ import net.pengo.data.DiffData;
 import net.pengo.data.EditableData;
 import net.pengo.data.LargeFileData;
 import net.pengo.hexdraw.original.HexPanel;
-import net.pengo.hexdraw.tabled.HexTable;
+import net.pengo.hexdraw.original.renderer.Renderer;
 import net.pengo.restree.SimpleResTree;
 import net.pengo.splash.FontMetricsCache;
 
@@ -26,7 +35,7 @@ public class GUI implements ActiveFileListener {
     
     protected JFrame jframe;
     protected HexPanel hexpanel;
-    protected HexTable hextable;
+    //protected HexTable hextable;
     protected JLabel statusbar;
     //protected ResTree moojtree;
     protected SimpleResTree simplemoojtree;
@@ -90,7 +99,7 @@ public class GUI implements ActiveFileListener {
 	simplemoojtree = SimpleResTree.create(activeFile);
 	
 	hexpanel = new HexPanel(activeFile); //
-	//HexTable hexpanel = new HexTable(openFile);
+	//hextable = new HexTable(activeFile);
 	//LineRepeater hexpanel = new LineRepeater(openFile.getData());
 	
 	statusbar = new JLabel("Qubero: Vertical Modeller/Assembler");
@@ -106,6 +115,8 @@ public class GUI implements ActiveFileListener {
 	
 	jframe.setIconImage(icon);
 	jframe.setJMenuBar(mmb);
+	
+	//change it here!!!:
 	JScrollPane sp_hexpanel = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
 						  JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
 	//JScrollPane sp_hexpanel = new JScrollPane(hextable, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
@@ -246,9 +257,14 @@ public class GUI implements ActiveFileListener {
 	}
     }
     
-    public void setGreyMode(int mode) {
-	hexpanel.setGreyMode(mode);
-    }
+	public Renderer[] getViewModes() {
+		return hexpanel.getViewModes();
+	}
+	
+	public Renderer getViewMode(String name) {
+	    return hexpanel.getViewMode(name);
+	}
+	
     
     /*
      public void setEditable(boolean editable) {

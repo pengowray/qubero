@@ -65,8 +65,8 @@ public abstract class Resource {
 
     // how to respond to a rename event
     public void rename(String name) {
-	//FIXME:
-	return;
+        //FIXME:
+        return;
     }
     
     // default action when clicked (e.g in a list)

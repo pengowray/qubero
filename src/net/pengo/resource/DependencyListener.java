@@ -17,8 +17,8 @@ public interface DependencyListener
      / \
     *   * SINK
     
-     parent = subscriber / listener
-     dependency = subscription / publication / feed / resource
+     parent = subscriber / listener  
+     dependency = subscription / publication / feed / resource / trigger  
     
     */
     

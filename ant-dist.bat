@@ -1,1 +1,1 @@
-ant build.xml dist
+ant dist

@@ -1,6 +1,6 @@
 JarIndex-Version: 1.0
 
-Qubero-20040104-1025-backup.jar
+Qubero-20040107-1051-backup.jar
 net/pengo/hexdraw
 eclipse/bin/net/pengo/splash
 eclipse/bin/net/pengo/selection
@@ -8,12 +8,14 @@ net
 eclipse/bin/net/pengo/hexdraw/lineRepeater
 eclipse/bin/net/pengo/hexdraw/original
 eclipse/bin/net/pengo/dependency
+src/net/pengo/hexdraw/original/renderer
 net/pengo/pointer
 src
 net/pengo/resource
 eclipse/bin/net/pengo/app
 src/net/pengo/splash
 net/pengo/restree
+eclipse/bin/net/pengo/hexdraw/original/renderer
 src/net/pengo/data
 src/net/pengo/hexdraw
 eclipse/.externalToolBuilders
@@ -41,6 +43,7 @@ eclipse/bin/net/pengo/pointer
 eclipse/bin/net/pengo
 net/pengo
 src/net/pengo/resource
+net/pengo/hexdraw/original/renderer
 net/pengo/propertyEditor
 src/net/pengo/selection
 eclipse/bin
@@ -57,6 +60,7 @@ eclipse/bin/net/pengo/data
 extras
 mooj32.png
 HexEditorGUI.jasm.txt
+ant-backup.bat
 ant-dist.bat
 backup-mydocs.lnk
 bedrock mydocs-6_1.cpr

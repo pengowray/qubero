@@ -3,15 +3,17 @@ package net.pengo.app;
 import java.awt.event.ActionEvent;
 
 import javax.swing.AbstractAction;
-import javax.swing.ButtonGroup;
+import javax.swing.JCheckBox;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
-import javax.swing.JRadioButtonMenuItem;
 import javax.swing.JSeparator;
+
+import net.pengo.hexdraw.original.renderer.Renderer;
 
 public class MoojMenuBar extends JMenuBar {
     protected final GUI gui;
+    
     public MoojMenuBar(GUI gui) {
         super();
         this.gui = gui;
@@ -50,7 +52,9 @@ public class MoojMenuBar extends JMenuBar {
         nowmenu = new JMenu("Edit");
         nowmenu.add("no undo.").setEnabled(false);
         this.add(nowmenu);
-        
+
+        nowmenu = new JMenu("View");
+        /*
         ButtonGroup greyModeGroup = new ButtonGroup();
         JRadioButtonMenuItem grey0 = new JRadioButtonMenuItem( new GreyModeItem("ASCII", 0));
         JRadioButtonMenuItem grey1 = new JRadioButtonMenuItem( new GreyModeItem("Grey scale", 1));
@@ -58,14 +62,36 @@ public class MoojMenuBar extends JMenuBar {
         greyModeGroup.add(grey0);
         greyModeGroup.add(grey1);
         greyModeGroup.add(grey2);
-        grey0.setSelected(true); //fixme: should check.
-        //fixme: Should get feedback from GUI as to which grey mode is used.
-        
-        nowmenu = new JMenu("View");
-        
+        grey0.setSelected(true);
         nowmenu.add( grey0 );
         nowmenu.add( grey1 );
         nowmenu.add( grey2 );
+        */
+
+        Renderer renderers[] = gui.getViewModes();
+		JCheckBox checks[] = new JCheckBox[renderers.length];
+
+		for ( int i = 0; i < checks.length; i++) {
+		    Renderer renderer = renderers[i]; 
+			if ( renderer == null ) {}
+			else if ( renderer.toString().equals("_") )
+				nowmenu.add( new JSeparator() );
+			else {
+				ViewMenuItem action = new ViewMenuItem(renderer);
+				checks[i] = new JCheckBox( renderer.toString(), renderer.isEnabled() );
+	        	checks[i].setAction( action );
+	        	nowmenu.add( checks[i] );
+			}
+		}
+/*        
+        nowmenu.add( new JSeparator() );
+        JCheckBox wave = new JCheckBox( new ViewMenuItem("Wave", checks[0]) );
+        JCheckBox waveRGB = new JCheckBox( new ViewMenuItem("Wave RGB", checks[0]) );
+        nowmenu.add( wave );
+        nowmenu.add( waveRGB );
+*/
+//fixme: Should get feedback from GUI as to which grey mode is used.
+
         this.add(nowmenu);
         
         nowmenu = new JMenu("Go");
@@ -85,15 +111,22 @@ public class MoojMenuBar extends JMenuBar {
         this.add(nowmenu);
     }
     
-    private class GreyModeItem extends AbstractAction {
-        int value;
-        public GreyModeItem(String name, int value) {
-            super(name);
-            this.value = value;
+    private class ViewMenuItem extends AbstractAction {
+        private Renderer renderer;
+        public ViewMenuItem(Renderer renderer) {
+            super(renderer.toString());
+            this.renderer = renderer;
         }
         public void actionPerformed(ActionEvent e) {
             GUI gui = MoojMenuBar.this.gui;
-            gui.setGreyMode(value);
+
+			String name = e.getActionCommand();
+			Renderer renderer = gui.getViewMode(name);
+
+            // read check box item value and update checks
+			JCheckBox check = (JCheckBox)(e.getSource());
+			renderer.setEnabled(check.isSelected());
+
         }
         
     }

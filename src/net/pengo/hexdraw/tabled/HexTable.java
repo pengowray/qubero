@@ -30,9 +30,11 @@ public class HexTable extends JTable implements ResourceListener
     protected UnifiedSelectionModel unifiedSelectionModel;
     
     /** Creates a new instance of HexTable */
-    public HexTable(OpenFile openFile)
+    public HexTable(ActiveFile activeFile)
 	{
 		super();
+		this.openFile = activeFile.getActive();
+		
 		Data data = openFile.getData();
 		
 		setFont(FontMetricsCache.singleton().getFont("hex"));

@@ -2,23 +2,45 @@ package net.pengo.hexdraw.original;
 
 /* this is the original hex panel. updated to work with the new selection model. */
 
-import java.awt.*;
-import net.pengo.app.*;
-
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.datatransfer.Transferable;
 import java.awt.dnd.DropTargetListener;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.io.InputStream;
-import java.math.BigInteger;
+
 import javax.swing.JPanel;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.event.MouseInputAdapter;
+
+import net.pengo.app.ActiveFile;
+import net.pengo.app.ActiveFileEvent;
+import net.pengo.app.ActiveFileListener;
+import net.pengo.app.ClipboardEvent;
+import net.pengo.app.FileEvent;
+import net.pengo.app.OpenFile;
+import net.pengo.app.OpenFileListener;
+import net.pengo.app.SelectionEvent;
 import net.pengo.data.Data;
 import net.pengo.data.DataEvent;
 import net.pengo.data.DataListener;
 import net.pengo.data.EmptyData;
+import net.pengo.hexdraw.original.renderer.AddressRenderer;
+import net.pengo.hexdraw.original.renderer.AsciiRenderer;
+import net.pengo.hexdraw.original.renderer.GreyScale2Renderer;
+import net.pengo.hexdraw.original.renderer.GreyScaleRenderer;
+import net.pengo.hexdraw.original.renderer.HexRenderer;
+import net.pengo.hexdraw.original.renderer.Renderer;
+import net.pengo.hexdraw.original.renderer.SeperatorRenderer;
+import net.pengo.hexdraw.original.renderer.WaveRGBRenderer;
+import net.pengo.hexdraw.original.renderer.WaveRenderer;
 import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
 import net.pengo.selection.LongListSelectionModel;
@@ -54,7 +76,12 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     
     
     private Font font = new Font("Monospaced", Font.PLAIN, 11); // antialias?
-    private int greyMode = 0;
+    //private Font font = new Font("Monospaced", Font.PLAIN, 8); // antialias?
+
+
+    Renderer renderers[];
+    private boolean[] checks;
+    
     
     public HexPanel(ActiveFile activeFile)  {
 	super();
@@ -121,6 +148,27 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 			
 		    }
 		});
+	renderers = new Renderer[] {
+	        new AddressRenderer(this, true),
+	        new SeperatorRenderer(this, true),
+	        new HexRenderer(this, false),
+	        new AsciiRenderer(this, false),
+	        new SeperatorRenderer(this, true),
+	        new GreyScaleRenderer(this, false),
+	        new GreyScale2Renderer(this, true),
+	        new SeperatorRenderer(this, true),
+	        new WaveRenderer(this, false),
+	        new WaveRGBRenderer(this, false),
+	};
+	
+	// do reflection here.. later..
+	//String[] classes = { "Address", "Hex", "Seperator", "Ascii"
+	//renderers = new Renderer[classes.length];
+	
+	//renderers[0] = (Renderer)( new AddressRenderer(this, true) );
+	//renderers[1] = (Renderer)( new HexRenderer(this, true) );
+	//renderers[2] = (Renderer)( new SeperatorRenderer(this, true) );
+	//renderers[3] = (Renderer)( new AsciiRenderer(this, true) );
 	
     }
     
@@ -382,127 +430,131 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
      */
     
     public Dimension getPreferredSize()  {
-	//FIXME: this is a hack!
-	return new Dimension(width, (int)height); //FIXME: precision loss!
-	
-	
+        //FIXME: this is a hack!
+        return new Dimension(width, (int)height); //FIXME: precision loss!
+        
+        
     }
     
     public Dimension getMinimumSize()  {
-	return getPreferredSize();
+        return getPreferredSize();
     }
     
     
     public Dimension getMaximumSize()  {
-	return new Dimension(width, (int)height); //FIXME: precision loss!
+        return new Dimension(width, (int)height); //FIXME: precision loss!
     }
     
     //FIXME: will need def listener?
     
     private void reCalcDim()  {
-	dimensionsCalculated = false;
-	calcDim();
+        dimensionsCalculated = false;
+        calcDim();
     }
     
     /** calculate dimensions */
     private void calcDim()  {
-	if (dimensionsCalculated == true)
-	    return;
-	
-	//calcDim(getComponentGraphics().getFontMetrics(font)); // oops stupid no work
-	
-	calcDim(charWidth, charHeight); //FIXME: may not have been worked out from FontMetrics
-	if (charSizeKnown == false)  {
-	    // don't trust size until calculated with FontMetrics
-	    dimensionsCalculated = false;
-	}
+        if (dimensionsCalculated == true)
+            return;
+        
+        //calcDim(getComponentGraphics().getFontMetrics(font)); // oops stupid no work
+        
+        calcDim(charWidth, charHeight); //FIXME: may not have been worked out from FontMetrics
+        if (charSizeKnown == false)  {
+            // don't trust size until calculated with FontMetrics
+            dimensionsCalculated = false;
+        }
     }
     
     private void calcDim(FontMetrics fm)  {
-	if (dimensionsCalculated == true)
-	    return;
-	
-	if (charSizeKnown == false)  {
-	    int oldCharWidth = charWidth;
-	    int oldCharHeight = charHeight;
-	    int oldCharAscent = charAscent;
-	    charWidth = fm.charWidth('W');
-	    charHeight = fm.getHeight();
-	    charAscent = fm.getAscent();
-	    charSizeKnown = true;
-	    if (oldCharWidth != charWidth || oldCharHeight != charHeight)  {
-		System.out.println("Note: screen character size different to expected: " + charWidth  + "x" + charHeight + ",ascent:" + charAscent +  " instead of expected: " + oldCharWidth  + "x" + oldCharHeight + ",ascent:" + oldCharAscent);
-	    }
-	    if (oldCharAscent != charAscent )  {
-		System.out.println("Note: character ascent different to expected: " + charAscent + " instead of expected: " + oldCharAscent);
-	    }
-	}
-	
-	calcDim(charWidth, charHeight);
+        if (dimensionsCalculated == true)
+            return;
+        
+        if (charSizeKnown == false)  {
+            int oldCharWidth = charWidth;
+            int oldCharHeight = charHeight;
+            int oldCharAscent = charAscent;
+            charWidth = fm.charWidth('W');
+            charHeight = fm.getHeight();
+            charAscent = fm.getAscent();
+            charSizeKnown = true;
+            if (oldCharWidth != charWidth || oldCharHeight != charHeight)  {
+                System.out.println("Note: screen character size different to expected: " + charWidth  + "x" + charHeight + ",ascent:" + charAscent +  " instead of expected: " + oldCharWidth  + "x" + oldCharHeight + ",ascent:" + oldCharAscent);
+            }
+            if (oldCharAscent != charAscent )  {
+                System.out.println("Note: character ascent different to expected: " + charAscent + " instead of expected: " + oldCharAscent);
+            }
+        }
+        
+        calcDim(charWidth, charHeight);
     }
     
     protected synchronized void calcDim(int charWidth, int charHeight)  {
-	if (dimensionsCalculated == true)
-	    return;
-	
-	long oldHeight = height;
-	int oldWidth = width;
-	int oldLineStart = lineStart;
-	
-	lineHeight = charHeight;
-	lineStart = charWidth * ((root.getLength()+"").length() + 3); // longest "hex" address can be (as a string), plus three (for a " : ")
-	
-	unitWidth = charWidth * 2; // length of two characters (eg FF).
-	int asciiWidth = charWidth * hexPerLine; // how long the ascii stuff is
-	
-	int[] spaceEvery = new int[] {1, 2, 4, 8};
-	int[] spaceSize = new int[]  {charWidth*3, 0, charWidth, charWidth };
-	
-	hexStart = new int[hexPerLine+1]; // where each hex starts on a line + where ascii starts
-	
-	int s = 0;
-	for (int n=0; n<hexStart.length; n++) { // only place hexStart.length should be used. use hexPerLine instead.
-	    hexStart[n] = s;
-	    for (int m=0; m<spaceEvery.length; m++)  {
-		if ((n+1) % spaceEvery[m] == 0)  {
-		    s += spaceSize[m];
-		}
-	    }
-	}
-	
-	// if (root.isFixedLength()) {  // --- how to deal with non fixed length?
-	
-	totalLines = root.getLength() / hexPerLine;
-	if ((float)totalLines != ((float)root.getLength() / hexPerLine))
-	    totalLines++;
-	height = totalLines * lineHeight;
-	width = lineStart + hexStart[hexPerLine] + unitWidth + asciiWidth;
-	dimensionsCalculated = true;
-	
-	if (oldWidth != width || oldHeight != height || oldLineStart != lineStart)  {
-	    revalidate();
-	}
-	//System.out.println("char: " + charWidth + "x" + charHeight + ". Dimensions: " + width + "x" + height +".");
+        if (dimensionsCalculated == true)
+            return;
+        
+        long oldHeight = height;
+        int oldWidth = width;
+        int oldLineStart = lineStart;
+        
+        lineHeight = charHeight;
+        lineStart = charWidth * ((root.getLength()+"").length() + 3); // longest "hex" address can be (as a string), plus three (for a " : ")
+        
+        unitWidth = charWidth * 2; // length of two characters (eg FF).
+        int asciiWidth = charWidth * hexPerLine; // how long the ascii stuff is
+        
+        int[] spaceEvery = new int[] {1, 2, 4, 8};
+        int[] spaceSize = new int[]  {charWidth*3, 0, charWidth, charWidth };
+        
+        hexStart = new int[hexPerLine+1]; // where each hex starts on a line + where ascii starts
+        
+        int s = 0;
+        for (int n=0; n<hexStart.length; n++) { // only place hexStart.length should be used. use hexPerLine instead.
+            hexStart[n] = s;
+            for (int m=0; m<spaceEvery.length; m++)  {
+                if ((n+1) % spaceEvery[m] == 0)  {
+                    s += spaceSize[m];
+                }
+            }
+        }
+        
+        // if (root.isFixedLength()) {  // --- how to deal with non fixed length?
+        
+        totalLines = root.getLength() / hexPerLine;
+        if ((float)totalLines != ((float)root.getLength() / hexPerLine))
+            totalLines++;
+        height = totalLines * lineHeight;
+        //FIXME!!!!!!!!!
+        width = lineStart + hexStart[hexPerLine] + unitWidth + asciiWidth;
+        width += 500;
+        dimensionsCalculated = true;
+        
+        if (oldWidth != width || oldHeight != height || oldLineStart != lineStart)  {
+            revalidate();
+        }
+        //System.out.println("char: " + charWidth + "x" + charHeight + ". Dimensions: " + width + "x" + height +".");
     }
     
     public void paintComponent(Graphics g)  {
-	if (rootLength != root.getLength()) { // FIXME: size change should be given via trigger
-	    reCalcDim();
-	}
-	Graphics2D g2 = (Graphics2D)g;
-	super.paintComponent(g2);
-	//System.out.println("paint called. " + g.getClipBounds());
-	//System.out.println("this dimens.. " + this.getSize());
-	if (dimensionsCalculated==false)  {
-	    g2.setFont(font);
-	    FontMetrics fm = g2.getFontMetrics();
-	    calcDim(fm);
-	}
-	int top, bot;
-	Rectangle clipRect = g2.getClipBounds();
-	if (clipRect != null)  {
-	    //If it's more efficient, draw only the area specified by clipRect.
-	    
+        if (rootLength != root.getLength()) { // FIXME: size change should be given via trigger
+            reCalcDim();
+        }
+        Graphics2D g2 = (Graphics2D)g;
+        super.paintComponent(g2);
+        //System.out.println("paint called., width:"+width + ", height:"+height);
+        //System.out.println("paint called. " + g.getClipBounds());
+        //System.out.println("this dimens.. " + this.getSize());
+        
+        if (dimensionsCalculated==false)  {
+            g2.setFont(font);
+            FontMetrics fm = g2.getFontMetrics();
+            calcDim(fm);
+        }
+        int top, bot;
+        Rectangle clipRect = g2.getClipBounds();
+        if (clipRect != null)  {
+            //If it's more efficient, draw only the area specified by clipRect.
+            
 	    /*
 	     // box around the just painted area
 	     g2.setColor(Color.pink);
@@ -512,147 +564,118 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
 	     g2.setColor(Color.green);
 	     g2.drawLine(clipRect.x, clipRect.y+clipRect.height-1, clipRect.x+clipRect.width-1, clipRect.y+clipRect.height-1); // bot
 	     */
-	    
-	    top = clipRect.y / lineHeight;
-	    bot = (clipRect.y + clipRect.height) / lineHeight + 1;
-	    
-	}
-	else  {
-	    top = 0;
-	    bot = (int)totalLines; //FIXME: precision loss!!
-	    //Paint the entire component.
-	    System.out.println("Warning: Whole hexpanel component got painted! that shouldn't really happen.");
-	}
-	
-	paintLines(g2,top,bot);
+            
+            top = clipRect.y / lineHeight;
+            bot = (clipRect.y + clipRect.height) / lineHeight + 1;
+            
+        }
+        else  {
+            top = 0;
+            bot = (int)totalLines; //FIXME: precision loss!!
+            //Paint the entire component.
+            System.out.println("Warning: Whole hexpanel component got painted! that shouldn't really happen.");
+        }
+        
+        paintLines(g2,top,bot);
     }
     
     /** paint each hex unit from start to finish (lines) */
-    public void paintLines(Graphics2D g, long start, long finish)  {
-	//System.out.println("painting from " + start + "(" + start*hexPerLine + ") to " + finish + "(" + finish*hexPerLine + ")");
-	g.setFont(font);
-	FontMetrics fm = g.getFontMetrics();
-	
-	if (start < 0)  {
-	    start = 0;
-	}
-	
-	long len = root.getLength();
-	
-	long startByte = start*hexPerLine;
-	long endByte = finish*hexPerLine;
-	if (endByte > len)
-	    endByte = len;
-	
-	long linenum = start;
-	long lastHex = finish*hexPerLine;
-	//long selStart = -1;
-	//long selEnd = -1;
-	
-	byte ba[] = new byte[1]; // current byte
-	byte b;
-	
-	
-	try  {
-	    InputStream data = root.getDataStream(startByte,endByte-startByte);
+    public void paintLines(Graphics g, long start, long finish)  {
+        //System.out.println("painting from " + start + "(" + start*hexPerLine + ") to " + finish + "(" + finish*hexPerLine + ")");
+        int charsHeight = lineHeight;
+        //System.out.println("rendering: "+start +"-"+finish);
+        //g = g.create(0,0,width,charsHeight);
+        g.setFont(font);
+        
+        FontMetrics fm = g.getFontMetrics();
+
+        if (start < 0)  {
+            //fixme
+            System.out.println("drawing from negative! (" + start +")");
+            start = 0;
+        }
+        
+        long startByte = start*hexPerLine;
+        long endByte = finish*hexPerLine;
+        
+        long len = root.getLength();
+        if (endByte > root.getLength())
+            endByte = root.getLength();
+        
+        long linenum = start;
+        long lastHex = finish*hexPerLine;
+        //long selStart = -1;
+        //long selEnd = -1;
+        
+
+        boolean selecta[] = new boolean[hexPerLine]; // current selecteds
+        byte ba[] = new byte[hexPerLine]; // current bytes
+        
+		int totalRenderWidth, segmentWidth; 
+		long i;
+		int index, count;
+	    Renderer renderer;
 	    
-	    for (long i = start*hexPerLine; i < len && i <=lastHex; i += hexPerLine) { // line (y)
-		
-		// calc characters to draw on this line (jlen). Can't be moreo than hexPerLine.
-		int jlen = (int)((len-i >= hexPerLine ? hexPerLine : len-i));
-		for (int j=0; j < jlen; j++) { // unit (x)
-		    try  {
-			data.read(ba); // read byte into b[]
-			b = ba[0];
-		    }
-		    catch (IOException e)  {
-			//FIXME:
+	    //g.setClip( 0, (int)(start)*fm.getHeight(), width, (int)(finish)*fm.getHeight()+fm.getHeight() ); // possible problems with large i[ndex]
+	    g.translate( 0,(int)(start)*fm.getHeight() );
+	    
+        try  {
+            InputStream data = root.getDataStream(startByte,endByte-startByte);
+            
+            for (linenum = start*hexPerLine; linenum < len && linenum <=lastHex; linenum+=hexPerLine) { // line (y)
+                // calc characters to draw on this line (jlen). Can't be moreo than hexPerLine.
+                count = (int)((len-linenum >= hexPerLine ? hexPerLine : len-linenum));
+				totalRenderWidth = 0;
+ 	
+
+                try  {
+                  //count = data.read(ba, 0, count); // read bytes into ba[]
+				  data.read(ba); // read bytes into ba[]
+				  //count = data.read(ba); // read bytes into ba[]
+                }
+                catch (IOException e)  {
+                    //FIXME:
+                    e.printStackTrace();
+                    return;
+                }
+                    
+                // draw line of hex
+                /*
+                boolean selected =
+                    openFile.getSelectionModel().isSelectedIndex(i+j) ||
+                    (i+j >= activeSelectionFirst && i+j <= activeSelectionLast);
+                */
+                
+                //renderByte( Point p1, Point p2, int index, byte b, boolena selected);
+                
+                
+				//System.out.println("i:"+linenum +", lastHex:"+lastHex +", len:"+len +", count:"+count);
+				//g.setClip( 0, (int)(linenum), width, charsHeight ); // possible problems with large i[ndex]
+
+				for ( index=0; index < selecta.length; index++) {	//setup selection
+                	selecta[index] = openFile.getSelectionModel().isSelectedIndex(((int)linenum *charsHeight) +index);
+				}
+				
+				for ( index=0; index < renderers.length; index++) {	//render each renderer
+                    renderer = renderers[index];
+					if (renderer != null && renderer.isEnabled()) {
+						segmentWidth = 
+						    renderer.renderBytes( g, hexStart, linenum, ba, selecta, count );
+						totalRenderWidth += segmentWidth;
+		                g.translate( segmentWidth, 0 );
+					}
+				}
+				//System.out.println("totalRenderWidth: " + totalRenderWidth +", charsHeight:" + charsHeight);
+                g.translate( -totalRenderWidth, charsHeight );
+                //linenum++;
+            }
+        } catch (IOException e)  {
+            //FIXME: now what?
 			e.printStackTrace();
-			return;
-		    }
-		    
-		    // draw line of hex
-		    /*
-		     boolean selected =
-		     openFile.getSelectionModel().isSelectedIndex(i+j) ||
-		     (i+j >= activeSelectionFirst && i+j <= activeSelectionLast);
-		     */
-		    boolean selected = openFile.getSelectionModel().isSelectedIndex(i+j);
-		    
-		    if (selected)  {
-			g.setColor( new Color(170,170,255) ); // FIXME: cache
-			g.fillRect( lineStart + hexStart[j], (int)(lineHeight*linenum), hexStart[j+1]-hexStart[j], lineHeight);  //FIXME: precision loss!
-			g.fillRect( lineStart + hexStart[j], (int)(lineHeight*linenum), hexStart[j+1]-hexStart[j], lineHeight);  //FIXME: precision loss!
-		    }
-		    g.setColor(Color.black);
-		    g.drawString( byte2hex(b), lineStart + hexStart[j], (int)(charAscent + lineHeight*linenum)); //FIXME: precision loss!
-		    //g.drawString( byte2hex(b), (float)lineStart + hexStart[j], (float)(charAscent + lineHeight*linenum)); //FIXME: precision loss?
-		    
-		    if (greyMode == 1)  {
-			int col = ~((int)b) & 0xff; // the "gamma" of grey squares
-			if (selected)  {
-			    g.setColor(new Color(col/3*2,col/3*2,col/2+128));
-			}
-			else  {
-			    g.setColor(new Color(col,col,col));
-			}
-			g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j), (int)(lineHeight*linenum), charWidth-1, lineHeight-1); //FIXME: precision loss!
-			
-			//g.setColor(Color.red);
-			//g.drawString( byte2ascii(b), lineStart + hexStart[hexPerLine] + (charWidth*j), charAscent + lineHeight*linenum );
-		    }
-		    else if (greyMode == 2)  {
-			int col = ~((int)b) & 0xf0; // the gamma of left/outer square
-			int col2 = (~((int)b) & 0x0f) << 4; // the gamma of right/inner square
-			col = col | (col >> 4); // turn a0 into aa
-			col2 = col2 | (col2 >> 4);
-			
-			if (selected)  {
-			    g.setColor(new Color(col/3*2,col/3*2,col/2+128));
-			    g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j), (int)(lineHeight*linenum), charWidth-1, lineHeight-1); //FIXME: precision loss!
-			    g.setColor(new Color(col2/3*2,col2/3*2,col2/2+128));
-			    g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j) + (charWidth/2), (int)(lineHeight*linenum)+(lineHeight/2), (charWidth/2)-1, (lineHeight/2)-1); //FIXME: precision loss!
-			}
-			else  {
-			    g.setColor(new Color(col,col,col));
-			    g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j), (int)(lineHeight*linenum), charWidth-1, lineHeight-1); //FIXME: precision loss!
-			    g.setColor(new Color(col2,col2,col2));
-			    g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j) + (charWidth/2), (int)(lineHeight*linenum)+(lineHeight/2), (charWidth/2)-1, (lineHeight/2)-1); //FIXME: precision loss!
-			}
-			
-		    }
-		    else  {
-			if (selected)  {
-			    g.setColor( new Color(170,170,255) ); // FIXME: cache
-			    g.fillRect(lineStart + hexStart[hexPerLine] + (charWidth*j), (int)(lineHeight*linenum), charWidth, lineHeight); //FIXME: precision loss!
-			}
-			g.setColor( Color.black );
-			g.drawString( byte2ascii(b), lineStart + hexStart[hexPerLine] + (charWidth*j), (int)(lineHeight*linenum + charAscent) ); //FIXME: precision loss!
-		    }
-		    //ascii.append(byte2ascii(b));
-		}
-		g.setColor(Color.black);
-		
-		// draw address:
-		String addr = BigInteger.valueOf(i).toString(16)+":  ";
-		g.setColor(Color.darkGray);
-		g.drawString( addr,lineStart - fm.stringWidth(addr),(int)(lineHeight*linenum + charAscent)); //FIXME: precision loss!
-		linenum++;
-	    }
-	}
-	catch (IOException e)  {
-	    //FIXME: now what?
-	}
+        }
     }
     
-    public static String byte2ascii(byte b)  {
-	//if (b <= 0x20)
-	//return " ";
-	
-	//return Character.toString((char)b); //FIXME: do this some other way?
-	return (char)(((int)b) & 0xff) + "";
-	
-    }
+
     
     public void dataEdited(DataEvent e)  {
     }
@@ -682,21 +705,24 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     public void selectionCleared(SelectionEvent e)  {
 	
     }
-    
-    public void setGreyMode(int mode)  {
-	greyMode = mode;
-	repaint();
-	//FIXME:XXXXXXXX
+    public Renderer[] getViewModes() {
+        return renderers;
     }
     
-    public static String byte2hex(byte b)  {
-	int l = ((int)b & 0xf0) >> 4;
-	int r = (int)b & 0x0f;
-	
-	return ""
-	    + (l < 0x0a ? (char)('0'+l) : (char)('a'+l-10) )
-	    + (r < 0x0a ? (char)('0'+r) : (char)('a'+r-10) );
+    public Renderer getViewMode(String name)  {
+        for ( int i = 0; i < renderers.length; i++) {
+            if (renderers[i] != null && renderers[i].toString().equals(name) )
+                return renderers[i];
+        }
+        return null;
     }
+
+/*
+ 	public void repaint()  {
+		super.repaint();
+	}
+*/
+
     
     public java.awt.Dimension getPreferredScrollableViewportSize()  {
 	return new Dimension(width, viewportHeight);

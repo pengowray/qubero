@@ -7,14 +7,15 @@
 package net.pengo.resource;
 
 import java.awt.event.ActionEvent;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import javax.swing.AbstractAction;
 import javax.swing.JMenu;
 import javax.swing.JSeparator;
 
-import net.pengo.app.OpenFile;
 import net.pengo.dependency.QNode;
 
 // should this be rolled into Resource ?
@@ -87,11 +88,14 @@ abstract public class QNodeResource extends Resource implements QNode {
     
     // is this the owner? owners should edit values directly rather than selecting pointers from drop downs
     public boolean isOwner(QNodeResource qnr) {
-        if (java.util.Arrays.asList(this.getSources()).contains(qnr)
-                && qnr.getSinkCount() == 1) {
+        List srcs = Arrays.asList(this.getSources());
+        if (qnr.getSinkCount() == 1 &&
+                (srcs.contains(qnr) 
+                        //||  // or check if parent is owner maybe or something
+                )) {
             return true;
         }
-        
+        System.out.println("sinks: " + qnr.getSinkCount());
         return false;
     }
 }
