@@ -2,6 +2,8 @@ import javax.swing.*;
 import javax.swing.tree.*;
 import javax.swing.event.*;
 import java.util.*;
+import java.awt.event.*;
+
 
 class MoojTree extends JTree {
     protected HexPanel hexpanel = null;
@@ -10,6 +12,7 @@ class MoojTree extends JTree {
     protected DefaultMutableTreeNode topnode; // the top node of the tree on the left, which the data goes under
 
     protected List defNodeList = new ArrayList(); // nodes for the display of data definitions + their selection
+    protected final MoojTree thisTree = this;
 
     // constructor
     public static MoojTree create(DefNode defnode) {
@@ -39,7 +42,7 @@ class MoojTree extends JTree {
 	    public void valueChanged(TreeSelectionEvent treeEvent) {
 		DefaultMutableTreeNode node = (DefaultMutableTreeNode)getLastSelectedPathComponent();
 
-		if (node == null) 
+		if (node == null)
 		    return;
 
 		Object nodeInfo = node.getUserObject();
@@ -47,11 +50,58 @@ class MoojTree extends JTree {
 		if (nodeInfo instanceof RawDataSelection){
 		    hexpanel.setSelection((RawDataSelection)nodeInfo);
 		}
+
 	    }
+	});
+
+	// popup menu
+	MouseListener ml = new MouseAdapter() {
+		public void mousePressed(MouseEvent e) {
+		    final int selRow = thisTree.getRowForLocation(e.getX(), e.getY());
+		    final TreePath selPath = thisTree.getPathForLocation(e.getX(), e.getY());
+
+		    if(selRow != -1) {
+			if(e.isPopupTrigger() || e.isMetaDown() ) {//XXX: popup trigger is never true? why?
+			    JMenu pop = new JMenu("test");
+			    Action aa = new AddToTemplateAction(selPath);
+			    Action da = new DeleteDefinitionAction(selPath);
+			    Action ia = new InfoAction(selPath);
+			    pop.add(aa);
+			    pop.add(da);
+			    pop.add(ia);
+			    pop.add(new JMenuItem("sock puppets are fun!"));
+			    JPopupMenu popup = pop.getPopupMenu();
+			    popup.show(thisTree, e.getX(), e.getY());
+			}
+		    }
+		}
+	    };
+	addMouseListener(ml);
+ 
+	// rename (edit) element:
+	treemodel.addTreeModelListener(new TreeModelListener() {
+	    public void treeNodesChanged(TreeModelEvent e) {
+		Object[] path = e.getPath();
+		Object object = path[path.length-1];
+		if (object instanceof RawDataSelection) {
+		    //XXX: check that it's a selection (not a definition)
+		    //if (path.length >= 2 && path[]);
+
+		    RawDataSelection raw = (RawDataSelection)object;
+		    DefNode defnode = raw.getDefNode();
+		    
+		    defnode.definitionMade(raw);
+		    //defnode.clearSelection();
+		}
+	    }
+	    public void treeNodesInserted(TreeModelEvent e){}
+	    public void treeNodesRemoved(TreeModelEvent e){}
+	    public void treeStructureChanged(TreeModelEvent e){}
 	});
 
     }
 
+    // add a viewed file, effectively:
     public void addDefNode(DefNode defNode) {
 	//XXX: error checking
 	defNode.setParentTreeModel(treemodel);
@@ -75,4 +125,90 @@ class MoojTree extends JTree {
 	this.hexpanel = hexpanel;
     }
 
+}
+
+
+
+class AddToTemplateAction extends AbstractAction {
+    protected TreePath selPath;
+
+    public AddToTemplateAction(TreePath selPath) {
+	super("Add to template");
+	this.selPath = selPath;
+    }
+
+    public void actionPerformed(ActionEvent e) {
+	//XXX: this code is almost duplicated from above
+	Object[] path = selPath.getPath();
+	Object object = selPath.getLastPathComponent();
+	Object userObject = null;
+
+	if (object instanceof DefaultMutableTreeNode) {
+	    userObject = ((DefaultMutableTreeNode)object).getUserObject();
+	}
+
+	if (userObject instanceof RawDataSelection) {
+	    //XXX: different menus for selection and definition
+	    //if (path.length >= 2 && path[]);
+	    
+	    RawDataSelection raw = (RawDataSelection)userObject;
+	    DefNode defnode = raw.getDefNode();
+	    
+	    defnode.definitionMade(raw);
+	    //defnode.clearSelection();
+	}
+	
+    }
+}
+
+class DeleteDefinitionAction extends AbstractAction {
+    protected TreePath selPath;
+
+    public DeleteDefinitionAction(TreePath selPath) {
+	super("Delete definition");
+	this.selPath = selPath;
+    }
+
+    public void actionPerformed(ActionEvent e) {
+	//XXX: this code is almost duplicated from above
+	Object[] path = selPath.getPath();
+	Object object = selPath.getLastPathComponent();
+	Object userObject = null;
+
+	if (object instanceof DefaultMutableTreeNode) {
+	    userObject = ((DefaultMutableTreeNode)object).getUserObject();
+
+	    if (userObject instanceof RawDataSelection) {
+		//XXX: different menus for selection and definition
+		//if (path.length >= 2 && path[]);
+		
+		RawDataSelection raw = (RawDataSelection)userObject;
+		DefNode defnode = raw.getDefNode();
+		
+		defnode.deleteDefinition((DefaultMutableTreeNode)object);
+		//defnode.clearSelection();
+	    }
+	}
+
+    }
+}
+
+class InfoAction extends AbstractAction {
+    protected TreePath selPath;
+
+    public InfoAction(TreePath selPath) {
+	super("Show info (Debug)");
+	this.selPath = selPath;
+    }
+
+    public void actionPerformed(ActionEvent e) {
+	Object object = selPath.getLastPathComponent();
+	Object userObject = null;
+	System.out.println("this is: " + object + " -- type: " + object.getClass());	
+
+	if (object instanceof DefaultMutableTreeNode) {
+	    userObject = ((DefaultMutableTreeNode)object).getUserObject();
+	    System.out.println("user object: " + userObject + " -- type: " + userObject.getClass());
+	}
+    }
 }

@@ -11,6 +11,7 @@ class DefNode extends DefaultMutableTreeNode {
     protected RawData rawdata;
     protected DefaultTreeModel def;
     protected DefaultMutableTreeNode selectionHeader = null; // the header/heading node for the current selection
+    protected DefaultMutableTreeNode definitionHeader = null; // the header node for the definition
     protected RawDataSelection currentSelection = null;
     protected DefaultMutableTreeNode currentSelectionNode = null;
     protected DefaultTreeModel parentTreeModel; // the tree model this is part of. XXX: multiple?
@@ -45,13 +46,12 @@ class DefNode extends DefaultMutableTreeNode {
 	}
     }
 
-    public void setSelection(RawDataSelection sel){
-	//XXX: how does this work with selectionMade?
-	currentSelection = sel;
-    }
-
     // hexpanel selection:
     public void selectionMade(SelectionEvent e) {
+	setSelection(e.getSelection());
+    }
+
+    public void setSelection(RawDataSelection sel){
 	DefaultMutableTreeNode oldSelectionNode	= currentSelectionNode;
 
 	if (selectionHeader == null) {
@@ -60,16 +60,10 @@ class DefNode extends DefaultMutableTreeNode {
 	}
 
 	if (oldSelectionNode != null) {
-	    //selectionHeader.remove(0); // XXX: remove from treemodel
 	    parentTreeModel.removeNodeFromParent(oldSelectionNode);
-
-	    //int x = selectionHeader.getIndex(currentSelectionNode);
-	    //if (x != -1) {
-	    //  selectionHeader.remove(x);
-	    //}
 	}
 
-	currentSelection = e.getSelection();
+	currentSelection = sel;
 	currentSelectionNode = new DefaultMutableTreeNode(currentSelection,false);
 	parentTreeModel.insertNodeInto(currentSelectionNode, selectionHeader, 0);
 
@@ -77,6 +71,26 @@ class DefNode extends DefaultMutableTreeNode {
 	//makeVisible(new TreePath(new Object[]{topnode,selectionHeader,currentSelectionNode}));
     }
 
+
+    // MoojTree rename (edit) of node / converting selection to a definition:
+    public void definitionMade(RawDataSelection sel) {
+	DefaultMutableTreeNode oldSelectionNode	= currentSelectionNode;
+
+	if (definitionHeader == null) {
+	    definitionHeader = new DefaultMutableTreeNode("Definition",true);
+	    parentTreeModel.insertNodeInto(definitionHeader, this, 0);
+	}
+
+	DefaultMutableTreeNode definitionNode = new DefaultMutableTreeNode(sel,false);
+	parentTreeModel.insertNodeInto(definitionNode, definitionHeader, 0);
+
+	//makeVisible(new TreePath(new Object[]{topnode,selectionHeader,currentSelectionNode}));
+    }
+    
+    public void deleteDefinition(MutableTreeNode sel) {
+	//XXX: take an actual selection, and find its TreeNode wrapper?
+	parentTreeModel.removeNodeFromParent(sel);
+    }
 
     public RawDataSelection getSelection(){
 	return currentSelection;
@@ -92,7 +106,8 @@ class DefNode extends DefaultMutableTreeNode {
     }
 
     public String toString() {
-	return "DefNode!" + rawdata.toString();
+	return rawdata.toString();
+	//return "DefNode " + rawdata.toString();
     }
 
 

@@ -5,6 +5,26 @@ view, edit, create java bytecode + automation
 get it right later
 """
 
+to do right now:
+ - selection at end of large file
+ - scrollbar doesn't update immediately on opening file
+ - arrow key movement
+ - show selection in ascii
+ - EDIT hex / ascii
+ - DnD tree elements
+ - status messages
+ - save/open template definitions
+ - bigger west pane for tree
+ - new selection: auto open up tree
+
+soon after:
+ - select a template area by clicking it on the hex side
+ - empty hex pane when nothing open
+ - multiple documents open (mdi-ish)
+
+read this:
+ - http://tunes.org/files/papers/Arrow_Introduction_v8.htm
+
 for v0.1
  - sequential + recursive + random access + dependant + compression definitions of parts of file (xml defintion)
  - scoped type definition with inheritance
@@ -55,6 +75,11 @@ future versions:
  - lambda
  - java convention checker
  - java security awareness
+ - file location as part of definition
+ - new english words for hex. Wunex, Texo, Treex, Forx, Fivex, Sixer .. Aten, Blev, Curlve, Dirxeen, Exorte, Fixte, Texan (ten is bigger in texas)
+ - design new characters for hex (incorporating roman numerals, x's, japanese, and standard arabic)
+
+future formats:
  - parse .java files too?
  - Extended Backus-Naur Form (EBNF) notation support
  - mame images and sounds!
@@ -64,10 +89,17 @@ future versions:
  - self describing document -> .exe / .class / applet / javascript
  - human language guessing
  - gif / jpg / png
+ - rar / zip / ace
  - flash
  - javadoc viewer/editor!
  - decompiler (nasm.octium.net / intel.com / x86.org)
-
+ - various flashroms
+ - virus detection/definitions (e.g. norton)
+ - configuration files (.ini + unix, including new quota files)
+ - DVD + subtitles
+ - fat12/fat16 (ask rob_ert). Fat32, NTFS, etc.
+ - resource fork (mac)
+  
 programs to obsolete:
  - notepad + wordpad
  - kde's hex editor
@@ -83,7 +115,6 @@ silly stuff:
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
-    
  - Views: Graphical (bitmap)
  - resizable bytes-per-row (shows number as you stretch it)
  - Search for graphics?
@@ -115,7 +146,7 @@ hexworkshop.com
  - Date, DOS Time/Date, time_t, binary...
  - red highlighting of changed data
  - character filters: ASCII, DOS, EBCDIC, Macintosh, Window, and Unicode character set
- - output to customizable hex dumps, RTF, HTML, Java, C (MN: java/c choose for size or readability (mixed hex+strings?) or maintainability (eg function to put it together?) or set format)
+ - output to customizable hex dumps, RTF, HTML, Java, C (MN: java/c choose for size or readability (mixed hex+strings+comments?) or maintainability (eg function to put it together?) or set format)
  - drag and drop
  - physical disk editing
  - mutli-level undo
@@ -136,5 +167,5 @@ ben's suggestions:
  - russian fbi fed pdf 
  - bus: streaming data
  - mpeg4 (for dad)
-
-qi gong
+ - WGS 84 (Earth coordinates)
+ - divx

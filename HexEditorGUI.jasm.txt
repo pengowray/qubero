@@ -1,0 +1,142 @@
+Compiled from HexEditorGUI.java
+class HexEditorGUI extends java.lang.Object {
+    protected RawData root;
+    protected javax.swing.tree.DefaultMutableTreeNode def;
+    protected javax.swing.JFrame jframe;
+    protected HexPanel hexpanel;
+    protected javax.swing.JLabel statusbar;
+    protected MoojTree moojtree;
+    public HexEditorGUI(RawData);
+    protected void start();
+}
+
+Method HexEditorGUI(RawData)
+   0 aload_0
+   1 invokespecial #1 <Method java.lang.Object()>
+   4 aload_0
+   5 aload_1
+   6 putfield #2 <Field RawData root>
+   9 aload_0
+  10 aload_1
+  11 invokevirtual #3 <Method DefaultDefinition getDef()>
+  14 putfield #4 <Field javax.swing.tree.DefaultMutableTreeNode def>
+  17 aload_0
+  18 invokevirtual #5 <Method void start()>
+  21 return
+
+Method void start()
+   0 aload_0
+   1 new #6 <Class javax.swing.JFrame>
+   4 dup
+   5 new #7 <Class java.lang.StringBuffer>
+   8 dup
+   9 invokespecial #8 <Method java.lang.StringBuffer()>
+  12 aload_0
+  13 getfield #2 <Field RawData root>
+  16 invokevirtual #9 <Method java.lang.StringBuffer append(java.lang.Object)>
+  19 ldc #10 <String " - Mooj">
+  21 invokevirtual #11 <Method java.lang.StringBuffer append(java.lang.String)>
+  24 invokevirtual #12 <Method java.lang.String toString()>
+  27 invokespecial #13 <Method javax.swing.JFrame(java.lang.String)>
+  30 putfield #14 <Field javax.swing.JFrame jframe>
+  33 aload_0
+  34 aload_0
+  35 getfield #4 <Field javax.swing.tree.DefaultMutableTreeNode def>
+  38 invokestatic #15 <Method MoojTree create(javax.swing.tree.DefaultMutableTreeNode)>
+  41 putfield #16 <Field MoojTree moojtree>
+  44 aload_0
+  45 new #17 <Class HexPanel>
+  48 dup
+  49 aload_0
+  50 getfield #2 <Field RawData root>
+  53 aload_0
+  54 getfield #4 <Field javax.swing.tree.DefaultMutableTreeNode def>
+  57 aload_0
+  58 getfield #16 <Field MoojTree moojtree>
+  61 invokespecial #18 <Method HexPanel(RawData,javax.swing.tree.TreeNode,HexPanelListener)>
+  64 putfield #19 <Field HexPanel hexpanel>
+  67 aload_0
+  68 getfield #16 <Field MoojTree moojtree>
+  71 aload_0
+  72 getfield #19 <Field HexPanel hexpanel>
+  75 invokevirtual #20 <Method void setHexPanel(HexPanel)>
+  78 aload_0
+  79 aload_0
+  80 getfield #19 <Field HexPanel hexpanel>
+  83 invokevirtual #21 <Method javax.swing.JLabel getStatusbar()>
+  86 putfield #22 <Field javax.swing.JLabel statusbar>
+  89 new #23 <Class javax.swing.JScrollPane>
+  92 dup
+  93 aload_0
+  94 getfield #19 <Field HexPanel hexpanel>
+  97 bipush 22
+  99 bipush 30
+ 101 invokespecial #24 <Method javax.swing.JScrollPane(java.awt.Component,int,int)>
+ 104 astore_1
+ 105 new #23 <Class javax.swing.JScrollPane>
+ 108 dup
+ 109 aload_0
+ 110 getfield #16 <Field MoojTree moojtree>
+ 113 bipush 20
+ 115 bipush 30
+ 117 invokespecial #24 <Method javax.swing.JScrollPane(java.awt.Component,int,int)>
+ 120 astore_2
+ 121 new #25 <Class javax.swing.JSplitPane>
+ 124 dup
+ 125 iconst_1
+ 126 aload_2
+ 127 aload_1
+ 128 invokespecial #26 <Method javax.swing.JSplitPane(int,java.awt.Component,java.awt.Component)>
+ 131 astore_3
+ 132 aload_3
+ 133 invokevirtual #27 <Method void resetToPreferredSizes()>
+ 136 aload_0
+ 137 getfield #14 <Field javax.swing.JFrame jframe>
+ 140 invokevirtual #28 <Method java.awt.Container getContentPane()>
+ 143 aload_3
+ 144 ldc #29 <String "Center">
+ 146 invokevirtual #30 <Method void add(java.awt.Component, java.lang.Object)>
+ 149 aload_0
+ 150 getfield #14 <Field javax.swing.JFrame jframe>
+ 153 invokevirtual #28 <Method java.awt.Container getContentPane()>
+ 156 aload_0
+ 157 getfield #22 <Field javax.swing.JLabel statusbar>
+ 160 ldc #31 <String "South">
+ 162 invokevirtual #30 <Method void add(java.awt.Component, java.lang.Object)>
+ 165 aload_0
+ 166 getfield #14 <Field javax.swing.JFrame jframe>
+ 169 new #32 <Class HexEditorGUI$1>
+ 172 dup
+ 173 aload_0
+ 174 invokespecial #33 <Method HexEditorGUI$1(HexEditorGUI)>
+ 177 invokevirtual #34 <Method null>
+ 180 aload_0
+ 181 getfield #14 <Field javax.swing.JFrame jframe>
+ 184 invokevirtual #35 <Method null>
+ 187 sipush 500
+ 190 istore 4
+ 192 aload_0
+ 193 getfield #14 <Field javax.swing.JFrame jframe>
+ 196 invokevirtual #36 <Method null>
+ 199 istore 5
+ 201 aload_0
+ 202 getfield #14 <Field javax.swing.JFrame jframe>
+ 205 invokevirtual #37 <Method null>
+ 208 istore 6
+ 210 iload 5
+ 212 iload 4
+ 214 if_icmple 228
+ 217 aload_0
+ 218 getfield #14 <Field javax.swing.JFrame jframe>
+ 221 iload 5
+ 223 iload 4
+ 225 invokevirtual #38 <Method null>
+ 228 aload_0
+ 229 getfield #14 <Field javax.swing.JFrame jframe>
+ 232 iconst_1
+ 233 invokevirtual #39 <Method null>
+ 236 aload_0
+ 237 getfield #19 <Field HexPanel hexpanel>
+ 240 iconst_1
+ 241 invokevirtual #40 <Method null>
+ 244 return

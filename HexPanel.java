@@ -151,7 +151,7 @@ class HexPanel extends JPanel {
 	setSelection(offset, len, true);
     }
     public void setSelection(int offset, int len, boolean publish) {
-        setSelection(new RawDataSelection(root, offset, len), publish);
+        setSelection(new RawDataSelection(defnode, offset, len), publish);
     }
 
     public int getHeight() {

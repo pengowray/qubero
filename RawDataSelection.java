@@ -1,9 +1,11 @@
 class RawDataSelection extends RawData {
     //XXX: should listen for updates from its source data (rawdata)
-    private RawData rawdata; //XXX: rename to sourceData
-    private int start;
-    private int length;
-    private byte data[] = null;
+    protected DefNode defnode = null; // may be left null
+    protected RawData sourceData;
+    protected int start;
+    protected int length;
+    protected byte data[] = null;
+    protected String name = null;
     
     public int getStart() {
         return start;
@@ -19,23 +21,47 @@ class RawDataSelection extends RawData {
 
         if (rds.start == this.start &&
                 rds.length == this.length &&
-                rds.rawdata == this.rawdata) {
+                rds.sourceData == this.sourceData) {
             return true;
         }
         
         return false;    
     }
     
-    public RawDataSelection(RawData rawdata, int start, int length) {
-        this.rawdata = rawdata;
+    public RawDataSelection(DefNode defnode, int start, int length) {
+	this.defnode = defnode;
+	this.sourceData = defnode.getRawData();
+        this.start = start;
+        this.length = length;
+        //XXX: validate data?
+    }
+
+    public RawDataSelection(RawData sourceData, int start, int length) {
+        this.sourceData = sourceData;
         this.start = start;
         this.length = length;
         //XXX: validate data?
     }
     
     public String toString() {
-        //return "Selection of \"" + rawdata + "\" [" + start + "-" + (start+length) + "] ";
-        return "[" + start + "-" + (start+length) + "]";
+	//XXX: change to (optional) hex offset display?
+	if (name == null)
+	    return getShortDesc();
+
+	return name + " " + getShortDesc();
+    }
+
+    public String getShortDesc() {
+	return "[" + start + "-" + (start+length) + "]";
+    }
+
+    public void setName(String name) {
+	this.name = name;
+    }
+
+    public String getName() {
+	// see also: toString()
+	return name;
     }
     
     public String getType() {
@@ -45,9 +71,13 @@ class RawDataSelection extends RawData {
     public byte[] getData() {
         if (data == null) {
             data = new byte[length];
-            System.arraycopy(rawdata.getData(), start, data, 0, length);
+            System.arraycopy(sourceData.getData(), start, data, 0, length);
         }
         return data;
     }
-    
+
+    public DefNode getDefNode() {
+	return defnode;
+    }
+
 }
