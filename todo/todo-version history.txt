@@ -1,17 +1,5 @@
 moojasm todo.txt
 
-"bedrock"
-"templatation"
-templater
-binary data language and modeller.
-binary data modelling spreadsheet and database.
-the photoshop of hex editors.
-view, edit, create java bytecode + automation
-visual code editor
-the editor editor (lame)
-base edit
-hex project
-
 """get it working first
 get it right later
 start working now
@@ -121,11 +109,17 @@ Log started Aug 21 2002:
  2003-09-30  MetaSelectionModel complete and debugged
              Ant build.xml started
  	     AddressPage and MethodSelectionPage debugged
+ 2003-10-01  Started on dependency graph framework
+             Ant build works
  	     
  see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
-priority/immediate features todo:
+priority/immediate/current bugs/features:
+2003-10-04
+ - open random class might open non-class files
+2003-10-02
+ - (old bug) Close All is broken
 2003-09-30
  - AddressedResouce must be changed into a method (e.g. isAddressedResource() or getSubResources() )
  - changing an addressed resource's selection (in property editor) should have the selection shown in the editor also (at least if the resource is already selected)

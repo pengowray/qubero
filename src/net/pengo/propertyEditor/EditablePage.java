@@ -41,7 +41,7 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
         building = false;
     }
     
-    private void mod() {
+    public void mod() {
         if (!building) {
             modded = true;
             form.mod();
@@ -64,7 +64,7 @@ public abstract class EditablePage extends PropertyPage implements DocumentListe
     // DocumentListener
     public void removeUpdate(DocumentEvent e) {
         mod();
-    }    
+    }
 
     
     protected ActionListener getSaveActionListener() {

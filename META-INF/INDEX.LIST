@@ -1,6 +1,6 @@
 JarIndex-Version: 1.0
 
-Bedrock-20031001-0041-backup.jar
+Qubero-20031027-1144-backup.jar
 src/net/pengo/selection
 src/net/pengo/hexdraw
 src/net/pengo/app
@@ -24,6 +24,7 @@ extras
 src/net/pengo/propertyEditor
 net/pengo
 src/net/pengo/hexdraw/lineRepeater
+src/net/pengo/dependency
 src/net/pengo/data
 net
 src/net/pengo/layer

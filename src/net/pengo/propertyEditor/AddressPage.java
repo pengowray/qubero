@@ -38,7 +38,7 @@ public class AddressPage extends MethodSelectionPage {
     }
     
     public void buildOp() {
-	if (res != null) {
+	if (res != null && modded == false) {
 	    SelectionResource sel = res.getSelectionResource();
 	    
 	    if (sel.getSelection().getSegmentCount() > 1) {
@@ -50,9 +50,10 @@ public class AddressPage extends MethodSelectionPage {
 	    else {
 		setSelected(0);
 	    }
+	    
 	}
-	
- 	super.buildOp();
+	super.buildOp();
+ 	
    }
     
     public String toString() {

@@ -5,8 +5,8 @@ stuctures
   <import class="javabytecode" />
 
    <area name="header">
-      <magicnumber value="C0C0BABE" name="magic number"><!-- work out how to do this in xml notation-->
-      <majorminor name="version">
+      <magicnumber value="C0C0BABE" name="magic number"/><!-- work out how to do this in xml notation-->
+      <majorminor name="version"/>
          <screw this-- make it in the program itself.>
    </area>
 

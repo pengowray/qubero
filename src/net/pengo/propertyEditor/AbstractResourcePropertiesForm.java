@@ -60,6 +60,7 @@ abstract public class AbstractResourcePropertiesForm extends JFrame {
     
     
     public AbstractResourcePropertiesForm() {
+	super("Property editor");
     }
     
     

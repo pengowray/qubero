@@ -7,7 +7,8 @@ import javax.swing.*;
 import javax.swing.event.*;
 import java.awt.event.ActionEvent;
 
-public abstract class DefinitionResource extends Resource {
+public abstract class DefinitionResource extends Resource //implements DependencyListener
+{
     public DefinitionResource(OpenFile openFile) {
 	super(openFile);
     }

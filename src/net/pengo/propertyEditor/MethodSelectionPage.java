@@ -34,10 +34,10 @@ public class MethodSelectionPage extends EditablePage {
 	selectBox = new JComboBox(page);
 	selectBox.addActionListener( new ActionListener() {
 		    public void actionPerformed(ActionEvent e) {
-			setSelected(MethodSelectionPage.this.selectBox.getSelectedIndex());
+			setNewSelected(MethodSelectionPage.this.selectBox.getSelectedIndex());
 		    }
 		});
-	selectBox.setSelectedIndex(selected);
+	setSelected(selected);
 	
 	main = new JPanel(new BorderLayout());
 	main.add(selectBox, BorderLayout.NORTH);
@@ -50,13 +50,29 @@ public class MethodSelectionPage extends EditablePage {
 	return page[selected];
     }
     
+    // set the selection.. e.g. during building
     public void setSelected(int selected) {
 	if (this.selected != selected) {
 	    main.remove(getSelected());
 	    this.selected = selected;
-	    form.mod();
-	    buildSelected();
+	    build();
 	}
+    }
+    
+    // call when a user chooses a new selection
+    public void setNewSelected(int selected) {
+	if (this.selected != selected) {
+	    main.remove(getSelected());
+	    this.selected = selected;
+	    mod(); //fixme: bit of a hack.. AddressPage checks for mod before "fixing" the selection
+	    buildOp(); // can't just "build" because that resets modded (should it?)
+	    mod(); // need to mod() again so selected page thinks it's changed so it will save
+	}
+    }
+    
+    public void mod() {
+	getSelected().mod();
+	super.mod();
     }
     
     public void save() {
@@ -70,15 +86,11 @@ public class MethodSelectionPage extends EditablePage {
     }
     
     public void buildOp() {
-	buildSelected();
-    }
-    
-    public void buildSelected(){
+	selectBox.setSelectedIndex(selected);
 	getSelected().build();
 	main.add(getSelected(), BorderLayout.CENTER);
 	validate();
 	repaint();
-	
     }
     
     public String toString() {

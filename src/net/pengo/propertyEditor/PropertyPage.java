@@ -39,7 +39,13 @@ public abstract class PropertyPage extends JPanel {
         return;
     }
     
-    // checks that properties are OK and ready to be sxtracted.
+    // call when the page is modified, so it knows it should be saved.
+    // can also be called if the page is selected by MethodSelectionPage
+    public void mod() {
+	return;
+    }
+
+	// checks that properties are OK and ready to be sxtracted.
     public boolean isValid() {
         return true; // success
     }

@@ -11,14 +11,16 @@ import java.awt.*;
 import java.awt.event.*;
 
 /**
- *
+ * the splash is a bit of a hack
+ * is only used to get font sizes (used for window sizing or something)
+
  * @author  administrator
  */
 public class Splash {
     private static boolean done = false;
     
     public static void show() {
-        JFrame j = new JFrame("Mooj") {
+        JFrame j = new JFrame("Qubero loading...") {
             
             public void paint(Graphics g) {
                 FontMetricsCache.singleton().lendGraphics(g);

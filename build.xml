@@ -1,6 +1,6 @@
-<project name="Bedrock" default="dist" basedir=".">
+<project name="Qubero" default="dist" basedir=".">
     <description>
-        Build bedrock.
+        Build Qubero.
     </description>
   <!-- set global properties for this build -->
   <property name="src" location="src"/>
@@ -12,8 +12,9 @@
     <tstamp>
        <format property="stamp" pattern="yyyyMMdd-HHmm"/>
     </tstamp>
-    <property name="dist-bin-file"  value="${dist}/Bedrock-${stamp}-bin.jar"/>
-    <property name="dist-backup-file"  value="${dist}/Bedrock-${stamp}-backup.jar"/>
+    <property name="dist-bin-file"  value="${dist}/Qubero-${stamp}-bin.jar"/>
+    <property name="dist-backup-file"  value="${dist}/Qubero-${stamp}-backup.jar"/>
+    <property name="dist-latest-bin"  value="${dist}/latest/qubero-bin.jar"/>
 
     <!-- Create the build directory structure used by compile -->
     <mkdir dir="${build}"/>
@@ -30,16 +31,18 @@
         description="generate the distribution" >
     <!-- Create the distribution directory -->
     <mkdir dir="${dist}"/>
+    <mkdir dir="${dist}/latest"/>
 
     <!-- Put everything in ${build} into the ${dist-bin-file} -->
-    <jar jarfile="${dist-bin-file}" basedir="${build}" manifest="mf.txt"/>
+    <jar jarfile="${dist-bin-file}"   basedir="${build}" manifest="mf.txt"/>
+    <jar jarfile="${dist-latest-bin}" basedir="${build}" manifest="mf.txt"/>
   </target>
 
   <target name="backup" depends="compile"
         description="generates a backup" >
     <!-- Create the distribution directory -->
     <mkdir dir="${dist}"/>
-    <!-- Put everything in ${build} into the ${dist-backup-file} -->
+    <!-- Put everything into ${dist-backup-file} -->
     <jar jarfile="${dist-backup-file}"
         manifest="mf.txt"
         excludesfile="jar-excludes.txt"
@@ -49,12 +52,13 @@
     <jar jarfile="${dist-backup-file}" basedir="${build}" update="true" index="true"/>
   </target>
 
-  
-  <target name="distribute" depends="backup" />
-  
+  <target name="distribute_backup" depends="backup"
+          description="distribute backup to ftp + other hdd">
+          <!-- pending -->
+  </target>
 
   <target name="execute" depends="compile"
-	  description="run bedrock">
+	  description="run Qubero">
     <java classname="net.pengo.app.Mooj" fork="true">
          <classpath>
            <!-- pathelement location="${dist}/Bedrock-${stamp}-bin.jar"/ -->

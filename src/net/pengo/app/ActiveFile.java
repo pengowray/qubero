@@ -64,6 +64,7 @@ public class ActiveFile {
 	    }
 	}
 	
+	//fixme: close all does not work. (ConcurrentModificationException)
 	for (Iterator i = available.iterator(); i.hasNext(); ) {
 	    OpenFile of = (OpenFile)i.next();
 	    boolean success = close(of, source);

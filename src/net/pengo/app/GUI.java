@@ -31,7 +31,7 @@ public class GUI implements ActiveFileListener {
     
     protected ExitAction exitAction;
     
-    protected String titleSuffix =  "HexMediaBedrock";
+    protected String titleSuffix =  "Qubero";
     
     public GUI() {
 	setIcon();
@@ -44,7 +44,6 @@ public class GUI implements ActiveFileListener {
     }
     
     public GUI(Data d) {
-	System.out.println("hi3");
 	open(d);
     }
     
@@ -90,7 +89,7 @@ public class GUI implements ActiveFileListener {
 	//HexTable hexpanel = new HexTable(openFile);
 	//LineRepeater hexpanel = new LineRepeater(openFile.getData());
 	
-	statusbar = new JLabel("Mooj Data Modeller and Hex Editor");
+	statusbar = new JLabel("Qubero: Vertical Modeller/Assembler");
 	mmb = new MoojMenuBar(this);
 	
 	// ARRANGE THEM IN A FRAME
@@ -198,12 +197,12 @@ public class GUI implements ActiveFileListener {
     
     public void closeAll() {
 	activeFile.closeAll(this); //FIXME: confirm close?!
-	jframe.setTitle("Mooj");
+	jframe.setTitle(titleSuffix);
     }
 
     public void closeActive() {
 	activeFile.close(activeFile.getActive(), this); //FIXME: confirm close?!
-	jframe.setTitle("Mooj");
+	jframe.setTitle(titleSuffix);
     }
     
     public void saveAs() {

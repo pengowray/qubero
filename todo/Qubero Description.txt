@@ -1,6 +1,19 @@
-Bedrock is:
+Name:
+ - Qubero (quartz bedrock) (BRQ/QUBERO)
+ - quartz syntax (QSYN)
+ - templatation / templater
+
+Qubero is: (subtitle)
+ - Buzzword: Table based, declarative, optimisable, OO, visualising, vertical development, compiling, PnP, bean-like, templating, collaboration
+ - Noun: compiler/modeller/development environment/architecture/technology/assembler
+ - Vertical Modeller/Assembler VMA
+ - Visual templating compiler
+ - MACS (Model/Assemble/Compile/Sculpt)
  - a binary-data modeller
+ - an application sculptor
  - based around the user interface of a hexidecimal editor.
+ - spreadsheet and database.
+ - the photoshop of hex editors.
 
 Definition interface is powerful because it does:
  - give meaning to raw data
@@ -9,6 +22,7 @@ Definition interface is powerful because it does:
  - support limitless custom data types
  - support custom data polymorphism
  - include defining functions to.... blah
+
 
 Source code is not yet available and is currently pure Java. User interface is (currently) Swing.
 
@@ -19,7 +33,3 @@ Features (complete or mostly complete):
  - multiple undo
  - scalible. Can chop and change very large files (> 2gig) with a small memory footprint.
  - native diff file support: save "changes only" to a diff file, or keep backup as a diff.
-
-Still in progress:
- - text mode (currently only swing)
- - not yet optimized for small files.

@@ -1,0 +1,55 @@
+VJ'ing ideas:
+ - Regular division of the plane (escher-style)
+ - smaller and smaller
+ - block plane form buildings/landscapes
+ - islamic patterns: http://www.wozzeck.net/arabeske/gallery/ara-gallery.html
+ - code: http://kerneltrap.org/node.php?id=542
+ - http://www.shodor.org/interactivate/activities/tessellate/
+ - http://www.peda.com/tess/
+ - http://members.lycos.nl/amazingart/E/downloads.html
+ - http://www.blorf.com/swirlies/
+ - http://mrl.nyu.edu/projects/image-analogies/lf/
+ - http://www.electricsheep.org/
+
+show off by:
+ - winning: the icfp contest in 2004 (oops missed 2003) prize: $1000 (August 30 2002, July 2003)
+ - bunch of problems to get ready for competition: http://acm.uva.es/problemset/ (entries must be java/c source)
+ - IPv6 Application Competition - win $10,000 -  http://www.v6pc.jp/apc/en/index.html - deadline planned for the beginning of June, 2003
+ - getting slashdotted:
+ - compilation of mini-os's (with bochs + hex viewer + cd masterer + bios-bootloader) or for just being cool.
+ - (graphical) shell
+ - thesis on dyslexics programming with goom
+ - screensaver
+ - knoppix distribution--roll your own from windows/linux (with moojasm prominant)
+ - making an online space churchship mullusc-firing dragons game (chopper/apache style)
+ - http://www.ravenbrook.com/doc/2003/05/28/contest/ (ILC 2003 Programming Contest)
+ - linux NTFS writable + backtrack
+ - windows archive viewer that opens archives into a new drive (double clicking on C:\myzip.zip opens up in X:\myzip.zip\ or just X:\ like a removable drive. eject when done.). much like DAEMON tools for an .iso.
+ - Linux downloader/installer/distribution(+software) selector/customizer
+
+make money with:
+ - donations (to encourage open sourcing)
+ - mp3 editor (and ogg, bonk, wav, etc)
+ - reason thing
+ - live media stream control
+ - web database tool (database, w3c standards, ass, ACLs)
+ - web site contracts
+ - jasm environment
+ - logistics database (Barcode, camera, ocr, database, cash register, library...)
+ - document automation tool
+ - xml editor
+ - altered state server (ASS)
+ - communications software
+ - telecommunications software
+ - dual licence
+ - contract work
+ - sell a book (datatype reference with CD)
+ - VJ'ing / VJ equipment
+ - cashless + democratic market place system, with easy auction
+ - childrens educational television show
+ - automated microscopic aquarium with DVD output for the visitors
+ - flagged images. (online textbook suppliments.)
+ - image analogies style 3D skin for renderings (for movies)
+ - monitor ebay / stockmarket / weather / horses (and correlate:) )
+ - Become a VFX studio, contracting out to hollywood studios
+ - Automate the production of major thesis's for students (and sell them) :)

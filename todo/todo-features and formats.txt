@@ -14,7 +14,6 @@ D display: tree of parts
  - overview/summary view: show whole file as one screen w/ areas of text/binary/etc
  - subsection editing (e.g. only display one definition or range)
  - backup files as .diff + save changes as diff (or patch and .reg files or cvs or rcs)
- - ASS (altered state server).
 
 for v0.3
  - use java.nio ByteBuffer + Channels
@@ -27,6 +26,9 @@ for v0.3
  - less java dependant?
  - hex edit clipboard
  - percentages (pie graph) of data types used in a file (total and bytes)
+
+for 0.4
+ - BRASS (bedrock altered state server).
 
 initial chunk types to support:
  - internal types: template references
@@ -45,6 +47,7 @@ initial chunk types to support:
  - xml + schema: types, patterns, restrictions, enumerations, list types, unions, etc.
  - Simple Outline XML (SOX): http://www.langdale.com.au/SOX/
  - python's pickled objects
+   see also: http://www.brpreiss.com/books/opus7/
  - truncated types (last 8 bits of a 32-bit float?)
  - Math.BigNumber
  - roman numerals (ascii and unicode, u/lcase)
@@ -60,7 +63,7 @@ initial chunk types to support:
  - end of line: PC (0D 0A), Mac, Unix, [IBM Mainframe's] NEL (0D 85), Unicode line separator character (#x2028),
  - metadata descriptors: uninitialized data, null, Reserved, bad (sector), unknown, loading, cached/offline, (un)synchronized, copy, linked, unformatted,
  - hidden/unaddressable data: data which doesnt add to the address number, and is unaddressable (thru the user's current view), usually grey or red or small print.. distinguished from "real data"
-   e.g. checksums at the end of the line, overlapped data (extra columns either side to give continuity), data from the original source (e.g. zipped data), diff data, secondary addressing scheme
+   e.g. checksums at the end of the line, overlapped data (extra columns either side to give continuity), data from the original source (e.g. zipped data), diff data, secondary addressing scheme, superscripts and superscripts
  - form elements with scripting (e.g database entry)
  - multiple addressing schemes/methods
  - User Validation / Access Control Lists (ACL) / Appliable to chunks of data
@@ -225,7 +228,7 @@ future formats:
  - comms app histories (icq data / irc logs / outlook / eudora / lotus / etc)
  - midi + kar + mod + other musical notations (see keykit http://nosuch.com/keykit/)
  - w3c: CSS, DOM, HTTP, URL/URI, SVG, SMIL, SOAP, XLink, XFORMS...
- - weights and measures (metric->imperial,dB,etc)
+ - weights and measures (metric->imperial,dB,etc) google calculator
  - web logs
  - email address + email format + news
  - fonts! ttf, etc.
@@ -286,7 +289,7 @@ future formats:
  - Midi Show Control (MSC) : It provides show control functions, like syncronising sound and lighting with pyro. This is used BIG TIME in the theme park industry.
  - game controllor configure: image of keyboard / joystick / controller with labels for what each key/button does. also select and drag to move a bunch of keys around the keyboard. support multiple keyboard layouts. load/save/share settings.
  - console save games / memory card format (ps2/dreamcast/xbox...).
- - name (first, last, initial, full)
+ - name (title, first, last, initial, full)
  - address (number, street, postcode..., divide into parts, validate, normalize, historical-- eg postcode used to exist...)
  - domain names (valid, available, whois, historical)
  - recipe management / database (auto calories, nutrition, categorise (vego, vegan...), variants, guess cooking times..)
@@ -353,14 +356,19 @@ projects to synergise with:
  - compression utilities (share libraries if possible)
  - JavaCC
 
+visualisers/debuggers/disassemblers:
+ - Data Display Debugger: http://www.gnu.org/software/ddd/
+
 diff tools:
  - diffutils
  - cvs, cmp, bitkeeper
- - http://meld.sourceforge.net/
+ - http://meld.sourceforge.net/  "Meld is a GNOME 2 visual diff and merge tool"
+ - emacs "ediff" tool
  - http://xxdiff.sourceforge.net/
  - http://vim.sourceforge.net/htmldoc/diff.html
  - darcs: http://abridgegame.org/darcs/ (good theory in manual)
  - monotone: http://www.venge.net/monotone/
+ - Jigsaw Download (jigdo) http://home.in.tum.de/~atterer/jigdo/ (.template + .jigdo + half finished .iso.tmp files)
 
 silly/fun stuff:
  - xmodem end-escape sequence fixing

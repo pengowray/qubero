@@ -55,9 +55,9 @@ public class IntAddressedResourcePropertiesForm extends AbstractResourceProperti
             new ValuePage(intRes, this),
             new AddressPage(intRes, this),
 	    //new AddressPage2(intRes, this)
-	    new TextOnlyPage("About","Bedrock Operator (c) 2003 Peter Halasz"),
-	    new MethodSelectionPage(this,
-		 new PropertyPage[] { new TextOnlyPage("About1","This..."), new TextOnlyPage("About2","...rocks")}, "More text")
+	    new TextOnlyPage("About","Qubero: Sculpting Assembler (c) 2003 Peter Halasz")
+		
+	    //new MethodSelectionPage(this, new PropertyPage[] { new TextOnlyPage("About1","This..."), new TextOnlyPage("About2","...rocks")}, "More text")
 		
         };
     }
