@@ -67,6 +67,9 @@ public class Repeater extends MultiSpacer {
 	}
 
 	public long getPixelWidth(BitCursor bits) {
+		if (bits.isZero())
+			return 0;
+		
 		RepeatSpacerSimple main = getMainRepeater(bits); 
 		BitCursor leftover = getLeftover(bits);
 		
@@ -78,6 +81,9 @@ public class Repeater extends MultiSpacer {
 	}
 
 	public long getPixelHeight(BitCursor bits) {
+		if (bits.isZero())
+			return 0;
+
 		RepeatSpacerSimple main = getMainRepeater(bits); 
 		BitCursor leftover = getLeftover(bits);
 		
@@ -140,7 +146,7 @@ public class Repeater extends MultiSpacer {
 				return;
 			} else if (x >= width && x < width + contents.getPixelWidth(getLeftover(bits))) {
 				BitCursor leftover = getLeftover(bits);
-				if (leftover.equals(BitCursor.zero)) {
+				if (leftover.isZero()) {
 					lc.setNull(true);
 					return;
 				}
@@ -163,7 +169,7 @@ public class Repeater extends MultiSpacer {
 				return;
 			} else if (y >= height && y < height + contents.getPixelHeight(getLeftover(bits))) {
 				BitCursor leftover = getLeftover(bits);
-				if (leftover.equals(BitCursor.zero)) {
+				if (leftover.isZero()) {
 					lc.setNull(true);
 					return;
 				}
@@ -191,7 +197,7 @@ public class Repeater extends MultiSpacer {
 		main.paint(g,d,seg, sel, curs, repaintSeg);
 		
 		BitCursor leftover = getLeftover(len);
-		if (leftover.equals(BitCursor.zero))
+		if (leftover.isZero())
 				return;
 		
 		long tranX = (isHorizontal() ? main.getPixelWidth() : 0);

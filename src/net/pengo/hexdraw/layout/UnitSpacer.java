@@ -67,7 +67,7 @@ public class UnitSpacer extends SingleSpacer {
     }
     
     public long getPixelWidth(BitCursor bits) {
-    	if (bits.equals(BitCursor.zero))
+    	if (bits.isZero())
     		return 0;    	
 
     	
@@ -75,7 +75,7 @@ public class UnitSpacer extends SingleSpacer {
     }
     
     public long getPixelHeight(BitCursor bits) {
-    	if (bits.equals(BitCursor.zero))
+    	if (bits.isZero())
     		return 0;    	
     	
     	return getMaxPixelHeight();
@@ -97,42 +97,6 @@ public class UnitSpacer extends SingleSpacer {
 		return 0;
 	}
     
-    protected void bitIsHere(LayoutCursorBuilder lc, Round round) {
-    	BitCursor bits = lc.getBits();
-
-    	if (bits.equals(BitCursor.zero)) {
-    		lc.setNull(true);
-    		return;
-    	}
-    	
-    	if (round == Round.before) {
-    		calcBlinky(lc);
-    		return;
-    	
-    	} else if (round == Round.after) {
-    		lc.addToBitLocation(bitCount);
-    		lc.addToBlinkX(getMaxPixelWidth());
-    		calcBlinky(lc);
-    		return;
-    	
-    	} else {
-			assert round == Round.nearest;
-			if (lc.getClickX() <= getPixelWidth(bits)/2) {
-	    		calcBlinky(lc);
-				return;
-			} else {
-	    		lc.addToBitLocation(bitCount);
-	    		lc.addToBlinkX(getMaxPixelWidth());
-	    		calcBlinky(lc);
-	    		return;
-			}
-		}
-    }
-
-    protected void calcBlinky(LayoutCursorBuilder lc) {
-    	lc = lc.restorePerspective();
-    	lc.setBlinkyLocation(new Rectangle((int)lc.getBlinkX(), (int)lc.getBlinkY(), 1, (int)getMaxPixelHeight()));
-    }
     //public abstract SpacerIterator iterator(); // Iterator<SuperSpacer>
     //public abstract SpacerIterator iterator(long first);
     

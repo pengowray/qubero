@@ -71,7 +71,7 @@ public class GroupSpacer extends MultiSpacer {
     //public abstract long getDeepSubSpacerCount();
     
     public long getPixelWidth(BitCursor bits) {
-    	if (bits.equals(BitCursor.zero))
+    	if (bits.isZero())
     		return 0;    	
     	
         //fixme: cache result
@@ -100,7 +100,7 @@ public class GroupSpacer extends MultiSpacer {
     }
     
     public long getPixelHeight(BitCursor bits) {
-    	if (bits.equals(BitCursor.zero))
+    	if (bits.isZero())
     		return 0;    	
     	
         //if (bits.equals(getBitCount(bits))) {

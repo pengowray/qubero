@@ -32,6 +32,7 @@ available at:
 package net.pengo.hexdraw.layout;
 
 import java.awt.Point;
+import java.awt.Rectangle;
 
 import net.pengo.bitSelection.BitCursor;
 
@@ -65,4 +66,44 @@ public abstract class SingleSpacer extends SuperSpacer {
 		return max.restorePerspective().getBlinkPoint();
 	}
 	
+    protected void bitIsHere(LayoutCursorBuilder lc, Round round) {
+    	BitCursor bits = getBitCount(lc.getBits());
+    	
+
+    	if (bits.isZero()) {
+    		//lc.setNull(true);
+    		return;
+    	}
+    	
+    	if (round == Round.before) {
+    		calcBlinky(lc, bits);
+    		return;
+    	
+    	} else if (round == Round.after) {
+    		lc.addToBitLocation(bits);
+//    		lc.addToBlinkX(getMaxPixelWidth()); // from unitSpacer
+    		lc.addToBlinkX(getPixelWidth(bits));
+    		calcBlinky(lc, bits);
+    		return;
+    	
+    	} else {
+			assert round == Round.nearest;
+			if (lc.getClickX() <= getPixelWidth(bits)/2) {
+	    		calcBlinky(lc, bits);
+				return;
+			} else {
+	    		lc.addToBitLocation(getBitCount(lc.getBits()));
+//	    		lc.addToBlinkX(getMaxPixelWidth()); // from unitSpacer
+	    		lc.addToBlinkX(getPixelWidth(bits));
+	    		calcBlinky(lc, bits);
+	    		return;
+			}
+		}
+    }
+
+    protected void calcBlinky(LayoutCursorBuilder lc, BitCursor gottenBits) {
+    	lc = lc.restorePerspective();
+    	//lc.setBlinkyLocation(new Rectangle((int)lc.getBlinkX(), (int)lc.getBlinkY(), 1, (int)getMaxPixelHeight()));
+    	lc.setBlinkyLocation(new Rectangle((int)lc.getBlinkX(), (int)lc.getBlinkY(), 1, (int)getPixelHeight(gottenBits)));
+    }
 }

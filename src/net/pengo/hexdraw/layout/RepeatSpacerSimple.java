@@ -182,7 +182,7 @@ public class RepeatSpacerSimple extends MultiSpacer {
 	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs, BitSegment repaintSeg) {
 		BitCursor length = seg.getLength();
 		// check for empty
-		if (length.equals(BitCursor.zero))
+		if (length.isZero())
 			return;
 
         int totalXChange = 0;

@@ -110,6 +110,11 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	col.clear();
     	
     	col.setAutoSpace(true);
+
+    	Address addr = new Address();
+    	addr.setFont(hexFont);
+    	addr.setBitSpan(new BitCursor(16,0));
+    	col.addColumn(addr, 1);
     	
     	TextTileSet tiles = new TextTileSet(hexFont, false);
     	UnitSpacer unit = new UnitSpacer(tiles);
@@ -228,7 +233,7 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     
     public void valueChanged(BitSelectionEvent e) {
     	//recalc();
-    	System.out.println("value changed:" + e.getChangeRange());
+    	//System.out.println("value changed:" + e.getChangeRange());
         repaint(e.getChangeRange());
         //repaint();
     }
@@ -444,7 +449,7 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 		LayoutCursor cursClick = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.nearest, len);
 		BitCursor clickbit = cursClick.getBitLocation();
 		
-		System.out.println("clicked (nearest): " + clickbit);
+		//System.out.println("clicked (nearest): " + clickbit);
 		
 		if (clickbit==null) {
 			return;

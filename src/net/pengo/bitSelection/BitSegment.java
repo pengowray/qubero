@@ -53,7 +53,6 @@ public class BitSegment implements Cloneable, Comparable {
         java.util.Arrays.sort(indexes);
         firstIndex = indexes[0];
         lastIndex = indexes[indexes.length-1];
-        System.out.println("bs:" + this);
     }
     
     

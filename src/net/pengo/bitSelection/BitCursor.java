@@ -210,4 +210,11 @@ public class BitCursor implements Comparable {
     public BitCursor mod(BitCursor mod) {
         return BitCursor.newFromBits( this.toBits() % mod.toBits() );
     }
+
+	public boolean isZero() {
+		if (byteOffset == 0 && bitOffset == 0)
+			return true;
+		
+		return false;
+	}
 }

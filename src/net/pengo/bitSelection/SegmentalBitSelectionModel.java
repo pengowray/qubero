@@ -260,7 +260,7 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		if (activeAntiSelection != EMPTY_SEGMENT) {
 			BitSegment seg = activeAntiSelection;
 			
-			if (seg == null || seg.getLength().equals(BitCursor.zero))
+			if (seg == null || seg.getLength().isZero())
 				return;
 
 			BitSegment leftOverlap = findLeftOverlap(seg, false);
@@ -293,7 +293,7 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 			BitSegment seg = activeSelection;
 			BitSegment stretchedSeg;
 
-			if (seg == null || seg.getLength().equals(BitCursor.zero))
+			if (seg == null || seg.getLength().isZero())
 				return;
 			
 			// find what's there now
@@ -378,10 +378,8 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		// return area of change
 		
 		if (oldActive.isEmpty()) {
-			System.out.println("old empty, new:" + newActive);
 			return newActive;
 		}
-		System.out.println("old:" +oldActive + ", new:" + newActive);
 		
 		boolean sameFirst = (oldActive.firstIndex.equals(newActive.firstIndex));
 		boolean sameLast= (oldActive.lastIndex.equals(newActive.lastIndex));
