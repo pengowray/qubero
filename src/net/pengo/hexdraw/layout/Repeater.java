@@ -11,6 +11,7 @@ import java.awt.Graphics;
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 import net.pengo.data.Data;
+import net.pengo.splash.SimpleSize;
 
 /**
  * @author Que
@@ -105,8 +106,39 @@ public class Repeater extends MultiSpacer {
 		return getMainRepeater(bits).getBitCount(bits).add(getLeftover(bits));
 	}
 
-	public BitCursor bitIsHere(long arg0, long arg1, net.pengo.hexdraw.layout.SuperSpacer.Round arg2, BitCursor arg3) {
-		// TODO Auto-generated method stub
+	public BitCursor bitIsHere(long x, long y, SuperSpacer.Round r, BitCursor bits) {
+		if (isHorizontal()) {
+			long width = getMainRepeater(bits).getPixelWidth(bits);
+			if (x >= 0 && x < width) {
+				return getMainRepeater(bits).bitIsHere(x, y, r, bits);
+			} else if (x >= width && x < width + contents.getPixelWidth(getLeftover(bits))) {
+				BitCursor leftover = getLeftover(bits);
+				if (leftover.equals(BitCursor.zero))
+					return null;
+				
+				BitCursor location = contents.bitIsHere(x-width, y, r, leftover);
+				if (location == null)
+					return null;
+				
+				return getMainRepeater(bits).getBitCount(bits).add(location);
+			}
+			
+		} else {
+			long height = getMainRepeater(bits).getPixelHeight(bits);
+			if (y >= 0 && y < height) {
+				return getMainRepeater(bits).bitIsHere(x, y, r, bits);
+			} else if (y >= height && y < height + contents.getPixelHeight(getLeftover(bits))) {
+				BitCursor leftover = getLeftover(bits);
+				if (leftover.equals(BitCursor.zero))
+					return null;
+				
+				BitCursor location = contents.bitIsHere(x, y-height, r, leftover);
+				if (location == null)
+					return null;
+				
+				return getMainRepeater(bits).getBitCount(bits).add(location);
+			}
+		}
 		return null;
 	}
 
@@ -144,5 +176,9 @@ public class Repeater extends MultiSpacer {
 	}
 	public void setMaxRepeats(long maxRepeats) {
 		this.maxRepeats = maxRepeats;
+	}
+	
+	public void setSimpleSize(SimpleSize s) {
+		contents.setSimpleSize(s);
 	}
 }

@@ -72,23 +72,23 @@ public class MoojMenuBar extends JMenuBar {
         nowmenu.add( grey2 );
          */
         
-        Renderer renderers[] = gui.getViewModes();
+//        Renderer renderers[] = gui.getViewModes();
         //JCheckBox does not work properly in Java 1.5. Change to JCheckBoxMenuItem ?
-        JCheckBoxMenuItem checks[] = new JCheckBoxMenuItem[renderers.length];
+//        JCheckBoxMenuItem checks[] = new JCheckBoxMenuItem[renderers.length];
         
-        for ( int i = 0; i < checks.length; i++) {
-            Renderer renderer = renderers[i];
-            if ( renderer == null ) {}
-            else if ( renderer.toString().equals("_") )
-                nowmenu.add( new JSeparator() );
-            else {
-                
-                ViewMenuItem action = new ViewMenuItem(renderer);
-                checks[i] = new JCheckBoxMenuItem( renderer.toString(), renderer.isEnabled() );
-                checks[i].setAction( action );
-                nowmenu.add( checks[i] );
-            }
-        }
+//        for ( int i = 0; i < checks.length; i++) {
+//            Renderer renderer = renderers[i];
+//            if ( renderer == null ) {}
+//            else if ( renderer.toString().equals("_") )
+//                nowmenu.add( new JSeparator() );
+//            else {
+//                
+//                ViewMenuItem action = new ViewMenuItem(renderer);
+//                checks[i] = new JCheckBoxMenuItem( renderer.toString(), renderer.isEnabled() );
+//                checks[i].setAction( action );
+//                nowmenu.add( checks[i] );
+//            }
+//        }
 /*
         nowmenu.add( new JSeparator() );
         JCheckBox wave = new JCheckBox( new ViewMenuItem("Wave", checks[0]) );

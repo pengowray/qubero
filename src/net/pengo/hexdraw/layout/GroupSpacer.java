@@ -15,6 +15,7 @@ import java.util.Iterator;
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 import net.pengo.data.Data;
+import net.pengo.splash.SimpleSize;
 
 
 /**
@@ -278,5 +279,11 @@ public class GroupSpacer extends MultiSpacer {
 	}
 	public void setHorizontal(boolean horizontal) {
 		this.horizontal = horizontal;
+	}
+	
+	public void setSimpleSize(SimpleSize s) {
+		for (SuperSpacer c : contents) {
+			c.setSimpleSize(s);
+		}
 	}
 }

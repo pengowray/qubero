@@ -14,9 +14,11 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 
+import javax.swing.Action;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JMenu;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
@@ -59,6 +61,7 @@ public class GUI implements ActiveFileListener {
         setIcon();
         open(new DemoData(icon));
     }
+    
     public GUI(ActiveFile af) {
         activeFile = af;
         activeFile.addActiveFileListener(this);
@@ -82,6 +85,15 @@ public class GUI implements ActiveFileListener {
             icon = Toolkit.getDefaultToolkit().createImage(url);
     }
     
+    protected void registerActionsList(ActionListHolder actionHolder) {
+    	Action[] actions = actionHolder.getActions();
+    	JMenu view = new JMenu("View");
+    	for (Action a : actions) {
+    		view.add(a);
+    	}
+    	mmb.add(view);
+    }
+    
     protected void start() {
         if (jframe != null)
             return;
@@ -93,8 +105,9 @@ public class GUI implements ActiveFileListener {
         //moojtree = ResTree.create(openFile);
         simplemoojtree = SimpleResTree.create(activeFile);
         
-        hexpanel = new HexPanel(activeFile); //
-        hexpanel.setCommandLine(getCommandLine());
+        //hexpanel = new HexPanel(activeFile); //
+        //hexpanel.setCommandLine(getCommandLine());
+        
         //hextable = new HexTable(activeFile);
         //LineRepeater hexpanel = new LineRepeater(openFile.getData());
         
@@ -117,8 +130,10 @@ public class GUI implements ActiveFileListener {
        
         //test..
         JPanel hexpane = new JPanel(new BorderLayout());
-        hexpane.add(hexpanel.getPanel(), BorderLayout.EAST);
+//        hexpane.add(hexpanel.getPanel(), BorderLayout.EAST);
         MainPanel spacerPanel = new MainPanel(activeFile);
+        registerActionsList(spacerPanel);
+        
         //spacerPanel.setActiveFile(activeFile);
         spacerPanel.loadDefaults();
         hexpane.add(spacerPanel, BorderLayout.WEST);
@@ -159,8 +174,11 @@ public class GUI implements ActiveFileListener {
         
         //splitpane.resetToPreferredSizes();
         int FRAMEBORDER = 15; //FIXME: cant work this out properly :/
-        int treewidth = jframe.getWidth() -
-        (FRAMEBORDER + sp_hexpanel.getVerticalScrollBar().getWidth() + hexpanel.getPreferredSize().width + splitpane.getDividerSize());
+//        int treewidth = jframe.getWidth() -
+//        	(FRAMEBORDER + sp_hexpanel.getVerticalScrollBar().getWidth() + hexpanel.getPreferredSize().width + splitpane.getDividerSize());
+        
+        int treewidth = 150;
+        
         //int treewidth = jframe.getWidth() -
         //(FRAMEBORDER + sp_hexpanel.getVerticalScrollBar().getWidth() + hexpanel.getPreferredSize().width + splitpane.getDividerSize());
         
@@ -308,9 +326,9 @@ public class GUI implements ActiveFileListener {
         }
     }
     
-    public Renderer[] getViewModes() {
-        return hexpanel.getViewModes();
-    }
+//    public Renderer[] getViewModes() {
+//        return hexpanel.getViewModes();
+//    }
     
     public Renderer getViewMode(String name) {
         return hexpanel.getViewMode(name);

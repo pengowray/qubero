@@ -13,24 +13,26 @@ package net.pengo.hexdraw.layout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
-import net.pengo.splash.FontMetricsCache;
+
+import net.pengo.splash.SimpleSize;
+import net.pengo.splash.SimplySizedFont;
 
 /**
  *
  * @author  Que
  */
 public class TextTileSet extends TileSet {
-    private String font;
+    private SimplySizedFont font;
     private String alphabet;
     private boolean antialias;
     private int bitsPerTile = -1; //lazy
     
-    public TextTileSet(String font, boolean antialias) {
+    public TextTileSet(SimplySizedFont font, boolean antialias) {
         this(font, "0123456789abcdef", antialias);
     }
 
     /* alphabet is "0123456789abcdef" */
-    public TextTileSet(String font, String alphabet, boolean antialias) {
+    public TextTileSet(SimplySizedFont font, String alphabet, boolean antialias) {
         this.font = font;
         this.alphabet = alphabet;
         this.antialias = antialias;
@@ -71,15 +73,15 @@ public class TextTileSet extends TileSet {
     }
     
     private String getFontName() {
-        return font;
+        return font.getFontName();
     }
     
     private Font getFont() {
-        return FontMetricsCache.singleton().getFont( getFontName() );
+        return font.getFont();
     }
     
     private FontMetrics getFontMetrics() {
-        return FontMetricsCache.singleton().getFontMetrics( getFontName() );
+        return font.getFontMetrics();
     }
 
     public int maxWidth() {
@@ -125,6 +127,12 @@ public class TextTileSet extends TileSet {
     
     protected char tileChar(int tile) {
     	return alphabet.charAt(tile);
+    }
+    
+    public void setSimpleSize(SimpleSize s) {
+    	font = font.resize(s);
+    	
+    	//FIXME: repaint?
     }
     
 }

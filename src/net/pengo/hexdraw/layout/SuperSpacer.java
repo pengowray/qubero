@@ -11,6 +11,7 @@ import java.awt.Point;
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 import net.pengo.data.Data;
+import net.pengo.splash.SimpleSize;
 
 /**
  *
@@ -18,6 +19,8 @@ import net.pengo.data.Data;
  */
 public abstract class SuperSpacer {
     public enum Round { nearest, before, after };
+    
+    //private int simpleSize = -1; // lazily replaced with default
     
     /** Creates a new instance of SuperSpacer */
     public SuperSpacer() {
@@ -48,4 +51,6 @@ public abstract class SuperSpacer {
     
     public abstract void paint(Graphics g, Data d, BitSegment seg);
     
+
+	public abstract void setSimpleSize(SimpleSize s);
 }

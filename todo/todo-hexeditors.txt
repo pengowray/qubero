@@ -106,6 +106,37 @@ Bless
  - Bless aims to be a fast and customizable hex editor written in Gtk#. It efficiently handles very large files and supports multiple undo-redo actions. 
  - There are also plans for the addition of lua based scripting language for binary file manipulation.
 
+Binary Browser v4.2
+http://www.papyrussoftware.com/vmh.html
+ - tip of the day
+ - Struts
+ - unlimited undo/redo
+ - "emergency exit".. saves workspace in tact (including undos) without saving changes
+ - regex, with "auto syntax coloring"
+ - History Wizard, so you can undo a script and review the steps
+
 big list:
 http://esca.atomki.hu/paradise/simtel/msdos/binaryed.html
 http://esca.atomki.hu/paradise/simtel/win95/editor.html (search for hex or binary)
+
+
+
+
+
+
+
+
+My Review of Binary.Browser.v4.2
+2005-01-27
+
+ugh. binary browser is a pretty clunky hex editor, and it's really unintuative. 
+
+I right clicked on some hex and picked "flip".. I wasn't sure if it would flip the byte order or the bit order.. Instead, it flipped around the display of panels on the screen. 
+
+When looking at a BMP (for example) in the strut view you it won't find the location of a defined structure in the main hex view pane for you. Ugh.
+
+There's no editing of bits (it does call itself "binary" browser). The views aren't configurable. I could go on. I can't believe this is a v4 release and not an early beta.
+
+If you want a real Hex Editor wait for Qubero.
+
+Qubero!!

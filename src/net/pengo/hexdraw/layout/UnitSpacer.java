@@ -12,6 +12,7 @@ import java.awt.Graphics;
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 import net.pengo.data.Data;
+import net.pengo.splash.SimpleSize;
 
 /**
  *
@@ -105,4 +106,7 @@ public class UnitSpacer extends SingleSpacer {
     	
     }
     
+	public void setSimpleSize(SimpleSize s) {
+		tileSet.setSimpleSize(s);
+	}	    
 }

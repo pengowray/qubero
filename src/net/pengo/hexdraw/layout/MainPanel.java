@@ -11,8 +11,17 @@ package net.pengo.hexdraw.layout;
 
 import java.awt.Dimension;
 import java.awt.Graphics;
-import javax.swing.JPanel;
+import java.awt.event.ActionEvent;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseListener;
+import java.awt.event.MouseMotionListener;
 
+import javax.swing.AbstractAction;
+import javax.swing.Action;
+import javax.swing.JPanel;
+import javax.swing.KeyStroke;
+
+import net.pengo.app.ActionListHolder;
 import net.pengo.app.ActiveFile;
 import net.pengo.app.ActiveFileEvent;
 import net.pengo.app.ActiveFileListener;
@@ -20,13 +29,17 @@ import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 import net.pengo.bitSelection.BitSelectionEvent;
 import net.pengo.bitSelection.BitSelectionListener;
+import net.pengo.bitSelection.DirectionalSegment;
+import net.pengo.bitSelection.SegmentalBitSelectionModel;
 import net.pengo.data.Data;
+import net.pengo.splash.SimpleSize;
+import net.pengo.splash.SimplySizedFont;
 
 /**
  *
  * @author  Que
  */
-public class MainPanel extends JPanel implements BitSelectionListener, ActiveFileListener {
+public class MainPanel extends JPanel implements BitSelectionListener, ActiveFileListener, ActionListHolder, MouseListener, MouseMotionListener {
     /**
 	 * Comment for <code>serialVersionUID</code>
 	 */
@@ -34,99 +47,84 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	
 	//private List<Spacer> spacerlist = new LinkedList<Spacer>();
 	private SuperSpacer spacer;
-    private int defaultSize = 11;
+    private SimplySizedFont hexFont = new SimplySizedFont("hex");
+    private SimpleSize size = new SimpleSize();
     private ActiveFile activeFile;
+    private SegmentalBitSelectionModel selection = new SegmentalBitSelectionModel();
+    
+    private Columns col = new Columns();
     
     /** Creates a new instance of MainPanel */
     public MainPanel(ActiveFile activeFile) {
     	loadDefaults();
         setActiveFile(activeFile);
-        
     }
 
     public void loadDefaults() {
-    	defaultSize = 12;
-    	TextTileSet tiles = new TextTileSet("hex", false);
-    	UnitSpacer unit = new UnitSpacer(tiles);
+    	col.clear();
     	
-    	AsciiTileSet asciiTiles = new AsciiTileSet("hex", false);
+    	TextTileSet tiles = new TextTileSet(hexFont, false);
+    	
+    	UnitSpacer unit = new UnitSpacer(tiles);
+    	col.addColumn(unit, 32);
+    	
+    	AsciiTileSet asciiTiles = new AsciiTileSet(hexFont, false);
     	UnitSpacer asciiUnit = new UnitSpacer(asciiTiles);
-
-    	Repeater row = new Repeater();
-        row.setHorizontal(true);
-        row.setContents(unit);
-        row.setMaxRepeats(32);
-        
-        Repeater asciiRow = new Repeater();
-        asciiRow.setHorizontal(true);
-        asciiRow.setContents(asciiUnit);
-        asciiRow.setMaxRepeats(16);
-        
-        GroupSpacer rowWrap = new GroupSpacer();
-    	rowWrap.setContents(new SuperSpacer[] { row } );
-    	rowWrap.setLength(new BitCursor(16,0));
-    	//rowWrap.setHorizontal(false); // n/a
-
-        Repeater column = new Repeater();
-        column.setHorizontal(false);
-        //column.setContents(rowWrap);
-        column.setContents(row);
-        
-        Repeater asciiColumn = new Repeater();
-        asciiColumn.setHorizontal(false);
-        asciiColumn.setContents(asciiRow);
-
-    	SuperSpacer[] pageContents = new SuperSpacer[] { 
-        		column, asciiColumn };
-
-    	GroupSpacer page = new GroupSpacer();
-    	page.setContents(pageContents);
-    	//page.setContents(pageContents);
-    	//page.setLength(new BitCursor(0,4)); //shouldn't need...? or should it?-
-    	page.setHorizontal(true);
-        
-       spacer = page;
-        
-       //spacer = column;
-        
-        //spacer = row;
-        
+    	col.addColumn(asciiUnit, 16);
+    	
+       spacer = col.toColumnGroup();
+       
     	recalc();
     }
-    public void loadDefaults_proper() {
-        defaultSize = 11;
-        
-        //spacerlist.clear();
-        //MonoSpacer hex = new MonoSpacer();
-        //hex.setFontName("hex");
-        //hex.setActiveFile(getActiveFile());
-        //spacerlist.add(hex);
-        
-        TextTileSet tiles = new TextTileSet("hex", false);
-        
-        // this needs to be replaced with a limited repeat.. cause the same unit will be shown every time
-        UnitSpacer unit = new UnitSpacer(tiles);
-        
-        SuperSpacer[] lineContents = new SuperSpacer[] { 
-        		unit, unit, unit, unit,  unit, unit, unit, unit, 
-				unit, unit, unit, unit,  unit, unit, unit, unit };
-        
-        GroupSpacer line = new GroupSpacer();
-        line.setContents(lineContents);
-        line.setLength(new BitCursor(0,4)); //shouldn't need...? or should it?-
-        line.setHorizontal(true);
-        
-        RepeatSpacer column = new RepeatSpacer();
-        column.setHorizontal(false);
-        column.setContents(line);
-        
-        spacer = column;
-        
-        recalc();
-        
-        repack();
+    
+    //fixme: actions need to be categorised.. e.g. into View | Font Size
+    public Action[] getActions() {
+    	return new Action[] { biggerAction(), smallerAction() };
+    }
+    	
+    private Action biggerAction() {
+    	AbstractAction aa = new AbstractAction() {
+    		public void actionPerformed(ActionEvent e) {
+    			bigger();
+    		}
+    	};
+    	aa.putValue(Action.NAME, "Increase font size"); 
+    	aa.putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke('=', ActionEvent.CTRL_MASK) );
+    	return aa;
     }
     
+    private Action smallerAction() {
+    	AbstractAction aa = new AbstractAction() {
+    		public void actionPerformed(ActionEvent e) {
+    			smaller();
+    		}
+    	};
+    	aa.putValue(Action.NAME, "Decrease font size");
+    	aa.putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke( '-', ActionEvent.CTRL_MASK) );
+    	
+    	//fixme: how to add multiple accelerators?
+    	//aa.putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke('-') );
+    			//ACCELERATOR_KEY
+    			//MNEMONIC_KEY
+    			//ACTION_COMMAND_KEY
+				
+    	return aa;
+    }
+    
+    public void bigger() {
+    	setSimpleSize(size.bigger());
+    }
+    
+    public void smaller() {
+    	setSimpleSize(size.smaller());
+    }
+    
+    public void setSimpleSize(SimpleSize s) {
+    	this.size = s;
+    	spacer.setSimpleSize(s);
+    	recalc();
+    }
+
     /* fix up size */
     protected void recalc() {
     	if (activeFile == null)
@@ -143,7 +141,6 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	invalidate();
     	repaint();
     }
-    
     
     
     /* work out how to lay everything out again.. after changes to layout properties*/
@@ -220,5 +217,67 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 		// TODO Auto-generated method stub
 		
 	}
+	
+	// ************** MOUSE EVENTS ************** 
+	public void mouseClicked(MouseEvent e) {
+		
+		//FIXME: should do different things if you click on a selected thing or not
+
+		int clicks = e.getClickCount();
+		BitCursor len = activeFile.getActive().getData().getBitLength();
+		
+		if (clicks==1) {
+			
+			BitCursor clickbit = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.nearest, len );
+			if (e.isShiftDown()) {
+				selection.setLeadSelectionIndex(clickbit);
+			} else if (e.isControlDown()) {
+				selection.setAnchor(clickbit);
+			} else {
+				selection.clearSelection();
+				selection.setAnchor(clickbit);
+			}
+			
+			
+		} else if (clicks==2) {
+			BitCursor clickLeft = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.before, len );
+			BitCursor clickRight = spacer.bitIsHere(e.getX(), e.getY(), SuperSpacer.Round.after, len );
+			
+			if (e.isControlDown()) {
+				selection.addSelectionInterval(new BitSegment(clickLeft, clickRight));
+				selection.setAnchor(clickLeft); //FIXME: is this needed?
+				
+				selection.setAnchor(clickLeft);
+				selection.setLeadSelectionIndex(clickRight);
+			} else {
+				selection.setSelectionInterval(new DirectionalSegment(clickLeft, clickRight));
+			}
+			
+		}
+	}
+	public void mouseEntered(MouseEvent e) {
+		// TODO Auto-generated method stub
+
+	}
+	public void mouseExited(MouseEvent e) {
+		// TODO Auto-generated method stub
+
+	}
+	public void mousePressed(MouseEvent e) {
+		// TODO Auto-generated method stub
+
+	}
+	public void mouseReleased(MouseEvent e) {
+		// TODO Auto-generated method stub
+
+	}
     
+	public void mouseDragged(MouseEvent e) {
+		// TODO Auto-generated method stub
+
+	}
+	public void mouseMoved(MouseEvent e) {
+		// TODO Auto-generated method stub
+
+	}
 }

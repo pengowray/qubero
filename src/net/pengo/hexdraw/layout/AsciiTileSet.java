@@ -6,15 +6,16 @@
  */
 package net.pengo.hexdraw.layout;
 
+import net.pengo.splash.SimplySizedFont;
+
 /**
  * @author Que
- *
- * TODO To change the template for this generated type comment go to
- * Window - Preferences - Java - Code Style - Code Templates
  */
 public class AsciiTileSet extends TextTileSet {
 
-	public AsciiTileSet(String font, boolean antialias) {
+	boolean highbitMasked = false;
+	
+	public AsciiTileSet(SimplySizedFont font, boolean antialias) {
 		super(font, antialias);
 	}
 	
@@ -31,8 +32,17 @@ public class AsciiTileSet extends TextTileSet {
     }    
     
     protected char tileChar(int tile) {
+    	if (highbitMasked)
+    		return (char)(tile & 0x8f);
+			
     	return (char)tile;
     }
 
 
+	public boolean isHighbitMasked() {
+		return highbitMasked;
+	}
+	public void setHighbitMasked(boolean highbitMasked) {
+		this.highbitMasked = highbitMasked;
+	}
 }

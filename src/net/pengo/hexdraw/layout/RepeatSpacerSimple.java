@@ -12,6 +12,7 @@ import java.awt.Rectangle;
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 import net.pengo.data.Data;
+import net.pengo.splash.SimpleSize;
 
 /**
  * @author Que
@@ -230,4 +231,8 @@ public class RepeatSpacerSimple extends MultiSpacer {
 	public void setRepeats(long repeats) {
 		this.repeats = repeats;
 	}
+	
+	public void setSimpleSize(SimpleSize s) {
+		contents.setSimpleSize(s);
+	}	
 }

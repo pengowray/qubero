@@ -8,6 +8,8 @@ package net.pengo.hexdraw.layout;
 
 import java.awt.Graphics;
 
+import net.pengo.splash.SimpleSize;
+
 /**
  *
  * @author  Que
@@ -37,4 +39,7 @@ public abstract class TileSet {
     public abstract int maxHeight();
     
     public abstract void draw(Graphics g, int tile);
+    
+    public abstract void setSimpleSize(SimpleSize s);
+    
 }
