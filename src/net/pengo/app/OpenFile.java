@@ -293,5 +293,10 @@ public class OpenFile extends Resource implements LongListSelectionListener { //
         // TODO Auto-generated method stub
         
     }
+
+    public void doubleClickAction() {
+        super.doubleClickAction();
+        makeActive(this);
+    }
     
 }

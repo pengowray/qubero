@@ -25,7 +25,10 @@
   <target name="compile" depends="init"
         description="compile the source " >
     <!-- Compile the java code from ${src} into ${build} -->
-    <javac srcdir="${src}" destdir="${build}"/> <!--javac (wishlist) target="1.4" source="1.5" -->
+
+    <javac srcdir="${src}" destdir="${build}"/>
+    <!-- i wish:  <javac srcdir="${src}" destdir="${build}" target="1.4" source="1.5" /> -->
+
     <copy file="extras/mooj32.png" todir="${build}"/>
   </target>
 

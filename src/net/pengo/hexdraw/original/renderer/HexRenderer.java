@@ -3,6 +3,9 @@ package net.pengo.hexdraw.original.renderer;
 import java.awt.Color;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
+import java.awt.LayoutManager;
+import javax.swing.OverlayLayout;
+import javax.swing.JTextField;
 
 import net.pengo.hexdraw.original.Place;
 
@@ -52,7 +55,7 @@ public class HexRenderer extends SeperatorRenderer {
     }
     
     // longest length for a byte "symbol"
-    private int maxChars() {
+    protected int maxChars() {
         int unsigned = 0xff; // highest value
         return Integer.toString(unsigned, base).length();
     }
@@ -184,7 +187,13 @@ public class HexRenderer extends SeperatorRenderer {
     
     public String toString() {
 	if (showPrintables && showSpecials)
-	    return "character display (" + base(base) + ")";
+	    return "character display (" + base(base) + ")" ;
+        
+        if (showPrintables)
+	    return "character display (" + base(base) + "), without escapes";
+	
+        if (showSpecials)
+	    return "escaped characters (" + base(base) + ")";
 	
 	return base(base);
 	
@@ -207,4 +216,53 @@ public class HexRenderer extends SeperatorRenderer {
 
     }
 
+    public EditBox editBox() {
+        return new HexEditBox(this);
+    }    
+}
+
+class HexEditBox extends JTextField implements EditBox {
+    private HexRenderer r;
+    private long offset; // offset of data we're editing
+    private JTextField textField;
+    
+    HexEditBox(HexRenderer r) {
+        this.r = r;
+    }
+    
+    public JTextField getComponent() {
+        if (textField == null) {
+            textField = new JTextField("XX",3);
+            //textField.setMaximumSize(textField.getPreferredSize());
+            System.out.println("pref size: " + textField.getPreferredSize());
+            //textField.setFont(r.)
+            //setLocation(x,y);
+            //set some listeners and stuff
+        }
+        
+        return textField;
+    }
+    
+    public void setCursor(long offset) {
+        this.offset = offset;
+        
+    }
+
+    public void done() {
+        
+    }
+    
+    public void save() {
+        
+    }
+    
+    public void paint(Graphics g, FontMetrics fm) {
+        int charsHeight = fm.getHeight();
+        int charsWidth = fm.charWidth('W') * r.maxChars();
+        int[] hexStart = r.hexStart();
+        int colCount = r.getColumnCount();
+        
+        
+    }
+    
 }

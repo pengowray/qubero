@@ -29,10 +29,19 @@ public class SeperatorRenderer implements Renderer {
        this.fm = fm;
        updateWidth();
     }
+    
+    // don't change fm. read only, please!
+    public FontMetrics getFontMetrics() {
+        return fm;
+    }
 
     public void setColumnCount(int columnCount) {
         this.columnCount = columnCount;
         updateWidth();
+    }
+    
+    public int getColumnCount() {
+        return columnCount;
     }
     
     public void renderBytes( Graphics g, long lineNumber,
@@ -100,6 +109,11 @@ public class SeperatorRenderer implements Renderer {
     }
     
     //public int 
+    
+    //fixme: nyi
+    public EditBox editBox() {
+        return null;
+    }
 }
 
 

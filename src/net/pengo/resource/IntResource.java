@@ -33,6 +33,9 @@ abstract public class IntResource extends DefinitionResource {
     public final static int SIGN_MAG = 3;
     public final static int RESERVED_SIGN_BIT = 4; //fixme: NYI: Positive signed. e.g. 0-127 only
     
+    public final static int NETWORK_BYTE_ORDER = 0;
+    public final static int LITTLE_ENDIAN = 1;
+    
     //FIXME: little endian, big endian (2 byte only?), network byte order, local byte order
     
     //FIXME: all these must be put in the subresource

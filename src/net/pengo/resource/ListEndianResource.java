@@ -1,7 +1,9 @@
 /*
- * ListNegativeFormatsResource.java
+ * ListEndianResource.java
  *
- * Created on 17 September 2004, 09:52
+ * Copy of ListNegativeFormatsResource
+ *
+ * Created on 3 October 2004, 09:52
  */
 
 package net.pengo.resource;
@@ -11,15 +13,14 @@ import net.pengo.pointer.SmartPointer;
 
 /**
  *
- * @author  Que
+ * @author  Peter Halasz
  */
-public class ListNegativeFormatsResource extends ListSingleChoiceResource {
-   
+public class ListEndianResource extends ListSingleChoiceResource {
     
-    /** Creates a new instance of ListNegativeFormatsResource */
-    public ListNegativeFormatsResource(IntResource r) {
+    /** Creates a new instance of ListEndianResource */
+    public ListEndianResource(IntResource r) {
 	super(r, getNegList());
-    }
+    }    
     
     //fixme: make these SmartPointers too ?
     static public SmartPointer negListP = new JavaPointer(ListPrimativeResource.class);
@@ -27,7 +28,7 @@ public class ListNegativeFormatsResource extends ListSingleChoiceResource {
 
     static {
 	ListPrimativeResource negList = new ListPrimativeResource(stringType);
-	String[] negStrings = new String[] {"Unsigned","One's complement","Two's Completement","Sign-and-magnitude","Reserved Sign Bit (NYI)"};
+	String[] negStrings = new String[] {"Network byte-order (big endian)","Little endian (Intel)"};
 	negList.setCount(new IntPrimativeResource(negStrings.length));
 	for (int c=0; c<negStrings.length; c++) {
 	    negList.setElement(new IntPrimativeResource(c), new StringPrimativeResource(negStrings[c]));
@@ -39,7 +40,5 @@ public class ListNegativeFormatsResource extends ListSingleChoiceResource {
     static private ListResource getNegList() {
 	return (ListPrimativeResource)negListP.evaluate();
     }
-    
-    
     
 }

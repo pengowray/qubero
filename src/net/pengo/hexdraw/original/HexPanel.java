@@ -3,11 +3,13 @@ package net.pengo.hexdraw.original;
 /* this is the original hex panel. updated to work with the new selection model. */
 
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.datatransfer.Transferable;
 import java.awt.dnd.DropTargetListener;
@@ -35,6 +37,7 @@ import net.pengo.data.DataListener;
 import net.pengo.data.EmptyData;
 import net.pengo.hexdraw.original.renderer.AddressRenderer;
 import net.pengo.hexdraw.original.renderer.AsciiRenderer;
+import net.pengo.hexdraw.original.renderer.EditBox;
 import net.pengo.hexdraw.original.renderer.GreyScale2Renderer;
 import net.pengo.hexdraw.original.renderer.GreyScaleRenderer;
 import net.pengo.hexdraw.original.renderer.HexRenderer;
@@ -84,18 +87,23 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     
     
     private Font font; // = new Font("Monospaced", Font.PLAIN, 11); // antialias?
-
-	private boolean overwrite = true; // overwrite mode? (false for insert)
-	Place cursor = null;
-	
+    
+    private boolean overwrite = true; // overwrite mode? (false for insert)
+    Place cursor = null;
+    
     Renderer renderers[];
     SeperatorRenderer seperator;
     
     private boolean[] checks;
     
+    protected EditBox editbox;
+    protected Component editcom;
     
     public HexPanel(ActiveFile activeFile)  {
         super();
+        //setLayout(new OverlayLayout(this));
+        setLayout(null);
+        
         setBackground(Color.white);
         setupRenderers();
         
@@ -103,7 +111,7 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         activeFile.addActiveFileListener(this);
         setOpenFile(activeFile.getActive());
         setupMouse();
-
+        
         calcDim(); // must be called AFTER setup renderers
         
     }
@@ -116,7 +124,7 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         for (Renderer r : renderers) {
             //Renderer r = renderers[i];
             r.setFontMetrics(getFontMetrics());
-        }    
+        }
     }
     
     public FontMetrics getFontMetrics() {
@@ -130,54 +138,54 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         // MOUSE ROUTINES
         
         addMouseListener(
-                new MouseInputAdapter()  {
-                    
-                    public void mousePressed(MouseEvent e)  {
-                        if (e.getButton() == MouseEvent.BUTTON3) {
-                            // Right click!
-                            openFile.liveSelection.getJMenu().getPopupMenu().show(HexPanel.this, e.getX(), e.getY());
-                            //System.out.println("rclick ");
-                            return;
-                        }
-
-                        Place pl = hexFromClick( e.getX(), e.getY() );
-                        if (pl.addr != -1)  {
-                            getSelectionModel().setValueIsAdjusting(true);
-                            draggingMode = true;
-                            
-                            click(pl.addr, e);
-                        }
-                        else  {
-                            draggingMode = false;
-                            getSelectionModel().setValueIsAdjusting(false);
-                        }
-                        
-                    }
-                    
-                    public synchronized void  mouseReleased(MouseEvent e)  {
-                        if (draggingMode) // && selection != null
-                        {
-                            //System.out.println("release: " + e);
-                            draggingMode = false;
-                            getSelectionModel().setValueIsAdjusting(false);
-                        }
-                        
-                    }
-                    
-                    public void mouseClicked(MouseEvent e)  {
-                        int clicks = e.getClickCount();
-                        if (clicks == 2) {
-                            Place pl = hexFromClick( e.getX(), e.getY() );
-                            if (pl.addr != -1)  {
-                                startEdit(pl);
-                            }
-                            
-                            //getSelectionModel().setValueIsAdjusting(false);
-                            //draggingMode = false;
-                        }
-                    }
-                    
+        new MouseInputAdapter()  {
+            
+            public void mousePressed(MouseEvent e)  {
+                if (e.getButton() == MouseEvent.BUTTON3) {
+                    // Right click!
+                    openFile.liveSelection.getJMenu().getPopupMenu().show(HexPanel.this, e.getX(), e.getY());
+                    //System.out.println("rclick ");
+                    return;
                 }
+                
+                Place pl = hexFromClick( e.getX(), e.getY() );
+                if (pl.addr != -1)  {
+                    getSelectionModel().setValueIsAdjusting(true);
+                    draggingMode = true;
+                    
+                    click(pl.addr, e);
+                }
+                else  {
+                    draggingMode = false;
+                    getSelectionModel().setValueIsAdjusting(false);
+                }
+                
+            }
+            
+            public synchronized void  mouseReleased(MouseEvent e)  {
+                if (draggingMode) // && selection != null
+                {
+                    //System.out.println("release: " + e);
+                    draggingMode = false;
+                    getSelectionModel().setValueIsAdjusting(false);
+                }
+                
+            }
+            
+            public void mouseClicked(MouseEvent e)  {
+                int clicks = e.getClickCount();
+                if (clicks == 2) {
+                    Place pl = hexFromClick( e.getX(), e.getY() );
+                    if (pl.addr != -1)  {
+                        startEdit(pl);
+                    }
+                    
+                    //getSelectionModel().setValueIsAdjusting(false);
+                    //draggingMode = false;
+                }
+            }
+            
+        }
         );
         
         addMouseMotionListener(new MouseInputAdapter()  {
@@ -200,32 +208,32 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         seperator = new SeperatorRenderer(fm, columns, true);
         
         renderers = new Renderer[] {
-                new AddressRenderer(fm, columns, false, 10), //base-10 address
-                new AddressRenderer(fm, columns, false, 16),
-                //new SeperatorRenderer(fm, columns, true),
-                new HexRenderer(fm, columns, true),
-                new HexRenderer(fm, columns, false, 10, false), // decimal (last false=no zeropad)
-                new HexRenderer(fm, columns, false, 8, true), //octal 
-                new HexRenderer(fm, columns, false, 2, true), //binary 
-                new HexRenderer(fm, columns, false, 8, true, true, true), // c-flag
-                new HexRenderer(fm, columns, false, 16, true, true, true), // c-flag but hex
-                new AsciiRenderer(fm, columns, true, true), // ascii 
-                new AsciiRenderer(fm, columns, false, false), // ascii (extended)
-                //new SeperatorRenderer(fm, columns, true),
-                new GreyScaleRenderer(fm, columns, false), // reenable
-                //new SeperatorRenderer(fm, columns, false),
-                new GreyScale2Renderer(fm, columns, false),
-                //new SeperatorRenderer(fm, columns, true),
-                new RGBRenderer(fm, columns, 2, false), // 2 channel
-                new RGBRenderer(fm, columns, 3, false),
-                new RGBRenderer(fm, columns, 4, false),
-                new RGBRenderer(fm, columns, 5, false),
-                new WaveRenderer(fm, columns, 8, true),  // 8 bit
-                new WaveRenderer(fm, columns, 16, false), 
-                new WaveRenderer(fm, columns, 24, false), 
-                new WaveRenderer(fm, columns, 32, false), 
-                new RGBWave(fm, columns, false, 3),
-                new RGBWave(fm, columns, false, 4),
+            new AddressRenderer(fm, columns, false, 10), //base-10 address
+            new AddressRenderer(fm, columns, false, 16),
+            //new SeperatorRenderer(fm, columns, true),
+            new HexRenderer(fm, columns, true),
+            new HexRenderer(fm, columns, false, 10, false), // decimal (last false=no zeropad)
+            new HexRenderer(fm, columns, false, 8, true), //octal
+            new HexRenderer(fm, columns, false, 2, true), //binary
+            new HexRenderer(fm, columns, false, 8, true, true, true), // c-flag
+            new HexRenderer(fm, columns, false, 16, true, true, true), // c-flag but hex
+            new AsciiRenderer(fm, columns, true, true), // ascii
+            new AsciiRenderer(fm, columns, false, false), // ascii (extended)
+            //new SeperatorRenderer(fm, columns, true),
+            new GreyScaleRenderer(fm, columns, false), // reenable
+            //new SeperatorRenderer(fm, columns, false),
+            new GreyScale2Renderer(fm, columns, false),
+            //new SeperatorRenderer(fm, columns, true),
+            new RGBRenderer(fm, columns, 2, false), // 2 channel
+            new RGBRenderer(fm, columns, 3, false),
+            new RGBRenderer(fm, columns, 4, false),
+            new RGBRenderer(fm, columns, 5, false),
+            new WaveRenderer(fm, columns, 8, true),  // 8 bit
+            new WaveRenderer(fm, columns, 16, false),
+            new WaveRenderer(fm, columns, 24, false),
+            new WaveRenderer(fm, columns, 32, false),
+            new RGBWave(fm, columns, false, 3),
+            new RGBWave(fm, columns, false, 4),
         };
         
         for (int i = 0; i < renderers.length; i++) {
@@ -258,7 +266,7 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         for (Renderer r : renderers) {
             //Renderer r = renderers[i];
             r.setColumnCount(columns);
-        }    
+        }
         
     }
     
@@ -284,19 +292,45 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     
     public void activeChanged(ActiveFileEvent e) {
         setOpenFile(activeFile.getActive());
+        calcDim();
     }
     
     private void startEdit(Place pl) {
         //Fixme: TODO
-        System.out.println("now (not really) editing at: " + pl.addr + " with " + pl.r);
+        //System.out.println("now (not really) editing at: " + pl.addr + " with " + pl.r);
+        
+        if (editbox != null) {
+            editbox.save(); // hmm
+            editbox.done();
+            remove(editcom);
+        }
         
         //make a blinking cursor
         
+        editbox = pl.r.editBox();
+        editcom = editbox.getComponent();
+        editcom.setFont(font);
+        
+        editcom.setLocation(100,100);
+        
+        Dimension size = editcom.getPreferredSize();
+        Insets insets = getInsets();
+        editcom.setBounds(100 + insets.left, 100 + insets.top, size.width, size.height);
+        //editcom.setSize(40,40);
+        
+        add(editcom);
+
+        //editcom.revalidate();
+        
+        System.out.println("font: " + font);
+        
+        validate();
         
     }
     
     // triggered when data changes
     public void dataUpdate(DataEvent e) {
+        calcDim();
         repaint();
     }
     
@@ -326,7 +360,7 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         }
     }
     
-
+    
     public void changeSelection(long index, boolean toggle, boolean extend)  {
         //super.changeSelection(rowIndex, columnIndex, toggle, extend);
         LongListSelectionModel sm  = getSelectionModel();
@@ -357,84 +391,78 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     
     
     private void setOpenFile(OpenFile openFile)  {
-	if (this.openFile != null)  {
-	    this.openFile.removeOpenFileListener(this);
-	    this.openFile.removeLongListSelectionListener(this);
-	    this.openFile.removeDataListener(this);
-	}
-	
-	this.openFile = openFile;
-	if (openFile == null) {
-	    this.root = new EmptyData();
-	} else {
-	    this.root = openFile.getData();
-	    openFile.addOpenFileListener(this);
-	    //openFile.addResourceListener(this);
-	    openFile.addLongListSelectionListener(this);
-	    openFile.addDataListener(this);
-	}
-	
-	//getSelectionModel().clearSelection();
-	long oldRootLength = rootLength; 
-	rootLength = root.getLength(); // used to check if it's changed.. FIXME: should have listener
-	if (rootLength != oldRootLength)
-	    calcDim();
-	
-	long MAX_PREC = 16777216;
-	if (height > Integer.MAX_VALUE)  {
-	    System.out.println("Warning: Very long file being displayed. Display height of " + height + " > Integer.MAX_VALUE (" + Integer.MAX_VALUE + ")" );
-	    System.out.println("      Size is " + (float)((double)height/Integer.MAX_VALUE)*100 + "% of Integer.MAX_VALUE" );
-	    System.out.println("      Size is " + (float)((double)height/MAX_PREC)*100 + "% of Max precise display height" );
-	}
-	else if (height > MAX_PREC )  {
-	    System.out.println("Note (for old versions of Java): Longish file being displayed. Max precise display height of " + MAX_PREC + " < actual display height of " + height + " < Integer.MAX_VALUE (" + Integer.MAX_VALUE + ")" );
-	    System.out.println("      Size is " + (float)((double)height/Integer.MAX_VALUE)*100 + "% of Integer.MAX_VALUE" );
-	    System.out.println("      Size is " + (float)((double)height/MAX_PREC)*100 + "% of Max precise display height" );
-	}
-	
+        if (this.openFile != null)  {
+            this.openFile.removeOpenFileListener(this);
+            this.openFile.removeLongListSelectionListener(this);
+            this.openFile.removeDataListener(this);
+        }
+        
+        this.openFile = openFile;
+        if (openFile == null) {
+            this.root = new EmptyData();
+        } else {
+            this.root = openFile.getData();
+            openFile.addOpenFileListener(this);
+            //openFile.addResourceListener(this);
+            openFile.addLongListSelectionListener(this);
+            openFile.addDataListener(this);
+        }
+        
+        long MAX_PREC = 16777216;
+        if (height > Integer.MAX_VALUE)  {
+            System.out.println("Warning: Very long file being displayed. Display height of " + height + " > Integer.MAX_VALUE (" + Integer.MAX_VALUE + ")" );
+            System.out.println("      Size is " + (float)((double)height/Integer.MAX_VALUE)*100 + "% of Integer.MAX_VALUE" );
+            System.out.println("      Size is " + (float)((double)height/MAX_PREC)*100 + "% of Max precise display height" );
+        }
+        else if (height > MAX_PREC )  {
+            System.out.println("Note (for old versions of Java): Longish file being displayed. Max precise display height of " + MAX_PREC + " < actual display height of " + height + " < Integer.MAX_VALUE (" + Integer.MAX_VALUE + ")" );
+            System.out.println("      Size is " + (float)((double)height/Integer.MAX_VALUE)*100 + "% of Integer.MAX_VALUE" );
+            System.out.println("      Size is " + (float)((double)height/MAX_PREC)*100 + "% of Max precise display height" );
+        }
+        
     }
     
     
-
+    
     
     public Place hexFromClick(int x, int y)  {
         
         int hx = -1;
         int hy = -1;
-
+        
         // work out row (y)
         hy = y / charHeight;
         int rendererY = y - (hy*charHeight); // Y to give to pass to renderer
         
         // work out address of line (first hex)
-        long startAddr = hy * hexPerLine; 
+        long startAddr = hy * hexPerLine;
         long clickedOn = 0;
         
         int totalWidth = 0;
         Renderer r = null;
-        Renderer[] rendererarray = getEnabledRenderers(); 
+        Renderer[] rendererarray = getEnabledRenderers();
         for (int i = 0; i < rendererarray.length; i++) {
             r = rendererarray[i];
             if (r.isEnabled()) {
-	            int width = r.getWidth();
-	            int nextTotal = totalWidth+width;
-	            
-	            if (x >= totalWidth && x < nextTotal ){
-	                //System.out.println("r"+ i + " x:" + (x - totalWidth) + " y:"+ rendererY + " start:" + startAddr);
-	                clickedOn = r.whereAmI(x - totalWidth, rendererY, startAddr);
-	                //System.out.println("clicked: " + clickedOn);
-	                break;
-	            }
-	            
-	            totalWidth = nextTotal;
+                int width = r.getWidth();
+                int nextTotal = totalWidth+width;
+                
+                if (x >= totalWidth && x < nextTotal ){
+                    //System.out.println("r"+ i + " x:" + (x - totalWidth) + " y:"+ rendererY + " start:" + startAddr);
+                    clickedOn = r.whereAmI(x - totalWidth, rendererY, startAddr);
+                    //System.out.println("clicked: " + clickedOn);
+                    break;
+                }
+                
+                totalWidth = nextTotal;
             }
         }
         
         //dont let it go off the edge of the world
-        if (clickedOn > rootLength)
-            return new Place(hy, rootLength-1, r, overwrite);
+        if (clickedOn > getRootLength())
+            return new Place(hy, getRootLength()-1, r);
         
-        return new Place(hy, clickedOn, r, overwrite);
+        return new Place(hy, clickedOn, r);
     }
     
     /*
@@ -462,18 +490,18 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
      * e.g. repaintHex(0, 31) may repaint the first two lines
      */
     private void repaintHex(long minPos, long maxPos)  {
-	//repaint only necessary areas
-	//FIXME: this just gets converted back to hex units again, so why bother?
-	//FIXME: doesn't trim X-ways
-	
-	//FIXME: loss of precision!
-	repaint(0, (int)((minPos/hexPerLine)* charHeight), width, (int)(((maxPos/hexPerLine)+1)*(charHeight)));
-	
+        //repaint only necessary areas
+        //FIXME: this just gets converted back to hex units again, so why bother?
+        //FIXME: doesn't trim X-ways
+        
+        //FIXME: loss of precision!
+        repaint(0, (int)((minPos/hexPerLine)* charHeight), width, (int)(((maxPos/hexPerLine)+1)*(charHeight)));
+        
     }
     
     /** returns a copy of the selection model */
     private LongListSelectionModel getSelectionModel()  {
-	return openFile.getSelectionModel();
+        return openFile.getSelectionModel();
     }
     
     public Dimension getPreferredSize()  {
@@ -492,15 +520,15 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     
     //FIXME: will need def listener?
     
-//    private void reCalcDim()  {
-//        dimensionsCalculated = false;
-//        calcDim();
-//    }
+    //    private void reCalcDim()  {
+    //        dimensionsCalculated = false;
+    //        calcDim();
+    //    }
     
     /** calculate dimensions */
     private void calcDim()  {
-//        if (dimensionsCalculated == true)
-//            return;
+        //        if (dimensionsCalculated == true)
+        //            return;
         
         //calcDim(getComponentGraphics().getFontMetrics(font)); // oops stupid no work
         FontMetrics fm = getFontMetrics();
@@ -510,34 +538,34 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     private void calcDim(FontMetrics fm)  {
         
         //if (charSizeKnown == false)  {
-            int oldCharWidth = charWidth;
-            int oldCharHeight = charHeight;
-            int oldCharAscent = charAscent;
-            int oldWidth = width;
-            long oldHeight = height;
-            
-            charWidth = fm.charWidth('W');
-            charHeight = fm.getHeight();
-            charAscent = fm.getAscent();
-            unitWidth = charWidth * 2; // length of two characters (eg FF). -- used for H scroll distance
-            
-            totalLines = root.getLength() / hexPerLine;
-            if ((float)totalLines != ((float)root.getLength() / hexPerLine))
-                totalLines++;
-
-            height = totalLines * charHeight;
-            
-            //calc width
-            int totalWidth = 0;
-            Renderer[] renderers = getEnabledRenderers();
-            
-            for (int index=0; index < renderers.length; index++) {	//render each renderer
-                Renderer renderer = renderers[index];
-                int segmentWidth = renderer.getWidth(); 
-                totalWidth += segmentWidth;
-            }
-            width = totalWidth;
-            
+        int oldCharWidth = charWidth;
+        int oldCharHeight = charHeight;
+        int oldCharAscent = charAscent;
+        int oldWidth = width;
+        long oldHeight = height;
+        
+        charWidth = fm.charWidth('W');
+        charHeight = fm.getHeight();
+        charAscent = fm.getAscent();
+        unitWidth = charWidth * 2; // length of two characters (eg FF). -- used for H scroll distance
+        
+        totalLines = root.getLength() / hexPerLine;
+        if ((float)totalLines != ((float)root.getLength() / hexPerLine))
+            totalLines++;
+        
+        height = totalLines * charHeight;
+        
+        //calc width
+        int totalWidth = 0;
+        Renderer[] renderers = getEnabledRenderers();
+        
+        for (int index=0; index < renderers.length; index++) {	//render each renderer
+            Renderer renderer = renderers[index];
+            int segmentWidth = renderer.getWidth();
+            totalWidth += segmentWidth;
+        }
+        width = totalWidth;
+        
             /*
             charSizeKnown = true;
             if (oldCharWidth != charWidth || oldCharHeight != charHeight)  {
@@ -546,23 +574,19 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
             if (oldCharAscent != charAscent )  {
                 System.out.println("Note: character ascent different to expected: " + charAscent + " instead of expected: " + oldCharAscent);
             }
-            */
-            
-            //dimensionsCalculated = true;
-            //System.out.println("calc, height:"+height +" width:"+ width);
-            
-            if (oldWidth != width || oldHeight != height)  {
-	            revalidate();
-            }
+             */
+        
+        //dimensionsCalculated = true;
+        //System.out.println("calc, height:"+height +" width:"+ width);
+        
+        if (oldWidth != width || oldHeight != height)  {
+            revalidate();
+        }
         //}
         
     }
     
     public void paintComponent(Graphics g)  {
-        if (rootLength != root.getLength()) { // FIXME: size change should be given via trigger
-            calcDim();
-        }
-        
         Graphics2D g2 = (Graphics2D)g;
         super.paintComponent(g2);
         
@@ -570,11 +594,11 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         //System.out.println("paint called. " + g.getClipBounds());
         //System.out.println("this dimens.. " + this.getSize());
         
-//        if (dimensionsCalculated==false)  {
-//            g2.setFont(font);
-//            FontMetrics fm = g2.getFontMetrics();
-//            calcDim(fm);
-//        }
+        //        if (dimensionsCalculated==false)  {
+        //            g2.setFont(font);
+        //            FontMetrics fm = g2.getFontMetrics();
+        //            calcDim(fm);
+        //        }
         int top, bot;
         Rectangle clipRect = g2.getClipBounds();
         if (clipRect != null)  {
@@ -617,18 +641,18 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         //long selStart = -1;
         //long selEnd = -1;
         
-
+        
         boolean selecta[] = new boolean[hexPerLine]; // current selecteds
         byte ba[] = new byte[hexPerLine]; // current bytes
         
-		int totalRenderWidth, segmentWidth; 
-
-		int index, count;
-	    Renderer renderer;
-	    
-	    //g.setClip( 0, (int)(start)*fm.getHeight(), width, (int)(finish)*fm.getHeight()+fm.getHeight() ); // possible problems with large i[ndex]
-	    g.translate( 0,(int)(start)*fm.getHeight() );
-	    
+        int totalRenderWidth, segmentWidth;
+        
+        int index, count;
+        Renderer renderer;
+        
+        //g.setClip( 0, (int)(start)*fm.getHeight(), width, (int)(finish)*fm.getHeight()+fm.getHeight() ); // possible problems with large i[ndex]
+        g.translate( 0,(int)(start)*fm.getHeight() );
+        
         try  {
             InputStream data = root.getDataStream(startByte,endByte-startByte);
             //FontMetrics fm = getFontMetrics();
@@ -636,59 +660,59 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
             for (offset = start*hexPerLine; offset < len && offset <=lastHex; offset+=hexPerLine) { // line (y)
                 // calc characters to draw on this line (jlen). Can't be moreo than hexPerLine.
                 count = (int)((len-offset >= hexPerLine ? hexPerLine : len-offset));
-				totalRenderWidth = 0;
- 	
-
+                totalRenderWidth = 0;
+                
+                
                 try  {
-                  //FIXME: data.readad(ba, 0, count) should work! but sometimes returning -1 
-                  //count = data.read(ba, 0, count); // read bytes into ba[]
-				  data.read(ba); // read bytes into ba[]
-				  //count = data.read(ba); // read bytes into ba[]
+                    //FIXME: data.readad(ba, 0, count) should work! but sometimes returning -1
+                    //count = data.read(ba, 0, count); // read bytes into ba[]
+                    data.read(ba); // read bytes into ba[]
+                    //count = data.read(ba); // read bytes into ba[]
                 }
                 catch (IOException e)  {
                     //FIXME:
                     e.printStackTrace();
                     return;
                 }
-                    
+                
                 // draw line of hex
                 /*
                 boolean selected =
                     openFile.getSelectionModel().isSelectedIndex(i+j) ||
                     (i+j >= activeSelectionFirst && i+j <= activeSelectionLast);
-                */
+                 */
                 
                 //renderByte( Point p1, Point p2, int index, byte b, boolena selected);
                 
                 
-				//System.out.println("i:"+linenum +", lastHex:"+lastHex +", len:"+len +", count:"+count);
-				//g.setClip( 0, (int)(linenum), width, charHeight ); // possible problems with large i[ndex]
-
-				for ( index=0; index < selecta.length; index++) {	//setup selection
-                	selecta[index] = openFile.getSelectionModel().isSelectedIndex((int)offset+index);
-				}
-				
-				// get enabled renderers, and also seperator renderers between them
-				Renderer[] renderers = getEnabledRenderers();
-				
-				for ( index=0; index < renderers.length; index++) {	//render each renderer
+                //System.out.println("i:"+linenum +", lastHex:"+lastHex +", len:"+len +", count:"+count);
+                //g.setClip( 0, (int)(linenum), width, charHeight ); // possible problems with large i[ndex]
+                
+                for ( index=0; index < selecta.length; index++) {	//setup selection
+                    selecta[index] = openFile.getSelectionModel().isSelectedIndex((int)offset+index);
+                }
+                
+                // get enabled renderers, and also seperator renderers between them
+                Renderer[] renderers = getEnabledRenderers();
+                
+                for ( index=0; index < renderers.length; index++) {	//render each renderer
                     renderer = renderers[index];
-					segmentWidth = renderer.getWidth(); 
-					renderer.renderBytes( g, offset, ba, 0, count, selecta, cursor );
-					totalRenderWidth += segmentWidth;
-	                g.translate( segmentWidth, 0 );
-				}
-				//System.out.println("totalRenderWidth: " + totalRenderWidth +", charHeight:" + charHeight);
+                    segmentWidth = renderer.getWidth();
+                    renderer.renderBytes( g, offset, ba, 0, count, selecta, cursor );
+                    totalRenderWidth += segmentWidth;
+                    g.translate( segmentWidth, 0 );
+                }
+                //System.out.println("totalRenderWidth: " + totalRenderWidth +", charHeight:" + charHeight);
                 g.translate( -totalRenderWidth, charHeight );
                 //linenum++;
             }
         } catch (IOException e)  {
             //FIXME: now what?
-			e.printStackTrace();
+            e.printStackTrace();
         }
     }
     
-
+    
     
     public void dataEdited(DataEvent e)  {
     }
@@ -700,23 +724,23 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     }
     
     public void fileClosed(FileEvent e)  {
-	setOpenFile(new OpenFile(new EmptyData()));
+        setOpenFile(new OpenFile(new EmptyData()));
     }
     public void selectionCopied(ClipboardEvent e)  {
     }
     
     public void selectionMade(SelectionEvent e)  {
-	if (e.getSource() == this)  {
-	    return;
-	}
-	
-	//setSelection(e.getSelectionResource(), true); //FIXME:
-	repaint(); //FIXME: smaller area?
-	
+        if (e.getSource() == this)  {
+            return;
+        }
+        
+        //setSelection(e.getSelectionResource(), true); //FIXME:
+        repaint(); //FIXME: smaller area?
+        
     }
     
     public void selectionCleared(SelectionEvent e)  {
-	
+        
     }
     public Renderer[] getViewModes() {
         return renderers;
@@ -729,42 +753,42 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         }
         return null;
     }
-
+    
 /*
- 	public void repaint()  {
-		super.repaint();
-	}
-*/
-
+        public void repaint()  {
+                super.repaint();
+        }
+ */
+    
     
     public java.awt.Dimension getPreferredScrollableViewportSize()  {
-	return new Dimension(width, viewportHeight);
+        return new Dimension(width, viewportHeight);
     }
     
     public int getScrollableBlockIncrement(java.awt.Rectangle visibleRect, int orientation, int direction)  {
-	if (orientation == SwingConstants.VERTICAL)  {
-	    return visibleRect.height - charHeight;
-	}
-	else  {
-	    return visibleRect.width - unitWidth;
-	}
+        if (orientation == SwingConstants.VERTICAL)  {
+            return visibleRect.height - charHeight;
+        }
+        else  {
+            return visibleRect.width - unitWidth;
+        }
     }
     
     public boolean getScrollableTracksViewportHeight()  {
-	return false;
+        return false;
     }
     
     public boolean getScrollableTracksViewportWidth()  {
-	return false;
+        return false;
     }
     
     public int getScrollableUnitIncrement(java.awt.Rectangle visibleRect, int orientation, int direction)  {
-	if (orientation == SwingConstants.VERTICAL)  {
-	    return charHeight;
-	}
-	else  {
-	    return unitWidth;
-	}
+        if (orientation == SwingConstants.VERTICAL)  {
+            return charHeight;
+        }
+        else  {
+            return unitWidth;
+        }
     }
     
     public void dragEnter(java.awt.dnd.DropTargetDragEvent dropTargetDragEvent)  {
@@ -777,31 +801,40 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     }
     
     public void drop(java.awt.dnd.DropTargetDropEvent dtde)  {
-	dtde.acceptDrop(dtde.getDropAction());
-	System.out.println("accepted: " + dtde);
-	
-	Transferable t = dtde.getTransferable();
-	System.out.println("transferable: " + t);
-	System.out.println("local: " + dtde.isLocalTransfer());
-	
-	dtde.dropComplete(false);
+        dtde.acceptDrop(dtde.getDropAction());
+        System.out.println("accepted: " + dtde);
+        
+        Transferable t = dtde.getTransferable();
+        System.out.println("transferable: " + t);
+        System.out.println("local: " + dtde.isLocalTransfer());
+        
+        dtde.dropComplete(false);
     }
     
     public void dropActionChanged(java.awt.dnd.DropTargetDragEvent dropTargetDragEvent)  {
         System.out.println("Drop targetted! " + dropTargetDragEvent);
     }
-
-
+    
+    
     public void rendererWidthUpdated() {
-        calcDim();        
+        calcDim();
     }
-
+    
     public void rendererDisplayUpdated() {
         repaint();
     }
-
+    
     public void rendererEnabledUpdated(Renderer r) {
         calcDim();
+    }
+    
+    private long getRootLength() {
+        long oldRootLength = rootLength;
+        rootLength = root.getLength(); // used to check if it's changed.. FIXME: should have listener
+        if (rootLength != oldRootLength)
+            calcDim();
+        
+        return rootLength;
     }
     
 }

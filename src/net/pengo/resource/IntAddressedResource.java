@@ -22,6 +22,7 @@ public class IntAddressedResource extends IntResource implements AddressedResour
     //public final SmartPointer signedResP = new JavaPointer("net.pengo.resource.IntResource"); //private IntResource signedRes;
     public final SmartPointer signChoiceP = new JavaPointer("net.pengo.resource.ListNegativeFormatsResource");
     public final SmartPointer allowResizeP  = new JavaPointer("net.pengo.resource.BooleanResource");
+    public final SmartPointer byteOrderP  = new JavaPointer("net.pengo.resource.ListEndianResource");
     
     //fixme: separate "allowShrink" and "allowGrow"?
     //fixme: not to mention "grow by 4 bytes" etc
@@ -37,22 +38,7 @@ public class IntAddressedResource extends IntResource implements AddressedResour
     }
     
     public IntAddressedResource(SelectionResource selRes, ListSingleChoiceResource signedRes) {
-        super();
-        
-        selResP.addSink(this);
-        selResP.setName("Selection");
-        setSelectionResource(selRes);
-        
-        signChoiceP.addSink(this);
-        signChoiceP.setName("Negatives");
-        setSignChoice(signedRes);
-        //getSigned
-        
-        allowResizeP.addSink(this);
-        allowResizeP.setName("Allow resize");
-        setAllowResize(new BooleanPrimativeResource(false));
-        
-        //new IntAddressedResourcePropertiesForm(this).show();
+        this(selRes, signedRes, new ListEndianResource(new IntPrimativeResource(IntResource.NETWORK_BYTE_ORDER)));
     }
 
     public IntAddressedResource(SelectionResource selRes, IntResource signed) {
@@ -65,8 +51,32 @@ public class IntAddressedResource extends IntResource implements AddressedResour
         this(selRes, new IntPrimativeResource((long)signed));
     }
     
+    public IntAddressedResource(SelectionResource selRes, ListSingleChoiceResource signedRes, ListEndianResource byteOrder) {
+        super();
+        
+        selResP.addSink(this);
+        selResP.setName("Selection");
+        setSelectionResource(selRes);
+        
+        signChoiceP.addSink(this);
+        signChoiceP.setName("Negatives");
+        setSignChoice(signedRes);
+        //getSigned
+        
+        byteOrderP.addSink(this);
+        byteOrderP.setName("Byte order");
+        setByteOrder(byteOrder);
+
+        allowResizeP.addSink(this);
+        allowResizeP.setName("Allow resize");
+        setAllowResize(new BooleanPrimativeResource(false));
+        
+        //new IntAddressedResourcePropertiesForm(this).show();
+    }
+
+    
     public Resource[] getSources() {
-        return new Resource[]{selResP, signChoiceP, allowResizeP};
+        return new Resource[]{selResP, signChoiceP, byteOrderP, allowResizeP};
     }
     
     //fixme: does this make the above redundant? this is dodgy.
@@ -111,6 +121,20 @@ public class IntAddressedResource extends IntResource implements AddressedResour
         return getSignedRes().getValue().intValue();
     }
     
+    
+    public ListSingleChoiceResource getByteOrder() {
+        return (ListSingleChoiceResource)byteOrderP.evaluate();
+    }
+    
+    public void setByteOrder(ListSingleChoiceResource choice) {
+        byteOrderP.setValue(choice);
+    }
+    
+    public int getByteOrderInt() {
+        return getByteOrder().getChoice().getValue().intValue();
+    }
+    
+    
     public BooleanResource getAllowResize() {
         return (BooleanResource)allowResizeP.evaluate();
     }
@@ -124,6 +148,18 @@ public class IntAddressedResource extends IntResource implements AddressedResour
         super.doubleClickAction();
         getSelectionResource().makeActive();
     }
+
+    
+    private static byte[] flip(byte[] unflipped) {
+        int len = unflipped.length;
+        
+        byte[] data = new byte[len];
+        for (int i=0; i<len; i++) {
+            data[i] = unflipped[len-i-1];
+        }
+        
+        return data;
+    }
     
     public BigInteger getValue() {
         //byte[] data = sel.getDataStreamAsArray();
@@ -134,6 +170,11 @@ public class IntAddressedResource extends IntResource implements AddressedResour
             if (data.length == 0) {
                 return BigInteger.ZERO;
             }
+            
+            if (getByteOrderInt() == LITTLE_ENDIAN) {
+                data = flip(data);
+            }
+            
             if (signed == UNSIGNED) {
                 return new BigInteger(1, data);
             }
@@ -230,6 +271,17 @@ public class IntAddressedResource extends IntResource implements AddressedResour
     }
     
     public byte[] encodeBigInt(BigInteger bigInt) {
+        byte[] data = encodeBigIntNetworkByteOrder(bigInt);
+        
+        if (getByteOrderInt() == LITTLE_ENDIAN) {
+            data = flip(data);
+        }
+        
+        return data;
+    }
+    
+    /** encodes BigInteger to byte array taking into account negative format and resizing, assuming network byte order */
+    private byte[] encodeBigIntNetworkByteOrder(BigInteger bigInt) {
         
         byte[] data = bigInt.toByteArray();
         SelectionData selData = getSelectionResource().getSelectionData();

@@ -25,6 +25,8 @@ public interface Renderer {
     
     public void setColumnCount(int cc);
     public void setFontMetrics(FontMetrics fm);
+    
+    public EditBox editBox();
 }
 
 
