@@ -26,6 +26,7 @@ for v0.3
  - more data/resource types
  - less java dependant?
  - hex edit clipboard
+ - percentages (pie graph) of data types used in a file (total and bytes)
 
 initial chunk types to support:
  - internal types: template references
@@ -66,7 +67,7 @@ initial chunk types to support:
  - floating point
    http://developers.slashdot.org/article.pl?sid=03/06/26/0044223&mode=thread&tid=126&tid=156
    http://docs.sun.com/source/806-3568/ncg_goldberg.html
-  - arbitrary precision floating point / fixed point floating point: 
+  - arbitrary precision floating point / fixed point floating point:
    <air> u can create float types with (a:range 0.0 1.0 delta 0.1)      (like ada)
    <air> all floats have a precision
    http://adahome.com/Ammo/cpp2ada.html#1.1

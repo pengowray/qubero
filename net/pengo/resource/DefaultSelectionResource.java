@@ -22,10 +22,6 @@ public class DefaultSelectionResource extends SelectionResource
             getSelection().addLongListSelectionListener(this);
 }
 
-    public LongListSelectionModel getSelectionModel() {
-            return sel;
-    }
-
      public void setSelection(LongListSelectionModel sel) {
          selData = null;
          this.sel = sel;

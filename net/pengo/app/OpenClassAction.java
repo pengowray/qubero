@@ -7,35 +7,59 @@ import javax.swing.*;
 import net.pengo.data.*;
 import java.io.*;
 import java.util.zip.ZipFile;
+import java.util.Enumeration;
+import java.util.zip.ZipEntry;
+import java.util.Random;
 
 public class OpenClassAction extends AbstractAction {
     GUI gui;
     public OpenClassAction(GUI gui){
-	super("Open Java Class...");
-	this.gui = gui;
+		super("Open a random Java Class...");
+		this.gui = gui;
     }
     
     public void actionPerformed(ActionEvent e) {
 
         try {
             //Class guiclass = gui.getClass(); // GUI.class;
-			
+			/*
+			// opens a serialized object (of a string's Class object)
             Class guiclass = String.class;
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             new ObjectOutputStream(baos).writeObject(guiclass);
             gui.open(new ArrayData(baos.toByteArray(), "Serialized Object: " + guiclass+""));
+			 */
 			
-			String cp = System.getProperty("java.class.path");
+			//String cp = System.getProperty("java.class.path");
+			//String cp = System.getProperty("java.library.path");
+			//String cp = System.getProperty("java.ext.dirs");
+			String cp = System.getProperty("sun.boot.class.path");
+			//String cp = getClass().getClassLoader().getSystemResource("rt.jar").toString();
 			String ps = System.getProperty("path.separator");
 			String[] scp = cp.split(ps);
+			String failed = "";
 			for (int i=0; i<scp.length; i++) {
-				File test = new File (scp[i] + ps + "rt.jar");
-				if (test.exists()) {
-					ZipFile zf = new ZipFile(test);
-					String ss = zf.entries().nextElement() + "";
-					gui.open(new ArrayData(ss.getBytes(), "worked"));
+				File dir = new File(scp[i]);
+				File rtjar = dir;
+				failed += "nondir:" + rtjar + "\r\n";
+				if (rtjar.getName().equalsIgnoreCase("rt.jar")) {
+					//gui.open(rtjar.getAbsolutePath());
+					ZipFile zf = new ZipFile(rtjar);
+					
+					//choose a random entry.
+					int totalEntries = zf.size();
+					int count = (new Random().nextInt(totalEntries));
+					
+					Enumeration enum = zf.entries();
+					while (count > 1) {
+						enum.nextElement();
+						count--;
+					}
+					ZipEntry ze = (ZipEntry)enum.nextElement();
+					gui.open(new SmallFileData(zf.getInputStream(ze),ze.getName()));
 				}
 			}
+			//gui.open(new ArrayData(failed.getBytes(), "fail text"));
 			/*
 			// doesn't work
 			if (getClass().getClassLoader().getSystemResource("java/lang") != null) {
@@ -55,6 +79,7 @@ public class OpenClassAction extends AbstractAction {
         //String classname = this.getClass() + "";
         //String classname = "OpenClassAction";
 
+		/*
         String classname = //"mooj32.png"; // works
             //"net/pengo/app/GUI.class"; // works
             "java/lang/String.class";
@@ -68,6 +93,7 @@ public class OpenClassAction extends AbstractAction {
         }
         SmallFileData sfd = new SmallFileData(is, classname);
         gui.open(sfd);
+		 */
     }
 	
 }

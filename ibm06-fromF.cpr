@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project version="6.0">
+    <SourceDirectories>
+        <Directory relativePath="" absolutePath="F:\mooj\"/>
+    </SourceDirectories>
+    <ProjectDirectories>
+        <Directory relativePath="" absolutePath="F:\mooj\"/>
+    </ProjectDirectories>
+    <LibrarySourceDirectories/>
+    <LibraryClassDirectories>
+        <Directory relativePath="" absolutePath="F:\mooj\"/>
+    </LibraryClassDirectories>
+    <Target relativePath="net/pengo/app/Mooj.java" absolutePath="F:\mooj\net\pengo\app\Mooj.java" java2DebugVmType="classic"/>
+    <CompilerOptions targetVM="1.3" generateDebugInfo="true" showCompilerWarnings="false" showDeprecationWarnings="false" jdk14Assertions="false" gj="false" maximumHeapSize="128" otherOptions=""/>
+    <ResourceFilePattern>*.gif</ResourceFilePattern>
+    <ResourceFilePattern>*.jpg</ResourceFilePattern>
+    <ResourceFilePattern>*.xml</ResourceFilePattern>
+    <ResourceFilePattern>*.properties</ResourceFilePattern>
+    <BuildExclusionPattern>CVS</BuildExclusionPattern>
+    <BuildExclusionPattern>SCCS</BuildExclusionPattern>
+    <Ant useAnt="false" additionalVmArguments="" buildTargets="" rebuildTargets="" additionalArguments="">
+        <AdditionalClasspaths/>
+        <BuildFile absolutePath=""/>
+        <WorkingDirectory absolutePath=""/>
+    </Ant>
+</Project>

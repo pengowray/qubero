@@ -5,10 +5,10 @@ Bedrock is:
 Definition interface is powerful because it does:
  - give meaning to raw data
  - allow definitions of addresses and regions
- - support a wide range of data types
- - support custom data types
+ - support a wide range of data types found in any data
+ - support limitless custom data types
  - support custom data polymorphism
- - including defining functions to
+ - include defining functions to.... blah
 
 Source code is not yet available and is currently pure Java. User interface is (currently) Swing.
 

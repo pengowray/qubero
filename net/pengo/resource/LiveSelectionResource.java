@@ -17,7 +17,7 @@ public class LiveSelectionResource extends SelectionResource implements OpenFile
     
     public LiveSelectionResource(OpenFile openFile) {
 	super(openFile);
-        openFile.addLongListSelectionListener(this); 
+        openFile.addLongListSelectionListener(this);
     }
     
     public LongListSelectionModel getSelectionModel() {
@@ -41,7 +41,6 @@ public class LiveSelectionResource extends SelectionResource implements OpenFile
 		DefaultDefinitionResource def = new DefaultDefinitionResource(getOpenFile(), selection);
 		//getOpenFile().addDefinition(this, def);
 		getOpenFile().getDefinitionList().add(def);
-		System.out.println("added");
 	    }
 	};
 	menu.add(addToTemplate);

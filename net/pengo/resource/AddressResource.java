@@ -39,7 +39,7 @@ public class AddressResource extends Resource {
     }
     
     public String toString() {
-        return "Pointer@" + Long.toString(address.getSelectionData().getStart(), 16) +" -> address:" + address.getValue().toString(16) + " = " + toSelection();
+        return "Pointer@" + Long.toString(address.getSelectionResource().getSelectionData().getStart(), 16) +" -> address:" + address.getValue().toString(16) + " = " + toSelection();
     }
 }
 
