@@ -3,12 +3,12 @@ import java.io.*;
 /** 
  * rudimentary file editing. entire file is kept in an array.
  */
-class SmallFileData extends Data {
+class SmallFileData extends ArrayData {
     protected File file;
-    protected byte[] data = null;
     protected String name;
 
     public SmallFileData(File file) {
+        super();
 	this.file = file;
 	name = file.getName();
         readFileToMemory();
@@ -18,20 +18,12 @@ class SmallFileData extends Data {
         this(new File(filename));
     }
     
-    public InputStream getDataStream(long offset, long length) {
-        return new ByteArrayInputStream(data, (int)offset, (int)length); // no loss.
-    }
-
-    public InputStream getDataStream(){
-        return new ByteArrayInputStream(data);
-    }
-    
     /**
     * reads the entire (hex) file to memory for quick access
     */
-    public void readFileToMemory() {
-        //XXX: very inefficent! fix it sometime.
-	//XXX: should set off a trigger if called after construction
+    protected void readFileToMemory() {
+        //XXX: very inefficent! fix it sometime. 
+        //XXX: oops. i didn't know about file.length()
         try {
             File in = file;
             FileInputStream fis = new FileInputStream(in);
@@ -40,36 +32,31 @@ class SmallFileData extends Data {
 
             int ch; // current byte
             int chc = 0; // char count
-            if (data == null)
-                data = new byte[1024];
+            if (byteArray == null)
+                byteArray = new byte[1024];
             while ((ch=fis.read()) != -1) {
-                if (data.length <= chc) {
-                    // double data's size
-                    byte[] dataTemp = new byte[data.length*2] ;
-                    System.arraycopy(data,0,dataTemp,0,data.length);
-                    data = dataTemp;
+                if (byteArray.length <= chc) {
+                    // double byteArray's size
+                    byte[] byteArrayTemp = new byte[byteArray.length*2] ;
+                    System.arraycopy(byteArray,0,byteArrayTemp,0,byteArray.length);
+                    byteArray = byteArrayTemp;
                 }
-                data[chc] = (byte)ch;
+                byteArray[chc] = (byte)ch;
                 chc++;
             }
             
-            // truncate data to correct size
-            if (data.length != chc) {
-                byte[] dataTemp = new byte[chc] ;
-                System.arraycopy(data,0,dataTemp,0,chc);
-                data = dataTemp;
+            // truncate byteArray to correct size
+            if (byteArray.length != chc) {
+                byte[] byteArrayTemp = new byte[chc] ;
+                System.arraycopy(byteArray,0,byteArrayTemp,0,chc);
+                byteArray = byteArrayTemp;
             }
             
         } catch (IOException e) {
             //FIXME: !!!
-            data = new String("error reading file: " + e).getBytes();
+            byteArray = new String("error reading file: " + e).getBytes();
         }
         
-    }
-
-    // make long eventually?
-    public long getLength() {
-        return data.length;
     }
 
     public String toString() {
@@ -77,7 +64,7 @@ class SmallFileData extends Data {
     }
 
     public String getType() {
-        return "file";
+        return "small file";
     }
     
     

@@ -25,7 +25,11 @@ class MoojMenuBar extends JMenuBar {
             }
         }));
 	nowmenu.add( new JMenuItem("Save")).setEnabled(false);
-	nowmenu.add( new JMenuItem("Save as...")).setEnabled(false);
+	nowmenu.add( new JMenuItem(new AbstractAction("Save as...") {
+            public void actionPerformed(ActionEvent e) { 
+                gui.saveAs();
+            }
+        }));
 	nowmenu.add( new JMenuItem("Print...")).setEnabled(false);
 	nowmenu.add( new JSeparator() );
 	nowmenu.add( new JMenuItem(new ExitAction(gui))); // "Exit"

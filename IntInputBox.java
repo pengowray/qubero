@@ -46,10 +46,9 @@ public class IntInputBox extends JFrame {
                 String retStr = inputField.getText();
                 int retInt;
                 try {
-                    retInt = Integer.parseInt(retStr);
+                    //retInt = Integer.parseInt(retStr);
                     //XXX: pay attention to integer size and type!
-                    byte[] b = IntResource.intToByte(retInt);
-                    modRes.setValue(b);
+                    modRes.setValue(retStr);
                     close();
                 } catch (NumberFormatException nfe) {
                     System.out.println("Invalid!");

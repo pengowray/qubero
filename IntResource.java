@@ -116,7 +116,7 @@ public class IntResource extends DefinitionResource {
     public BigInteger getValue() {
         byte[] data = sel.getDataStreamAsArray();
         if (data.length == 0) {
-            return BigInteger.ZERO;            
+            return BigInteger.ZERO;
         } if (signed == UNSIGNED) {
             return new BigInteger(1, data);
         } else if (signed == ONES_COMP) {
@@ -151,10 +151,55 @@ public class IntResource extends DefinitionResource {
         }
     }
     
-    public void setValue(byte[] val) {
+    public void setValue(String value) throws NumberFormatException {
+        byte[] b = stringToByteArray(value);
+        openFile.getEditableData().insertReplace(sel,new ArrayData(b));
+        
+    }
+    
+    public byte[] stringToByteArray(String value) {
+        BigInteger bigInt = new BigInteger(value);
+        byte[] data = bigInt.toByteArray();
+        if (data.length == 0) {
+            return data;
+        } if (signed == UNSIGNED) {
+            if (data[0] == 0) {
+                // strip leading 0x00
+                byte[] strip = new byte[data.length-1];
+                System.arraycopy(data, 1, strip, 0, strip.length);
+                return strip;
+            } else {
+                return data;
+            }
+            
+        } else if (signed == ONES_COMP) {
+            if (bigInt.signum() == -1) {
+                return bigInt.subtract(BigInteger.ONE).toByteArray(); //xxx does not allow -0
+            } else {
+                // ones comp, positive.
+                return data;
+            }
+        } else if (signed == TWOS_COMP) {
+            // big-endian, two's comp.
+            return data;
+        } else if (signed == SIGN_MAG) {
+            if (bigInt.signum() == -1) {
+                //xxx does not allow -0
+                BigInteger positive = bigInt.multiply(new BigInteger("-1")); // ugh
+                data = positive.toByteArray();
+                data[0] = (byte)(data[0] | 0x80 ); // set highest bit
+                return data;
+            } else {
+                return data;
+            }
+        } else {
+            System.out.println("inaccessable code accessed!");
+            return data;
+        }
+        
         //getModLayer(); //xXXX
         //sel.setValue(val);
-        System.out.println("value change: " + byteToInt(val));
+        
     }
     
     public void setSigned(int signage) {

@@ -43,27 +43,38 @@ Log started Aug 21 2002:
              new DefaultSelectionResource
  2002-09-05  debugged!
              ShiftedData now works on large files at good speed too
+ 2002-09-06  Intresource setValue from string
+ 2002-09-07  Can really edit Int's now
+ 2002-09-10  Save As (slightly buggy?)
              
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
-priority/imediate features:  
- - calculate int min + max
- - major refactoring (layers, editing policy, Chunks->DataSources etc)
- - definitions
- - save/open template definitions
+priority/imediate features:
+ - save
+ - undo
+ - layers
  - EDIT hex / ascii
+ - ascii as unicode
+ - duplicate hex
+ - error messages / throw exceptions
+ - screen updates when needed (after updates)
+ - calculate int min + max
+ - proper definitions
+ - major refactoring (layers, editing policy)
+ - save/open template definitions
  - make all menus work
  - documentation + read me
  - status messages
  - multiple documents open (mdi-ish)
- - throw exceptions
  - clean up xxx's
  - clean up demo file code
  - "show System.out" in a window (menu option)
- - Selections too reliant on TransparentData type. Should use any Data.
+ - rename "get" methods that don't really "get"
+ - selection data is not verified.
 
 UI to do:
+ - only double click should select in tree
  - allow right click on hex area
 1/2 arrow key movement
  - show selection on ascii side as a hollow box
@@ -74,14 +85,14 @@ UI to do:
  - header lines (eg "1 Megabyte", "10 Megabytes", or "1st Megabyte"?)
 
 bugs:
+ - Save as does not ask "Are you sure?" for overwrite
  - non-file does not throw exception [FileChunk]
  - fix bug: rename of item destroys it
- - scrollbar and menu freezes up sometimes:
-   appears to happen in Netbeans too!
+ - "negative zero" for one's comp and sign magnitude
  - overlap of lines on very big files: 
    Bug ID: 4707774 Graphics.drawString( String, int, int ) not precise for large ints 
    http://developer.java.sun.com/developer/bugParade/bugs/4707774.html
-
+ 
 read this:
  - http://tunes.org/files/papers/Arrow_Introduction_v8.htm
 
@@ -98,18 +109,19 @@ D display: tree of parts
  - array/table numbering systems
  - search / jump
  - text only display
- - overview view: show whole file as one screen w/ areas of text/binary/etc
+ - overview/summary view: show whole file as one screen w/ areas of text/binary/etc
  - subsection editing (e.g. only display one definition or range)
  - backup files as .diff + save changes as diff
  - ASS (altered state server).
 
 for v0.3
+ - use java.nio ByteBuffer + Channels
  - "command line" commands / macros
  - keyboard editing (no mouse)
  - expandable view (.jar, compressed bits)
  - more file formats
- - more views
- - more chunk types
+ - views
+ - more data/resource types
  - less java dependant?
  - hex edit clipboard 
 
@@ -192,6 +204,7 @@ future versions:
 future formats:
  - parse .java files too?
  - java tracestack messages/details
+ - .jad : text/vnd.sun.j2me.app-descriptor
  - Extended Backus-Naur Form (EBNF) notation support
  - mame images and sounds!
  - excel types + formats + equations
@@ -251,12 +264,13 @@ future formats:
  - bar codes (even as graphics) + link to product information
  - Various Mime Types (esepcially as in java.awt.datatransfer.DataFlavor)
  - various game maps (whatever's popular near release date)
+ - mobile phone sim cards
 
 priority programs to obsolete:
  - notepad + wordpad
  - kde's hex editor
  - vi, emacs
- - excel
+ - excel + calc (check out calc's java api stuff)
  - leo [literate programming]`
 
 other programs to obsolete:
@@ -280,6 +294,9 @@ silly stuff:
  - how much does that number resemble someone randomly hitting the keyboard
    [Miffy: NSA-STD 102328292302    TTY logging of remote user commands with time stamps.]
  - old text modes (with colours and symbols and codes): C64, ZX81, Spectrum, Apple ][...
+ - backwards filter
+ - data format used by maths lego page: (LDRAW .DAT)
+   http://www.lipsons.pwp.blueyonder.co.uk/mathlego.htm
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
@@ -344,6 +361,20 @@ ben's suggestions:
 
 soel's idea:
  - financial transactions (linked to revolving bank account), video game style
+
+^Lister^ is Meeeeeowth@vw10579.iprimus.net.au * The Slob Who Walks
+^Lister^ on @#Dark_Thoughts @#m
+ 2002-09-06 austnet
+  - <^Lister^> ne1 know a program i can use to interpret xpi files?
+  - <pengo_brainrot> xpi?
+  - <^Lister^> xp install files
+  - <^Lister^> XPInstall Install type
+
+wossname is wossname@HSE-QuebecCity-ppp81867.qc.sympatico.ca * seb
+wossname on #osdev #asm #assembler #nasm #kagezpro #cprogramming #fluffichan #dunder #codeleft #ypn 
+ 2002-09-07 opn
+ - <wossname> a self-disassembling bootsector is what the world needs
+ - <pengo> wossname: i'll add that to my features list
 
 data modelling tools + terms:
  - http://datamodel.org/

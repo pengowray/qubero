@@ -11,7 +11,7 @@ import java.lang.ref.*;
  *
  * @author  administrator
  */
-public class DiffData extends Data {
+public class DiffData extends EditableData {
     protected OpenFile openFile;
     protected Data source;
     protected List modList;
@@ -28,6 +28,10 @@ public class DiffData extends Data {
         this.source = source;
         modList = new LinkedList();
         calcSourceBreaks();
+    }
+    
+    public DiffData(Data source) {
+        this(null, source);
     }
     
     public void setOpenFile(OpenFile openFile) {
@@ -63,20 +67,17 @@ public class DiffData extends Data {
         addMod(new DelMod(offset, length));
     }
     
-    public void insert(long offset, Data data) {
-        addMod(new InsertMod(data, offset));
-    }
-
     public void insert(Data data) {
         addMod(new InsertMod(data));
     }
 
-    public void overwrite(long offset, Data data) {
-        addMod(new OverwriteMod(data,offset));
-    }
-
     public void overwrite(Data data) {
         addMod(new OverwriteMod(data));
+    }
+    
+    public void insertReplace(Data oldData, Data newData) {
+        //xxx: optimize with new Mod class
+        super.insertReplace(oldData,newData);
     }
     
     protected void addMod(Mod mod){
@@ -121,7 +122,15 @@ public class DiffData extends Data {
     }
     
     public String toString() {
-        return source + " with mr diff";
+        return source + "";
+        
+        /* // this is lame
+        if (modList.isEmpty()) {
+            return source + "";
+        } else {
+            return source + "*";
+        }
+        */
     }
     
     /** calculates where the places source changes from one source to another */
@@ -226,7 +235,9 @@ public class DiffData extends Data {
             clearBreakResList();
         }
          
-        //int a=0;
+        if (openFile == null)
+            return;
+        
         for (Iterator i = breakList.iterator(); i.hasNext(); ) {
             Object o = i.next();
             DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, (Data)o);
@@ -235,12 +246,15 @@ public class DiffData extends Data {
             //a++;
         }
         
-        debugOut("Current mod List", modList);
-        debugOut("BreakList", breakList);
+        //debugOut("Current mod List", modList);
+        //debugOut("BreakList", breakList);
         
     }
     
     public void clearBreakResList() {
+        if (openFile == null)
+            return;
+        
         for (Iterator i = breakResList.iterator(); i.hasNext(); ) {
             DefaultDefinitionResource ddr = (DefaultDefinitionResource)i.next();
             openFile.deleteBreak(this, ddr);
@@ -337,11 +351,6 @@ public class DiffData extends Data {
             this.data = data;
         }
         
-        /** change data's start */
-        public InsertMod(Data data, long offset) {
-            this.data = data.getStartShiftedSelection(offset - data.getStart());
-        }
-        
         public void apply() {
             DiffData.this.moveEnd(new Cursor(data.getStart()), data.getLength());
             DiffData.this.breakList.add(data);
@@ -380,11 +389,6 @@ public class DiffData extends Data {
         /** use data's start */
         public OverwriteMod(Data data) {
             this.data = data;
-        }
-        
-        /** change data's start */
-        public OverwriteMod(Data data, long offset) {
-            this.data = data.getStartShiftedSelection(offset - data.getStart());
         }
         
         public void apply() {

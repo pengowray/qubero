@@ -2,6 +2,7 @@ import java.util.*;
 import javax.swing.*;
 import javax.swing.tree.*;
 import javax.swing.event.*;
+import java.io.*;
 
 /**
  * Node used by MoojTree containing display information for a file/definition.
@@ -17,6 +18,8 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
     protected HexPanel hexpanel; //XXX: allow multiple?
 
     protected SelectionResource selection;
+    
+    protected String filename;
     
     //protected List definitionList = new LinkedList(); // (do we really need both?)
     protected List definitionResList = new LinkedList(); 
@@ -188,7 +191,7 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         if (success) {
             fireResourceRemoved(source,"Break",defRes);
         } else {
-            System.out.println("you dick. src:" + source + " res:" + defRes);
+            System.out.println("my bad. src:" + source + " res:" + defRes);
         }
     }
     
@@ -216,6 +219,21 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
         //XXX: throw exceptions??
     }
 
+    public void saveAs(Object source, File filename) throws IOException {
+        //xxx: use a pipe?
+        InputStream in = rawdata.getDataStream();
+        FileOutputStream out = new FileOutputStream(filename, false);
+        
+        int c;
+        while ((c = in.read()) != -1) {
+            out.write(c);
+        }
+        
+        out.close();
+        
+        fireFileSaved(source);
+    }
+    
     public Data getData() {
 	return rawdata;
     }
@@ -225,6 +243,17 @@ class OpenFile { // previously did extend DefaultMutableTreeNode
 	this.rawdata = rawdata;
     }
 
+    public EditableData getEditableData() {
+        //xxx: this is ugly as shit
+        if (rawdata instanceof EditableData) {
+            return (EditableData)rawdata;
+        } else {
+            //xxx: throw a wobbly.
+            return null;
+        }
+            
+    }
+    
     public String toString() {
 	return rawdata.toString();
     }

@@ -4,6 +4,7 @@ import java.io.*;
  * RawData is a fixed length chunk of data. e.g. a binary file, or an area of memory.
  */
 abstract class Data implements Comparable {
+    // xxx: replace with ByteBuffer ?
     abstract public long getLength();
     
     /**

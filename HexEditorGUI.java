@@ -22,17 +22,23 @@ class HexEditorGUI {
     protected String titleSuffix =  " - Mooj";
 
     public HexEditorGUI() {
-        setIcon();
-        openFile = new OpenFile(new DemoData(icon));
-        start();
+        setIcon();        
+        open(new DemoData(icon));
+    }
+    public HexEditorGUI(Data data) {
+        open(data);
+    }
+    public HexEditorGUI(EditableData data) {
+        open(data);
     }
     public HexEditorGUI(OpenFile openFile){
-        setIcon();
-        this.openFile = openFile;
-        start();
+        open(openFile);
     }
     
     protected void setIcon() {
+        if (icon != null)
+            return;
+        
         URL url = ClassLoader.getSystemResource("mooj32.png");
         if (url != null)
             icon = Toolkit.getDefaultToolkit().createImage(url);
@@ -40,7 +46,8 @@ class HexEditorGUI {
 
     protected void start() {
         //XXX: in future use a renderer factory
-
+        setIcon();        
+        
 	// CREATE THE COMPONENTS
 	moojtree = MoojTree.create(openFile);
 	hexpanel = new HexPanel(openFile);
@@ -114,20 +121,52 @@ class HexEditorGUI {
     }
 
     public void open(Data raw) { 
+        if (raw instanceof EditableData) {
+            EditableData eraw = (EditableData)raw;
+            open(eraw);
+            return;
+        }
+        DiffData draw = new DiffData(raw);
+        OpenFile of = new OpenFile(draw);
+        draw.setOpenFile(of);
+        open(of);
+    }
+
+    public void open(EditableData raw) { 
         open(new OpenFile(raw));
     }
+    
     public void open(OpenFile of) { 
-        closeAll();
+        if (jframe == null) {
+            this.openFile = of;
+            start();
+        } else {
+            closeAll();
+            this.openFile = of;
+            hexpanel.setOpenFile(of);
+            moojtree.addOpenFile(of);
+            jframe.setTitle(openFile.toString() + titleSuffix);
+        }
         
-	this.openFile = of;
-        hexpanel.setOpenFile(of);
-        moojtree.addOpenFile(of);
-        jframe.setTitle(of.toString() + titleSuffix);
         //mmb.setOpenFile(of); // menu bar
     }
     
     public void closeAll() {
         openFile.close(this); //XXX: confirm close?!
+        jframe.setTitle("Mooj");
+    }
+
+    public void saveAs() {
+        try {
+            JFileChooser chooser = new JFileChooser();
+            int returnVal = chooser.showSaveDialog(jframe);
+            if (returnVal == JFileChooser.APPROVE_OPTION) {
+                //String filename = chooser.getSelectedFile().getName();
+                openFile.saveAs(this, chooser.getSelectedFile());
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     public void quit() {

@@ -5,6 +5,8 @@ import java.io.*;
  * Only viewed part of file is read.
  */
 class LargeFileData extends Data {
+    // use FileChannel
+    
     protected File file;
     protected String name;
     protected long length;
@@ -52,6 +54,8 @@ class LargeFileData extends Data {
     }    
     
     public InputStream getDataStream(long offset, long length) {
+        //xxx: keep alive a FileInputStream. (or bank of them)
+    //xxx: o/s dependant watch file for changes
         try {
             FileInputStream fis = new FileInputStream(file);
             fis.skip(offset);

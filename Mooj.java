@@ -13,10 +13,8 @@ public class Mooj {
             
         } else {
             Data d = new LargeFileData(arg[0]);
-            OpenFile of = new OpenFile(d);
-            new HexEditorGUI(of);
+            new HexEditorGUI(d);
         }
-        
     }
 
 }
