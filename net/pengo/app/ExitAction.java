@@ -3,7 +3,7 @@ package net.pengo.app;
 import javax.swing.AbstractAction;
 import java.awt.event.ActionEvent;
 
-class ExitAction extends AbstractAction {
+public class ExitAction extends AbstractAction {
     GUI gui;
     public ExitAction(GUI gui){
 	super("Exit");

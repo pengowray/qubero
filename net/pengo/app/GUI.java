@@ -15,7 +15,7 @@ import net.pengo.restree.SimpleResTree;
 import net.pengo.splash.FontMetricsCache;
 
 /** HexEditorGUI creates and coordinates all the graphical components. */
-class GUI
+public class GUI
 {
     protected OpenFile openFile; // the current nodedef being worked on
 	

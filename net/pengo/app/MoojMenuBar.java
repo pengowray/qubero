@@ -6,7 +6,7 @@ import java.awt.event.*;
 import javax.swing.*;
 import javax.swing.tree.*;
 
-class MoojMenuBar extends JMenuBar {
+public class MoojMenuBar extends JMenuBar {
     protected final GUI gui;
     public MoojMenuBar(GUI gui) {
 	super();

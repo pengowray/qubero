@@ -47,18 +47,18 @@ public class SelectionData extends Data {
     }
     
     class SelectionStream extends InputStream {
-		long[] sel = lsm.getSelectionIndexes();
+	long[] sel = lsm.getSelectionIndexes();
         int pos = 0;
-		
+	
         public int read() throws IOException {
-            if (sel.length == 0 || pos >= sel.length) {
-				return -1;
-			}
-			long sp = sel[pos];
-			int r = (int)(data.readByteArray(sp,1)[0]); //FIXME: use a stream from data too.
-            //System.out.println("reading byte "+ sp +" of " + sel.length + " from a selection stream: " + r );
-			pos++;
-            return r;
+	    if (sel.length == 0 || pos >= sel.length) {
+		return -1;
+	    }
+	    long sp = sel[pos];
+	    int r = (int)(data.readByteArray(sp,1)[0]) & 0xFF; //FIXME: use a stream from data too.
+	    //System.out.println("reading byte "+ sp +" of " + sel.length + " from a selection stream: " + r );
+	    pos++;
+	    return r;
         }
         
     }

@@ -10,7 +10,7 @@
  */
 package net.pengo.app;
 
-class ClipboardEvent extends java.util.EventObject {
+public class ClipboardEvent extends java.util.EventObject {
     
     /** Creates a new instance of ClipboardEvent */
     public ClipboardEvent(Object source) {

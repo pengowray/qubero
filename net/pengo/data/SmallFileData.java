@@ -6,7 +6,7 @@ import java.io.*;
 /** 
  * rudimentary file editing. entire file is kept in an array.
  */
-class SmallFileData extends ArrayData {
+public class SmallFileData extends ArrayData {
     protected File file;
     protected String name;
 

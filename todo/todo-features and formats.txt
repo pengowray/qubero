@@ -54,6 +54,7 @@ initial chunk types to support:
  - stacks, and other standard structures + stack equiv's
  - [file/data] sizes (kb / mb / other powers of 1024)
  - partial byte ints (e.g. 3 bit int)
+ - binary coded decimal (packed decimal) http://wombat.doc.ic.ac.uk/foldoc/foldoc.cgi?packed+decimal
  - from Chunk.java: recordset, Flags, NarrativeSequence, OverviewDisplayChunk
  - end of line: PC (0D 0A), Mac, Unix, [IBM Mainframe's] NEL (0D 85), Unicode line separator character (#x2028),
  - metadata descriptors: uninitialized data, null, Reserved, bad (sector), unknown, loading, cached/offline, (un)synchronized, copy, linked, unformatted,
@@ -62,7 +63,9 @@ initial chunk types to support:
  - form elements with scripting (e.g database entry)
  - multiple addressing schemes/methods
  - User Validation / Access Control Lists (ACL) / Appliable to chunks of data
- - document workflow
+ - floating point
+   http://developers.slashdot.org/article.pl?sid=03/06/26/0044223&mode=thread&tid=126&tid=156
+   http://docs.sun.com/source/806-3568/ncg_goldberg.html
  
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
@@ -164,6 +167,7 @@ future versions:
  - event model data: lisenter, event object, source, handler/register?
  - java's image/graphics classes
  - labelled diagrams (auto find best place for labels and connecting lines, or photo+drawing-with-labelled outlines style)
+ - document workflow
 
 stuff that small freshmeat projects do:
  - drivers (connect to/integrate/rip from): [proprietory] hardware/protocols/data stores

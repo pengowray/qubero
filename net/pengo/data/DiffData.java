@@ -12,8 +12,8 @@ import net.pengo.app.Cursor;
 import net.pengo.app.OpenFile;
 import net.pengo.resource.DefaultDefinitionResource;
 import net.pengo.restree.ResourceList;
-import net.pengo.selection.LongListSelectionModel;
-import net.pengo.selection.SimpleLongListSelectionModel;
+import net.pengo.restree.ResourceSortedSet;
+import net.pengo.selection.*;
 
 /**
  *
@@ -28,12 +28,11 @@ public class DiffData extends EditableData {
     protected LinkedList streamList;
     protected boolean streamFlow = true;
     
-    protected List breakResList;
-    
     /** Creates a new instance of DiffData */
     public DiffData(OpenFile openFile, Data source) {
         this.source = source;
-		setOpenFile(openFile);
+        setOpenFile(openFile);
+        breakList = new ResourceSortedSet(Collections.synchronizedSortedSet(new TreeSet()), openFile, "Breaks");
         calcSourceBreaks();
     }
     
@@ -43,20 +42,21 @@ public class DiffData extends EditableData {
     
     public void setOpenFile(OpenFile openFile) {
         if (this.openFile != null) {
-			//fixme
-			openFile.getResourceList().remove(modList);
-			//openFile.getResourceList().remove(breakList);
-            //clearBreakResList();
+            //fixme
+            openFile.getResourceList().remove(modList);
+            openFile.getResourceList().remove(breakList);
         }
         this.openFile = openFile;
 		
-		modList = new ResourceList(new LinkedList(), openFile, "Undo Wishlist"); //new LinkedList();
+        modList = new ResourceList(new LinkedList(), openFile, "Undo Wishlist"); //new LinkedList();
 		
         if (openFile != null) {
-			((ResourceList)modList).setOpenFile(openFile);
-			openFile.getResourceList().add(modList);
-			
-		}
+            ((ResourceList)modList).setOpenFile(openFile);
+            openFile.getResourceList().add(modList);
+
+            ((ResourceSortedSet)breakList).setOpenFile(openFile);
+            openFile.getResourceList().add(breakList);
+        }
     }
     
     public InputStream dataStream() {
@@ -86,8 +86,11 @@ public class DiffData extends EditableData {
     }
 
     public void delete(LongListSelectionModel selection) {
-        //FIXME: wrong wrong wrong
-        addMod(new DelMod(selection.getMinSelectionIndex(), selection.getMaxSelectionIndex()-selection.getMinSelectionIndex()+1 ));
+        //fixme: should be combined into a "super mod" so undos can happen more seamlessly
+        Segment[] seg = selection.getSegments();
+        for (int i=0; i<seg.length; i++) {
+            addMod(new DelMod(seg[i].firstIndex, seg[i].lastIndex - seg[i].firstIndex +1 ));
+        }
     }
     
     public void insert(Data data) {
@@ -104,12 +107,12 @@ public class DiffData extends EditableData {
     }
     
     protected void addMod(Mod mod){
-        //System.out.println("********* applying mod: " + mod);
         synchronized (breakList) {
             modList.add(mod);
             mod.apply();
         }
-        debugOut();
+	//fixme: need to tell openFile about refresh
+        //openFile.refresh();
     }
 
 
@@ -160,15 +163,15 @@ public class DiffData extends EditableData {
     protected synchronized void calcSourceBreaks() {
         //FIXME: allow specific range to be calculated only
         
-        breakList = Collections.synchronizedSortedSet(new TreeSet());
+        breakList.clear();
         breakList.add(source);
         
-		for (int a = modList.size()-1; a >= 0; a--) {
-			Mod mod = (Mod)modList.get(a);
-			mod.apply();
-		}
+        for (int a = modList.size()-1; a >= 0; a--) {
+                Mod mod = (Mod)modList.get(a);
+                mod.apply();
+        }
         
-        debugOut();
+        //debugOut();
     }
     
     // @returns true if a cut was made. false if cursor was on a gap.
@@ -176,8 +179,8 @@ public class DiffData extends EditableData {
         //debugOut("possible places to cut", breakList);
         //System.out.println("------- cutting: " + divider);
         SortedSet top = breakList.headSet(divider);
-        debugOut("choose from", breakList);
-        debugOut("narrow down to", top);
+        //debugOut("choose from", breakList);
+        //debugOut("narrow down to", top);
 
         Data maySplit;
         if (top.isEmpty()) {
@@ -212,9 +215,9 @@ public class DiffData extends EditableData {
         cut(start);
         cut(end);
         //System.out.println("------- deleting: " + start + " -to- " + end);
-        debugOut("break list to delete from",breakList);
+        //debugOut("break list to delete from",breakList);
         SortedSet delRange = breakList.subSet(start, end);
-        debugOut("delete",delRange);
+        //debugOut("delete",delRange);
         //breakList.removeAll(delRange);
         delRange.clear();
         
@@ -225,8 +228,8 @@ public class DiffData extends EditableData {
         //System.out.println("------- moving: " + start + " .. " + move + " bytes");
         cut(start);
         SortedSet moveRange = breakList.tailSet(start);
-        debugOut("starting break list",breakList);
-        debugOut("moving these", moveRange);
+        //debugOut("starting break list",breakList);
+        //debugOut("moving these", moveRange);
         TreeSet movedSet = new TreeSet();
         //debugOut("to move",moveRange);
         for (Iterator i = moveRange.iterator(); i.hasNext(); ) {
@@ -237,59 +240,9 @@ public class DiffData extends EditableData {
         }
         //debugOut("moved",movedSet);
         breakList.addAll(movedSet);
-        debugOut("moved", movedSet);
-        debugOut("final break list",breakList);
+        //debugOut("moved", movedSet);
+        //debugOut("final break list",breakList);
     }
-    
-    public void debugOut(String name, Collection c) {
-        //System.out.println(name + ": ");
-        int a=0;
-        for (Iterator i = c.iterator(); i.hasNext(); ) {
-            Object o = i.next();
-            //System.out.println(" - " + a + ": " + o);
-			//openFile.addMod(this, new ContainerResource(o, openFile));
-			
-            a++;
-        }
-    }
-    public synchronized void debugOut() {
-        
-        if (breakResList == null) {
-            breakResList = new LinkedList();
-        } else {
-            clearBreakResList();
-        }
-         
-        if (openFile == null)
-            return;
-        
-        for (Iterator i = breakList.iterator(); i.hasNext(); ) {
-            Object o = i.next();
-            //DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, (Data)o);
-            Data d = (Data)o;
-            DefaultDefinitionResource ddr = new DefaultDefinitionResource(openFile, new SimpleLongListSelectionModel(d.getStart(), d.getStart()+d.getLength()-1));
-            
-            openFile.addBreak(this, ddr);
-            breakResList.add(ddr);
-            //a++;
-        }
-        
-        //debugOut("Current mod List", modList);
-        //debugOut("BreakList", breakList);
-        
-    }
-    
-    public void clearBreakResList() {
-        if (openFile == null)
-            return;
-        
-        for (Iterator i = breakResList.iterator(); i.hasNext(); ) {
-            DefaultDefinitionResource ddr = (DefaultDefinitionResource)i.next();
-            openFile.deleteBreak(this, ddr);
-            i.remove();
-        }
-    }
-    
     
     class DiffDataInputStream extends InputStream {
         Iterator breakIt;
@@ -398,6 +351,7 @@ public class DiffData extends EditableData {
         
         /** delete */
         public DelMod(long offset, long deleteLength) {
+            //fixme: should be start and end (not length)
             this.offset = offset;
             this.deleteLength = deleteLength;
         }

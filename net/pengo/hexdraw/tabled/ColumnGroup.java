@@ -39,13 +39,13 @@ public abstract class ColumnGroup
 	
 	// min
 	// for calculating a new size for everyone
-	public float widthIf(int unitsPerLine);
+	abstract public float widthIf(int unitsPerLine);
 	
-	public float widthIf(int unitsPerLine, ptSize);
+	abstract public float widthIf(int unitsPerLine, int ptSize);
 	
     // is it this column group that's been selected?
-    public boolean getIsPrimarySelection();
-    public void setIsPrimarySelection(boolean primary);
+    abstract public boolean getIsPrimarySelection();
+    abstract public void setIsPrimarySelection(boolean primary);
 	
 
     

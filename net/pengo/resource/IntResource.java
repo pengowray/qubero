@@ -5,9 +5,11 @@
  */
 
 package net.pengo.resource;
+
 import net.pengo.app.*;
 import net.pengo.selection.*;
 import net.pengo.data.*;
+import net.pengo.propertyEditor.*;
 
 import java.util.*;
 import javax.swing.*;
@@ -27,27 +29,24 @@ public class IntResource extends DefinitionResource {
     public final static int ONES_COMP = 1;
     public final static int TWOS_COMP = 2;
     public final static int SIGN_MAG = 3;
+    public final static int UNUSED_SIGN_BIT = 4; //fixme: NYI: Positive signed. e.g. 0-127 only
     
     //FIXME: little endian, big endian (2 byte only?), network byte order, local byte order
     
     //int length; //FIXME: allow fixed length
-    int signed;
-    LongListSelectionModel sel;
-    SelectionData selData;
+    private int signed;
+    private LongListSelectionModel sel;
+    private SelectionData selData;
+    private boolean allowStretch = false;
+    private boolean allowShrink = false;
     
     //public IntResource(OpenFile openFile, LongListSelectionModel sel, int length, int signed) {
     public IntResource(OpenFile openFile, LongListSelectionModel sel, int signed) {
         super(openFile);
-        /*
-        if (sel.getLength() != length) {
-            // wrong length. set length.
-            // FIXME: error checking!
-            sel = sel.getSelection(sel.getStart(), (long)length);
-        }
-         */
         this.sel = sel; // note: may be replaced as above
         //this.length = length;
         this.signed = signed;
+	new IntResourcePropertiesForm(IntResource.this).show();
     }
     
     public JMenu getJMenu() {
@@ -112,7 +111,16 @@ public class IntResource extends DefinitionResource {
         };
 	menu.add(signmagAction);
         //JPopupMenu popup = menu.getPopupMenu();
+        
+        Action propAction = new AbstractAction("Edit properties") {
+            public void actionPerformed(ActionEvent e) {
+                new IntResourcePropertiesForm(IntResource.this).show();
+            }
+        };
+	menu.add(propAction);
+        //JPopupMenu popup = menu.getPopupMenu();
 	return menu;
+        
     }
 
     public String toString() {
@@ -123,14 +131,18 @@ public class IntResource extends DefinitionResource {
         openFile.setSelectionModel(sel);
     }
     
+    public SelectionData getSelectionData() {
+        if (selData == null)
+            selData = new SelectionData(sel, openFile.getData());
+        
+        return selData;
+    }
+    
     public BigInteger getValue() {
         //byte[] data = sel.getDataStreamAsArray();
 		try
 		{
-			if (selData == null)
-				selData = new SelectionData(sel, openFile.getData());
-			
-			byte[] data = selData.readByteArray();
+			byte[] data = getSelectionData().readByteArray();
 			if (data.length == 0)
 			{
 				return BigInteger.ZERO;
@@ -160,8 +172,33 @@ public class IntResource extends DefinitionResource {
 			}
 			else if (signed == TWOS_COMP)
 			{
-				// big-endian, two's comp.
-				return new BigInteger(data);
+                            // big-endian, two's comp.
+                            
+                            //remove padding
+                            if (data.length >= 2) {
+                                int padcount=0;
+                                //while (padcount < data.length && data[padcount] == (byte)0xFF) {
+                                while (padcount < data.length && data[padcount] == -1) {
+                                    padcount++;
+                                }
+                                System.out.println("pad count: " + padcount + " first 2 bytes: " + data[0] + ", " + data[1] );
+                                for (int i=0; i<data.length; i++) {
+                                    System.out.println(i + ": " + data[i] + " == -1? " + (data[i]==-1) );
+                                }
+                                if (padcount == 0) {
+                                    return new BigInteger(data);
+                                } else if (padcount == data.length) {
+                                    return BigInteger.valueOf(-1);
+                                } else {
+                                    int trimmedSize = data.length - padcount;
+                                    byte[] trimmed = new byte[trimmedSize];
+                                    System.arraycopy(data, padcount, trimmed, 0, trimmedSize);
+                                    System.out.println( trimmed );
+                                    return new BigInteger(trimmed);
+                                }
+                            } else {                          
+                                return new BigInteger(data);
+                            }
 			}
 			else if (signed == SIGN_MAG)
 			{
@@ -191,27 +228,52 @@ public class IntResource extends DefinitionResource {
 			return BigInteger.ONE;
 			
 		}
+                //return null; // unreachable
     }
     
     public void setValue(String value) throws NumberFormatException {
         byte[] b = stringToByteArray(value);
-        openFile.getEditableData().insertReplace(sel, new ArrayData(b));
+        Data newdata = new ArrayData(b);
+        openFile.getEditableData().insertReplace(sel, newdata);
         System.out.println("replacing: " + sel.getMinSelectionIndex() + "-" + sel.getMaxSelectionIndex());
     }
     
     public byte[] stringToByteArray(String value) {
         BigInteger bigInt = new BigInteger(value);
         byte[] data = bigInt.toByteArray();
+        
         if (data.length == 0) {
             return data;
-        } if (signed == UNSIGNED) {
-            if (data[0] == 0) {
+        } else if (signed == UNSIGNED) {
                 // strip leading 0x00
-                byte[] strip = new byte[data.length-1];
-                System.arraycopy(data, 1, strip, 0, strip.length);
-                return strip;
+            if (!allowShrink && !allowStretch) {
+                int paddingNeeded = (int)( selData.getLength() - data.length );
+                if (paddingNeeded == 0) {
+                    return data;
+                } else if (paddingNeeded > 0) {
+                    byte[] padded = new byte[(int)selData.getLength()];
+                    System.arraycopy(data, 0, padded, paddingNeeded, data.length);
+                    return padded;
+                } else {
+                    if (paddingNeeded == -1 && data[0] == 0) {
+                        byte[] strip = new byte[data.length-1];
+                        System.arraycopy(data, 1, strip, 0, strip.length);
+                        return strip;
+                    } else {
+                        System.out.println("too big!");
+                        throw new IllegalArgumentException("Number too big to fit");
+                        
+                    }
+                }
             } else {
-                return data;
+                //fixme: assumes stretch AND shrink ok
+                if (data[0] == 0) {
+                    byte[] strip = new byte[data.length-1];
+                    System.arraycopy(data, 1, strip, 0, strip.length);
+                    return strip;
+                } else {
+                    return data;
+                }
             }
             
         } else if (signed == ONES_COMP) {
@@ -223,14 +285,30 @@ public class IntResource extends DefinitionResource {
             }
         } else if (signed == TWOS_COMP) {
             // big-endian, two's comp.
-            return data;
+            if (!allowShrink && !allowStretch) {
+                int paddingNeeded = (int)( selData.getLength() - data.length );
+                
+                if (paddingNeeded == 0) {
+                    return data;
+                } else if (paddingNeeded > 0) {
+                    byte pad = (bigInt.signum() == -1 ? (byte)-1 : (byte)0); 
+                    byte[] padded = new byte[(int)selData.getLength()];
+                    System.arraycopy(data, 0, padded, paddingNeeded, data.length);
+                    Arrays.fill(padded, 0, paddingNeeded, pad);
+                    return padded;
+                } else {
+                    throw new IllegalArgumentException("Number too big to fit");
+                }
+            } else {
+                //fixme: assumes stretch AND shrink ok
+                return data;
+            }
         } else if (signed == SIGN_MAG) {
+            //fixme: no fixed size support
             if (bigInt.signum() == -1) {
-                //FIXME: does not allow -0
                 BigInteger positive = bigInt.multiply(new BigInteger("-1")); // ugh
                 data = positive.toByteArray();
                 data[0] = (byte)(data[0] | 0x80 ); // set highest bit
-                return data;
             } else {
                 return data;
             }
@@ -239,13 +317,20 @@ public class IntResource extends DefinitionResource {
             return data;
         }
         
+        return null; // unrearchable?
+        
         //getModLayer(); //FIXME:X
         //sel.setValue(val);
         
     }
     
     public void setSigned(int signage) {
+        //fixme: allow to convert between?
         this.signed = signage;
+    }
+    
+    public int getSigned() {
+        return signed;
     }
 
     /* no longer used */

@@ -7,7 +7,7 @@
 package net.pengo.selection;
 
 //fixme: hehehe
-class PatternedSegment
+public class PatternedSegment
 {
     long firstIndex;
     long lastIndex;

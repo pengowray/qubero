@@ -6,7 +6,7 @@ import java.io.*;
 /** 
  * NewFile.. currently immutable.
  */
-class EmptyData extends Data {
+public class EmptyData extends Data {
     static final byte[] nada = new byte[0];
     
     public long getLength() {

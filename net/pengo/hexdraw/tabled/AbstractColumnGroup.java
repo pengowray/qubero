@@ -13,12 +13,12 @@ import java.awt.*;
 
 public abstract class AbstractColumnGroup
 {
-    public int getColumnCount();
-    public Column getColumn(int col);
+    abstract public int getColumnCount();
+    //abstract public Column getColumn(int col);
     
-    public int getPreferredWidth();
-    public int getMaximumWidth();
-    public int getMinimumWidth();
+    abstract public int getPreferredWidth();
+    abstract public int getMaximumWidth();
+    abstract public int getMinimumWidth();
     
     // set width of entire column group
     //public void setWidth(...);

@@ -26,7 +26,7 @@ import net.pengo.selection.LongListSelectionEvent;
 
 //FIXME: openFile's resources should be considered in rendering ?
 
-class HexPanel extends JPanel implements OpenFileListener, Scrollable, LongListSelectionListener, DropTargetListener  {
+public class HexPanel extends JPanel implements OpenFileListener, Scrollable, LongListSelectionListener, DropTargetListener  {
     
     
     /**

@@ -13,7 +13,7 @@
 package net.pengo.layer;
 import net.pengo.app.*;
 
-public class SimpleLayer {
+abstract public class SimpleLayer {
     OpenFile openFile;
     
     // has BOUNDS == selection, start + end, or a rough box, etc.
@@ -38,24 +38,25 @@ public class SimpleLayer {
     
     private int leftBound;
     private int rightBound;
-    
+    /*
     private Mask mask;
     
     public SimpleLayer(OpenFile openFile, Mask mask) {
         
     }
-
+    */
+    
     /** Creates a new instance of ChunkLayer */
     public SimpleLayer(OpenFile openFile, int left, int right, boolean opaque) {
         
     }
     
-    public int getLeftBound();
-    public int getRightBound();
+    abstract public int getLeftBound();
+    abstract public int getRightBound();
     
-    public void insert(int offset, byte[] data);
-    public void delete(int offset, int count);
-    public void set(int offset, int count, byte[] pattern);
+    abstract public void insert(int offset, byte[] data);
+    abstract public void delete(int offset, int count);
+    abstract public void set(int offset, int count, byte[] pattern);
     
     
 }

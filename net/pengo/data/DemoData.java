@@ -10,7 +10,7 @@ import java.awt.*;
  * rudimentary file editing. no extending file size.
  * entire file is cached.
  */
-class DemoData extends ArrayData {
+public class DemoData extends ArrayData {
 
     public DemoData() {
         this(null);

@@ -6,7 +6,7 @@
 
 package net.pengo.selection;
 
-class Index implements Comparable
+public class Index implements Comparable
 {
     public long firstIndex;
     

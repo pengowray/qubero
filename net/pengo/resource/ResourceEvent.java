@@ -11,7 +11,7 @@
 package net.pengo.resource;
 
 
-class ResourceEvent extends java.util.EventObject {
+public class ResourceEvent extends java.util.EventObject {
     String category; //FIXME: prolly do this some other way later?
     Resource resource;
     

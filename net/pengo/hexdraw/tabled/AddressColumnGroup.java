@@ -9,7 +9,8 @@ package net.pengo.hexdraw.tabled;
 import net.pengo.app.*;
 import net.pengo.data.*;
 
-public class AddressColumnGroup extends AbstractColumnGroup
+//fixme: not meant to be abstract
+abstract public class AddressColumnGroup extends AbstractColumnGroup
 {
     private OpenFile openFile;
     
@@ -29,12 +30,11 @@ public class AddressColumnGroup extends AbstractColumnGroup
 	return 1;
     }
     
-    public Column getColumn(int col) {
-    	
-    }
+    //public Column getColumn(int col);
     
-    public int getPreferredWidth();
-    public int getMaximumWidth();
-    public int getMinimumWidth();
+    abstract public int getPreferredWidth();
+    abstract public int getMaximumWidth();
+    abstract public int getMinimumWidth();
+    
 }
 

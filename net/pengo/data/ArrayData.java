@@ -7,7 +7,7 @@ import java.io.*;
  * rudimentary file editing. entire file is kept in an array.
  * this is NOT editableArrayData
  */
-class ArrayData extends Data {
+public class ArrayData extends Data {
     protected byte[] byteArray;
     
     public ArrayData() {

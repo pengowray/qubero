@@ -21,9 +21,10 @@ import net.pengo.resource.ListResource;
 public class ResourceList implements List {
     String name;
     private List list;
-    private Map parentTree = new HashMap(); // parent nodes for this resource list. MutableTreeNode->JTree. MutableTreeNode must not be modified by any other objects besides this.
     private OpenFile openFile; //fixme: do we really need this?
-    
+
+    private Map parentTree = new HashMap(); // parent nodes for this resource list. MutableTreeNode->JTree. MutableTreeNode must not be modified by any other objects besides this.
+
     public ResourceList(List list) {
 	this(list, null, null);
     }
@@ -49,26 +50,6 @@ public class ResourceList implements List {
     
     public ListIterator listIterator() {
 	return list.listIterator();
-    }
-    
-    public void clear() {
-	// remove all children from all parents.
-	/*
-	 for (Iterator i=parentTree.keySet().iterator(); i.hasNext(); ) {
-	 MutableTreeNode p = (MutableTreeNode)i.next();
-	 for (int child=0; child < p.getChildCount(); child++) {
-	 //p.remove(child);
-	 remove(child);
-	 }
-	 }
-	 */
-	
-	//list.clear();
-	
-	for (int i=list.size()-1; i>=0; i--) {
-	    remove(i);
-	}
-	
     }
     
     public Object get(int index) {
@@ -127,27 +108,29 @@ public class ResourceList implements List {
     }
     
     private void subTreeCheck(SimpleResTree parent, Object childObject, MutableTreeNode childNode) {
+        //fixme: what a mess!
 	if (childObject instanceof ResourceList) {
 	    //System.out.println("...given new parent " + parent);
 	    ResourceList childResList = (ResourceList)childObject;
 	    childResList.addParent(parent, childNode);
-	}
+	} else if (childObject instanceof ResourceSortedSet) {
+            ResourceSortedSet childResList = (ResourceSortedSet)childObject;
+            childResList.addParent(parent, childNode);
+        }
     }
     
     public void addParent(SimpleResTree rt, MutableTreeNode p) {
 	// add existing items to new parent node
-	//System.out.println("adding parent: " + p);
-	for (int i=0; i < list.size(); i++) {
-	    //Resource res = ResourceFactory.wrap(list.get(i), openFile);
-	    //DefaultMutableTreeNode child = new DefaultMutableTreeNode(res);
+        int i=0;
+        for (Iterator it=list.iterator(); it.hasNext(); ) {
+            Object obj = it.next();
 	    DefaultTreeModel tm = (DefaultTreeModel)rt.getModel();
 	    //p.insert(child, i); // not much good.
-	    insertNode(p, list.get(i), rt, i);
-	    //rt.makeVisible(new TreePath(((DefaultTreeModel)rt.getModel()).getPathToRoot(child))); //fixme messy? nah
+	    insertNode(p, obj, rt, i); 
+            i++;
 	}
 	
 	// add new parent node to list of parent nodes
-	//System.out.println(this + " new parent: " + p);
 	parentTree.put(p, rt);
     }
     
@@ -195,6 +178,20 @@ public class ResourceList implements List {
 	return list.remove(o);
     }
     
+    public void clear() {
+	// remove all children from all parents.
+	for (int i=list.size()-1; i>=0; i--) {
+	    remove(i);
+	}
+	
+    }
+
+    public boolean removeAll(Collection c) {
+	//Fixme: nyi
+	System.out.println("NYI: public boolean removeAll(Collection c)");
+	return list.removeAll(c);
+    }
+
     // does the work for the remove methods
     private void removeRes(int index) {
 	//System.out.println("removing resource..." + index);
@@ -212,12 +209,6 @@ public class ResourceList implements List {
 	    //tm.reload();
 	}
 	
-    }
-    
-    public boolean removeAll(Collection c) {
-	//Fixme: nyi
-	System.out.println("NYI: public boolean removeAll(Collection c)");
-	return list.removeAll(c);
     }
     
     public boolean addAll(int index, Collection c) {

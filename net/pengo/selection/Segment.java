@@ -6,7 +6,7 @@
 
 package net.pengo.selection;
 
-class Segment extends Index
+public class Segment extends Index
 {
     public long lastIndex;
     

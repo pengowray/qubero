@@ -7,7 +7,7 @@ import java.io.*;
  * Data of a "large" file, up to Long.MAX_VALUE in length. (16 million terrabytes)
  * Only viewed part of file is read.
  */
-class LargeFileData extends Data {
+public class LargeFileData extends Data {
     // use FileChannel
     
     protected File file;

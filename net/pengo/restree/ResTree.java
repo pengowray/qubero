@@ -10,7 +10,7 @@ import java.util.*;
 import java.awt.event.*;
 import java.beans.*;
 
-class ResTree extends JTree implements ResourceListener, OpenFileListener
+public class ResTree extends JTree implements ResourceListener, OpenFileListener
 {
     protected DefaultTreeModel treemodel;
     protected DefaultMutableTreeNode topnode; // the top node of the tree on the left, which the data goes under

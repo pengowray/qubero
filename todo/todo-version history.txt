@@ -80,13 +80,23 @@ Log started Aug 21 2002:
  2003-07-08  ResourceList + SimpleResTree working. Multiselection in HexPanel.
  2003-07-09  Multiselection really working now. And really debugged.
              OpenFile can handle SelectionListeners.
-             
- 
+ 2003-07-10  property editor started: IntResourcePropertiesForm, and two PropertyPages: SummaryPage + SetTypePage
+             Apply button enabling only on modification.
+             Removed errors in unused classes: Commented out / made abstract
+ 2003-07-11  fixed-length unsigned integers
+ 2003-07-12  ResourceSortedSet (for the breaks)
+             added ValuePage and AddressPage (needs work).
+             fixed-length 2's comp integers
+             fixed -1 reading bug in SelectionData
+
 see also:
  - C:\My Documents\notes-ideas+todo\hexeditor.txt
 
 priority/immediate features todo:
+ 2003-07-10
+ - show properties page when creating an int resource
  2003-07-09
+ - growing the file doesn't allow new chunk to be selected
  - make hexpanel's repaint more accurate
  - force notify for selections (for when they are first used). this means simple selection needs to able to to notify.
  2003-07-05

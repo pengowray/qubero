@@ -32,7 +32,7 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
 	this.hexColumns = hexColumns;
 	this.data = data;
 	cgm = new ArrayList(hexColumns);
-	cgm.add(1).add(2).add(3);
+	//cgm.add(1).add(2).add(3); // 	commented out to allow build
 	columns = preHexColumns + hexColumns + afterHexColumns; //FIXME: all columns should be managed by cgm
     }
     
@@ -43,7 +43,7 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
 	int cols = 0;
 	for (Iterator i = cgm.iterator(); i.hasNext(); ) {
 	    ColumnGroup cg = (ColumnGroup)i.next();
-	    cols += cg.getColumnCount();
+	    //cols += cg.getColumnCount(); // 	commented out to allow build
 	}
 	
 	columns = cols;

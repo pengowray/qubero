@@ -31,6 +31,9 @@ public class GroupColumnModel extends DefaultTableColumnModel
     }
 	
     // returns itself (for chaining).
+    
+    // commented out to make compile
+    /*
     public GroupColumnModel addColumnGroup(int type) {
 	ColumnGroup cg = null;
 	
@@ -52,9 +55,9 @@ public class GroupColumnModel extends DefaultTableColumnModel
 	groupList.add(cg);
 	List c = cg.getColumns();
 	tableColumns.addAll(c);
-	
 	return this;
     }
+	*/
     
     
 }

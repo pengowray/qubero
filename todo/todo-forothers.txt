@@ -144,6 +144,7 @@ show off by:
  - knoppix distribution--roll your own from windows/linux (with moojasm prominant)
  - making an online space churchship mullusc-firing dragons game (chopper/apache style)
  - http://www.ravenbrook.com/doc/2003/05/28/contest/ (ILC 2003 Programming Contest)
+ - linux NTFS writable + backtrack
 
 make money with:
  - donations (to encourage open sourcing)

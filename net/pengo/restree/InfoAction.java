@@ -11,7 +11,7 @@ import javax.swing.AbstractAction;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.TreePath;
 
-class InfoAction extends AbstractAction
+public class InfoAction extends AbstractAction
 {
     protected TreePath selPath;
 	

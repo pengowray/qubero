@@ -474,7 +474,6 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
 	    length += 1 + (seg.lastIndex - seg.firstIndex);
 	    
 	}
-	System.out.println("Length: " + length);
 	return length;
     }
     

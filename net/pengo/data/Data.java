@@ -6,7 +6,7 @@ import java.io.*;
 /**
  * Data is a fixed length chunk of data. e.g. a binary file, or an area of memory.
  */
-abstract class Data implements Comparable {
+public abstract class Data implements Comparable {
     // xxy: replace with ByteBuffer ? - no doesn't support long indexes
     abstract public long getLength();
     
@@ -110,7 +110,7 @@ abstract class Data implements Comparable {
                 long skipped = stream.skip(toSkip);
                 if (skipped != toSkip) {
                     //FIXME: error i guess
-					System.out.println("couldn't skip good");
+		    System.out.println("couldn't skip good");
                 }
             } else {
                 throw new IOException("tried to getBytes from before the start");

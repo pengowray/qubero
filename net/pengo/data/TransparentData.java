@@ -3,7 +3,7 @@ package net.pengo.data;
 
 import java.io.*;
 
-class TransparentData extends Data {
+public class TransparentData extends Data {
     //FIXME: should listen for updates from its source data (rawdata)
     protected Data sourceData;
     protected long start;

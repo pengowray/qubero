@@ -10,7 +10,7 @@
 package net.pengo.app;
 import net.pengo.resource.*;
 
-class SelectionEvent extends java.util.EventObject {
+public class SelectionEvent extends java.util.EventObject {
     protected SelectionResource sr;
     
     /** Creates a new instance of SelectionEvent */

@@ -15,7 +15,7 @@ public class ResourceFactory
 		if (o instanceof LongListSelectionModel)
 			return wrap((LongListSelectionModel)o, openFile);
 		
-		if (o instanceof List)
+                if (o instanceof List)
 			return wrap((List)o, openFile);
 
 		if (o instanceof Resource)

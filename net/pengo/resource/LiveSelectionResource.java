@@ -13,7 +13,7 @@ import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionModel;
 import net.pengo.selection.Segment;
 
-class LiveSelectionResource extends SelectionResource {
+public class LiveSelectionResource extends SelectionResource {
     public LiveSelectionResource(OpenFile openFile) {
 	super(openFile);
     }
