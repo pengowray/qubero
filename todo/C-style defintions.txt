@@ -1,0 +1,17 @@
+C/C++ Definitions
+
+types of definition:
+ - Declaration
+
+parts of a definition: (The C++ Programming Lang. S4.9)
+ - specifier (optional) e.g. extern, virtual
+ - base type
+ - declarator
+    - name
+    - declarator operators
+      eg. prefix for constant pointer: *const 
+      eg. postfix for array: []
+      eg. postfix for function: ()
+ - initializer (optional)
+
+Warn if using multiple similiar names that differ only in similiar characters.. e.g. IO I0 or O1 or OI or Ol
