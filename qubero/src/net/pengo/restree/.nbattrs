@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE attributes PUBLIC "-//NetBeans//DTD DefaultAttributes 1.0//EN" "http://www.netbeans.org/dtds/attributes-1_0.dtd">
+<attributes version="1.0">
+    <fileobject name="ResTree.java">
+        <attr name="class_dependency_javax.swing.AbstractAction" stringvalue="DeleteDefinitionAction"/>
+        <attr name="class_dependency_javax.swing.JTree" stringvalue="ResTree"/>
+    </fileobject>
+    <fileobject name="ResourceList.java">
+        <attr name="class_dependency_java.util.List" stringvalue="ResourceList"/>
+    </fileobject>
+    <fileobject name="ResourceSortedSet.java">
+        <attr name="class_dependency_java.util.SortedSet" stringvalue="ResourceSortedSet"/>
+    </fileobject>
+</attributes>
