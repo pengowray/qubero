@@ -45,14 +45,20 @@ initial chunk types to support:
    Descriptors (4.3)
  - table of constants
  - xml + schema: types, patterns, restrictions, enumerations, list types, unions, etc.
+   especially: xsd:integer, xsd:string, xsd:hexBinary, xsd:base64Binary
+   http://www.w3.org/TR/xmlschema-2/#built-in-datatypes
+   http://www.w3.org/TR/owl-guide/#Datatypes1
  - Simple Outline XML (SOX): http://www.langdale.com.au/SOX/
  - python's pickled objects
    see also: http://www.brpreiss.com/books/opus7/
+ - NextStep's NIB, Objective C bundles or Interface Builder files (like a pickle)
  - PyProtocols: http://peak.telecommunity.com/PyProtocols.html
+ - Python optParse (command line option parser)
+ - Python NumArray
  - truncated types (last 8 bits of a 32-bit float?)
  - Math.BigNumber
  - roman numerals (ascii and unicode, u/lcase)
- - chinese/japanese numerals + dates
+ - chinese/japanese numerals + dates, e.g. U+12992.. japanese months, U+13280 for days
  - regex's + regex helper + tr (unix) +
    Regular Expression Graphing Program: http://www.oualline.com/sw/index.html
  - DataBuffer's special unsigned types
@@ -77,6 +83,10 @@ initial chunk types to support:
    <air> all floats have a precision
    http://adahome.com/Ammo/cpp2ada.html#1.1
    type Fixed is delta 0.1 range -1.0 .. 1.0;w
+ - Mixed radix. e.g. time: [7, 24, 60, 60, 1000] or degrees (angle) [360, 60, 60], kilobytes-bytes-bits [1024, 8], or factorial based radix (see also: Ruby's MultiCounter)
+ - grey code
+ - Excess-3
+ - Elias Gamma coding / Elias Delta coding -- huffman-like compression, show off arbitrary bit lengths!
 
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
@@ -150,7 +160,7 @@ future versions:
    <wli> (5) state machine models are most useful for asynchronous message reception and complex but flat structured message reception + state transition models.
  - statistical data: quantitive (continuous/discrete), categorical (ordinal, nominal), etc...
  - browser plugin / plugger compatibility
- - flowcharts
+ - flowcharts: GEF, dia
  - scheduler (e.g. class timetable, train timetable, priorities, urgency, costs, conflicts, goals, and for realtime scheduling--include time taken for better estimates)
  - expression expander (for human readability), show what each expression expands out to mean. allow tables of expanded expressions. e.g. chr$(x) would give you an ascii chart
  - poetry/word suggestor: random words, genre words (poetry, scientific), markov chain words, word with same base, synonyms, etc. Fridge Magnet poetry with Drag'n'Drog
@@ -313,7 +323,29 @@ future formats:
  - hibernate: http://www.hibernate.org
  - mail boxes.. import/export/convert various email boxen.. Pine, Evolution, Outlook, Eudora, Sylpheed, Thunderbird, etc
  - juice (byte code bytecode from UoC): http://www.modulaware.com/mdlt69.htm
-
+ - keyboard scan codes.. [also: show keyboard state after a number of makes/breaks
+    <iiz> pengo: the raw keycodes in windows are defined as VK_*, then are handled in the message loop of an application, if this is what you are looking for
+ - bios memory areas, cmos settings, video card (etc) bios, 
+ - character encodings (charsets):
+    IANA character sets: http://www.iana.org/assignments/character-sets
+    MIME charset parameter
+    x-futurama-2999
+   http://www.w3.org/TR/charmod/
+    C028   [S]  Specifications MUST NOT  propose the use of heuristics to determine the encoding of data.
+   http://www.w3.org/TR/SVG
+    SVG (see [SVG] section 10.14) defines an element altglyph which allows the identification of specific display variants of Unicode characters.
+   String types: http://www.w3.org/TR/charmod/#sec-Strings
+    - Byte strings    : A string viewed as a sequence of bytes representing characters in a particular character encoding.
+    - Code unit string: A string viewed as a sequence of code units  representing characters in a particular character encoding.
+    - Character string: A string viewed as a sequence of characters, each represented by a code point in Unicode [Unicode].
+    - Grapheme clusters: Grapheme clusters divide the text into units that correspond more closely than character strings to the user's perception of where character boundaries occur in a visually rendered text.
+ - TCP/IP packets
+    http://base.secureideas.net/screens.php  
+ - video frame buffer (vesa, etc)
+ - .MSI, Windows Installer files, OLE Compound Storage Files
+ - reStructured Text (reST), http://en.wikipedia.org/wiki/ReStructured_Text
+ - GIS or OpenGIS, (Geographic information system), http://en.wikipedia.org/wiki/Open_GIS_Consortium
+ 
 Content Management Systems: http://lwn.net/Articles/34007
   (see also: Open Source Content Management (OSCOM) Conference http://www.oscom.org/ )
   OSCOM Matrix of CMS projects. http://www.oscom.org/matrix/index.html
@@ -331,12 +363,14 @@ Content Management Systems: http://lwn.net/Articles/34007
  WebGUI http://www.plainblack.com/webgui
  OpenCms http://www.opencms.org/opencms/en/
  OpensourceCMS http://www.opensourcecms.com/
+ RIFE
 
 priority programs to obsolete (in order):
  - hex editors
  - java decompiler (javap)
  - diff tools (see below for list)
  - excel + open spreadsheets functionality (check out calc's java api stuff)
+ - Matlab
  - text formatters: vim, emacs
  - source code formatters: leo [literate programming]
  - table formatting (word/excel, html, smart/auto formatting)
@@ -365,6 +399,8 @@ projects to synergise with:
 
 visualisers/debuggers/disassemblers:
  - Data Display Debugger: http://www.gnu.org/software/ddd/
+ - GEF: Java Graph Editing Framework: http://gef.tigris.org/
+ - Fujaba (UML diagrams)
 
 diff tools:
  - diffutils
@@ -375,14 +411,15 @@ diff tools:
  - http://vim.sourceforge.net/htmldoc/diff.html
  - darcs: http://abridgegame.org/darcs/ (good theory in manual)
  - monotone: http://www.venge.net/monotone/
- - Jigsaw Download (jigdo) http://home.in.tum.de/~atterer/jigdo/ (.template + .jigdo + half finished .iso.tmp files)
+ - Jigsaw Download (jigdo) http://atterer.net/jigdo/ (.template + .jigdo + half finished .iso.tmp files)
+   mn: make jigsaw (also) on server side
 
 silly/fun stuff:
  - xmodem end-escape sequence fixing
  - modem init string
  - ansi music!
  - ansi animation / 2400 emulation
- - DOS logs (xxx: how to add "invisible" timestamps?)
+ - DOS logs (xxx: how to add "invisible" timestamps?.. make logs as XML with <timestamp> tags?)
  - how much does that number resemble someone randomly hitting the keyboard
    [Miffy: NSA-STD 102328292302    TTY logging of remote user commands with time stamps.]
  - old text modes (with colours and symbols and codes): C64, ZX81, Spectrum, Apple ][, Atari (ATASCII or ATari-ASCII), Radio Shack Color Computer, Tandy
@@ -394,6 +431,7 @@ silly/fun stuff:
  - geometry (n-dimensional)
  - speak the hex (naturally. calc time between sounds, record each sound in 3-4 different positions, place emphasis on chosen parts)
  - pi, the constant, as a "pseudo" large file, scroll to any point. Viewable as ascii numbers or as base-2. maybe only base-2. might be too slow too.
+   use the "BBP formula for pi", or Bellard's formula (a faster version of the BBP formula) http://crd.lbl.gov/~dhbailey/
  - morse code
  - reversi/othello/iagno board and ai strategy designer:
    base strategy on:
@@ -406,6 +444,7 @@ silly/fun stuff:
     number/ratio of pieces (e.g. so as to try to get lots of pieces when you have few)
     strategy/factor combiners: weightings and neural network, if-then-else/case, fittingness of a model)
     experimental: try something just to see how human reacts
+    brute force: see game through to the end?
  - laser show / vector graphics / plotter
  - http://icfpcontest.cse.ogi.edu/ : make "winning entries" for all old competitions
  - mazes
@@ -424,6 +463,12 @@ silly/fun stuff:
    http://www.cs.umd.edu/hcil/treemap-history/index.shtml
  - XML tag underlining ala Conglomerate: www.conglomerate.org
  - dos "mode code"
+ - baudot code, and International Telegraph Alphabet No 2 (ITA2)
+ - Font Set from Wang word processors, from Wang Laboratories (font set was precursor to MSDOS Codepage 437)
+ - IBM's EBCDIC and punchcard formats:
+   http://homepages.cwi.nl/~dik/english/codes/80col.html  (and parent page)
+   punched tags, magnetic tapes, character recognition codes, morse codes (e.g. japanese morse code)
+   http://homepages.cwi.nl/~dik/english/codes/
 
 academic: (ideas from uni)
  - cladograms (and phylogenetic tree)
@@ -447,4 +492,6 @@ academic: (ideas from uni)
  - symbolic algebra:
 	http://www.xs4all.nl/~apinkus/yacas.html
 	http://www.detachedsolutions.com/symbolic/ [ti83+]
-
+ - get a Ph.D. in Visual Perception and Message Design from Indiana University (USA). like Deane Hutton (curosity show)
+ - huge, realtime data streams: (kst) http://www.kde-apps.org/content/show.php?content=10399
+ - half bits and qubits

@@ -1,0 +1,58 @@
+Platforms to support
+
+Internet
+ - Web: Flat web site (sources+published), SSI, web application
+ - IRC bot?
+
+Operating System
+ - Win
+ - Lin console
+ - OSX (Aqua)
+ - Palm
+ - linux cluster
+ - Symbian, Hiptop
+
+Abstract base platforms:
+ - Console (in, out, err)
+ - VESA graphics
+ - Screen saver
+
+Windowing/graphics Systems:
+ - X
+ - Gnome/Gtk+
+ - KDE/Qt
+ - SDL
+ - DirectDraw DirectX
+
+Hardware
+ - boot loader
+ - roll-your-own-operating-system
+ - embedded (digital cameras, router, mp3 server, whatever)
+
+Processor
+ - x86
+ - z80
+ - mips
+
+Virtual Machines / Runtimes
+ - Java VM
+ - J2ME
+ - .net
+
+Application and file-based platforms
+ - Acrobat (PDF)
+ - Flash
+ - svg
+ - TeX
+ - Word
+ - Hypercard
+
+Application modules and addons
+ - Shell extensions
+ - Office / Outlook extension
+ - COM objects (to work with regsvr32)
+ - ASAPI filters (Apache Server API)
+ - Windows services
+ - Half Life 2 mods
+ - Eclipse / NetBeans modules
+ 

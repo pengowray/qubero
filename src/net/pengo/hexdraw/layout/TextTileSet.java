@@ -40,7 +40,7 @@ public class TextTileSet extends TileSet {
         return true;
     }
     
-    public boolean isHMonospaced() {
+    public boolean isVMonospaced() {
         return true;
     }
     
@@ -56,7 +56,7 @@ public class TextTileSet extends TileSet {
             // 2^bits = getNumTiles()
             bitsPerTile = (int) Math.ceil( Math.log(getNumTiles()) / Math.log(2) ); // = 4
         }
-            
+
         //System.out.println("bitsPerTile=" + bitsPerTile + " Math.log(2)=" + Math.log(2) + " Math.log(getNumTiles())="+ Math.log(getNumTiles()) + " getNumTiles()=" + getNumTiles());
         
         return bitsPerTile;
@@ -84,15 +84,22 @@ public class TextTileSet extends TileSet {
 
     public int maxWidth() {
         FontMetrics fm = getFontMetrics();
-        
-        return fm.getMaxAdvance();
+        //w2k, Monospaced, Font.BOLD, 11: MaxAdvance=17, W-width=7
+        //System.out.println("MaxAdvance=" + fm.getMaxAdvance() + " W-width=" + fm.charWidth('W'));
+        //return fm.getMaxAdvance();
+        return fm.charWidth('W');
     }
     
     public int maxHeight() {
         FontMetrics fm = getFontMetrics();
         
         //fixme: this seems a bit crap ?
-        return fm.getMaxAscent() + fm.getMaxDescent();
+        //return fm.getMaxAscent() + fm.getMaxDescent();
+        return fm.getHeight();
+    }
+    
+    public int getWidth(int tile) {
+        return maxWidth();
     }
 
     public void draw(Graphics g, int tile) {
@@ -102,8 +109,18 @@ public class TextTileSet extends TileSet {
         //fixme: antialias..
         
         //System.out.println("tile=" + tile);
-        char x = alphabet.charAt(tile);
-        g.drawString(x+"", 0, fm.getDescent());
+        
+        char ch = alphabet.charAt(tile);
+        int xOffset = 0;
+        
+        // Force monospacing (centered)
+        if (fm.charWidth(ch) < maxWidth()) {
+            xOffset = (int) ((maxWidth() - fm.charWidth(ch)) / 2);
+        }
+        
+        //System.out.println("charWidth[" + ch + "]=" + fm.charWidth(ch) + " maxWidth=" + maxWidth());
+        
+        g.drawString(ch+"", xOffset, fm.getAscent());
         //g.drawString(tile+"", 0, fm.getDescent()); // temp
     }
 }

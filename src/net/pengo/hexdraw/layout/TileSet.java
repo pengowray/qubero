@@ -20,7 +20,7 @@ public abstract class TileSet {
     
     public abstract boolean isMonospaced();
     
-    public abstract boolean isHMonospaced();
+    public abstract boolean isVMonospaced();
     
     // for text: yes (eg LF, CR, TAB)
     public abstract boolean hasControlCodes();
@@ -32,6 +32,7 @@ public abstract class TileSet {
     public abstract String getName();
     
     public abstract int maxWidth();
+    public abstract int getWidth(int tile);
     
     public abstract int maxHeight();
     

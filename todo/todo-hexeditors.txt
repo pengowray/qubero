@@ -99,6 +99,13 @@ by Robert Polic
 Learning By Simulation
  - http://www.vias.org/simulations/simusoft_asciicode.html
 
+Bless
+ - http://home.gna.org/bless/	
+ - https://gna.org/projects/bless/
+ - written in mono/Gtk# and its primary platform is GNU/Linux.
+ - Bless aims to be a fast and customizable hex editor written in Gtk#. It efficiently handles very large files and supports multiple undo-redo actions. 
+ - There are also plans for the addition of lua based scripting language for binary file manipulation.
+
 big list:
 http://esca.atomki.hu/paradise/simtel/msdos/binaryed.html
 http://esca.atomki.hu/paradise/simtel/win95/editor.html (search for hex or binary)

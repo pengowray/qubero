@@ -26,7 +26,7 @@ import net.pengo.data.DemoData;
 import net.pengo.data.DiffData;
 import net.pengo.data.EditableData;
 import net.pengo.data.LargeFileData;
-import net.pengo.hexdraw.layout.MonoSpacer;
+import net.pengo.hexdraw.layout.MainPanel;
 import net.pengo.hexdraw.original.CommandLine;
 import net.pengo.hexdraw.original.HexPanel;
 import net.pengo.hexdraw.original.renderer.Renderer;
@@ -118,12 +118,12 @@ public class GUI implements ActiveFileListener {
         //test..
         JPanel hexpane = new JPanel(new BorderLayout());
         hexpane.add(hexpanel.getPanel(), BorderLayout.EAST);
-        MonoSpacer mspacer = new MonoSpacer();
-        mspacer.setFontName("hex");
-        mspacer.setActiveFile(activeFile);
-        hexpane.add(mspacer, BorderLayout.WEST);
+        MainPanel spacerPanel = new MainPanel();
+        spacerPanel.setActiveFile(activeFile);
+        spacerPanel.loadDefaults();
+        hexpane.add(spacerPanel, BorderLayout.WEST);
         //disregard the above..
-        hexpane = mspacer;
+        hexpane = spacerPanel;
         //hexpane.add(new HexPanel(activeFile), BorderLayout.WEST);
         
         JScrollPane sp_hexpanel = new JScrollPane(hexpane, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,

@@ -1,7 +1,7 @@
 /*
  * columnSpacer.java
  *
- * An interface between the hexpanel and the renderers. 
+ * An interface between the hexpanel and the renderers.
  * for cleaning up data into the right bit lengths
  * and knowing where everything is.
  *
@@ -12,31 +12,57 @@
 
 package net.pengo.hexdraw.layout;
 
-import java.awt.Graphics;
 import java.awt.Point;
-import java.awt.event.MouseEvent;
 import javax.swing.JPanel;
 import net.pengo.app.ActiveFile;
+import net.pengo.bitSelection.BitCursor;
+import net.pengo.bitSelection.SegmentalBitSelectionModel;
 import net.pengo.data.Data;
 import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
+import net.pengo.selection.LongListSelectionModel;
 
 /**
  *
  * @author  Peter Halasz
  */
 public abstract class Spacer extends JPanel implements LongListSelectionListener {
+    
+    public enum Resolution { letter, word, line, paragraph, all };
+    public enum Round { nearest, before, after };
+    
+    //fixme: create a MinorMajorSpacer as an inbetween for Spacer -> MonoSpacer
+    
     private ActiveFile activeFile;
     
     private String fontName = "hex"; // to be gotten from FontMetricsCache
     private int itemSize = 12; // recommended size in px or font size. general control of size.
     private int itemCount = 16; // number of items per column. may be ignored by vertical renderers and offset columns
-    private int bitCount = 8; // how many bits each renderer recieves at a time. (must support 1-8?)
+    private int bitCount = 8; // minor unit size how many bits each renderer recieves at a time. (must support 1-8?)
+    private int majorUnitSize = 1; // selection will snap to this many minor units
+    
+    //private MainPanel mainPanel = null;
+    //private SegmentalBitSelectionModel selection = null; // only used if no mainPanel
+    
+    // selection resolutions
+    
+    // is this spacer the one in focus (of all the spacers)
+    private boolean isFocus = false;
 
     //too difficult, e.g. tiles may or may not be.
     //public abstract boolean isMeasuredInFontSize(); // if false, use font sizes for measurement
     
     private int orientation; // 0 horizontal, 1 vertical, fixme: make an enum
+    
+    
+
+    public int getBitCount() {
+        return bitCount;
+    }
+    
+    public void setBitCount(int bitCount) {
+        this.bitCount = bitCount;
+    }
     
     /** false if proportionally spaced */
     public abstract boolean isHMonospaced();
@@ -51,7 +77,7 @@ public abstract class Spacer extends JPanel implements LongListSelectionListener
     
     // usually true, false e.g. for text with random breaks
     public abstract boolean isVMonospaced();
-
+    
     /** Are the symbols in the same order as the data? */
     public abstract boolean isLinear();
     
@@ -60,7 +86,7 @@ public abstract class Spacer extends JPanel implements LongListSelectionListener
     public abstract int getWidth();
     
     private boolean isColumnInFocus;
-
+    
     // first item of data
     private long offset; // for calculating bit position in byte stream
     private int offsetBit; // 0 to 7
@@ -73,30 +99,18 @@ public abstract class Spacer extends JPanel implements LongListSelectionListener
         
     }
     
-    public abstract void paintComponent(Graphics g);
+    //public abstract void paintComponent(Graphics g);
     
     public String getFontName() {
         return fontName;
     }
-
+    
     public void setFontName(String font) {
         this.fontName = font;
     }
     
-    public void mousePressed(MouseEvent e)  {
-        if (e.getButton() == MouseEvent.BUTTON3) {
-            // right click
-        }
-    }
-    
-    // MouseMotionListener
-    public void mouseDragged(MouseEvent e)  {
-        //Place pl =  hexFromClick( e.getX(), e.getY() );
-        //if (draggingMode && pl.addr != -1)  {
-            //getSelectionModel().setLeadSelectionIndex(hclick);
-            //changeSelection(pl.addr, false, true);
-        //}
-
+    private LongListSelectionModel selectionModel()  {
+        return getActiveFile().getActive().getSelectionModel();
     }
     
     /** Where is the cursor to be placed if clicked on these coordinates? 
@@ -109,65 +123,90 @@ public abstract class Spacer extends JPanel implements LongListSelectionListener
      *
      * @returns cursor is left of which byte?
      */
-    public long whereIsByteCursor(int x, int y) {
-        //fixme: may also need to return screen cordinates of cursor line. 
-        //fixme: might not be actual bytes if using, say, 5 bit "bytes"
-        return 0;
-    }
+    //fixme: may also need to return screen cordinates of cursor line.
+    //fixme: may also need to return screen cordinates of cursor line.
+    //fixme: will need to know which sub-renderer is selected (for multi-symbols)
+    public abstract BitCursor whereIsCursor(int x, int y, Resolution r);
     
-    public long whereIsBitCursor(int x, int y) {
-        //fixme: needs to return which bit        
-        //fixme: may also need to return screen cordinates of cursor line.
-        //fixme: will need to know which sub-renderer is selected (for multi-symbols)
-        return 0;
+    /** convert a symbol offset to a bit offset */
+    /*
+    public BitCursor minorSymbol2Bit(long symbolOffset) {
+        //fixme: have a standard way of setting startUnit and bitoffset for whole renderer?
+        int startUnit = 0;
+        int unitSize = bitCount;
+        int bitOffset = 0;
+        long i = symbolOffset;
+     
+        //xxx: code from Data.readIntArray()
+        long xByte = (long) (  ((startUnit + i) * unitSize + bitOffset) / 8 ); // set initial byte
+        int xBit = (int) ( ((startUnit + i) * unitSize + bitOffset) % 8 ); // set initial bit
+     
+        return new BitCursor(xByte, xBit);
     }
-
+     */
+    
+    /*
+    public BitCursor majorSymbol2Bit(long symbolOffset) {
+        //fixme: have a standard way of setting startUnit and bitoffset for whole renderer?
+        int startUnit = 0;
+        int unitSize = bitCount * ;
+        int bitOffset = 0;
+        long i = symbolOffset;
+     
+        //xxx: code from Data.readIntArray()
+        long xByte = (long) (  ((startUnit + i) * unitSize + bitOffset) / 8 ); // set initial byte
+        int xBit = (int) ( ((startUnit + i) * unitSize + bitOffset) % 8 ); // set initial bit
+     
+        return new BitCursor(xByte, xBit);
+    }
+     */
+    
     /** Which symbol appears at this location?  */
-    public abstract long whatIsHere(int x, int y);
+    public abstract long whatSymbolIsHere(int x, int y);
     
     /** where is this byte on the screen?
      * may be used to line up Spacers (columns) */
-    public abstract Point offsetCoordinates(long offset);
-
+    //public abstract Point offsetCoordinates(long offset);
+    
     public int getItemSize() {
         return itemSize;
     }
-
+    
     public void setItemSize(int itemSize) {
         this.itemSize = itemSize;
     }
-
+    
     public int getItemCount() {
         return itemCount;
     }
-
+    
     public void setItemCount(int itemCount) {
         this.itemCount = itemCount;
-    }
-
-    public int getBitCount() {
-        return bitCount;
-    }
-
-    public void setBitCount(int bitCount) {
-        this.bitCount = bitCount;
     }
     
     public void valueChanged(LongListSelectionEvent e) {
         return;
     }
-
+    
     public ActiveFile getActiveFile() {
         return activeFile;
     }
-
+    
     public void setActiveFile(ActiveFile activeFile) {
         this.activeFile = activeFile;
     }
-
+    
     // for your convinence
     protected Data getData() {
         return getActiveFile().getActive().getData();
+    }
+    
+    public boolean isFocus() {
+        return isFocus;
+    }
+    
+    public void setFocus(boolean isFocus) {
+        this.isFocus = isFocus;
     }
     
 }

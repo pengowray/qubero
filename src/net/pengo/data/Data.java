@@ -2,6 +2,8 @@ package net.pengo.data;
 import net.pengo.app.*;
 
 import java.io.*;
+import net.pengo.bitSelection.BitCursor;
+import net.pengo.bitSelection.BitSegment;
 
 /**
  * Data is a fixed length chunk of data. e.g. a binary file, or an area of memory.
@@ -10,15 +12,8 @@ public abstract class Data implements Comparable {
     // xxy: replace with ByteBuffer ? - no doesn't support long indexes
     abstract public long getLength();
     
-    /** @returns the length in unitSize, disscarding incomplete units */
-    public long getLength(int unitSize) {
-        //fixme: no checking
-        //fixme should support: long startUnit, int bitOffset
-        
-        //fixme: should also give indication of discarded incomplete units maybe?
-        
-        //fixme: loss of precision if the getLength() is more than 1/8th maximum size
-        return (long) (getLength() * 8) / unitSize;
+    public BitCursor getBitLength() {
+        return new BitCursor(getLength(), 0);
     }
     
     /**
@@ -198,7 +193,40 @@ public abstract class Data implements Comparable {
     public boolean equals(Cursor obj) {
         return false;
     }
+    
+    public int readBitsToInt(BitSegment segment) throws IOException {
+        int BIT_COUNT = Integer.bitCount(-1); // 32
+        
+        int unitSize = (int)segment.getLength().toBits();
+        
+        long xByte = segment.firstIndex.getByteOffset(); // set initial byte
+        int xBit = segment.firstIndex.getBitOffset(); 
+        int rightShift = BIT_COUNT - unitSize - xBit; // how much data will need to be right shifted before being returned
+        
+        int mask = (int)(-1) >>> xBit // leftGap.. -1 = 0xFFFFFFFF
+                 & (int)(-1) << rightShift; //rightGap;
 
+        int bytesInUnit = 1+ ((unitSize+xBit)/8); // how many bytes will we need to read
+
+        byte[] bytes = readByteArray(xByte, bytesInUnit);
+
+        int readBytes = 0;
+        for (int b=0; b<bytesInUnit; b++) {
+            readBytes |= (int)(bytes[b]) << (BIT_COUNT - 8 - (b*8));
+        }
+
+        int maskedBytes = readBytes & mask;
+
+        int rShiftedBytes = maskedBytes >>> rightShift;
+
+        /*
+        System.out.println("xByte=" + xByte + " xBit=" + xBit + " bytesInUnit=" + bytesInUnit + " mask=" + Integer.toBinaryString(mask) + "b" + 
+            " rightShift=" + rightShift + " bytesInUnit=" + bytesInUnit + " readBytes=" + Integer.toHexString(readBytes) + 
+            "h, " + Integer.toBinaryString(readBytes) + "b maskedBytes=" + Integer.toBinaryString(maskedBytes) + "b rShiftedBytes=" + Integer.toBinaryString(rShiftedBytes) + "b");
+        */
+
+        return rShiftedBytes;
+    }
     
     /* unitSize = number of bits to return in each int
        startUnit = first unit to return (assuming all binary is in unitSize units
@@ -207,6 +235,8 @@ public abstract class Data implements Comparable {
      *fixme: maybe startByteOffset would be more useful than startUnit
      *
      *fixme: optimise for special cases like unitSize = 4 or 8
+     *
+     * @depricated use readBitsToInt //how do i do this relaly?
      */
     public int[] readIntArray(int unitSize, long startUnit, int bitOffset, int unitCount) throws IOException {
         //fixme: no checking
@@ -215,13 +245,13 @@ public abstract class Data implements Comparable {
         int BIT_COUNT = Integer.bitCount(-1); // 32
         
         //int maxBytesUnit = // too difficult to calculate and better ways.... 1 gives 1, 2-9 gives 2, 10+ gives 3.. 
-        System.out.println("unitSize=" + unitSize + " startUnit=" + startUnit + " unitCount=" + unitCount);
+        //System.out.println("unitSize=" + unitSize + " startUnit=" + startUnit + " unitCount=" + unitCount);
         
         int[] returnArray = new int[unitCount];
         
         for (int i=0; i < unitCount; i++) {
-            long xByte = (long) (  (i * unitSize + bitOffset) / 8 ); // set initial byte
-            int xBit = (int) ( (i * unitSize + bitOffset) % 8 ); // set initial bit
+            long xByte = (long) (  ((startUnit + i) * unitSize + bitOffset) / 8 ); // set initial byte
+            int xBit = (int) ( ((startUnit + i) * unitSize + bitOffset) % 8 ); // set initial bit
             
             //bits remaining in first byte = 8-xBit 
             //loc of first bit is unitSize
@@ -232,7 +262,7 @@ public abstract class Data implements Comparable {
             int mask = (int)(-1) >>> xBit // leftGap.. -1 = 0xFFFFFFFF
                      & (int)(-1) << rightShift; //rightGap;
             
-            int bytesInUnit = (unitSize+xBit)/8; // how many bytes will we need to read
+            int bytesInUnit = 1+ ((unitSize+xBit)/8); // how many bytes will we need to read
             
             byte[] bytes = readByteArray(xByte, bytesInUnit);
             

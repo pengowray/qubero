@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE attributes PUBLIC "-//NetBeans//DTD DefaultAttributes 1.0//EN" "http://www.netbeans.org/dtds/attributes-1_0.dtd">
+<attributes version="1.0">
+    <fileobject name="ActiveFileEvent.java">
+        <attr name="class_dependency_java.util.EventObject" stringvalue="ActiveFileEvent"/>
+    </fileobject>
+    <fileobject name="ClipboardEvent.java">
+        <attr name="class_dependency_java.util.EventObject" stringvalue="ClipboardEvent"/>
+    </fileobject>
+    <fileobject name="ExitAction.java">
+        <attr name="class_dependency_javax.swing.AbstractAction" stringvalue="ExitAction"/>
+    </fileobject>
+    <fileobject name="GUI.java">
+        <attr name="class_dependency_net.pengo.app.ActiveFileListener" stringvalue="GUI"/>
+    </fileobject>
+    <fileobject name="MoojMenuBar.java">
+        <attr name="class_dependency_javax.swing.JMenuBar" stringvalue="MoojMenuBar"/>
+    </fileobject>
+    <fileobject name="OpenAction.java">
+        <attr name="class_dependency_javax.swing.AbstractAction" stringvalue="OpenAction"/>
+    </fileobject>
+    <fileobject name="OpenClassAction.java">
+        <attr name="class_dependency_javax.swing.AbstractAction" stringvalue="OpenClassAction"/>
+    </fileobject>
+    <fileobject name="OpenFile.java">
+        <attr name="class_dependency_net.pengo.selection.LongListSelectionListener" stringvalue="OpenFile"/>
+    </fileobject>
+    <fileobject name="SelectionEvent.java">
+        <attr name="class_dependency_java.util.EventObject" stringvalue="SelectionEvent"/>
+    </fileobject>
+</attributes>
