@@ -66,17 +66,18 @@ public class SmallFileData extends ArrayData {
             //FileInputStream fis = new FileInputStream(in);
 
             // read in bytes to data
-
+        	byte[] byteArray = getByteArray();
+        	
             int ch; // current byte
             int chc = 0; // char count
             //if (byteArray == null) // byte array now starts life as new byte[0]
-            byteArray = new byte[1024];
+            setByteArray(new byte[1024]);
             while ((ch=fis.read()) != -1) {
                 if (byteArray.length <= chc) {
                     // double byteArray's size
                     byte[] byteArrayTemp = new byte[byteArray.length*2] ;
                     System.arraycopy(byteArray,0,byteArrayTemp,0,byteArray.length);
-                    byteArray = byteArrayTemp;
+                    setByteArray(byteArrayTemp);
                 }
                 byteArray[chc] = (byte)ch;
                 chc++;
@@ -86,12 +87,12 @@ public class SmallFileData extends ArrayData {
             if (byteArray.length != chc) {
                 byte[] byteArrayTemp = new byte[chc] ;
                 System.arraycopy(byteArray,0,byteArrayTemp,0,chc);
-                byteArray = byteArrayTemp;
+                setByteArray(byteArrayTemp);
             }
             
         } catch (IOException e) {
             //FIXME: !!!
-            byteArray = new String("error reading file: " + e).getBytes();
+            setByteArray( new String("error reading file: " + e).getBytes() );
         }
         
     }

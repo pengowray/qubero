@@ -26,26 +26,32 @@ available at:
 package net.pengo.data;
 
 
-import java.io.*;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 
 /** 
  * rudimentary file editing. entire file is kept in an array.
  * this is NOT editableArrayData
  */
 public class ArrayData extends Data {
-    protected byte[] byteArray;
+    private byte[] byteArray;
     String name;
     
+    protected ByteBuffer byteBuffer;
+    
     public ArrayData() {
-        this.byteArray = new byte[0];
+        setByteArray(new byte[0]);        
     }
 
     public ArrayData(byte[] byteArray) {
-	this.byteArray = byteArray;
+    	setByteArray(byteArray);
     }	
     
     public ArrayData(byte[] byteArray, String name) {
-	this.byteArray = byteArray;
+    	setByteArray(byteArray);
         this.name = name;
     }	
 
@@ -61,6 +67,28 @@ public class ArrayData extends Data {
         return new ByteArrayInputStream(byteArray);
     }
     
+    public byte[] readByteArray() {
+    	//FIXME: should clone?
+    	return byteArray;
+    }
+
+    public byte[] readByteArray(long start, int length) throws IOException {
+    	try {
+        	byte[] bytes = new byte[length];
+        	
+        	//??? always returns from the first byte only
+        	//byteBuffer.position((int) start); 
+    		//return byteBuffer.get(bytes).array();
+        	
+        	System.arraycopy(getByteArray(), (int)start, bytes, 0, length);
+        	
+        	return bytes;
+        	
+    	} catch (BufferUnderflowException e) {
+    		throw new IOException(e.getMessage());
+    	}
+    }
+    
     public long getLength() {
         return (long)byteArray.length;
     }
@@ -71,4 +99,13 @@ public class ArrayData extends Data {
             
         return name;
     }
+    
+	protected byte[] getByteArray() {
+		return byteArray;
+	}
+	
+	protected void setByteArray(byte[] byteArray) {
+		this.byteArray = byteArray;
+		byteBuffer = ByteBuffer.wrap(byteArray);
+	}
 }

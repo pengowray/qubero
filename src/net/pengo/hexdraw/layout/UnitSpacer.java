@@ -35,6 +35,7 @@ package net.pengo.hexdraw.layout;
 
 import java.awt.Color;
 import java.awt.Graphics;
+import java.awt.Point;
 import java.awt.Rectangle;
 
 import net.pengo.bitSelection.BitCursor;
@@ -96,36 +97,41 @@ public class UnitSpacer extends SingleSpacer {
 		return 0;
 	}
     
-    public LayoutCursor bitIsHere(long x, long y, Round round, BitCursor bits, LayoutCursor lc) {
-    	if (bits.equals(BitCursor.zero))
-    		return LayoutCursor.unactiveCursor();
+    protected void bitIsHere(LayoutCursorBuilder lc, Round round) {
+    	BitCursor bits = lc.getBits();
+
+    	if (bits.equals(BitCursor.zero)) {
+    		lc.setNull(true);
+    		return;
+    	}
     	
     	if (round == Round.before) {
     		calcBlinky(lc);
-    		return lc;
+    		return;
     	
     	} else if (round == Round.after) {
-    		lc.setBitLocation(lc.getBitLocation().add(bitCount));
-    		lc.setX(lc.getX() + getMaxPixelWidth());
+    		lc.addToBitLocation(bitCount);
+    		lc.addToBlinkX(getMaxPixelWidth());
     		calcBlinky(lc);
-    		return lc;
+    		return;
     	
     	} else {
 			assert round == Round.nearest;
-			if (x <= getPixelWidth(bits)/2) {
+			if (lc.getClickX() <= getPixelWidth(bits)/2) {
 	    		calcBlinky(lc);
-				return lc;
+				return;
 			} else {
-	    		lc.setBitLocation(lc.getBitLocation().add(bitCount));
-	    		lc.setX(lc.getX() + getMaxPixelWidth());
+	    		lc.addToBitLocation(bitCount);
+	    		lc.addToBlinkX(getMaxPixelWidth());
 	    		calcBlinky(lc);
-	    		return lc;
+	    		return;
 			}
 		}
     }
 
-    protected void calcBlinky(LayoutCursor lc) {
-    	lc.setBlinkyLocation(new Rectangle((int)lc.getX(), (int)lc.getY(), 1, (int)getMaxPixelHeight()));
+    protected void calcBlinky(LayoutCursorBuilder lc) {
+    	lc = lc.restorePerspective();
+    	lc.setBlinkyLocation(new Rectangle((int)lc.getBlinkX(), (int)lc.getBlinkY(), 1, (int)getMaxPixelHeight()));
     }
     //public abstract SpacerIterator iterator(); // Iterator<SuperSpacer>
     //public abstract SpacerIterator iterator(long first);
@@ -133,9 +139,8 @@ public class UnitSpacer extends SingleSpacer {
     //public Point whereGoes(long sub);
     //public Point whereGoes(BitCursor bit);
     
-    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
+    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs, BitSegment repaintSeg) {
 
-    	//System.out.print('/');
         if (seg.getLength().equals(new BitCursor())) // fixme: optimise
         	return;
 
@@ -158,13 +163,23 @@ public class UnitSpacer extends SingleSpacer {
     		
     		if (selected) {
     			Color c = g.getColor();
-    			g.setColor( new Color(170,170,255) );
     			if (activeSelection) {
+        			g.setColor( new Color(170,170,255) );
     				g.fillRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
     			} else {
-    				g.drawRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
+        			g.setColor( new Color(215,215,255) );
+    				g.fillRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
+    				//g.drawRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
     			}
     			g.setColor( c );
+			} else {
+				
+				//clear background
+    			Color c = g.getColor();
+    			g.setColor( Color.white );
+				g.fillRect(0,0,(int)getPixelWidth(seg.getLength()), (int)getPixelHeight(seg.getLength()));
+				g.setColor( c );
+				
 			}
     		
     		tileSet.draw(g, redbits);
@@ -178,5 +193,11 @@ public class UnitSpacer extends SingleSpacer {
     
 	public void setSimpleSize(SimpleSize s) {
 		tileSet.setSimpleSize(s);
+	}
+
+
+	public void updateLayoutCursor(LayoutCursorBuilder lc, LayoutCursorDescender curs) {
+		//FIXME NOW
+		//fixme
 	}	    
 }

@@ -34,8 +34,8 @@ available at:
 package net.pengo.hexdraw.layout;
 
 import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.Point;
-import java.util.Iterator;
 
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
@@ -50,7 +50,7 @@ import net.pengo.splash.SimpleSize;
  */
 public class GroupSpacer extends MultiSpacer {
     
-    // these spacers layed out vertically. they dont get repeated, unless inside a repeater spacer
+    // these spacers usually layed out vertically. they dont get repeated, unless inside a repeater spacer
     private SuperSpacer[] contents;
     private BitCursor length; //fixme: should this be auto from max length of contents?
     private boolean horizontal; //  layout contents horizontal or vertically 
@@ -71,7 +71,6 @@ public class GroupSpacer extends MultiSpacer {
     //public abstract long getDeepSubSpacerCount();
     
     public long getPixelWidth(BitCursor bits) {
-    	System.out.println("bits:" + bits);
     	if (bits.equals(BitCursor.zero))
     		return 0;    	
     	
@@ -145,19 +144,20 @@ public class GroupSpacer extends MultiSpacer {
     
     //also need a wordIsHere and lineIsHere
     //x and y are relative to this component. i.e. 0,0 is top left of this.
-    public LayoutCursor bitIsHere(long x, long y, Round round, BitCursor bits, LayoutCursor lc) {
-        //fixme: cache locations in tree
-    	
+    protected void bitIsHere(LayoutCursorBuilder lc, Round round) { 
+    	BitCursor bits = lc.getBits();
     	if (isHorizontal()) {
     	
 	        long xOffset = 0;
 	        long nextOffset = 0;
 	        for (SuperSpacer s : contents) {
 	            nextOffset = xOffset + s.getPixelWidth(bits);
-	            if (x >= xOffset && x < nextOffset) {
+	            if (lc.getClickX() >= xOffset && lc.getClickX() < nextOffset) {
 	            	lc.getPathList().add(s);
-	            	lc.setX(lc.getX() + xOffset);
-	                return s.bitIsHere(x - xOffset, y, round, bits, lc);
+	            	lc.addToBlinkX(xOffset);
+	                s.bitIsHere(lc.perspective((int)xOffset, 0 ), round);
+
+	                return;
 	            }
 	            
 	            xOffset = nextOffset;
@@ -168,11 +168,12 @@ public class GroupSpacer extends MultiSpacer {
         	long yOffset = 0;
 	        long nextOffset = 0;
 	        for (SuperSpacer s : contents) {
-	            nextOffset =yOffset +  s.getPixelHeight(bits);
-	            if (y >= yOffset && y < nextOffset) {
+	            nextOffset = yOffset +  s.getPixelHeight(bits);
+	            if (lc.getClickY() >= yOffset && lc.getClickY() < nextOffset) {
 	            	lc.getPathList().add(s);
-	            	lc.setY(lc.getY() + yOffset);
-	                return s.bitIsHere(x, y - yOffset, round, bits, lc);
+	            	lc.addToBlinkY(yOffset);
+	                s.bitIsHere(lc.perspective(0, (int)yOffset ), round);
+	                return;
 	            }
 	            
 	            yOffset = nextOffset;
@@ -180,11 +181,11 @@ public class GroupSpacer extends MultiSpacer {
 
         }
     	
-    	// failure! 
-    	return LayoutCursor.unactiveCursor();
-        
+    	// failure!
+    	lc.setNull(true);
     }
-    
+	
+	
     public SpacerIterator iterator() {
         return new SpacerIterator() {
             long pos = -1;
@@ -285,7 +286,7 @@ public class GroupSpacer extends MultiSpacer {
     //public abstract Point whereGoes(BitCursor bit);
     
     // 0,0 is top left
-    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
+    public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs, BitSegment repaintSeg) {
         BitCursor len = seg.getLength();
         int totalXChange = 0;
         int totalYChange = 0;
@@ -303,12 +304,13 @@ public class GroupSpacer extends MultiSpacer {
             //System.out.println("  " + sp + " seg:" + seg);
             
             g.translate(i.getXChange(), i.getYChange());
+            
             totalXChange += i.getXChange();
             totalYChange += i.getYChange();
             
             //if (seg.getLength().compareTo())
             //FIXME: check null
-            sp.paint(g, d, seg, sel, curs.descend(sp));
+            sp.paint(g, d, seg, sel, curs.descend(sp), repaintSeg);
 
         }
         
@@ -346,5 +348,97 @@ public class GroupSpacer extends MultiSpacer {
 			r+= "[" + i + "]:" + contents[i] + ", ";
 		
 		return r;
+	}
+
+	public Point getBitRangeMin(LayoutCursorBuilder min) {
+		if (contents.length == 0)
+			return null;
+		
+		//FIXME: assumes elements are aligned left or aligned top. which is currently always true of course. 
+		
+		SuperSpacer focus = contents[0];
+		
+		return focus.getBitRangeMin(min);
+	}
+
+
+	public void updateLayoutCursor(LayoutCursorBuilder lc, LayoutCursorDescender curs) {
+		//FIXME: (optimise) make a lookup table of the path items so we dont have to go thru them one at a time
+		for (SuperSpacer s : contents) {
+			if (s.equals(curs.pathItem())) {
+				curs = curs.descend(s); //FIXME: maybe descend() should just give back boolean success?
+				s.updateLayoutCursor(lc, curs);
+				return;
+			}
+			
+			if (isHorizontal()) {
+				lc.addToBlinkX(s.getPixelWidth(lc.getBits()));
+			} else {
+				lc.addToBlinkY(s.getPixelHeight(lc.getBits()));
+			}
+		}
+		
+		lc.setNull(true);
+	}
+
+	public Point getBitRangeMax(LayoutCursorBuilder max) {
+		
+		//System.out.println("<group> " + max);
+		if (contents.length == 0)
+			return null;
+		
+		//FIXED: assumption may be false. really needs to go thru all contents and make a "bounding" point
+		//SuperSpacer focus = contents[contents.length-1];
+
+		//FIXME cache stuff / optimise
+		//FIXME maybe should be using that iterator
+		
+		BitCursor bits = max.getBits();
+		Point maxPoint = null;
+		SuperSpacer prevSpacer = null;
+		LayoutCursorBuilder perspective = max;
+		
+		for (SuperSpacer s : contents) {
+			if (prevSpacer != null) {
+				if (isHorizontal()) {
+					long x = prevSpacer.getPixelWidth(bits);
+					perspective = perspective.perspective((int)x, 0);
+					perspective.addToBlinkX(x);
+				} else {
+					long y = prevSpacer.getPixelHeight(bits);
+					perspective = perspective.perspective(0, (int)y);
+					perspective.addToBlinkY(y);
+				}
+			}
+			
+			LayoutCursorBuilder trial = perspective.clone();
+			//System.out.println(" <perspective>" + perspective);
+			//System.out.println(" <trial>" + trial);
+
+			Point p = s.getBitRangeMax(trial);
+			//System.out.println(" </trial>" + trial);
+
+			
+			if (maxPoint == null) {
+				maxPoint =  p;
+				
+			} else {
+				if (p.x > maxPoint.x) {
+					maxPoint = new Point(p.x, maxPoint.y);
+				}
+
+				if (p.y > maxPoint.y) {
+					maxPoint = new Point(maxPoint.x, p.y);
+				}
+				
+			}
+			prevSpacer = s;
+		}
+		
+		LayoutCursorBuilder fin = max.restorePerspective();
+		fin.setBlinkX(maxPoint.x);
+		fin.setBlinkY(maxPoint.y);
+		
+		return new Point((int)fin.getBlinkX(), (int)fin.getBlinkY());
 	}
 }

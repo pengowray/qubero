@@ -12,6 +12,9 @@ public class LayoutCursorDescender {
 	private LayoutCursor lc;
 
 	private int depth = 0;
+	
+	private int x;
+	private int y;
 
 	// is the sescender still in an active area. active means the selection was
 	// made in that column
@@ -76,4 +79,22 @@ public class LayoutCursorDescender {
 		this.active = active;
 	}
 	
+	public int getX() {
+		return x;
+	}
+	public void setX(int x) {
+		this.x = x;
+	}
+	public void addToX(int add) {
+		this.x += add;
+	}
+	public int getY() {
+		return y;
+	}
+	public void setY(int y) {
+		this.y = y;
+	}
+	public void addToY(int add) {
+		this.y += add;
+	}
 }

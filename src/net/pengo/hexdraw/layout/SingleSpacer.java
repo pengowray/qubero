@@ -31,6 +31,10 @@ available at:
 
 package net.pengo.hexdraw.layout;
 
+import java.awt.Point;
+
+import net.pengo.bitSelection.BitCursor;
+
 /**
  *
  * @author Peter Halasz
@@ -48,4 +52,17 @@ public abstract class SingleSpacer extends SuperSpacer {
     public long getSubSpacerCount() {
         return 1;
     }
+    
+	public Point getBitRangeMin(LayoutCursorBuilder min) {
+		return min.restorePerspective().getBlinkPoint();
+	}
+
+	public Point getBitRangeMax(LayoutCursorBuilder max) {
+		BitCursor bits = max.getBits(); // must do before restoring
+		max.addToBlinkX(getPixelWidth(bits));
+		max.addToBlinkY(getPixelHeight(bits));
+		
+		return max.restorePerspective().getBlinkPoint();
+	}
+	
 }

@@ -45,12 +45,12 @@ public class DemoData extends ArrayData {
     
     public DemoData(int length) {
         // stripes
-        byteArray = new byte[length];
+        setByteArray(new byte[length]);
         Random random = new Random();
         
-        random.nextBytes(byteArray);
-        byteArray[length-1] = (byte)0xff;
-        byteArray[0] = 0x00;
+        random.nextBytes(getByteArray());
+        getByteArray()[length-1] = (byte)0xff;
+        getByteArray()[0] = 0x00;
     }
     
     public void addData(String addition) {
@@ -68,16 +68,17 @@ public class DemoData extends ArrayData {
     }
     
     public void addData(byte[] addition) {
+    	byte[] byteArray = getByteArray();
         byte[] newBytes = new byte[byteArray.length + addition.length];
         System.arraycopy(byteArray, 0, newBytes, 0, byteArray.length);
         System.arraycopy(addition, 0, newBytes, byteArray.length, addition.length);
-        byteArray = newBytes;
+        setByteArray(newBytes);
     }
     
     public DemoData(Image logo) {
         super();
         this.logo = logo;
-        byteArray = new byte[0];
+        setByteArray(new byte[0]);
         
         
         addData("Qubero Demo File");
@@ -148,7 +149,7 @@ public class DemoData extends ArrayData {
     }
     
     public String toString() {
-        return "Demo" + byteArray.length;
+        return "Demo" + getByteArray().length;
     }
     private byte[] logo() {
         if (logo == null)

@@ -53,6 +53,7 @@ public class BitSegment implements Cloneable, Comparable {
         java.util.Arrays.sort(indexes);
         firstIndex = indexes[0];
         lastIndex = indexes[indexes.length-1];
+        System.out.println("bs:" + this);
     }
     
     
@@ -107,5 +108,20 @@ public class BitSegment implements Cloneable, Comparable {
             return firstIndex.compareTo(o);
     }
     
+    /** subtracts from both indexes. if last index would be is below 0 then returns null */ 
+    public BitSegment shiftLeft(BitCursor shift) {
+    	if (lastIndex.compareTo(shift) < 0)
+    		return null;
+    	
+    	return new BitSegment(firstIndex.subtract(shift), lastIndex.subtract(shift));
+    }
     
+    /** is this an empty selection? (i.e. is length == 0) */
+    public boolean isEmpty() { 
+    	if (firstIndex == lastIndex || firstIndex.equals(lastIndex) ) {
+    		return true;
+    	}
+    	
+    	return false;
+    }
 }

@@ -31,9 +31,10 @@ available at:
 
 package net.pengo.hexdraw.layout;
 
+import java.awt.Dimension;
 import java.awt.Graphics;
+import java.awt.Point;
 import java.awt.Rectangle;
-import java.util.LinkedList;
 import java.util.List;
 
 import net.pengo.bitSelection.BitCursor;
@@ -65,11 +66,23 @@ public abstract class SuperSpacer {
 
     /* create a path to the clicked selection */
     public LayoutCursor layoutCursor(long x, long y, Round round, BitCursor bits) {
-    	LayoutCursor lc = new LayoutCursor();
-    	bitIsHere(x,y,round,bits,lc);
+    	LayoutCursorBuilder lc = new LayoutCursorBuilder();
+    	lc.setClickX(x);
+    	lc.setClickY(y);
+    	lc.setBits(bits);
 
-		return lc;
+    	bitIsHere(lc,round);
+
+		return lc.toLayoutCursor();
     }
+    
+    /**
+     * use through layoutCursor()
+     * 
+     * @param round
+     * @param lc the path taken to reach the active selection. should isolate the column selected. mutable. add to the end of path as you go.
+     */
+    protected abstract void bitIsHere(LayoutCursorBuilder lc, Round round);
 	
     /* add to the list with path info for this layout doodad. */
     protected List cursorPath(List path) {
@@ -84,24 +97,34 @@ public abstract class SuperSpacer {
     public abstract BitCursor getBitCount(BitCursor bits);
     
     //public abstract long subIsHere(int x, int y, Round round);
-    
-    /**
-     * @param x 
-     * @param y
-     * @param round
-     * @param bits
-     * @param lc the path taken to reach the active selection. should isolate the column selected. mutable. add to the end of path as you go.
-     * @return lc as is, or with modifications, or a LayoutCursor.unactiveCursor() for null
-     */
-    public abstract LayoutCursor bitIsHere(long x, long y, Round round, BitCursor bits, LayoutCursor lc);
 
-    //public abstract SpacerIterator iterator(); // Iterator<SuperSpacer>
-    //public abstract SpacerIterator iterator(long first);
-    
-    //public abstract Point whereGoes(long sub);
-    //public abstract Point whereGoes(BitCursor bit);
-    
-    public abstract void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs);
+	public Rectangle getBitRangeRectangle(BitSegment range, BitCursor bits) {
+		LayoutCursorBuilder min = new LayoutCursorBuilder();
+		min.setBits(bits);
+		min.setBitLocation(range.firstIndex);
+		
+		LayoutCursorBuilder max = new LayoutCursorBuilder();
+		max.setBits(bits);
+		max.setBitLocation(range.lastIndex);
+		
+		return getBitRangeRectangle(min, max);
+	}
+
+	/** does not work. */
+	public Rectangle getBitRangeRectangle(LayoutCursorBuilder min, LayoutCursorBuilder max) {
+		/* this is flawed, as the start and end tiles do not have the properties of having the extreme min and max values. */ 
+		Point topLeft  = getBitRangeMin(min);
+		Point botRight = getBitRangeMax(max);
+		Dimension relativeBotRight = new Dimension(botRight.x - topLeft.x, botRight.y - topLeft.y );
+		return new Rectangle(topLeft, relativeBotRight);
+	}
+	
+	public abstract Point getBitRangeMin(LayoutCursorBuilder min);
+	public abstract Point getBitRangeMax(LayoutCursorBuilder max);
+
+	public abstract void updateLayoutCursor(LayoutCursorBuilder lc, LayoutCursorDescender curs);
+	
+    public abstract void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs, BitSegment repaintSeg);
     
 	public abstract void setSimpleSize(SimpleSize s);
 	
@@ -117,5 +140,4 @@ public abstract class SuperSpacer {
 		
 	}
 
-	
 }

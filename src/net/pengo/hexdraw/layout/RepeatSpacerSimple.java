@@ -30,6 +30,7 @@ available at:
 package net.pengo.hexdraw.layout;
 
 import java.awt.Graphics;
+import java.awt.Point;
 import java.awt.Rectangle;
 
 import net.pengo.bitSelection.BitCursor;
@@ -122,67 +123,63 @@ public class RepeatSpacerSimple extends MultiSpacer {
 		return bits().multiply((int) repeats);
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see net.pengo.hexdraw.layout.SuperSpacer#bitIsHere(long, long, ,
-	 *         net.pengo.bitSelection.BitCursor)
-	 */
-	public LayoutCursor bitIsHere(long x, long y,
-			net.pengo.hexdraw.layout.SuperSpacer.Round r, BitCursor bits, LayoutCursor lc) {
-		
+	 public void bitIsHere(LayoutCursorBuilder lc, Round r) {
+	 	BitCursor bits = lc.getBits();
 		if (isHorizontal()) {
 			    //FIXME: check both y too
 	    		long one = contents.getPixelWidth(bits(bits));
 	            long where;
+	            long x = lc.getClickX();
+	            
 	            if (false) {
 	            	//if we're catching the event here.. FIXME: NYI	
 	            	
 	            	where = doRound( (float) x /one, r) ;
-	            	lc.setX(lc.getX() + where);
+	            	lc.addToBlinkX(where);
 	            	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
-	            	//XXX: do we need to add it? can't we just set it?
-	            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation ));
-	            	return lc;
+	            	lc.addToBitLocation(localBitLocation);
+	            	getContents().bitIsHere(lc, r);
+	            	return;
 	            } else {
-	            	where =  x /one; // round down, let contents do real rounding
+	            	where =  x / one; // round down, let contents do real rounding
 	            	long xOffset = one * where;
 	            	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
-		            lc.setX(lc.getX()+xOffset);
-	            	lc = contents.bitIsHere(x-xOffset,y,r,bits(bits),lc);
-	            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation));
-					
-		            return lc;
+		            lc.addToBlinkX(xOffset);
+		            lc.addToBitLocation(localBitLocation);
+		            LayoutCursorBuilder view = lc.perspective((int)xOffset,0,localBitLocation);
+		            view.setBits(bits(bits));
+	            	getContents().bitIsHere(view,r);
+		            return;
 	            }
 	            
     	} else {
     		long one = contents.getPixelHeight(bits(bits));
             long where;
+            long y = lc.getClickY();
             if (false) {
             	//if we're catching the event here.. FIXME: NYI	
             	
-            	where = doRound( (float) y /one, r) ;
-            	lc.setY(lc.getY() + where);
-            	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
-            	//XXX: do we need to add it? can't we just set it?
-            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation ));
-            	return lc;
+            	//FIXME: copy from above
+            	return;
 
             } else {
-            	where =  y /one; // round down, let contents do real rounding
+            	where =  y / one; // round down, let contents do real rounding
             	long yOffset = one * where;
             	BitCursor localBitLocation = (bits(bits)).multiply( (int) where );
-	            lc.setY(lc.getY()+yOffset);
-            	lc = contents.bitIsHere(x,y-yOffset,r,bits(bits),lc);
-            	lc.setBitLocation(lc.getBitLocation().add(localBitLocation));
-				
-	            return lc;
+	            lc.addToBlinkY(yOffset);
+	            lc.addToBitLocation(localBitLocation);
+
+	            LayoutCursorBuilder view = lc.perspective(0,(int)yOffset,localBitLocation);
+	            view.setBits(bits(bits));
+	            getContents().bitIsHere(view,r);
+	            return;
+            
             }
     	}
 		
 	}
 	
-	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
+	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs, BitSegment repaintSeg) {
 		BitCursor length = seg.getLength();
 		// check for empty
 		if (length.equals(BitCursor.zero))
@@ -196,6 +193,7 @@ public class RepeatSpacerSimple extends MultiSpacer {
         int yPixels = 0;
         long first = 0;
         long reps = repeats;
+        BitCursor bitLength = bits(length);
 
         Rectangle clip = g.getClipBounds();
         if (clip.getMaxX() < 0 || clip.getMinX() > getPixelWidth(length))
@@ -203,6 +201,22 @@ public class RepeatSpacerSimple extends MultiSpacer {
         
         if (clip.getMaxY() < 0 || clip.getMinY() > getPixelHeight(length))
         	return;
+
+        BitSegment localRepaintSeg = repaintSeg.shiftLeft(seg.firstIndex);
+
+        if (localRepaintSeg==null)
+        	return;
+        
+        if (repaintSeg != null) {
+        	long minFirst = localRepaintSeg.firstIndex.divide(bitLength);
+        	long minReps = localRepaintSeg.lastIndex.divide(bitLength) + 1;
+        	
+        	//System.out.println("repaint first/reps:" + minFirst + "vs" + first + ", " + repeats +"vs"+minReps);
+        	
+        	first = Math.max(minFirst, first);
+        	repeats = Math.min(minReps, repeats);
+        	//System.out.println("first/reps:" + first + ","+repeats);
+        }
         
         if (horizontal) {
                     	
@@ -210,16 +224,15 @@ public class RepeatSpacerSimple extends MultiSpacer {
             xPixels = (int)one;
             
         	if (clip.getMinX() > 0) {
-	            first = (long) (clip.getMinX()/one);
-	            startTranslateX = (int) (one * first);
+	            first = Math.max((long)(clip.getMinX()/one), first);
         	}
+        	startTranslateX = (int) (one * first);
         	
             //System.out.println("first: " + first + " startX:" + startTranslateX + " clipMinX:" + clip.getMinX() + " i.lastPosCalc:" + i.lastPosCalc + " i.current:" + i.currentIndex());
             
         	if (clip.getMaxX() > 0) {
-	            long last = ((long) (clip.getMaxX()/one ) +1);
+	            long last = ((long)(clip.getMaxX()/one ) +1);
 	            reps = Math.min(repeats, last);
-	            
         	}
             
         } else {
@@ -228,14 +241,13 @@ public class RepeatSpacerSimple extends MultiSpacer {
             yPixels = (int)one;
             
         	if (clip.getMinY() > 0) {
-	            first = (long) (clip.getMinY()/one);
-	            startTranslateY = (int) (one * first);
+	            first = Math.max((long)(clip.getMinY()/one), first);
         	}
+            startTranslateY = (int) (one * first);
         	
         	if (clip.getMaxY() > 0) {
 	            long last = ((long) (clip.getMaxY()/one ) +1);
 	            reps = Math.min(repeats, last);
-	            
 	            //System.out.println("Math.min(repeats, last); " + "h:" + horizontal +" repeats:" + repeats +" last:" + last);  
         	}
 	            
@@ -244,9 +256,7 @@ public class RepeatSpacerSimple extends MultiSpacer {
         g.translate(startTranslateX, startTranslateY);
         totalXChange += startTranslateX;
         totalYChange += startTranslateY;
-		
-        BitCursor bitLength = bits(length);
-        
+		        
         BitCursor segEnd = seg.firstIndex.add(bitLength.multiply((int) first) );
         
         //System.out.println("printing " + "h:" + horizontal +  " reps:" + reps + " starting index: " + first + " pos: " + segEnd + " clip:" + clip);
@@ -254,7 +264,7 @@ public class RepeatSpacerSimple extends MultiSpacer {
 			BitCursor segStart = segEnd;
 			segEnd = segStart.add(bitLength);
 			
-			contents.paint(g, d, new BitSegment(segStart, segEnd), sel, curs);
+			contents.paint(g, d, new BitSegment(segStart, segEnd), sel, curs, repaintSeg);
 			
 			g.translate(xPixels, yPixels);
 			totalXChange += xPixels; 
@@ -298,5 +308,42 @@ public class RepeatSpacerSimple extends MultiSpacer {
 	
 	public void setSimpleSize(SimpleSize s) {
 		contents.setSimpleSize(s);
+	}
+
+	/** adds to blinkX/Y, moves perspective to content's 0,0 */
+	private LayoutCursorBuilder doRangeWork(LayoutCursorBuilder blinkLocKnown) {
+		LayoutCursorBuilder lc = blinkLocKnown;
+		BitCursor loc = lc.getBitLocation();
+		BitCursor bitLength = lc.getBits();
+		BitCursor unitBits = bits(bitLength);
+		long pos = loc.divide(unitBits);
+		BitCursor addition = unitBits.multiply((int)pos);
+		LayoutCursorBuilder newPerspective = lc.perspective(addition);
+		
+		if (horizontal) {
+    		long one = contents.getPixelWidth(unitBits);
+    		newPerspective.addToBlinkX(one*pos);
+    		newPerspective = newPerspective.perspective((int)(one*pos), 0);
+		} else {
+    		long one = contents.getPixelHeight(unitBits);
+    		newPerspective.addToBlinkY(one*pos);
+    		newPerspective = newPerspective.perspective(0, (int)(one*pos));
+		}
+		
+		return newPerspective; 
+	}
+
+	public Point getBitRangeMin(LayoutCursorBuilder min) {
+		return contents.getBitRangeMin(doRangeWork(min)); 
+	}
+
+	public Point getBitRangeMax(LayoutCursorBuilder max) {
+		//System.out.println("<rep.sim> " + max);
+		
+		return contents.getBitRangeMax(doRangeWork(max)); 
+	}
+
+	public void updateLayoutCursor(LayoutCursorBuilder min, LayoutCursorDescender curs) {
+		contents.updateLayoutCursor(doRangeWork(min), curs); 
 	}	
 }

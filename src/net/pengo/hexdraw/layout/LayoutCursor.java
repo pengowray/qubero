@@ -1,8 +1,5 @@
 /*
  * Created on 3/02/2005
- *
- * TODO To change the template for this generated file go to
- * Window - Preferences - Java - Code Style - Code Templates
  */
 package net.pengo.hexdraw.layout;
 
@@ -14,22 +11,16 @@ import java.util.List;
 import net.pengo.bitSelection.BitCursor;
 
 /**
- * @author Que
- *
- * TODO To change the template for this generated type comment go to
- * Window - Preferences - Java - Code Style - Code Templates
+ * @author Peter Halasz
  */
 public class LayoutCursor {
 
-	/* use	s pathList preferably, but if setPath() is used pathList will be lazily created */
+	/* use pathList preferably, but if setPath() is used pathList will be lazily created */
 	private Object[] path;
 	private LinkedList pathList;
 	
-	private long x,y; // calculating cursor blink while initializing..
-	
-	private BitCursor bitLocation;
-	private Rectangle blinkyLocation;
-	private boolean blink = false;
+	protected BitCursor bitLocation;
+	protected Rectangle blinkyLocation;
 
 	private static LayoutCursor unactiveCursor;
 	public static LayoutCursor unactiveCursor() {
@@ -45,10 +36,6 @@ public class LayoutCursor {
 	}
 	
 	public BitCursor getBitLocation() {
-		if (bitLocation == null)
-			// FIXME: shouldn't do this. null valid. create an "addToBitLocation" method instead.
-			bitLocation = new BitCursor();
-				
 		return bitLocation;
 	}
 
@@ -83,6 +70,7 @@ public class LayoutCursor {
 	public LayoutCursorDescender descender() {
 		return new LayoutCursorDescender(this);
 	}
+	
 	public String toString() {
 		String r = "LayoutCursor loc:" + bitLocation + " path(" + getPath().length + ")";
 		for (Object o : getPath()) {
@@ -97,17 +85,15 @@ public class LayoutCursor {
 	public void setBlinkyLocation(Rectangle blinkyLocation) {
 		this.blinkyLocation = blinkyLocation;
 	}
-	public long getX() {
-		return x;
+
+	
+	/** @return a builder so this can be rebuilt */
+	public LayoutCursorBuilder toBuilder() {
+		LayoutCursorBuilder b = new LayoutCursorBuilder();
+		b.setBitLocation(getBitLocation());
+		b.setPath(getPath());
+		return b;
 	}
-	public void setX(long x) {
-		this.x = x;
-	}
-	public long getY() {
-		return y;
-	}
-	public void setY(long y) {
-		this.y = y;
-	}
+
 }
  

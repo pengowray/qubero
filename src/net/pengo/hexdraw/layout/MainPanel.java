@@ -37,6 +37,7 @@ package net.pengo.hexdraw.layout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
 import java.awt.event.MouseEvent;
@@ -47,6 +48,7 @@ import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
+import javax.swing.RepaintManager;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 
@@ -68,7 +70,7 @@ import net.pengo.splash.SimplySizedFont;
  *
  * @author Peter Halasz
  */
-public class MainPanel extends JPanel implements BitSelectionListener, ActiveFileListener, ActionListHolder, MouseListener, MouseMotionListener, Scrollable  {
+public class MainPanel extends JPanel implements BitSelectionListener, ActiveFileListener, ActionListHolder, MouseListener, MouseMotionListener, Scrollable {
     /**
 	 * Comment for <code>serialVersionUID</code>
 	 */
@@ -89,9 +91,16 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     
     private Columns col = new Columns();
     
+    // only repaint these bits, unless pendingBitRepaintRequests is below 0
+    private BitSegment repaintBits = null;
+    //  if this goes below 0 then we have external 
+    private int pendingBitRepaintRequests = 0; 
+
+	
     /** Creates a new instance of MainPanel */
     public MainPanel(ActiveFile activeFile) {
     	loadDefaults();
+    	this.setOpaque(true);
     	this.addMouseListener(this);
     	this.addMouseMotionListener(this);
         setActiveFile(activeFile);
@@ -100,9 +109,7 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     public void loadDefaults() {
     	col.clear();
     	
-    	CodePage437 dosTiles= new CodePage437(dosFont, false);
-    	UnitSpacer dosUnit = new UnitSpacer(dosTiles);
-    	col.addColumn(dosUnit, 16);    	
+    	col.setAutoSpace(true);
     	
     	TextTileSet tiles = new TextTileSet(hexFont, false);
     	UnitSpacer unit = new UnitSpacer(tiles);
@@ -112,6 +119,10 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	UnitSpacer asciiUnit = new UnitSpacer(asciiTiles);
     	col.addColumn(asciiUnit, 16);
 
+    	CodePage437 dosTiles= new CodePage437(dosFont, false);
+    	UnitSpacer dosUnit = new UnitSpacer(dosTiles);
+    	col.addColumn(dosUnit, 16);    	
+    	
         spacer = col.toColumnGroup();
        
         System.out.println("main spacer: " + spacer);
@@ -178,17 +189,16 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	setMaximumSize(size);
     	setPreferredSize(size);
     	setSize(size);
-    	System.out.println("size:" + size);
+    	//System.out.println("size:" + size);
     	//doesn't help
-    	invalidate();
-    	repaint();
+    	//invalidate();
+    	//repaint();
     }
     private BitCursor len() {
     	return activeFile.getActive().getData().getBitLength();
     }
     /* work out how to lay everything out again.. after changes to layout properties*/
     private void repack() {
-    	
     	
     	/*
         FlowLayout layout = new FlowLayout();
@@ -210,32 +220,134 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 
     public void setActiveFile(ActiveFile activeFile) {
         this.activeFile = activeFile;
+        activeFile.getActive().setSelection(selection);
         activeFile.getActive().getSelection().addBitSelectionListener(this);
         activeFile.addActiveFileListener(this);
         recalc();
     }
     
     public void valueChanged(BitSelectionEvent e) {
-    	recalc();
-        repaint();
+    	//recalc();
+    	System.out.println("value changed:" + e.getChangeRange());
+        repaint(e.getChangeRange());
+        //repaint();
     }
-    
-    public void paintComponent(Graphics g) {
-    	//System.out.println("---------------");
-    	super.paintComponent(g);
+        
+    public void repaint() {
+    	checkRepaint();
+    	super.repaint();
+	}
+	public void repaint(int x, int y, int width, int height) {
+		checkRepaint();
+		super.repaint(x, y, width, height);
+	}
+	public void repaint(long tm, int x, int y, int width, int height) {
+		checkRepaint();
+		super.repaint(tm, x, y, width, height);
+	}
+	public void repaint(long tm) {
+		checkRepaint();
+		super.repaint(tm);
+	}
+	public void repaint(Rectangle r) {
+		checkRepaint();
+		super.repaint(r);
+	}
+	
+	private void checkRepaint() {
+		pendingBitRepaintRequests--;
+	}
 
+	/** @return bits to repaint, or null if you should paint everything. */
+	private BitSegment popRepaintBits() {
+		if (pendingBitRepaintRequests < 0) {
+			//external paint request, ignore repaintBits. 
+			pendingBitRepaintRequests = 0;
+			repaintBits = null;
+			return null;
+		}
+			
+		BitSegment r = repaintBits;
+		repaintBits = null;
+		return r;
+	}
+	
+	private void repaint(BitSegment changeRange) {
+		//Rectangle change = spacer.getBitRangeRectangle(changeRange, bits());
+		//repaint(change);
+		
+		if (changeRange == null || changeRange.isEmpty())
+			return;
+		
+		if (repaintBits == null) {
+			repaintBits = changeRange;
+		} else {
+			repaintBits = new BitSegment(new BitCursor[] {repaintBits.firstIndex, repaintBits.lastIndex, changeRange.firstIndex, changeRange.lastIndex} );
+		}
+		pendingBitRepaintRequests++;
+		
+//		call this knowing it will call another paint request in this class, evening out the accounting. kinda dodgy.
+		super.repaint();
+		
+		
+	}
+	
+	private BitCursor bits() {
     	Data d = activeFile.getActive().getData();
+
+    	return d.getBitLength();
+	}
+	
+	public void fillWhite(Graphics g) {
+		Color oldCol = g.getColor();
+		g.setColor(Color.white);
+		Rectangle clip = g.getClipBounds();
+		g.fillRect(clip.x, clip.y, clip.width, clip.height);
+		g.setColor(oldCol);
+	}
+	
+	public void paintComponent(Graphics g_orig) {
+	//public void paint(Graphics g) {
+    	//System.out.println("---------------");
+    	//super.paintComponent(g);
+
+		//RepaintManager.setCurrentManager(null);
+		RepaintManager.currentManager(this).setDoubleBufferingEnabled(false);
+		
+		//try to stop it screwing up.. doesn't help
+		Graphics g = (Graphics2D) g_orig.create(); 
+		
+		try {  
+		
+    	Data d = activeFile.getActive().getData();
+    	BitSegment dataSeg = new BitSegment(new BitCursor(), d.getBitLength());
     	
-    	//System.out.println("d.getBitLength():" + d.getBitLength());
+    	BitSegment repaintSeg = popRepaintBits();
+    	if (repaintSeg == null) {
+        	//super.paintComponent(g);
+        	fillWhite(g);
+    		repaintSeg = dataSeg;
+    	} else {
+    		//Do nothing.
+
+    		//FIXME: comment out following line!!!
+    		//repaintSeg = dataSeg; 
+    	}
+    	
+    	//System.out.println("repaintSeg=" + repaintSeg);
+    	
     	spacer.paint(g, activeFile.getActive().getData(), 
-    			new BitSegment(new BitCursor(), d.getBitLength()),
-				selection, getLayoutCursor().descender());
+    			dataSeg, selection, getLayoutCursor().descender(), repaintSeg);
     	
     	g.setColor(Color.red);
     	Rectangle blinky = getLayoutCursor().getBlinkyLocation();
     	if (blinky != null)
     		g.fillRect(blinky.x, blinky.y, blinky.width, blinky.height);
-    }
+
+    	} finally { 
+    		g.dispose(); 
+    	}
+	}
 
 	public void activeChanged(ActiveFileEvent e) {
 		recalc();
@@ -271,6 +383,14 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 	public void mouseClicked(MouseEvent e) {
 		int clicks = e.getClickCount();
 		BitCursor len = len();
+		if (e.getButton() == MouseEvent.BUTTON3) {
+			activeFile.getActive().liveSelection.getJMenu().getPopupMenu().show(this, e.getX(), e.getY());
+			return;
+		}
+		
+		if (e.getButton() == MouseEvent.BUTTON2) {
+			return;
+		}
 		
 		if (clicks==2) {
 			LayoutCursor cursLeft = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.before, len);
@@ -285,18 +405,18 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 				return;
 			
 			if (e.isControlDown()) {
-				selection.addSelectionInterval(new DirectionalSegment(clickLeft, clickRight));
+				selection.addSelectionInterval(new DirectionalSegment(clickLeft, clickRight), true);
 				
 //				selection.setAnchor(clickLeft);
 //				selection.setLeadSelectionIndex(clickRight);
 				
-				repaint();
+				//repaint();
 			} else if (e.isShiftDown()) {
 				//fixme: left or right depends on which direction you're coming from
 				selection.setLeadSelectionIndex(clickRight);
 			} else {
 				selection.setSelectionInterval(new DirectionalSegment(clickLeft, clickRight));
-				repaint();
+				//repaint();
 			}
 			
 		}
@@ -310,6 +430,10 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 
 	}
 	public void mousePressed(MouseEvent e) {
+		if (e.getButton() != MouseEvent.BUTTON1) {
+			return;
+		}
+		
 		selection.setValueIsAdjusting(true);
 
 		//FIXME: should do different things if you click on a selected thing or not
@@ -320,7 +444,7 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 		LayoutCursor cursClick = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.nearest, len);
 		BitCursor clickbit = cursClick.getBitLocation();
 		
-		//System.out.println("clicked (nearest): " + clickbit);
+		System.out.println("clicked (nearest): " + clickbit);
 		
 		if (clickbit==null) {
 			return;
@@ -331,11 +455,11 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 		if (e.isShiftDown()) {
 			//System.out.println("shift-click: setLeadSelectionIndex()");
 			selection.setLeadSelectionIndex(clickbit);
-			repaint();
+			//repaint();
 		} else if (e.isControlDown()) {
 			//System.out.println("ctrl-click: setAnchor()");
-			selection.setAnchor(clickbit);
-			repaint();
+			selection.setAnchor(clickbit, true);
+			//repaint();
 		} else {
 			//System.out.println("click: setSelectionInterval()");
 //				selection.setSelectionInterval(new DirectionalSegment(clickbit, clickbit));
@@ -343,18 +467,25 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 			selection.clearSelection();
 			selection.setAnchor(clickbit);
 			
-			repaint();
+			//repaint();
 		}
-			
 		
 	}
 	public void mouseReleased(MouseEvent e) {
+		if (e.getButton() != MouseEvent.BUTTON1) {
+			return;
+		}
+		
 		selection.setValueIsAdjusting(false);
 
 	}
     
 	public void mouseDragged(MouseEvent e) {
-
+		if ((e.getModifiersEx() & MouseEvent.BUTTON1_DOWN_MASK) == 0) {
+			//System.out.println("button:" + + e.getButton() + " e:" + e);
+			return;
+		}
+		
 		//FIXME: check that mouse drags are on the same path
 
 		LayoutCursor cursClick = spacer.layoutCursor(e.getX(), e.getY(), SuperSpacer.Round.nearest, len());
@@ -368,7 +499,7 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 		setLayoutCursor(cursClick);
 		selection.setLeadSelectionIndex(clickbit);
 			
-		repaint();
+		//repaint();
 
 	}
 	public void mouseMoved(MouseEvent e) {
@@ -382,7 +513,7 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
 		return layoutCursor;
 	}
 	public void setLayoutCursor(LayoutCursor layoutCursor) {
-		System.out.println("layout cursor:" + layoutCursor);
+		//System.out.println("layout cursor:" + layoutCursor);
 		this.layoutCursor = layoutCursor;
 	}
 

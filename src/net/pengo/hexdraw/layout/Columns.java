@@ -30,12 +30,15 @@ package net.pengo.hexdraw.layout;
 
 import java.util.ArrayList;
 
+import net.pengo.splash.SimplySizedFont;
+
 /**
  * @author Peter Halasz
  */
 public class Columns {
     private ArrayList<SuperSpacer> columns = new ArrayList<SuperSpacer>();
-    
+    boolean autoSpace = false;
+	
     public void addColumn(SuperSpacer unit, int repeats) {
     	Repeater row = new Repeater();
         row.setHorizontal(true);
@@ -53,6 +56,45 @@ public class Columns {
     	return columns.toArray(new SuperSpacer[0]); 
     }
     
+    private SpacingLine space(SuperSpacer link) {
+    	//fixme: font should be from elsewhere
+        SimplySizedFont hexFont = new SimplySizedFont("hex");
+        SpacingLine s = new SpacingLine();
+        s.setLineVisible(true);
+        s.setFont(hexFont);
+        s.setLinkSizeToSpacer(link);
+        s.setMLength(3);
+        return s;
+    }
+    private SpacingLine space() {
+    	//fixme: font should be from elsewhere
+        SimplySizedFont hexFont = new SimplySizedFont("hex");
+        SpacingLine s = new SpacingLine();
+        s.setLineVisible(false);
+        s.setFont(hexFont);
+        return s;
+    }
+
+    private SuperSpacer[] toSpacedArray() {
+    	SuperSpacer[] original = toArray();
+    	SuperSpacer[] spacedCol = new SuperSpacer[original.length * 2 - 1];
+    	
+    	int origi = 0; // iterator thru original
+    	boolean origTurn = true; // whose turn is it? column or space?
+    	for (int i=0; i<spacedCol.length; i++) {
+    		if (origTurn) {
+    			spacedCol[i] = original[origi];
+    			origi++;
+    			origTurn = false;
+    		} else {
+    			spacedCol[i] = space(spacedCol[0]);
+    			origTurn = true;
+    		}
+    	}
+    	
+    	return spacedCol;
+    }    
+    
     public void clear() {
     	columns.clear();
     }
@@ -60,9 +102,20 @@ public class Columns {
     
     public GroupSpacer toColumnGroup() {
 	   	GroupSpacer page = new GroupSpacer();
-		page.setContents(toArray());
+	   	
+    	if (autoSpace) {
+    		page.setContents(toSpacedArray());
+    	} else {
+    		page.setContents(toArray());
+    	}
+    	
 		page.setHorizontal(true);
 		
 		return page;
     }
+
+	public void setAutoSpace(boolean auto) {
+		this.autoSpace = auto;
+	}
+	
 }

@@ -30,6 +30,7 @@ available at:
 package net.pengo.hexdraw.layout;
 
 import java.awt.Graphics;
+import java.awt.Point;
 
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
@@ -128,46 +129,66 @@ public class Repeater extends MultiSpacer {
 		return getMainRepeater(bits).getBitCount(bits).add(getLeftover(bits));
 	}
 
-	public LayoutCursor bitIsHere(long x, long y, SuperSpacer.Round r, BitCursor bits, LayoutCursor lc) {
+    protected void bitIsHere(LayoutCursorBuilder lc, Round round) {
+    	BitCursor bits = lc.getBits();
+    	
 		if (isHorizontal()) {
+			long x = lc.getClickX();
 			long width = getMainRepeater(bits).getPixelWidth(bits);
 			if (x >= 0 && x < width) {
-				return getMainRepeater(bits).bitIsHere(x, y, r, bits, lc);
+				getMainRepeater(bits).bitIsHere(lc, round);
+				return;
 			} else if (x >= width && x < width + contents.getPixelWidth(getLeftover(bits))) {
 				BitCursor leftover = getLeftover(bits);
-				if (leftover.equals(BitCursor.zero))
-					return LayoutCursor.unactiveCursor();
+				if (leftover.equals(BitCursor.zero)) {
+					lc.setNull(true);
+					return;
+				}
 
-				lc.setX(lc.getX() + width);
-				lc = contents.bitIsHere(x-width, y, r, leftover, lc);
-				lc.setBitLocation(lc.getBitLocation().add(getMainRepeater(bits).getBitCount(bits)));
-				return lc;
+				BitCursor mainRepeaterBits = getMainRepeater(bits).getBitCount(bits);
+				lc.addToBitLocation(mainRepeaterBits);
+				lc.addToBlinkX(width);
+				//lc.setBits(leftover); // should do by itself?
+				LayoutCursorBuilder view = lc.perspective((int)width, 0, mainRepeaterBits);
+				//view.setBlinkX(0);
+				contents.bitIsHere(view, round);
+				return;
 			}
 			
 		} else {
+			long y = lc.getClickY();
 			long height = getMainRepeater(bits).getPixelHeight(bits);
 			if (y >= 0 && y < height) {
-				return getMainRepeater(bits).bitIsHere(x, y, r, bits, lc);
+				getMainRepeater(bits).bitIsHere(lc, round);
+				return;
 			} else if (y >= height && y < height + contents.getPixelHeight(getLeftover(bits))) {
 				BitCursor leftover = getLeftover(bits);
-				if (leftover.equals(BitCursor.zero))
-					return LayoutCursor.unactiveCursor();
+				if (leftover.equals(BitCursor.zero)) {
+					lc.setNull(true);
+					return;
+				}
 
-				lc.setY(lc.getY() + height);
-				lc = contents.bitIsHere(x, y-height, r, leftover, lc);
-				lc.setBitLocation(lc.getBitLocation().add(getMainRepeater(bits).getBitCount(bits)));
-				return lc;
+				BitCursor mainRepeaterBits = getMainRepeater(bits).getBitCount(bits);
+				lc.addToBitLocation(mainRepeaterBits);
+				lc.addToBlinkY(height);
+				
+				LayoutCursorBuilder view = lc.perspective(0, (int)height, mainRepeaterBits);
+				//view.setBlinkY(0);
+				contents.bitIsHere(view, round);
+				return;
 			}
 		}
-		return null;
+		
+		lc.setNull(true);
+		return;
 	}
 
-	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs) {
+	public void paint(Graphics g, Data d, BitSegment seg, SegmentalBitSelectionModel sel, LayoutCursorDescender curs, BitSegment repaintSeg) {
 		BitCursor len = seg.getLength();
 		
 		//FIXME: should cut short segment for main repeater? not really needed because number of repeats is worked out
 		RepeatSpacerSimple main = getMainRepeater(len);
-		main.paint(g,d,seg, sel, curs);
+		main.paint(g,d,seg, sel, curs, repaintSeg);
 		
 		BitCursor leftover = getLeftover(len);
 		if (leftover.equals(BitCursor.zero))
@@ -178,8 +199,8 @@ public class Repeater extends MultiSpacer {
 		g.translate((int)tranX, (int)tranY);
 		
 		BitSegment leftoverSeg = new BitSegment( seg.lastIndex.subtract(leftover), seg.lastIndex);
-
-		contents.paint(g, d, leftoverSeg, sel, curs);
+		
+		contents.paint(g, d, leftoverSeg, sel, curs, repaintSeg);
 		
 		g.translate((int)-tranX, (int)-tranY);
 	}
@@ -200,5 +221,68 @@ public class Repeater extends MultiSpacer {
 	
 	public void setSimpleSize(SimpleSize s) {
 		contents.setSimpleSize(s);
+	}
+
+	public Point getBitRangeMin(LayoutCursorBuilder min) {
+		return getMainRepeater(min.getBits()).getBitRangeMin(min);
+	}
+
+	public Point getBitRangeMax(LayoutCursorBuilder max) {
+		//System.out.println("<rep> cont:" + contents +".."+ max);
+		BitCursor loc = max.getBitLocation();
+		BitCursor bits = max.getBits();
+		RepeatSpacerSimple main = getMainRepeater(bits);
+		BitCursor mainBits = main.getBitCount(bits);
+		BitCursor leftover = getLeftover(bits);
+		
+		if (loc.compareTo(mainBits) <= 0) {
+			return main.getBitRangeMax(max);
+		}
+		
+		// adjust for leftover
+		
+		LayoutCursorBuilder trans = max.perspective(mainBits);
+		if (isHorizontal()) {
+			long x = main.getPixelWidth();
+			trans.addToBlinkX(x);
+			trans = trans.perspective((int)x,0);
+		} else {
+			long y = main.getPixelHeight();
+			trans.addToBlinkY(y);
+			trans = trans.perspective(0,(int)y);
+		}
+				
+		return contents.getBitRangeMax(max);
+	}
+
+	public void updateLayoutCursor(LayoutCursorBuilder lc, LayoutCursorDescender curs) {
+		//FIXME: should use path more. e.g. save whether used top or bottom
+		//but would probably need a seperate path, as current one is used exclusively for
+		//working out active selection.
+		
+		//FIXME is this too much copy/paste
+		BitCursor bits = lc.getBits();
+		RepeatSpacerSimple main = getMainRepeater(bits);
+		BitCursor mainbits = main.getBitCount(bits);
+		BitCursor leftover = getLeftover(bits);
+		
+		if (mainbits.compareTo(lc.getBitLocation()) <= 0) {
+			main.updateLayoutCursor(lc, curs);
+		} else if (mainbits.add(leftover).compareTo(lc.getBitLocation()) <=0 ) {
+			LayoutCursorBuilder trans = lc.perspective(main.getBitCount(bits));
+			if (isHorizontal()) {
+				int add = (int)main.getPixelWidth();
+				trans.addToBlinkX(add);
+				trans = trans.perspective(add,0);
+			} else {
+				int add = (int)main.getPixelHeight();
+				trans.addToBlinkY(add);
+				trans = trans.perspective(0,add);
+			}
+			
+		} else {
+			lc.setNull(true);
+		}
+
 	}
 }

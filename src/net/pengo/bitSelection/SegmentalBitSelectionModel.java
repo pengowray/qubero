@@ -83,10 +83,8 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 
 	private boolean activeSelectionIsAnti = false;
 
-	private BitSegment adjustedSegment = EMPTY_SEGMENT; // replaces
-																								// firstAdjustedIndex
-																								// +
-																								// lastAdjustedIndex
+	 // replaces firstAdjustedIndex  +lastAdjustedIndex
+	private BitSegment adjustedSegment = null;
 
 	private boolean isAdjusting = false;
 
@@ -143,14 +141,27 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 	}
 
 	public void addSelectionInterval(DirectionalSegment interval) {
+		//default to no autoflip
+		addSelectionInterval(interval, false);
+	}
+
+	public void addSelectionInterval(DirectionalSegment interval, boolean autoflip) {
 		if (getSelectionMode() != MULTIPLE_INTERVAL_SELECTION) {
 			setSelectionInterval(interval);
 			return;
 		}
 
 		saveActiveSelection();
-		BitSegment change = changeActiveSelectionInterval(interval, false);
-		fireValueChanged(change);
+		
+		if (autoflip) {
+			BitSegment change = changeActiveSelectionInterval(interval, isSelectedIndex(interval.getTail()));
+			fireValueChanged(change);			
+		} else {
+			BitSegment change = changeActiveSelectionInterval(interval, false);
+			fireValueChanged(change);
+		}
+		
+		
 	}
 
 	/**
@@ -330,7 +341,6 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		}
 
 		if (interval == null) {
-			//System.out.println("chagned to null selection");
 			saveActiveSelection();
 			return oldActive;
 		}
@@ -366,6 +376,27 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		// FIXME: doesn't take into account "background"(??) selection.
 
 		// return area of change
+		
+		if (oldActive.isEmpty()) {
+			System.out.println("old empty, new:" + newActive);
+			return newActive;
+		}
+		System.out.println("old:" +oldActive + ", new:" + newActive);
+		
+		boolean sameFirst = (oldActive.firstIndex.equals(newActive.firstIndex));
+		boolean sameLast= (oldActive.lastIndex.equals(newActive.lastIndex));
+		
+		if (sameFirst && sameLast)
+			return EMPTY_SEGMENT;
+		
+		if (sameFirst) {
+			return new BitSegment(oldActive.lastIndex, newActive.lastIndex);
+		}
+		
+		if (sameLast) {
+			return new BitSegment(oldActive.firstIndex, newActive.firstIndex);
+		}
+		
 		BitCursor[] everything = new BitCursor[] { oldActive.firstIndex,
 				newActive.firstIndex, oldActive.lastIndex, newActive.lastIndex };
 
@@ -388,6 +419,7 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 	public void setSelectionInterval(DirectionalSegment interval) {
 		BitSegment change = changeActiveSelectionInterval(interval, false);
 
+		//clearSegment();
 		intervalSet.clear();
 		isCacheValid = false;
 		isIntervalsetUptodate = false;
@@ -467,6 +499,7 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		BitSegment old;
 		if (getMinSelectionIndex() == null || getMaxSelectionIndex() == null) {
 			old = new BitSegment(BitCursor.zero, BitCursor.zero);
+			//old = null;
 		} else {
 			old = new BitSegment(getMinSelectionIndex(), getMaxSelectionIndex());
 		}
@@ -764,26 +797,35 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		return previewSaveActiveSelection().isEmpty();
 	}
 
+	public void setAnchor(BitCursor anchor) {
+		// default to no autoflip
+		setAnchor(anchor, false);
+	}
 	/**
 	 * Set the anchor selection index.
 	 * 
 	 * @see #getAnchorSelectionIndex
 	 * 
 	 */
-	public void setAnchor(BitCursor anchor) {
+	public void setAnchor(BitCursor anchor, boolean autoflip) {
 		// This also has the effect on saving the active selection and starting
 		// a new one.
+		
+		//FIXME: replace autoflip with modes: normal, anti, and flip (and noflip for completeness)
 
-		BitSegment change = new BitSegment(anchor, getAnchorSelectionIndex());
+		//BitSegment change = new BitSegment(anchor, getAnchorSelectionIndex());
 
 		if (selectionMode == MULTIPLE_INTERVAL_SELECTION) {
 			saveActiveSelection();
 			//activeSelection = new DirectionalSegment(anchor, anchor);
-			changeActiveSelectionInterval(new DirectionalSegment(anchor, anchor), activeSelectionIsAnti);
+			boolean anti = (autoflip ? isSelectedIndex(anchor) : false);
+			BitSegment change = changeActiveSelectionInterval(new DirectionalSegment(anchor, anchor), anti);
+			fireValueChanged(change);
 		} else {
 			clearSelection(); // shouldnt ?
 			//activeSelection = new DirectionalSegment(anchor, anchor);
-			changeActiveSelectionInterval(new DirectionalSegment(anchor, anchor), activeSelectionIsAnti);
+			BitSegment change = changeActiveSelectionInterval(new DirectionalSegment(anchor, anchor), false);
+			fireValueChanged(change);
 
 			// fixme:
 
@@ -795,7 +837,6 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		// isCacheValid = false; // handled by changeActiveSllection
 		// isIntervalsetUptodate = false; // ditto
 
-		fireValueChanged(change);
 
 	}
 
@@ -812,9 +853,12 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		
 		//System.out.println("setting lead selection with this new thing:" + newActiveSel);
 		
-		changeActiveSelectionInterval(newActiveSel, activeSelectionIsAnti);
+		BitSegment change = changeActiveSelectionInterval(newActiveSel, activeSelectionIsAnti);
 
-		fireValueChanged(new BitSegment(index, oldHead));
+		//seems better but needs to check more
+		//fireValueChanged(new BitSegment(index, oldHead));
+		
+		fireValueChanged(change);
 	}
 
 	/**
@@ -899,7 +943,12 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		if (this.isAdjusting && !valueIsAdjusting) {
 			this.isAdjusting = false;
 			BitSegment oldAdjustedSegment = adjustedSegment;
-			adjustedSegment = EMPTY_SEGMENT;
+			adjustedSegment = null;
+			if (oldAdjustedSegment == null || oldAdjustedSegment.isEmpty()) {
+				//dont bother, i think
+				return;
+			}
+			
 			fireValueChanged(oldAdjustedSegment);
 			return;
 		}
@@ -926,9 +975,18 @@ public class SegmentalBitSelectionModel { // implements BitSelectionModel
 		boolean isAdjusting = getValueIsAdjusting();
 
 		if (isAdjusting) {
-			adjustedSegment = changedRange.maxRange(adjustedSegment);
+			if (adjustedSegment != null && !adjustedSegment.isEmpty()) {
+				if (changedRange == null || changedRange.isEmpty()) {
+					// do nothing
+				} else {
+					adjustedSegment = adjustedSegment.maxRange(changedRange);
+					//System.out.println("changed to:" + adjustedSegment + " from:" + adjustedSegment + " and " +changedRange );
+				}
+			} else {
+					adjustedSegment = changedRange;
+			}
 		} else {
-			adjustedSegment = EMPTY_SEGMENT;
+			adjustedSegment = null;
 		}
 
 		BitSelectionEvent e = null;

@@ -24,9 +24,11 @@ available at:
 */
 
 package net.pengo.data;
-import net.pengo.app.*;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 
-import java.io.*;
+import net.pengo.app.Cursor;
 import net.pengo.bitSelection.BitCursor;
 import net.pengo.bitSelection.BitSegment;
 
@@ -223,6 +225,28 @@ public abstract class Data implements Comparable {
     }
     
     public int readBitsToInt(BitSegment segment) throws IOException {
+    	BitCursor seglen = segment.getLength();
+    	
+    	if (seglen == BitCursor.oneByte && segment.firstIndex.getBitOffset() == 0) {
+    		// single, aligned byte (optimisation)
+            byte[] b = readByteArray((int)segment.firstIndex.getByteOffset(), 1);
+    		return b[0];
+    	}
+    	
+    	if (seglen.getBitOffset() == 4 && seglen.getByteOffset() == 0) {
+    		// optimise for 4 bits reads
+    		if (segment.firstIndex.getBitOffset() == 0) {
+    			// first four bits
+                byte[] b = readByteArray((int)segment.firstIndex.getByteOffset(), 1);
+        		return (b[0] >> 4) & 0x0F;
+    		} else if (segment.firstIndex.getBitOffset() == 4) {
+                byte[] b = readByteArray((int)segment.firstIndex.getByteOffset(), 1);
+        		return b[0] & 0x0F;
+			} else {
+				// nibble not aligned, continue using normal method...
+			}
+    	}
+    	
         int BIT_COUNT = Integer.bitCount(-1); // 32
         
         int unitSize = (int)segment.getLength().toBits();
