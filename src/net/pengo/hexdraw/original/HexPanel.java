@@ -108,6 +108,17 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
         
     }
     
+    public void setHexFont(Font font){
+        //super.setFont(font);
+        this.font = font;
+        calcDim();
+        
+        for (Renderer r : renderers) {
+            //Renderer r = renderers[i];
+            r.setFontMetrics(getFontMetrics());
+        }    
+    }
+    
     public FontMetrics getFontMetrics() {
         if (font==null)
             font = FontMetricsCache.singleton().getFont("hex");
@@ -243,6 +254,12 @@ public class HexPanel extends JPanel implements DataListener, ActiveFileListener
     public void setColumnCount(int columns) {
         hexPerLine = columns;
         calcDim();
+        
+        for (Renderer r : renderers) {
+            //Renderer r = renderers[i];
+            r.setColumnCount(columns);
+        }    
+        
     }
     
     public void openFileNameChanged(ActiveFileEvent e) {

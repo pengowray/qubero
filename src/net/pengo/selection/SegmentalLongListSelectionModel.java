@@ -53,6 +53,17 @@ public class SegmentalLongListSelectionModel implements LongListSelectionModel {
     public SegmentalLongListSelectionModel() {
     }
     
+    /** copy out data from model */
+    public SegmentalLongListSelectionModel(LongListSelectionModel model) {
+        for (Segment s : model.getSegments()) {
+            addSelectionInterval(s.firstIndex, s.lastIndex);
+        }
+        
+        setLeadSelectionIndex( model.getLeadSelectionIndex() );
+        setAnchorSelectionIndex( model.getAnchorSelectionIndex() );
+        
+    }
+    
     // implements javax.swing.ListSelectionModel
     public void addLongListSelectionListener(LongListSelectionListener l) {
 	listenerList.add(LongListSelectionListener.class, l);

@@ -81,12 +81,6 @@ public class SimpleSelectionResource extends SelectionResource implements LongLi
 	return ((IntResource)(lastIndexP.evaluate())).toLong();
     }
     
-    public SegmentalLongListSelectionModel toSegmental() {
-	SegmentalLongListSelectionModel segmental = new SegmentalLongListSelectionModel();
-	segmental.addSelectionInterval(getFirstIndex(), getLastIndex());
-	return segmental;
-    }
-    
     public long getSegmentCount() {
 	return 1;
     }
@@ -234,4 +228,14 @@ public class SimpleSelectionResource extends SelectionResource implements LongLi
     public void updated(){
 	// do nothing.
     }
+
+    public SegmentalLongListSelectionModel toSegmental() {
+        return new SegmentalLongListSelectionModel(this);
+    }
+
+    public void doubleClickAction() {
+        // similiar to BooleanAddrssdResource
+        super.doubleClickAction();
+        makeActive();
+    }    
 }

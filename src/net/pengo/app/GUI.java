@@ -3,6 +3,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Container;
 import java.awt.Dimension;
+import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Image;
 import java.awt.Toolkit;
@@ -46,6 +47,7 @@ public class GUI implements ActiveFileListener {
     protected ExitAction exitAction;
     
     protected String titleSuffix =  "Qubero";
+    protected String logo = "mooj32.png";
     
     public GUI() {
         setIcon();
@@ -83,7 +85,7 @@ public class GUI implements ActiveFileListener {
         if (icon != null)
             return;
         
-        URL url = ClassLoader.getSystemResource("mooj32.png");
+        URL url = ClassLoader.getSystemResource(logo);
         if (url != null)
             icon = Toolkit.getDefaultToolkit().createImage(url);
     }
@@ -344,5 +346,27 @@ public class GUI implements ActiveFileListener {
         jframe.setTitle(of.toString() + " - " + titleSuffix);
     }
     
+    public void fontSizeSmall() {
+        Font bigger = FontMetricsCache.singleton().getFont("hex.S");
+        hexpanel.setHexFont(bigger);
+    }
+    public void fontSizeMedium() {
+        Font bigger = FontMetricsCache.singleton().getFont("hex");
+        hexpanel.setHexFont(bigger);
+    }
+    
+    public void fontSizeLarge() {
+        Font bigger = FontMetricsCache.singleton().getFont("hex.L");
+        hexpanel.setHexFont(bigger);
+    }
+
+    public void fontSizeXLarge() {
+        Font bigger = FontMetricsCache.singleton().getFont("hex.XL");
+        hexpanel.setHexFont(bigger);
+    }
+    
+    public void setColumnCount(int count) {
+        hexpanel.setColumnCount(count);
+    }
 }
 

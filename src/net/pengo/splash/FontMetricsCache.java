@@ -22,8 +22,10 @@ public class FontMetricsCache {
         //***********
         // put registrations here:
         
+        registerFontToFind("hex.S", new Font("Monospaced", Font.PLAIN, 8) );
         registerFontToFind("hex", new Font("Monospaced", Font.PLAIN, 11) );
-        registerFontToFind("hex.big", new Font("Monospaced", Font.PLAIN, 15) );
+        registerFontToFind("hex.L", new Font("Monospaced", Font.PLAIN, 14) );
+        registerFontToFind("hex.XL", new Font("Monospaced", Font.PLAIN, 24) );
         
         //***********
         
@@ -74,7 +76,11 @@ public class FontMetricsCache {
     
     public FontMetrics getFontMetrics(Font f) {
         //System.out.println("getting metrics" + f);
-        return (FontMetrics)fontMap.get(f);
+        FontMetrics fm = (FontMetrics)fontMap.get(f);
+        if (fm==null)
+            System.out.println("this font never registered: " + f);
+            
+        return fm;
     }
     
     public Font getFont(String name) {

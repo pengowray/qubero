@@ -25,7 +25,7 @@ public class WaveRenderer extends SeperatorRenderer {
             Place cursor) {
         //// draw side wave form:
         
-        int charsHeight = 16;
+        int charsHeight = fm.getHeight(); // 16
         int imax =  8 * baLength / (sampleBits);
         
         for ( int i=0; i < imax; i++ ) {

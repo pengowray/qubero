@@ -90,8 +90,6 @@ public class StringAddressedResource extends StringResource implements Addressed
         Data newdata = new ArrayData(b);
         alertBinaryListener(newdata);
     }
-
-    
     
 }
 

@@ -5,18 +5,20 @@ import java.awt.Image;
 import java.awt.image.PixelGrabber;
 import java.util.Random;
 
-/** 
+/**
  * rudimentary file editing. no extending file size.
  * entire file is cached.
  */
 public class DemoData extends ArrayData {
-
+    
+    private Image logo;
+    
     public DemoData() {
         this(null);
     }
     
     public DemoData(int length) {
-       // stripes
+        // stripes
         byteArray = new byte[length];
         Random random = new Random();
         
@@ -25,82 +27,143 @@ public class DemoData extends ArrayData {
         byteArray[0] = 0x00;
     }
     
+    public void addData(String addition) {
+        byte[] string = addition.getBytes();
+        int line = 16;
+        
+        //round up to nearest 16 bytes
+        if (string.length % line != 0) {
+            byte[] tabbed = new byte[string.length + (line - (string.length % line ))];
+            System.arraycopy(string, 0, tabbed, 0, string.length);
+            addData(tabbed);
+        } else {
+            addData(string);
+        }
+    }
+    
+    public void addData(byte[] addition) {
+        byte[] newBytes = new byte[byteArray.length + addition.length];
+        System.arraycopy(byteArray, 0, newBytes, 0, byteArray.length);
+        System.arraycopy(addition, 0, newBytes, byteArray.length, addition.length);
+        byteArray = newBytes;
+    }
+    
     public DemoData(Image logo) {
         super();
-        byte[] msg = "Welcome to Qubero!".getBytes();
-        byte[] boiler = "Qubero (c) 2002-2004 Peter Halasz".getBytes();
-        int length = 1024 + boiler.length;
-
-	byteArray = new byte[length];
+        this.logo = logo;
+        byteArray = new byte[0];
         
-        byte b = 0;
-        for (int a=0; a < length; a++) {
-            byteArray[a] = b;
-            b++;
-        }
         
-        Random random = new Random();
-        byte[] rbytes = new byte[256];
-        random.nextBytes(rbytes);
-        System.arraycopy(rbytes, 0, byteArray, 256*2, rbytes.length);
+        addData("Qubero Demo File");
+        addData(randomData(16));
+        addData("1-Byte Spectrum");
+        addData(oneByteSpectrum());
+        addData("32-bit integers counter");
+        addData(fourByteSpectrum());
+        addData("Random data");
+        addData(randomData(256));
+        addData("Logo");
+        addData(logo());
+        addData("Qubero (c) 2002-2004 Peter Halasz");
+        
+        //int length = header.length + 1024 + footer.length;
+        
         
         // copy message into the middle
         //System.arraycopy(msg, 0, byteArray, (256-msg.length)/2, msg.length); // actual middle
-        System.arraycopy(msg, 0, byteArray, 128, msg.length);
         
         
-        
-        int offset = 768;
-
-        // stripes
-        byte[] st = new byte[16];
-        random.nextBytes(st);
-        for (int ay = 0; ay < 16; ay++) {
-            for (int ax = 0; ax < 16; ax++) {
-                byteArray[offset + ay*16 + ax] = st[ay];
-            }
-        }
-
         
         // logo
-        offset = random.nextInt(48)*16;
         
-        if (logo != null) {
-            int w = 16, h = 16;
-            int[] pixels = new int[w * h];
-            
-            Image i = logo.getScaledInstance(w,h,Image.SCALE_SMOOTH);
-            PixelGrabber pg = new PixelGrabber(i,0,0,w,h,pixels,0,w);
-            try {
-                pg.grabPixels();
-            } catch (InterruptedException e) {
-                System.out.println("logo failure.");
-                return;
-            }
-            
-            for (int y=0; y<16; y++) {
-                for (int x=0; x<16; x++) {
-                    int nowOff = y * w + x;
-                    int pixel = pixels[nowOff];
-                    byte old = byteArray[offset + nowOff];
-                    byte alpha = (byte) ((pixel >> 24) & 0xff);
-                    int red   = (pixel >> 16) & 0xff;
-                    int green = (pixel >>  8) & 0xff;
-                    int blue  = (pixel      ) & 0xff;
-                    byte grey = (byte) (((red+green+blue)/3) & 0xff); 
-                    //byte newPixel = (byte) ((old & ~(~alpha & grey)));
-                    byte newPixel = (byte)( (old & ~alpha) | (~grey & alpha)  );
+        
+    
+    //System.arraycopy(boiler, 0, byteArray, byteArray.length - boiler.length, boiler.length);
+}
 
-                    byteArray[offset + nowOff] = newPixel;
-                }
-            }
+private byte[] oneByteSpectrum() {
+    byte[] spec = new byte[256];
+    
+    byte b = 0;
+    for (int i=0; i<spec.length; i++) {
+        spec[i] = (byte)b;
+        b++;
+    }
+    
+    return spec;
+}
+
+private byte[] fourByteSpectrum() {
+    Random random = new Random();
+    byte[] spec = new byte[256];
+    
+    int num = random.nextInt();
+    for (int i=0; i<spec.length; i+=4) {
+        int a   = (num >> 24) & 0xff;
+        int b   = (num >> 16) & 0xff;
+        int c   = (num >>  8) & 0xff;
+        int d   = (num      ) & 0xff;
+        spec[i  ] = (byte)a;
+        spec[i+1] = (byte)b;
+        spec[i+2] = (byte)c;
+        spec[i+3] = (byte)d;
+        
+        num++;
+    }
+    
+    return spec;
+}
+
+private byte[] randomData(int len) {
+    Random random = new Random();
+    byte[] rbytes = new byte[len];
+    random.nextBytes(rbytes);
+    
+    return rbytes;
+}
+
+public String toString() {
+    return "Demo" + byteArray.length;
+}
+
+private byte[] logo() {
+    if (logo == null)
+        return new byte[0];
+    
+    int offset = 0;
+    byte[] returnBytes = new byte[256]; //fixme: can be filled with other stuff
+    
+    int w = 16, h = 16;
+    int[] pixels = new int[w * h];
+    
+    Image i = logo.getScaledInstance(w,h,Image.SCALE_SMOOTH);
+    PixelGrabber pg = new PixelGrabber(i,0,0,w,h,pixels,0,w);
+    try {
+        pg.grabPixels();
+    } catch (InterruptedException e) {
+        System.out.println("logo failure.");
+        return new byte[0];
+    }
+    
+    for (int y=0; y<16; y++) {
+        for (int x=0; x<16; x++) {
+            int nowOff = y * w + x;
+            int pixel = pixels[nowOff];
+            byte old = returnBytes[offset + nowOff];
+            byte alpha = (byte) ((pixel >> 24) & 0xff);
+            int red   = (pixel >> 16) & 0xff;
+            int green = (pixel >>  8) & 0xff;
+            int blue  = (pixel      ) & 0xff;
+            byte grey = (byte) (((red+green+blue)/3) & 0xff);
+            //byte newPixel = (byte) ((old & ~(~alpha & grey)));
+            byte newPixel = (byte)( (old & ~alpha) | (~grey & alpha)  );
+            
+            returnBytes[offset + nowOff] = newPixel;
         }
-        
-        System.arraycopy(boiler, 0, byteArray, byteArray.length - boiler.length, boiler.length);
     }
-
-    public String toString() {
-        return "Demo" + byteArray.length;
-    }
+    return returnBytes;
+    
+    
+}
 
 }

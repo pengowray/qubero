@@ -16,6 +16,7 @@ import net.pengo.data.SelectionData;
 import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionListener;
 import net.pengo.selection.LongListSelectionModel;
+import net.pengo.selection.SegmentalLongListSelectionModel;
 
 //acts as a wrapper for LongListSelectionModel.
 
@@ -78,7 +79,8 @@ abstract public class SelectionResource extends Resource implements LongListSele
     
     /** makes the selection active (selected) in openfile. */
     public void makeActive() {
-	LongListSelectionModel selection = (LongListSelectionModel)getSelection().clone();
+        //fixme: should check if selection already supports segments, if so just clone it instead.
+	LongListSelectionModel selection = new SegmentalLongListSelectionModel( getSelection() );
 	openFile.setSelectionModel(selection);
     }
 

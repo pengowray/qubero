@@ -1,14 +1,20 @@
 package net.pengo.app;
 
+import javax.swing.UIManager;
+import javax.swing.UIManager.LookAndFeelInfo;
+import javax.swing.UnsupportedLookAndFeelException;
 import net.pengo.data.Data;
 import net.pengo.data.LargeFileData;
 import net.pengo.splash.Splash;
 
 public class Mooj {
     public static void main(String[] arg) {
-	try {
-	    
-	    
+            
+            
+            try {
+
+	    //changeLookAndFeel();
+            
 	    Splash.show();
 	    if (arg.length == 0) {
 		////arg = new String[] {"C:\\My Documents\\project-moojasm\\HexEditorGUI.class"}; // Mooj.class
@@ -28,8 +34,50 @@ public class Mooj {
 	    e.printStackTrace();
 	}
     }
+
+    /** changes the look and feel so it is NOT the default */
+    static void changeLookAndFeel() {
+        try {
+            //UIManager ui = new UIManager();
+            LookAndFeelInfo[] laf = UIManager.getInstalledLookAndFeels();
+            if (laf == null) {
+                System.out.println("note: UIManager.getInstalledLookAndFeels() returns null");
+                return;
+            }
+            
+            String defaultLAF = UIManager.getLookAndFeel().getName();
+            System.out.println("default look and feel name: " + defaultLAF);
+            System.out.println("installed look and feels: " + laf.length);
+            
+            LookAndFeelInfo l2 = null;
+            for (LookAndFeelInfo l : laf) {
+                l2 = l;
+                System.out.println("candidate look and feel name: " + l.getName());
+                if (! l.getName().equals(defaultLAF)) {
+                    UIManager.setLookAndFeel(l2.getClassName());
+                    System.out.println(l.getName() + " is not default");
+                    return;
+                }
+
+            }
+            System.out.println("setting to: " + l2.getName() + ".");
+            UIManager.setLookAndFeel(l2.getClassName());
+            System.out.println("no other auxilary l+f found :(");
+
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        } catch (InstantiationException e) {
+            e.printStackTrace();
+        } catch (IllegalAccessException e) {
+            e.printStackTrace();
+        } catch (UnsupportedLookAndFeelException e) {
+            e.printStackTrace();
+        }
+    }
     
 }
+
+
 
 /**
  * A view contains information on how to display chunks, options and commands

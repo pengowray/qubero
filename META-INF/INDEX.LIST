@@ -1,7 +1,8 @@
 JarIndex-Version: 1.0
 
-Qubero-20041001-0326-backup.jar
+Qubero-20041001-1424-backup.jar
 classes
+classes/extras
 classes/net
 classes/net/pengo
 classes/net/pengo/app
@@ -60,8 +61,10 @@ src/net/pengo/resource
 src/net/pengo/restree
 src/net/pengo/selection
 src/net/pengo/splash
+backup.bat
 build-custom.xml
 build.xml
+dist.bat
 manifest.mf
 mooj32.png
 
