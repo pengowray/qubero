@@ -4,6 +4,7 @@ moojasm todo.txt
 binary data modelling spreadsheet and database.
 the photoshop of hex editors.
 view, edit, create java bytecode + automation
+visual code editor
 
 """get it working first
 get it right later
@@ -99,6 +100,7 @@ priority/immediate features todo:
  - "show System.out" in a window (menu option)
  - rename "get" methods that don't really "get"(?)
  - selection data is not verified.
+ - export/import to/from c
 
 UI to do:
  - only double click should select in tree
@@ -180,6 +182,8 @@ initial chunk types to support:
  - from Chunk.java: recordset, Flags, NarrativeSequence, OverviewDisplayChunk
  - end of line: PC (0D 0A), Mac, Unix, [IBM Mainframe's] NEL (0D 85), Unicode line separator character (#x2028),
  - metadata descriptors: uninitialized data, null, Reserved, bad (sector), unknown, loading, cached/offline, (un)synchronized, copy, linked, unformatted,
+ - topologies (match sticks, boxes, dungeon walls and rooms, hex, rectangular, donut...)
+ - collaboration / communications
  
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
@@ -233,7 +237,7 @@ future versions:
  - complex numbers, real/imaginary
  - typical cryptography operations and symbols (xor?)
  - masks / serial numbers (e.g xxx-xxxx-xxx). Stored with and without the -'s.
- - C strings (escaped).. \n \t \\ etc \nnn \xHH \cx
+ - C string literals (escaped).. \n \t \\ etc \nnn \xHH \cx
  - knuth-compatible (everything in art of programming)
  - database tables / ER diagrams
  - comms tools: share templates, search. p2p.
@@ -246,6 +250,8 @@ future versions:
    <wli> (3) string models are useful for string manipulation and character-oriented stimulus-response patterns that are aggregated into patterns
    <wli> (4) object models are useful for stimulus response patterns subdividable into specific inter-object message transmissions and layered decomposition
    <wli> (5) state machine models are most useful for asynchronous message reception and complex but flat structured message reception + state transition models.
+ - statistical data: quantitive (continuous/discrete), categorical (ordinal, nominal), etc...
+ - browser plugin / plugger compatibility
 
 future formats:
  - plain text
@@ -328,10 +334,12 @@ future formats:
  - plant/animal/biological taxonomies
  - command line arguments parsing / options / generic argv + args parser / --help generator
  - objdump
- - POV-ray
+ - POV-Ray / povray
  - library dewey decimal
  - output from unix 'od', 'nl',
-
+ - astrology / astronomy formats and charts
+ - teletext
+ 
 priority programs to obsolete:
  - notepad + wordpad
  - kde's hex editor
@@ -373,6 +381,18 @@ silly/fun stuff:
  - speak the hex (naturally. calc time between sounds, record each sound in 3-4 different positions, place emphasis on chosen parts)
  - pi, the constant, as a "pseudo" large file, scroll to any point. Viewable as ascii numbers or as base-2. maybe only base-2. might be too slow too.
  - morse code
+ - reversi/othello/iagno board and ai strategy designer:
+   base strategy on:
+    short term number of tiles
+    tracing game through to end
+    enemy prediction (combined with above or counter-move strategy) (match strategy with your own)
+    [symetrical] part of board weighting
+    reversability calculator (e.g. if you have an L shape around one corner (0,0), putting a piece at (1,1) can't be reversed),
+    stage of game (turns)
+    number/ratio of pieces (e.g. so as to try to get lots of pieces when you have few)
+    strategy/factor combiners: weightings and neural network, if-then-else/case, fittingness of a model)
+    experimental: try something just to see how human reacts
+  - laser show / vector graphics / plotter
 
 embrace and obsolete:
  AXE (Advanced Hex Editor 2.0 from Kahei Co)
@@ -465,6 +485,8 @@ other projects / pages:
  - http://www.informatik.tu-darmstadt.de/TI/LiDIA/ (anticommercial maths library)
  - http://xanadu.com.au/
  - http://kos.enix.org/docs.php?lang=en
+ - http://astronomy.swin.edu.au/~pbourke/geomformats/
+ - http://www.arkaos.net/
 
 show off by:
  - winning: http://icfpcontest.cse.ogi.edu/ in 2003
@@ -487,3 +509,4 @@ make money with:
  - dual licence
  - contract work
  - sell a book
+ - VJ'ing

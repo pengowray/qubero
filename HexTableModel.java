@@ -9,10 +9,6 @@ import java.io.*;
  * @author  administrator
  */
 public class HexTableModel extends javax.swing.table.AbstractTableModel {
-    public static final int COLGROUP_ADDR = 1;
-    public static final int COLGROUP_HEX = 2;
-    public static final int COLGROUP_ASCII = 3;
-    public static final int COLGROUP_GREY = 4;
     
     
     private int preHexColumns = 1;
@@ -22,6 +18,28 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
     private int rows;
     private Data data;
     private HexTable parent;
+    private ColumnGroupManager cgm;
+    
+    /** Creates a new instance of HexTableModel */
+    public HexTableModel(Data data, int hexColumns) {
+	ColumnGroupManager cgm = new ColumnGroupManager(hexColumns);
+	cgm.add(1).add(2).add(3);
+	this(data, hexColumns, cgm);
+    }
+	/** Creates a new instance of HexTableModel */
+    public HexTableModel(Data data, int hexColumns, ColumnGroupManager cgm) {
+        super();
+        this.data = data;
+        this.hexColumns = hexColumns;
+	setColGroupManager(cgm);
+        columns = preHexColumns + hexColumns + afterHexColumns;
+    }
+    
+    public void setColGroupManager(ColumnGroupManager cgm){
+	this.cgm = cgm;
+    }
+    
+
     
     public String getColumnName(int column) {
         if (column < preHexColumns) {
@@ -32,14 +50,6 @@ public class HexTableModel extends javax.swing.table.AbstractTableModel {
         } else {
             return "x";
         }
-    }
-    
-    /** Creates a new instance of HexTableModel */
-    public HexTableModel(Data data, int hexColumns) {
-        super();
-        this.data = data;
-        this.hexColumns = hexColumns;
-        columns = preHexColumns + hexColumns + afterHexColumns;
     }
     
     /** Returns the most specific superclass for all the cell values
