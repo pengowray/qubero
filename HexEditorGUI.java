@@ -21,7 +21,6 @@ class HexEditorGUI {
         start();
     }
 
-
     protected void start() {
         //XXX: in future use a renderer factory
 
@@ -33,12 +32,18 @@ class HexEditorGUI {
 
         statusbar = hexpanel.getStatusbar(); //XXX: hmm status bar creation here?
 	
-        JScrollPane jsp = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
-        jframe.getContentPane().add(jsp, BorderLayout.CENTER);
-
-        jframe.getContentPane().add(statusbar, BorderLayout.SOUTH);
+        JScrollPane sp_hexpanel = new JScrollPane(hexpanel, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         
-        jframe.getContentPane().add(moojtree, BorderLayout.WEST);
+        JScrollPane sp_moojtree = new JScrollPane(moojtree, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+
+	JSplitPane splitpane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sp_moojtree, sp_hexpanel);
+	splitpane.resetToPreferredSizes();
+
+        //jframe.getContentPane().add(sp_hexpanel, BorderLayout.CENTER);
+        //jframe.getContentPane().add(sp_moojtree, BorderLayout.WEST);
+
+	jframe.getContentPane().add(splitpane, BorderLayout.CENTER);
+        jframe.getContentPane().add(statusbar, BorderLayout.SOUTH);
         
         jframe.addWindowListener(new WindowAdapter() {
             public void windowClosing(WindowEvent e) {
@@ -48,6 +53,8 @@ class HexEditorGUI {
         
         jframe.pack();
         jframe.setVisible(true);
+  	hexpanel.setVisible(true);
+	//hexpanel.repaint();
     }
 
     //protected void drawScreen(Canvas c) {
@@ -95,7 +102,8 @@ class HexPanel extends JPanel {
     //protected int selectionEnd = -1;
     protected int cursor = -1;
 
-    private boolean draggingMode = false;
+    private boolean draggingMode = false; // mouse is currently dragging a selection
+    private boolean published = false; // has the current selection been published? 
     
     Font font = new Font("Monospaced", Font.PLAIN, 11); // antialias?
     
@@ -131,19 +139,21 @@ class HexPanel extends JPanel {
 
         hy = y / lineHeight;
 
-        return (hy * hexPerLine) + hx;
-        
+        return (hy * hexPerLine) + hx;      
     }
     
     /**
      * hpl may be null
      */
     public HexPanel(RawData root, TreeNode def, HexPanelListener hpl){
+	super();
         //XXX: def should be used in rendering
         this.root = root;
         this.def = def;
         this.hexPanelListener = hpl;
         
+	calcDim();
+       
 	// mouse routines:
 
         addMouseListener(
@@ -153,10 +163,8 @@ class HexPanel extends JPanel {
                     int hclick = hexFromClick( e.getX(), e.getY() );
                     if (hclick != -1) {
                         setSelection(hclick, 1, false);
-			//statusbar.setText("pressing" + draggingMode);
 			draggingMode = true;
                     } else {
-                        //statusbar.setText("pressed on nothing" + draggingMode);
 			draggingMode = false;
                     }		    
 
@@ -166,7 +174,6 @@ class HexPanel extends JPanel {
                     // e.getModifiers(); // FIXME: later.
 		    if (draggingMode) {
 			setSelection(getSelection(), true);
-			//statusbar.setText("releasing");
 			draggingMode = false;
 		    }
 
@@ -177,9 +184,6 @@ class HexPanel extends JPanel {
                     int hclick = hexFromClick( e.getX(), e.getY() );
                     if (hclick != -1) {
                         setSelection(hclick, 1, true);
-                        //statusbar.setText("clicked" + draggingMode);
-                    } else {
-                        //statusbar.setText("clicked on nothing" + draggingMode);
                     }
 		    draggingMode = false;
                 }
@@ -192,10 +196,6 @@ class HexPanel extends JPanel {
                 if (draggingMode && hclick != -1) {
 		    int start = selection.getStart(); 
 		    setSelection(start, (hclick-start)+1, false );
-		    //statusbar.setText("dragged");    
-                } else {
-                    //statusbar.setText("dragged nowhere. mode: " + draggingMode );    
-		    //selection = null;
                 }
         
             }
@@ -211,17 +211,19 @@ class HexPanel extends JPanel {
 	setSelection(sel, true);
     }
 
-    public void setSelection(RawDataSelection sel, boolean publish) {
-	if (sel.equals(selection)) return;
+    public synchronized void setSelection(RawDataSelection sel, boolean publish) {
+	if (sel.equals(selection) && (publish==false || published==true)) return;
 
 	this.selection = sel;
 
-        repaint(); //XXX: repaint only necessary areas!
-
-	if (publish) {
+	if (publish==true) {
 	    hexPanelListener.selectionMade( new SelectionEvent(selection) );
+	    published = true;
+	} else {
+	    published = false;
 	}
 
+        repaint(); //XXX: repaint only necessary areas!
 
     }
 
@@ -235,6 +237,10 @@ class HexPanel extends JPanel {
     public int getHeight() {
         return height;
    }
+
+    public int getWidth() {
+	return width;
+    }
     
     public Dimension getPreferredSize() {
         //FIXME: this is a hack!
@@ -244,25 +250,48 @@ class HexPanel extends JPanel {
     public Dimension getSize() {
         return getPreferredSize();
     }
+
+    public Dimension getMinimumSize() {
+	return getPreferredSize();
+    }
+
+    public Dimension getMaximumSize() {
+	return getPreferredSize();
+    }
     
     //XXX: will need def listener?
  
     /** calculate dimensions */
-    protected synchronized void calcDim(FontMetrics fm) {
+    protected void calcDim() {
+        if (dimensionsCalculated == true)
+            return;
+
+	calcDim(8, 14);
+    }
+
+    protected void calcDim(FontMetrics fm) {
+        if (dimensionsCalculated == true)
+            return;
+
+	calcDim(fm.charWidth('W'), fm.getHeight());
+    }
+
+    protected synchronized void calcDim(int charWidth, int charHeight) {
         if (dimensionsCalculated == true)
             return;
         
-        lineHeight = fm.getHeight();
-        lineStart = fm.stringWidth("0000 0000    "); // ought to be enough space
-        unitWidth = fm.stringWidth("WW"); // length of two characters, basically.
-        
+        lineHeight = charHeight;
+        lineStart = charWidth * 12; // ought to be enough space for hex address
+        unitWidth = charWidth * 2; // length of two characters (eg FF).
+        int asciiWidth = charWidth * hexPerLine; // how long the ascii stuff is
+
         int[] spaceEvery = new int[] {1, 2, 4, 8};
-        int[] spaceSize = new int[]  {unitWidth*3/2, 0, unitWidth/2, unitWidth/2 };
+        int[] spaceSize = new int[]  {charWidth*3, 0, charWidth, charWidth };
         
-        hexStart = new int[hexPerLine]; // where each hex starts on a line.
+        hexStart = new int[hexPerLine+1]; // where each hex starts on a line + where ascii starts
         
         int s = 0;
-        for (int n=0; n<hexPerLine; n++) {
+        for (int n=0; n<hexStart.length; n++) { // only place hexStart.length should be used. use hexPerLine instead.
             hexStart[n] = s;
             for (int m=0; m<spaceEvery.length; m++) {
                 if ((n+1) % spaceEvery[m] == 0) {
@@ -271,26 +300,21 @@ class HexPanel extends JPanel {
             }
         }
 
-        hexPerLine = hexStart.length;
-        
-        
         // if (root.isFixedLength()) {  // --- how to deal with non fixed length?
         
         totalLines = root.getLength() / hexPerLine;
         if ((float)totalLines != ((float)root.getLength() / hexPerLine))
             totalLines++;
-        height = totalLines * lineHeight; //FIXME: slight hack, adds one (two) to avoid rounding up. and long->int
-         
-        width = lineStart + hexStart[hexStart.length-1] + unitWidth;
-        
+        height = totalLines * lineHeight;
+        width = lineStart + hexStart[hexPerLine] + unitWidth + asciiWidth;
         dimensionsCalculated = true;
-        
-        statusbar.setText("line height: " + lineHeight + ". unit width: " + unitWidth + ". width: " + width);
+
+        statusbar.setText("char: " + charHeight + "x" + charWidth + ". Dimensions: " + width + "x" + height +".");
     }
     
-    //public void paintComponent(Graphics g) {
     public void paint(Graphics g) {
-        super.paint(g);
+        super.paint(g); // not needed
+	//System.out.println("paint called. " + g.getClipBounds());
         if (dimensionsCalculated==false) {
             g.setFont(font);            
             FontMetrics fm = g.getFontMetrics();
@@ -313,7 +337,6 @@ class HexPanel extends JPanel {
             top = 0;
             bot = totalLines;
             //Paint the entire component.
-            
         }
       
         paintLines(g,top,bot);
@@ -338,11 +361,12 @@ class HexPanel extends JPanel {
 	    selEnd = selStart + selection.getLength();
 	}
 
-        for (int i = start*hexPerLine; i < len && i <=lastHex; i += hexPerLine) {
+        for (int i = start*hexPerLine; i < len && i <=lastHex; i += hexPerLine) { // line (y)
             linenum++;
+	    StringBuffer ascii = new StringBuffer(16);
             
             int jlen = (len-i >= hexPerLine ? hexPerLine : len-i);
-            for (int j=0; j < jlen; j++) {
+            for (int j=0; j < jlen; j++) { // unit (x)
                 // draw line of hex
                 if (i+j >= selStart && i+j < selEnd) {
                     g.setColor(Color.magenta);
@@ -350,19 +374,26 @@ class HexPanel extends JPanel {
                     g.setColor(Color.black);
                 }
                 g.drawString( byte2hex(data[i+j]), lineStart + hexStart[j], lineHeight*linenum);
-                
+		ascii.append(byte2ascii(data[i+j]));
             }
-            //System.out.println(linenum + ": " + hexline);
+	    g.setColor(Color.black);
+	    g.drawString(ascii.toString(), lineStart + hexStart[hexPerLine], lineHeight*linenum); //XXX: magicnumber
             
             // draw address:
             String addr = i+":  ";
             g.setColor(Color.blue);
             g.drawString( addr,lineStart - fm.stringWidth(addr),lineHeight*linenum);
-            
         }
-                        
     }
     
+    public static String byte2ascii(byte b) {
+	if (b <= 20)
+	    return " ";
+	
+	return Character.toString((char)b); //XXX: do this some other way?
+
+    }
+
     public static String byte2hex(byte b) {
         int l = ((int)b & 0xf0) >> 4;
         int r = (int)b & 0x0f;
