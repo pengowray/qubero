@@ -1,4 +1,4 @@
-ben's suggestions:
+ben's suggestions (miffy):
  - replace large area with "0x20" or a pattern, etc
  - postscript / pdf
  - shockwave flash
@@ -14,7 +14,10 @@ ben's suggestions:
  - openGL stuff
  - DMG mac(?) Disk Image file
  - patent database
- 
+ - Do you know what program people use to make graph sheets?
+   Like charts, and pie stuff, etc..
+   AND NOT FUCKING EXCEL.
+
 data:
  - mpeg4 (for dad)
 
@@ -65,13 +68,14 @@ Artemis (twodogs / Damien)
 
 Craig Huggins (Cehbab):
  - Popup book editor
- - XML language (iXML?)
+ - XML language <iXML?>
  - integrate: XML parser (craig's own), HTML requestor (from PhD).
  - projects: wap (onyaphone)
  - 3d game: quake3 character format, custom map formats (doomish, quake-ish, tiles), openGL, scripting language
  - mpeg4 low-bandwidth video conf (for mobiles)
  - netmeeting video conf
  - "COMPILE BUTTON"
+ - png, color of pixel
 
 quantis@cg166.halls.umist.ac.uk * jason mcginty
 quantis on #osdev (03 May 2003)
@@ -85,6 +89,21 @@ air:
 <air> http://www.geocities.com/tablizer/top.htm
 data modelling tools + terms:
  - http://datamodel.org/
+brix features: http://brix-os.sourceforge.net/?p0=status
+
+
+<ree>
+ - remote access (have the display be external)
+ - <ree> it'd be cool to have a distributed networked hex editor
+
+bevin:
+ <Bevin> http://www.caucho.com/hessian/
+ <Bevin> just added that to RIFE
+
+hellz_hunter is ~abra@pcp02481317pcs.spedwy01.in.comcast.net * cadabra
+hellz_hunter on #math 
+ <hellz_hunter> how do u convert an integer to an ip address?
+ <hellz_hunter> so how does 2130706433 == 127.0.0.1?
 
 other projects / pages:
  - http://opendocman.sourceforge.net - OpenDocMan is a full featured Web-based document management system designed to conform to ISO 17025/IEC
@@ -122,6 +141,10 @@ Mur:
 	[23:12:33] * mur is born 12.18.9.14.13
 	[23:40:38] <mur> http://www.michielb.nl/maya/calendar.html
 
+Mathis:
+  <Mathis> you could also use nasm or gas or wasm or tasm or masm
+  <Mathis> nasm is nice
+
 VJ'ing ideas:
  - Regular division of the plane (escher-style)
  - smaller and smaller
@@ -136,7 +159,7 @@ VJ'ing ideas:
  - http://www.electricsheep.org/
 
 show off by:
- - winning: http://icfpcontest.cse.ogi.edu/ in 2003 ($1000) (last year: August 30)
+ - winning: the icfp contest in 2004 (oops missed 2003) prize: $1000 (August 30 2002, July 2003)
  - bunch of problems to get ready for competition: http://acm.uva.es/problemset/ (entries must be java/c source)
  - IPv6 Application Competition - win $10,000 -  http://www.v6pc.jp/apc/en/index.html - deadline planned for the beginning of June, 2003
  - getting slashdotted:
@@ -173,4 +196,13 @@ make money with:
  - flagged images. (online textbook suppliments.)
  - image analogies style 3D skin for renderings (for movies)
  - monitor ebay / stockmarket / weather / horses (and correlate:) )
+
+Saman (8/8/03)
+ - Fridge 2003: 4 options
+ - more uplifting music (sade)
+ - Windows but better
+ - "Enhance" button (NASA technology)
+
+
+
 

@@ -41,7 +41,7 @@ public class SizePage extends PropertyPage {
 
     public void build() {
         removeAll();
-        add(new JLabel( "Size: " + res.getSelectionData().getLength() ));
+        add(new JLabel( "Size: " + res.getSelectionResource().getSelectionData().getLength() ));
     }
     
     

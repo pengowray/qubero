@@ -10,6 +10,7 @@ import net.pengo.app.*;
 import net.pengo.selection.*;
 import net.pengo.data.*;
 import net.pengo.propertyEditor.*;
+import net.pengo.restree.ResourceList;
 
 import java.util.*;
 import javax.swing.*;
@@ -33,26 +34,46 @@ public class IntResource extends DefinitionResource {
     
     //FIXME: little endian, big endian (2 byte only?), network byte order, local byte order
     
-    //int length; //FIXME: allow fixed length
-    private int signed;
-    private LongListSelectionModel sel;
-    private SelectionData selData;
-    private boolean allowStretch = false;
-    private boolean allowShrink = false;
+    //fixme: all these must be put in the subresource
+    private int signed; //0:
+    //private LongListSelectionModel sel; // needed to able to set the selection //1:  use SelectionResource instead!
+    //private SelectionData selData; //2:
+    private boolean allowStretch = false; //3:
+    private boolean allowShrink = false; //4:
+    
+    private IntResource signedRes; // use if not null
+    private SelectionResource selRes;
+    //prviate 
     
     //public IntResource(OpenFile openFile, LongListSelectionModel sel, int length, int signed) {
-    public IntResource(OpenFile openFile, LongListSelectionModel sel, int signed) {
+    public IntResource(OpenFile openFile, SelectionResource selRes, int signed) {
         super(openFile);
-        this.sel = sel; // note: may be replaced as above
+	/*
+        rl = new ResourceList(new ArrayList(), openFile, "Sub resources") {
+	    public void setSigned(int signed){add(new Integer(signed));}
+	    public int getSigned(){add(new Integer(signed));}
+	};
+	add(new Integer(signed));
+	add(sel); // 0
+	 */
+	
+	
+        this.selRes = selRes; // note: may be replaced as above
         //this.length = length;
         this.signed = signed;
 	new IntResourcePropertiesForm(IntResource.this).show();
     }
     
+    
+    public SelectionResource getSelectionResource() {
+        return selRes;
+    }
+    
     public JMenu getJMenu() {
-        final OpenFile openFile = this.openFile;
+        //final OpenFile openFile = this.openFile;
         
-  	JMenu menu = new JMenu("Example");
+  	JMenu menu = new JMenu("Menu");
+        
         Action deleteAction = new AbstractAction("Delete") {
             public void actionPerformed(ActionEvent e) {
                 //getOpenFile().deleteDefinition(e.getSource(), This);
@@ -63,8 +84,8 @@ public class IntResource extends DefinitionResource {
         
         Action untypeAction = new AbstractAction("Convert to untyped definition") {
             public void actionPerformed(ActionEvent e) {
-                DefaultDefinitionResource res = new DefaultDefinitionResource(openFile, sel);
-                //openFile.definitionChange(e.getSource(), This, res);
+                //DefaultDefinitionResource res = new DefaultDefinitionResource(openFile, sel);
+                DefaultDefinitionResource res = new DefaultDefinitionResource(openFile, selRes.getSelection()); // change to above when DefaultDefinitionResource is fixed
 		List l = getOpenFile().getDefinitionList();
 		int index = l.indexOf(IntResource.this);
 		l.remove(index);
@@ -115,6 +136,7 @@ public class IntResource extends DefinitionResource {
         };
 	menu.add(signmagAction);
         //JPopupMenu popup = menu.getPopupMenu();
+        */
         
         Action propAction = new AbstractAction("Edit properties") {
             public void actionPerformed(ActionEvent e) {
@@ -122,32 +144,25 @@ public class IntResource extends DefinitionResource {
             }
         };
 	menu.add(propAction);
-	 */
+	 
         //JPopupMenu popup = menu.getPopupMenu();
 	return menu;
         
     }
 
     public String toString() {
-        return "int " + sel.toString();
+        return "int " + getValue(); // sel.toString();
     }
 
     public void doubleClickAction() {
-        openFile.setSelectionModel(sel);
-    }
-    
-    public SelectionData getSelectionData() {
-        if (selData == null)
-            selData = new SelectionData(sel, openFile.getData());
-        
-        return selData;
+        openFile.setSelectionModel(selRes.getSelection());
     }
     
     public BigInteger getValue() {
         //byte[] data = sel.getDataStreamAsArray();
 		try
 		{
-			byte[] data = getSelectionData().readByteArray();
+			byte[] data = selRes.getSelectionData().readByteArray();
 			if (data.length == 0)
 			{
 				return BigInteger.ZERO;
@@ -235,6 +250,7 @@ public class IntResource extends DefinitionResource {
     public void setValue(String value) throws NumberFormatException {
         byte[] b = stringToByteArray(value);
         Data newdata = new ArrayData(b);
+        LongListSelectionModel sel = selRes.getSelection();
         openFile.getEditableData().insertReplace(sel, newdata);
         System.out.println("replacing: " + sel.getMinSelectionIndex() + "-" + sel.getMaxSelectionIndex());
     }
@@ -242,6 +258,7 @@ public class IntResource extends DefinitionResource {
     public byte[] stringToByteArray(String value) {
         BigInteger bigInt = new BigInteger(value);
         byte[] data = bigInt.toByteArray();
+        SelectionData selData = selRes.getSelectionData();
         
         if (data.length == 0) {
             return data;
@@ -321,7 +338,7 @@ public class IntResource extends DefinitionResource {
         return null; // unrearchable?
         
         //getModLayer(); //FIXME:X
-        //sel.setValue(val);
+        //sel.setValue(val);level4.php
         
     }
     
@@ -340,9 +357,12 @@ public class IntResource extends DefinitionResource {
         try {
             return Long.parseLong( getValue().toString() );
         } catch (NumberFormatException e) {
+            e.printStackTrace();
             return 0L;
         }
     }
+    
+    
     
 
     /* no longer used */
@@ -367,6 +387,10 @@ public class IntResource extends DefinitionResource {
         int i = ((0xff & b[0]) << 24) | ((0xff & b[1]) << 16) | ((0xff & b[2]) << 8) | (0xff & b[3]);
         
         return i;
+    }
+    
+    public ResourceList getSubResources() {
+        return null;
     }
     
 }

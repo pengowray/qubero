@@ -22,7 +22,15 @@ public class AddressResource extends Resource {
     AddressResource(OpenFile of, IntResource address, IntResource length) {
         super(of);
         this.address = address;
+        this.length = length;
+        
+        //address.addDependent(this);
+        //length.addDependent(this);
     }
+    
+    //public void dependencyChanged(Resource changed) {
+        
+    //}
     
     public LongListSelectionModel toSelection() {
         long firstIndex = address.toLong();

@@ -6,7 +6,8 @@ import java.awt.event.ActionEvent;
 /*
  * MoojNode.java
  *
- *
+ * What is a resource? An item in the menu? A definition? A declaration? 
+ * Something more?
  *
  * Created on 1 August 2002, 13:25
  */

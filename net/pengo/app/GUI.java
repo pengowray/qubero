@@ -31,7 +31,7 @@ public class GUI implements ActiveFileListener {
     
     protected ExitAction exitAction;
     
-    protected String titleSuffix =  "MediaDataGlove";
+    protected String titleSuffix =  "HexMediaBedrock";
     
     public GUI() {
 	setIcon();
@@ -46,6 +46,10 @@ public class GUI implements ActiveFileListener {
     public GUI(Data d) {
 	System.out.println("hi3");
 	open(d);
+    }
+    
+    public JFrame getJFrame() {
+        return jframe;
     }
     /*
      public GUI(Data data)
@@ -150,13 +154,9 @@ public class GUI implements ActiveFileListener {
 	statusbar.setText(msg);
     }
     
-    public void open() {
-	JFileChooser chooser = new JFileChooser();
-	int returnVal = chooser.showOpenDialog(jframe);
-	if (returnVal == JFileChooser.APPROVE_OPTION) {
-	    //String filename = chooser.getSelectedFile().getName();
-	    open(chooser.getSelectedFile());
-	}
+    public void openClass() {
+         // to do
+         
     }
     
     public void open(String filename) {

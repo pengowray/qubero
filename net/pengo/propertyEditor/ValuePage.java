@@ -21,63 +21,32 @@ import java.awt.event.*;
  *
  * @author  Smiley
  */
-public class ValuePage extends PropertyPage {
+public class ValuePage extends EditablePage {
     private IntResource res;
-    private IntResourcePropertiesForm form;
     private JTextField inputField;
-    private boolean modded = false;
-    private boolean updating = false; // if updating, ignore mods
     
     /** Creates a new instance of ValuePage */
     public ValuePage(IntResource res, IntResourcePropertiesForm form) {
-        super();
+        super(form);
         this.res = res;
         this.form = form;
 
         add(new JLabel( "Value: " ));
         inputField = new JTextField("0",12);
-        inputField.addActionListener( new ActionListener() {
-            public void actionPerformed(ActionEvent e) {
-                ValuePage.this.form.save();
-            }
-        } );
-        
-        inputField.getDocument().addDocumentListener( new DocumentListener() {
-            public void changedUpdate(DocumentEvent e) {
-                mod();
-            }
-        
-            public void insertUpdate(DocumentEvent e) {
-                mod();
-            }
+        inputField.addActionListener( getSaveActionListener() );
+        inputField.getDocument().addDocumentListener( this );
             
-            public void removeUpdate(DocumentEvent e) {
-                mod();
-            }
-            
-        });
         add(inputField);
         build();
     }
     
-    private void mod() {
-        if (!updating) {
-            modded = true;
-            form.mod();
-        }
+    
+    public void saveOp() {
+        res.setValue(inputField.getText());
     }
     
-    public void build() {
-        updating = true;
-        modded = false;
-        inputField.setText(res.getValue().toString());
-        updating = false;
-    }
-    
-    public void save() {
-        if (modded) {
-            res.setValue(inputField.getText());
-        }
+    public void buildOp() {
+        inputField.setText( res.getValue() + "" );
     }
     
     public boolean isValid() {

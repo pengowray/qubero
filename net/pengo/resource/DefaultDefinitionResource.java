@@ -5,9 +5,9 @@
  */
 
 package net.pengo.resource;
+
 import net.pengo.app.*;
 import net.pengo.selection.*;
-
 
 import java.util.*;
 import javax.swing.*;
@@ -42,7 +42,7 @@ public class DefaultDefinitionResource extends DefinitionResource {
         
         Action intAction = new AbstractAction("Convert to int") {
             public void actionPerformed(ActionEvent e) {
-                IntResource intRes = new IntResource(openFile, sel, IntResource.TWOS_COMP);
+                IntResource intRes = new IntResource(openFile, new DefaultSelectionResource(openFile, sel), IntResource.TWOS_COMP);
                 //openFile.definitionChange(e.getSource(), This, intRes); // xxx
 		List l = getOpenFile().getDefinitionList();
 		int index = l.indexOf(DefaultDefinitionResource.this);
@@ -51,6 +51,18 @@ public class DefaultDefinitionResource extends DefinitionResource {
             }
         };
 	menu.add(intAction);
+
+        Action boolAction = new AbstractAction("Convert to boolean") {
+            public void actionPerformed(ActionEvent e) {
+                BooleanResource boolRes = new BooleanResource(openFile, new DefaultSelectionResource(openFile, sel), 0);
+                //openFile.definitionChange(e.getSource(), This, intRes); // xxx
+		List l = getOpenFile().getDefinitionList();
+		int index = l.indexOf(DefaultDefinitionResource.this);
+		l.remove(index);
+		l.add(index, boolRes);
+            }
+        };
+	menu.add(boolAction);
         
         Action s2vAction = new AbstractAction("Set range to value...") {
             public void actionPerformed(ActionEvent e) {
@@ -64,11 +76,15 @@ public class DefaultDefinitionResource extends DefinitionResource {
     }
     
     public String toString() {
-        return "untyped " + sel.toString();
+        return "untyped: " + sel.toString();
     }
     
     public void doubleClickAction() {
         getOpenFile().setSelectionModel(sel);
     }
    
+    public net.pengo.restree.ResourceList getSubResources() {
+        return null;
+    }
+    
 }

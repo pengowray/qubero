@@ -1,4 +1,14 @@
-Bedrock is a binary-data modeller, based around the user interface of a hexidecimal editor. Its power comes from the ability to give meaning to raw data, including defining functions to
+Bedrock is:
+ - a binary-data modeller
+ - based around the user interface of a hexidecimal editor.
+
+Definition interface is powerful because it does:
+ - give meaning to raw data
+ - allow definitions of addresses and regions
+ - support a wide range of data types
+ - support custom data types
+ - support custom data polymorphism
+ - including defining functions to
 
 Source code is not yet available and is currently pure Java. User interface is (currently) Swing.
 

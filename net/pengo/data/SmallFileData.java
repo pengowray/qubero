@@ -10,33 +10,42 @@ public class SmallFileData extends ArrayData {
     protected File file;
     protected String name;
 
-    public SmallFileData(File file) {
+    public SmallFileData(File file) throws IOException {
         super();
 	this.file = file;
 	name = file.getName();
-        readFileToMemory();
+        readFileToMemory(new FileInputStream(file));
     }	
 
-    public SmallFileData(String filename) {
+    public SmallFileData(String filename) throws IOException {
         this(new File(filename));
     }
     
+    public SmallFileData(InputStream is, String name) {
+        super();
+        this.file = null;
+        this.name = name;
+        readFileToMemory(is);
+    }
+
     /**
     * reads the entire (hex) file to memory for quick access
     */
-    protected void readFileToMemory() {
+    protected void readFileToMemory(InputStream fis) {
         //FIXME: very inefficent! fix it sometime. 
         //FIXME: oops. i didn't know about file.length()
+        //FIXME: oops! i didn't know about ByteArrayOutputStream
+        
         try {
-            File in = file;
-            FileInputStream fis = new FileInputStream(in);
+            //File in = file;
+            //FileInputStream fis = new FileInputStream(in);
 
             // read in bytes to data
 
             int ch; // current byte
             int chc = 0; // char count
-            if (byteArray == null)
-                byteArray = new byte[1024];
+            //if (byteArray == null) // byte array now starts life as new byte[0]
+            byteArray = new byte[1024];
             while ((ch=fis.read()) != -1) {
                 if (byteArray.length <= chc) {
                     // double byteArray's size

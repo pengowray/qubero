@@ -64,6 +64,7 @@ public class OpenFile implements LongListSelectionListener { // previously did e
 	rootResList.add(definitionResList);
 	rootResList.add(selectionDetails);
 	addLongListSelectionListener(this);
+        getResourceList().add(new LiveSelectionResource(this)); // adds selection. //xxx: should this be here?
     }
     
     public ActiveFile getActiveFile() {
@@ -208,22 +209,22 @@ public class OpenFile implements LongListSelectionListener { // previously did e
 	if (this.selectionModel != null) // && this.selectionModel != selectionModel
 	{
 	    this.selectionModel.removeLongListSelectionListener(this);
-	    getResourceList().remove(this.selectionModel);
+	    //getResourceList().remove(this.selectionModel);
 	    //fireResourceRemoved(this,"Selection",this.selectionResource);
-	}
-	
+        }
+        
 	this.selectionModel = selectionModel;
 	selectionModel.setEventListenerList(listenerList);
-	
 	if (selectionModel == null ) { // || selectionModel.isSelectionEmpty()
 	    return;
 	}
-	
+        
 	//selectionResource = new LiveSelectionResource(this); //fixme: probably unnecessary
 	//fireResourceAdded(this,"Selection",selectionResource);
 	
-	getResourceList().add(this.selectionModel);
-	
+        // no longer needed.
+        //getResourceList().add(this.selectionModel);	
+        
 	//fixme: better way to fire?
 	selectionModel.setValueIsAdjusting(false);
 	selectionModel.setValueIsAdjusting(true);

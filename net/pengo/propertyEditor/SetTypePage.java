@@ -21,30 +21,29 @@ import java.awt.event.*;
  *
  * @author  Smiley
  */
-public class SetTypePage extends PropertyPage {
+public class SetTypePage extends EditablePage {
     private IntResource res;
-    private IntResourcePropertiesForm form;
     private JComboBox type;
     
     /** Creates a new instance of SummaryPage */
-    public SetTypePage(IntResource res, IntResourcePropertiesForm form) {
-        super();
+    public SetTypePage(IntResource res, AbstractResourcePropertiesForm form) {
+        super(form);
         this.res = res;
-        this.form = form;
 
         add(new JLabel( "Integer Type: " ));
         type = new JComboBox(new String[] {
             "unsigned", "ones complement (+/-0)", "twos complement (default)", "sign magnitude", "unused sign bit (NYI)"} );
         add(type);
-        build(); // build before listener to stop apply being hit
-        type.addActionListener( form.getModListener() );
+        type.addActionListener( getModActionListener() );
+        
+        build();
     }
     
-    public void build() {
+    public void buildOp() {
         type.setSelectedIndex( res.getSigned() );
     }
     
-    public void save() {
+    public void saveOp() {
         res.setSigned( type.getSelectedIndex() );
         System.out.println("setting sign to: " + type.getSelectedIndex());
     }

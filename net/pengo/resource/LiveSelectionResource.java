@@ -1,27 +1,36 @@
 package net.pengo.resource;
+
 import java.awt.event.ActionEvent;
 import java.util.*;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.JMenu;
-import net.pengo.app.OpenFile;
-import net.pengo.data.Data;
-import net.pengo.data.DemoData;
-import net.pengo.data.DiffData;
+import net.pengo.app.*;
+import net.pengo.data.*;
 import net.pengo.restree.ResourceList;
 import net.pengo.selection.LongListSelectionEvent;
 import net.pengo.selection.LongListSelectionModel;
 import net.pengo.selection.Segment;
 
-public class LiveSelectionResource extends SelectionResource {
+public class LiveSelectionResource extends SelectionResource implements OpenFileListener {
+    private SelectionData selData; // cache thing
+    
     public LiveSelectionResource(OpenFile openFile) {
 	super(openFile);
+        openFile.addLongListSelectionListener(this); 
     }
     
     public LongListSelectionModel getSelectionModel() {
 	return openFile.getSelectionModel();
     }
     
+    public SelectionData getSelectionData() {
+        if (selData == null)
+            selData = new SelectionData(getSelection(), openFile.getData());
+            
+        return selData;
+    }
+
     public JMenu getJMenu() {
 	final SelectionResource This = this;
 	
@@ -43,8 +52,7 @@ public class LiveSelectionResource extends SelectionResource {
 		public void actionPerformed(ActionEvent e) {
 		    //getOpenFile().clearSelection(this);
 		    //((DiffData)data).delete(sel.getStart(), sel.getLength());
-		    LongListSelectionModel selection = getOpenFile().getSelectionModel();
-		    getOpenFile().getEditableData().delete(selection);
+		    getOpenFile().getEditableData().delete(getSelectionModel());
 		}
 	    };
 	    menu.add(delAction);
@@ -104,18 +112,16 @@ public class LiveSelectionResource extends SelectionResource {
     }
     
     public String toString() {
-	return "Selection";
+	return "Live Selection";
     }
     
-    public synchronized void valueChanged(LongListSelectionEvent e) {
+    public void updated() {
+        selData = null;
+        
 	LongListSelectionModel sel = getSelectionModel();
 	List details = getOpenFile().getSelectionDetails();
 	//fixme: adds to a stupid place.
-	
-	if (e.getValueIsAdjusting()) {
-	    return;
-	}
-	
+        
 	long c = sel.getSegmentCount();
 	details.clear();
 	
@@ -123,7 +129,33 @@ public class LiveSelectionResource extends SelectionResource {
 	for (int i=0; i < seg.length; i++) {
 	    details.add(seg[i]);
 	}
-
     }
+    
+    public LongListSelectionModel getSelection() {
+        return openFile.getSelectionModel();
+    }
+    
+    public void selectionCleared(SelectionEvent e) {
+        updated();
+    }
+    
+    public void dataEdited(DataEvent e) {
+        updated();
+    }
+    
+    public void dataLengthChanged(DataEvent e) {}
+    
+    public void fileClosed(FileEvent e) {
+        // what now?
+    }
+    
+    public void fileSaved(FileEvent e) {}
+    
+    public void selectionCopied(ClipboardEvent e) {}
+    
+    public void selectionMade(SelectionEvent e) {
+        updated();
+    }
+    
 }
 

@@ -37,7 +37,9 @@ public class SummaryPage extends PropertyPage {
         
         //add(new JLabel( "Value: " + res.getValue().toString() ));
         JTextPane jtp = new JTextPane();
-        jtp.setText("Value: " + res.getValue().toString() + "\n" + "Size (bytes): " + res.getSelectionData().getLength() ) ;
+        String s = "Value: " + res.getValue() + "\n";
+        s = s  + "Size (bytes): " + res.getSelectionResource().getSelectionData().getLength();
+        jtp.setText(s ) ;
         add(jtp);
     }
     

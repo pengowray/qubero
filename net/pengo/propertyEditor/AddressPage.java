@@ -21,28 +21,81 @@ import java.awt.event.*;
  *
  * @author  Smiley
  */
-public class AddressPage extends PropertyPage {
+
+
+public class AddressPage extends EditablePage {
     private IntResource res;
-    private IntResourcePropertiesForm form;
-    private JTextField inputField;
+    private JTextField addressField;
+    private JTextField lengthField;
+    
+    private ButtonGroup radioGroup;
+    private JRadioButton simpleRadio;
+    private JRadioButton multiRadio;
+    private JRadioButton emptyRadio;
     
     /** Creates a new instance of AddressPage */
     public AddressPage(IntResource res, IntResourcePropertiesForm form) {
-        super();
+        super(form);
         this.res = res;
-        this.form = form;
+        
+        //fixme: choose selection type via a drop down!
 
-        add(new JLabel( "Address: " ));
-        inputField = new JTextField("0",12);
+        addressField = new JTextField("0",12);
+        addressField.addActionListener( getSaveActionListener() );
+        addressField.getDocument().addDocumentListener( this );
+        lengthField = new JTextField("0",12);
+        lengthField.addActionListener( getSaveActionListener() );
+        lengthField.getDocument().addDocumentListener( this );
+        simpleRadio = new JRadioButton("Simple selection");
+        simpleRadio.addActionListener( getModActionListener() );
+        multiRadio = new JRadioButton("Multi-selection");
+        multiRadio.addActionListener( getModActionListener() );
+        emptyRadio = new JRadioButton("Empty selection"); //fixme: todo ??
+        emptyRadio.addActionListener( getModActionListener() );
+        radioGroup = new ButtonGroup();
+        radioGroup.add(simpleRadio);
+        radioGroup.add(multiRadio);
+        radioGroup.add(emptyRadio);        
+        
         build();
-        add(inputField);
+        
+        JPanel radioPanel = new JPanel(new GridLayout(0, 1));
+        JPanel simplePanel1 = new JPanel();
+        JPanel simplePanel2 = new JPanel();
+        
+        radioPanel.add(simpleRadio);
+        
+        simplePanel1.add(new JLabel( "Address: " ));
+        simplePanel1.add(addressField);
+        simplePanel2.add(new JLabel( "Length: " ));
+        simplePanel2.add(lengthField);
+        radioPanel.add(simplePanel1);
+        radioPanel.add(simplePanel2);
+        radioPanel.add(multiRadio);
+        radioPanel.add(new JLabel("(multi-editor NYI)"));
+        radioPanel.add(emptyRadio);
+        add(radioPanel);
     }
     
-    public void build() {
-        inputField.setText(res.getSelectionData().getStart()+"");
+    public void buildOp() {
+        SelectionResource sel = res.getSelectionResource();
+        SelectionData selData = sel.getSelectionData();
+        addressField.setText(selData.getStart()+"");
+        lengthField.setText(selData.getLength()+"");
+        if (sel.getSelection().getSegmentCount() > 1) {
+            multiRadio.setSelected(true);
+        } else if (sel.getSelection().getSegmentCount() == 0) {
+            addressField.setText("0");
+            emptyRadio.setSelected(true);
+        } else {
+            simpleRadio.setSelected(true);
+        }
     }
     
-    public void save() {
+    public void saveOp() {
+        if (simpleRadio.isSelected()) {
+            
+        }
     }
     
     public String toString() {

@@ -66,7 +66,12 @@ initial chunk types to support:
  - floating point
    http://developers.slashdot.org/article.pl?sid=03/06/26/0044223&mode=thread&tid=126&tid=156
    http://docs.sun.com/source/806-3568/ncg_goldberg.html
- 
+  - arbitrary precision floating point / fixed point floating point: 
+   <air> u can create float types with (a:range 0.0 1.0 delta 0.1)      (like ada)
+   <air> all floats have a precision
+   http://adahome.com/Ammo/cpp2ada.html#1.1
+   type Fixed is delta 0.1 range -1.0 .. 1.0;w
+
 future versions:
  - evidence based error checking (well it doesn't have xyz, but the abcs are in order...)
  - links and soft copies of referenced specs (+ evidence based "broken" links)

@@ -9,6 +9,7 @@ import java.io.*;
  */
 public class ArrayData extends Data {
     protected byte[] byteArray;
+    String name;
     
     public ArrayData() {
         this.byteArray = new byte[0];
@@ -18,6 +19,11 @@ public class ArrayData extends Data {
 	this.byteArray = byteArray;
     }	
     
+    public ArrayData(byte[] byteArray, String name) {
+	this.byteArray = byteArray;
+        this.name = name;
+    }	
+
     public InputStream getDataStream(long offset, long length) {
         return new ByteArrayInputStream(byteArray, (int)offset, (int)length); // no loss.
     }
@@ -35,6 +41,9 @@ public class ArrayData extends Data {
     }
 
     public String toString() {
-        return "byte array data";
+        if (name == null)
+            return "byte array data";
+            
+        return name;
     }
 }

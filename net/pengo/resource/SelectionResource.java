@@ -11,38 +11,23 @@
 package net.pengo.resource;
 import net.pengo.app.*;
 import net.pengo.selection.*;
+import net.pengo.data.*;
 
 import javax.swing.*;
 
-public class SelectionResource extends Resource implements LongListSelectionListener {
-    //final protected Data sel;
+//acts as a wrapper for LongListSelectionModel.
+
+abstract public class SelectionResource extends Resource implements LongListSelectionListener {
+
     
     public SelectionResource(OpenFile openFile) {
-	super(openFile);
-	openFile.addLongListSelectionListener(this);
+        super(openFile);
     }
     
-    public JMenu getJMenu() {
-	JMenu m = new JMenu(this.getClass().getName());
-	m.add(this.getClass().getName());
-	return m;
-    }
-    
-    
-    /*
-     public Data getData() {
-     return sel;
-     }
+     abstract public LongListSelectionModel getSelection();
+
+     abstract public SelectionData getSelectionData();
      
-     public TransparentData getTransparentData() {
-     if (sel instanceof TransparentData) {
-     return (TransparentData)sel;
-     }
-     
-     return sel.getTransparentData();
-     }
-     */
-    
     //FIXME:; reimplement?
     /*
      public boolean equals(SelectionResource o) {
@@ -71,6 +56,14 @@ public class SelectionResource extends Resource implements LongListSelectionList
      *
      */
     public void valueChanged(LongListSelectionEvent e) {
+	if (e.getValueIsAdjusting()) {
+	    return;
+	}
+        
+	updated();
     }
+    
+    abstract public void updated();
+    
     
 }

@@ -28,11 +28,9 @@ public class MoojMenuBar extends JMenuBar {
             }
         }));
 	
-	nowmenu.add( new JMenuItem(new AbstractAction("Open") {
-            public void actionPerformed(ActionEvent e) {
-                gui.open();
-            }
-        }));
+	nowmenu.add( new OpenAction(gui) );
+        nowmenu.add( new OpenClassAction(gui) );
+        
 	nowmenu.add( new JMenuItem("Save")).setEnabled(false);
 	nowmenu.add( new JMenuItem(new AbstractAction("Save as...") {
             public void actionPerformed(ActionEvent e) {

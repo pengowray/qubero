@@ -23,8 +23,11 @@ public class OpenFileResourceFactory extends ResourceFactory {
     public Resource wrap(Object o) {
 	if (o instanceof LongListSelectionModel)
 	    return wrap((LongListSelectionModel)o);
-	
-	if (o instanceof Resource)
+
+	if (o instanceof OpenFile)
+	    return wrap((OpenFile)o);
+        
+        if (o instanceof Resource)
 	    return wrap((Resource)o);
 	
 	if (o instanceof Collection)
@@ -36,6 +39,15 @@ public class OpenFileResourceFactory extends ResourceFactory {
 	return new ContainerResource(o, openFile);
     }
     
+    // return a live selection resource for the OpenFile
+    public Resource wrap(OpenFile of) {
+        new Exception().printStackTrace();
+        //if (of == openFile)
+            return new LiveSelectionResource(openFile);
+        
+        //return null;
+    }
+
     public Resource wrap(Collection o) {
 	return new CollectionResource(o, openFile);
     }
@@ -47,6 +59,8 @@ public class OpenFileResourceFactory extends ResourceFactory {
     }
     
     public Resource wrap(LongListSelectionModel o) {
+        System.out.println("Wrapping a selection");
+        new Exception().printStackTrace();
 	return new DefaultSelectionResource(openFile, o);
     }
     
