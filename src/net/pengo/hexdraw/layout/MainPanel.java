@@ -75,9 +75,9 @@ public class MainPanel extends JPanel implements BitSelectionListener, ActiveFil
     	//page.setLength(new BitCursor(0,4)); //shouldn't need...? or should it?-
     	page.setHorizontal(true);
         
-        spacer = page;
+        //spacer = page;
         
-       // spacer = column;
+        spacer = column;
         
         //spacer = row;
         

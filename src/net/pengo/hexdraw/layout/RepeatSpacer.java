@@ -134,6 +134,9 @@ public class RepeatSpacer extends MultiSpacer {
 	
 
     public void paint(Graphics g, Data d, BitSegment seg) {
+    	
+    	System.out.println("init: " + seg);
+		
         RepeatSpacerIterator i;
         BitCursor length = seg.getLength();
 
@@ -141,12 +144,16 @@ public class RepeatSpacer extends MultiSpacer {
         int totalYChange = 0;
         int startTranslateX = 0;
         int startTranslateY = 0;
-        
+
+        System.out.println("check zero..");
+		
         // check for empty
         if (length.equals(BitCursor.zero))
         	return;
         
         //System.out.println(this.getClass().getName() + " start printing: " + seg);
+        
+        System.out.println("get clip..");
         
         Rectangle clip = g.getClipBounds();
         if (clip.getMaxX() < 0 || clip.getMinX() > getPixelWidth(length))
@@ -154,7 +161,7 @@ public class RepeatSpacer extends MultiSpacer {
         
         if (clip.getMaxY() < 0 || clip.getMinY() > getPixelHeight(length))
         	return;
-        	
+        System.out.println("4..");	
         if (horizontal) {
                     	
             long one = contents.getPixelWidth(length);
@@ -165,15 +172,20 @@ public class RepeatSpacer extends MultiSpacer {
 	            //startTranslateX = (int) (clip.getMinX() * first);
 	            startTranslateX = (int) (one * first);
         	}
+        	
+        	System.out.println("5..");
 	            
             i = iterator(first, seg);
 
+            System.out.println("6..");
+            
         	if (clip.getMaxX() > 0) {
 	            i.setEndCrop((long) (clip.getMaxX()/one + 2)); // cleaner rounding up?
         	}
             
         } else {
             
+        	System.out.println("7..");
         	
             long one = contents.getPixelHeight(length);
             long first = 0;
@@ -183,7 +195,9 @@ public class RepeatSpacer extends MultiSpacer {
 	            startTranslateY = (int) (one * first);
         	}
         	
-            i = iterator(first, seg);
+        	System.out.println("8..");
+        	
+        	i = iterator(first, seg);
 
         	if (clip.getMaxY() > 0) {
 	            i.setEndCrop((long) (clip.getMaxY()/one + 2)); // cleaner rounding up?
@@ -191,6 +205,8 @@ public class RepeatSpacer extends MultiSpacer {
 	            
             
         }
+        
+        System.out.println("9..");
         
         g.translate(startTranslateX, startTranslateY);
         totalXChange += startTranslateX;
@@ -201,10 +217,12 @@ public class RepeatSpacer extends MultiSpacer {
         
 //        System.out.println("  initial:" + nextSeg + " length:" + length + " index:" + i.currentIndex() + "/" + last);
 //        System.out.println("  last: " + last + " X-change:" + totalXChange + " Y-change:" + totalYChange);
+        //System.out.println("---");
         
+        System.out.println("10..");
         while (i.hasNext()) {
-        	
-            //System.out.println("inloop: " + nextSeg + " length:" + length + " index:" + i.currentIndex() + "/" + last);
+        	System.out.println("11..");
+            //System.out.println(" index:" + i.currentIndex() + "of ?, current segment:" + i.currentSegment() ); // + "/" + last
             
             SuperSpacer sp = i.next();
             
@@ -234,6 +252,9 @@ public class RepeatSpacer extends MultiSpacer {
             //nextSeg = new BitSegment(i.getBitOffset(), seg.lastIndex);
 
         }
+        
+        System.out.println("12..");
+        //System.out.println("---");
 
         //System.out.println("Move back, XChange:" + i.getXChange() + " YChange:" + i.getYChange());
         g.translate(-totalXChange, -totalYChange);
@@ -348,9 +369,23 @@ public class RepeatSpacer extends MultiSpacer {
         
         public void skip(long n) {
         	//XXX: do this better!
-        	for(long i=0; i<n; i++) {
-        		next();
-        	}
+
+        	if (n==0) //FIXME: this happens too often, fix calling code
+        		return; 
+        	
+        	BitCursor addbits = bits(1).multiply( (int)n );
+			
+			bitOffset = bitOffset.add( addbits );
+			  
+	      	System.out.println("Skipping:" + n + " bits-per-step:" + bits(1) + " bits:" + addbits + " old pos:" + pos + " new pos:" + (pos+n));
+
+	      	pos+=n;
+	      	
+        	
+        	
+        	//for(long i=0; i<n; i++) {
+        	//	next();
+        	//}
         }
         
         
