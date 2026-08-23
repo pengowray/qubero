@@ -5,6 +5,7 @@ mod id3;
 mod midi;
 mod mp4;
 mod pe;
+pub mod pe_tables;
 mod png;
 mod sqlite;
 mod w4v;

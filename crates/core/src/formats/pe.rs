@@ -12,146 +12,17 @@
 //! bounds it, not the sum of its fields, because the data directory count at
 //! the end of it is a field of the file rather than a constant.
 
+// The names for every number in here come from `pe_tables.rs`, generated from
+// the project that maintains them rather than written out from memory: a PE
+// machine table written by hand is forty magic numbers and a few mistakes.
+use crate::formats::pe_tables::{
+    CHARACTERISTICS, DIRECTORY, DLL_CHARACTERISTICS, MACHINE, OPTIONAL_MAGIC, SECTION_FLAGS, SUBSYSTEM,
+};
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
-
-/// The machines a PE says it is for. The list is longer than anything still
-/// running: the point of a name here is that a file claiming `0x14c` is read
-/// as 32-bit x86 rather than left as a number to look up.
-const MACHINE: &[(i128, &str)] = &[
-    (0x0000, "unknown"),
-    (0x014c, "i386"),
-    (0x0162, "mips r3000"),
-    (0x0166, "mips r4000"),
-    (0x0168, "mips r10000"),
-    (0x0169, "mips wce v2"),
-    (0x0184, "alpha"),
-    (0x01a2, "sh3"),
-    (0x01a3, "sh3 dsp"),
-    (0x01a6, "sh4"),
-    (0x01a8, "sh5"),
-    (0x01c0, "arm"),
-    (0x01c2, "thumb"),
-    (0x01c4, "arm thumb-2"),
-    (0x01d3, "am33"),
-    (0x01f0, "powerpc"),
-    (0x01f1, "powerpc fp"),
-    (0x0200, "ia64"),
-    (0x0266, "mips16"),
-    (0x0284, "alpha64"),
-    (0x0366, "mips fpu"),
-    (0x0466, "mips16 fpu"),
-    (0x0ebc, "efi bytecode"),
-    (0x5032, "riscv32"),
-    (0x5064, "riscv64"),
-    (0x5128, "riscv128"),
-    (0x8664, "amd64"),
-    (0xaa64, "arm64"),
-];
-
-/// What the loader hands the image to.
-const SUBSYSTEM: &[(i128, &str)] = &[
-    (0, "unknown"),
-    (1, "native"),
-    (2, "windows gui"),
-    (3, "windows console"),
-    (5, "os/2 console"),
-    (7, "posix console"),
-    (8, "native windows"),
-    (9, "windows ce gui"),
-    (10, "efi application"),
-    (11, "efi boot service driver"),
-    (12, "efi runtime driver"),
-    (13, "efi rom"),
-    (14, "xbox"),
-    (16, "windows boot application"),
-];
-
-/// The file header's characteristics. Half of these describe a file nobody has
-/// produced since the 1990s, which is the point of naming them: a bit set in a
-/// modern binary that means "16-bit machine" is worth seeing.
-const CHARACTERISTICS: &[(u32, &str)] = &[
-    (0, "relocations stripped"),
-    (1, "executable"),
-    (2, "line numbers stripped"),
-    (3, "local symbols stripped"),
-    (4, "aggressive working set trim"),
-    (5, "large address aware"),
-    (7, "bytes reversed low"),
-    (8, "32-bit machine"),
-    (9, "debug stripped"),
-    (10, "run from swap if removable"),
-    (11, "run from swap if network"),
-    (12, "system file"),
-    (13, "dll"),
-    (14, "uniprocessor only"),
-    (15, "bytes reversed high"),
-];
-
-/// What the loader may do with the image. The mitigation bits (ASLR, DEP,
-/// control flow guard) are the ones people look for.
-const DLL_CHARACTERISTICS: &[(u32, &str)] = &[
-    (5, "high entropy va"),
-    (6, "dynamic base"),
-    (7, "force integrity"),
-    (8, "nx compatible"),
-    (9, "no isolation"),
-    (10, "no seh"),
-    (11, "no bind"),
-    (12, "appcontainer"),
-    (13, "wdm driver"),
-    (14, "control flow guard"),
-    (15, "terminal server aware"),
-];
-
-/// A section's characteristics. Bits 20 to 23 hold an alignment as a number
-/// rather than as flags, so they are left unnamed here: a name on each would
-/// say four things where the format says one.
-const SECTION_FLAGS: &[(u32, &str)] = &[
-    (3, "no pad"),
-    (5, "code"),
-    (6, "initialized data"),
-    (7, "uninitialized data"),
-    (9, "info"),
-    (11, "remove"),
-    (12, "comdat"),
-    (15, "global pointer relative"),
-    (24, "extended relocations"),
-    (25, "discardable"),
-    (26, "not cached"),
-    (27, "not paged"),
-    (28, "shared"),
-    (29, "execute"),
-    (30, "read"),
-    (31, "write"),
-];
-
-/// The two shapes of the optional header, told apart by its first two bytes.
-const OPTIONAL_MAGIC: &[(i128, &str)] = &[(0x107, "rom"), (0x10b, "pe32"), (0x20b, "pe32+")];
 
 /// Bytes of the optional header before `Switch` reaches the part that differs:
 /// the magic, the two linker version bytes, and five longs.
 const OPTIONAL_FIXED: i128 = 2 + 2 + 5 * 4;
-
-/// The directories, in the order the header lists them. Nothing in the file
-/// names them: entry three is the exception table because it is third.
-const DIRECTORY: &[(i128, &str)] = &[
-    (0, "export"),
-    (1, "import"),
-    (2, "resource"),
-    (3, "exception"),
-    (4, "certificate"),
-    (5, "base relocation"),
-    (6, "debug"),
-    (7, "architecture"),
-    (8, "global pointer"),
-    (9, "thread local storage"),
-    (10, "load config"),
-    (11, "bound import"),
-    (12, "import address table"),
-    (13, "delay import"),
-    (14, "clr runtime"),
-    (15, "reserved"),
-];
 
 /// One data directory entry: an address and a length, and nothing saying which
 /// directory it is. Its position in the array is what decides that, so the
@@ -425,7 +296,7 @@ mod tests {
         let v = value(&mut e, &doc, &[1, 7]);
         let Value::Flags { raw, set, unnamed } = v else { panic!("expected flags, got {v:?}") };
         assert_eq!(raw, 0x22);
-        assert_eq!(set, ["executable", "large address aware"]);
+        assert_eq!(set, ["executable image", "large address aware"]);
         assert_eq!(unnamed, 0);
     }
 
@@ -440,8 +311,8 @@ mod tests {
         assert_eq!(name, "Characteristics");
         assert_eq!(raw, 0x22);
         assert_eq!(bits.len(), 16, "one entry per bit of the field, set or not");
-        assert!(bits[1].set && bits[1].name.as_deref() == Some("executable"));
-        assert!(!bits[0].set && bits[0].name.as_deref() == Some("relocations stripped"));
+        assert!(bits[1].set && bits[1].name.as_deref() == Some("executable image"));
+        assert!(!bits[0].set && bits[0].name.as_deref() == Some("relocs stripped"));
         // Bit 6 has no meaning in the format, and is listed anyway.
         assert!(bits[6].name.is_none());
     }

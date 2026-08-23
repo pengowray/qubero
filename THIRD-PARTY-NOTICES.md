@@ -135,6 +135,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## The PE name tables
+
+The names Qubero shows for the numbers in a Windows executable, machine types,
+subsystems, the bits of each characteristics field and the rest, are generated
+by `node tools/petables.mjs` from the `Formats` project, which is what XPEViewer
+and Detect It Easy are both built on. Same author, same MIT terms as above.
+
+Upstream: https://github.com/horsicq/Formats
+
 ## Shipped in the browser
 
 | Crate | Version | Offered under | Taken under |
