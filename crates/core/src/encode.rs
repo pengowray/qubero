@@ -18,6 +18,7 @@ use crate::template::{Endian, Ty};
 /// Bytes stop at the 16 the preview shows.
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
+        Ty::Enum { inner, .. } => editable(inner, size_bits),
         Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } => true,
         Ty::Bytes(_) => size_bits <= 16 * 8,
         Ty::Utf8(_) => size_bits <= 64 * 8,
@@ -87,6 +88,16 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
             }
             Ok(bytes)
         }
+        Ty::Enum { inner, def } => {
+            let t = text.trim();
+            match def.value_of(t) {
+                Some(v) => encode(inner, &v.to_string(), size_bits),
+                // Not a name: any number is still a legal value for the field.
+                None => encode(inner, t, size_bits).map_err(|e| {
+                    if parse_int(t).is_some() { e } else { enum_msg(&def.name, &def.cases) }
+                }),
+            }
+        }
         Ty::Magic(_) => Err("Magic bytes are fixed by the format.".into()),
         _ => Err("This field can't be edited here. Use the hex view.".into()),
     }
@@ -98,6 +109,16 @@ fn whole_number_msg(signed: bool) -> String {
     } else {
         "Whole numbers only, 0 or higher: 12, 0x1f, 0b1010.".into()
     }
+}
+
+/// Names the field accepts, trimmed to something readable in a status line.
+fn enum_msg(name: &str, cases: &[(i128, String)]) -> String {
+    const SHOW: usize = 6;
+    let mut names: Vec<&str> = cases.iter().take(SHOW).map(|(_, n)| n.as_str()).collect();
+    let more = cases.len().saturating_sub(SHOW);
+    let tail = if more > 0 { format!(", and {more} more") } else { String::new() };
+    names.dedup();
+    format!("Not a {name} name or number. Names: {}{tail}.", names.join(", "))
 }
 
 fn range_msg(type_name: &str, min: &str, max: &str) -> String {

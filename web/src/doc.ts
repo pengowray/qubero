@@ -20,7 +20,9 @@ export type TemplateNode = {
   readonly offset_bits: number;
   readonly size_bits: number;
   readonly value: string;
-  readonly kind: "uint" | "int" | "float" | "bytes" | "str" | "magic" | "composite";
+  /** What the in-place editor starts with; differs from `value` for enums. */
+  readonly edit_text: string;
+  readonly kind: "uint" | "int" | "float" | "bytes" | "str" | "magic" | "enum" | "composite";
   readonly ok: boolean;
   readonly child_count: number;
   readonly composite: boolean;

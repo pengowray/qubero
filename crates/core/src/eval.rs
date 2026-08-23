@@ -35,6 +35,9 @@ pub enum Value {
     Str(String),
     Magic { ok: bool },
     Composite { count: u64 },
+    /// A named integer. `name` is None when the file holds a value the enum
+    /// does not list.
+    Enum { raw: i128, name: Option<String> },
 }
 
 impl Value {
@@ -43,6 +46,7 @@ impl Value {
             Value::UInt(v) => i128::try_from(*v).ok(),
             Value::Int(v) => Some(*v),
             Value::Composite { count } => Some(*count as i128),
+            Value::Enum { raw, .. } => Some(*raw),
             // Short text/byte fields used in expressions are their bytes as a
             // big-endian number, so a switch can key on e.g. "IHDR".
             Value::Bytes { len, preview } if *len <= 15 => Some(be_int(preview)),
@@ -125,7 +129,7 @@ impl Evaluator {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
-            _ => (self.primitive_value(doc, &r, size)?, 0, false),
+            _ => (self.primitive_value(doc, &r, &r.ty, size)?, 0, false),
         };
         Ok(NodeInfo {
             path: path.to_vec(),
@@ -307,6 +311,13 @@ impl Evaluator {
                     let (_, n) = self.read_leb(doc, &r)?;
                     n * 8
                 }
+                Ty::Enum { inner, .. } => match **inner {
+                    Ty::Leb128 { .. } => {
+                        let (_, n) = self.read_leb(doc, &r)?;
+                        n * 8
+                    }
+                    _ => return fail("enum over a type with no fixed size"),
+                },
                 Ty::Struct(s) => {
                     if s.fields.is_empty() {
                         0
@@ -477,7 +488,7 @@ impl Evaluator {
             value |= ((b & 0x7f) as u128) << shift;
             shift += 7;
             if b & 0x80 == 0 {
-                if let Ty::Leb128 { signed: true } = r.ty {
+                if let Ty::Leb128 { signed: true } = r.ty.base() {
                     if b & 0x40 != 0 {
                         let v = value as i128 - (1i128 << shift);
                         return Ok((v as u128, i + 1));
@@ -489,8 +500,8 @@ impl Evaluator {
         fail("LEB128 longer than 10 bytes")
     }
 
-    fn primitive_value<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, size: u64) -> R<Value> {
-        Ok(match &r.ty {
+    fn primitive_value<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
+        Ok(match ty {
             Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
             Ty::Int { bits, endian } => {
                 let u = read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian);
@@ -518,6 +529,14 @@ impl Evaluator {
                     s.push('…');
                 }
                 Value::Str(s)
+            }
+            Ty::Enum { inner, def } => {
+                let raw = match self.primitive_value(doc, r, inner, size)? {
+                    Value::UInt(v) => i128::try_from(v).unwrap_or(i128::MAX),
+                    Value::Int(v) => v,
+                    _ => return fail("an enum must sit on an integer"),
+                };
+                Value::Enum { raw, name: def.label(raw).map(str::to_string) }
             }
             _ => unreachable!("composite handled by caller"),
         })

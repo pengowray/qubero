@@ -233,7 +233,7 @@ export class TypeTable {
     tr.dataset["path"] = k;
     tr.dataset["start"] = String(Math.floor(n.offset_bits / 8));
     tr.dataset["end"] = String(Math.ceil((n.offset_bits + n.size_bits) / 8));
-    tr.dataset["value"] = n.value;
+    tr.dataset["value"] = n.edit_text;
     if (k === this.selected) tr.classList.add("tt-selected");
     if (!n.ok) tr.classList.add("tt-bad");
 

@@ -25,6 +25,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::Struct(s) => s.fields.iter().map(|f| fixed_bits(&f.ty)).sum::<Option<u64>>()?,
         Ty::Array { elem, count: Expr::Lit(n) } => fixed_bits(elem)? * (*n).max(0) as u64,
         Ty::Sized { size: Expr::Lit(n), .. } => (*n).max(0) as u64 * 8,
+        Ty::Enum { inner, .. } => fixed_bits(inner)?,
         _ => return None,
     })
 }

@@ -229,6 +229,9 @@ input.invalid {
 .tt-status.warn {
   color: var(--warn);
 }
+.tt-enum {
+  color: var(--accent);
+}
 .tt-bad .tt-val {
   color: var(--warn);
 }

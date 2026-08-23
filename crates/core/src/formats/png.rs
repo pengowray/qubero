@@ -2,6 +2,16 @@
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
+/// PNG colour types. 1, 5 and 7 are not defined by the spec, so a file holding
+/// one shows the number with no name.
+const COLOR_TYPE: &[(i128, &str)] = &[
+    (0, "greyscale"),
+    (2, "rgb"),
+    (3, "indexed"),
+    (4, "greyscale alpha"),
+    (6, "rgba"),
+];
+
 pub fn png() -> Template {
     let ihdr = T::structure(
         "IHDR",
@@ -9,10 +19,10 @@ pub fn png() -> Template {
             ("width", T::u32(Big)),
             ("height", T::u32(Big)),
             ("bit_depth", T::u8()),
-            ("color_type", T::u8()),
-            ("compression", T::u8()),
-            ("filter", T::u8()),
-            ("interlace", T::u8()),
+            ("color_type", T::enumeration("ColorType", T::u8(), COLOR_TYPE)),
+            ("compression", T::enumeration("Compression", T::u8(), &[(0, "deflate")])),
+            ("filter", T::enumeration("FilterMethod", T::u8(), &[(0, "adaptive")])),
+            ("interlace", T::enumeration("Interlace", T::u8(), &[(0, "none"), (1, "adam7")])),
         ],
     );
     let chunk = T::structure(
@@ -71,5 +81,8 @@ mod tests {
         assert_eq!(ihdr.type_name, "IHDR");
         assert_eq!(ev.node(&d, &[1, 0, 2, 1]).unwrap().value, Value::UInt(480));
         assert_eq!(ev.node(&d, &[1, 1, 1]).unwrap().value, Value::Str("IEND".into()));
+        let color = ev.node(&d, &[1, 0, 2, 3]).unwrap();
+        assert_eq!(color.type_name, "ColorType");
+        assert_eq!(color.value, Value::Enum { raw: 6, name: Some("rgba".into()) });
     }
 }

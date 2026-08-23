@@ -2,8 +2,37 @@
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
+/// Section ids from the core spec, in id order.
+const SECTION: &[(i128, &str)] = &[
+    (0, "custom"),
+    (1, "type"),
+    (2, "import"),
+    (3, "function"),
+    (4, "table"),
+    (5, "memory"),
+    (6, "global"),
+    (7, "export"),
+    (8, "start"),
+    (9, "element"),
+    (10, "code"),
+    (11, "data"),
+    (12, "data count"),
+];
+
+const VALTYPE: &[(i128, &str)] = &[
+    (0x7f, "i32"),
+    (0x7e, "i64"),
+    (0x7d, "f32"),
+    (0x7c, "f64"),
+    (0x7b, "v128"),
+    (0x70, "funcref"),
+    (0x6f, "externref"),
+];
+
+const EXPORT_KIND: &[(i128, &str)] = &[(0, "func"), (1, "table"), (2, "memory"), (3, "global")];
+
 pub fn wasm() -> Template {
-    let valtype = T::u8();
+    let valtype = T::enumeration("ValType", T::u8(), VALTYPE);
     let functype = T::structure(
         "FuncType",
         vec![
@@ -19,7 +48,7 @@ pub fn wasm() -> Template {
     let limits = T::structure(
         "Limits",
         vec![
-            ("flags", T::u8()),
+            ("flags", T::enumeration("LimitsFlags", T::u8(), &[(0, "min only"), (1, "min and max")])),
             ("min", T::leb_u()),
             ("max", T::switch(E::field("flags"), vec![(0, T::array(T::u8(), E::lit(0)))], T::leb_u())),
         ],
@@ -35,7 +64,7 @@ pub fn wasm() -> Template {
         vec![
             ("name_len", T::leb_u()),
             ("name", T::utf8(E::field("name_len"))),
-            ("kind", T::u8()),
+            ("kind", T::enumeration("ExportKind", T::u8(), EXPORT_KIND)),
             ("index", T::leb_u()),
         ],
     );
@@ -44,7 +73,7 @@ pub fn wasm() -> Template {
     let section = T::structure(
         "Section",
         vec![
-            ("id", T::u8()),
+            ("id", T::enumeration("SectionId", T::u8(), SECTION)),
             ("size", T::leb_u()),
             (
                 "body",
@@ -93,7 +122,12 @@ mod tests {
         assert_eq!(ev.node(&d, &[2]).unwrap().child_count, 2);
         let params = ev.node(&d, &[2, 0, 2, 1, 0, 2]).unwrap();
         assert_eq!(params.child_count, 2);
-        assert_eq!(params.type_name, "u8[]");
+        assert_eq!(params.type_name, "ValType[]");
+        // The section id is an enum and the body switch still keys off its number.
+        let id = ev.node(&d, &[2, 0, 0]).unwrap();
+        assert_eq!(id.value, Value::Enum { raw: 1, name: Some("type".into()) });
+        assert_eq!(ev.node(&d, &[2, 0, 2]).unwrap().type_name, "TypeSection");
+        assert_eq!(ev.node(&d, &[2, 0, 2, 1, 0, 2, 0]).unwrap().value, Value::Enum { raw: 0x7f, name: Some("i32".into()) });
         let custom = ev.node(&d, &[2, 1, 2]).unwrap();
         assert_eq!(custom.value, Value::Bytes { len: 3, preview: vec![9, 9, 9] });
     }

@@ -22,7 +22,9 @@ struct NodeDto {
     offset_bits: f64,
     size_bits: f64,
     value: String,
-    /// "uint" | "int" | "float" | "bytes" | "str" | "magic" | "composite"
+    /// What the editor should start with when this value is edited.
+    edit_text: String,
+    /// "uint" | "int" | "float" | "bytes" | "str" | "magic" | "enum" | "composite"
     kind: &'static str,
     ok: bool,
     child_count: f64,
@@ -50,21 +52,30 @@ enum Reply<T: Serialize> {
 }
 
 fn dto(n: NodeInfo) -> NodeDto {
-    let (kind, value, ok) = match &n.value {
-        Value::UInt(v) => ("uint", v.to_string(), true),
-        Value::Int(v) => ("int", v.to_string(), true),
-        Value::Float(v) => ("float", v.to_string(), true),
+    // (kind, shown value, text the editor starts with, ok)
+    let (kind, value, edit_text, ok) = match &n.value {
+        Value::UInt(v) => ("uint", v.to_string(), v.to_string(), true),
+        Value::Int(v) => ("int", v.to_string(), v.to_string(), true),
+        Value::Float(v) => ("float", v.to_string(), v.to_string(), true),
         Value::Bytes { len, preview } => {
             let hex: Vec<String> = preview.iter().map(|b| format!("{b:02x}")).collect();
             let mut s = hex.join(" ");
             if *len as usize > preview.len() {
                 s.push('…');
             }
-            ("bytes", s, true)
+            ("bytes", s.clone(), s, true)
         }
-        Value::Str(s) => ("str", s.clone(), true),
-        Value::Magic { ok } => ("magic", if *ok { "matches".into() } else { "does not match".into() }, *ok),
-        Value::Composite { count } => ("composite", count.to_string(), true),
+        Value::Str(s) => ("str", s.clone(), s.clone(), true),
+        Value::Magic { ok } => {
+            let s: String = if *ok { "matches".into() } else { "does not match".into() };
+            ("magic", s.clone(), s, *ok)
+        }
+        Value::Composite { count } => ("composite", count.to_string(), count.to_string(), true),
+        Value::Enum { raw, name } => match name {
+            Some(n) => ("enum", format!("{n} ({raw})"), n.clone(), true),
+            // A value the format does not define. Worth flagging, still editable.
+            None => ("enum", format!("{raw} (unknown)"), raw.to_string(), false),
+        },
     };
     NodeDto {
         path: n.path,
@@ -73,6 +84,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         offset_bits: n.offset_bits as f64,
         size_bits: n.size_bits as f64,
         value,
+        edit_text,
         kind,
         ok,
         child_count: n.child_count as f64,

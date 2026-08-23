@@ -55,6 +55,24 @@ pub enum Until {
     FieldBytes { field: String, bytes: Vec<u8> },
 }
 
+/// Names for the values an integer field is expected to take: `color_type` 6
+/// reads as "rgba". The underlying integer is untouched, so expressions and
+/// switches still see the number, and a value with no name is still shown.
+#[derive(Debug)]
+pub struct EnumDef {
+    pub name: String,
+    pub cases: Vec<(i128, String)>,
+}
+
+impl EnumDef {
+    pub fn label(&self, v: i128) -> Option<&str> {
+        self.cases.iter().find(|(k, _)| *k == v).map(|(_, n)| n.as_str())
+    }
+    pub fn value_of(&self, name: &str) -> Option<i128> {
+        self.cases.iter().find(|(_, n)| n.eq_ignore_ascii_case(name)).map(|(k, _)| *k)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Field {
     pub name: String,
@@ -83,6 +101,8 @@ pub enum Ty {
     Sized { size: Expr, inner: Box<Ty> },
     /// Pick a type by the value of `on`; falls back to `default`.
     Switch { on: Expr, cases: Vec<(i128, Ty)>, default: Box<Ty> },
+    /// An integer type whose values have names.
+    Enum { inner: Box<Ty>, def: Arc<EnumDef> },
 }
 
 #[derive(Debug)]
@@ -137,6 +157,23 @@ impl Ty {
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases, default: Box::new(default) }
     }
+    pub fn enumeration(name: &str, inner: Ty, cases: &[(i128, &str)]) -> Ty {
+        Ty::Enum {
+            inner: Box::new(inner),
+            def: Arc::new(EnumDef {
+                name: name.to_string(),
+                cases: cases.iter().map(|(v, n)| (*v, n.to_string())).collect(),
+            }),
+        }
+    }
+
+    /// The integer type under an enum, or the type itself.
+    pub fn base(&self) -> &Ty {
+        match self {
+            Ty::Enum { inner, .. } => inner.base(),
+            other => other,
+        }
+    }
 
     /// Short human-readable type name for the type table.
     pub fn display_name(&self) -> String {
@@ -164,6 +201,7 @@ impl Ty {
             Ty::Repeat { elem, .. } => format!("{}[]", elem.display_name()),
             Ty::Sized { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
+            Ty::Enum { def, .. } => def.name.clone(),
         }
     }
 }
