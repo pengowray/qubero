@@ -157,9 +157,10 @@ pub enum StrLen {
 /// Where the offsets in a `PointerList` count from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
-    /// The start of the structure the list is a field of. A page of a database
-    /// keeps its offsets from the start of that page.
-    Container,
+    /// The start of the nearest `Sized` window around the list, which is the
+    /// unit a format that keeps offsets inside itself counts from: a page of a
+    /// database, a table of a font. Without one, the start of the file.
+    Window,
     /// The start of the file.
     File,
 }

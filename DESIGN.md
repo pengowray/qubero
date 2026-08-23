@@ -59,8 +59,8 @@ invalidates only the fields that read the edited bytes is the upgrade when that 
 
 Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3, WAV,
 W4V, MIDI, SQLite), one file per format plus `wasm_opcodes.rs` for the instruction
-table. WAV
-carries the metadata chunks bat recorders write: GUANO (`guan`) as UTF-8 lines,
+table. WAV carries the metadata chunks bat recorders write: GUANO (`guan`) as
+UTF-8 lines,
 and `wamd` as a stream of tagged items whose tag numbers were read out of files
 rather than a specification. W4V is the same RIFF container with a format tag of
 0x5741, its `data` chunk a run of 392-byte blocks: a predictor, a scale, five
@@ -69,21 +69,24 @@ the reverse-engineered decoder in the batchi project and covers only the six-bit
 flavour; wider ones would need the code width read from a sibling chunk, which a
 field cannot do.
 
-SQLite is the first format the IR can only half read, and it is worth keeping for
-what it shows. The header and the page grid come out fine: the fields are flat in
-the root struct so the page size is in scope where the pages are sized, a page
-size of 1 (which means 65536, since the field is two bytes) is a `Switch` because
-there is no conditional expression, and the run of pages ends at the end of the
-file rather than trusting the header's page count, which legacy files leave
-stale. A page reads down to its cell pointer array, and stops. Three things are
-missing to go further. Cells sit at the offsets in that array, counted from the
-start of the page, and no type says "the thing at this offset"; that is the one
-worth adding, and it means children that are not in file order, which `spans` and
-`locate` currently assume. SQLite's varint is nine bytes at most and the ninth
-contributes all eight of its bits, so `Vlq` cannot stand in for it. And a record's
-columns are typed by a list of serial types read just before them, one per column,
-which an expression cannot index into. A page whose first byte is not a b-tree
-type reads as bytes, which is what a freelist, overflow or pointer-map page is.
+SQLite reads down to the rows. The header and the page grid are ordinary: the
+fields are flat in the root struct so the page size is in scope where the pages
+are sized, a page size of 1 (which means 65536, since the field is two bytes) is
+a `Switch` because there is no conditional expression, and the run of pages ends
+at the end of the file rather than trusting the header's page count, which
+legacy files leave stale. A page whose first byte is not a b-tree type reads as
+bytes, which is what a freelist, overflow or pointer-map page is.
+
+The cells are what the format cost the IR, and they are in the list below:
+`PointerList` places them, `SqliteVarint` measures them, and `Expr::Elem` with
+`Expr::Idx` types their columns. Two things a database does are still out of
+reach. A payload too big for its page spills onto an overflow page, and how much
+stays behind is a formula with a comparison in it, which expressions cannot say;
+such a cell reads as an error rather than as the wrong bytes, and a comparison
+or a min/max in `Expr` is what would fix it. And page numbers, in an interior
+cell or at the end of a spilled one, are read as numbers and not followed: a
+b-tree that pointed at its own pages would stop being a tree, and the template
+would describe a graph rather than a file.
 
 A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
@@ -132,6 +135,30 @@ Later additions to the IR, each paying for itself in a format:
 * `Named` looks a type up in `Template::types`, which is what lets an MP4 box
   contain more boxes. Resolution has a 64-hop limit, so an alias that resolves
   to itself errors instead of spinning.
+* `PointerList` places its children at offsets held in an earlier array,
+  rather than one after another: a b-tree page keeps its cells that way. The
+  offsets count from the nearest enclosing `Sized` window, which is the page,
+  with an `adjust` for the one page whose offsets count from somewhere else
+  (SQLite's page 1 starts 100 bytes into the file but counts from 0). The
+  children can be in any order, need not fill the space, and one whose offset
+  or contents make no sense is an error on its own rather than one that takes
+  the page with it. What no child covers is a gap, which is what free space
+  inside a page is. This is the first type whose children are not in file
+  order, so `locate` looks at all of them instead of stopping at the first that
+  starts too late, and a gap inside one ends where the next child begins rather
+  than at the end of the parent.
+* `Expr::Elem` reads one element of an earlier array and `Expr::Idx` is the
+  index of the element the expression sits in. Together they say "my type is
+  the one this list gives for my position", which is how a database row's
+  columns are typed: a header of serial types, one per column, read just before
+  the columns themselves. The serial types from 12 up are lengths rather than
+  names, even for a blob and odd for text; there is no remainder operator, so
+  the parity is `s - (s / 2) * 2`, as with RIFF's pad byte.
+* `SqliteVarint` is seven bits per byte, most significant group first, up to
+  nine bytes, where a ninth byte contributes all eight of its bits. `Vlq` stops
+  at four and never does that, so it could not stand in. The value is 64-bit
+  two's complement, so a negative row id reads as one, and writing keeps the
+  field's size by padding at the front with empty groups.
 * `Vlq` is MIDI's variable-length quantity: seven bits per byte, most
   significant group first. LEB128 packs the same seven bits the other way
   round, so it could not stand in. Writing one keeps the field's size by

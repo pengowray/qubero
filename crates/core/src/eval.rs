@@ -494,8 +494,8 @@ impl Evaluator {
         };
         // Offset: read from the pointer array, or after the previous sibling,
         // or at the parent's start.
-        let offset = if let Ty::PointerList { offsets, anchor, adjust, .. } = &pr.ty {
-            self.pointer_offset(doc, parent, &pr, offsets.clone(), *anchor, adjust.clone(), idx)?
+        let offset = if matches!(pr.ty, Ty::PointerList { .. }) {
+            self.pointer_offset(doc, parent, &pr, idx)?
         } else if idx == 0 {
             pr.offset
         } else if let (Ty::Array { elem, .. }, Some(fs)) = (&pr.ty, fixed_bits(child_elem(&pr.ty))) {
@@ -522,22 +522,20 @@ impl Evaluator {
     /// Where child `idx` of a pointer list starts. The offsets are bytes from
     /// the anchor, so a child can sit anywhere in the list's stretch, in any
     /// order. One that points outside it is an error for that child alone.
-    fn pointer_offset<S: Source>(
-        &mut self,
-        doc: &Document<S>,
-        list: &[usize],
-        lr: &Resolved,
-        offsets: String,
-        anchor: Anchor,
-        adjust: Expr,
-        idx: usize,
-    ) -> R<u64> {
+    fn pointer_offset<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved, idx: usize) -> R<u64> {
+        let Ty::PointerList { offsets, anchor, adjust, .. } = &lr.ty else {
+            return fail("not a pointer list");
+        };
+        let (offsets, anchor, adjust) = (offsets.clone(), *anchor, adjust.clone());
         let base = match anchor {
             Anchor::File => 0,
-            Anchor::Container => match list.split_last() {
-                Some((_, up)) => self.memo.get(up).map(|r| r.offset).unwrap_or(0),
-                None => 0,
-            },
+            // The nearest enclosing window, which is the page or the table the
+            // offsets are counted inside.
+            Anchor::Window => (0..list.len())
+                .rev()
+                .find_map(|k| self.memo.get(&list[..k]).filter(|r| r.declared_size.is_some()))
+                .map(|r| r.offset)
+                .unwrap_or(0),
         };
         let at = self.eval_expr(doc, list, &Expr::Elem { array: offsets, index: Box::new(Expr::Lit(idx as i128)) })?;
         let adj = self.eval_expr(doc, list, &adjust)?;
@@ -1526,7 +1524,7 @@ mod tests {
                 vec![
                     ("count", T::u8()),
                     ("ptrs", T::array(T::u16(Big), E::field("count"))),
-                    ("items", T::pointer_list("ptrs", Anchor::Container, E::lit(0), item)),
+                    ("items", T::pointer_list("ptrs", Anchor::Window, E::lit(0), item)),
                 ],
             ),
         )
