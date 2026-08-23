@@ -36,11 +36,10 @@ const DIALOG_TITLE = "File type";
 const DIALOG_CLOSE = "Close";
 const IDENTIFIED_FROM = `Identified from the file's first bytes, using the rule database of the Unix "file" command.`;
 const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
-const NO_TEMPLATE_LINE = "Qubero has no field template for this format.";
 const SIGNATURE_LINE =
   "The Fields table shows only the format's signature, generated from this rule. Qubero has no full template for this format.";
-const SIGNATURE_NOTE =
-  "Signature only. Generated from the identification rule; Qubero has no full template for this format.";
+const SIGNATURE_NOTE = "Signature only.";
+const fullTemplateLine = (name: string): string => `The Fields table uses Qubero's full ${name} template.`;
 /** The select value that stands for the generated template. Not a built-in
  *  name, so it can never collide with one. */
 const SIGNATURE_VALUE = "generated-signature";
@@ -171,38 +170,51 @@ function mount(doc: Doc): void {
     doc.setTemplate(tmpl.value === "" ? null : tmpl.value);
   });
   void doc.sniffTemplate().then(async (name) => {
+    const templated = name !== null;
     if (name !== null) {
       tmpl.value = name;
       doc.setTemplate(name);
-      return;
+    } else {
+      // Nothing to read a field from, so start on the raw reading instead.
+      inspector.setMode("le");
     }
-    // Nothing to read a field from, so start on the raw reading instead.
-    inspector.setMode("le");
-    // The rule database is a separate download. Say so once the wait is long
-    // enough to notice, so a file answered from cache says nothing at all.
-    const waiting = setTimeout(() => {
-      kindLabel.textContent = IDENTIFYING_MSG;
-    }, 300);
+    // The rules describe a file in a sentence, and a sentence saying a PNG is
+    // 1280 by 720 and 8-bit RGBA is worth having whether or not a template
+    // covers the format. Only a file without one waits on it, though: a
+    // templated file is already readable, so it says nothing until it knows.
+    const waiting = templated
+      ? null
+      : setTimeout(() => {
+          kindLabel.textContent = IDENTIFYING_MSG;
+        }, 300);
     try {
       const id = await doc.identify();
       // Stop the timer the moment there is an answer, and before the rule file
       // is fetched for the template: that second wait must not be able to
       // write "identifying" over a name already on screen.
-      clearTimeout(waiting);
+      if (waiting !== null) clearTimeout(waiting);
       if (id === null) {
-        kindLabel.textContent = UNKNOWN_TYPE_MSG;
-        showDetails(null, NO_TEMPLATE_LINE);
+        // A file with a template is not unknown, whatever the rules make of
+        // it, so only a file without one says so.
+        if (!templated) {
+          kindLabel.textContent = UNKNOWN_TYPE_MSG;
+          showDetails(null, "");
+        }
         return;
       }
       kindLabel.textContent = id.message;
       // The toolbar copy is cut short, so the whole sentence stays reachable
       // on hover as well as in the dialog.
       kindLabel.title = id.message;
+      if (name !== null) {
+        showDetails(id, fullTemplateLine(name));
+        return;
+      }
       // The rule that named the format also says where its signature is. That
       // is one field, but it is a field: clickable, highlighted, and true.
       const signature = await doc.signatureTemplate(id);
       if (signature === null) {
-        showDetails(id, NO_TEMPLATE_LINE);
+        showDetails(id, "");
         return;
       }
       const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
@@ -219,7 +231,7 @@ function mount(doc: Doc): void {
       kindLabel.textContent = IDENTIFY_FAILED_MSG;
       kindLabel.title = IDENTIFY_FAILED_TITLE;
     } finally {
-      clearTimeout(waiting);
+      if (waiting !== null) clearTimeout(waiting);
     }
   });
 
@@ -264,7 +276,7 @@ function mount(doc: Doc): void {
       if (id.source !== "") row("Rule file", id.source);
       rows.push(el("p", { className: "dlg-muted", textContent: IDENTIFIED_FROM }));
     }
-    rows.push(el("p", { className: "dlg-muted", textContent: templateLine }));
+    if (templateLine !== "") rows.push(el("p", { className: "dlg-muted", textContent: templateLine }));
     dlgBody.replaceChildren(...rows);
     kindInfo.hidden = false;
   };
