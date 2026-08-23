@@ -81,6 +81,46 @@ pub struct NodeInfo {
     pub read_as: Option<String>,
 }
 
+/// One entry in the annotation column: a field, a run of them, or a stretch
+/// the template does not describe. Produced by `Evaluator::spans`.
+#[derive(Debug, Clone)]
+pub struct Span {
+    pub path: Vec<usize>,
+    pub offset_bits: u64,
+    pub size_bits: u64,
+    pub name: String,
+    /// What it sits inside, outermost first.
+    pub trail: Vec<String>,
+    pub type_name: String,
+    pub value: Value,
+    /// No field covers these bits.
+    pub gap: bool,
+    /// How many fields this entry stands for, when a run of numbers is shown
+    /// as one. Zero for a single field.
+    pub count: u64,
+}
+
+/// A run of these is worth one entry rather than one each.
+const COLLAPSE_RUN: u64 = 8;
+
+/// A type that holds one number or one run of bytes, and nothing inside it.
+fn plain(ty: &Ty) -> bool {
+    match ty {
+        Ty::Enum { inner, .. } => plain(inner),
+        Ty::UInt { .. }
+        | Ty::Int { .. }
+        | Ty::F16(_)
+        | Ty::F32(_)
+        | Ty::F64(_)
+        | Ty::Fixed { .. }
+        | Ty::Leb128 { .. }
+        | Ty::Vlq
+        | Ty::Magic(_)
+        | Ty::Bytes(_) => true,
+        _ => false,
+    }
+}
+
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Write {
@@ -204,6 +244,87 @@ impl Evaluator {
                 None => return Ok(path),
             }
         }
+    }
+
+    /// Every field across a stretch of the file, in order, for the annotation
+    /// column. One call covers what is on screen rather than one field, so the
+    /// column can be drawn without a round trip per byte.
+    ///
+    /// Two things are not one field each. A stretch no field covers, which is
+    /// the slack at the end of a structure, comes back as a gap. A long run of
+    /// plain numbers, such as W4V's 512 codes, comes back as the run itself:
+    /// several hundred entries reading `[0]`, `[1]`, `[2]` would fill the
+    /// column with less than one entry saying what the run is.
+    pub fn spans<S: Source>(&mut self, doc: &Document<S>, from: u64, to: u64, max: usize) -> R<Vec<Span>> {
+        self.resolve(doc, &[])?;
+        let root_size = self.size_of(doc, &[])?;
+        let root_offset = self.memo[&Vec::new()].offset;
+        let end = to.min(root_offset + root_size);
+        let mut at = from.max(root_offset);
+        let mut out: Vec<Span> = Vec::new();
+        while at < end && out.len() < max {
+            let path = self.locate(doc, at)?;
+            let info = self.node(doc, &path)?;
+            let mut span = self.span_of(doc, &path, &info)?;
+            if info.composite {
+                // Inside it, but in none of its children: the template has
+                // nothing to say about these bytes.
+                span.gap = true;
+                span.offset_bits = at;
+                span.size_bits = info.offset_bits + info.size_bits - at;
+                span.count = 0;
+            } else if let Some((run, count)) = self.collapsible(doc, &path)? {
+                let run_info = self.node(doc, &run)?;
+                span = self.span_of(doc, &run, &run_info)?;
+                span.count = count;
+            }
+            let next = span.offset_bits + span.size_bits;
+            at = if next > at { next } else { at + 8 };
+            if span.size_bits > 0 {
+                out.push(span);
+            }
+        }
+        Ok(out)
+    }
+
+    fn span_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
+        let mut trail = Vec::new();
+        for k in 1..path.len() {
+            self.resolve(doc, &path[..k])?;
+            trail.push(self.memo[&path[..k]].name.clone());
+        }
+        Ok(Span {
+            path: path.to_vec(),
+            offset_bits: info.offset_bits,
+            size_bits: info.size_bits,
+            name: info.name.clone(),
+            trail,
+            type_name: info.type_name.clone(),
+            value: info.value.clone(),
+            gap: false,
+            count: 0,
+        })
+    }
+
+    /// The nearest run of plain numbers `path` sits in, if it is long enough to
+    /// be worth showing as one entry.
+    fn collapsible<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<(Vec<usize>, u64)>> {
+        for k in 0..path.len() {
+            let ty = self.memo[&path[..k]].ty.clone();
+            let elem = match &ty {
+                Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => (**elem).clone(),
+                _ => continue,
+            };
+            // Text stays one entry per line: GUANO lines are each worth reading.
+            if !plain(&elem) {
+                continue;
+            }
+            let n = self.child_count(doc, &path[..k])?;
+            if n >= COLLAPSE_RUN {
+                return Ok(Some((path[..k].to_vec(), n)));
+            }
+        }
+        Ok(None)
     }
 
     /// Which child of `path` covers `bit`, if any.
@@ -880,6 +1001,61 @@ mod tests {
 
     fn doc(bytes: &[u8]) -> Document<MemSource> {
         Document::new(MemSource(bytes.to_vec()))
+    }
+
+    #[test]
+    fn spans_cover_a_stretch_without_a_call_per_field() {
+        // A header, a run of numbers too long to list, and a window with room
+        // left over at the end of it.
+        let t = Template::new(
+            "t",
+            T::structure(
+                "Root",
+                vec![
+                    ("tag", T::u16(Big)),
+                    ("codes", T::array(T::u8(), E::lit(12))),
+                    ("window", T::sized(E::lit(4), T::structure("Inner", vec![("a", T::u16(Big))]))),
+                ],
+            ),
+        );
+        let d = doc(&[0xab, 0xcd, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 7, 0, 0]);
+        let mut ev = Evaluator::new(t);
+
+        let all = ev.spans(&d, 0, 18 * 8, 100).unwrap();
+        assert_eq!(all.len(), 4);
+        assert_eq!((all[0].name.as_str(), all[0].size_bits), ("tag", 16));
+        assert!(all[0].trail.is_empty());
+
+        // Twelve numbers as one entry, saying how many it stands for.
+        assert_eq!(all[1].name, "codes");
+        assert_eq!(all[1].count, 12);
+        assert_eq!(all[1].size_bits, 12 * 8);
+
+        assert_eq!(all[2].name, "a");
+        assert_eq!(all[2].trail, vec!["window"]);
+        assert_eq!(all[2].value, Value::UInt(7));
+
+        // The two bytes the window leaves over are a gap, not a field.
+        assert!(all[3].gap);
+        assert_eq!(all[3].offset_bits, 16 * 8);
+        assert_eq!(all[3].size_bits, 2 * 8);
+
+        // Asking for part of the file starts at the field covering that bit,
+        // whether or not the field starts there.
+        let part = ev.spans(&d, 5 * 8, 8 * 8, 100).unwrap();
+        assert_eq!(part.len(), 1);
+        assert_eq!(part[0].name, "codes");
+        assert_eq!(part[0].offset_bits, 2 * 8);
+
+        // A shorter run stays one entry per field.
+        let t2 = Template::new("t", T::array(T::u8(), E::lit(4)));
+        let mut ev2 = Evaluator::new(t2);
+        let each = ev2.spans(&d, 0, 4 * 8, 100).unwrap();
+        assert_eq!(each.len(), 4);
+        assert_eq!(each[3].name, "[3]");
+
+        // The count is a limit, not a target.
+        assert_eq!(ev2.spans(&d, 0, 4 * 8, 2).unwrap().len(), 2);
     }
 
     #[test]

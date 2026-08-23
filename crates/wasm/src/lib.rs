@@ -3,7 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::{formats, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Value};
+use qubero_core::{formats, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -65,9 +65,45 @@ enum Reply<T: Serialize> {
     Error { message: String },
 }
 
-fn dto(n: NodeInfo) -> NodeDto {
-    // (kind, shown value, text the editor starts with, ok)
-    let (kind, value, edit_text, ok) = match &n.value {
+/// One entry of the annotation column.
+#[derive(Serialize)]
+struct SpanDto {
+    path: Vec<usize>,
+    name: String,
+    /// What it sits inside, outermost first.
+    trail: Vec<String>,
+    #[serde(rename = "type")]
+    type_name: String,
+    offset_bits: f64,
+    size_bits: f64,
+    value: String,
+    kind: &'static str,
+    /// No field covers these bits.
+    gap: bool,
+    /// Fields this entry stands for, when a run of numbers is shown as one.
+    count: f64,
+}
+
+fn span_dto(s: Span) -> SpanDto {
+    let (kind, value, _, _) = shown(&s.value);
+    SpanDto {
+        path: s.path,
+        name: s.name,
+        trail: s.trail,
+        type_name: s.type_name,
+        offset_bits: s.offset_bits as f64,
+        size_bits: s.size_bits as f64,
+        value,
+        kind,
+        gap: s.gap,
+        count: s.count as f64,
+    }
+}
+
+/// How a value reads: its kind, what to show, what an editor starts with, and
+/// whether the format says it is right.
+fn shown(v: &Value) -> (&'static str, String, String, bool) {
+    match v {
         Value::UInt(v) => ("uint", v.to_string(), v.to_string(), true),
         Value::Int(v) => ("int", v.to_string(), v.to_string(), true),
         Value::Float(v) => ("float", v.to_string(), v.to_string(), true),
@@ -93,7 +129,11 @@ fn dto(n: NodeInfo) -> NodeDto {
                 None => ("enum", format!("{num} (unknown)"), num, false),
             }
         }
-    };
+    }
+}
+
+fn dto(n: NodeInfo) -> NodeDto {
+    let (kind, value, edit_text, ok) = shown(&n.value);
     NodeDto {
         path: n.path,
         name: n.name,
@@ -189,6 +229,18 @@ impl Editor {
         match &mut self.eval {
             None => reply::<TextDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => reply(e.text_value(&self.doc, &p).map(|(text, truncated)| TextDto { text, truncated })),
+        }
+    }
+
+    /// Every field between two bit offsets, for the annotation column:
+    /// {status:"ok",node:[span,..]}. `max` caps how many come back.
+    pub fn spans(&mut self, from_bit: f64, to_bit: f64, max: u32) -> String {
+        match &mut self.eval {
+            None => reply::<Vec<SpanDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(
+                e.spans(&self.doc, from_bit as u64, to_bit as u64, max as usize)
+                    .map(|v| v.into_iter().map(span_dto).collect::<Vec<SpanDto>>()),
+            ),
         }
     }
 
