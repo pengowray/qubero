@@ -252,8 +252,19 @@ impl Evaluator {
         mut limit: u64,
     ) -> R<Resolved> {
         let mut declared_size = None;
+        let mut hops = 0;
         loop {
             match ty {
+                Ty::Named(n) => {
+                    hops += 1;
+                    if hops > 64 {
+                        return fail(format!("type {n} refers to itself with nothing in between"));
+                    }
+                    match self.template.types.get(&n) {
+                        Some(t) => ty = t.clone(),
+                        None => return fail(format!("no type named {n} in this template")),
+                    }
+                }
                 Ty::Sized { size, inner } => {
                     let bytes = self.eval_expr(doc, path, &size)?;
                     if bytes < 0 {
@@ -562,10 +573,10 @@ mod tests {
 
     #[test]
     fn struct_with_count_driven_array() {
-        let t = Template {
-            name: "t".into(),
-            root: T::structure("Root", vec![("n", T::u8()), ("items", T::array(T::u16(Little), E::field("n")))]),
-        };
+        let t = Template::new(
+            "t",
+            T::structure("Root", vec![("n", T::u8()), ("items", T::array(T::u16(Little), E::field("n")))]),
+        );
         let d = doc(&[3, 1, 0, 2, 0, 3, 0, 99]);
         let mut ev = Evaluator::new(t);
         let root = ev.node(&d, &[]).unwrap();
@@ -582,13 +593,13 @@ mod tests {
     #[test]
     fn repeat_until_end_and_leb128() {
         // Records: leb128 length, then bytes. Three records.
-        let t = Template {
-            name: "t".into(),
-            root: T::repeat(
+        let t = Template::new(
+            "t",
+            T::repeat(
                 T::structure("Rec", vec![("len", T::leb_u()), ("data", T::bytes(E::field("len")))]),
                 Until::End,
             ),
-        };
+        );
         let mut bytes = vec![2, 0xAA, 0xBB, 0, 0x80, 0x01];
         bytes.extend(std::iter::repeat_n(7u8, 128));
         let d = doc(&bytes);
@@ -604,9 +615,9 @@ mod tests {
     #[test]
     fn sized_switch_and_pending() {
         use crate::source::ChunkStore;
-        let t = Template {
-            name: "t".into(),
-            root: T::structure(
+        let t = Template::new(
+            "t",
+            T::structure(
                 "Root",
                 vec![
                     ("kind", T::u8()),
@@ -620,7 +631,7 @@ mod tests {
                     ),
                 ],
             ),
-        };
+        );
         let mut d = Document::new(ChunkStore::new(6, 4, 8));
         let mut ev = Evaluator::new(t.clone());
         assert!(matches!(ev.node(&d, &[]), Err(EvalError::Pending(_))));
@@ -651,10 +662,10 @@ mod tests {
                 bytes.push((v >> 7) as u8);
             }
         }
-        let t = Template {
-            name: "t".into(),
-            root: T::structure("Root", vec![("n", T::leb_u()), ("xs", T::array(T::leb_u(), E::field("n")))]),
-        };
+        let t = Template::new(
+            "t",
+            T::structure("Root", vec![("n", T::leb_u()), ("xs", T::array(T::leb_u(), E::field("n")))]),
+        );
         let d = doc(&bytes);
         let mut ev = Evaluator::new(t);
         // Size of the array first, before any element is resolved.
@@ -669,10 +680,10 @@ mod tests {
 
     #[test]
     fn bitfields_read_msb_first() {
-        let t = Template {
-            name: "t".into(),
-            root: T::structure("B", vec![("a", T::UInt { bits: 3, endian: Big }), ("b", T::UInt { bits: 5, endian: Big })]),
-        };
+        let t = Template::new(
+            "t",
+            T::structure("B", vec![("a", T::UInt { bits: 3, endian: Big }), ("b", T::UInt { bits: 5, endian: Big })]),
+        );
         let d = doc(&[0b101_01100]);
         let mut ev = Evaluator::new(t);
         assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0b101));
@@ -682,9 +693,9 @@ mod tests {
 
     #[test]
     fn writing_a_field_hits_only_its_own_bits() {
-        let t = Template {
-            name: "t".into(),
-            root: T::structure(
+        let t = Template::new(
+            "t",
+            T::structure(
                 "B",
                 vec![
                     ("a", T::UInt { bits: 3, endian: Big }),
@@ -693,7 +704,7 @@ mod tests {
                     ("tag", T::utf8(E::lit(4))),
                 ],
             ),
-        };
+        );
         let mut d = doc(&[0b101_01100, 0x34, 0x12, b'I', b'H', b'D', b'R']);
         let mut ev = Evaluator::new(t);
         assert!(ev.node(&d, &[0]).unwrap().editable);

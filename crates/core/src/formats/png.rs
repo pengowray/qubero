@@ -41,16 +41,16 @@ pub fn png() -> Template {
             ("crc", T::u32(Big)),
         ],
     );
-    Template {
-        name: "png".into(),
-        root: T::structure(
+    Template::new(
+        "png",
+        T::structure(
             "PNG",
             vec![
                 ("signature", T::magic(b"\x89PNG\r\n\x1a\n")),
                 ("chunks", T::repeat(chunk, Until::FieldBytes { field: "type".into(), bytes: b"IEND".to_vec() })),
             ],
         ),
-    }
+    )
 }
 
 #[cfg(test)]

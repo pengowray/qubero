@@ -97,9 +97,9 @@ pub fn wasm() -> Template {
             ),
         ],
     );
-    Template {
-        name: "wasm".into(),
-        root: T::structure(
+    Template::new(
+        "wasm",
+        T::structure(
             "Wasm",
             vec![
                 ("magic", T::magic(b"\0asm")),
@@ -107,7 +107,7 @@ pub fn wasm() -> Template {
                 ("sections", T::repeat(section, Until::End)),
             ],
         ),
-    }
+    )
 }
 
 #[cfg(test)]

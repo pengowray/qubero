@@ -5,6 +5,7 @@
 //! the field named `n`" or "bytes whose length is `size`, parsed as the section
 //! type selected by `id`". Evaluation lives in `eval.rs`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +107,9 @@ pub enum Ty {
     Switch { on: Expr, cases: Vec<(i128, Ty)>, default: Box<Ty> },
     /// An integer type whose values have names.
     Enum { inner: Box<Ty>, def: Arc<EnumDef> },
+    /// A type from the template's table, by name. This is what makes a format
+    /// whose boxes contain boxes expressible: the type refers to itself.
+    Named(String),
 }
 
 #[derive(Debug)]
@@ -213,6 +217,7 @@ impl Ty {
             Ty::Sized { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Enum { def, .. } => def.name.clone(),
+            Ty::Named(n) => n.clone(),
         }
     }
 }
@@ -221,4 +226,17 @@ impl Ty {
 pub struct Template {
     pub name: String,
     pub root: Ty,
+    /// Types a `Ty::Named` can refer to, including the root's own type when a
+    /// format nests inside itself.
+    pub types: HashMap<String, Ty>,
+}
+
+impl Template {
+    pub fn new(name: &str, root: Ty) -> Template {
+        Template { name: name.to_string(), root, types: HashMap::new() }
+    }
+    pub fn with_type(mut self, name: &str, ty: Ty) -> Template {
+        self.types.insert(name.to_string(), ty);
+        self
+    }
 }
