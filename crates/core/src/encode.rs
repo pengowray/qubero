@@ -32,7 +32,7 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
             let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
             let max = mask(*bits);
             if v > max {
-                return Err(format!("Out of range for {}: 0 to {max}.", ty.display_name()));
+                return Err(range_msg(&ty.display_name(), "0", &max.to_string()));
             }
             Ok(write_uint(v, *bits, *endian))
         }
@@ -40,7 +40,7 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
             let v = parse_int(text).ok_or_else(|| whole_number_msg(true))?;
             let (min, max) = int_range(*bits);
             if v < min || v > max {
-                return Err(format!("Out of range for {}: {min} to {max}.", ty.display_name()));
+                return Err(range_msg(&ty.display_name(), &min.to_string(), &max.to_string()));
             }
             let u = (v as u128) & mask(*bits);
             Ok(write_uint(u, *bits, *endian))
@@ -66,7 +66,10 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
                 let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
                 leb_unsigned(v, room)
             };
-            bytes.ok_or_else(|| format!("Too big for this field, which holds {}.", plural(room, "byte")))
+            bytes.ok_or_else(|| {
+                let (min, max) = leb_limits(room, *signed);
+                format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
+            })
         }
         Ty::Utf8(_) => {
             let want = (size_bits / 8) as usize;
@@ -78,31 +81,44 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
         }
         Ty::Bytes(_) => {
             let want = (size_bits / 8) as usize;
-            let bytes = parse_hex(text).ok_or("Hex bytes only, for example 4a 2f 00.")?;
+            let bytes = parse_hex(text).ok_or("Hex bytes only: 4a 2f 00.")?;
             if bytes.len() != want {
                 return Err(length_msg(bytes.len(), want, "bytes"));
             }
             Ok(bytes)
         }
-        Ty::Magic(_) => Err("A magic field is fixed by the format and cannot be edited.".into()),
-        _ => Err("This field cannot be edited directly.".into()),
+        Ty::Magic(_) => Err("Magic bytes are fixed by the format.".into()),
+        _ => Err("This field can't be edited here. Use the hex view.".into()),
     }
 }
 
 fn whole_number_msg(signed: bool) -> String {
     if signed {
-        "Whole numbers only, for example -12, 0x1f or 0b1010.".into()
+        "Whole numbers only: -12, 0x1f, 0b1010.".into()
     } else {
-        "Whole numbers only, not negative. For example 12, 0x1f or 0b1010.".into()
+        "Whole numbers only, 0 or higher: 12, 0x1f, 0b1010.".into()
     }
 }
 
-fn plural(n: usize, noun: &str) -> String {
-    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+fn range_msg(type_name: &str, min: &str, max: &str) -> String {
+    format!("{type_name} range is {min} to {max}.")
 }
 
 fn length_msg(got: usize, want: usize, noun: &str) -> String {
-    format!("This field holds exactly {want} {noun}; that is {got}. Changing a field's length is not supported yet.")
+    format!("Needs exactly {want} {noun}; got {got}. Field sizes can't change yet.")
+}
+
+/// What a LEB128 field of this many bytes can hold, for the message that says
+/// a value will not fit.
+fn leb_limits(room: usize, signed: bool) -> (String, String) {
+    let bits = (room * 7).min(128) as u32;
+    if !signed {
+        return ("0".to_string(), mask(bits).to_string());
+    }
+    if bits >= 128 {
+        return (i128::MIN.to_string(), i128::MAX.to_string());
+    }
+    ((-(1i128 << (bits - 1))).to_string(), ((1i128 << (bits - 1)) - 1).to_string())
 }
 
 fn mask(bits: u32) -> u128 {
@@ -178,7 +194,7 @@ fn radix(t: &str) -> Option<(&str, u32)> {
 
 fn parse_float(text: &str) -> Result<f64, String> {
     let t = strip(text);
-    t.parse::<f64>().map_err(|_| "Numbers only, for example 1.5, -2e10, inf or nan.".to_string())
+    t.parse::<f64>().map_err(|_| "Numbers only: 1.5, -2e10, inf, nan.".to_string())
 }
 
 fn parse_hex(text: &str) -> Option<Vec<u8>> {

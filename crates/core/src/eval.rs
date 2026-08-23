@@ -151,11 +151,9 @@ impl Evaluator {
         let r = self.memo.get(path).expect("resolved").clone();
         if !encode::editable(&r.ty, size) {
             return fail(match &r.ty {
-                Ty::Magic(_) => "A magic field is fixed by the format and cannot be edited.".to_string(),
-                Ty::Bytes(_) | Ty::Utf8(_) => {
-                    format!("This field is {} bytes long. Editing here is limited to short fields; use the hex view.", size / 8)
-                }
-                _ => "This field cannot be edited directly.".to_string(),
+                Ty::Magic(_) => "Magic bytes are fixed by the format.".to_string(),
+                Ty::Bytes(_) | Ty::Utf8(_) => format!("Too long to edit here: {} bytes. Use the hex view.", size / 8),
+                _ => "This field can't be edited here. Use the hex view.".to_string(),
             });
         }
         let data = encode::encode(&r.ty, text, size).map_err(EvalError::Failed)?;

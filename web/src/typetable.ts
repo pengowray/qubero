@@ -164,7 +164,9 @@ export class TypeTable {
       // asked for them; this runs again when they land.
       e.waiting = e.tries < WRITE_RETRIES;
       e.tries += 1;
-      this.status.textContent = e.waiting ? "Reading the file around this field" : "Could not read this part of the file.";
+      this.status.textContent = e.waiting
+        ? "Loading this part of the file…"
+        : "Couldn't read this part of the file. Press Enter to try again.";
       this.status.classList.toggle("warn", !e.waiting);
     } else {
       e.waiting = false;
@@ -261,7 +263,7 @@ export class TypeTable {
       value.classList.add("tt-editable");
       value.dataset["edit"] = k;
       value.tabIndex = 0;
-      value.title = `Edit this ${n.type} value`;
+      value.title = "Click to edit";
       value.textContent = n.value;
     } else {
       value.textContent = n.composite ? countText(n.child_count, n.type.endsWith("[]") ? "item" : "field") : n.value;
@@ -330,6 +332,7 @@ export class TypeTable {
       e.stopPropagation();
       if (e.key === "Enter") {
         e.preventDefault();
+        if (this.editing) this.editing.tries = 0; // a manual retry gets the full run of attempts
         this.commit();
       } else if (e.key === "Escape") {
         e.preventDefault();

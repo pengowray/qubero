@@ -62,6 +62,27 @@ and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
 Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
 Text encodings still to add: CP437, JIS.
 
+### Editing a typed field writes only that field
+`crates/core/src/encode.rs` is the inverse of the readers in `eval.rs`: text in,
+MSB-first packed bits out, exactly the field's current size. `Evaluator::prepare_write`
+resolves the field, encodes, and hands back the bits and offset; it reports `Pending`
+like a read, because working out where a field starts can touch unloaded chunks. The
+host applies the write and invalidates the memo.
+
+Keeping the size fixed is the point: a shorter or longer value would shift the rest of
+the file. So LEB128 pads out with redundant continuation bytes (legal, and what wasm
+tools do), and text and byte fields must be typed at their exact length. Growing a
+field is a structural edit and waits for the redundant-editing work below.
+
+The type table (`web/src/typetable.ts`) edits values in place with this. It rebuilds
+its rows from scratch on every document change, so the open input is re-created each
+render with its text and caret restored; a committed edit can restructure the tree
+(change a count, flip a switch) and the edited row may simply not exist afterwards.
+The inspector's per-type lenses are the same idea in TS, but they cannot serve the
+table: they are byte-aligned and `DataView`-sized, while a template field can be three
+bits at an odd offset. Core owns encoding; the inspector's lenses stay where they are
+until the redundant-editing work gives both sides one model.
+
 ### Saving
 `save.rs` turns the piece list into runs. The host composes a `Blob` from lazy slices
 of the original plus add-buffer bytes; only bit-unaligned stretches are read through
@@ -75,17 +96,16 @@ of the file is rewritten on save. That is inherent; the UI should show progress.
 Two fields derived from the same bytes, or two bytes ranges that must agree
 (seconds vs minutes, a length field and the array it describes). Model as pairs of
 invertible expressions (bidirectional lenses): each typed field has `decode(bytes)`
-and `encode(value) -> bytes`; the inspector rows already have this shape. Editing
-either side writes through its `encode`; dependent fields re-evaluate. When an edit
+and `encode(value) -> bytes`; `eval.rs` and `encode.rs` are those two halves already,
+and the inspector rows have the same shape. Editing either side writes through its `encode`; dependent fields re-evaluate. When an edit
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
-### Type table editing
-The table (`web/src/typetable.ts`) shows and navigates; editing values in place is
-next, reusing the inspector's encode lenses per type.
-
 ### Known gaps
-The field highlight in the hex view has no way to be dismissed yet. Save shows no
-progress while rewriting bit-shifted stretches.
+Save shows no progress while rewriting bit-shifted stretches. The type table has no
+keyboard navigation between rows, so a value cell is reached by clicking or tabbing.
+Text fields are displayed through `from_utf8_lossy`, so invalid bytes show as U+FFFD;
+committing that back would write the replacement character, and only the exact-length
+check stands in the way.
 
 ### Later
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.
