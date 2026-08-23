@@ -69,6 +69,10 @@ pub struct NodeInfo {
     pub composite: bool,
     /// True when `write` accepts text for this field.
     pub editable: bool,
+    /// How many bytes of the field the value occupies. Same as the field's size
+    /// except for padded and terminated text, where the padding and the
+    /// terminator are the format's business, not the value's.
+    pub value_bytes: u64,
 }
 
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
@@ -134,6 +138,7 @@ impl Evaluator {
         Ok(NodeInfo {
             path: path.to_vec(),
             editable: !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)?,
+            value_bytes: self.value_bytes(doc, &r, size)?,
             name: r.name,
             type_name: r.ty.display_name(),
             offset_bits: r.offset,
@@ -570,6 +575,24 @@ impl Evaluator {
         } else {
             Err(EvalError::Pending(missing))
         }
+    }
+
+    /// Where the value stops inside the field: at the padding, at the
+    /// terminator, or at the end.
+    fn value_bytes<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<u64> {
+        let n = size / 8;
+        let Ty::Str { len } = &r.ty else { return Ok(n) };
+        let stop = match len {
+            StrLen::Fixed(_) => return Ok(n),
+            StrLen::Padded { pad, .. } => *pad,
+            StrLen::Terminated { end } => *end,
+        };
+        let read = n.min(crate::encode::EDIT_LIMIT_BYTES);
+        if read == 0 {
+            return Ok(0);
+        }
+        let bytes = self.read(doc, r, r.offset, read * 8)?;
+        Ok(bytes.iter().position(|b| *b == stop).map(|i| i as u64).unwrap_or(read))
     }
 
     /// A padded text field shows only what is before its first pad byte. If the

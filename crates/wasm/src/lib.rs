@@ -31,6 +31,9 @@ struct NodeDto {
     composite: bool,
     /// True when `write_node` accepts text for this field.
     editable: bool,
+    /// Bytes of the field the value occupies; less than the size for padded
+    /// and terminated text.
+    value_bytes: f64,
 }
 
 /// The range a successful `write_node` touched.
@@ -93,6 +96,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         child_count: n.child_count as f64,
         composite: n.composite,
         editable: n.editable,
+        value_bytes: n.value_bytes as f64,
     }
 }
 

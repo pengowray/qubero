@@ -446,7 +446,8 @@ export class Inspector {
    */
   private fillArea(n: TemplateNode): void {
     if (this.area.dataset["dirty"] === "1" && document.activeElement === this.area) return;
-    const shownBytes = Math.min(n.size_bits / 8, SHOW_LIMIT);
+    // Padding and terminators are the format's, not the value's.
+    const shownBytes = Math.min(n.value_bytes, SHOW_LIMIT);
     const { bytes, complete } = this.doc.readBits(n.offset_bits, shownBytes * 8);
     this.area.classList.remove("invalid");
     this.area.setAttribute("aria-label", `${n.name}, ${n.type}`);
@@ -473,7 +474,7 @@ export class Inspector {
     } else {
       text = hexText(bytes);
     }
-    const total = n.size_bits / 8;
+    const total = n.value_bytes;
     if (total > shownBytes) {
       // Past the limit the panel neither shows nor edits the whole field.
       note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${total.toLocaleString()}. Too long to edit here; use the hex view.`;
