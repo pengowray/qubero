@@ -153,6 +153,7 @@ export class Inspector {
   private offset = 0;
   private readonly inputs = new Map<Lens, HTMLInputElement>();
   private readonly status: HTMLElement;
+  private readonly seg: HTMLElement;
   private readonly table: HTMLElement;
   private readonly struct: HTMLElement;
   private readonly crumbs: HTMLElement;
@@ -179,8 +180,9 @@ export class Inspector {
     const seg = document.createElement("div");
     seg.className = "seg";
     seg.setAttribute("role", "radiogroup");
-    seg.setAttribute("aria-label", "Read the value as");
-    for (const [value, label] of [["structure", "Structure"], ["le", "Little-endian"], ["be", "Big-endian"]] as const) {
+    seg.setAttribute("aria-label", "Interpret the bytes at the cursor as");
+    this.seg = seg;
+    for (const [value, label] of [["structure", "Field"], ["le", "Little-endian"], ["be", "Big-endian"]] as const) {
       const b = document.createElement("button");
       b.type = "button";
       b.textContent = label;
@@ -276,6 +278,16 @@ export class Inspector {
     this.render();
   }
 
+  /** Pick which reading is shown. Used once at startup for a file with no
+   * template, where the field reading would be empty. */
+  setMode(mode: Mode): void {
+    this.mode = mode;
+    for (const c of this.seg.children) {
+      c.setAttribute("aria-checked", String(c instanceof HTMLElement && c.textContent === modeLabel(mode)));
+    }
+    this.render();
+  }
+
   /** Show this field rather than the innermost one at the cursor. */
   setPath(path: readonly number[]): void {
     this.pinned = path;
@@ -341,7 +353,8 @@ export class Inspector {
   private renderStructure(): void {
     if (this.doc.template === null) {
       this.at = null;
-      this.crumbs.textContent = "No template selected. Pick one above to read the field here.";
+      // The Fields table below says where to pick one; saying it twice is noise.
+      this.crumbs.textContent = "No template selected.";
       this.fieldRow.hidden = true;
       this.status.textContent = "";
       return;
@@ -349,7 +362,7 @@ export class Inspector {
     const found = this.pinned === null ? this.doc.locate(this.offset) : ({ status: "ok", node: this.pinned } as const);
     if (found.status !== "ok") {
       this.at = null;
-      this.crumbs.textContent = found.status === "pending" ? "Loading this part of the file…" : "Nothing defined at the cursor.";
+      this.crumbs.textContent = found.status === "pending" ? "Loading this part of the file…" : "No field at this offset.";
       this.fieldRow.hidden = true;
       return;
     }
@@ -370,7 +383,7 @@ export class Inspector {
     this.field.disabled = !n.editable;
     this.field.classList.remove("invalid");
     this.field.value = n.composite ? "" : n.edit_text;
-    this.field.placeholder = n.composite ? `${n.child_count.toLocaleString()} inside` : "";
+    this.field.placeholder = n.composite ? countText(n.child_count, n.type.endsWith("[]") ? "item" : "field") : "";
     this.field.setAttribute("aria-label", `${n.name}, ${n.type}`);
   }
 
@@ -405,6 +418,14 @@ export class Inspector {
     }
     return out;
   }
+}
+
+function modeLabel(mode: Mode): string {
+  return mode === "structure" ? "Field" : mode === "le" ? "Little-endian" : "Big-endian";
+}
+
+function countText(n: number, noun: string): string {
+  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
 }
 
 function sizeText(bits: number): string {

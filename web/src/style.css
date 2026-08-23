@@ -407,9 +407,8 @@ input.invalid {
 }
 .insp-head {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
   margin-bottom: 6px;
   font-weight: 600;
@@ -473,6 +472,10 @@ input.invalid {
   padding: 4px 6px;
   min-height: 28px;
   background: var(--bg);
+}
+.insp-field::placeholder {
+  color: var(--muted);
+  font-style: italic;
 }
 .insp-detail {
   font-family: var(--mono);

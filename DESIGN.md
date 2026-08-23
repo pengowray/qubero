@@ -102,6 +102,36 @@ table: they are byte-aligned and `DataView`-sized, while a template field can be
 bits at an odd offset. Core owns encoding; the inspector's lenses stay where they are
 until the redundant-editing work gives both sides one model.
 
+### One position, three views
+The hex cursor is a bit position, and it is what the views agree on.
+`Evaluator::locate` walks the template down to the deepest field covering a bit,
+so moving the cursor selects that field in the table and marks its bits in the
+hex view; picking a field in the table or in the inspector's trail moves the
+cursor to its first bit. `web/src/main.ts` owns that loop and holds a `picking`
+flag so it does not chase its own tail.
+
+The inspector reads from the cursor's bit, not its byte, so its integer and float
+rows show what an unaligned read would give. Its first mode ("Field") shows what
+the template says is there instead: the trail of enclosing structures, the value
+(editable, sub-byte fields included), and the type, offset and size.
+
+`locate` walks a repeat to find an element, so on a large templated file it costs
+what displaying it costs. The memo makes the next call cheap until the next edit,
+which is the same coarse-invalidation limit described above.
+
+### Sub-byte fields in the hex view
+A field of three bits that straddles two bytes is normal in these formats, so the
+byte-granular highlight was not enough. A fully covered byte keeps the block
+highlight; a partly covered one gets a bar under exactly the bits in the field
+(bit 0 leftmost, matching the reading order the core uses). The text column
+cannot show part of a byte, so it is tinted more faintly there instead of lying.
+
+Binary mode (`web/src/hexview.ts`) renders each byte as its eight bits, the
+cursor addresses one of them, `0`/`1` overwrites or inserts a bit, and Delete and
+Backspace remove one. Bytes are split into per-bit spans only where the cursor or
+a partial highlight needs it. Selecting binary drops the row width to 8 bytes,
+since eight digits per byte is wide.
+
 ### Saving
 `save.rs` turns the piece list into runs. The host composes a `Blob` from lazy slices
 of the original plus add-buffer bytes; only bit-unaligned stretches are read through
@@ -120,6 +150,12 @@ and the inspector rows have the same shape. Editing either side writes through i
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
 ### Known gaps
+Bit order is MSB-first everywhere: bit 0 of a byte is its top bit, and a field
+narrower than a byte is packed big-endian, with `endian` on such a field silently
+ignored. Formats that pack the other way (DEFLATE, Zig packed structs) need an
+LSB-first order on the field type, which is a real addition to the IR rather than
+a display option.
+
 MP4: a box with size 0 (meaning "to the end of the file") is an error, because
 there is no "rest of this container" expression yet. Sample tables past `stsd`
 are bytes. An SPS or PPS is exp-golomb coded, which the IR cannot describe, so a

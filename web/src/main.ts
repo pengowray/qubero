@@ -79,6 +79,9 @@ function mount(doc: Doc): void {
     if (name !== null) {
       tmpl.value = name;
       doc.setTemplate(name);
+    } else {
+      // Nothing to read a field from, so start on the raw reading instead.
+      inspector.setMode("le");
     }
   });
 
