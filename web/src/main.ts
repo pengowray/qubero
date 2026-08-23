@@ -1,5 +1,5 @@
 import { Doc, formatBytes, formatOffset, prefetchMagic, type Identification } from "./doc.js";
-import { HexView } from "./hexview.js";
+import { HexView, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
@@ -337,19 +337,21 @@ function mount(doc: Doc): void {
   for (const [value, label] of [
     ["text", "Text column"],
     ["fields", "Field column"],
+    ["both", "Text and fields"],
   ] as const) {
     column.append(el("option", { value, textContent: label }));
   }
   const columnKey = (): string => (doc.template === null ? "qubero.column.plain" : "qubero.column.template");
   const syncColumn = (): void => {
     const saved = localStorage.getItem(columnKey());
-    const c: "text" | "fields" = saved === "fields" || saved === "text" ? saved : doc.template === null ? "text" : "fields";
+    const c: RightColumn =
+      saved === "fields" || saved === "text" || saved === "both" ? saved : doc.template === null ? "text" : "fields";
     column.value = c;
     view.setRightColumn(c);
   };
   syncColumn();
   column.addEventListener("change", () => {
-    const c = column.value === "fields" ? "fields" : "text";
+    const c: RightColumn = column.value === "fields" ? "fields" : column.value === "both" ? "both" : "text";
     localStorage.setItem(columnKey(), c);
     view.setRightColumn(c);
   });

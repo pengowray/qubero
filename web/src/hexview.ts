@@ -9,7 +9,8 @@ import type { Doc, Span } from "./doc.js";
 export type Pane = "hex" | "ascii";
 /** What sits to the right of the bytes: their text, or what the template says
  *  each one is. */
-export type RightColumn = "text" | "fields";
+/** What sits to the right of the bytes: the text, the fields, or both. */
+export type RightColumn = "text" | "fields" | "both";
 /** Hex shows two digits per byte; binary shows the eight bits. */
 export type ViewMode = "hex" | "binary";
 
@@ -160,11 +161,11 @@ export class HexView {
     this.rightColumn = c;
     // The text column is where the "ascii" pane lives; without it the cursor
     // has nowhere to be but the bytes.
-    if (c !== "text" && this.pane === "ascii") this.pane = "hex";
+    if (c === "fields" && this.pane === "ascii") this.pane = "hex";
     this.spanCache = null;
     // Rows are taller while the field column is shown, so the number of rows
     // that fit has to be worked out again.
-    this.el.classList.toggle("has-notes", c === "fields");
+    this.el.classList.toggle("has-notes", c !== "text");
     this.relayout();
   }
 
@@ -565,7 +566,8 @@ export class HexView {
     const windowBytes = this.visibleRows * bpr;
     const { bytes, complete } = this.doc.read(start, windowBytes);
     const binary = this.mode === "binary";
-    const fields = this.rightColumn === "fields";
+    const fields = this.rightColumn !== "text";
+    const showText = this.rightColumn !== "fields";
     const templated = this.doc.template !== null;
 
     // Which span covers each byte on screen, and which start on each row.
@@ -598,6 +600,14 @@ export class HexView {
       "  " +
       Array.from({ length: bpr }, (_, i) => (binary ? (HEX[i] ?? "").padEnd(8) : HEX[i])).join(" ");
     this.header.replaceChildren(columns);
+    if (showText) {
+      // Nothing to label, but the width has to be held so the heading over the
+      // fields lands over the fields.
+      const gap = document.createElement("span");
+      gap.className = "hv-ascii";
+      gap.textContent = " ".repeat(bpr);
+      this.header.append(gap);
+    }
     if (fields) {
       const title = document.createElement("span");
       title.className = "hv-note hv-head-note";
@@ -686,7 +696,9 @@ export class HexView {
             if (trouble !== null) none.title = trouble;
             note.append(none);
           }
-          frag.append(cells, note);
+          frag.append(cells);
+          if (showText) frag.append(asc);
+          frag.append(note);
           row.replaceChildren(frag);
           continue;
         }
@@ -719,7 +731,9 @@ export class HexView {
           rest.title = `The field column shows up to ${SPAN_LIMIT} fields at a time. Scroll down to see the rest.`;
           note.append(rest);
         }
-        frag.append(cells, note);
+        frag.append(cells);
+        if (showText) frag.append(asc);
+        frag.append(note);
       } else {
         frag.append(cells, asc);
       }
