@@ -83,6 +83,6 @@ mod tests {
         assert_eq!(ev.node(&d, &[1, 1, 1]).unwrap().value, Value::Str("IEND".into()));
         let color = ev.node(&d, &[1, 0, 2, 3]).unwrap();
         assert_eq!(color.type_name, "ColorType");
-        assert_eq!(color.value, Value::Enum { raw: 6, name: Some("rgba".into()) });
+        assert_eq!(color.value, Value::Enum { raw: 6, name: Some("rgba".into()), hex: false });
     }
 }

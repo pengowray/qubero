@@ -36,8 +36,8 @@ pub enum Value {
     Magic { ok: bool },
     Composite { count: u64 },
     /// A named integer. `name` is None when the file holds a value the enum
-    /// does not list.
-    Enum { raw: i128, name: Option<String> },
+    /// does not list. `hex` is how the number should be shown.
+    Enum { raw: i128, name: Option<String>, hex: bool },
 }
 
 impl Value {
@@ -536,7 +536,7 @@ impl Evaluator {
                     Value::Int(v) => v,
                     _ => return fail("an enum must sit on an integer"),
                 };
-                Value::Enum { raw, name: def.label(raw).map(str::to_string) }
+                Value::Enum { raw, name: def.label(raw).map(str::to_string), hex: def.hex }
             }
             _ => unreachable!("composite handled by caller"),
         })

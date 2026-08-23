@@ -3,6 +3,7 @@
 
 mod png;
 mod wasm;
+mod wasm_opcodes;
 
 pub use png::png;
 pub use wasm::wasm;

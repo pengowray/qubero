@@ -71,11 +71,14 @@ fn dto(n: NodeInfo) -> NodeDto {
             ("magic", s.clone(), s, *ok)
         }
         Value::Composite { count } => ("composite", count.to_string(), count.to_string(), true),
-        Value::Enum { raw, name } => match name {
-            Some(n) => ("enum", format!("{n} ({raw})"), n.clone(), true),
-            // A value the format does not define. Worth flagging, still editable.
-            None => ("enum", format!("{raw} (unknown)"), raw.to_string(), false),
-        },
+        Value::Enum { raw, name, hex } => {
+            let num = if *hex && *raw >= 0 { format!("0x{raw:02x}") } else { raw.to_string() };
+            match name {
+                Some(n) => ("enum", format!("{n} ({num})"), n.clone(), true),
+                // A value the format does not define. Worth flagging, still editable.
+                None => ("enum", format!("{num} (unknown)"), num, false),
+            }
+        }
     };
     NodeDto {
         path: n.path,

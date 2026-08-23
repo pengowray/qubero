@@ -62,6 +62,9 @@ pub enum Until {
 pub struct EnumDef {
     pub name: String,
     pub cases: Vec<(i128, String)>,
+    /// Show the number in hex. True for sets people read in hex, such as wasm
+    /// opcodes and value types.
+    pub hex: bool,
 }
 
 impl EnumDef {
@@ -158,11 +161,19 @@ impl Ty {
         Ty::Switch { on, cases, default: Box::new(default) }
     }
     pub fn enumeration(name: &str, inner: Ty, cases: &[(i128, &str)]) -> Ty {
+        Ty::enum_with(name, inner, cases, false)
+    }
+    /// An enum whose numbers are shown in hex.
+    pub fn enumeration_hex(name: &str, inner: Ty, cases: &[(i128, &str)]) -> Ty {
+        Ty::enum_with(name, inner, cases, true)
+    }
+    fn enum_with(name: &str, inner: Ty, cases: &[(i128, &str)], hex: bool) -> Ty {
         Ty::Enum {
             inner: Box::new(inner),
             def: Arc::new(EnumDef {
                 name: name.to_string(),
                 cases: cases.iter().map(|(v, n)| (*v, n.to_string())).collect(),
+                hex,
             }),
         }
     }

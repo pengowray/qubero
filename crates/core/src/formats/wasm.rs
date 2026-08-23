@@ -1,5 +1,6 @@
 //! WebAssembly binary format: header plus a run of sections.
 
+use super::wasm_opcodes::{instr, valtype};
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
 /// Section ids from the core spec, in id order.
@@ -19,28 +20,18 @@ const SECTION: &[(i128, &str)] = &[
     (12, "data count"),
 ];
 
-const VALTYPE: &[(i128, &str)] = &[
-    (0x7f, "i32"),
-    (0x7e, "i64"),
-    (0x7d, "f32"),
-    (0x7c, "f64"),
-    (0x7b, "v128"),
-    (0x70, "funcref"),
-    (0x6f, "externref"),
-];
-
 const EXPORT_KIND: &[(i128, &str)] = &[(0, "func"), (1, "table"), (2, "memory"), (3, "global")];
 
 pub fn wasm() -> Template {
-    let valtype = T::enumeration("ValType", T::u8(), VALTYPE);
+    let vt = valtype();
     let functype = T::structure(
         "FuncType",
         vec![
             ("form", T::magic(&[0x60])),
             ("param_count", T::leb_u()),
-            ("params", T::array(valtype.clone(), E::field("param_count"))),
+            ("params", T::array(vt.clone(), E::field("param_count"))),
             ("result_count", T::leb_u()),
-            ("results", T::array(valtype, E::field("result_count"))),
+            ("results", T::array(vt, E::field("result_count"))),
         ],
     );
     let type_section =
@@ -70,6 +61,18 @@ pub fn wasm() -> Template {
     );
     let export_section =
         T::structure("ExportSection", vec![("count", T::leb_u()), ("exports", T::array(export, E::field("count")))]);
+    let local = T::structure("Local", vec![("count", T::leb_u()), ("type", valtype())]);
+    let func = T::structure(
+        "Func",
+        vec![
+            ("local_decls", T::leb_u()),
+            ("locals", T::array(local, E::field("local_decls"))),
+            ("code", T::repeat(instr(), Until::End)),
+        ],
+    );
+    let code = T::structure("Code", vec![("size", T::leb_u()), ("body", T::sized(E::field("size"), func))]);
+    let code_section =
+        T::structure("CodeSection", vec![("count", T::leb_u()), ("entries", T::array(code, E::field("count")))]);
     let section = T::structure(
         "Section",
         vec![
@@ -81,7 +84,13 @@ pub fn wasm() -> Template {
                     E::field("size"),
                     T::switch(
                         E::field("id"),
-                        vec![(1, type_section), (3, function_section), (5, memory_section), (7, export_section)],
+                        vec![
+                            (1, type_section),
+                            (3, function_section),
+                            (5, memory_section),
+                            (7, export_section),
+                            (10, code_section),
+                        ],
                         T::bytes(E::field("size")),
                     ),
                 ),
@@ -125,10 +134,52 @@ mod tests {
         assert_eq!(params.type_name, "ValType[]");
         // The section id is an enum and the body switch still keys off its number.
         let id = ev.node(&d, &[2, 0, 0]).unwrap();
-        assert_eq!(id.value, Value::Enum { raw: 1, name: Some("type".into()) });
+        assert_eq!(id.value, Value::Enum { raw: 1, name: Some("type".into()), hex: false });
         assert_eq!(ev.node(&d, &[2, 0, 2]).unwrap().type_name, "TypeSection");
-        assert_eq!(ev.node(&d, &[2, 0, 2, 1, 0, 2, 0]).unwrap().value, Value::Enum { raw: 0x7f, name: Some("i32".into()) });
+        assert_eq!(ev.node(&d, &[2, 0, 2, 1, 0, 2, 0]).unwrap().value, Value::Enum { raw: 0x7f, name: Some("i32".into()), hex: true });
         let custom = ev.node(&d, &[2, 1, 2]).unwrap();
         assert_eq!(custom.value, Value::Bytes { len: 3, preview: vec![9, 9, 9] });
+    }
+
+    #[test]
+    fn code_section_reads_instructions() {
+        // (func (param i32) (result i32) local.get 0, i32.const 42, i32.add)
+        let body: &[u8] = &[
+            0, // no local declarations
+            0x20, 0x00, // local.get 0
+            0x41, 0x2a, // i32.const 42
+            0x6a, // i32.add
+            0x0b, // end
+        ];
+        let mut section = vec![1u8]; // one function
+        section.push(body.len() as u8);
+        section.extend_from_slice(body);
+
+        let mut b = b"\0asm".to_vec();
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.push(10); // code section
+        b.push(section.len() as u8);
+        b.extend_from_slice(&section);
+
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(wasm());
+        assert_eq!(ev.node(&d, &[2, 0, 2]).unwrap().type_name, "CodeSection");
+        // sections[0].body.entries[0].body.code
+        let code = ev.node(&d, &[2, 0, 2, 1, 0, 1, 2]).unwrap();
+        assert_eq!(code.child_count, 4);
+        let names: Vec<Option<String>> = (0..4)
+            .map(|i| match ev.node(&d, &[2, 0, 2, 1, 0, 1, 2, i, 0]).unwrap().value {
+                Value::Enum { name, .. } => name,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![Some("local.get".into()), Some("i32.const".into()), Some("i32.add".into()), Some("end".into())]
+        );
+        // The i32.const immediate is a signed LEB128.
+        assert_eq!(ev.node(&d, &[2, 0, 2, 1, 0, 1, 2, 1, 1]).unwrap().value, Value::Int(42));
+        // An opcode with no immediate takes no space.
+        assert_eq!(ev.node(&d, &[2, 0, 2, 1, 0, 1, 2, 2, 1]).unwrap().size_bits, 0);
     }
 }
