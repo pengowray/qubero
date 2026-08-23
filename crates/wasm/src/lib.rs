@@ -3,8 +3,8 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::diescript;
 use qubero_core::eval::Explain;
+use qubero_core::{diescript, dosbasic};
 use qubero_core::{formats, magicrule, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -339,6 +339,11 @@ impl Editor {
     /// called or where its overlay begins are answered from the bytes here.
     /// A question the file cannot answer means the rule does not match, rather
     /// than being answered from somewhere else.
+    ///
+    /// One answer is not from the database: a DOS BASIC program names the
+    /// runtime it was built against in its own loader stub, which no rule in
+    /// the database can match on because the stub sits at a different place in
+    /// every program. It is credited to this editor rather than to a rule file.
     pub fn detect_tools(&self, rules: &str, head: &[u8]) -> String {
         let db = diescript::parse_bundle(rules);
         // What the file says about itself: where it starts running, what its
@@ -346,6 +351,7 @@ impl Editor {
         let facts = diescript::Facts::of(head, self.doc.len_bytes());
         let found: Vec<ToolDto> = diescript::detect(&db, head, &facts)
             .into_iter()
+            .chain(dosbasic::detect(head, self.doc.len_bytes()))
             .map(|d| ToolDto {
                 category: d.category,
                 name: d.name,

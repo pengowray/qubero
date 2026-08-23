@@ -1,4 +1,4 @@
-import { Doc, formatBytes, formatOffset, prefetchMagic, type Identification, type ToolMatch } from "./doc.js";
+import { Doc, formatBytes, formatOffset, OWN_SOURCE, prefetchMagic, type Identification, type ToolMatch } from "./doc.js";
 import { HexView, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
@@ -42,6 +42,7 @@ const SIGNATURE_NOTE = "Signature only.";
 const fullTemplateLine = (name: string): string => `The Fields table uses Qubero's full ${name} template.`;
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const NO_TOOL_MATCH = "No matches in the Detect It Easy signature database.";
+const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
 
 /**
  * The database writes its categories as slugs. Two of them are not words, and
@@ -398,7 +399,15 @@ function mount(doc: Doc): void {
         for (const m of sortTools(tools)) {
           rows.push(el("p", { className: "dlg-tool", textContent: toolLine(m) }));
         }
-        rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
+        // Each credit covers only the answers it found. An answer the editor
+        // read out of the file itself is not the database's to be credited
+        // with, and the database's rules are not this editor's.
+        if (tools.some((m) => m.source !== OWN_SOURCE)) {
+          rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
+        }
+        if (tools.some((m) => m.source === OWN_SOURCE)) {
+          rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
+        }
       }
     }
     if (templateLine !== "") rows.push(el("p", { className: "dlg-muted", textContent: templateLine }));

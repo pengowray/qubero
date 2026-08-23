@@ -10,6 +10,7 @@
 pub mod bits;
 pub mod decode;
 pub mod diescript;
+pub mod dosbasic;
 pub mod document;
 pub mod encode;
 pub mod eval;

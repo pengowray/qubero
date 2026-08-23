@@ -142,7 +142,7 @@ export type TypeInfo = {
   readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];
 };
 
-/** What one Detect It Easy rule concluded about what produced a file. */
+/** What one rule, or the editor itself, concluded about what produced a file. */
 export type ToolMatch = {
   /** The database's own word: `packer`, `compiler`, `protector`. */
   readonly category: string;
@@ -150,15 +150,33 @@ export type ToolMatch = {
   readonly version: string | null;
   /** Free text written by the rule's author, shown as written. */
   readonly options: string | null;
-  /** The signature file that answered. */
+  /** The signature file that answered, or `OWN_SOURCE` for the editor's own. */
   readonly source: string;
 };
+
+/**
+ * What `source` says for an answer the editor worked out itself rather than
+ * took from the signature database. Kept in step with `dosbasic::SOURCE` in
+ * the core, so the dialog credits each answer to whatever actually found it.
+ */
+export const OWN_SOURCE = "qubero";
 
 /**
  * The largest a .COM can be. It is loaded whole into one 64 KiB segment below
  * the stack, so anything bigger is not one, whatever its name says.
  */
 const COM_LIMIT = 65280;
+
+/**
+ * How much of a DOS executable the signature rules get to look at.
+ *
+ * More than the 64 KiB an unknown format is identified from, because what says
+ * which BASIC runtime one of these needs is at the end of the program rather
+ * than the start, and so is the entry point of anything but a small one. A DOS
+ * program cannot be much larger than this and still be one, and 1 MiB is 16
+ * chunks against a cache of 512.
+ */
+const DOS_WINDOW = 1024 * 1024;
 
 export type WrittenRange = { readonly offset_bits: number; readonly size_bits: number };
 
@@ -430,8 +448,9 @@ export class Doc {
     const n = Math.min(IDENTIFY_WINDOW, this.lengthBytes);
     if (n === 0) return [];
     await this.ensureRange(0, n);
-    const { bytes, complete } = this.read(0, n);
-    if (!complete) return [];
+    const first = this.read(0, n);
+    if (!first.complete) return [];
+    let bytes = first.bytes;
     const bundles: string[] = [];
     const mz = bytes[0] === 0x4d && bytes[1] === 0x5a;
     if (mz) {
@@ -442,6 +461,15 @@ export class Doc {
       const at = byteAt(0x3c) + (byteAt(0x3d) << 8) + (byteAt(0x3e) << 16) + byteAt(0x3f) * 0x1000000;
       const pe = at + 4 <= bytes.length && byteAt(at) === 0x50 && byteAt(at + 1) === 0x45 && byteAt(at + 2) === 0 && byteAt(at + 3) === 0;
       bundles.push(pe ? "pe.sig" : "msdos.sig");
+      // A DOS program is asked about further in than the 64 KiB an unknown
+      // format is identified from. A Windows one is not: its rules read the
+      // section table, which is in the header either way.
+      const want = Math.min(DOS_WINDOW, this.lengthBytes);
+      if (!pe && want > n) {
+        await this.ensureRange(0, want);
+        const wider = this.read(0, want);
+        if (wider.complete) bytes = wider.bytes;
+      }
     }
     // A .COM is bytes with no header at all, so nothing but its size and its
     // name suggest one. Asking for every unknown small file would be worse.

@@ -370,6 +370,35 @@ each. Updating is bumping the hash and running it again, which is the whole
 point: a database that had been rewritten into another format would need its
 changes merged by hand every time upstream moved.
 
+### Which BASIC runtime a DOS program wants
+One answer is the editor's own, because no rule can give it. Microsoft's 1980s
+BASIC compilers produced two kinds of program: one linked against
+`BCOM<version>.LIB`, carrying its runtime inside it, and one linked against
+`BRUN<version>.EXE`, which stays a separate file and has to be on the disk or
+the program prints `Cannot find BRUN20G.EXE` and quits. Which of the two a file
+is, and which runtime it names, is the first thing anybody opening one wants to
+know, and it is the reason such a program will not run today.
+
+A signature rule cannot say it. The entry point of one of these is a far call
+into the loader stub the linker put at the end of the program, and the segment
+it calls is different in every program, so an entry-point pattern has nothing
+fixed to match. What is fixed is the stub itself: it ends the load module and
+its last string is the file name it asks DOS to load. `dosbasic.rs` reads it
+from the last 8 KiB of the load module, and from the load module rather than
+the file, so a self-extracting archive carrying `BRUN20G.EXE` as its payload is
+not mistaken for a program that needs one. Over 188 DOS executables in hand it
+answers for 8 and stays silent on the rest, including the runtime itself.
+
+The name is reported as the file writes it, and nothing is made of it: mapping
+`BRUN20G` to a product version would be a guess about a naming scheme nobody
+documented. A detection of the editor's own is marked `source: "qubero"`, so
+the dialog credits it to reading the file rather than to a database that never
+made it.
+
+Rules test the first 64 KiB, but a DOS executable is read to 1 MiB, since the
+stub is at the end of the program and so is the entry point of anything but a
+small one.
+
 ### Naming a file
 Every file is identified using the rule database of the `file` command, through
 the `pure-magic` crate, and the rule's own sentence goes in the toolbar beside
