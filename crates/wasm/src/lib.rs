@@ -13,6 +13,13 @@ use wasm_bindgen::prelude::*;
 pub struct Editor {
     doc: Document<ChunkStore>,
     eval: Option<Evaluator>,
+    /// What the wasm sections say about the module, when that is the template.
+    /// Built on the first listing that needs it, and thrown away whenever the
+    /// document changes, since it holds paths that the change may have moved.
+    disasm: Option<formats::WasmModule>,
+    /// The template in use, which decides whether a listing row goes through
+    /// the disassembler.
+    template: String,
 }
 
 #[derive(Serialize)]
@@ -165,6 +172,9 @@ struct SpanDto {
     gap: bool,
     /// Fields this entry stands for, when a run of numbers is shown as one.
     count: f64,
+    /// A structure that reads on one row, already joined. Null for a field that
+    /// reads as its own value.
+    line: Option<String>,
 }
 
 fn span_dto(s: Span) -> SpanDto {
@@ -180,6 +190,7 @@ fn span_dto(s: Span) -> SpanDto {
         kind,
         gap: s.gap,
         count: s.count as f64,
+        line: s.line,
     }
 }
 
@@ -267,13 +278,14 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store), eval: None }
+        Editor { doc: Document::new(store), eval: None, disasm: None, template: String::new() }
     }
 
     fn changed(&mut self) {
         if let Some(e) = &mut self.eval {
             e.invalidate();
         }
+        self.disasm = None;
     }
 
     // ----- templates -----
@@ -289,6 +301,8 @@ impl Editor {
 
     /// Select a built-in template by name; "" clears it. Returns false if unknown.
     pub fn set_template(&mut self, name: &str) -> bool {
+        self.disasm = None;
+        self.template = name.to_string();
         if name.is_empty() {
             self.eval = None;
             return true;
@@ -311,6 +325,10 @@ impl Editor {
     /// bytes to a fixed place, which is the honest answer for a format found by
     /// searching rather than by looking.
     pub fn set_magic_template(&mut self, name: &str, rules: &str, head: &[u8]) -> bool {
+        // A signature template covers a format's first bytes only, so whatever
+        // full template was in use no longer applies.
+        self.disasm = None;
+        self.template = String::new();
         match magicrule::match_signature(rules, head) {
             Some(sig) => {
                 self.eval = Some(Evaluator::new(magicrule::signature_template(name, &sig)));
@@ -394,13 +412,43 @@ impl Editor {
     /// Every field between two bit offsets, for the annotation column:
     /// {status:"ok",node:[span,..]}. `max` caps how many come back.
     pub fn spans(&mut self, from_bit: f64, to_bit: f64, max: u32) -> String {
-        match &mut self.eval {
-            None => reply::<Vec<SpanDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => reply(
-                e.spans(&self.doc, from_bit as u64, to_bit as u64, max as usize)
-                    .map(|v| v.into_iter().map(span_dto).collect::<Vec<SpanDto>>()),
-            ),
+        let Some(e) = &mut self.eval else {
+            return reply::<Vec<SpanDto>>(Err(EvalError::Failed("no template".into())));
+        };
+        let found = match e.spans(&self.doc, from_bit as u64, to_bit as u64, max as usize) {
+            Ok(v) => v,
+            Err(err) => return reply::<Vec<SpanDto>>(Err(err)),
+        };
+        let named = self.name_instructions(found);
+        reply(Ok(named))
+    }
+
+    /// Rewrite instruction rows through the wasm disassembler, so a call names
+    /// the function it calls. Anything that does not work out keeps the row the
+    /// template already produced: a name is an improvement on a number, not a
+    /// requirement for reading the file.
+    fn name_instructions(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        if self.template != "wasm" || !found.iter().any(|s| s.type_name == "Instr") {
+            return found.into_iter().map(span_dto).collect();
         }
+        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
+        if self.disasm.is_none() {
+            // The module may not have streamed in far enough yet, in which case
+            // this is worth trying again on the next screenful.
+            self.disasm = formats::WasmModule::read(e, &self.doc).ok();
+        }
+        let Some(m) = &self.disasm else { return found.into_iter().map(span_dto).collect() };
+        found
+            .into_iter()
+            .map(|s| {
+                let named = if s.type_name == "Instr" { m.instruction_line(e, &self.doc, &s.path).ok() } else { None };
+                let mut dto = span_dto(s);
+                if let Some(line) = named {
+                    dto.line = Some(line);
+                }
+                dto
+            })
+            .collect()
     }
 
     /// Path of the deepest field covering `bit`, as {status:"ok",node:[..]}.

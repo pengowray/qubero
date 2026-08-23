@@ -216,6 +216,17 @@ impl Module {
         Ok(out)
     }
 
+    /// One instruction at `path`, as the text a listing row shows: the
+    /// mnemonic and its immediate, with any index that names something given
+    /// that name.
+    pub fn instruction_line<S: Source>(&self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<String> {
+        let (mnemonic, text) = self.instruction(ev, doc, path)?;
+        Ok(match undecoded_group(&mnemonic) {
+            Some(group) => format!("{text}  ;; {group}"),
+            None => text,
+        })
+    }
+
     /// One instruction as its mnemonic and its full text.
     fn instruction<S: Source>(&self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<(String, String)> {
         let mut op_path = path.to_vec();
