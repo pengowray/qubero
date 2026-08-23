@@ -78,6 +78,9 @@ struct Resolved {
     /// walk reached its terminating condition.
     repeat_ends: Vec<u64>,
     repeat_done: bool,
+    /// Children `0..seq_end` are resolved and sized, so child `seq_end` can be
+    /// placed without walking back. Keeps sibling resolution iterative.
+    seq_end: usize,
 }
 
 pub struct Evaluator {
@@ -167,17 +170,35 @@ impl Evaluator {
             let _ = elem;
             pr.offset + idx as u64 * fs
         } else {
+            // Place after the previous sibling. Siblings are resolved in order,
+            // iteratively, so deep arrays do not recurse element by element.
+            // Note: asking for an element past a Repeat's terminating condition
+            // is not prevented here; `children()` clamps, direct callers must too.
+            self.resolve_upto(doc, parent, idx)?;
             let mut prev = parent.to_vec();
             prev.push(idx - 1);
-            self.resolve(doc, &prev)?;
-            let end = self.memo[&prev].offset + self.size_of(doc, &prev)?;
-            end
+            self.memo[&prev].offset + self.size_of(doc, &prev)?
         };
         if offset > pr.limit {
             return fail("runs past the end of its container");
         }
         let r = self.effective(doc, path, name, ty, offset, pr.limit)?;
         self.memo.insert(path.to_vec(), r);
+        Ok(())
+    }
+
+    /// Resolve and size children `0..idx` of `parent`, in order, without recursion.
+    fn resolve_upto<S: Source>(&mut self, doc: &Document<S>, parent: &[usize], idx: usize) -> R<()> {
+        let mut j = self.memo[parent].seq_end;
+        let mut p = parent.to_vec();
+        while j < idx {
+            p.push(j);
+            self.resolve(doc, &p)?;
+            self.size_of(doc, &p)?;
+            p.pop();
+            j += 1;
+            self.memo.get_mut(parent).expect("resolved").seq_end = j;
+        }
         Ok(())
     }
 
@@ -221,6 +242,7 @@ impl Evaluator {
                         size: None,
                         repeat_ends: Vec::new(),
                         repeat_done: false,
+                        seq_end: 0,
                     });
                 }
             }
@@ -256,6 +278,7 @@ impl Evaluator {
                     } else {
                         let mut last = path.to_vec();
                         last.push(s.fields.len() - 1);
+                        self.resolve_upto(doc, path, s.fields.len() - 1)?;
                         self.resolve(doc, &last)?;
                         let end = self.memo[&last].offset + self.size_of(doc, &last)?;
                         end - r.offset
@@ -268,6 +291,7 @@ impl Evaluator {
                     } else {
                         let mut last = path.to_vec();
                         last.push(n as usize - 1);
+                        self.resolve_upto(doc, path, n as usize - 1)?;
                         self.resolve(doc, &last)?;
                         let end = self.memo[&last].offset + self.size_of(doc, &last)?;
                         end - r.offset
@@ -614,6 +638,36 @@ mod tests {
         let d2 = doc(&[9, 40, 0]);
         let mut ev2 = Evaluator::new(t);
         assert!(matches!(ev2.node(&d2, &[2]), Err(EvalError::Failed(_))));
+    }
+
+    #[test]
+    fn huge_variable_size_array_does_not_recurse() {
+        // 50k LEB128 elements; the count itself is a 3-byte LEB128.
+        let n = 50_000u32;
+        let mut bytes = vec![(n & 0x7f) as u8 | 0x80, ((n >> 7) & 0x7f) as u8 | 0x80, (n >> 14) as u8];
+        for i in 0..n {
+            let v = i % 300;
+            if v < 128 {
+                bytes.push(v as u8);
+            } else {
+                bytes.push((v & 0x7f) as u8 | 0x80);
+                bytes.push((v >> 7) as u8);
+            }
+        }
+        let t = Template {
+            name: "t".into(),
+            root: T::structure("Root", vec![("n", T::leb_u()), ("xs", T::array(T::leb_u(), E::field("n")))]),
+        };
+        let d = doc(&bytes);
+        let mut ev = Evaluator::new(t);
+        // Size of the array first, before any element is resolved.
+        let xs = ev.node(&d, &[1]).unwrap();
+        assert_eq!(xs.child_count, 50_000);
+        assert_eq!(xs.size_bits, (bytes.len() as u64 - 3) * 8);
+        assert_eq!(ev.node(&d, &[1, 49_999]).unwrap().value, Value::UInt(49_999 % 300));
+        // Fresh evaluator, jump straight to the last element.
+        let mut ev2 = Evaluator::new(ev.template().clone());
+        assert_eq!(ev2.node(&d, &[1, 49_999]).unwrap().value, Value::UInt(49_999 % 300));
     }
 
     #[test]

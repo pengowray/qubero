@@ -53,8 +53,9 @@ used in an expression is its bytes as a big-endian number, so a switch can key o
 `eval.rs` evaluates lazily by path with memoised offsets and sizes. Results are a
 strict tri-state: value, pending (unloaded chunks, which the host fetches before
 re-asking), or error. Zero-filled reads never reach the parser. Invalidation is
-coarse (whole memo on any edit); a dependency tracker that invalidates only the
-fields that read the edited bytes is the upgrade when templates get large.
+coarse (whole memo on any edit), so on a large templated file every keystroke
+re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker that
+invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
 Built-in templates live in `formats.rs` (PNG, wasm). A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
@@ -81,6 +82,10 @@ would make a constraint unsatisfiable, say so rather than silently picking a sid
 ### Type table editing
 The table (`web/src/typetable.ts`) shows and navigates; editing values in place is
 next, reusing the inspector's encode lenses per type.
+
+### Known gaps
+The field highlight in the hex view has no way to be dismissed yet. Save shows no
+progress while rewriting bit-shifted stretches.
 
 ### Later
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.

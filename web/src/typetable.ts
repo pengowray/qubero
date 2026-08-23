@@ -18,6 +18,10 @@ function hexOffset(bits: number): string {
   return `0x${byte.toString(16).toUpperCase()}${rem ? `+${rem}b` : ""}`;
 }
 
+function countText(n: number, noun: string): string {
+  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 function sizeText(bits: number): string {
   if (bits % 8 === 0) {
     const b = bits / 8;
@@ -135,7 +139,7 @@ export class TypeTable {
 
     const value = document.createElement("td");
     value.className = `tt-val tt-${n.kind}`;
-    value.textContent = n.composite ? `${n.child_count.toLocaleString()} ${n.type.endsWith("[]") ? "items" : "fields"}` : n.value;
+    value.textContent = n.composite ? countText(n.child_count, n.type.endsWith("[]") ? "item" : "field") : n.value;
 
     const type = document.createElement("td");
     type.className = "tt-type";
