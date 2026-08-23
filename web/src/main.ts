@@ -34,7 +34,7 @@ function panel(title: string, side: "bottom" | "right", content: HTMLElement, on
     section.classList.toggle("is-collapsed", collapsed);
     chevron.textContent = collapsed ? (side === "right" ? "\u25c2" : "\u25b8") : "\u25be";
     toggle.setAttribute("aria-expanded", String(!collapsed));
-    toggle.title = collapsed ? `Show ${title}` : `Hide ${title}`;
+    toggle.title = collapsed ? "Expand" : "Collapse";
   };
   apply(localStorage.getItem(key) === "collapsed");
   toggle.addEventListener("click", () => {
@@ -183,18 +183,24 @@ function mount(doc: Doc): void {
   });
 
   const column = el("select", { className: "tb-col" });
-  column.setAttribute("aria-label", "Right of the bytes");
+  column.setAttribute("aria-label", "Column beside the bytes");
   for (const [value, label] of [
     ["text", "Text column"],
     ["fields", "Field column"],
   ] as const) {
     column.append(el("option", { value, textContent: label }));
   }
-  column.value = localStorage.getItem("qubero.column") === "fields" ? "fields" : "text";
-  view.setRightColumn(column.value === "fields" ? "fields" : "text");
+  const columnKey = (): string => (doc.template === null ? "qubero.column.plain" : "qubero.column.template");
+  const syncColumn = (): void => {
+    const saved = localStorage.getItem(columnKey());
+    const c: "text" | "fields" = saved === "fields" || saved === "text" ? saved : doc.template === null ? "text" : "fields";
+    column.value = c;
+    view.setRightColumn(c);
+  };
+  syncColumn();
   column.addEventListener("change", () => {
     const c = column.value === "fields" ? "fields" : "text";
-    localStorage.setItem("qubero.column", c);
+    localStorage.setItem(columnKey(), c);
     view.setRightColumn(c);
   });
 
@@ -238,7 +244,12 @@ function mount(doc: Doc): void {
     if (!picking) followCursor(c.bitOffset);
     refresh();
   };
+  let hadTemplate = doc.template;
   doc.onChange(() => {
+    if (doc.template !== hadTemplate) {
+      hadTemplate = doc.template;
+      syncColumn();
+    }
     refresh();
     if (followWhenLoaded !== null) followCursor(followWhenLoaded);
   });

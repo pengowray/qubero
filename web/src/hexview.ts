@@ -29,7 +29,9 @@ const SPAN_LIMIT = 600;
 /** Colours the annotation column cycles through, as class suffixes. */
 const TINTS = 6;
 /** What a stretch of bytes no field covers is called. */
-const GAP_LABEL = "not described";
+const GAP_LABEL = "no field";
+/** Shown in the field column when nothing has said what the file's fields are. */
+const NO_TEMPLATE = "No template selected";
 /** Longest value shown on a chip before it is cut short. */
 const CHIP_VALUE = 32;
 /** Rough width of a character in the chip font, for working out how many
@@ -41,9 +43,8 @@ const CHIP_CHROME = 20;
 /** What a chip says after the name. A run of numbers says how many; raw bytes
  *  say how many, since the bytes themselves are already on the left. */
 function chipDetail(s: Span): string {
-  if (s.gap) return "";
   if (s.count > 0) return `${s.count.toLocaleString()} values`;
-  if (s.kind === "bytes") {
+  if (s.gap || s.kind === "bytes") {
     return s.size_bits % 8 === 0
       ? `${(s.size_bits / 8).toLocaleString()} bytes`
       : `${s.size_bits.toLocaleString()} bits`;
@@ -168,13 +169,32 @@ export class HexView {
   }
 
   relayout(): void {
-    const probe = this.rowEls[0];
-    if (probe) this.rowHeight = Math.max(1, probe.getBoundingClientRect().height || this.rowHeight);
-    const h = this.rowsEl.clientHeight;
-    this.visibleRows = Math.max(1, Math.floor(h / this.rowHeight));
+    this.fitRows();
     this.topRow = Math.min(this.topRow, this.maxTopRow);
-    this.ensureRowEls();
     this.render();
+  }
+
+  /**
+   * Match the number of rows to the space there is for them.
+   *
+   * The row height comes from the stylesheet rather than from a row's measured
+   * box: a row measured while the browser is still placing its contents can
+   * report the height of what is inside it, and one row of that height leaves
+   * the view showing a single line of the file. Called on every render, so a
+   * container that grows after the view was laid out is picked up either way.
+   */
+  private fitRows(): void {
+    const probe = this.rowEls[0];
+    const h = probe === undefined ? 0 : parseFloat(getComputedStyle(probe).height);
+    if (h > 0) this.rowHeight = h;
+    const fit = Math.max(1, Math.floor(this.rowsEl.clientHeight / this.rowHeight));
+    if (fit !== this.visibleRows) {
+      this.visibleRows = fit;
+      this.topRow = Math.min(this.topRow, this.maxTopRow);
+    }
+    // Unconditional: on the first pass there are no row elements yet, however
+    // many of them fit.
+    this.ensureRowEls();
   }
 
   private ensureRowEls(): void {
@@ -507,16 +527,23 @@ export class HexView {
     name.textContent = s.gap ? GAP_LABEL : s.name;
     el.append(name);
     const detail = chipDetail(s);
-    if (detail !== "" && !s.gap) {
+    if (detail !== "") {
       const v = document.createElement("span");
       v.className = "hv-chip-val";
       v.textContent = detail;
       el.append(v);
     }
-    const where = s.trail.length > 0 ? `${s.trail.join(" ")} ` : "";
-    el.title = s.gap
-      ? `${GAP_LABEL}: ${(s.size_bits / 8).toLocaleString()} bytes inside ${where}${s.name}`
-      : `${where}${s.name} \u00b7 ${s.type}`;
+    const path = [...s.trail, s.name].join(" ");
+    if (s.gap) {
+      el.title = `No field covers these ${chipDetail(s)}. Inside: ${path}`;
+    } else if (carried) {
+      // The arrow says "this began further up", which a screen reader cannot
+      // see and a first-time reader should not have to work out.
+      el.title = `Starts above the visible rows: ${path}, ${detail}`;
+      el.setAttribute("aria-label", `starts above: ${s.name}, ${detail}`);
+    } else {
+      el.title = `${path} \u00b7 ${s.type}`;
+    }
     el.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!s.gap) this.onPickField(s.path);
@@ -526,6 +553,7 @@ export class HexView {
   }
 
   render(): void {
+    this.fitRows();
     const bpr = this.bytesPerRow;
     const len = this.doc.lengthBytes;
     const addrWidth = Math.max(8, len.toString(16).length);
@@ -533,14 +561,15 @@ export class HexView {
     const windowBytes = this.visibleRows * bpr;
     const { bytes, complete } = this.doc.read(start, windowBytes);
     const binary = this.mode === "binary";
-    const fields = this.rightColumn === "fields" && this.doc.template !== null;
+    const fields = this.rightColumn === "fields";
+    const templated = this.doc.template !== null;
 
     // Which span covers each byte on screen, and which start on each row.
     let spans: Span[] = [];
     let more = false;
     const byteSpan = new Int32Array(windowBytes).fill(-1);
     const byRow: { span: Span; carried: boolean }[][] = [];
-    if (fields) {
+    if (fields && templated) {
       ({ spans, more } = this.spansForView(start, windowBytes));
       for (let r = 0; r < this.visibleRows; r++) byRow.push([]);
       for (const [i, s] of spans.entries()) {
@@ -644,6 +673,17 @@ export class HexView {
       if (fields) {
         const note = document.createElement("span");
         note.className = "hv-note";
+        if (!templated) {
+          if (r === 0) {
+            const none = document.createElement("span");
+            none.className = "hv-chip hv-chip-gap";
+            none.textContent = NO_TEMPLATE;
+            note.append(none);
+          }
+          frag.append(cells, note);
+          row.replaceChildren(frag);
+          continue;
+        }
         const entries = byRow[r] ?? [];
         // Work out how many fit before drawing any, so what is left over can be
         // counted rather than quietly cut off.
@@ -659,17 +699,18 @@ export class HexView {
         if (shown < entries.length) {
           const rest = document.createElement("span");
           rest.className = "hv-chip hv-chip-gap hv-chip-rest";
-          rest.textContent = `+${entries.length - shown}`;
-          rest.title = entries
-            .slice(shown)
-            .map(({ span }) => span.name)
-            .join(", ");
+          const left = entries.slice(shown);
+          rest.textContent = `+${left.length}`;
+          const named = left.slice(0, 8).map(({ span }) => span.name);
+          if (left.length > named.length) named.push("\u2026");
+          rest.title = `${left.length} more ${left.length === 1 ? "field starts" : "fields start"} on this row: ${named.join(", ")}`;
           note.append(rest);
         }
         if (more && r === this.rowEls.length - 1) {
           const rest = document.createElement("span");
           rest.className = "hv-chip hv-chip-gap";
-          rest.textContent = "more below";
+          rest.textContent = "more fields below";
+          rest.title = `The field column shows up to ${SPAN_LIMIT} fields at a time. Scroll down to see the rest.`;
           note.append(rest);
         }
         frag.append(cells, note);

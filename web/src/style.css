@@ -364,7 +364,7 @@ input.invalid {
 /* The bytes of a field. Selection and the cursor are defined after this, so
    they keep the upper hand where they overlap. */
 .hv-tint {
-  background: color-mix(in srgb, var(--tint) 18%, transparent);
+  background: color-mix(in srgb, var(--tint) 26%, transparent);
 }
 .hv-hl {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
@@ -482,7 +482,9 @@ input.invalid {
   text-overflow: ellipsis;
 }
 .hv-chip-val {
-  color: var(--muted);
+  /* Dimmer than the name, but this is the field's value, so it still has to
+     be readable against the tint behind it. */
+  color: color-mix(in srgb, var(--fg) 80%, var(--bg));
   font-family: var(--mono);
   flex: 1 1 auto;
   overflow: hidden;
@@ -497,7 +499,7 @@ input.invalid {
 .hv-chip-gap {
   --tint: var(--muted);
   border-left-style: dashed;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--fg) 80%, var(--bg));
   cursor: default;
 }
 .hv-head-note {
