@@ -88,10 +88,23 @@ impl<S: Source> Document<S> {
     /// Replace `n` bits at `at` with the first `n` bits of `data`. One undo step.
     /// Overwriting past the end extends the document.
     pub fn overwrite_bits(&mut self, at: u64, data: &[u8], n: u64) {
+        self.overwrite_bits_inner(at, data, n, false);
+    }
+
+    /// Like `overwrite_bits`, but folds into the previous undo step (used when a
+    /// single user action, such as typing the second hex digit of a byte, lands
+    /// as two writes).
+    pub fn amend_overwrite_bits(&mut self, at: u64, data: &[u8], n: u64) {
+        self.overwrite_bits_inner(at, data, n, self.can_undo());
+    }
+
+    fn overwrite_bits_inner(&mut self, at: u64, data: &[u8], n: u64, amend: bool) {
         if n == 0 {
             return;
         }
-        self.snapshot();
+        if !amend {
+            self.snapshot();
+        }
         let off = self.add.push_bits(data, n);
         let existing = n.min(self.table.len_bits().saturating_sub(at));
         self.table.delete(at, existing);
@@ -106,6 +119,9 @@ impl<S: Source> Document<S> {
     }
     pub fn overwrite_bytes(&mut self, at_byte: u64, data: &[u8]) {
         self.overwrite_bits(at_byte * 8, data, data.len() as u64 * 8);
+    }
+    pub fn amend_overwrite_bytes(&mut self, at_byte: u64, data: &[u8]) {
+        self.amend_overwrite_bits(at_byte * 8, data, data.len() as u64 * 8);
     }
 
     pub fn read_bits(&self, at: u64, n: u64, out: &mut [u8]) -> Vec<Missing> {
@@ -143,6 +159,17 @@ mod tests {
         assert_eq!(all(&d), b"abcdef");
         assert!(d.redo());
         assert_eq!(all(&d), b"abXYef");
+    }
+
+    #[test]
+    fn amend_folds_into_previous_undo_step() {
+        let mut d = Document::new(MemSource(b"abcd".to_vec()));
+        d.overwrite_bytes(1, b"X");
+        d.amend_overwrite_bytes(1, b"Y");
+        assert_eq!(all(&d), b"aYcd");
+        assert!(d.undo());
+        assert_eq!(all(&d), b"abcd");
+        assert!(!d.can_undo());
     }
 
     #[test]

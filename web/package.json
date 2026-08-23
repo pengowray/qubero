@@ -1,0 +1,15 @@
+{
+  "name": "qubero-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "wasm": "cd ../crates/wasm && wasm-pack build --target web --out-dir ../../web/src/pkg --release"
+  },
+  "devDependencies": {
+    "typescript": "^5.9",
+    "vite": "^7"
+  }
+}

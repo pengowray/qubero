@@ -54,6 +54,10 @@ impl Editor {
     pub fn overwrite_bytes(&mut self, at: f64, data: &[u8]) {
         self.doc.overwrite_bytes(at as u64, data);
     }
+    /// Overwrite that folds into the previous undo step.
+    pub fn amend_overwrite_bytes(&mut self, at: f64, data: &[u8]) {
+        self.doc.amend_overwrite_bytes(at as u64, data);
+    }
     pub fn insert_bytes(&mut self, at: f64, data: &[u8]) {
         self.doc.insert_bytes(at as u64, data);
     }

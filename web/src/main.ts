@@ -1,0 +1,137 @@
+import { Doc } from "./doc.js";
+import { HexView } from "./hexview.js";
+import { Inspector } from "./inspector.js";
+import { parseSize, syntheticFile } from "./synthetic.js";
+
+const appEl = document.getElementById("app");
+if (!appEl) throw new Error("missing #app");
+const app: HTMLElement = appEl;
+
+function formatSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let x = n / 1024;
+  let i = 0;
+  while (x >= 1024 && i < units.length - 1) {
+    x /= 1024;
+    i++;
+  }
+  return `${x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x)} ${units[i]}`;
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]> & { className?: string } = {},
+  ...children: (Node | string)[]
+): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag);
+  Object.assign(e, props);
+  e.append(...children);
+  return e;
+}
+
+function mount(doc: Doc): void {
+  const view = new HexView(doc);
+  const inspector = new Inspector(doc);
+
+  const fileLabel = el("span", { className: "tb-file" });
+  const posLabel = el("span", { className: "tb-pos" });
+  const undoBtn = el("button", { type: "button", textContent: "Undo", title: "Undo (Ctrl+Z)" });
+  const redoBtn = el("button", { type: "button", textContent: "Redo", title: "Redo (Ctrl+Y)" });
+  undoBtn.addEventListener("click", () => doc.undo());
+  redoBtn.addEventListener("click", () => doc.redo());
+
+  const goto = el("input", { type: "text", placeholder: "Go to offset (hex)", className: "tb-goto" });
+  goto.setAttribute("aria-label", "Go to offset, hexadecimal");
+  goto.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const t = goto.value.trim().replace(/^0x/i, "");
+    if (!/^[0-9a-f]+$/i.test(t)) return goto.classList.add("invalid");
+    goto.classList.remove("invalid");
+    view.setCursor(parseInt(t, 16), { pane: "hex" });
+    view.el.focus();
+  });
+  goto.addEventListener("input", () => goto.classList.remove("invalid"));
+
+  const width = el("select", { className: "tb-width" });
+  width.setAttribute("aria-label", "Bytes per row");
+  for (const n of [8, 16, 32]) width.append(el("option", { value: String(n), textContent: `${n} per row` }));
+  const narrow = window.innerWidth < 700;
+  width.value = narrow ? "8" : "16";
+  view.setBytesPerRow(narrow ? 8 : 16);
+  width.addEventListener("change", () => view.setBytesPerRow(Number(width.value)));
+
+  const openBtn = el("button", { type: "button", textContent: "Open" });
+  openBtn.addEventListener("click", () => pick());
+
+  const toolbar = el(
+    "header",
+    { className: "toolbar" },
+    openBtn,
+    fileLabel,
+    el("span", { className: "tb-spacer" }),
+    goto,
+    width,
+    undoBtn,
+    redoBtn,
+  );
+
+  const statusbar = el("footer", { className: "statusbar" }, posLabel);
+
+  const refresh = (): void => {
+    fileLabel.textContent = `${doc.name}${doc.modified ? " (edited)" : ""}  ${formatSize(doc.lengthBytes)}`;
+    undoBtn.disabled = !doc.canUndo;
+    redoBtn.disabled = !doc.canRedo;
+    const c = view.cursorState;
+    posLabel.textContent =
+      `Offset 0x${c.offset.toString(16).toUpperCase()} (${c.offset.toLocaleString()})` +
+      `  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${c.pane === "hex" ? "Hex" : "Text"}`;
+  };
+  view.onCursorChange = (c) => {
+    inspector.setOffset(c.offset);
+    refresh();
+  };
+  doc.onChange(refresh);
+
+  app.replaceChildren(toolbar, el("main", { className: "workspace" }, view.el, inspector.el), statusbar);
+  view.relayout();
+  refresh();
+  inspector.setOffset(0);
+  view.el.focus();
+}
+
+function pick(): void {
+  const input = el("input", { type: "file" });
+  input.addEventListener("change", () => {
+    const f = input.files?.[0];
+    if (f) void Doc.open(f).then(mount);
+  });
+  input.click();
+}
+
+function welcome(): void {
+  const openBtn = el("button", { type: "button", textContent: "Open a file", className: "primary" });
+  openBtn.addEventListener("click", pick);
+  const drop = el(
+    "div",
+    { className: "welcome" },
+    el("h1", { textContent: "Qubero" }),
+    el("p", { textContent: "A hex editor for files of any size. Nothing leaves your device." }),
+    openBtn,
+    el("p", { className: "hint", textContent: "or drop a file anywhere on this page" }),
+  );
+  app.replaceChildren(drop);
+}
+
+window.addEventListener("resize", () => document.querySelector(".hexview")?.dispatchEvent(new Event("relayout")));
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer?.files[0];
+  if (f) void Doc.open(f).then(mount);
+});
+
+const synthetic = new URLSearchParams(location.search).get("synthetic");
+const syntheticSize = synthetic === null ? null : parseSize(synthetic);
+if (syntheticSize !== null) void Doc.open(syntheticFile(syntheticSize)).then(mount);
+else welcome();
