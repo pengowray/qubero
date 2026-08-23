@@ -1,11 +1,13 @@
 //! Built-in templates. These double as the test-bed for the IR: anything a
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
+mod id3;
 mod mp4;
 mod png;
 mod wasm;
 mod wasm_opcodes;
 
+pub use id3::id3;
 pub use mp4::mp4;
 pub use png::png;
 pub use wasm::wasm;
@@ -13,7 +15,7 @@ pub use wasm::wasm;
 use crate::template::Template;
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4"]
+    &["png", "wasm", "mp4", "id3"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -21,6 +23,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "png" => Some(png()),
         "wasm" => Some(wasm()),
         "mp4" => Some(mp4()),
+        "id3" => Some(id3()),
         _ => None,
     }
 }
@@ -33,6 +36,8 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("wasm")
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
+    } else if head.starts_with(b"ID3") {
+        Some("id3")
     } else {
         None
     }
