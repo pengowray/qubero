@@ -300,7 +300,9 @@ pub fn instr() -> T {
         cases.push((op, memarg.clone()));
     }
 
-    T::structure(
+    // An opcode and its immediate are one instruction, so the linear views show
+    // them on one row rather than one row each.
+    T::inline_structure(
         "Instr",
         vec![
             ("op", T::enumeration_hex("Op", T::u8(), OPCODE)),

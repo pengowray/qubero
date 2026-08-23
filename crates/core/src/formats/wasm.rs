@@ -268,4 +268,30 @@ mod tests {
             Value::Enum { raw: 1, name: Some("var".into()), hex: false }
         );
     }
+
+    #[test]
+    fn an_instruction_is_one_span_not_two() {
+        let body: &[u8] = &[0, 0x41, 0x2a, 0x6a, 0x0b];
+        let mut section = vec![1u8];
+        section.push(body.len() as u8);
+        section.extend_from_slice(body);
+        let mut b = b" asm".to_vec();
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.push(10);
+        b.push(section.len() as u8);
+        b.extend_from_slice(&section);
+
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(wasm());
+        let code = ev.node(&d, &[2, 0, 2, 1, 0, 1, 2]).unwrap();
+        let from = code.offset_bits;
+        let spans = ev.spans(&d, from, from + code.size_bits, 50).unwrap();
+        // Three instructions, not six rows of opcode and immediate.
+        let lines: Vec<String> = spans.iter().filter_map(|s| s.line.clone()).collect();
+        assert_eq!(lines, vec!["i32.const 42", "i32.add", "end"]);
+        // The tree still opens an instruction up, and the cursor still lands on
+        // the byte it is on: only the linear views join them.
+        assert_eq!(ev.node(&d, &[2, 0, 2, 1, 0, 1, 2, 0]).unwrap().child_count, 2);
+        assert_eq!(ev.locate(&d, from + 8).unwrap(), vec![2, 0, 2, 1, 0, 1, 2, 0, 1]);
+    }
 }

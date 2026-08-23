@@ -103,6 +103,44 @@ pub struct Span {
     /// How many fields this entry stands for, when a run of numbers is shown
     /// as one. Zero for a single field.
     pub count: u64,
+    /// A structure marked to read on one row, already joined: `local.get 0`
+    /// rather than an `op` row and an `imm` row. None for everything else,
+    /// which reads as its own value.
+    pub line: Option<String>,
+}
+
+/// One value on a shared row, which is terser than the same value on a row of
+/// its own: a named number gives its name and drops the number behind it,
+/// because the row already has several values competing for the eye.
+fn brief(v: &Value) -> String {
+    match v {
+        Value::UInt(n) => n.to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(n) => format!("{n}"),
+        Value::Str(s) => s.clone(),
+        Value::Enum { raw, name, hex } => match name {
+            Some(n) => n.clone(),
+            None if *hex => format!("0x{raw:x}"),
+            None => raw.to_string(),
+        },
+        Value::Flags { set, unnamed, .. } => {
+            let mut s = set.join("|");
+            if *unnamed > 0 {
+                if !s.is_empty() {
+                    s.push('|');
+                }
+                let _ = std::fmt::Write::write_fmt(&mut s, format_args!("{unnamed} more"));
+            }
+            s
+        }
+        Value::Bytes { len, preview } => {
+            let s: String = preview.iter().map(|b| format!("{b:02x} ")).collect();
+            let s = s.trim_end().to_string();
+            if *len as usize > preview.len() { format!("{s}…") } else { s }
+        }
+        Value::Magic { ok } => (if *ok { "ok" } else { "does not match" }).to_string(),
+        Value::Composite { .. } => String::new(),
+    }
 }
 
 /// A run of these is worth one entry rather than one each.
@@ -252,6 +290,21 @@ impl Evaluator {
         }
     }
 
+    /// The outermost enclosing structure that reads as one row, or the field
+    /// itself when nothing on the way to it is marked that way. `locate` has
+    /// already resolved every step, so this only reads what it left behind.
+    fn inline_ancestor(&self, path: &[usize]) -> Vec<usize> {
+        for n in 0..path.len() {
+            let prefix = &path[..n];
+            if let Some(r) = self.memo.get(prefix) {
+                if matches!(r.ty.base(), Ty::Struct(s) if s.inline) {
+                    return prefix.to_vec();
+                }
+            }
+        }
+        path.to_vec()
+    }
+
     /// Every field across a stretch of the file, in order, for the annotation
     /// column. One call covers what is on screen rather than one field, so the
     /// column can be drawn without a round trip per byte.
@@ -270,9 +323,16 @@ impl Evaluator {
         let mut out: Vec<Span> = Vec::new();
         while at < end && out.len() < max {
             let path = self.locate(doc, at)?;
+            // A structure marked to read on one row stands for its fields here.
+            let path = self.inline_ancestor(&path);
+            let inline = matches!(self.memo[&path].ty.base(), Ty::Struct(s) if s.inline);
             let info = self.node(doc, &path)?;
             let mut span = self.span_of(doc, &path, &info)?;
-            if info.composite {
+            if inline {
+                let mut parts = Vec::new();
+                self.one_line(doc, &path, &mut parts)?;
+                span.line = Some(parts.join(" "));
+            } else if info.composite {
                 // Inside it, but in none of its children: the template has
                 // nothing to say about these bytes.
                 span.gap = true;
@@ -315,7 +375,32 @@ impl Evaluator {
             value: info.value.clone(),
             gap: false,
             count: 0,
+            line: None,
         })
+    }
+
+    /// A structure that reads on one row, as its fields' values in order. A
+    /// field that is itself a structure contributes its own fields, so a wasm
+    /// instruction whose immediate has two parts still reads as one line.
+    fn one_line<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<String>) -> R<()> {
+        let info = self.node(doc, path)?;
+        if !info.composite {
+            // A field of no bits is an absence, not an empty value: the switch
+            // for an opcode with no immediate selects one.
+            if info.size_bits > 0 {
+                let text = brief(&info.value);
+                if !text.is_empty() {
+                    out.push(text);
+                }
+            }
+            return Ok(());
+        }
+        for i in 0..info.child_count as usize {
+            let mut child = path.to_vec();
+            child.push(i);
+            self.one_line(doc, &child, out)?;
+        }
+        Ok(())
     }
 
     /// The nearest run of plain numbers `path` sits in, if it is long enough to

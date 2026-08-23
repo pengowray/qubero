@@ -243,6 +243,12 @@ pub enum Ty {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
+    /// Read this structure as one thing rather than as its fields. A wasm
+    /// instruction is an opcode and its immediate, and splitting those across
+    /// two rows says less than one row saying `local.get 0`. Only the linear
+    /// views honour it: `locate` still walks inside, so the cursor keeps its
+    /// bit precision and the field tree still opens the structure up.
+    pub inline: bool,
 }
 
 impl Ty {
@@ -295,7 +301,20 @@ impl Ty {
         Ty::Struct(Arc::new(StructDef {
             name: name.to_string(),
             fields: fields.into_iter().map(|(n, ty)| Field { name: n.to_string(), ty }).collect(),
+            inline: false,
         }))
+    }
+    /// A structure the linear views show on one row, rather than one row per
+    /// field. See [`StructDef::inline`].
+    pub fn inline_structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
+        match Ty::structure(name, fields) {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
+                name: s.name.clone(),
+                fields: s.fields.clone(),
+                inline: true,
+            })),
+            other => other,
+        }
     }
     pub fn array(elem: Ty, count: Expr) -> Ty {
         Ty::Array { elem: Box::new(elem), count }

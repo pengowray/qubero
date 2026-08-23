@@ -299,6 +299,24 @@ format does not describe is the kind of thing worth noticing, not hiding.
 Writing a flags field writes the number underneath, because typing a name would
 mean deciding whether it replaced the other bits or joined them.
 
+### A structure that reads on one row
+`StructDef::inline` says that a structure is one thing rather than several. A
+wasm instruction is an opcode and its immediate, and an `op` row followed by an
+`imm` row says less than one row saying `local.get 0`.
+
+Only the linear views honour it. `Evaluator::spans` trims a located path up to
+the outermost inline ancestor and joins the fields' values into `Span::line`;
+`locate` is untouched, so the cursor still lands on the bit it is on, and the
+field tree still opens the structure up. That split is the point: the flag is
+about reading, not about what the bytes are, and the two places that need the
+bytes exactly are the two that ignore it.
+
+Values on a shared row are written shorter than the same values on rows of their
+own, because a row that holds several of them has less room for each: a named
+number gives its name and drops the number behind it. A field of no bits
+contributes nothing rather than an empty string, which is what the switch for an
+opcode with no immediate selects.
+
 ### PE
 The DOS header, the PE header, the optional header and the section table.
 Three things in it are worth knowing, because each is a thing the IR had to be
