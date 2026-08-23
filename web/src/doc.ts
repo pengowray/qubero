@@ -36,6 +36,40 @@ type RawReply<T> =
   | { status: "pending"; chunks: number[] }
   | { status: "error"; message: string };
 
+export class ReadFailure extends Error {
+  constructor(
+    readonly offset: number,
+    readonly length: number,
+    cause: unknown,
+  ) {
+    super(describeReadFailure(offset, length, cause), { cause });
+    this.name = "ReadFailure";
+  }
+}
+
+function describeReadFailure(offset: number, length: number, cause: unknown): string {
+  const where = `${formatBytes(length)} at offset 0x${offset.toString(16).toUpperCase()}`;
+  const reason =
+    cause instanceof DOMException && cause.name === "NotReadableError"
+      ? "The file has changed or moved since it was opened."
+      : cause instanceof Error
+        ? cause.message
+        : "The file may have changed or moved since it was opened.";
+  return `Could not read ${where} from the original file. ${reason}`;
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let x = n / 1024;
+  let i = 0;
+  while (x >= 1024 && i < units.length - 1) {
+    x /= 1024;
+    i++;
+  }
+  return `${x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x)} ${units[i]}`;
+}
+
 export type ReadResult = {
   readonly bytes: Uint8Array;
   /** True when every byte came from loaded data. False means a reload will follow. */
@@ -164,7 +198,11 @@ export class Doc {
     const last = Math.floor((at + len - 1) / CHUNK_SIZE);
     const waits: Promise<void>[] = [];
     for (let c = first; c <= last; c++) {
-      if (!this.editor.has_chunk(c)) waits.push(this.loadChunk(c));
+      if (!this.editor.has_chunk(c)) {
+        waits.push(this.loadChunk(c).catch((e: unknown) => {
+          throw new ReadFailure(c * CHUNK_SIZE, Math.min(CHUNK_SIZE, this.blob.size - c * CHUNK_SIZE), e);
+        }));
+      }
     }
     await Promise.all(waits);
   }
@@ -210,8 +248,13 @@ export class Doc {
         for (let o = 0; o < len; o += STEP) {
           const n = Math.min(STEP, len - o);
           await this.ensureRange(docOff + o, n);
-          const { bytes, complete } = this.read(docOff + o, n);
-          if (!complete) throw new Error("Some of the file could not be read.");
+          let { bytes, complete } = this.read(docOff + o, n);
+          if (!complete) {
+            // Chunks were evicted between load and read; one retry covers it.
+            await this.ensureRange(docOff + o, n);
+            ({ bytes, complete } = this.read(docOff + o, n));
+          }
+          if (!complete) throw new ReadFailure(docOff + o, n, "Chunks were evicted before they could be used.");
           parts.push(new Uint8Array(bytes) as Uint8Array<ArrayBuffer>);
         }
       }

@@ -1,4 +1,4 @@
-import { Doc } from "./doc.js";
+import { Doc, formatBytes } from "./doc.js";
 import { HexView } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
@@ -9,17 +9,7 @@ const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
 const app: HTMLElement = appEl;
 
-function formatSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let x = n / 1024;
-  let i = 0;
-  while (x >= 1024 && i < units.length - 1) {
-    x /= 1024;
-    i++;
-  }
-  return `${x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x)} ${units[i]}`;
-}
+const formatSize = formatBytes;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
