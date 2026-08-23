@@ -102,7 +102,10 @@ impl<S: Source> Document<S> {
         if n == 0 {
             return;
         }
-        if !amend {
+        if amend {
+            // Still a new edit from the user's point of view: redo history is stale.
+            self.redo.clear();
+        } else {
             self.snapshot();
         }
         let off = self.add.push_bits(data, n);
@@ -170,6 +173,14 @@ mod tests {
         assert!(d.undo());
         assert_eq!(all(&d), b"abcd");
         assert!(!d.can_undo());
+        // An amend after an undo must invalidate redo like any other edit.
+        d.overwrite_bytes(0, b"Q");
+        d.undo();
+        assert!(d.can_redo());
+        d.overwrite_bytes(3, b"Z");
+        d.amend_overwrite_bytes(3, b"W");
+        assert!(!d.can_redo());
+        assert_eq!(all(&d), b"abcW");
     }
 
     #[test]
