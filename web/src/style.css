@@ -137,7 +137,9 @@ input.invalid {
 .left {
   flex: 1;
   min-width: 0;
-  min-height: 0;
+  /* The bytes are the point of the window, so they keep a floor no matter how
+     much the panels want. */
+  min-height: 8rem;
   display: flex;
   flex-direction: column;
 }
@@ -253,6 +255,34 @@ input.invalid {
   color: var(--muted);
   padding: 8px 10px;
   margin: 0;
+}
+
+/* ---- dropping a file ---- */
+.dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: none;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  /* Drag events have to keep reaching the page underneath. */
+  pointer-events: none;
+}
+.dropzone.is-over {
+  display: grid;
+}
+.dropzone-card {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 24px 32px;
+  background: var(--panel);
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.18);
+}
+.dropzone-card strong {
+  font-size: 18px;
 }
 
 /* ---- hex view ---- */
@@ -521,7 +551,9 @@ input.invalid {
   border-top: 1px solid var(--line);
 }
 .panel-right {
-  flex: 0 0 auto;
+  /* Shrinkable: this panel is sized by its contents, and on a narrow window it
+     would otherwise squeeze the hex view out of the layout. */
+  flex: 0 1 auto;
   border-left: 1px solid var(--line);
 }
 .panel-bar {
@@ -571,6 +603,8 @@ input.invalid {
   .panel-right {
     border-left: 0;
     border-top: 1px solid var(--line);
+    max-height: 45%;
+    overflow: auto;
   }
   .panel-right.is-collapsed .panel-toggle {
     writing-mode: horizontal-tb;

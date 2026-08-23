@@ -11,6 +11,30 @@ const app: HTMLElement = appEl;
 
 const formatSize = formatBytes;
 
+/** The file that is open, so a second one can ask before replacing it. */
+let current: Doc | null = null;
+/** Writes to the toolbar's message slot, once there is one. */
+let say: (text: string, warn?: boolean) => void = () => {};
+
+const DROP_TITLE = "Drop to open";
+const DROP_SUB = "The file stays on your device";
+const DROP_HINT = "or drop a file anywhere on this page";
+const FOLDER_MSG = "Folders can't be opened.";
+const manyFilesMsg = (name: string): string => `Opened ${name}. One file at a time.`;
+const discardMsg = (name: string): string => `Discard unsaved edits and open ${name}?`;
+
+/**
+ * Open a file, in place of the one already open. Unsaved edits live only in
+ * this tab, so replacing a file that has them asks first.
+ */
+function openFile(f: File, note?: string): void {
+  if (current?.modified === true && !confirm(discardMsg(f.name))) return;
+  void Doc.open(f).then((doc) => {
+    mount(doc);
+    if (note !== undefined) say(note);
+  });
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   props: Partial<HTMLElementTagNameMap[K]> & { className?: string } = {},
@@ -47,6 +71,7 @@ function panel(title: string, side: "bottom" | "right", content: HTMLElement, on
 }
 
 function mount(doc: Doc): void {
+  current = doc;
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
@@ -128,6 +153,10 @@ function mount(doc: Doc): void {
   const saveBtn = el("button", { type: "button", textContent: "Save as", title: "Save as a new file (Ctrl+S)" });
   const saveMsg = el("span", { className: "tb-msg" });
   saveMsg.setAttribute("role", "status");
+  say = (text, warn) => {
+    saveMsg.textContent = text;
+    saveMsg.classList.toggle("warn", warn === true);
+  };
   const save = async (): Promise<void> => {
     saveBtn.disabled = true;
     saveMsg.textContent = "Saving";
@@ -273,7 +302,7 @@ function pick(): void {
   const input = el("input", { type: "file" });
   input.addEventListener("change", () => {
     const f = input.files?.[0];
-    if (f) void Doc.open(f).then(mount);
+    if (f) openFile(f);
   });
   input.click();
 }
@@ -287,18 +316,80 @@ function welcome(): void {
     el("h1", { textContent: "Qubero" }),
     el("p", { textContent: "A hex editor for files of any size. Nothing leaves your device." }),
     openBtn,
-    el("p", { className: "hint", textContent: "or drop a file anywhere on this page" }),
+    el("p", { className: "hint", textContent: DROP_HINT }),
   );
   app.replaceChildren(drop);
 }
 
 window.addEventListener("resize", () => document.querySelector(".hexview")?.dispatchEvent(new Event("relayout")));
-document.addEventListener("dragover", (e) => e.preventDefault());
-document.addEventListener("drop", (e) => {
-  e.preventDefault();
-  const f = e.dataTransfer?.files[0];
-  if (f) void Doc.open(f).then(mount);
+
+// ----- dropping a file on the page -----
+
+/** Shown over the whole window while a file is being dragged onto it. */
+const dropzone = el(
+  "div",
+  { className: "dropzone" },
+  el(
+    "div",
+    { className: "dropzone-card" },
+    el("strong", { textContent: DROP_TITLE }),
+    el("span", { className: "hint", textContent: DROP_SUB }),
+  ),
+);
+dropzone.setAttribute("aria-hidden", "true");
+document.body.append(dropzone);
+
+/** True when what is being dragged is a file, rather than selected text or an
+ *  image dragged out of another page. */
+function draggingFile(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+}
+
+// Drag events fire on the element under the pointer and bubble, so entering a
+// child counts as leaving its parent. Counting them keeps the overlay steady
+// while the pointer crosses the toolbar, the rows and the panels.
+let dragDepth = 0;
+function showDropzone(on: boolean): void {
+  dragDepth = on ? dragDepth : 0;
+  dropzone.classList.toggle("is-over", on);
+}
+
+document.addEventListener("dragenter", (e) => {
+  if (!draggingFile(e)) return;
+  dragDepth += 1;
+  dropzone.classList.add("is-over");
 });
+document.addEventListener("dragleave", (e) => {
+  if (!draggingFile(e)) return;
+  dragDepth -= 1;
+  if (dragDepth <= 0) showDropzone(false);
+});
+document.addEventListener("dragover", (e) => {
+  if (!draggingFile(e)) return;
+  // Without this the browser opens the file itself, leaving the page.
+  e.preventDefault();
+  if (e.dataTransfer !== null) e.dataTransfer.dropEffect = "copy";
+});
+document.addEventListener("drop", (e) => {
+  if (!draggingFile(e)) return;
+  e.preventDefault();
+  showDropzone(false);
+  // A folder arrives as an item with no usable file behind it, so it has to be
+  // told apart before reaching for the file.
+  const first = e.dataTransfer?.items[0];
+  if (first !== undefined && first.webkitGetAsEntry()?.isDirectory === true) {
+    say(FOLDER_MSG, true);
+    return;
+  }
+  const files = e.dataTransfer?.files;
+  const f = files?.[0];
+  if (files === undefined || f === undefined) return;
+  openFile(f, files.length > 1 ? manyFilesMsg(f.name) : undefined);
+});
+// A drag that ends outside the window, or one the browser abandons, still has
+// to clear the overlay.
+window.addEventListener("dragend", () => showDropzone(false));
+window.addEventListener("blur", () => showDropzone(false));
 
 const params = new URLSearchParams(location.search);
 const sampleUrl = params.get("url");
