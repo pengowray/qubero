@@ -265,8 +265,9 @@ fn f64_to_f16(x: f64) -> u16 {
         e += 1; // log2 rounds up at powers of two
     }
     if e < -14 {
-        let sub = (a / 2f64.powi(-24)).round() as u32;
-        return sign | sub.min(0x3ff) as u16;
+        // Subnormal. Rounding up to 1024 carries into the exponent field on its
+        // own, giving the smallest normal, so there is nothing to clamp.
+        return sign | (a / 2f64.powi(-24)).round() as u16;
     }
     if e > 15 {
         return sign | 0x7c00;
@@ -329,6 +330,12 @@ mod tests {
             assert_eq!(f16_to_f64(f64_to_f16(x)), x, "f16 {x}");
         }
         assert_eq!(f64_to_f16(f64::NEG_INFINITY), 0xfc00);
+        // Subnormals, and a value just under the smallest normal (2^-14), which
+        // rounds up into it rather than sticking at the largest subnormal.
+        for x in [2f64.powi(-24), 2f64.powi(-16), 2f64.powi(-14) - 2f64.powi(-26), 2f64.powi(-14)] {
+            let back = f16_to_f64(f64_to_f16(x));
+            assert!((back - x).abs() <= 2f64.powi(-25), "f16 {x} -> {back}");
+        }
         assert_eq!(encode(&Ty::F32(Endian::Big), "1.5", 32).unwrap(), vec![0x3f, 0xc0, 0, 0]);
         assert_eq!(encode(&Ty::F64(Endian::Little), "1.5", 64).unwrap(), vec![0, 0, 0, 0, 0, 0, 0xf8, 0x3f]);
         assert!(encode(&Ty::F64(Endian::Little), "nan", 64).is_ok());
