@@ -12,7 +12,7 @@ use crate::decode::{be_int, f16_to_f64, fixed_bits, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::source::{Missing, Source};
-use crate::template::{Encoding, Expr, StrLen, Template, Ty, Until};
+use crate::template::{Anchor, Encoding, Expr, StrLen, Template, Ty, Until};
 use crate::text::{self, Settled};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +115,7 @@ fn plain(ty: &Ty) -> bool {
         | Ty::Fixed { .. }
         | Ty::Leb128 { .. }
         | Ty::Vlq
+        | Ty::SqliteVarint
         | Ty::Magic(_)
         | Ty::Bytes(_) => true,
         _ => false,
@@ -194,7 +195,7 @@ impl Evaluator {
         let r = self.memo.get(path).expect("resolved").clone();
         let (value, child_count, composite) = match &r.ty {
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
-            Ty::Array { .. } | Ty::Repeat { .. } => {
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -271,7 +272,13 @@ impl Evaluator {
                 // nothing to say about these bytes.
                 span.gap = true;
                 span.offset_bits = at;
-                span.size_bits = info.offset_bits + info.size_bits - at;
+                let mut ends = info.offset_bits + info.size_bits;
+                if matches!(self.memo[&path].ty, Ty::PointerList { .. }) {
+                    if let Some(next) = self.next_child_start(doc, &path, at)? {
+                        ends = ends.min(next);
+                    }
+                }
+                span.size_bits = ends - at;
                 span.count = 0;
             } else if let Some((run, count)) = self.collapsible(doc, &path)? {
                 let run_info = self.node(doc, &run)?;
@@ -339,21 +346,53 @@ impl Evaluator {
                 }
             }
         }
+        // Children of a pointer list are in the order their offsets are in,
+        // not the order they sit in, so every one has to be looked at, and one
+        // that does not parse is passed over rather than taking the page with it.
+        let scattered = matches!(r.ty, Ty::PointerList { .. });
         let mut p = path.to_vec();
         for i in 0..n as usize {
             p.push(i);
-            self.resolve(doc, &p)?;
-            let size = self.size_of(doc, &p)?;
-            let off = self.memo[&p].offset;
+            let placed = match self.resolve(doc, &p) {
+                Ok(()) => self.size_of(doc, &p).map(|size| (self.memo[&p].offset, size)),
+                Err(e) => Err(e),
+            };
             p.pop();
-            if bit < off {
+            let (off, size) = match placed {
+                Ok(v) => v,
+                Err(e) if scattered && !matches!(e, EvalError::Pending(_)) => continue,
+                Err(e) => return Err(e),
+            };
+            if bit < off && !scattered {
                 return Ok(None);
             }
-            if bit < off + size {
+            if bit >= off && bit < off + size {
                 return Ok(Some(i));
             }
         }
         Ok(None)
+    }
+
+    /// The first child of a pointer list that starts after `bit`. What is
+    /// between them belongs to no field, and saying so needs to know where the
+    /// next one begins: free space inside a page sits between cells, not after
+    /// all of them.
+    fn next_child_start<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<u64>> {
+        let n = self.child_count(doc, path)?;
+        let mut best: Option<u64> = None;
+        let mut p = path.to_vec();
+        for i in 0..n as usize {
+            p.push(i);
+            let placed = self.resolve(doc, &p).map(|()| self.memo[&p].offset);
+            p.pop();
+            match placed {
+                Ok(off) if off > bit => best = Some(best.map_or(off, |b: u64| b.min(off))),
+                Ok(_) => {}
+                Err(e @ EvalError::Pending(_)) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        Ok(best)
     }
 
     /// The whole text of a text field, decoded in its own encoding, up to the
@@ -448,11 +487,16 @@ impl Evaluator {
                 Some(f) => (f.name.clone(), f.ty.clone()),
                 None => return fail("no such field"),
             },
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => (format!("[{idx}]"), (**elem).clone()),
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
+                (format!("[{idx}]"), (**elem).clone())
+            }
             _ => return fail("not a composite"),
         };
-        // Offset: after the previous sibling, or at the parent's start.
-        let offset = if idx == 0 {
+        // Offset: read from the pointer array, or after the previous sibling,
+        // or at the parent's start.
+        let offset = if let Ty::PointerList { offsets, anchor, adjust, .. } = &pr.ty {
+            self.pointer_offset(doc, parent, &pr, offsets.clone(), *anchor, adjust.clone(), idx)?
+        } else if idx == 0 {
             pr.offset
         } else if let (Ty::Array { elem, .. }, Some(fs)) = (&pr.ty, fixed_bits(child_elem(&pr.ty))) {
             let _ = elem;
@@ -473,6 +517,35 @@ impl Evaluator {
         let r = self.effective(doc, path, name, ty, offset, pr.limit)?;
         self.memo.insert(path.to_vec(), r);
         Ok(())
+    }
+
+    /// Where child `idx` of a pointer list starts. The offsets are bytes from
+    /// the anchor, so a child can sit anywhere in the list's stretch, in any
+    /// order. One that points outside it is an error for that child alone.
+    fn pointer_offset<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        list: &[usize],
+        lr: &Resolved,
+        offsets: String,
+        anchor: Anchor,
+        adjust: Expr,
+        idx: usize,
+    ) -> R<u64> {
+        let base = match anchor {
+            Anchor::File => 0,
+            Anchor::Container => match list.split_last() {
+                Some((_, up)) => self.memo.get(up).map(|r| r.offset).unwrap_or(0),
+                None => 0,
+            },
+        };
+        let at = self.eval_expr(doc, list, &Expr::Elem { array: offsets, index: Box::new(Expr::Lit(idx as i128)) })?;
+        let adj = self.eval_expr(doc, list, &adjust)?;
+        let bits = base as i128 + (at + adj) * 8;
+        if bits < lr.offset as i128 || bits >= lr.limit as i128 {
+            return fail(format!("offset {at} points outside {}", lr.name));
+        }
+        Ok(bits as u64)
     }
 
     /// Resolve and size children `0..idx` of `parent`, in order, without recursion.
@@ -609,8 +682,13 @@ impl Evaluator {
                         let (_, n) = self.read_vlq(doc, &r)?;
                         n * 8
                     }
+                    Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,
                     _ => return fail("enum over a type with no fixed size"),
                 },
+                // A pointer list holds the stretch its offsets point into,
+                // which runs to the end of its container.
+                Ty::PointerList { .. } => r.limit - r.offset,
+                Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,
                 Ty::Struct(s) => {
                     if s.fields.is_empty() {
                         0
@@ -653,6 +731,14 @@ impl Evaluator {
             Ty::Struct(s) => Ok(s.fields.len() as u64),
             Ty::Array { count, .. } => {
                 let n = self.eval_expr(doc, path, count)?;
+                if n < 0 {
+                    return fail("negative count");
+                }
+                Ok(n as u64)
+            }
+            // As many children as the array of offsets has entries.
+            Ty::PointerList { offsets, .. } => {
+                let n = self.eval_expr(doc, path, &Expr::Ref(offsets.clone()))?;
                 if n < 0 {
                     return fail("negative count");
                 }
@@ -741,6 +827,37 @@ impl Evaluator {
                 Some((offset, limit)) if limit >= offset => ((limit - offset) / 8) as i128,
                 _ => return fail("nothing to measure the rest of"),
             },
+            // The index of the element this sits in, which is what a field
+            // whose type comes from a list read earlier needs.
+            Expr::Idx => {
+                let mut cur = at.to_vec();
+                let mut found = 0;
+                while let Some(idx) = cur.pop() {
+                    let listy = self
+                        .memo
+                        .get(&cur)
+                        .map(|r| matches!(r.ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. }));
+                    if listy == Some(true) {
+                        found = idx as i128;
+                        break;
+                    }
+                }
+                found
+            }
+            Expr::Elem { array, index } => {
+                let i = self.eval_expr_at(doc, at, index, here)?;
+                if i < 0 {
+                    return fail("negative index");
+                }
+                let Some(mut p) = self.find_field(at, array) else {
+                    return fail(format!("unknown field {array}"));
+                };
+                p.push(i as usize);
+                match self.node(doc, &p)?.value.as_int() {
+                    Some(v) => v,
+                    None => return fail(format!("{array}[{i}] is not a number")),
+                }
+            }
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
                 (None, _) => return fail(format!("{name} is not a number")),
@@ -757,6 +874,21 @@ impl Evaluator {
                 self.eval_expr_at(doc, at, a, here)? / d
             }
         })
+    }
+
+    /// The path of the field named `name`, found the way `lookup` finds it.
+    fn find_field(&self, at: &[usize], name: &str) -> Option<Vec<usize>> {
+        let mut cur = at.to_vec();
+        while let Some(idx) = cur.pop() {
+            if let Some(Ty::Struct(s)) = self.memo.get(&cur).map(|r| &r.ty) {
+                if let Some(j) = s.fields.iter().take(idx).position(|f| f.name == name) {
+                    let mut p = cur.clone();
+                    p.push(j);
+                    return Some(p);
+                }
+            }
+        }
+        None
     }
 
     /// Find `name` among the fields before `at` in its struct, then in
@@ -940,6 +1072,23 @@ impl Evaluator {
         fail("variable-length number longer than 4 bytes")
     }
 
+    /// SQLite's varint: seven bits per byte, most significant group first, and
+    /// a ninth byte that contributes all eight of its bits. The result is
+    /// 64-bit two's complement, so a negative row id reads as one.
+    fn read_sqlite_varint<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(i128, u64)> {
+        let mut value: u64 = 0;
+        for i in 0..8u64 {
+            let b = self.read(doc, r, r.offset + i * 8, 8)?[0];
+            value = (value << 7) | (b & 0x7f) as u64;
+            if b & 0x80 == 0 {
+                return Ok((value as i64 as i128, i + 1));
+            }
+        }
+        let last = self.read(doc, r, r.offset + 64, 8)?[0];
+        value = (value << 8) | last as u64;
+        Ok((value as i64 as i128, 9))
+    }
+
     fn primitive_value<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
@@ -957,6 +1106,7 @@ impl Evaluator {
                 if *signed { Value::Int(v as i128) } else { Value::UInt(v) }
             }
             Ty::Vlq => Value::UInt(self.read_vlq(doc, r)?.0),
+            Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
             Ty::Magic(want) => Value::Magic { ok: self.read(doc, r, r.offset, size)? == *want },
             Ty::Bytes(_) => {
                 let len = size / 8;
@@ -997,7 +1147,7 @@ fn child_elem(ty: &Ty) -> &Ty {
 mod tests {
     use super::*;
     use crate::source::MemSource;
-    use crate::template::{Endian::*, Expr as E, Ty as T};
+    use crate::template::{Anchor, Endian::*, Expr as E, Ty as T};
 
     fn doc(bytes: &[u8]) -> Document<MemSource> {
         Document::new(MemSource(bytes.to_vec()))
@@ -1363,5 +1513,111 @@ mod tests {
         let strict = T::text(StrLen::Terminated { end: b'\n', or_end: false }, Encoding::Utf8);
         let mut ev2 = Evaluator::new(Template::new("t", T::repeat(strict, Until::End)));
         assert!(ev2.node(&d, &[1]).is_err());
+    }
+
+    /// A template whose items sit at offsets held in an earlier array, in the
+    /// order the offsets are in rather than the order they sit in.
+    fn pointer_template() -> Template {
+        let item = T::structure("Item", vec![("len", T::u8()), ("text", T::utf8(E::field("len")))]);
+        Template::new(
+            "t",
+            T::structure(
+                "Root",
+                vec![
+                    ("count", T::u8()),
+                    ("ptrs", T::array(T::u16(Big), E::field("count"))),
+                    ("items", T::pointer_list("ptrs", Anchor::Container, E::lit(0), item)),
+                ],
+            ),
+        )
+    }
+
+    // count, two offsets, a byte belonging to nothing, then the two items with
+    // the later one pointed at first.
+    const POINTED: &[u8] = &[2, 0, 10, 0, 6, 0xff, 3, b'b', b'e', b'e', 2, b'o', b'k'];
+
+    #[test]
+    fn pointed_at_items_read_in_offset_order() {
+        let d = doc(POINTED);
+        let mut ev = Evaluator::new(pointer_template());
+        assert_eq!(ev.node(&d, &[2]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[2, 0]).unwrap().offset_bits, 10 * 8);
+        assert_eq!(ev.node(&d, &[2, 0, 1]).unwrap().value, Value::Str("ok".into()));
+        assert_eq!(ev.node(&d, &[2, 1, 1]).unwrap().value, Value::Str("bee".into()));
+        // The cursor finds the item that covers a byte, wherever it is in the list.
+        assert_eq!(ev.locate(&d, 7 * 8).unwrap(), vec![2, 1, 1]);
+        assert_eq!(ev.locate(&d, 11 * 8).unwrap(), vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn space_between_pointed_at_items_is_a_gap_of_its_own() {
+        let d = doc(POINTED);
+        let mut ev = Evaluator::new(pointer_template());
+        let spans = ev.spans(&d, 5 * 8, 13 * 8, 20).unwrap();
+        // The byte no offset points at, then the earlier item, then the later.
+        assert!(spans[0].gap);
+        assert_eq!((spans[0].offset_bits, spans[0].size_bits), (5 * 8, 8));
+        assert_eq!(spans[1].name, "len");
+        assert_eq!(spans[2].value, Value::Str("bee".into()));
+        assert_eq!(spans[4].value, Value::Str("ok".into()));
+    }
+
+    #[test]
+    fn an_offset_outside_the_list_fails_only_that_item() {
+        let mut b = POINTED.to_vec();
+        b[2] = 200; // the first offset now points past the end
+        let d = doc(&b);
+        let mut ev = Evaluator::new(pointer_template());
+        assert!(ev.node(&d, &[2, 0]).is_err());
+        assert_eq!(ev.node(&d, &[2, 1, 1]).unwrap().value, Value::Str("bee".into()));
+        assert_eq!(ev.locate(&d, 7 * 8).unwrap(), vec![2, 1, 1]);
+    }
+
+    #[test]
+    fn a_field_takes_its_type_from_a_list_read_earlier() {
+        let t = Template::new(
+            "t",
+            T::structure(
+                "Root",
+                vec![
+                    ("n", T::u8()),
+                    ("types", T::array(T::u8(), E::field("n"))),
+                    (
+                        "vals",
+                        T::array(
+                            T::switch(E::elem("types", E::idx()), vec![(1, T::u8()), (2, T::u16(Big))], T::bytes(E::lit(0))),
+                            E::field("n"),
+                        ),
+                    ),
+                ],
+            ),
+        );
+        let d = doc(&[2, 2, 1, 0, 5, 7]);
+        let mut ev = Evaluator::new(t);
+        assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::UInt(5));
+        assert_eq!(ev.node(&d, &[2, 1]).unwrap().value, Value::UInt(7));
+    }
+
+    #[test]
+    fn sqlite_varints_read_and_write_at_their_own_size() {
+        let t = Template::new(
+            "t",
+            T::structure("Root", vec![("a", T::sqlite_varint()), ("b", T::sqlite_varint())]),
+        );
+        // 128 in two bytes, then -1 in the nine-byte form.
+        let d = doc(&[0x81, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        let mut ev = Evaluator::new(t);
+        let a = ev.node(&d, &[0]).unwrap();
+        assert_eq!((a.value.clone(), a.size_bits), (Value::Int(128), 16));
+        let b = ev.node(&d, &[1]).unwrap();
+        assert_eq!((b.value.clone(), b.size_bits), (Value::Int(-1), 72));
+        // Writing keeps the size: 3 pads out to two bytes, -2 to nine.
+        let w = ev.prepare_write(&d, &[0], "3").unwrap();
+        assert_eq!((w.data, w.n_bits), (vec![0x80, 0x03], 16));
+        let w = ev.prepare_write(&d, &[1], "-2").unwrap();
+        assert_eq!(w.n_bits, 72);
+        let d2 = doc(&w.data);
+        let mut ev2 = Evaluator::new(Template::new("t", T::structure("R", vec![("v", T::sqlite_varint())])));
+        assert_eq!(ev2.node(&d2, &[0]).unwrap().value, Value::Int(-2));
     }
 }

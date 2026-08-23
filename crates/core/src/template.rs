@@ -26,6 +26,12 @@ pub enum Expr {
     /// Size in bytes of an earlier field. Needed when a field runs to the end
     /// of a container and what came before it was variable length.
     SizeOf(String),
+    /// This element's index in the nearest list it sits in. Zero outside one.
+    Idx,
+    /// The value of one element of an earlier array, by index. `Ref` names a
+    /// field; this reaches inside one, which is what a list of pointers or a
+    /// list of column types needs.
+    Elem { array: String, index: Box<Expr> },
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -42,6 +48,14 @@ impl Expr {
     /// The byte size of an earlier field.
     pub fn size_of(name: &str) -> Expr {
         Expr::SizeOf(name.to_string())
+    }
+    /// This element's index in the nearest enclosing list.
+    pub fn idx() -> Expr {
+        Expr::Idx
+    }
+    /// Element `index` of the earlier array field `array`.
+    pub fn elem(array: &str, index: Expr) -> Expr {
+        Expr::Elem { array: array.to_string(), index: Box::new(index) }
     }
     pub fn add(self, rhs: Expr) -> Expr {
         Expr::Add(Box::new(self), Box::new(rhs))
@@ -140,6 +154,16 @@ pub enum StrLen {
     Terminated { end: u8, or_end: bool },
 }
 
+/// Where the offsets in a `PointerList` count from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anchor {
+    /// The start of the structure the list is a field of. A page of a database
+    /// keeps its offsets from the start of that page.
+    Container,
+    /// The start of the file.
+    File,
+}
+
 #[derive(Debug, Clone)]
 pub struct Field {
     pub name: String,
@@ -171,6 +195,18 @@ pub enum Ty {
     Struct(Arc<StructDef>),
     Array { elem: Box<Ty>, count: Expr },
     Repeat { elem: Box<Ty>, until: Until },
+    /// Children placed at offsets read from an earlier array of numbers,
+    /// rather than one after another. Element `i` starts at
+    /// `anchor + adjust + offsets[i]`, so the children can be in any order and
+    /// need not fill the space. The list itself runs from where it is declared
+    /// to the end of its container, which is the region those offsets point
+    /// into; declare it last. Anything no child covers reads as a gap.
+    PointerList { offsets: String, anchor: Anchor, adjust: Expr, elem: Box<Ty> },
+    /// SQLite's variable-length integer: seven bits per byte, most significant
+    /// group first, up to nine bytes, where a ninth byte contributes all eight
+    /// of its bits. `Vlq` stops at four bytes and never does that, so it
+    /// cannot stand in.
+    SqliteVarint,
     /// Occupies exactly `size` bytes; `inner` is parsed within that window.
     Sized { size: Expr, inner: Box<Ty> },
     /// Pick a type by the value of `on`; falls back to `default`.
@@ -246,6 +282,13 @@ impl Ty {
     pub fn repeat(elem: Ty, until: Until) -> Ty {
         Ty::Repeat { elem: Box::new(elem), until }
     }
+    /// Elements at the offsets held in an earlier array field.
+    pub fn pointer_list(offsets: &str, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
+        Ty::PointerList { offsets: offsets.to_string(), anchor, adjust, elem: Box::new(elem) }
+    }
+    pub fn sqlite_varint() -> Ty {
+        Ty::SqliteVarint
+    }
     pub fn sized(size: Expr, inner: Ty) -> Ty {
         Ty::Sized { size, inner: Box::new(inner) }
     }
@@ -298,6 +341,7 @@ impl Ty {
                 format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
             }
             Ty::Vlq => "vlq".into(),
+            Ty::SqliteVarint => "varint".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),
             Ty::Magic(b) => format!("magic[{}]", b.len()),
@@ -316,6 +360,7 @@ impl Ty {
             Ty::Struct(s) => s.name.clone(),
             Ty::Array { elem, .. } => format!("{}[]", elem.display_name()),
             Ty::Repeat { elem, .. } => format!("{}[]", elem.display_name()),
+            Ty::PointerList { elem, .. } => format!("{}[] at offsets", elem.display_name()),
             Ty::Sized { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Enum { def, .. } => def.name.clone(),

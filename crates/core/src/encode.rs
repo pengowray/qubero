@@ -25,7 +25,7 @@ pub const EDIT_LIMIT_BYTES: u64 = 4096;
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::Fixed { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
@@ -115,6 +115,14 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
             let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
             vlq(v, room).ok_or_else(|| {
                 let (min, max) = leb_limits(room, false);
+                format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
+            })
+        }
+        Ty::SqliteVarint => {
+            let room = (size_bits / 8) as usize;
+            let v = parse_int(text).ok_or_else(|| whole_number_msg(true))?;
+            sqlite_varint(v, room).ok_or_else(|| {
+                let (min, max) = sqlite_varint_limits(room);
                 format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
             })
         }
@@ -420,6 +428,33 @@ fn vlq(v: u128, room: usize) -> Option<Vec<u8>> {
         out.push(if groups.is_empty() { g } else { g | 0x80 });
     }
     Some(out)
+}
+
+/// SQLite's varint in exactly `room` bytes. Up to eight bytes it is seven bits
+/// each, front-padded with empty groups the way a VLQ is. The nine-byte form
+/// is its own shape: eight groups of seven and then a whole byte, which is the
+/// only way a value with its top bits set, or a negative one, can be written.
+fn sqlite_varint(v: i128, room: usize) -> Option<Vec<u8>> {
+    if room == 0 || room > 9 {
+        return None;
+    }
+    if room == 9 {
+        let bits = i64::try_from(v).ok()? as u64;
+        let mut out: Vec<u8> = (0..8).map(|i| (((bits >> 8) >> (7 * (7 - i))) as u8 & 0x7f) | 0x80).collect();
+        out.push(bits as u8);
+        return Some(out);
+    }
+    vlq(u128::try_from(v).ok()?, room)
+}
+
+/// What fits in a `room`-byte varint. Only the nine-byte form can hold a
+/// negative number, since the shorter ones have no bits left over for a sign.
+fn sqlite_varint_limits(room: usize) -> (i128, i128) {
+    if room >= 9 {
+        (i64::MIN as i128, i64::MAX as i128)
+    } else {
+        (0, (1i128 << (7 * room)) - 1)
+    }
 }
 
 fn leb_signed(v: i128, room: usize) -> Option<Vec<u8>> {
