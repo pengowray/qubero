@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::bits::bytes_for;
-use crate::decode::{be_int, f16_to_f64, fixed_bits, read_uint};
+use crate::decode::{be_int, f16_to_f64, fixed_bits, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::source::{Missing, Source};
@@ -514,10 +514,11 @@ impl Evaluator {
     fn primitive_value<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
-            Ty::Int { bits, endian } => {
-                let u = read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian);
-                let v = if *bits < 128 && u >> (bits - 1) & 1 == 1 { u as i128 - (1i128 << bits) } else { u as i128 };
-                Value::Int(v)
+            Ty::Int { bits, endian } => Value::Int(read_int(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
+            Ty::Fixed { bits, frac, endian, signed } => {
+                let buf = self.read(doc, r, r.offset, size)?;
+                let raw = if *signed { read_int(&buf, *bits, *endian) as f64 } else { read_uint(&buf, *bits, *endian) as f64 };
+                Value::Float(raw / (1u64 << frac) as f64)
             }
             Ty::F16(e) => Value::Float(f16_to_f64(read_uint(&self.read(doc, r, r.offset, 16)?, 16, *e) as u16)),
             Ty::F32(e) => Value::Float(f32::from_bits(read_uint(&self.read(doc, r, r.offset, 32)?, 32, *e) as u32) as f64),

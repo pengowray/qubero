@@ -19,7 +19,7 @@ use crate::template::{Endian, Ty};
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Fixed { .. } => true,
         Ty::Bytes(_) => size_bits <= 16 * 8,
         Ty::Utf8(_) => size_bits <= 64 * 8,
         _ => false,
@@ -45,6 +45,21 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
             }
             let u = (v as u128) & mask(*bits);
             Ok(write_uint(u, *bits, *endian))
+        }
+        Ty::Fixed { bits, frac, endian, signed } => {
+            let x = parse_float(text)?;
+            let scaled = (x * (1u64 << frac) as f64).round();
+            let (min, max) = if *signed {
+                let (lo, hi) = int_range(*bits);
+                (lo as f64, hi as f64)
+            } else {
+                (0.0, mask(*bits) as f64)
+            };
+            if !scaled.is_finite() || scaled < min || scaled > max {
+                let unit = 1.0 / (1u64 << frac) as f64;
+                return Err(range_msg(&ty.display_name(), &(min * unit).to_string(), &(max * unit).to_string()));
+            }
+            Ok(write_uint((scaled as i128 as u128) & mask(*bits), *bits, *endian))
         }
         Ty::F16(e) => {
             let x = parse_float(text)?;

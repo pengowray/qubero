@@ -62,16 +62,6 @@ const NAL_TYPE: &[(i128, &str)] = &[
     (19, "auxiliary slice"),
 ];
 
-/// Handler types seen in `hdlr`, which say what a track carries.
-const HANDLER: &[(i128, &str)] = &[
-    (0x76696465, "video"),
-    (0x736f756e, "sound"),
-    (0x68696e74, "hint"),
-    (0x6d657461, "timed metadata"),
-    (0x73756274, "subtitle"),
-    (0x74657874, "text"),
-];
-
 pub fn mp4() -> Template {
     Template::new("mp4", T::repeat(T::Named("Box".into()), Until::End)).with_type("Box", boxes())
 }
@@ -158,8 +148,8 @@ fn mvhd() -> T {
     let mut fields = full_box();
     fields.extend(vec![
         ("times", T::switch(E::field("version"), vec![(1, v1)], v0)),
-        ("rate", u32be()),
-        ("volume", u16be()),
+        ("rate", T::fixed(32, 16, Big)),
+        ("volume", T::fixed(16, 8, Big)),
         ("reserved", T::bytes(E::lit(10))),
         ("matrix", T::bytes(E::lit(36))),
         ("pre_defined", T::bytes(E::lit(24))),
@@ -195,11 +185,11 @@ fn tkhd() -> T {
         ("reserved2", T::bytes(E::lit(8))),
         ("layer", T::Int { bits: 16, endian: Big }),
         ("alternate_group", T::Int { bits: 16, endian: Big }),
-        ("volume", u16be()),
+        ("volume", T::fixed(16, 8, Big)),
         ("reserved3", u16be()),
         ("matrix", T::bytes(E::lit(36))),
-        ("width", u32be()),
-        ("height", u32be()),
+        ("width", T::fixed(32, 16, Big)),
+        ("height", T::fixed(32, 16, Big)),
     ]);
     T::structure("TrackHeader", fields)
 }
@@ -238,7 +228,8 @@ fn hdlr(len: E) -> T {
     let mut fields = full_box();
     fields.extend(vec![
         ("pre_defined", u32be()),
-        ("handler_type", T::enumeration("HandlerType", T::u32(Big), HANDLER)),
+        // The handler is four characters, and they read as themselves.
+        ("handler_type", T::utf8(E::lit(4))),
         ("reserved", T::bytes(E::lit(12))),
         ("name", T::utf8(len.sub(E::lit(24)))),
     ]);
@@ -283,8 +274,8 @@ fn visual_sample_entry() -> T {
             ("pre_defined2", T::bytes(E::lit(12))),
             ("width", u16be()),
             ("height", u16be()),
-            ("horiz_resolution", u32be()),
-            ("vert_resolution", u32be()),
+            ("horiz_resolution", T::fixed(32, 16, Big)),
+            ("vert_resolution", T::fixed(32, 16, Big)),
             ("reserved2", u32be()),
             ("frame_count", u16be()),
             ("compressor_name", T::bytes(E::lit(32))),

@@ -18,6 +18,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
     Some(match ty {
         Ty::UInt { bits, .. } | Ty::Int { bits, .. } => *bits as u64,
         Ty::F16(_) => 16,
+        Ty::Fixed { bits, .. } => *bits as u64,
         Ty::F32(_) => 32,
         Ty::F64(_) => 64,
         Ty::Magic(b) => b.len() as u64 * 8,
@@ -30,6 +31,16 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::Named(_) => return None,
         _ => return None,
     })
+}
+
+/// Interpret a two's-complement integer of `bits` bits.
+pub(crate) fn read_int(buf: &[u8], bits: u32, endian: Endian) -> i128 {
+    let u = read_uint(buf, bits, endian);
+    if bits < 128 && (u >> (bits - 1)) & 1 == 1 {
+        u as i128 - (1i128 << bits)
+    } else {
+        u as i128
+    }
 }
 
 /// Interpret `bits` bits (MSB-first packed in `buf`) as an unsigned integer.

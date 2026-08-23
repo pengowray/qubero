@@ -92,6 +92,9 @@ pub enum Ty {
     F64(Endian),
     /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
     Leb128 { signed: bool },
+    /// Fixed-point: `bits` wide with `frac` fraction bits, so MP4's 16.16 rate
+    /// of 0x00010000 reads as 1.
+    Fixed { bits: u32, frac: u32, endian: Endian, signed: bool },
     /// Fixed bytes that must match.
     Magic(Vec<u8>),
     /// Raw bytes of computed length (in bytes).
@@ -133,6 +136,10 @@ impl Ty {
     }
     pub fn i32(e: Endian) -> Ty {
         Ty::Int { bits: 32, endian: e }
+    }
+    /// Unsigned fixed-point, e.g. `fixed(32, 16, Big)` for MP4's 16.16.
+    pub fn fixed(bits: u32, frac: u32, endian: Endian) -> Ty {
+        Ty::Fixed { bits, frac, endian, signed: false }
     }
     pub fn leb_u() -> Ty {
         Ty::Leb128 { signed: false }
@@ -206,6 +213,9 @@ impl Ty {
             Ty::F16(en) => format!("f16 {}", e(*en)),
             Ty::F32(en) => format!("f32 {}", e(*en)),
             Ty::F64(en) => format!("f64 {}", e(*en)),
+            Ty::Fixed { bits, frac, endian, signed } => {
+                format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
+            }
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),
             Ty::Magic(b) => format!("magic[{}]", b.len()),
