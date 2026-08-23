@@ -69,6 +69,12 @@ pub enum Anchor {
 /// One test in a rule, and what the rule concludes when it passes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Branch {
+    /// A name of this branch's own, replacing the rule's. Rules covering a
+    /// family of tools use it to say which one this is: `sName = "crypt 95-97"`.
+    pub name: Option<String>,
+    /// Appended to whichever name applies, for a variant of the same tool:
+    /// `sName += ' N2'`.
+    pub name_suffix: String,
     pub anchor: Anchor,
     /// Added to the anchor. Only `compareEP` takes one, and it is usually zero.
     pub offset: i64,
@@ -196,18 +202,32 @@ pub fn parse_rule(source: &str, text: &str) -> Result<Rule, Skipped> {
             current = Some(branch);
             continue;
         }
-        if let Some((key, value)) = assignment_of(line) {
+        if let Some((key, append, value)) = assignment_of(line) {
             let Some(b) = current.as_mut() else { continue };
-            match key {
-                "sVersion" => match literal(value) {
+            match (key, append) {
+                ("sVersion", false) => match literal(value) {
                     Some(v) => b.version = Some(v),
                     None => computed = true,
                 },
-                "sOptions" => match literal(value) {
+                ("sOptions", false) => match literal(value) {
                     Some(v) => b.options = Some(v),
                     None => computed = true,
                 },
-                "bDetected" => {}
+                // A rule may cover a family and name the member in the
+                // branch, or name a variant by appending to it. Either way the
+                // name belongs to the branch that matched, not to the rule.
+                ("sName", false) => match literal(value) {
+                    Some(v) => b.name = Some(v),
+                    None => computed = true,
+                },
+                ("sName", true) => match literal(value) {
+                    Some(v) => b.name_suffix.push_str(&v),
+                    None => computed = true,
+                },
+                // The language the tool was written in, which is a fact about
+                // the tool rather than about the file. Read and not reported.
+                ("sLang", _) => {}
+                ("bDetected", false) => {}
                 // A rule that keeps other state is doing something this module
                 // is not following.
                 _ => return Err(Skipped::NeedsMoreThanBytes),
@@ -274,7 +294,7 @@ fn parse_condition(cond: &str) -> Option<Branch> {
     // Whatever follows the pattern is the optional offset.
     let tail = rest[end + 1..].trim_start().trim_start_matches(',').trim();
     let offset = if tail.is_empty() || tail.starts_with(')') { 0 } else { parse_offset(tail)? };
-    Some(Branch { anchor, offset, pattern, version: None, options: None })
+    Some(Branch { name: None, name_suffix: String::new(), anchor, offset, pattern, version: None, options: None })
 }
 
 fn parse_offset(tail: &str) -> Option<i64> {
@@ -286,21 +306,29 @@ fn parse_offset(tail: &str) -> Option<i64> {
     t.parse::<i64>().ok()
 }
 
-/// `sVersion = "2.1.0";`
-fn assignment_of(line: &str) -> Option<(&str, &str)> {
+/// `sVersion = "2.1.0";` or `sName += ' N2';`. The middle value says which.
+fn assignment_of(line: &str) -> Option<(&str, bool, &str)> {
     let (lhs, rhs) = line.split_once('=')?;
-    let lhs = lhs.trim();
+    let (lhs, append) = match lhs.trim_end().strip_suffix('+') {
+        Some(l) => (l.trim(), true),
+        None => (lhs.trim(), false),
+    };
     if lhs.is_empty() || !lhs.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return None;
     }
-    Some((lhs, rhs.trim().trim_end_matches(';').trim()))
+    Some((lhs, append, rhs.trim().trim_end_matches(';').trim()))
 }
 
-/// A plain string, as opposed to something worked out from the file.
+/// A plain string, as opposed to something worked out from the file. Rules
+/// are written with either quote, and a few use both in the same file.
 fn literal(value: &str) -> Option<String> {
     let v = value.trim();
-    let inner = v.strip_prefix('"')?.strip_suffix('"')?;
-    if inner.contains('"') { None } else { Some(inner.to_string()) }
+    for q in ['"', '\''] {
+        if let Some(inner) = v.strip_prefix(q).and_then(|r| r.strip_suffix(q)) {
+            return if inner.contains(q) { None } else { Some(inner.to_string()) };
+        }
+    }
+    None
 }
 
 /// Decode a `die_script` signature.
@@ -394,7 +422,7 @@ pub fn detect(db: &Database, head: &[u8], entry: Option<u64>) -> Vec<Detection> 
         let Some(b) = rule.branches.iter().find(|b| branch_matches(b, head, entry)) else { continue };
         out.push(Detection {
             category: rule.category.clone(),
-            name: rule.name.clone(),
+            name: format!("{}{}", b.name.as_deref().unwrap_or(&rule.name), b.name_suffix),
             version: b.version.clone(),
             options: b.options.clone(),
             source: rule.source.clone(),
@@ -490,6 +518,24 @@ function detect() {
         assert_eq!(r.branches.len(), 2);
         assert_eq!(r.branches[0].version.as_deref(), Some("1"));
         assert_eq!(r.branches[1].version.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn a_branch_may_name_a_variant_of_the_same_tool() {
+        let text = "meta(\"packer\", \"Trojan\");\nfunction detect() {\n    if (Binary.compare(\"aa\")) {\n        bDetected = true;\n    } else if (Binary.compare(\"bb\")) {\n        sName += ' N2';\n        sOptions = \"by ZeroCoder\";\n        bDetected = true;\n    }\n    return result();\n}";
+        let db = parse_bundle(&format!("{FILE_MARKER}t\n{text}\n"));
+        assert_eq!(detect(&db, b"\xaa", None)[0].name, "Trojan");
+        let second = &detect(&db, b"\xbb", None)[0];
+        assert_eq!(second.name, "Trojan N2");
+        assert_eq!(second.options.as_deref(), Some("by ZeroCoder"));
+    }
+
+    #[test]
+    fn a_rule_may_cover_a_family_and_name_the_member() {
+        let text = "meta(\"cryptor\", \"Cryptor\");\nfunction detect() {\n    if (Binary.compare(\"aa\")) {\n        bDetected = true;\n    } else if (Binary.compare(\"bb\")) {\n        sName = \"crypt 95-97\";\n        bDetected = true;\n    }\n    return result();\n}";
+        let db = parse_bundle(&format!("{FILE_MARKER}c\n{text}\n"));
+        assert_eq!(detect(&db, b"\xaa", None)[0].name, "Cryptor");
+        assert_eq!(detect(&db, b"\xbb", None)[0].name, "crypt 95-97");
     }
 
     #[test]

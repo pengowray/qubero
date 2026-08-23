@@ -59,6 +59,21 @@ export function prefetchMagic(): void {
   else window.setTimeout(start, 2000);
 }
 
+/** Rule bundles already fetched, so a second file of the same kind is free. */
+const ruleCache = new Map<string, Promise<string | null>>();
+
+/** One bundle of signature rules, or null when it cannot be had. */
+function fetchRules(name: string): Promise<string | null> {
+  let p = ruleCache.get(name);
+  if (p === undefined) {
+    p = fetch(`diesig/${name}`)
+      .then((r) => (r.ok ? r.text() : null))
+      .catch(() => null);
+    ruleCache.set(name, p);
+  }
+  return p;
+}
+
 /** The parts of the Network Information API we use; Safari has none of it. */
 type NetworkInformation = { saveData?: boolean; effectiveType?: string };
 
@@ -126,6 +141,24 @@ export type TypeInfo = {
   /** Flags: one entry per bit of the field, from bit 0 up. */
   readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];
 };
+
+/** What one Detect It Easy rule concluded about what produced a file. */
+export type ToolMatch = {
+  /** The database's own word: `packer`, `compiler`, `protector`. */
+  readonly category: string;
+  readonly name: string;
+  readonly version: string | null;
+  /** Free text written by the rule's author, shown as written. */
+  readonly options: string | null;
+  /** The signature file that answered. */
+  readonly source: string;
+};
+
+/**
+ * The largest a .COM can be. It is loaded whole into one 64 KiB segment below
+ * the stack, so anything bigger is not one, whatever its name says.
+ */
+const COM_LIMIT = 65280;
 
 export type WrittenRange = { readonly offset_bits: number; readonly size_bits: number };
 
@@ -382,6 +415,38 @@ export class Doc {
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */
   typeInfo(path: readonly number[]): TemplateReply<TypeInfo> {
     return this.handleReply<TypeInfo>(this.editor.type_info(Uint32Array.from(path)));
+  }
+
+  /**
+   * What tool produced this file, from the Detect It Easy signature rules.
+   *
+   * Which rules are worth fetching depends on what the file is, and both
+   * bundles are only worth fetching for the files they describe. A DOS
+   * executable is asked about at its entry point; a .COM has no header to say
+   * it is one, so the format's own limit stands in: it is loaded whole into a
+   * single 64 KiB segment, and anything larger is not one.
+   */
+  async detectTools(identified: boolean): Promise<ToolMatch[]> {
+    const n = Math.min(IDENTIFY_WINDOW, this.lengthBytes);
+    if (n === 0) return [];
+    await this.ensureRange(0, n);
+    const { bytes, complete } = this.read(0, n);
+    if (!complete) return [];
+    const bundles: string[] = [];
+    const mz = bytes[0] === 0x4d && bytes[1] === 0x5a;
+    if (mz) bundles.push("msdos.sig");
+    // A .COM is bytes with no header at all, so nothing but its size and its
+    // name suggest one. Asking for every unknown small file would be worse.
+    if (!mz && this.lengthBytes <= COM_LIMIT && (!identified || this.name.toLowerCase().endsWith(".com"))) {
+      bundles.push("com.sig");
+    }
+    const out: ToolMatch[] = [];
+    for (const bundle of bundles) {
+      const rules = await fetchRules(bundle);
+      if (rules === null) continue;
+      out.push(...(JSON.parse(this.editor.detect_tools(rules, bytes)) as ToolMatch[]));
+    }
+    return out;
   }
 
   /** Path of the deepest template field covering `bitOffset`. */

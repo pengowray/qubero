@@ -322,6 +322,36 @@ Not yet described: the section contents, so imports, exports, resources and
 relocations are all gaps. The characteristics fields are numbers, and want the
 named-bit type the IR does not have.
 
+### What made a file
+A second database answers a different question. Where `file(1)` says what
+format a file is, the Detect It Easy signature rules say what tool produced it:
+which packer, which compiler, which protector. That is what someone opens a DOS
+executable to find out.
+
+A rule is a small JavaScript program. `diescript.rs` reads the ones that say
+everything in their own text, which is a test on a byte pattern and some
+assignments, and counts the rest by reason. Of the 596 DOS rules shipped, 494
+are read; every one of them recognises bytes built to its own pattern. The
+pattern language is implemented from its definition in the engine's `xbinary.h`
+rather than from the shapes these rules happen to use, because the same engine
+is a shared submodule across the author's other detectors.
+
+Two anchors. A `.COM` is loaded flat, so its rules test from the first byte; an
+`MZ` executable's test from the instruction the loader jumps to, worked out from
+the header. An entry point outside the file, or a packer's negative code
+segment, means the rule is skipped rather than tested somewhere wrong.
+
+Which bundle to fetch comes from the file: `msdos.sig` for anything starting
+`MZ`, `com.sig` for a small file nothing else could name, since a `.COM` has no
+header to declare itself and the format's own 64 KiB limit is the only
+constraint there is.
+
+Nothing is converted. `tools/die.mjs` fetches a pinned commit and concatenates
+the rule files byte for byte, author credits included, with a marker line before
+each. Updating is bumping the hash and running it again, which is the whole
+point: a database that had been rewritten into another format would need its
+changes merged by hand every time upstream moved.
+
 ### Naming a file
 Every file is identified using the rule database of the `file` command, through
 the `pure-magic` crate, and the rule's own sentence goes in the toolbar beside
@@ -432,6 +462,11 @@ bytes show as U+FFFD there; the field panel decodes strictly instead and refuses
 to edit what it cannot decode.
 
 ### Later
+A magic field that does not match could offer to write the bytes the format
+wanted. Deliberately not built: `encode::editable` refuses to write a magic
+field at all, and one narrow exception to that is a decision worth taking on
+purpose rather than in passing.
+
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.
 Bit-level cursor mode in the UI. Column/width presets. Worker-side core so the main
 thread never blocks on reads.

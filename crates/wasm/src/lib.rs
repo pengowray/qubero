@@ -3,6 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
+use qubero_core::diescript;
 use qubero_core::eval::Explain;
 use qubero_core::{formats, magicrule, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
 use serde::Serialize;
@@ -114,6 +115,19 @@ fn explain_dto(e: Explain) -> ExplainDto {
         }
     }
     dto
+}
+
+/// One rule's answer about what made the file.
+#[derive(Serialize)]
+struct ToolDto {
+    /// The database's own word: `packer`, `compiler`, `protector`.
+    category: String,
+    name: String,
+    version: Option<String>,
+    /// Free text from the rule's author, passed through as written.
+    options: Option<String>,
+    /// The signature file that answered.
+    source: String,
 }
 
 /// The range a successful `write_node` touched.
@@ -315,6 +329,29 @@ impl Editor {
             None => reply::<ExplainDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => reply(e.explain(&self.doc, &p).map(explain_dto)),
         }
+    }
+
+    /// What tool produced this file, according to a bundle of Detect It Easy
+    /// signature rules. `rules` is the bundle text, `head` the file's first
+    /// bytes. Returns JSON, an array that is usually empty.
+    ///
+    /// Rules that test from the entry point need one: it is worked out from
+    /// the DOS header here, and where there is none those rules are skipped
+    /// rather than tested at the start of the file.
+    pub fn detect_tools(&self, rules: &str, head: &[u8]) -> String {
+        let db = diescript::parse_bundle(rules);
+        let entry = diescript::mz_entry_point(head, self.doc.len_bytes());
+        let found: Vec<ToolDto> = diescript::detect(&db, head, entry)
+            .into_iter()
+            .map(|d| ToolDto {
+                category: d.category,
+                name: d.name,
+                version: d.version,
+                options: d.options,
+                source: d.source,
+            })
+            .collect();
+        serde_json::to_string(&found).unwrap_or_else(|_| "[]".to_string())
     }
 
     /// JSON: {status:"ok",node} | {status:"pending",chunks} | {status:"error",message}

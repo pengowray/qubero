@@ -967,3 +967,7 @@ input.invalid {
 .insp-bit-run {
   padding: 2px 0 2px 22px;
 }
+
+.dlg-tool {
+  font-family: var(--mono);
+}
