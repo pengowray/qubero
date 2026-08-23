@@ -5,9 +5,10 @@
 //! "UTF-16, with a byte-order mark that tells you which way round". A `Switch`
 //! on that byte picks the text type, so the template says what the format says.
 //!
-//! Frame sizes here are the plain 32-bit ones of ID3v2.3. Version 2.4 makes
-//! them synchsafe (seven bits per byte), which the size expression cannot say
-//! yet, so a 2.4 tag with a frame over 127 bytes will read short.
+//! Frame sizes are the plain 32-bit ones in ID3v2.3 and synchsafe (seven bits
+//! per byte) in 2.4. The template switches on the tag's version field and
+//! rebuilds the synchsafe value with arithmetic, since the expression language
+//! has no shifts.
 
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
@@ -55,13 +56,34 @@ pub fn id3() -> Template {
 }
 
 fn frame() -> T {
+    // In 2.4 the four size bytes carry seven bits each, so the number the field
+    // reads as is not the size. Take the four bytes back out of it by dividing,
+    // then put them together shifted by sevens.
+    let raw = E::field("size");
+    let b0 = raw.clone().div(E::lit(1 << 24));
+    let b1 = raw.clone().div(E::lit(1 << 16)).sub(b0.clone().mul(E::lit(256)));
+    let b2 = raw.clone().div(E::lit(1 << 8)).sub(raw.clone().div(E::lit(1 << 16)).mul(E::lit(256)));
+    let b3 = raw.clone().sub(raw.clone().div(E::lit(256)).mul(E::lit(256)));
+    let synchsafe = b0
+        .mul(E::lit(1 << 21))
+        .add(b1.mul(E::lit(1 << 14)))
+        .add(b2.mul(E::lit(1 << 7)))
+        .add(b3);
+
     T::structure(
         "Frame",
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
             ("size", T::u32(Big)),
             ("flags", T::u16(Big)),
-            ("body", T::sized(E::field("size"), body())),
+            (
+                "body",
+                T::switch(
+                    E::field("version"),
+                    vec![(4, T::sized(synchsafe, body()))],
+                    T::sized(E::field("size"), body()),
+                ),
+            ),
         ],
     )
 }
@@ -74,7 +96,9 @@ fn body() -> T {
         cases.push((cc(id), text_frame()));
     }
     cases.push((cc("COMM"), comment_frame()));
-    T::switch(E::field("id"), cases, T::bytes(E::field("size")))
+    // Inside the frame's window, "the rest of it" is the honest length, and it
+    // is right whichever way the version encodes the size.
+    T::switch(E::field("id"), cases, T::bytes(E::Remaining))
 }
 
 /// The text of a frame, in whichever encoding its first byte names.
@@ -100,7 +124,7 @@ fn text_frame() -> T {
         "TextFrame",
         vec![
             ("encoding", T::enumeration("TextEncoding", T::u8(), TEXT_ENCODING)),
-            ("text", text(E::field("size").sub(E::lit(1)))),
+            ("text", text(E::Remaining)),
         ],
     )
 }
@@ -111,7 +135,7 @@ fn comment_frame() -> T {
         vec![
             ("encoding", T::enumeration("TextEncoding", T::u8(), TEXT_ENCODING)),
             ("language", T::text(StrLen::Fixed(E::lit(3)), Encoding::Ascii)),
-            ("text", text(E::field("size").sub(E::lit(4)))),
+            ("text", text(E::Remaining)),
         ],
     )
 }
@@ -155,6 +179,34 @@ mod tests {
         ]);
         out.extend_from_slice(&frames);
         out
+    }
+
+    #[test]
+    fn version_4_frame_sizes_are_synchsafe() {
+        // One frame of 200 bytes: 0xC8 as a plain u32, but 0x01 0x48 synchsafe.
+        let body = vec![3u8; 200];
+        let mut frames = b"TXXX".to_vec();
+        frames.extend_from_slice(&[0, 0, 1, 0x48]); // 200, seven bits per byte
+        frames.extend_from_slice(&[0, 0]);
+        frames.extend_from_slice(&body);
+
+        let size = frames.len();
+        let mut out = b"ID3".to_vec();
+        out.extend_from_slice(&[4, 0, 0]); // version 2.4
+        out.extend_from_slice(&[
+            (size >> 21) as u8 & 0x7f,
+            (size >> 14) as u8 & 0x7f,
+            (size >> 7) as u8 & 0x7f,
+            size as u8 & 0x7f,
+        ]);
+        out.extend_from_slice(&frames);
+
+        let d = Document::new(MemSource(out));
+        let mut ev = Evaluator::new(id3());
+        assert_eq!(ev.node(&d, &[8]).unwrap().child_count, 1);
+        // The body is 200 bytes, not the 328 the raw number would say.
+        assert_eq!(ev.node(&d, &[8, 0, 3]).unwrap().size_bits, 200 * 8);
+        assert_eq!(ev.node(&d, &[8, 0]).unwrap().size_bits, 210 * 8);
     }
 
     #[test]

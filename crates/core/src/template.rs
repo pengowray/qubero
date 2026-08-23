@@ -20,6 +20,9 @@ pub enum Endian {
 pub enum Expr {
     Lit(i128),
     Ref(String),
+    /// Bytes from here to the end of the enclosing container: what a field that
+    /// runs to the end is worth. An MP4 box of size 0 means exactly this.
+    Remaining,
     /// Size in bytes of an earlier field. Needed when a field runs to the end
     /// of a container and what came before it was variable length.
     SizeOf(String),
@@ -130,7 +133,11 @@ pub enum StrLen {
     /// byte. Writing a shorter value pads the rest, so the field keeps its size.
     Padded { size: Expr, pad: u8 },
     /// Runs to the first `end` byte, which belongs to the field. A C string.
-    Terminated { end: u8 },
+    /// With `or_end`, a field with no terminator in it runs to the end of its
+    /// container instead of failing, which is what a last line without a
+    /// newline needs. Such a field is read-only: writing one would have to add
+    /// the terminator, and that would change the size.
+    Terminated { end: u8, or_end: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -212,7 +219,7 @@ impl Ty {
     }
     /// UTF-8 that ends at a NUL, which is part of the field.
     pub fn cstr() -> Ty {
-        Ty::text(StrLen::Terminated { end: 0 }, Encoding::Utf8)
+        Ty::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Utf8)
     }
     pub fn text(len: StrLen, enc: Encoding) -> Ty {
         Ty::Str { len, enc }
@@ -293,9 +300,9 @@ impl Ty {
                     StrLen::Fixed(_) => format!("{e}[]"),
                     StrLen::Padded { pad: 0, .. } => format!("{e} nul-pad"),
                     StrLen::Padded { pad, .. } => format!("{e} pad 0x{pad:02x}"),
-                    StrLen::Terminated { end: 0 } if matches!(enc, Encoding::Utf8) => "cstr".into(),
-                    StrLen::Terminated { end: 0 } => format!("{e} cstr"),
-                    StrLen::Terminated { end } => format!("{e} to 0x{end:02x}"),
+                    StrLen::Terminated { end: 0, .. } if matches!(enc, Encoding::Utf8) => "cstr".into(),
+                    StrLen::Terminated { end: 0, .. } => format!("{e} cstr"),
+                    StrLen::Terminated { end, .. } => format!("{e} to 0x{end:02x}"),
                 }
             }
             Ty::Struct(s) => s.name.clone(),

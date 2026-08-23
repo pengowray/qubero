@@ -10,9 +10,7 @@
 //! NAL unit split into its header bits and payload.
 //!
 //! What is not: the contents of an SPS or PPS, which are exp-golomb coded bit
-//! fields the IR cannot describe yet; sample tables beyond stsd; and a box with
-//! size 0, meaning "to the end of the file", which needs a "rest of the
-//! container" expression.
+//! fields the IR cannot describe yet, and sample tables beyond stsd.
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
@@ -80,16 +78,22 @@ fn boxes() -> T {
                 "body",
                 T::switch(
                     E::field("size"),
-                    vec![(
-                        1,
-                        T::structure(
-                            "LargeBox",
-                            vec![
-                                ("largesize", T::u64(Big)),
-                                ("payload", T::sized(long.clone(), payload(long))),
-                            ],
+                    vec![
+                        // Size 0 means "to the end of the file". The spec allows
+                        // it only for the last box; a file that uses it anywhere
+                        // else really does swallow what follows.
+                        (0, T::sized(E::Remaining, payload(E::Remaining))),
+                        (
+                            1,
+                            T::structure(
+                                "LargeBox",
+                                vec![
+                                    ("largesize", T::u64(Big)),
+                                    ("payload", T::sized(long.clone(), payload(long))),
+                                ],
+                            ),
                         ),
-                    )],
+                    ],
                     T::sized(short.clone(), payload(short)),
                 ),
             ),
@@ -424,5 +428,20 @@ mod tests {
 
         // mdat is left as bytes.
         assert_eq!(ev.node(&d, &[2, 2]).unwrap().size_bits, 16 * 8);
+    }
+
+    #[test]
+    fn a_box_of_size_zero_runs_to_the_end_of_the_file() {
+        let mut b = boxed(b"ftyp", b"isom\0\0\0\0");
+        // A size of 0 means the box takes everything that is left.
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(b"mdat");
+        b.extend_from_slice(&[0x11; 20]);
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(mp4());
+        assert_eq!(ev.node(&d, &[]).unwrap().child_count, 2);
+        let mdat = ev.node(&d, &[1]).unwrap();
+        assert_eq!(mdat.size_bits, (8 + 20) * 8);
+        assert_eq!(ev.node(&d, &[1, 2]).unwrap().size_bits, 20 * 8);
     }
 }

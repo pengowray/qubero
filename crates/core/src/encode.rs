@@ -154,7 +154,7 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
                     }
                     Ok(out)
                 }
-                StrLen::Terminated { end } => {
+                StrLen::Terminated { end, .. } => {
                     if room < unit {
                         return Err(format!("The field is {want} bytes; there's no room for text."));
                     }

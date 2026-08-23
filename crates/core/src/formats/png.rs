@@ -30,7 +30,7 @@ pub fn png() -> Template {
     let text = T::structure(
         "tEXt",
         vec![
-            ("keyword", T::text(StrLen::Terminated { end: 0 }, Encoding::Latin1)),
+            ("keyword", T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Latin1)),
             (
                 "text",
                 T::text(StrLen::Fixed(E::field("length").sub(E::size_of("keyword"))), Encoding::Latin1),

@@ -270,13 +270,15 @@ impl Evaluator {
             });
         }
         if !self.padding_is_clean(doc, &r, size)? {
-            let pad = match &r.ty {
-                Ty::Str { len: StrLen::Padded { pad, .. }, .. } => *pad,
-                _ => 0,
-            };
-            return fail(format!(
-                "Bytes after the first 0x{pad:02x} aren't shown here; writing would overwrite them. Use the hex view."
-            ));
+            return fail(match &r.ty {
+                Ty::Str { len: StrLen::Terminated { end, .. }, .. } => format!(
+                    "This text has no 0x{end:02x} to end it, so writing would have to add one. Use the hex view."
+                ),
+                Ty::Str { len: StrLen::Padded { pad, .. }, .. } => format!(
+                    "Bytes after the first 0x{pad:02x} aren't shown here; writing would overwrite them. Use the hex view."
+                ),
+                _ => "This field can't be edited here. Use the hex view.".to_string(),
+            });
         }
         // A text field is written back in the encoding it was read in, with the
         // byte-order mark it already had.
@@ -392,7 +394,7 @@ impl Evaluator {
                     }
                 }
                 Ty::Sized { size, inner } => {
-                    let bytes = self.eval_expr(doc, path, &size)?;
+                    let bytes = self.eval_expr_at(doc, path, &size, Some((offset, limit)))?;
                     if bytes < 0 {
                         return fail("negative size");
                     }
@@ -452,11 +454,21 @@ impl Evaluator {
                         }
                         n as u64 * 8
                     }
-                    StrLen::Terminated { end } => {
+                    StrLen::Terminated { end, or_end } => {
                         let (settled, bom) = self.str_head(doc, &r, enc)?;
                         let term = text::unit_bytes(settled, *end);
-                        let (_, n) = self.read_terminated(doc, &r, &term, bom)?;
-                        n * 8
+                        match self.read_terminated(doc, &r, &term, bom) {
+                            Ok((_, n)) => n * 8,
+                            // No terminator: the field runs to the end of its
+                            // container, if the format allows for that.
+                            Err(e) => {
+                                if *or_end && !matches!(e, EvalError::Pending(_)) {
+                                    r.limit - r.offset
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                        }
                     }
                 },
                 Ty::Leb128 { .. } => {
@@ -580,22 +592,40 @@ impl Evaluator {
     // ----- expressions -----
 
     fn eval_expr<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr) -> R<i128> {
+        let here = self.memo.get(at).map(|r| (r.offset, r.limit));
+        self.eval_expr_at(doc, at, e, here)
+    }
+
+    /// `here` is the field's own start and its container's limit, which is what
+    /// `Remaining` measures. It has to be passed in while a node is still being
+    /// resolved, since it is not in the memo yet.
+    fn eval_expr_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
         Ok(match e {
             Expr::Lit(v) => *v,
+            Expr::Remaining => match here {
+                Some((offset, limit)) if limit >= offset => ((limit - offset) / 8) as i128,
+                _ => return fail("nothing to measure the rest of"),
+            },
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
                 (None, _) => return fail(format!("{name} is not a number")),
             },
             Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
-            Expr::Add(a, b) => self.eval_expr(doc, at, a)? + self.eval_expr(doc, at, b)?,
-            Expr::Sub(a, b) => self.eval_expr(doc, at, a)? - self.eval_expr(doc, at, b)?,
-            Expr::Mul(a, b) => self.eval_expr(doc, at, a)? * self.eval_expr(doc, at, b)?,
+            Expr::Add(a, b) => self.eval_expr_at(doc, at, a, here)? + self.eval_expr_at(doc, at, b, here)?,
+            Expr::Sub(a, b) => self.eval_expr_at(doc, at, a, here)? - self.eval_expr_at(doc, at, b, here)?,
+            Expr::Mul(a, b) => self.eval_expr_at(doc, at, a, here)? * self.eval_expr_at(doc, at, b, here)?,
             Expr::Div(a, b) => {
-                let d = self.eval_expr(doc, at, b)?;
+                let d = self.eval_expr_at(doc, at, b, here)?;
                 if d == 0 {
                     return fail("division by zero");
                 }
-                self.eval_expr(doc, at, a)? / d
+                self.eval_expr_at(doc, at, a, here)? / d
             }
         })
     }
@@ -665,9 +695,13 @@ impl Evaluator {
                     }
                 }
             }
-            StrLen::Terminated { end } => {
+            StrLen::Terminated { end, .. } => {
                 let term = text::unit_bytes(settled, *end);
-                (find_unit(body, &term).map(|i| i as u64).unwrap_or(rest), false)
+                match find_unit(body, &term) {
+                    Some(i) => (i as u64, false),
+                    // No terminator to write back, so this one is read-only.
+                    None => (rest, true),
+                }
             }
         };
         Ok(Some(StrSpan { start: bom, len: text_len, settled, dirty, note }))
@@ -1065,5 +1099,69 @@ mod tests {
         assert_eq!(ev.prepare_write(&d, &[0], "two").unwrap().data, vec![2]);
         assert_eq!(ev.prepare_write(&d, &[0], "9").unwrap().data, vec![9]);
         assert!(matches!(ev.prepare_write(&d, &[0], "three"), Err(EvalError::Failed(_))));
+    }
+
+    #[test]
+    fn remaining_measures_to_the_end_of_the_container() {
+        use crate::template::{Encoding, StrLen};
+        let t = Template::new(
+            "t",
+            T::structure(
+                "R",
+                vec![
+                    ("n", T::u8()),
+                    ("head", T::bytes(E::field("n"))),
+                    ("rest", T::bytes(E::Remaining)),
+                ],
+            ),
+        );
+        let d = doc(&[2, 0xaa, 0xbb, 1, 2, 3]);
+        let mut ev = Evaluator::new(t);
+        assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 3 * 8);
+
+        // Inside a Sized window it stops at the window, not at the file.
+        let t2 = Template::new(
+            "t",
+            T::structure(
+                "R",
+                vec![
+                    ("win", T::sized(E::lit(3), T::structure("W", vec![("a", T::u8()), ("b", T::bytes(E::Remaining))]))),
+                    ("after", T::u8()),
+                ],
+            ),
+        );
+        let mut ev2 = Evaluator::new(t2);
+        assert_eq!(ev2.node(&d, &[0, 1]).unwrap().size_bits, 2 * 8);
+        assert_eq!(ev2.node(&d, &[1]).unwrap().offset_bits, 3 * 8);
+
+        // A repeat whose element takes the rest has exactly one element.
+        let t3 = Template::new("t", T::repeat(T::sized(E::Remaining, T::bytes(E::Remaining)), Until::End));
+        let mut ev3 = Evaluator::new(t3);
+        assert_eq!(ev3.node(&d, &[]).unwrap().child_count, 1);
+        let _ = StrLen::Fixed(E::lit(0));
+        let _ = Encoding::Utf8;
+    }
+
+    #[test]
+    fn a_last_line_without_a_terminator_still_reads() {
+        use crate::template::{Encoding, StrLen};
+        let line = T::text(StrLen::Terminated { end: b'\n', or_end: true }, Encoding::Utf8);
+        let t = Template::new("t", T::repeat(line, Until::End));
+        let d = doc(b"one\ntwo");
+        let mut ev = Evaluator::new(t);
+        assert_eq!(ev.node(&d, &[]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Str("one".into()));
+        assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 4 * 8);
+        let last = ev.node(&d, &[1]).unwrap();
+        assert_eq!(last.value, Value::Str("two".into()));
+        assert_eq!(last.size_bits, 3 * 8);
+        // Nothing to write the terminator back into, so the tail is read-only.
+        assert!(!last.editable);
+        assert!(ev.node(&d, &[0]).unwrap().editable);
+
+        // Without `or_end` the same bytes are an error, not a guess.
+        let strict = T::text(StrLen::Terminated { end: b'\n', or_end: false }, Encoding::Utf8);
+        let mut ev2 = Evaluator::new(Template::new("t", T::repeat(strict, Until::End)));
+        assert!(ev2.node(&d, &[1]).is_err());
     }
 }
