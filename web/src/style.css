@@ -409,6 +409,8 @@ input.invalid {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-bottom: 6px;
   font-weight: 600;
 }
@@ -426,12 +428,57 @@ input.invalid {
 }
 .seg button:last-child {
   border-radius: 0 6px 6px 0;
+}
+.seg button + button {
   border-left: 0;
 }
 .seg button[aria-checked="true"] {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
+}
+.insp-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.insp-crumb {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  padding: 1px 0;
+  min-height: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.insp-crumb:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.insp-crumb:not(:last-child)::after {
+  content: " › ";
+  color: var(--line);
+}
+.insp-crumb-here {
+  color: var(--fg);
+  font-weight: 600;
+}
+.insp-field {
+  width: 100%;
+  font-family: var(--mono);
+  padding: 4px 6px;
+  min-height: 28px;
+  background: var(--bg);
+}
+.insp-detail {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
 }
 .insp-table {
   width: 100%;

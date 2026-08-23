@@ -144,6 +144,64 @@ impl Evaluator {
         })
     }
 
+    /// The deepest field containing `bit`, as a path from the root. Its
+    /// ancestors are the prefixes of that path, so one call gives the whole
+    /// chain the hex cursor is standing in.
+    ///
+    /// Walking a repeat has to resolve its elements, so on a large templated
+    /// file this costs what displaying it costs; the memo makes the second call
+    /// cheap until the next edit.
+    pub fn locate<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<usize>> {
+        let mut path: Vec<usize> = Vec::new();
+        self.resolve(doc, &path)?;
+        let size = self.size_of(doc, &path)?;
+        let root = self.memo[&path].clone();
+        if bit < root.offset || bit >= root.offset + size {
+            return fail("outside the template");
+        }
+        loop {
+            let n = self.child_count(doc, &path)?;
+            if n == 0 {
+                return Ok(path);
+            }
+            match self.child_at(doc, &path, n, bit)? {
+                Some(i) => path.push(i),
+                // Inside the parent but in none of its children: padding, or a
+                // struct whose fields do not fill it.
+                None => return Ok(path),
+            }
+        }
+    }
+
+    /// Which child of `path` covers `bit`, if any.
+    fn child_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], n: u64, bit: u64) -> R<Option<usize>> {
+        let r = self.memo[path].clone();
+        // Fixed-size elements: go straight to the one that covers the bit.
+        if let Ty::Array { elem, .. } | Ty::Repeat { elem, .. } = &r.ty {
+            if let Some(each) = fixed_bits(elem) {
+                if each > 0 {
+                    let i = (bit - r.offset) / each;
+                    return Ok(if i < n { Some(i as usize) } else { None });
+                }
+            }
+        }
+        let mut p = path.to_vec();
+        for i in 0..n as usize {
+            p.push(i);
+            self.resolve(doc, &p)?;
+            let size = self.size_of(doc, &p)?;
+            let off = self.memo[&p].offset;
+            p.pop();
+            if bit < off {
+                return Ok(None);
+            }
+            if bit < off + size {
+                return Ok(Some(i));
+            }
+        }
+        Ok(None)
+    }
+
     /// Encode `text` for the field at `path`, ready to be written.
     ///
     /// Resolving a field can touch unloaded chunks, so this reports the same
@@ -729,5 +787,31 @@ mod tests {
         assert!(matches!(ev.prepare_write(&d, &[1], "32"), Err(EvalError::Failed(_))));
         assert!(matches!(ev.prepare_write(&d, &[3], "toolong"), Err(EvalError::Failed(_))));
         assert!(matches!(ev.prepare_write(&d, &[], "1"), Err(EvalError::Failed(_))));
+    }
+
+    #[test]
+    fn locate_finds_the_field_under_a_bit() {
+        let t = Template::new(
+            "t",
+            T::structure(
+                "B",
+                vec![
+                    ("a", T::UInt { bits: 3, endian: Big }),
+                    ("b", T::UInt { bits: 5, endian: Big }),
+                    ("items", T::array(T::u16(Big), E::lit(3))),
+                ],
+            ),
+        );
+        let d = doc(&[0b101_01100, 0, 1, 0, 2, 0, 3]);
+        let mut ev = Evaluator::new(t);
+        assert_eq!(ev.locate(&d, 0).unwrap(), vec![0]);
+        assert_eq!(ev.locate(&d, 2).unwrap(), vec![0]);
+        assert_eq!(ev.locate(&d, 3).unwrap(), vec![1]);
+        assert_eq!(ev.locate(&d, 7).unwrap(), vec![1]);
+        // Into the array: element 1 starts at byte 3.
+        assert_eq!(ev.locate(&d, 8).unwrap(), vec![2, 0]);
+        assert_eq!(ev.locate(&d, 3 * 8 + 4).unwrap(), vec![2, 1]);
+        assert_eq!(ev.locate(&d, 6 * 8).unwrap(), vec![2, 2]);
+        assert!(ev.locate(&d, 7 * 8).is_err());
     }
 }

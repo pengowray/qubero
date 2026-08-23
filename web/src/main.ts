@@ -26,9 +26,47 @@ function mount(doc: Doc): void {
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
-  table.onPick = ({ startBit, endBit }) => {
+  // The three views share one position: the hex cursor. Picking a field moves
+  // it; moving it picks the field it lands in. `picking` stops that going round.
+  let picking = false;
+  let followWhenLoaded: number | null = null;
+
+  const followCursor = (bitOffset: number): void => {
+    if (doc.template === null) return;
+    const at = doc.locate(bitOffset);
+    if (at.status === "pending") {
+      followWhenLoaded = bitOffset;
+      return;
+    }
+    followWhenLoaded = null;
+    if (at.status !== "ok") return;
+    const n = doc.templateNode(at.node);
+    if (n.status === "ok") {
+      view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
+    }
+    table.reveal(at.node);
+  };
+
+  const goToField = (path: readonly number[]): void => {
+    const n = doc.templateNode(path);
+    if (n.status !== "ok") return;
+    view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
+    picking = true;
+    view.setBitCursor(n.node.offset_bits, { pane: "hex" });
+    picking = false;
+    inspector.setPath(path);
+  };
+
+  table.onPick = ({ path, startBit, endBit }) => {
     view.setHighlight({ startBit, endBit });
+    picking = true;
     view.setBitCursor(startBit, { pane: "hex" });
+    picking = false;
+    inspector.setPath(path);
+  };
+  inspector.onPick = (path) => {
+    goToField(path);
+    table.reveal(path);
   };
   view.onHighlightClear = () => table.clearSelection();
 
@@ -140,10 +178,14 @@ function mount(doc: Doc): void {
     posLabel.textContent = `${where}  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${pane}`;
   };
   view.onCursorChange = (c) => {
-    inspector.setOffset(c.offset);
+    inspector.setOffset(c.bitOffset);
+    if (!picking) followCursor(c.bitOffset);
     refresh();
   };
-  doc.onChange(refresh);
+  doc.onChange(() => {
+    refresh();
+    if (followWhenLoaded !== null) followCursor(followWhenLoaded);
+  });
 
   app.replaceChildren(toolbar, el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, table.el), inspector.el), statusbar);
   view.relayout();

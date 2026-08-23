@@ -1,10 +1,15 @@
 // Value inspector: interprets the bytes under the cursor as common primitive
 // types and writes edits back. Every row is a small two-way lens: decode bytes
 // to text, parse text to bytes.
+//
+// The cursor is a bit position, so these readings start wherever it is: put the
+// cursor three bits into a byte and the rows show what a u16 there would say.
 
-import type { Doc } from "./doc.js";
+import { formatOffset } from "./doc.js";
+import type { Doc, TemplateNode } from "./doc.js";
 
-type Endian = "le" | "be";
+/** Structure reads the template's field; the other two read raw bytes. */
+type Mode = "structure" | "le" | "be";
 
 type Lens = {
   readonly label: string;
@@ -143,10 +148,24 @@ function utf8Len(b0: number): number {
 
 export class Inspector {
   readonly el: HTMLElement;
-  private endian: Endian = "le";
+  private mode: Mode = "structure";
+  /** Absolute bit position of the cursor. */
   private offset = 0;
   private readonly inputs = new Map<Lens, HTMLInputElement>();
   private readonly status: HTMLElement;
+  private readonly table: HTMLElement;
+  private readonly struct: HTMLElement;
+  private readonly crumbs: HTMLElement;
+  private readonly field: HTMLInputElement;
+  private readonly detail: HTMLElement;
+  private readonly fieldRow: HTMLElement;
+  /** Path of the field the structure panel is showing, if any. */
+  private at: readonly number[] | null = null;
+  /** A field picked by name stays shown until the cursor moves off it. */
+  private pinned: readonly number[] | null = null;
+
+  /** Asked for when a breadcrumb is clicked, so the views can follow. */
+  onPick: (path: readonly number[]) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -157,24 +176,24 @@ export class Inspector {
     head.className = "insp-head";
     const title = document.createElement("span");
     title.textContent = "At cursor";
-    const endian = document.createElement("div");
-    endian.className = "seg";
-    endian.setAttribute("role", "radiogroup");
-    endian.setAttribute("aria-label", "Byte order");
-    for (const [value, label] of [["le", "Little-endian"], ["be", "Big-endian"]] as const) {
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    seg.setAttribute("role", "radiogroup");
+    seg.setAttribute("aria-label", "Read the value as");
+    for (const [value, label] of [["structure", "Structure"], ["le", "Little-endian"], ["be", "Big-endian"]] as const) {
       const b = document.createElement("button");
       b.type = "button";
       b.textContent = label;
       b.setAttribute("role", "radio");
-      b.setAttribute("aria-checked", String(value === this.endian));
+      b.setAttribute("aria-checked", String(value === this.mode));
       b.addEventListener("click", () => {
-        this.endian = value;
-        for (const c of endian.children) c.setAttribute("aria-checked", String(c === b));
+        this.mode = value;
+        for (const c of seg.children) c.setAttribute("aria-checked", String(c === b));
         this.render();
       });
-      endian.append(b);
+      seg.append(b);
     }
-    head.append(title, endian);
+    head.append(title, seg);
 
     const table = document.createElement("table");
     table.className = "insp-table";
@@ -206,34 +225,99 @@ export class Inspector {
       this.inputs.set(lens, input);
     }
 
+    this.table = table;
+
+    // Structure panel: where the cursor is in the template, and that field's value.
+    this.struct = document.createElement("div");
+    this.struct.className = "insp-struct";
+    this.crumbs = document.createElement("div");
+    this.crumbs.className = "insp-crumbs";
+    this.crumbs.addEventListener("click", (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      const p = t.dataset["path"];
+      if (p !== undefined) this.onPick(p === "" ? [] : p.split("/").map(Number));
+    });
+    this.field = document.createElement("input");
+    this.field.type = "text";
+    this.field.spellcheck = false;
+    this.field.autocomplete = "off";
+    this.field.className = "insp-field";
+    this.field.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.commitField();
+      if (e.key === "Escape") this.render();
+    });
+    this.field.addEventListener("blur", () => {
+      if (this.field.dataset["dirty"] === "1") this.commitField();
+    });
+    this.field.addEventListener("input", () => {
+      this.field.dataset["dirty"] = "1";
+      this.field.classList.remove("invalid");
+    });
+    this.detail = document.createElement("div");
+    this.detail.className = "insp-detail";
+    this.fieldRow = document.createElement("div");
+    this.fieldRow.className = "insp-fieldrow";
+    this.fieldRow.append(this.field, this.detail);
+    this.struct.append(this.crumbs, this.fieldRow);
+
     this.status = document.createElement("div");
     this.status.className = "insp-status";
     this.status.setAttribute("role", "status");
 
-    this.el.append(head, table, this.status);
+    this.el.append(head, this.struct, table, this.status);
     doc.onChange(() => this.render());
   }
 
-  setOffset(offset: number): void {
-    this.offset = offset;
+  /** `bitOffset` is absolute, counting from the top bit of byte 0. */
+  setOffset(bitOffset: number): void {
+    this.offset = bitOffset;
+    this.pinned = null;
     this.render();
+  }
+
+  /** Show this field rather than the innermost one at the cursor. */
+  setPath(path: readonly number[]): void {
+    this.pinned = path;
+    this.render();
+  }
+
+  private commitField(): void {
+    this.field.dataset["dirty"] = "0";
+    if (this.at === null) return;
+    const r = this.doc.writeNode(this.at, this.field.value);
+    if (r.status === "error") {
+      this.field.classList.add("invalid");
+      this.status.textContent = r.message;
+      return;
+    }
+    if (r.status === "pending") {
+      this.status.textContent = "Loading this part of the file…";
+      return;
+    }
+    this.status.textContent = "";
   }
 
   private commit(lens: Lens, input: HTMLInputElement): void {
     input.dataset["dirty"] = "0";
-    const bytes = lens.encode(input.value, this.endian === "le");
+    const bytes = lens.encode(input.value, this.mode === "le");
     if (bytes === null) {
       input.classList.add("invalid");
       this.status.textContent = `Not a valid ${lens.label} value.`;
       return;
     }
-    this.doc.overwrite(this.offset, bytes);
+    this.doc.overwriteBits(this.offset, bytes, bytes.length * 8);
     this.status.textContent = "";
   }
 
   render(): void {
-    const { bytes, complete } = this.doc.read(this.offset, 8);
-    const avail = Math.max(0, this.doc.lengthBytes - this.offset);
+    const structure = this.mode === "structure";
+    this.struct.hidden = !structure;
+    this.table.hidden = structure;
+    if (structure) return this.renderStructure();
+
+    const { bytes, complete } = this.doc.readBits(this.offset, 64);
+    const avail = Math.max(0, Math.floor((this.doc.lengthBits - this.offset) / 8));
     const view = new DataView(bytes.buffer);
     for (const [lens, input] of this.inputs) {
       if (input.dataset["dirty"] === "1" && document.activeElement === input) continue;
@@ -248,8 +332,85 @@ export class Inspector {
         input.placeholder = "loading";
       } else {
         input.placeholder = "";
-        input.value = lens.decode(view, this.endian === "le");
+        input.value = lens.decode(view, this.mode === "le");
       }
     }
   }
+
+  /** Where the cursor is in the template, and what that field holds. */
+  private renderStructure(): void {
+    if (this.doc.template === null) {
+      this.at = null;
+      this.crumbs.textContent = "No template selected. Pick one above to read the field here.";
+      this.fieldRow.hidden = true;
+      this.status.textContent = "";
+      return;
+    }
+    const found = this.pinned === null ? this.doc.locate(this.offset) : ({ status: "ok", node: this.pinned } as const);
+    if (found.status !== "ok") {
+      this.at = null;
+      this.crumbs.textContent = found.status === "pending" ? "Loading this part of the file…" : "Nothing defined at the cursor.";
+      this.fieldRow.hidden = true;
+      return;
+    }
+    const path: readonly number[] = found.node;
+    const node = this.doc.templateNode(path);
+    if (node.status !== "ok") {
+      this.at = null;
+      this.crumbs.textContent = node.status === "pending" ? "Loading this part of the file…" : node.message;
+      this.fieldRow.hidden = true;
+      return;
+    }
+    this.at = path;
+    const n = node.node;
+    this.crumbs.replaceChildren(...this.trail(path));
+    this.fieldRow.hidden = false;
+    this.detail.textContent = `${n.type} · ${formatOffset(n.offset_bits)} · ${sizeText(n.size_bits)}`;
+    if (this.field.dataset["dirty"] === "1" && document.activeElement === this.field) return;
+    this.field.disabled = !n.editable;
+    this.field.classList.remove("invalid");
+    this.field.value = n.composite ? "" : n.edit_text;
+    this.field.placeholder = n.composite ? `${n.child_count.toLocaleString()} inside` : "";
+    this.field.setAttribute("aria-label", `${n.name}, ${n.type}`);
+  }
+
+  /**
+   * The last few steps of the path, each one selectable. The whole chain is in
+   * the field table below, which follows the cursor too, so this stays short.
+   */
+  private trail(path: readonly number[]): HTMLElement[] {
+    const out: HTMLElement[] = [];
+    const from = Math.max(0, path.length - 2);
+    if (from > 0) {
+      const more = document.createElement("span");
+      more.className = "insp-crumb insp-crumb-more";
+      more.textContent = "…";
+      out.push(more);
+    }
+    for (let i = from; i <= path.length; i++) {
+      const p = path.slice(0, i);
+      const node = this.doc.templateNode(p);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = i === path.length ? "insp-crumb insp-crumb-here" : "insp-crumb";
+      b.dataset["path"] = p.join("/");
+      // A struct field is often called `body`; its type says what it holds.
+      b.textContent =
+        node.status !== "ok"
+          ? "?"
+          : node.node.composite && node.node.type !== node.node.name
+            ? `${node.node.name} (${node.node.type})`
+            : node.node.name;
+      out.push(b);
+    }
+    return out;
+  }
+}
+
+function sizeText(bits: number): string {
+  if (bits % 8 === 0) {
+    const b = bits / 8;
+    return b === 1 ? "1 byte" : `${b.toLocaleString()} bytes`;
+  }
+  return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
 }

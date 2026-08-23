@@ -165,6 +165,15 @@ impl Editor {
         }
     }
 
+    /// Path of the deepest field covering `bit`, as {status:"ok",node:[..]}.
+    /// Its ancestors are the prefixes of that path.
+    pub fn locate(&mut self, bit: f64) -> String {
+        match &mut self.eval {
+            None => reply::<Vec<usize>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(e.locate(&self.doc, bit as u64)),
+        }
+    }
+
     /// Write `text` into the field at `path`, encoded as that field's type.
     /// Same envelope as `template_node`; on success `node` is the bit range written.
     pub fn write_node(&mut self, path: &[u32], text: &str) -> String {

@@ -10,7 +10,7 @@ const PAGE = 200;
 /** Give up after this many chunk-loading retries on one commit. */
 const WRITE_RETRIES = 8;
 
-export type FieldPick = { readonly startBit: number; readonly endBit: number };
+export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
 type Editing = {
   readonly key: string;
@@ -93,6 +93,17 @@ export class TypeTable {
     });
   }
 
+  /** Open the path down to `path` and select it, scrolling it into view. */
+  reveal(path: readonly number[]): void {
+    const k = key(path);
+    if (k === this.selected) return;
+    for (let i = 0; i < path.length; i++) this.expanded.add(key(path.slice(0, i)));
+    this.selected = k;
+    this.editing = null;
+    this.render();
+    this.body.querySelector(`tr[data-path="${CSS.escape(k)}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+
   /** Drop the selection and any half-typed value. */
   clearSelection(): void {
     this.selected = null;
@@ -127,7 +138,7 @@ export class TypeTable {
     if (t.closest("[data-edit]")) this.beginEdit(k, row.dataset["value"] ?? "");
     else this.editing = null;
     this.render();
-    this.onPick({ startBit, endBit });
+    this.onPick({ path: pathOf(k), startBit, endBit });
   }
 
   private onKey(e: KeyboardEvent): void {

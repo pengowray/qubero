@@ -182,6 +182,11 @@ export class Doc {
     return this.handleReply(this.editor.template_children(Uint32Array.from(path), from, to));
   }
 
+  /** Path of the deepest template field covering `bitOffset`. */
+  locate(bitOffset: number): TemplateReply<number[]> {
+    return this.handleReply<number[]>(this.editor.locate(bitOffset));
+  }
+
   /**
    * Write `text` into the field at `path`, encoded as that field's type. The
    * core writes exactly the field's own bits, so nothing after it shifts.
@@ -198,6 +203,14 @@ export class Doc {
   read(at: number, len: number): ReadResult {
     const bytes = new Uint8Array(len);
     const missing = this.editor.read_bytes(at, bytes);
+    for (const chunk of missing) this.fetchChunk(chunk);
+    return { bytes, complete: missing.length === 0 };
+  }
+
+  /** Synchronous read of `nBits` starting at any bit, packed MSB first. */
+  readBits(atBit: number, nBits: number): ReadResult {
+    const bytes = new Uint8Array(Math.ceil(nBits / 8));
+    const missing = this.editor.read_bits(atBit, nBits, bytes);
     for (const chunk of missing) this.fetchChunk(chunk);
     return { bytes, complete: missing.length === 0 };
   }
