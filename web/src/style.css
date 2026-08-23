@@ -134,6 +134,94 @@ input.invalid {
   }
 }
 
+.left {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- type table ---- */
+.typetable {
+  flex: 0 0 38%;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.typetable table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.typetable th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  text-align: left;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.typetable td {
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 28rem;
+}
+.typetable tr[data-path] {
+  cursor: pointer;
+}
+.typetable tr[data-path]:hover {
+  background: var(--panel);
+}
+.tt-selected {
+  background: var(--accent-soft) !important;
+}
+.tt-toggle {
+  display: inline-block;
+  width: 1.4em;
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.tt-val {
+  font-family: var(--mono);
+}
+.tt-type,
+.tt-num {
+  font-family: var(--mono);
+  color: var(--muted);
+  font-size: 12px;
+}
+.tt-bad .tt-val {
+  color: var(--warn);
+}
+.tt-pending td {
+  color: var(--muted);
+  font-style: italic;
+}
+.tt-error td {
+  color: var(--warn);
+}
+.tt-more {
+  padding: 2px 8px;
+  min-height: 24px;
+  font-size: 12px;
+}
+.tt-empty {
+  color: var(--muted);
+  padding: 8px 10px;
+  margin: 0;
+}
+
 /* ---- hex view ---- */
 .hexview {
   flex: 1;
@@ -198,6 +286,9 @@ input.invalid {
 }
 .hv-pending {
   color: var(--muted);
+}
+.hv-hl {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .hv-cur {
   background: var(--accent-soft);

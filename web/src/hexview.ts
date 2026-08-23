@@ -37,6 +37,8 @@ export class HexView {
   private pane: Pane = "hex";
   private insertMode = false;
   private dragging: { startY: number; startRow: number } | null = null;
+  /** Byte range [start, end) to highlight, e.g. the selected template field. */
+  private highlight: { start: number; end: number } | null = null;
 
   onCursorChange: (c: CursorState) => void = () => {};
 
@@ -132,6 +134,11 @@ export class HexView {
     this.scrollCursorIntoView();
     this.render();
     this.onCursorChange(this.cursorState);
+  }
+
+  setHighlight(range: { start: number; end: number } | null): void {
+    this.highlight = range;
+    this.render();
   }
 
   scrollTo(row: number): void {
@@ -345,6 +352,10 @@ export class HexView {
         } else {
           h.textContent = "  ";
           a.textContent = " ";
+        }
+        if (this.highlight && off >= this.highlight.start && off < this.highlight.end) {
+          h.classList.add("hv-hl");
+          a.classList.add("hv-hl");
         }
         if (off === this.cursor) {
           h.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");

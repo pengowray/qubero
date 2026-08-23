@@ -3,12 +3,81 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::{ChunkStore, Document, RunKind};
+use qubero_core::{formats, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Value};
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct Editor {
     doc: Document<ChunkStore>,
+    eval: Option<Evaluator>,
+}
+
+#[derive(Serialize)]
+struct NodeDto {
+    path: Vec<usize>,
+    name: String,
+    #[serde(rename = "type")]
+    type_name: String,
+    offset_bits: f64,
+    size_bits: f64,
+    value: String,
+    /// "uint" | "int" | "float" | "bytes" | "str" | "magic" | "composite"
+    kind: &'static str,
+    ok: bool,
+    child_count: f64,
+    composite: bool,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status")]
+enum Reply<T: Serialize> {
+    #[serde(rename = "ok")]
+    Ok { node: T },
+    #[serde(rename = "pending")]
+    Pending { chunks: Vec<f64> },
+    #[serde(rename = "error")]
+    Error { message: String },
+}
+
+fn dto(n: NodeInfo) -> NodeDto {
+    let (kind, value, ok) = match &n.value {
+        Value::UInt(v) => ("uint", v.to_string(), true),
+        Value::Int(v) => ("int", v.to_string(), true),
+        Value::Float(v) => ("float", v.to_string(), true),
+        Value::Bytes { len, preview } => {
+            let hex: Vec<String> = preview.iter().map(|b| format!("{b:02x}")).collect();
+            let mut s = hex.join(" ");
+            if *len as usize > preview.len() {
+                s.push('…');
+            }
+            ("bytes", s, true)
+        }
+        Value::Str(s) => ("str", s.clone(), true),
+        Value::Magic { ok } => ("magic", if *ok { "matches".into() } else { "does not match".into() }, *ok),
+        Value::Composite { count } => ("composite", count.to_string(), true),
+    };
+    NodeDto {
+        path: n.path,
+        name: n.name,
+        type_name: n.type_name,
+        offset_bits: n.offset_bits as f64,
+        size_bits: n.size_bits as f64,
+        value,
+        kind,
+        ok,
+        child_count: n.child_count as f64,
+        composite: n.composite,
+    }
+}
+
+fn reply<T: Serialize>(r: Result<T, EvalError>) -> String {
+    let rep = match r {
+        Ok(node) => Reply::Ok { node },
+        Err(EvalError::Pending(m)) => Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect() },
+        Err(EvalError::Failed(message)) => Reply::Error { message },
+    };
+    serde_json::to_string(&rep).unwrap_or_else(|e| format!("{{\"status\":\"error\",\"message\":{:?}}}", e.to_string()))
 }
 
 #[wasm_bindgen]
@@ -18,7 +87,57 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store) }
+        Editor { doc: Document::new(store), eval: None }
+    }
+
+    fn changed(&mut self) {
+        if let Some(e) = &mut self.eval {
+            e.invalidate();
+        }
+    }
+
+    // ----- templates -----
+
+    pub fn template_names(&self) -> Vec<String> {
+        formats::builtin_names().iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Name of the built-in template matching these leading bytes, or "".
+    pub fn sniff_template(&self, head: &[u8]) -> String {
+        formats::sniff(head).unwrap_or("").to_string()
+    }
+
+    /// Select a built-in template by name; "" clears it. Returns false if unknown.
+    pub fn set_template(&mut self, name: &str) -> bool {
+        if name.is_empty() {
+            self.eval = None;
+            return true;
+        }
+        match formats::builtin(name) {
+            Some(t) => {
+                self.eval = Some(Evaluator::new(t));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// JSON: {status:"ok",node} | {status:"pending",chunks} | {status:"error",message}
+    pub fn template_node(&mut self, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<NodeDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(e.node(&self.doc, &p).map(dto)),
+        }
+    }
+
+    /// Same envelope as `template_node`, with `node` being an array of children.
+    pub fn template_children(&mut self, path: &[u32], from: f64, to: f64) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<Vec<NodeDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(e.children(&self.doc, &p, from as u64, to as u64).map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>())),
+        }
     }
 
     pub fn feed_chunk(&mut self, chunk: f64, data: &[u8]) {
@@ -52,25 +171,32 @@ impl Editor {
     }
 
     pub fn overwrite_bytes(&mut self, at: f64, data: &[u8]) {
+        self.changed();
         self.doc.overwrite_bytes(at as u64, data);
     }
     /// Overwrite that folds into the previous undo step.
     pub fn amend_overwrite_bytes(&mut self, at: f64, data: &[u8]) {
+        self.changed();
         self.doc.amend_overwrite_bytes(at as u64, data);
     }
     pub fn insert_bytes(&mut self, at: f64, data: &[u8]) {
+        self.changed();
         self.doc.insert_bytes(at as u64, data);
     }
     pub fn delete_bytes(&mut self, at: f64, n: f64) {
+        self.changed();
         self.doc.delete_bytes(at as u64, n as u64);
     }
     pub fn overwrite_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
+        self.changed();
         self.doc.overwrite_bits(at_bit as u64, data, n as u64);
     }
     pub fn insert_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
+        self.changed();
         self.doc.insert_bits(at_bit as u64, data, n as u64);
     }
     pub fn delete_bits(&mut self, at_bit: f64, n: f64) {
+        self.changed();
         self.doc.delete_bits(at_bit as u64, n as u64);
     }
 
@@ -95,9 +221,11 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.changed();
         self.doc.undo()
     }
     pub fn redo(&mut self) -> bool {
+        self.changed();
         self.doc.redo()
     }
     pub fn can_undo(&self) -> bool {

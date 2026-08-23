@@ -13,6 +13,29 @@ export type ByteSource = {
   slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> } | Blob;
 };
 
+export type TemplateNode = {
+  readonly path: readonly number[];
+  readonly name: string;
+  readonly type: string;
+  readonly offset_bits: number;
+  readonly size_bits: number;
+  readonly value: string;
+  readonly kind: "uint" | "int" | "float" | "bytes" | "str" | "magic" | "composite";
+  readonly ok: boolean;
+  readonly child_count: number;
+  readonly composite: boolean;
+};
+
+export type TemplateReply<T> =
+  | { readonly status: "ok"; readonly node: T }
+  | { readonly status: "pending" }
+  | { readonly status: "error"; readonly message: string };
+
+type RawReply<T> =
+  | { status: "ok"; node: T }
+  | { status: "pending"; chunks: number[] }
+  | { status: "error"; message: string };
+
 export type ReadResult = {
   readonly bytes: Uint8Array;
   /** True when every byte came from loaded data. False means a reload will follow. */
@@ -68,6 +91,47 @@ export class Doc {
   }
   get pieceCount(): number {
     return this.editor.piece_count();
+  }
+
+  // ----- templates -----
+
+  template: string | null = null;
+
+  get templateNames(): string[] {
+    return this.editor.template_names();
+  }
+
+  /** Built-in template name matching the file's first bytes, or null. */
+  async sniffTemplate(): Promise<string | null> {
+    const n = Math.min(16, this.lengthBytes);
+    if (n === 0) return null;
+    await this.ensureRange(0, n);
+    const name = this.editor.sniff_template(this.read(0, n).bytes);
+    return name === "" ? null : name;
+  }
+
+  setTemplate(name: string | null): boolean {
+    const ok = this.editor.set_template(name ?? "");
+    this.template = ok ? name : null;
+    this.notify();
+    return ok;
+  }
+
+  private handleReply<T>(json: string): TemplateReply<T> {
+    const r: RawReply<T> = JSON.parse(json);
+    if (r.status === "pending") {
+      for (const c of r.chunks) this.fetchChunk(c);
+      return { status: "pending" };
+    }
+    return r;
+  }
+
+  templateNode(path: readonly number[]): TemplateReply<TemplateNode> {
+    return this.handleReply(this.editor.template_node(Uint32Array.from(path)));
+  }
+
+  templateChildren(path: readonly number[], from: number, to: number): TemplateReply<TemplateNode[]> {
+    return this.handleReply(this.editor.template_children(Uint32Array.from(path), from, to));
   }
 
   /** Synchronous read. Missing chunks are zero and fetched in the background. */

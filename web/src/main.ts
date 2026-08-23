@@ -3,6 +3,7 @@ import { HexView } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
+import { TypeTable } from "./typetable.js";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -34,6 +35,23 @@ function el<K extends keyof HTMLElementTagNameMap>(
 function mount(doc: Doc): void {
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
+  const table = new TypeTable(doc);
+  table.onPick = ({ startByte, endByte }) => {
+    view.setHighlight({ start: startByte, end: endByte });
+    view.setCursor(startByte, { pane: "hex" });
+  };
+
+  const tmpl = el("select", { className: "tb-tmpl" });
+  tmpl.setAttribute("aria-label", "Template");
+  tmpl.append(el("option", { value: "", textContent: "No template" }));
+  for (const n of doc.templateNames) tmpl.append(el("option", { value: n, textContent: `Template: ${n}` }));
+  tmpl.addEventListener("change", () => doc.setTemplate(tmpl.value === "" ? null : tmpl.value));
+  void doc.sniffTemplate().then((name) => {
+    if (name !== null) {
+      tmpl.value = name;
+      doc.setTemplate(name);
+    }
+  });
 
   const fileLabel = el("span", { className: "tb-file" });
   const posLabel = el("span", { className: "tb-pos" });
@@ -94,6 +112,7 @@ function mount(doc: Doc): void {
     el("span", { className: "tb-spacer" }),
     goto,
     width,
+    tmpl,
     undoBtn,
     redoBtn,
   );
@@ -115,12 +134,12 @@ function mount(doc: Doc): void {
   };
   doc.onChange(refresh);
 
-  app.replaceChildren(toolbar, el("main", { className: "workspace" }, view.el, inspector.el), statusbar);
+  app.replaceChildren(toolbar, el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, table.el), inspector.el), statusbar);
   view.relayout();
   refresh();
   inspector.setOffset(0);
   view.el.focus();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector } });
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table } });
 }
 
 function pick(): void {
@@ -154,7 +173,15 @@ document.addEventListener("drop", (e) => {
   if (f) void Doc.open(f).then(mount);
 });
 
-const synthetic = new URLSearchParams(location.search).get("synthetic");
+const params = new URLSearchParams(location.search);
+const sampleUrl = params.get("url");
+if (sampleUrl !== null) {
+  void fetch(sampleUrl)
+    .then((r) => r.blob())
+    .then((b) => Doc.open(new File([b], sampleUrl.split("/").pop() ?? "sample")))
+    .then(mount);
+}
+const synthetic = sampleUrl !== null ? null : params.get("synthetic");
 const syntheticSize = synthetic === null ? null : parseSize(synthetic);
 if (syntheticSize !== null) void Doc.open(syntheticFile(syntheticSize)).then(mount);
 else welcome();
