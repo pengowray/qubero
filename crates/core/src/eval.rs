@@ -39,6 +39,10 @@ pub enum Value {
     /// A named integer. `name` is None when the file holds a value the enum
     /// does not list. `hex` is how the number should be shown.
     Enum { raw: i128, name: Option<String>, hex: bool },
+    /// An integer read as independent bits. `set` names the bits that are on,
+    /// in bit order; `unnamed` counts the bits that are on and have no name,
+    /// which is worth saying rather than hiding.
+    Flags { raw: u128, set: Vec<String>, unnamed: u32 },
 }
 
 impl Value {
@@ -48,6 +52,7 @@ impl Value {
             Value::Int(v) => Some(*v),
             Value::Composite { count } => Some(*count as i128),
             Value::Enum { raw, .. } => Some(*raw),
+            Value::Flags { raw, .. } => i128::try_from(*raw).ok(),
             // Short text/byte fields used in expressions are their bytes as a
             // big-endian number, so a switch can key on e.g. "IHDR".
             Value::Bytes { len, preview } if *len <= 15 => Some(be_int(preview)),
@@ -106,7 +111,7 @@ const COLLAPSE_RUN: u64 = 8;
 /// A type that holds one number or one run of bytes, and nothing inside it.
 fn plain(ty: &Ty) -> bool {
     match ty {
-        Ty::Enum { inner, .. } => plain(inner),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => plain(inner),
         Ty::UInt { .. }
         | Ty::Int { .. }
         | Ty::F16(_)
@@ -671,7 +676,7 @@ impl Evaluator {
                     let (_, n) = self.read_vlq(doc, &r)?;
                     n * 8
                 }
-                Ty::Enum { inner, .. } => match **inner {
+                Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => match **inner {
                     Ty::Leb128 { .. } => {
                         let (_, n) = self.read_leb(doc, &r)?;
                         n * 8
@@ -1128,6 +1133,25 @@ impl Evaluator {
                     _ => return fail("an enum must sit on an integer"),
                 };
                 Value::Enum { raw, name: def.label(raw).map(str::to_string), hex: def.hex }
+            }
+            Ty::Flags { inner, def } => {
+                let raw = match self.primitive_value(doc, r, inner, size)? {
+                    Value::UInt(v) => v,
+                    Value::Int(v) => v as u128,
+                    _ => return fail("flags must sit on an integer"),
+                };
+                let mut set: Vec<String> = Vec::new();
+                let mut unnamed = 0u32;
+                for bit in 0..size.min(128) as u32 {
+                    if raw >> bit & 1 == 0 {
+                        continue;
+                    }
+                    match def.label(bit) {
+                        Some(n) => set.push(n.to_string()),
+                        None => unnamed += 1,
+                    }
+                }
+                Value::Flags { raw, set, unnamed }
             }
             _ => unreachable!("composite handled by caller"),
         })
@@ -1617,5 +1641,78 @@ mod tests {
         let d2 = doc(&w.data);
         let mut ev2 = Evaluator::new(Template::new("t", T::structure("R", vec![("v", T::sqlite_varint())])));
         assert_eq!(ev2.node(&d2, &[0]).unwrap().value, Value::Int(-2));
+    }
+}
+
+/// What a type permits, as opposed to what this file happens to hold.
+///
+/// Three field kinds know more than their value shows: an enum knows the other
+/// values it would accept, a magic field knows the bytes it wanted, and a flags
+/// field knows what each bit means. This is one answer for all three, because
+/// they are one question: what does this type say, beyond the number.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Explain {
+    /// The bytes the format requires, and the bytes that are there. They are
+    /// equal when the field matches, and worth comparing when it does not.
+    Magic { expected: Vec<u8>, actual: Vec<u8> },
+    /// Every value the enum names, and the one the file holds. `current` is not
+    /// always among them: a file is free to hold a value nobody named.
+    Enum { name: String, hex: bool, cases: Vec<(i128, String)>, current: i128 },
+    /// Every bit of the field, from bit 0 up, whether it is set and what it is
+    /// called. A bit with no name is still a bit, and is still listed.
+    Flags { name: String, raw: u128, bits: Vec<FlagBit> },
+    /// The type has nothing to add: its value already says everything.
+    Plain,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlagBit {
+    pub bit: u32,
+    pub name: Option<String>,
+    pub set: bool,
+}
+
+impl Evaluator {
+    /// What the type at `path` permits. See [`Explain`].
+    pub fn explain<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Explain> {
+        self.resolve(doc, path)?;
+        let size = self.size_of(doc, path)?;
+        let r = self.memo.get(path).expect("resolved").clone();
+        Ok(match &r.ty {
+            Ty::Magic(want) => {
+                // A short read is not a failure to explain: the expected bytes
+                // are known whatever the file turned out to hold.
+                let actual = self.read(doc, &r, r.offset, size).unwrap_or_default();
+                Explain::Magic { expected: want.clone(), actual }
+            }
+            Ty::Enum { def, .. } => {
+                let current = self.value_at(doc, path)?.as_int().unwrap_or(0);
+                Explain::Enum {
+                    name: def.name.clone(),
+                    hex: def.hex,
+                    cases: def.cases.clone(),
+                    current,
+                }
+            }
+            Ty::Flags { def, .. } => {
+                let raw = match self.value_at(doc, path)? {
+                    Value::Flags { raw, .. } => raw,
+                    other => other.as_int().and_then(|v| u128::try_from(v).ok()).unwrap_or(0),
+                };
+                let bits = (0..size.min(64) as u32)
+                    .map(|bit| FlagBit {
+                        bit,
+                        name: def.label(bit).map(str::to_string),
+                        set: raw >> bit & 1 == 1,
+                    })
+                    .collect();
+                Explain::Flags { name: def.name.clone(), raw, bits }
+            }
+            _ => Explain::Plain,
+        })
+    }
+
+    fn value_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Value> {
+        Ok(self.node(doc, path)?.value)
     }
 }

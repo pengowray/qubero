@@ -168,6 +168,9 @@ function mount(doc: Doc): void {
       return;
     }
     doc.setTemplate(tmpl.value === "" ? null : tmpl.value);
+    // Picking a template is asking to read fields, so the panel goes back to
+    // them. It is left on the raw reading only for a file that has none.
+    if (tmpl.value !== "") inspector.setMode("structure");
   });
   void doc.sniffTemplate().then(async (name) => {
     const templated = name !== null;

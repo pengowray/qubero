@@ -24,7 +24,7 @@ pub const EDIT_LIMIT_BYTES: u64 = 4096;
 /// the preview elided.
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
-        Ty::Enum { inner, .. } => editable(inner, size_bits),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => editable(inner, size_bits),
         Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
@@ -136,6 +136,10 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
                 }),
             }
         }
+        // A flags field is written as the number it is. Names are for reading;
+        // typing one would mean deciding whether it replaced the others or
+        // joined them, and the field is a number either way.
+        Ty::Flags { inner, .. } => encode(inner, text.trim(), size_bits, state),
         Ty::Str { len, .. } => {
             let want = (size_bits / 8) as usize;
             let settled = state.settled.unwrap_or(Settled::Utf8);

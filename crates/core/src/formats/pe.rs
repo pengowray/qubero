@@ -66,6 +66,65 @@ const SUBSYSTEM: &[(i128, &str)] = &[
     (16, "windows boot application"),
 ];
 
+/// The file header's characteristics. Half of these describe a file nobody has
+/// produced since the 1990s, which is the point of naming them: a bit set in a
+/// modern binary that means "16-bit machine" is worth seeing.
+const CHARACTERISTICS: &[(u32, &str)] = &[
+    (0, "relocations stripped"),
+    (1, "executable"),
+    (2, "line numbers stripped"),
+    (3, "local symbols stripped"),
+    (4, "aggressive working set trim"),
+    (5, "large address aware"),
+    (7, "bytes reversed low"),
+    (8, "32-bit machine"),
+    (9, "debug stripped"),
+    (10, "run from swap if removable"),
+    (11, "run from swap if network"),
+    (12, "system file"),
+    (13, "dll"),
+    (14, "uniprocessor only"),
+    (15, "bytes reversed high"),
+];
+
+/// What the loader may do with the image. The mitigation bits (ASLR, DEP,
+/// control flow guard) are the ones people look for.
+const DLL_CHARACTERISTICS: &[(u32, &str)] = &[
+    (5, "high entropy va"),
+    (6, "dynamic base"),
+    (7, "force integrity"),
+    (8, "nx compatible"),
+    (9, "no isolation"),
+    (10, "no seh"),
+    (11, "no bind"),
+    (12, "appcontainer"),
+    (13, "wdm driver"),
+    (14, "control flow guard"),
+    (15, "terminal server aware"),
+];
+
+/// A section's characteristics. Bits 20 to 23 hold an alignment as a number
+/// rather than as flags, so they are left unnamed here: a name on each would
+/// say four things where the format says one.
+const SECTION_FLAGS: &[(u32, &str)] = &[
+    (3, "no pad"),
+    (5, "code"),
+    (6, "initialized data"),
+    (7, "uninitialized data"),
+    (9, "info"),
+    (11, "remove"),
+    (12, "comdat"),
+    (15, "global pointer relative"),
+    (24, "extended relocations"),
+    (25, "discardable"),
+    (26, "not cached"),
+    (27, "not paged"),
+    (28, "shared"),
+    (29, "execute"),
+    (30, "read"),
+    (31, "write"),
+];
+
 /// The two shapes of the optional header, told apart by its first two bytes.
 const OPTIONAL_MAGIC: &[(i128, &str)] = &[(0x107, "rom"), (0x10b, "pe32"), (0x20b, "pe32+")];
 
@@ -122,7 +181,7 @@ fn optional_tail(pointer: T) -> Vec<(&'static str, T)> {
         ("headers_size", T::u32(Little)),
         ("checksum", T::u32(Little)),
         ("subsystem", T::enumeration("Subsystem", T::u16(Little), SUBSYSTEM)),
-        ("dll_characteristics", T::u16(Little)),
+        ("dll_characteristics", T::flags("DllCharacteristics", T::u16(Little), DLL_CHARACTERISTICS)),
         ("stack_reserve", pointer.clone()),
         ("stack_commit", pointer.clone()),
         ("heap_reserve", pointer.clone()),
@@ -179,7 +238,7 @@ pub fn pe() -> Template {
             ("line_numbers_offset", T::u32(Little)),
             ("relocation_count", T::u16(Little)),
             ("line_number_count", T::u16(Little)),
-            ("characteristics", T::u32(Little)),
+            ("characteristics", T::flags("SectionFlags", T::u32(Little), SECTION_FLAGS)),
         ],
     );
 
@@ -196,7 +255,7 @@ pub fn pe() -> Template {
     let optional = T::structure(
         "OptionalHeader",
         vec![
-            ("magic", T::enumeration("OptionalMagic", T::u16(Little), OPTIONAL_MAGIC)),
+            ("magic", T::enumeration_hex("OptionalMagic", T::u16(Little), OPTIONAL_MAGIC)),
             ("linker_version_major", T::u8()),
             ("linker_version_minor", T::u8()),
             ("code_size", T::u32(Little)),
@@ -221,13 +280,13 @@ pub fn pe() -> Template {
         "PEHeader",
         vec![
             ("signature", T::magic(b"PE\0\0")),
-            ("machine", T::enumeration("Machine", T::u16(Little), MACHINE)),
+            ("machine", T::enumeration_hex("Machine", T::u16(Little), MACHINE)),
             ("section_count", T::u16(Little)),
             ("timestamp", T::u32(Little)),
             ("symbol_table", T::u32(Little)),
             ("symbol_count", T::u32(Little)),
             ("optional_header_size", T::u16(Little)),
-            ("characteristics", T::u16(Little)),
+            ("characteristics", T::flags("Characteristics", T::u16(Little), CHARACTERISTICS)),
             // Bounded by what the file says, not by what the fields add up to:
             // a linker may leave room after the data directory.
             ("optional", T::sized(E::field("optional_header_size"), optional)),
@@ -356,6 +415,61 @@ mod tests {
         assert_eq!(image_base.name, "image_base");
         assert_eq!(image_base.size_bits, 64);
         assert_eq!(image_base.value.as_int(), Some(0x1_4000_0000));
+    }
+
+    #[test]
+    fn characteristics_read_as_named_bits() {
+        let doc = Document::new(MemSource(sample()));
+        let mut e = Evaluator::new(pe());
+        // 0x0022: bit 1 executable, bit 5 large address aware.
+        let v = value(&mut e, &doc, &[1, 7]);
+        let Value::Flags { raw, set, unnamed } = v else { panic!("expected flags, got {v:?}") };
+        assert_eq!(raw, 0x22);
+        assert_eq!(set, ["executable", "large address aware"]);
+        assert_eq!(unnamed, 0);
+    }
+
+    #[test]
+    fn every_bit_is_explained_named_or_not() {
+        use crate::eval::Explain;
+        let doc = Document::new(MemSource(sample()));
+        let mut e = Evaluator::new(pe());
+        let Explain::Flags { name, raw, bits } = e.explain(&doc, &[1, 7]).expect("explain") else {
+            panic!("expected flags")
+        };
+        assert_eq!(name, "Characteristics");
+        assert_eq!(raw, 0x22);
+        assert_eq!(bits.len(), 16, "one entry per bit of the field, set or not");
+        assert!(bits[1].set && bits[1].name.as_deref() == Some("executable"));
+        assert!(!bits[0].set && bits[0].name.as_deref() == Some("relocations stripped"));
+        // Bit 6 has no meaning in the format, and is listed anyway.
+        assert!(bits[6].name.is_none());
+    }
+
+    #[test]
+    fn a_magic_field_says_what_it_wanted() {
+        use crate::eval::Explain;
+        let doc = Document::new(MemSource(sample()));
+        let mut e = Evaluator::new(pe());
+        let Explain::Magic { expected, actual } = e.explain(&doc, &[1, 0]).expect("explain") else {
+            panic!("expected magic")
+        };
+        assert_eq!(expected, b"PE\0\0");
+        assert_eq!(actual, b"PE\0\0");
+    }
+
+    #[test]
+    fn an_enum_lists_what_else_it_would_accept() {
+        use crate::eval::Explain;
+        let doc = Document::new(MemSource(sample()));
+        let mut e = Evaluator::new(pe());
+        let Explain::Enum { name, cases, current, .. } = e.explain(&doc, &[1, 1]).expect("explain") else {
+            panic!("expected enum")
+        };
+        assert_eq!(name, "Machine");
+        assert_eq!(current, 0x8664);
+        assert_eq!(cases.len(), MACHINE.len());
+        assert!(cases.iter().any(|(v, n)| *v == 0x014c && n == "i386"));
     }
 
     #[test]

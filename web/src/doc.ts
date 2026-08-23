@@ -111,6 +111,22 @@ export type Span = {
   readonly count: number;
 };
 
+/** What a type permits, beyond what this file's bytes happen to say. */
+export type TypeInfo = {
+  readonly kind: "magic" | "enum" | "flags" | "plain";
+  /** The type's own name, for an enum or a flags field. */
+  readonly name: string;
+  /** Magic: what the format requires, and what is there. */
+  readonly expected: number[];
+  readonly actual: number[];
+  /** Enum: every value it names, and the one in the file. */
+  readonly cases: readonly { readonly value: number; readonly name: string }[];
+  readonly current: number;
+  readonly hex: boolean;
+  /** Flags: one entry per bit of the field, from bit 0 up. */
+  readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];
+};
+
 export type WrittenRange = { readonly offset_bits: number; readonly size_bits: number };
 
 /** What the file(1) rules made of a file the editor has no template for. */
@@ -361,6 +377,11 @@ export class Doc {
    */
   spans(fromBit: number, toBit: number, max: number): TemplateReply<Span[]> {
     return this.handleReply<Span[]>(this.editor.spans(fromBit, toBit, max));
+  }
+
+  /** What the type at `path` permits: enum values, magic bytes, flag bits. */
+  typeInfo(path: readonly number[]): TemplateReply<TypeInfo> {
+    return this.handleReply<TypeInfo>(this.editor.type_info(Uint32Array.from(path)));
   }
 
   /** Path of the deepest template field covering `bitOffset`. */

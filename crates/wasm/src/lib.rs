@@ -3,6 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
+use qubero_core::eval::Explain;
 use qubero_core::{formats, magicrule, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -24,7 +25,7 @@ struct NodeDto {
     value: String,
     /// What the editor should start with when this value is edited.
     edit_text: String,
-    /// "uint" | "int" | "float" | "bytes" | "str" | "magic" | "enum" | "composite"
+    /// "uint" | "int" | "float" | "bytes" | "str" | "magic" | "enum" | "flags" | "composite"
     kind: &'static str,
     ok: bool,
     child_count: f64,
@@ -45,6 +46,74 @@ struct TextDto {
     text: String,
     /// True when the field holds more than the editor will show.
     truncated: bool,
+}
+
+/// What a type permits. `kind` picks which of the rest is filled in.
+#[derive(Serialize)]
+struct ExplainDto {
+    /// "magic" | "enum" | "flags" | "plain"
+    kind: &'static str,
+    /// The type's own name, for an enum or a flags field.
+    name: String,
+    /// Magic: the bytes the format requires, and the bytes that are there.
+    expected: Vec<u8>,
+    actual: Vec<u8>,
+    /// Enum: every value it names, and the one in the file.
+    cases: Vec<CaseDto>,
+    current: f64,
+    /// Enum: whether its numbers are read in hex.
+    hex: bool,
+    /// Flags: one entry per bit of the field, from bit 0 up.
+    bits: Vec<BitDto>,
+}
+
+#[derive(Serialize)]
+struct CaseDto {
+    value: f64,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct BitDto {
+    bit: u32,
+    /// Absent for a bit the format does not name.
+    name: Option<String>,
+    set: bool,
+}
+
+fn explain_dto(e: Explain) -> ExplainDto {
+    let mut dto = ExplainDto {
+        kind: "plain",
+        name: String::new(),
+        expected: Vec::new(),
+        actual: Vec::new(),
+        cases: Vec::new(),
+        current: 0.0,
+        hex: false,
+        bits: Vec::new(),
+    };
+    match e {
+        Explain::Plain => {}
+        Explain::Magic { expected, actual } => {
+            dto.kind = "magic";
+            dto.expected = expected;
+            dto.actual = actual;
+        }
+        Explain::Enum { name, hex, cases, current } => {
+            dto.kind = "enum";
+            dto.name = name;
+            dto.hex = hex;
+            dto.current = current as f64;
+            dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
+        }
+        Explain::Flags { name, raw, bits } => {
+            dto.kind = "flags";
+            dto.name = name;
+            dto.current = raw as f64;
+            dto.bits = bits.into_iter().map(|b| BitDto { bit: b.bit, name: b.name, set: b.set }).collect();
+        }
+    }
+    dto
 }
 
 /// The range a successful `write_node` touched.
@@ -121,6 +190,21 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
             ("magic", s.clone(), s, *ok)
         }
         Value::Composite { count } => ("composite", count.to_string(), count.to_string(), true),
+        Value::Flags { raw, set, unnamed } => {
+            // The names, then a count of the set bits nobody named, which is
+            // the anomaly worth noticing in a field like this.
+            let mut s = set.join(", ");
+            if *unnamed > 0 {
+                if !s.is_empty() {
+                    s.push_str(", ");
+                }
+                s.push_str(&format!("+{unnamed} unnamed"));
+            }
+            if s.is_empty() {
+                s.push_str("none set");
+            }
+            ("flags", s, raw.to_string(), true)
+        }
         Value::Enum { raw, name, hex } => {
             let num = if *hex && *raw >= 0 { format!("0x{raw:02x}") } else { raw.to_string() };
             match name {
@@ -219,6 +303,17 @@ impl Editor {
                 true
             }
             None => false,
+        }
+    }
+
+    /// What the type at `path` permits, beyond what its value shows: the other
+    /// values an enum names, the bytes a magic field wanted, or what each bit
+    /// of a flags field means. JSON, in the same reply shape as the rest.
+    pub fn type_info(&mut self, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<ExplainDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(e.explain(&self.doc, &p).map(explain_dto)),
         }
     }
 

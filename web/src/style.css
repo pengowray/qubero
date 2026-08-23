@@ -852,3 +852,118 @@ input.invalid {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ---- what the type permits, under the editor ---- */
+.insp-type {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.insp-type-head {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.insp-type-note {
+  margin: 6px 0 0;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+}
+.insp-bytes {
+  font-family: var(--mono);
+  font-size: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  white-space: pre;
+}
+.insp-bytes-label {
+  font-family: var(--sans);
+  color: var(--muted);
+  min-width: 5em;
+}
+.insp-bytes-text {
+  color: var(--muted);
+}
+.insp-cases {
+  display: flex;
+  flex-direction: column;
+  max-height: 22em;
+  overflow-y: auto;
+}
+.insp-case {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.insp-case:hover {
+  background: var(--panel);
+}
+/* A mark as well as a tint: the current value must not be colour alone. */
+.insp-case.is-current {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.insp-mark {
+  width: 1ch;
+}
+.insp-case-name {
+  flex: 1;
+}
+.insp-case-num {
+  color: var(--muted);
+}
+.insp-bin {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.insp-bin-ends {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 10px;
+}
+.insp-bit-on {
+  font-weight: 700;
+}
+.insp-bit-off {
+  color: var(--muted);
+}
+.insp-bits {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.insp-bit {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  padding: 1px 0;
+}
+.insp-bit-name {
+  flex: 1;
+  font-family: var(--mono);
+}
+.insp-bit-num,
+.insp-bit-run {
+  color: var(--muted);
+  font-size: 11px;
+}
+.insp-bit-run {
+  padding: 2px 0 2px 22px;
+}

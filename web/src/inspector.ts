@@ -6,7 +6,7 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { formatOffset } from "./doc.js";
-import type { Doc, TemplateNode } from "./doc.js";
+import type { Doc, TemplateNode, TypeInfo } from "./doc.js";
 
 /** Structure reads the template's field; the other two read raw bytes. */
 type Mode = "structure" | "le" | "be";
@@ -146,6 +146,69 @@ function utf8Len(b0: number): number {
   return b0 < 0x80 ? 1 : b0 < 0xe0 ? 2 : b0 < 0xf0 ? 3 : 4;
 }
 
+function span(cls: string, text: string): HTMLElement {
+  const e = document.createElement("span");
+  e.className = cls;
+  e.textContent = text;
+  return e;
+}
+
+function heading(text: string): HTMLElement {
+  const h = document.createElement("div");
+  h.className = "insp-type-head";
+  h.textContent = text;
+  return h;
+}
+
+function headingFor(info: TypeInfo): string {
+  if (info.kind === "magic") return "Expected bytes";
+  if (info.kind === "flags") return "Flags";
+  return `Defined values (${info.cases.length})`;
+}
+
+/** An enum's numbers are read the way the format writes them. */
+function showNumber(v: number, hex: boolean): string {
+  return hex && v >= 0 ? `0x${v.toString(16)}` : String(v);
+}
+
+function hexOf(bytes: readonly number[]): string {
+  return bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+}
+
+/** The hex view's convention: anything unprintable shows as a dot. */
+function textOf(bytes: readonly number[]): string {
+  return bytes.map((b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".")).join("");
+}
+
+/**
+ * The bytes the format wanted, and when they are not the bytes that are there,
+ * both of them lined up so the difference is where the reader is looking.
+ */
+function magicBody(info: TypeInfo): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const same =
+    info.expected.length === info.actual.length && info.expected.every((b, i) => b === info.actual[i]);
+  const row = (label: string, bytes: readonly number[]): HTMLElement => {
+    const e = document.createElement("div");
+    e.className = "insp-bytes";
+    if (label !== "") e.append(span("insp-bytes-label", label));
+    e.append(span("insp-bytes-hex", hexOf(bytes)), span("insp-bytes-text", textOf(bytes)));
+    return e;
+  };
+  if (same) {
+    frag.append(row("", info.expected));
+    return frag;
+  }
+  frag.append(row("Expected", info.expected), row("In file", info.actual));
+  const n = info.expected.filter((b, i) => b !== info.actual[i]).length;
+  const total = info.expected.length;
+  const note = document.createElement("p");
+  note.className = "insp-type-note";
+  note.textContent = `${n} of ${total} bytes ${n === 1 ? "differs" : "differ"}.`;
+  frag.append(note);
+  return frag;
+}
+
 export class Inspector {
   readonly el: HTMLElement;
   private mode: Mode = "structure";
@@ -163,6 +226,7 @@ export class Inspector {
   private readonly note: HTMLElement;
   private readonly detail: HTMLElement;
   private readonly fieldRow: HTMLElement;
+  private readonly types: HTMLElement;
   /** Path of the field the structure panel is showing, if any. */
   private at: readonly number[] | null = null;
   /** A field picked by name stays shown until the cursor moves off it. */
@@ -292,7 +356,13 @@ export class Inspector {
     this.detail.className = "insp-detail";
     this.fieldRow = document.createElement("div");
     this.fieldRow.className = "insp-fieldrow";
-    this.fieldRow.append(this.field, this.area, this.note, this.detail);
+    // What the type permits, under the editor: the values an enum names, the
+    // bytes a magic field wanted, the meaning of each bit of a flags field.
+    // Absent for a type whose value already says everything.
+    this.types = document.createElement("div");
+    this.types.className = "insp-type";
+    this.types.hidden = true;
+    this.fieldRow.append(this.field, this.area, this.note, this.detail, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     this.status = document.createElement("div");
@@ -425,6 +495,142 @@ export class Inspector {
     this.field.hidden = long;
     if (long) this.fillArea(n);
     else this.fillField(n);
+    this.fillTypes(path, n);
+  }
+
+  /** The section below the editor. See `insp-type`. */
+  private fillTypes(path: readonly number[], n: TemplateNode): void {
+    const reply = this.doc.typeInfo(path);
+    if (reply.status !== "ok" || reply.node.kind === "plain") {
+      this.types.hidden = true;
+      this.types.replaceChildren();
+      return;
+    }
+    const info = reply.node;
+    const frag = document.createDocumentFragment();
+    frag.append(heading(headingFor(info)));
+    if (info.kind === "magic") frag.append(magicBody(info));
+    else if (info.kind === "enum") frag.append(this.enumBody(info, path));
+    else frag.append(this.flagsBody(info, path, n));
+    this.types.replaceChildren(frag);
+    this.types.hidden = false;
+  }
+
+  /** Every value the enum names, the one in the file marked, click to apply. */
+  private enumBody(info: TypeInfo, path: readonly number[]): DocumentFragment {
+    const frag = document.createDocumentFragment();
+    const known = info.cases.some((c) => c.value === info.current);
+    if (!known) {
+      const line = document.createElement("p");
+      line.className = "insp-type-note";
+      line.textContent = `${showNumber(info.current, info.hex)} is not a defined value.`;
+      frag.append(line);
+    }
+    const list = document.createElement("div");
+    list.className = "insp-cases";
+    for (const c of info.cases) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "insp-case";
+      const here = c.value === info.current;
+      if (here) row.classList.add("is-current");
+      row.setAttribute("aria-current", String(here));
+      const mark = document.createElement("span");
+      mark.className = "insp-mark";
+      mark.textContent = here ? "\u2713" : "";
+      const name = document.createElement("span");
+      name.className = "insp-case-name";
+      name.textContent = c.name;
+      const num = document.createElement("span");
+      num.className = "insp-case-num";
+      num.textContent = showNumber(c.value, info.hex);
+      row.append(mark, name, num);
+      row.addEventListener("click", () => this.applyValue(path, String(c.value)));
+      list.append(row);
+    }
+    frag.append(list);
+    return frag;
+  }
+
+  /** Each bit of the field: whether it is set, and what it is called. */
+  private flagsBody(info: TypeInfo, path: readonly number[], n: TemplateNode): DocumentFragment {
+    const frag = document.createDocumentFragment();
+    const width = info.bits.length;
+    const readout = document.createElement("div");
+    readout.className = "insp-bin";
+    const ends = document.createElement("div");
+    ends.className = "insp-bin-ends";
+    ends.append(span("insp-bin-hi", String(width - 1)), span("insp-bin-lo", "0"));
+    // Most significant first, in groups of four, so it lines up with the way
+    // the same number is read in hex.
+    const digits = document.createElement("div");
+    digits.className = "insp-bin-digits";
+    for (let i = width - 1; i >= 0; i--) {
+      const set = info.bits[i]?.set === true;
+      const d = span(set ? "insp-bit-on" : "insp-bit-off", set ? "1" : "0");
+      digits.append(d);
+      if (i % 4 === 0 && i > 0) digits.append(document.createTextNode(" "));
+    }
+    readout.append(ends, digits);
+    frag.append(readout);
+
+    const list = document.createElement("div");
+    list.className = "insp-bits";
+    let i = 0;
+    while (i < width) {
+      const bit = info.bits[i];
+      if (bit === undefined) break;
+      // A run of unnamed bits that are all off is one line, not five.
+      if (bit.name === null && !bit.set) {
+        let j = i;
+        while (j < width && info.bits[j]?.name === null && info.bits[j]?.set === false) j++;
+        if (j - i >= 3) {
+          const row = document.createElement("div");
+          row.className = "insp-bit-run";
+          row.textContent = `bits ${i}-${j - 1} \u00b7 unnamed, none set`;
+          list.append(row);
+          i = j;
+          continue;
+        }
+      }
+      list.append(this.bitRow(bit, path, n));
+      i++;
+    }
+    frag.append(list);
+    return frag;
+  }
+
+  private bitRow(
+    bit: { bit: number; name: string | null; set: boolean },
+    path: readonly number[],
+    n: TemplateNode,
+  ): HTMLElement {
+    const row = document.createElement("label");
+    row.className = "insp-bit";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = bit.set;
+    box.disabled = !n.editable;
+    box.addEventListener("change", () => {
+      const raw = BigInt(n.edit_text || "0");
+      const mask = 1n << BigInt(bit.bit);
+      this.applyValue(path, String(box.checked ? raw | mask : raw & ~mask));
+    });
+    const name = document.createElement("span");
+    name.className = "insp-bit-name";
+    name.textContent = bit.name ?? `bit ${bit.bit} (unnamed)`;
+    const num = document.createElement("span");
+    num.className = "insp-bit-num";
+    num.textContent = `bit ${bit.bit}`;
+    row.append(box, name, num);
+    return row;
+  }
+
+  /** Write a value chosen from the type section rather than typed. */
+  private applyValue(path: readonly number[], text: string): void {
+    const r = this.doc.writeNode(path, text);
+    if (r.status === "error") this.status.textContent = r.message;
+    else this.status.textContent = "";
   }
 
   private fillField(n: TemplateNode): void {

@@ -80,6 +80,24 @@ pub enum Until {
     FieldBytes { field: String, bytes: Vec<u8> },
 }
 
+/// Names for the individual bits of an integer field: a PE's `characteristics`
+/// is eight independent answers packed into sixteen bits, and reading it as the
+/// number 550 asks the reader to do the unpacking. Bits with no name still
+/// exist and are still shown, because a set bit nobody named is exactly the
+/// kind of thing worth noticing.
+#[derive(Debug)]
+pub struct FlagsDef {
+    pub name: String,
+    /// Bit number, counting from the least significant, and what it means.
+    pub bits: Vec<(u32, String)>,
+}
+
+impl FlagsDef {
+    pub fn label(&self, bit: u32) -> Option<&str> {
+        self.bits.iter().find(|(b, _)| *b == bit).map(|(_, n)| n.as_str())
+    }
+}
+
 /// Names for the values an integer field is expected to take: `color_type` 6
 /// reads as "rgba". The underlying integer is untouched, so expressions and
 /// switches still see the number, and a value with no name is still shown.
@@ -214,6 +232,8 @@ pub enum Ty {
     Switch { on: Expr, cases: Vec<(i128, Ty)>, default: Box<Ty> },
     /// An integer type whose values have names.
     Enum { inner: Box<Ty>, def: Arc<EnumDef> },
+    /// An integer type whose bits have names.
+    Flags { inner: Box<Ty>, def: Arc<FlagsDef> },
     /// A type from the template's table, by name. This is what makes a format
     /// whose boxes contain boxes expressible: the type refers to itself.
     Named(String),
@@ -315,6 +335,18 @@ impl Ty {
     }
 
     /// The integer type under an enum, or the type itself.
+    /// An integer whose bits are named. `bits` counts from the least
+    /// significant, which is how every format that has them numbers them.
+    pub fn flags(name: &str, inner: Ty, bits: &[(u32, &str)]) -> Ty {
+        Ty::Flags {
+            inner: Box::new(inner),
+            def: Arc::new(FlagsDef {
+                name: name.to_string(),
+                bits: bits.iter().map(|(b, n)| (*b, n.to_string())).collect(),
+            }),
+        }
+    }
+
     pub fn base(&self) -> &Ty {
         match self {
             Ty::Enum { inner, .. } => inner.base(),
@@ -365,6 +397,7 @@ impl Ty {
             Ty::Sized { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Enum { def, .. } => def.name.clone(),
+            Ty::Flags { def, .. } => def.name.clone(),
             Ty::Named(n) => n.clone(),
         }
     }
