@@ -10,6 +10,7 @@
 
 use crate::bits::bytes_for;
 use crate::template::{Endian, StrLen, Ty};
+use crate::text::{self, Settled};
 
 /// The longest text or byte field that can be written as text. Past this a
 /// value is not something anyone retypes, and the whole of it would have to be
@@ -30,8 +31,19 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     }
 }
 
+/// What a text field currently holds, which decides how new text is written:
+/// the encoding it was read as, and the byte-order mark to keep in front of it.
+#[derive(Debug, Clone, Default)]
+pub struct StrState {
+    pub settled: Option<Settled>,
+    pub bom: Vec<u8>,
+}
+
 /// Encode `text` as a value of `ty` occupying exactly `size_bits` bits.
-pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
+///
+/// `state` says how a text field was read; a field is written back in the
+/// encoding it was read in, so a guess never silently flips on save.
+pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<Vec<u8>, String> {
     match ty {
         Ty::UInt { bits, endian } => {
             let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
@@ -98,42 +110,60 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
                 format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
             })
         }
-        Ty::Str { len } => {
+        Ty::Enum { inner, def } => {
+            let t = text.trim();
+            match def.value_of(t) {
+                Some(v) => encode(inner, &v.to_string(), size_bits, state),
+                // Not a name: any number is still a legal value for the field.
+                None => encode(inner, t, size_bits, state).map_err(|e| {
+                    if parse_int(t).is_some() { e } else { enum_msg(&def.name, &def.cases) }
+                }),
+            }
+        }
+        Ty::Str { len, .. } => {
             let want = (size_bits / 8) as usize;
-            let bytes = text.as_bytes().to_vec();
+            let settled = state.settled.unwrap_or(Settled::Utf8);
+            let unit = settled.unit();
+            let bom = &state.bom;
+            let body = text::encode_settled(settled, text).map_err(|c| cannot_hold_msg(settled, c))?;
+            let room = want.saturating_sub(bom.len());
+            let noun = format!("bytes of {}", settled.name());
             match len {
                 StrLen::Fixed(_) => {
-                    if bytes.len() != want {
-                        return Err(length_msg(bytes.len(), want, "bytes of UTF-8"));
+                    if body.len() != room {
+                        return Err(length_msg(body.len(), room, &noun));
                     }
-                    Ok(bytes)
+                    Ok([bom.as_slice(), &body].concat())
                 }
                 StrLen::Padded { pad, .. } => {
-                    if bytes.len() > want {
-                        return Err(too_long_msg(bytes.len(), want));
+                    if body.len() > room {
+                        return Err(too_long_msg(body.len(), room, &noun));
                     }
-                    if bytes.contains(pad) {
+                    let term = text::unit_bytes(settled, *pad);
+                    if find_unit(&body, &term).is_some() {
                         return Err(no_pad_byte_msg(*pad));
                     }
-                    let mut out = bytes;
-                    out.resize(want, *pad);
+                    if (room - body.len()) % unit != 0 {
+                        return Err(odd_size_msg(settled, want));
+                    }
+                    let mut out = [bom.as_slice(), &body].concat();
+                    while out.len() < want {
+                        out.extend_from_slice(&term);
+                    }
                     Ok(out)
                 }
                 StrLen::Terminated { end } => {
-                    // The terminator is the field's, not the reader's, so the
-                    // text has to be one byte shorter than the field.
-                    if want == 0 {
-                        return Err("The field is 0 bytes; there's no room for text.".into());
+                    if room < unit {
+                        return Err(format!("The field is {want} bytes; there's no room for text."));
                     }
-                    if bytes.len() != want - 1 {
-                        return Err(length_msg(bytes.len(), want - 1, "bytes of UTF-8"));
+                    if body.len() != room - unit {
+                        return Err(length_msg(body.len(), room - unit, &noun));
                     }
-                    if bytes.contains(end) {
+                    let term = text::unit_bytes(settled, *end);
+                    if find_unit(&body, &term).is_some() {
                         return Err(no_pad_byte_msg(*end));
                     }
-                    let mut out = bytes;
-                    out.push(*end);
-                    Ok(out)
+                    Ok([bom.as_slice(), &body, &term].concat())
                 }
             }
         }
@@ -144,16 +174,6 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
                 return Err(length_msg(bytes.len(), want, "bytes"));
             }
             Ok(bytes)
-        }
-        Ty::Enum { inner, def } => {
-            let t = text.trim();
-            match def.value_of(t) {
-                Some(v) => encode(inner, &v.to_string(), size_bits),
-                // Not a name: any number is still a legal value for the field.
-                None => encode(inner, t, size_bits).map_err(|e| {
-                    if parse_int(t).is_some() { e } else { enum_msg(&def.name, &def.cases) }
-                }),
-            }
         }
         Ty::Magic(_) => Err("Magic bytes are fixed by the format.".into()),
         _ => Err("This field can't be edited here. Use the hex view.".into()),
@@ -208,8 +228,22 @@ fn range_msg(type_name: &str, min: &str, max: &str) -> String {
     format!("{type_name} range is {min} to {max}.")
 }
 
-fn too_long_msg(got: usize, want: usize) -> String {
-    format!("Too long for this field: {got} bytes of UTF-8; it holds {want}.")
+fn too_long_msg(got: usize, want: usize, noun: &str) -> String {
+    format!("Too long for this field: {got} {noun}; it holds {want}.")
+}
+
+fn cannot_hold_msg(settled: Settled, c: char) -> String {
+    format!("{} can't hold '{c}'.", settled.name())
+}
+
+fn odd_size_msg(settled: Settled, want: usize) -> String {
+    format!("This field is {want} bytes, which is not a whole number of {} characters.", settled.name())
+}
+
+/// Index of `term` in `hay`, aligned to whole units of its length.
+fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
+    let unit = term.len();
+    (0..hay.len().saturating_sub(unit - 1)).step_by(unit).find(|i| hay[*i..*i + unit] == *term)
 }
 
 fn no_pad_byte_msg(pad: u8) -> String {
@@ -408,7 +442,7 @@ mod tests {
             for endian in [Endian::Little, Endian::Big] {
                 let v = mask(bits) / 3;
                 let ty = Ty::UInt { bits, endian };
-                let buf = encode(&ty, &v.to_string(), bits as u64).unwrap();
+                let buf = encode(&ty, &v.to_string(), bits as u64, &StrState::default()).unwrap();
                 assert_eq!(read_uint(&buf, bits, endian), v, "u{bits} {endian:?}");
             }
         }
@@ -417,23 +451,23 @@ mod tests {
     #[test]
     fn signed_wraps_to_twos_complement() {
         let ty = Ty::Int { bits: 8, endian: Endian::Big };
-        assert_eq!(encode(&ty, "-1", 8).unwrap(), vec![0xff]);
-        assert_eq!(encode(&ty, "-128", 8).unwrap(), vec![0x80]);
-        assert!(encode(&ty, "-129", 8).is_err());
-        assert!(encode(&ty, "128", 8).is_err());
+        assert_eq!(encode(&ty, "-1", 8, &StrState::default()).unwrap(), vec![0xff]);
+        assert_eq!(encode(&ty, "-128", 8, &StrState::default()).unwrap(), vec![0x80]);
+        assert!(encode(&ty, "-129", 8, &StrState::default()).is_err());
+        assert!(encode(&ty, "128", 8, &StrState::default()).is_err());
     }
 
     #[test]
     fn narrow_fields_are_left_aligned() {
         // Three bits of value 0b101 sit at the top of the byte.
         let ty = Ty::UInt { bits: 3, endian: Endian::Little };
-        assert_eq!(encode(&ty, "0b101", 3).unwrap(), vec![0b1010_0000]);
+        assert_eq!(encode(&ty, "0b101", 3, &StrState::default()).unwrap(), vec![0b1010_0000]);
     }
 
     #[test]
     fn little_endian_reverses_whole_bytes() {
         let ty = Ty::UInt { bits: 32, endian: Endian::Little };
-        assert_eq!(encode(&ty, "0x01020304", 32).unwrap(), vec![4, 3, 2, 1]);
+        assert_eq!(encode(&ty, "0x01020304", 32, &StrState::default()).unwrap(), vec![4, 3, 2, 1]);
     }
 
     #[test]
@@ -448,10 +482,10 @@ mod tests {
             let back = f16_to_f64(f64_to_f16(x));
             assert!((back - x).abs() <= 2f64.powi(-25), "f16 {x} -> {back}");
         }
-        assert_eq!(encode(&Ty::F32(Endian::Big), "1.5", 32).unwrap(), vec![0x3f, 0xc0, 0, 0]);
-        assert_eq!(encode(&Ty::F64(Endian::Little), "1.5", 64).unwrap(), vec![0, 0, 0, 0, 0, 0, 0xf8, 0x3f]);
-        assert!(encode(&Ty::F64(Endian::Little), "nan", 64).is_ok());
-        assert!(encode(&Ty::F32(Endian::Big), "one", 32).is_err());
+        assert_eq!(encode(&Ty::F32(Endian::Big), "1.5", 32, &StrState::default()).unwrap(), vec![0x3f, 0xc0, 0, 0]);
+        assert_eq!(encode(&Ty::F64(Endian::Little), "1.5", 64, &StrState::default()).unwrap(), vec![0, 0, 0, 0, 0, 0, 0xf8, 0x3f]);
+        assert!(encode(&Ty::F64(Endian::Little), "nan", 64, &StrState::default()).is_ok());
+        assert!(encode(&Ty::F32(Endian::Big), "one", 32, &StrState::default()).is_err());
     }
 
     #[test]
@@ -469,11 +503,11 @@ mod tests {
 
     #[test]
     fn text_and_bytes_must_keep_their_length() {
-        assert!(encode(&Ty::utf8(Expr::lit(4)), "IHDR", 32).is_ok());
-        assert!(encode(&Ty::utf8(Expr::lit(4)), "IHD", 32).is_err());
-        assert_eq!(encode(&Ty::Bytes(Expr::lit(2)), "de ad", 16).unwrap(), vec![0xde, 0xad]);
-        assert!(encode(&Ty::Bytes(Expr::lit(2)), "dead be", 16).is_err());
-        assert!(encode(&Ty::Magic(vec![1]), "01", 8).is_err());
+        assert!(encode(&Ty::utf8(Expr::lit(4)), "IHDR", 32, &StrState::default()).is_ok());
+        assert!(encode(&Ty::utf8(Expr::lit(4)), "IHD", 32, &StrState::default()).is_err());
+        assert_eq!(encode(&Ty::Bytes(Expr::lit(2)), "de ad", 16, &StrState::default()).unwrap(), vec![0xde, 0xad]);
+        assert!(encode(&Ty::Bytes(Expr::lit(2)), "dead be", 16, &StrState::default()).is_err());
+        assert!(encode(&Ty::Magic(vec![1]), "01", 8, &StrState::default()).is_err());
     }
 
     #[test]
@@ -487,32 +521,32 @@ mod tests {
     #[test]
     fn padded_text_keeps_the_field_size() {
         let ty = Ty::utf8_padded(Expr::lit(8), 0);
-        assert_eq!(encode(&ty, "hi", 64).unwrap(), b"hi\0\0\0\0\0\0".to_vec());
-        assert_eq!(encode(&ty, "12345678", 64).unwrap(), b"12345678".to_vec());
+        assert_eq!(encode(&ty, "hi", 64, &StrState::default()).unwrap(), b"hi\0\0\0\0\0\0".to_vec());
+        assert_eq!(encode(&ty, "12345678", 64, &StrState::default()).unwrap(), b"12345678".to_vec());
         // One byte too many, and a value that would look truncated when read back.
-        assert!(encode(&ty, "123456789", 64).is_err());
-        assert!(encode(&ty, "a\0b", 64).is_err());
+        assert!(encode(&ty, "123456789", 64, &StrState::default()).is_err());
+        assert!(encode(&ty, "a\0b", 64, &StrState::default()).is_err());
         let spaces = Ty::utf8_padded(Expr::lit(4), b' ');
-        assert_eq!(encode(&spaces, "ab", 32).unwrap(), b"ab  ".to_vec());
+        assert_eq!(encode(&spaces, "ab", 32, &StrState::default()).unwrap(), b"ab  ".to_vec());
     }
 
     #[test]
     fn terminated_text_leaves_room_for_the_terminator() {
         let ty = Ty::cstr();
         // Five bytes of field: four of text, then the NUL.
-        assert_eq!(encode(&ty, "abcd", 40).unwrap(), b"abcd\0".to_vec());
-        assert!(encode(&ty, "abc", 40).is_err());
-        assert!(encode(&ty, "abcde", 40).is_err());
-        assert!(encode(&ty, "ab\0d", 40).is_err());
+        assert_eq!(encode(&ty, "abcd", 40, &StrState::default()).unwrap(), b"abcd\0".to_vec());
+        assert!(encode(&ty, "abc", 40, &StrState::default()).is_err());
+        assert!(encode(&ty, "abcde", 40, &StrState::default()).is_err());
+        assert!(encode(&ty, "ab\0d", 40, &StrState::default()).is_err());
     }
 
     #[test]
     fn number_bases_and_junk() {
         let ty = Ty::UInt { bits: 16, endian: Endian::Big };
-        assert_eq!(encode(&ty, " 0x1F ", 16).unwrap(), vec![0, 0x1f]);
-        assert_eq!(encode(&ty, "1_000", 16).unwrap(), vec![0x03, 0xe8]);
-        assert!(encode(&ty, "", 16).is_err());
-        assert!(encode(&ty, "12abc", 16).is_err());
-        assert!(encode(&ty, "-1", 16).is_err());
+        assert_eq!(encode(&ty, " 0x1F ", 16, &StrState::default()).unwrap(), vec![0, 0x1f]);
+        assert_eq!(encode(&ty, "1_000", 16, &StrState::default()).unwrap(), vec![0x03, 0xe8]);
+        assert!(encode(&ty, "", 16, &StrState::default()).is_err());
+        assert!(encode(&ty, "12abc", 16, &StrState::default()).is_err());
+        assert!(encode(&ty, "-1", 16, &StrState::default()).is_err());
     }
 }

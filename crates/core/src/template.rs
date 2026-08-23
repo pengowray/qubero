@@ -84,6 +84,41 @@ impl EnumDef {
     }
 }
 
+/// What the bytes of a text field mean. The last two are for formats that do
+/// not say outright: one where the bytes announce themselves, one where nobody
+/// knows and a guess is the honest answer.
+#[derive(Debug, Clone)]
+pub enum Encoding {
+    Utf8,
+    Ascii,
+    /// ISO 8859-1, where every byte is a character.
+    Latin1,
+    /// The DOS code page, which fills the high half with box drawing and accents.
+    Cp437,
+    Utf16(Endian),
+    /// A byte-order mark at the front decides; without one, `fallback`.
+    Bom { fallback: Box<Encoding> },
+    /// The format does not say. Read as UTF-8 if the bytes are valid UTF-8,
+    /// otherwise Latin-1, and say which was used.
+    Unknown,
+}
+
+impl Encoding {
+    /// Short name for the type column.
+    pub fn short(&self) -> String {
+        match self {
+            Encoding::Utf8 => "utf8".into(),
+            Encoding::Ascii => "ascii".into(),
+            Encoding::Latin1 => "latin1".into(),
+            Encoding::Cp437 => "cp437".into(),
+            Encoding::Utf16(Endian::Little) => "utf16le".into(),
+            Encoding::Utf16(Endian::Big) => "utf16be".into(),
+            Encoding::Bom { .. } => "text bom".into(),
+            Encoding::Unknown => "text?".into(),
+        }
+    }
+}
+
 /// How far a text field runs. Formats disagree, so the template says which:
 /// a fixed run of bytes, a fixed run whose tail is padding, or a run that ends
 /// at a terminator byte.
@@ -120,8 +155,8 @@ pub enum Ty {
     Magic(Vec<u8>),
     /// Raw bytes of computed length (in bytes).
     Bytes(Expr),
-    /// UTF-8 text. How its length is decided is up to `StrLen`.
-    Str { len: StrLen },
+    /// Text. `StrLen` says how far it runs, `enc` says what the bytes mean.
+    Str { len: StrLen, enc: Encoding },
     Struct(Arc<StructDef>),
     Array { elem: Box<Ty>, count: Expr },
     Repeat { elem: Box<Ty>, until: Until },
@@ -169,15 +204,18 @@ impl Ty {
         Ty::Bytes(len)
     }
     pub fn utf8(len: Expr) -> Ty {
-        Ty::Str { len: StrLen::Fixed(len) }
+        Ty::text(StrLen::Fixed(len), Encoding::Utf8)
     }
     /// Text in a field of `size` bytes, ending at the first `pad` byte.
     pub fn utf8_padded(size: Expr, pad: u8) -> Ty {
-        Ty::Str { len: StrLen::Padded { size, pad } }
+        Ty::text(StrLen::Padded { size, pad }, Encoding::Utf8)
     }
-    /// Text that ends at a NUL, which is part of the field.
+    /// UTF-8 that ends at a NUL, which is part of the field.
     pub fn cstr() -> Ty {
-        Ty::Str { len: StrLen::Terminated { end: 0 } }
+        Ty::text(StrLen::Terminated { end: 0 }, Encoding::Utf8)
+    }
+    pub fn text(len: StrLen, enc: Encoding) -> Ty {
+        Ty::Str { len, enc }
     }
     pub fn magic(b: &[u8]) -> Ty {
         Ty::Magic(b.to_vec())
@@ -249,13 +287,17 @@ impl Ty {
             Ty::Leb128 { signed: true } => "sleb128".into(),
             Ty::Magic(b) => format!("magic[{}]", b.len()),
             Ty::Bytes(_) => "bytes[]".into(),
-            Ty::Str { len } => match len {
-                StrLen::Fixed(_) => "utf8[]".into(),
-                StrLen::Padded { pad: 0, .. } => "utf8 nul-pad".into(),
-                StrLen::Padded { pad, .. } => format!("utf8 pad 0x{pad:02x}"),
-                StrLen::Terminated { end: 0 } => "cstr".into(),
-                StrLen::Terminated { end } => format!("utf8 to 0x{end:02x}"),
-            },
+            Ty::Str { len, enc } => {
+                let e = enc.short();
+                match len {
+                    StrLen::Fixed(_) => format!("{e}[]"),
+                    StrLen::Padded { pad: 0, .. } => format!("{e} nul-pad"),
+                    StrLen::Padded { pad, .. } => format!("{e} pad 0x{pad:02x}"),
+                    StrLen::Terminated { end: 0 } if matches!(enc, Encoding::Utf8) => "cstr".into(),
+                    StrLen::Terminated { end: 0 } => format!("{e} cstr"),
+                    StrLen::Terminated { end } => format!("{e} to 0x{end:02x}"),
+                }
+            }
             Ty::Struct(s) => s.name.clone(),
             Ty::Array { elem, .. } => format!("{}[]", elem.display_name()),
             Ty::Repeat { elem, .. } => format!("{}[]", elem.display_name()),

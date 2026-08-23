@@ -1,6 +1,6 @@
 //! PNG: signature plus a chunk stream that ends at IEND.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// PNG colour types. 1, 5 and 7 are not defined by the spec, so a file holding
 /// one shows the number with no name.
@@ -25,12 +25,16 @@ pub fn png() -> Template {
             ("interlace", T::enumeration("Interlace", T::u8(), &[(0, "none"), (1, "adam7")])),
         ],
     );
-    // tEXt: a NUL-terminated keyword, then the text filling the rest.
+    // tEXt: a NUL-terminated keyword, then the text filling the rest. Both are
+    // Latin-1 by the spec, not UTF-8; iTXt is the chunk that carries UTF-8.
     let text = T::structure(
         "tEXt",
         vec![
-            ("keyword", T::cstr()),
-            ("text", T::utf8(E::field("length").sub(E::size_of("keyword")))),
+            ("keyword", T::text(StrLen::Terminated { end: 0 }, Encoding::Latin1)),
+            (
+                "text",
+                T::text(StrLen::Fixed(E::field("length").sub(E::size_of("keyword"))), Encoding::Latin1),
+            ),
         ],
     );
     let chunk = T::structure(
@@ -89,7 +93,7 @@ mod tests {
         let mut ev = Evaluator::new(png());
         let keyword = ev.node(&d, &[1, 0, 2, 0]).unwrap();
         assert_eq!(keyword.value, Value::Str("Author".into()));
-        assert_eq!(keyword.type_name, "cstr");
+        assert_eq!(keyword.type_name, "latin1 cstr");
         assert_eq!(keyword.size_bits, 7 * 8); // the NUL belongs to the keyword
         let text = ev.node(&d, &[1, 0, 2, 1]).unwrap();
         assert_eq!(text.value, Value::Str("Ada Lovelace".into()));

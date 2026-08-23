@@ -31,6 +31,10 @@ export type TemplateNode = {
   /** Bytes the value occupies: short of the field's size when text is padded
    * or terminated, since neither belongs to the value. */
   readonly value_bytes: number;
+  /** Where the value starts, past a byte-order mark if the field has one. */
+  readonly value_offset_bits: number;
+  /** How the encoding was settled, or that the bytes do not fit it. */
+  readonly read_as: string | null;
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -183,6 +187,11 @@ export class Doc {
 
   templateChildren(path: readonly number[], from: number, to: number): TemplateReply<TemplateNode[]> {
     return this.handleReply(this.editor.template_children(Uint32Array.from(path), from, to));
+  }
+
+  /** The whole text of a text field, decoded in the field's own encoding. */
+  fieldText(path: readonly number[]): TemplateReply<{ text: string; truncated: boolean }> {
+    return this.handleReply(this.editor.field_text(Uint32Array.from(path)));
   }
 
   /** Path of the deepest template field covering `bitOffset`. */

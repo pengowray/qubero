@@ -12,7 +12,8 @@ use crate::decode::{be_int, f16_to_f64, fixed_bits, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::source::{Missing, Source};
-use crate::template::{Expr, StrLen, Template, Ty, Until};
+use crate::template::{Encoding, Expr, StrLen, Template, Ty, Until};
+use crate::text::{self, Settled};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
@@ -73,6 +74,11 @@ pub struct NodeInfo {
     /// except for padded and terminated text, where the padding and the
     /// terminator are the format's business, not the value's.
     pub value_bytes: u64,
+    /// Where the value starts, which is past a byte-order mark if there is one.
+    pub value_offset_bits: u64,
+    /// How the encoding was settled when the template did not say outright, or
+    /// that the bytes do not fit the encoding the template named.
+    pub read_as: Option<String>,
 }
 
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
@@ -82,6 +88,25 @@ pub struct Write {
     /// MSB-first packed, `n_bits` long.
     pub data: Vec<u8>,
     pub n_bits: u64,
+}
+
+/// Where a text field's value sits inside it, and what its bytes mean.
+struct StrSpan {
+    /// Bytes before the value: a byte-order mark, or none.
+    start: u64,
+    /// Bytes of value, before any padding or terminator.
+    len: u64,
+    settled: Settled,
+    /// The padding holds something other than padding.
+    dirty: bool,
+    /// How the encoding was decided, when the template did not say outright.
+    note: Option<String>,
+}
+
+/// Index of `term` in `hay`, aligned to whole units of its length.
+fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
+    let unit = term.len();
+    (0..hay.len().saturating_sub(unit - 1)).step_by(unit).find(|i| hay[*i..*i + unit] == *term)
 }
 
 #[derive(Debug, Clone)]
@@ -135,10 +160,13 @@ impl Evaluator {
             }
             _ => (self.primitive_value(doc, &r, &r.ty, size)?, 0, false),
         };
+        let reading = self.reading(doc, &r, size)?;
         Ok(NodeInfo {
             path: path.to_vec(),
-            editable: !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)?,
-            value_bytes: self.value_bytes(doc, &r, size)?,
+            editable: !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
+            value_offset_bits: reading.0 .0,
+            value_bytes: reading.0 .1,
+            read_as: reading.2,
             name: r.name,
             type_name: r.ty.display_name(),
             offset_bits: r.offset,
@@ -207,6 +235,19 @@ impl Evaluator {
         Ok(None)
     }
 
+    /// The whole text of a text field, decoded in its own encoding, up to the
+    /// length that can be edited. The node's value is only a preview.
+    pub fn text_value<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<(String, bool)> {
+        self.resolve(doc, path)?;
+        let size = self.size_of(doc, path)?;
+        let r = self.memo[path].clone();
+        let Some(span) = self.str_span(doc, &r, size)? else { return fail("not a text field") };
+        let shown = span.len.min(crate::encode::EDIT_LIMIT_BYTES);
+        let bytes = self.read(doc, &r, r.offset + span.start * 8, shown * 8)?;
+        let (text, _) = text::decode_settled(span.settled, &bytes);
+        Ok((text, span.len > shown))
+    }
+
     /// Encode `text` for the field at `path`, ready to be written.
     ///
     /// Resolving a field can touch unloaded chunks, so this reports the same
@@ -230,14 +271,23 @@ impl Evaluator {
         }
         if !self.padding_is_clean(doc, &r, size)? {
             let pad = match &r.ty {
-                Ty::Str { len: StrLen::Padded { pad, .. } } => *pad,
+                Ty::Str { len: StrLen::Padded { pad, .. }, .. } => *pad,
                 _ => 0,
             };
             return fail(format!(
                 "Bytes after the first 0x{pad:02x} aren't shown here; writing would overwrite them. Use the hex view."
             ));
         }
-        let data = encode::encode(&r.ty, text, size).map_err(EvalError::Failed)?;
+        // A text field is written back in the encoding it was read in, with the
+        // byte-order mark it already had.
+        let state = match self.str_span(doc, &r, size)? {
+            Some(span) => encode::StrState {
+                settled: Some(span.settled),
+                bom: if span.start == 0 { Vec::new() } else { self.read(doc, &r, r.offset, span.start * 8)? },
+            },
+            None => encode::StrState::default(),
+        };
+        let data = encode::encode(&r.ty, text, size, &state).map_err(EvalError::Failed)?;
         Ok(Write { offset_bits: r.offset, data, n_bits: size })
     }
 
@@ -394,7 +444,7 @@ impl Evaluator {
                     }
                     n as u64 * 8
                 }
-                Ty::Str { len } => match len {
+                Ty::Str { len, enc } => match len {
                     StrLen::Fixed(e) | StrLen::Padded { size: e, .. } => {
                         let n = self.eval_expr(doc, path, e)?;
                         if n < 0 {
@@ -403,7 +453,9 @@ impl Evaluator {
                         n as u64 * 8
                     }
                     StrLen::Terminated { end } => {
-                        let (_, n) = self.read_terminated(doc, &r, *end)?;
+                        let (settled, bom) = self.str_head(doc, &r, enc)?;
+                        let term = text::unit_bytes(settled, *end);
+                        let (_, n) = self.read_terminated(doc, &r, &term, bom)?;
                         n * 8
                     }
                 },
@@ -583,63 +635,104 @@ impl Evaluator {
         }
     }
 
-    /// Where the value stops inside the field: at the padding, at the
-    /// terminator, or at the end.
-    fn value_bytes<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<u64> {
+    /// Where the value sits inside a text field, and how the bytes read.
+    ///
+    /// A byte-order mark belongs to the field but not to the value, and the
+    /// padding or terminator ends it. Everything is measured in whole code
+    /// units, so UTF-16LE text does not stop at the first zero byte of "H".
+    fn str_span<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<Option<StrSpan>> {
+        let Ty::Str { len, enc } = &r.ty else { return Ok(None) };
         let n = size / 8;
-        let Ty::Str { len } = &r.ty else { return Ok(n) };
-        let stop = match len {
-            StrLen::Fixed(_) => return Ok(n),
-            StrLen::Padded { pad, .. } => *pad,
-            StrLen::Terminated { end } => *end,
+        let cap = n.min(crate::encode::EDIT_LIMIT_BYTES);
+        let bytes = if cap == 0 { Vec::new() } else { self.read(doc, r, r.offset, cap * 8)? };
+        let (settled, bom, note) = text::settle(enc, &bytes);
+        let bom = (bom as u64).min(cap);
+        let body = &bytes[bom as usize..];
+        let unit = settled.unit();
+        let rest = cap - bom;
+        let (text_len, dirty) = match len {
+            StrLen::Fixed(_) => (rest, false),
+            StrLen::Padded { pad, .. } => {
+                let term = text::unit_bytes(settled, *pad);
+                match find_unit(body, &term) {
+                    None => (rest, false),
+                    Some(i) => {
+                        let tail = &body[i..];
+                        // Anything in the padding that is not padding would be
+                        // lost by writing back only what is shown.
+                        let dirty = !tail.chunks(unit).all(|u| u == term);
+                        (i as u64, dirty)
+                    }
+                }
+            }
+            StrLen::Terminated { end } => {
+                let term = text::unit_bytes(settled, *end);
+                (find_unit(body, &term).map(|i| i as u64).unwrap_or(rest), false)
+            }
         };
-        let read = n.min(crate::encode::EDIT_LIMIT_BYTES);
-        if read == 0 {
-            return Ok(0);
-        }
-        let bytes = self.read(doc, r, r.offset, read * 8)?;
-        Ok(bytes.iter().position(|b| *b == stop).map(|i| i as u64).unwrap_or(read))
+        Ok(Some(StrSpan { start: bom, len: text_len, settled, dirty, note }))
+    }
+
+    /// Where a field's value sits, whether the bytes fit the encoding, and how
+    /// the encoding was decided. Everything a node needs beyond its value.
+    #[allow(clippy::type_complexity)]
+    fn reading<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<((u64, u64), bool, Option<String>)> {
+        let Some(span) = self.str_span(doc, r, size)? else { return Ok(((r.offset, size / 8), false, None)) };
+        let shown = span.len.min(crate::encode::EDIT_LIMIT_BYTES);
+        let bytes = self.read(doc, r, r.offset + span.start * 8, shown * 8)?;
+        let (_, lossy) = text::decode_settled(span.settled, &bytes);
+        let note = if lossy { Some(format!("not valid {}", span.settled.name())) } else { span.note };
+        Ok(((r.offset + span.start * 8, span.len), lossy, note))
     }
 
     /// A padded text field shows only what is before its first pad byte. If the
     /// rest is not all padding, writing back what is shown would drop bytes the
     /// reader never saw, so such a field is not editable here.
     fn padding_is_clean<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<bool> {
-        let Ty::Str { len: StrLen::Padded { pad, .. } } = &r.ty else { return Ok(true) };
-        if size == 0 || size > crate::encode::EDIT_LIMIT_BYTES * 8 {
+        if size > crate::encode::EDIT_LIMIT_BYTES * 8 {
             return Ok(true); // too long to edit anyway
         }
-        let bytes = self.read(doc, r, r.offset, size)?;
-        Ok(match bytes.iter().position(|b| b == pad) {
-            None => true,
-            Some(i) => bytes[i..].iter().all(|b| b == pad),
-        })
+        Ok(!self.str_span(doc, r, size)?.map(|s| s.dirty).unwrap_or(false))
     }
 
-    /// Bytes up to and including the first `end` byte, and the total length in
-    /// bytes. Read in blocks: a long string should not be one call per byte.
-    fn read_terminated<S: Source>(&self, doc: &Document<S>, r: &Resolved, end: u8) -> R<(Vec<u8>, u64)> {
-        const BLOCK: u64 = 256 * 8;
+    /// How a text field reads before its length is known: the encoding the
+    /// scanner should step in, and the bytes any byte-order mark takes.
+    fn str_head<S: Source>(&self, doc: &Document<S>, r: &Resolved, enc: &Encoding) -> R<(Settled, u64)> {
+        let want = 4u64.min((r.limit - r.offset) / 8);
+        let head = if want == 0 { Vec::new() } else { self.read(doc, r, r.offset, want * 8)? };
+        let (settled, bom, _) = text::settle(enc, &head);
+        Ok((settled, bom as u64))
+    }
+
+    /// Scan for the terminator, whole code units at a time, and return the
+    /// bytes of text and the bytes of the whole field. Read in blocks: a long
+    /// string should not be one call per unit.
+    fn read_terminated<S: Source>(&self, doc: &Document<S>, r: &Resolved, term: &[u8], bom: u64) -> R<(u64, u64)> {
+        const BLOCK: u64 = 256;
         /// A file with no terminator in it must fail rather than walk to the end.
-        const CAP: u64 = 64 * 1024 * 8;
-        let stop = r.limit.min(r.offset + CAP);
-        let mut out: Vec<u8> = Vec::new();
-        let mut at = r.offset;
+        const CAP: u64 = 64 * 1024;
+        let unit = term.len() as u64;
+        let start = r.offset + bom * 8;
+        let stop = r.limit.min(start + CAP * 8);
+        let mut at = start;
+        let mut text_bytes = 0u64;
         while at < stop {
-            let n = BLOCK.min(stop - at) / 8 * 8;
+            let mut n = BLOCK.min((stop - at) / 8);
+            n -= n % unit;
             if n == 0 {
                 break;
             }
-            let block = self.read(doc, r, at, n)?;
-            if let Some(i) = block.iter().position(|b| *b == end) {
-                out.extend_from_slice(&block[..=i]);
-                let total = out.len() as u64;
-                return Ok((out, total));
+            let block = self.read(doc, r, at, n * 8)?;
+            for i in (0..block.len()).step_by(unit as usize) {
+                if block[i..i + unit as usize] == *term {
+                    let len = text_bytes + i as u64;
+                    return Ok((len, bom + len + unit));
+                }
             }
-            out.extend_from_slice(&block);
-            at += n;
+            text_bytes += n;
+            at += n * 8;
         }
-        fail(format!("no 0x{end:02x} terminator within {} bytes", (stop - r.offset) / 8))
+        fail(format!("no 0x{:02x} terminator within {} bytes", term[0], (stop - start) / 8))
     }
 
     fn read_leb<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(u128, u64)> {
@@ -684,24 +777,15 @@ impl Evaluator {
                 let preview = self.read(doc, r, r.offset, len.min(16) * 8)?;
                 Value::Bytes { len, preview }
             }
-            Ty::Str { len } => {
-                let n = size / 8;
-                let shown = n.min(256);
-                let bytes = self.read(doc, r, r.offset, shown * 8)?;
-                let text = match len {
-                    StrLen::Fixed(_) => &bytes[..],
-                    // The value stops at the pad byte or the terminator; what
-                    // follows is the format's, not the reader's.
-                    StrLen::Padded { pad, .. } => &bytes[..bytes.iter().position(|b| b == pad).unwrap_or(bytes.len())],
-                    StrLen::Terminated { end } => {
-                        &bytes[..bytes.iter().position(|b| b == end).unwrap_or(bytes.len())]
-                    }
-                };
-                let mut s = String::from_utf8_lossy(text).into_owned();
-                if n > shown && text.len() as u64 == shown {
-                    s.push('…');
+            Ty::Str { .. } => {
+                let span = self.str_span(doc, r, size)?.expect("text field");
+                let shown = span.len.min(256);
+                let bytes = self.read(doc, r, r.offset + span.start * 8, shown * 8)?;
+                let (mut text, _) = text::decode_settled(span.settled, &bytes);
+                if span.len > shown {
+                    text.push('\u{2026}');
                 }
-                Value::Str(s)
+                Value::Str(text)
             }
             Ty::Enum { inner, def } => {
                 let raw = match self.primitive_value(doc, r, inner, size)? {
@@ -916,5 +1000,63 @@ mod tests {
         assert_eq!(ev.locate(&d, 3 * 8 + 4).unwrap(), vec![2, 1]);
         assert_eq!(ev.locate(&d, 6 * 8).unwrap(), vec![2, 2]);
         assert!(ev.locate(&d, 7 * 8).is_err());
+    }
+
+    #[test]
+    fn text_is_read_and_written_in_its_own_encoding() {
+        use crate::template::{Encoding, StrLen};
+        let t = Template::new(
+            "t",
+            T::structure(
+                "R",
+                vec![
+                    ("dos", T::text(StrLen::Padded { size: E::lit(8), pad: 0 }, Encoding::Cp437)),
+                    ("wide", T::text(StrLen::Padded { size: E::lit(10), pad: 0 }, Encoding::Bom { fallback: Box::new(Encoding::Latin1) })),
+                ],
+            ),
+        );
+        // CP437 0xE1 is the sharp s; the rest of the field is padding.
+        let mut bytes = vec![b'D', b'O', b'S', 0xe1, 0, 0, 0, 0];
+        // UTF-16 LE with a byte-order mark: "Hi", then NUL units.
+        bytes.extend_from_slice(&[0xff, 0xfe, b'H', 0, b'i', 0, 0, 0, 0, 0]);
+        let mut d = doc(&bytes);
+        let mut ev = Evaluator::new(t);
+
+        let dos = ev.node(&d, &[0]).unwrap();
+        assert_eq!(dos.value, Value::Str("DOS\u{00df}".into()));
+        assert_eq!(dos.value_bytes, 4);
+        assert_eq!(dos.type_name, "cp437 nul-pad");
+
+        let wide = ev.node(&d, &[1]).unwrap();
+        assert_eq!(wide.value, Value::Str("Hi".into()));
+        // The mark is part of the field, not of the value.
+        assert_eq!(wide.value_offset_bits, wide.offset_bits + 16);
+        assert_eq!(wide.value_bytes, 4);
+        assert_eq!(wide.read_as.as_deref(), Some("UTF-16 LE, from a byte-order mark"));
+
+        // Writing keeps the encoding and the mark, and pads in whole units.
+        let w = ev.prepare_write(&d, &[1], "Sun").unwrap();
+        assert_eq!(w.data, vec![0xff, 0xfe, b'S', 0, b'u', 0, b'n', 0, 0, 0]);
+        d.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
+        ev.invalidate();
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("Sun".into()));
+
+        // A character CP437 does not have is refused, not mangled.
+        assert!(matches!(ev.prepare_write(&d, &[0], "\u{20ac}"), Err(EvalError::Failed(_))));
+        let w = ev.prepare_write(&d, &[0], "\u{00df}\u{00df}").unwrap();
+        assert_eq!(w.data, vec![0xe1, 0xe1, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn an_enum_is_written_by_name() {
+        let t = Template::new(
+            "t",
+            T::structure("R", vec![("kind", T::enumeration("Kind", T::u8(), &[(1, "one"), (2, "two")]))]),
+        );
+        let d = doc(&[1]);
+        let mut ev = Evaluator::new(t);
+        assert_eq!(ev.prepare_write(&d, &[0], "two").unwrap().data, vec![2]);
+        assert_eq!(ev.prepare_write(&d, &[0], "9").unwrap().data, vec![9]);
+        assert!(matches!(ev.prepare_write(&d, &[0], "three"), Err(EvalError::Failed(_))));
     }
 }

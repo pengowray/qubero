@@ -24,7 +24,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::Magic(b) => b.len() as u64 * 8,
         Ty::Bytes(Expr::Lit(n)) => (*n).max(0) as u64 * 8,
         // Text is fixed-size only when its length does not depend on the bytes.
-        Ty::Str { len: StrLen::Fixed(Expr::Lit(n)) } | Ty::Str { len: StrLen::Padded { size: Expr::Lit(n), .. } } => {
+        Ty::Str { len: StrLen::Fixed(Expr::Lit(n)), .. } | Ty::Str { len: StrLen::Padded { size: Expr::Lit(n), .. }, .. } => {
             (*n).max(0) as u64 * 8
         }
         Ty::Struct(s) => s.fields.iter().map(|f| fixed_bits(&f.ty)).sum::<Option<u64>>()?,

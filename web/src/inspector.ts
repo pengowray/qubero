@@ -446,47 +446,47 @@ export class Inspector {
    */
   private fillArea(n: TemplateNode): void {
     if (this.area.dataset["dirty"] === "1" && document.activeElement === this.area) return;
-    // Padding and terminators are the format's, not the value's.
-    const shownBytes = Math.min(n.value_bytes, SHOW_LIMIT);
-    const { bytes, complete } = this.doc.readBits(n.offset_bits, shownBytes * 8);
     this.area.classList.remove("invalid");
     this.area.setAttribute("aria-label", `${n.name}, ${n.type}`);
-    if (!complete) {
+    this.area.placeholder = "";
+    const shown = n.kind === "str" ? this.readText(n) : this.readHex(n);
+    if (shown === null) {
       this.area.value = "";
       this.area.placeholder = "Loading this part of the file…";
       this.area.disabled = true;
       this.note.hidden = true;
       return;
     }
-    this.area.placeholder = "";
-    let text: string;
-    let editable = n.editable;
-    let note = "";
-    if (n.kind === "str") {
-      const decoded = decodeUtf8(bytes);
-      if (decoded === null) {
-        text = hexText(bytes);
-        editable = false;
-        note = "Not valid UTF-8, so it's shown as bytes. Edit it in the hex view.";
-      } else {
-        text = decoded;
-      }
-    } else {
-      text = hexText(bytes);
+    let note = shown.note ?? "";
+    if (shown.truncated) {
+      note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${n.value_bytes.toLocaleString()}. Too long to edit here; use the hex view.`;
     }
-    const total = n.value_bytes;
-    if (total > shownBytes) {
-      // Past the limit the panel neither shows nor edits the whole field.
-      note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${total.toLocaleString()}. Too long to edit here; use the hex view.`;
-    }
-    this.area.value = text;
+    const editable = n.editable && !shown.truncated;
+    this.area.value = shown.text;
     this.area.disabled = !editable;
+    this.area.rows = Math.max(2, Math.min(12, Math.ceil(shown.text.length / 30)));
     // Enter puts a newline into the value, so the way to apply has to be said.
-    // The notes above only appear when editing is off, so they never collide.
+    // A note only appears when editing is off, so the two never collide.
     if (editable && note === "") note = "Ctrl+Enter to apply";
-    this.area.rows = Math.max(2, Math.min(12, Math.ceil(text.length / 30)));
     this.note.textContent = note;
     this.note.hidden = note === "";
+  }
+
+  /** Text comes decoded from the core, which knows the field's encoding. */
+  private readText(n: TemplateNode): { text: string; truncated: boolean; note: string | null } | null {
+    const r = this.doc.fieldText(n.path);
+    if (r.status === "pending") return null;
+    if (r.status === "error") return { text: "", truncated: false, note: r.message };
+    return { text: r.node.text, truncated: r.node.truncated, note: n.read_as === null ? null : `Read as ${n.read_as}` };
+  }
+
+  /** A byte field is its own value: hex pairs, wrapped. */
+  private readHex(n: TemplateNode): { text: string; truncated: boolean; note: string | null } | null {
+    const total = n.value_bytes;
+    const shown = Math.min(total, SHOW_LIMIT);
+    const { bytes, complete } = this.doc.readBits(n.value_offset_bits, shown * 8);
+    if (!complete) return null;
+    return { text: hexText(bytes), truncated: total > shown, note: null };
   }
 
   /**
@@ -533,14 +533,6 @@ const SHOW_LIMIT = 4096;
 
 function hexText(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
-}
-
-function decodeUtf8(bytes: Uint8Array): string | null {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return null;
-  }
 }
 
 function modeLabel(mode: Mode): string {

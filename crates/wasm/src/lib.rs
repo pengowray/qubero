@@ -34,6 +34,17 @@ struct NodeDto {
     /// Bytes of the field the value occupies; less than the size for padded
     /// and terminated text.
     value_bytes: f64,
+    /// Where the value starts: past a byte-order mark, if the field has one.
+    value_offset_bits: f64,
+    /// How the encoding was settled, or that the bytes do not fit it.
+    read_as: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TextDto {
+    text: String,
+    /// True when the field holds more than the editor will show.
+    truncated: bool,
 }
 
 /// The range a successful `write_node` touched.
@@ -97,6 +108,8 @@ fn dto(n: NodeInfo) -> NodeDto {
         composite: n.composite,
         editable: n.editable,
         value_bytes: n.value_bytes as f64,
+        value_offset_bits: n.value_offset_bits as f64,
+        read_as: n.read_as,
     }
 }
 
@@ -166,6 +179,16 @@ impl Editor {
         match &mut self.eval {
             None => reply::<Vec<NodeDto>>(Err(EvalError::Failed("no template".into()))),
             Some(e) => reply(e.children(&self.doc, &p, from as u64, to as u64).map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>())),
+        }
+    }
+
+    /// Whole text of a text field, decoded in its own encoding:
+    /// {status:"ok",node:{text,truncated}}.
+    pub fn field_text(&mut self, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<TextDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(e.text_value(&self.doc, &p).map(|(text, truncated)| TextDto { text, truncated })),
         }
     }
 
