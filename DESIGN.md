@@ -41,20 +41,34 @@ exception to "use a library for UI primitives": no virtual-list library survives
 - `web`: Vite + TS. `npm run wasm` rebuilds the package into `web/src/pkg`.
 - `?synthetic=5G` opens a deterministic fake file for large-file testing.
 
-## Roadmap (not yet built)
-
 ### Templates are expressions, not a static layout
-A field's offset, length, and type can all be computed: an array of u32 whose length
-is read from another field; a LEB128 whose byte length depends on its content; a
-chunk whose position is "after the previous one". So the template IR must be an
-expression graph evaluated lazily against the document, with a dependency tracker so
-a byte edit invalidates only the fields that read it. Think spreadsheet cells whose
-formulas can say `bytes(offset, len)`, `u32le(at)`, `leb128(at)`, `sizeof(field)`.
+`crates/core/src/template.rs` is the IR: ints/floats of any bit width and endianness,
+LEB128, magic, bytes/utf8 with computed length, struct, array with computed count,
+repeat-until (end of container, or an element whose field matches bytes), `Sized`
+(parse inside an N-byte window) and `Switch` (choose a type by an earlier field).
+Expressions are integer arithmetic over earlier fields; a short text or byte field
+used in an expression is its bytes as a big-endian number, so a switch can key on
+`"IHDR"`.
 
-Target formats to drive this: zip, wasm (LEB128), rkyv, png, glTF. Descriptions to
-import: C structs and bitfields, ASN.1, protobuf, Zig packed structs, Python pickle,
-C# StructLayout. Text encodings: UTF-8, ASCII, CP437, JIS. Primitives: f16/f32/f64,
-integers of arbitrary bit width, magic numbers, alignment/padding.
+`eval.rs` evaluates lazily by path with memoised offsets and sizes. Results are a
+strict tri-state: value, pending (unloaded chunks, which the host fetches before
+re-asking), or error. Zero-filled reads never reach the parser. Invalidation is
+coarse (whole memo on any edit); a dependency tracker that invalidates only the
+fields that read the edited bytes is the upgrade when templates get large.
+
+Built-in templates live in `formats.rs` (PNG, wasm). A text format for templates,
+and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
+Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
+Text encodings still to add: CP437, JIS.
+
+### Saving
+`save.rs` turns the piece list into runs. The host composes a `Blob` from lazy slices
+of the original plus add-buffer bytes; only bit-unaligned stretches are read through
+the core. Written to a new file via `showSaveFilePicker` where available, otherwise a
+download. Note: a bit-level insert or delete shifts everything after it, so the rest
+of the file is rewritten on save. That is inherent; the UI should show progress.
+
+## Roadmap (not yet built)
 
 ### Resilient redundant editing
 Two fields derived from the same bytes, or two bytes ranges that must agree
@@ -64,14 +78,9 @@ and `encode(value) -> bytes`; the inspector rows already have this shape. Editin
 either side writes through its `encode`; dependent fields re-evaluate. When an edit
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
-### Nested type table
-Below the hex view: a tree/table of the template's fields with live values, expandable
-arrays and structs, click to select the bytes in the hex view, edit in place.
-
-### Saving
-Write out by streaming pieces: original chunks pass through untouched, add-buffer
-pieces are interleaved. Use the File System Access API where available (write to a
-new file, never in place), with a download fallback.
+### Type table editing
+The table (`web/src/typetable.ts`) shows and navigates; editing values in place is
+next, reusing the inspector's encode lenses per type.
 
 ### Later
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.
