@@ -226,6 +226,19 @@ the core. Written to a new file via `showSaveFilePicker` where available, otherw
 download. Note: a bit-level insert or delete shifts everything after it, so the rest
 of the file is rewritten on save. That is inherent; the UI should show progress.
 
+### Opening a file
+Dropping a file anywhere on the page opens it, and an overlay says so while the
+drag is over the window: `Drop to open`, and what letting go costs, which is
+that the open file closes. Not "replaces", which during a drag reads as
+overwriting that file on disk, and nothing here ever writes to the original.
+The overlay appears only when the drag carries files, so dragging text across
+the page is left alone, and it counts dragenter against dragleave, since
+crossing into a child element counts as leaving its parent.
+
+Edits live only in the tab: `Save as` writes a copy, so nothing on disk holds
+them. Opening a second file therefore asks before discarding them, whether it
+arrives by drop or by the Open button.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
