@@ -17,18 +17,22 @@ let current: Doc | null = null;
 let say: (text: string, warn?: boolean) => void = () => {};
 
 const DROP_TITLE = "Drop to open";
-const DROP_SUB = "The file stays on your device";
 const DROP_HINT = "or drop a file anywhere on this page";
-const FOLDER_MSG = "Folders can't be opened.";
-const manyFilesMsg = (name: string): string => `Opened ${name}. One file at a time.`;
-const discardMsg = (name: string): string => `Discard unsaved edits and open ${name}?`;
+const FOLDER_MSG = "Can't open folders. Drop a single file.";
+const manyFilesMsg = (name: string, ignored: number): string =>
+  `Opened ${name}. Ignored ${ignored} other ${ignored === 1 ? "file" : "files"}.`;
+const discardMsg = (open: string, next: string): string =>
+  `Discard unsaved edits to ${open} and open ${next}?`;
+/** Says what letting go costs: the open file closes. Not "replaces", which
+ *  during a drag reads as overwriting that file on disk, which never happens. */
+const closesMsg = (doc: Doc): string => `Closes ${doc.name}${doc.modified ? " (unsaved edits)" : ""}`;
 
 /**
  * Open a file, in place of the one already open. Unsaved edits live only in
  * this tab, so replacing a file that has them asks first.
  */
 function openFile(f: File, note?: string): void {
-  if (current?.modified === true && !confirm(discardMsg(f.name))) return;
+  if (current?.modified === true && !confirm(discardMsg(current.name, f.name))) return;
   void Doc.open(f).then((doc) => {
     mount(doc);
     if (note !== undefined) say(note);
@@ -326,15 +330,11 @@ window.addEventListener("resize", () => document.querySelector(".hexview")?.disp
 // ----- dropping a file on the page -----
 
 /** Shown over the whole window while a file is being dragged onto it. */
+const dropSub = el("span", { className: "hint" });
 const dropzone = el(
   "div",
   { className: "dropzone" },
-  el(
-    "div",
-    { className: "dropzone-card" },
-    el("strong", { textContent: DROP_TITLE }),
-    el("span", { className: "hint", textContent: DROP_SUB }),
-  ),
+  el("div", { className: "dropzone-card" }, el("strong", { textContent: DROP_TITLE }), dropSub),
 );
 dropzone.setAttribute("aria-hidden", "true");
 document.body.append(dropzone);
@@ -357,6 +357,9 @@ function showDropzone(on: boolean): void {
 document.addEventListener("dragenter", (e) => {
   if (!draggingFile(e)) return;
   dragDepth += 1;
+  // On the start screen there is nothing to close, so the card says only what
+  // the drop does.
+  dropSub.textContent = current === null ? "" : closesMsg(current);
   dropzone.classList.add("is-over");
 });
 document.addEventListener("dragleave", (e) => {
@@ -384,7 +387,7 @@ document.addEventListener("drop", (e) => {
   const files = e.dataTransfer?.files;
   const f = files?.[0];
   if (files === undefined || f === undefined) return;
-  openFile(f, files.length > 1 ? manyFilesMsg(f.name) : undefined);
+  openFile(f, files.length > 1 ? manyFilesMsg(f.name, files.length - 1) : undefined);
 });
 // A drag that ends outside the window, or one the browser abandons, still has
 // to clear the overlay.
