@@ -396,6 +396,32 @@ mod tests {
     }
 
     #[test]
+    fn an_interior_page_reads_its_child_pages() {
+        let mut b = header(PAGE);
+        b.extend_from_slice(&leaf_page(&[], PAGE - 100, 100));
+        // A table interior page: a rightmost child, then one cell holding the
+        // child page to its left and the last row id in it.
+        let mut p = vec![5u8];
+        p.extend_from_slice(&0u16.to_be_bytes()); // first freeblock
+        p.extend_from_slice(&1u16.to_be_bytes()); // one cell
+        p.extend_from_slice(&(PAGE as u16 - 5).to_be_bytes()); // cell content start
+        p.push(0); // fragmented free bytes
+        p.extend_from_slice(&9u32.to_be_bytes()); // rightmost child page
+        p.extend_from_slice(&(PAGE as u16 - 5).to_be_bytes()); // the one cell pointer
+        p.resize(PAGE - 5, 0);
+        p.extend_from_slice(&4u32.to_be_bytes()); // left child page
+        p.push(30); // last row id on it
+        b.extend_from_slice(&p);
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(sqlite());
+        let kind = ev.node(&d, &[PAGES, 0, 0]).unwrap();
+        assert_eq!(kind.value, Value::Enum { raw: 5, name: Some("table interior".into()), hex: false });
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, 4]).unwrap().value, Value::UInt(9)); // rightmost
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, 6, 0, 0]).unwrap().value, Value::UInt(4)); // left child
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, 6, 0, 1]).unwrap().value, Value::Int(30)); // row id
+    }
+
+    #[test]
     fn a_page_that_is_not_a_btree_reads_as_bytes() {
         let mut b = db();
         b[PAGE] = 0; // a freelist trunk page: the type byte means nothing here
