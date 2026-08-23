@@ -129,6 +129,20 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Group a count for reading: 8487 -> "8,487". Sizes in messages are read by
+/// people, not parsed.
+pub(crate) fn commas(n: u64) -> String {
+    let d = n.to_string();
+    let mut out = String::with_capacity(d.len() + d.len() / 3);
+    for (i, c) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn whole_number_msg(signed: bool) -> String {
     if signed {
         "Whole numbers only: -12, 0x1f, 0b1010.".into()
@@ -421,6 +435,14 @@ mod tests {
         assert_eq!(encode(&Ty::Bytes(Expr::lit(2)), "de ad", 16).unwrap(), vec![0xde, 0xad]);
         assert!(encode(&Ty::Bytes(Expr::lit(2)), "dead be", 16).is_err());
         assert!(encode(&Ty::Magic(vec![1]), "01", 8).is_err());
+    }
+
+    #[test]
+    fn counts_are_grouped_for_reading() {
+        assert_eq!(commas(0), "0");
+        assert_eq!(commas(999), "999");
+        assert_eq!(commas(4096), "4,096");
+        assert_eq!(commas(1234567), "1,234,567");
     }
 
     #[test]

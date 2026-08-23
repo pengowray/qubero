@@ -115,6 +115,14 @@ rows show what an unaligned read would give. Its first mode ("Field") shows what
 the template says is there instead: the trail of enclosing structures, the value
 (editable, sub-byte fields included), and the type, offset and size.
 
+The panel reads a long value from the document rather than from the node, whose
+`Value::Bytes` carries only a 16-byte preview. That is why the core's text and
+byte edit limit is 4 KiB (`encode::EDIT_LIMIT_BYTES`) while the type table keeps
+its own 16-byte one: the table's Value column shows a preview, and writing back
+a preview would replace the part it elided. A text field is decoded strictly, so
+invalid bytes are shown as hex and not editable there; a lossy decode would let
+one replacement character be written back over three valid-length bad bytes.
+
 `locate` walks a repeat to find an element, so on a large templated file it costs
 what displaying it costs. The memo makes the next call cheap until the next edit,
 which is the same coarse-invalidation limit described above.
@@ -164,9 +172,9 @@ than lengths) needs a "scan until these bytes" primitive that does not exist.
 
 Save shows no progress while rewriting bit-shifted stretches. The type table has no
 keyboard navigation between rows, so a value cell is reached by clicking or tabbing.
-Text fields are displayed through `from_utf8_lossy`, so invalid bytes show as U+FFFD;
-committing that back would write the replacement character, and only the exact-length
-check stands in the way.
+Text fields in the type table are displayed through `from_utf8_lossy`, so invalid
+bytes show as U+FFFD there; the field panel decodes strictly instead and refuses
+to edit what it cannot decode.
 
 ### Later
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.

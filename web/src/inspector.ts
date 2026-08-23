@@ -466,7 +466,7 @@ export class Inspector {
       if (decoded === null) {
         text = hexText(bytes);
         editable = false;
-        note = "Not valid UTF-8, so it is shown as bytes. Edit it in the hex view.";
+        note = "Not valid UTF-8, so it's shown as bytes. Edit it in the hex view.";
       } else {
         text = decoded;
       }
@@ -476,10 +476,13 @@ export class Inspector {
     const total = n.size_bits / 8;
     if (total > shownBytes) {
       // Past the limit the panel neither shows nor edits the whole field.
-      note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${total.toLocaleString()}. Too long to edit here.`;
+      note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${total.toLocaleString()}. Too long to edit here; use the hex view.`;
     }
     this.area.value = text;
     this.area.disabled = !editable;
+    // Enter puts a newline into the value, so the way to apply has to be said.
+    // The notes above only appear when editing is off, so they never collide.
+    if (editable && note === "") note = "Ctrl+Enter to apply";
     this.area.rows = Math.max(2, Math.min(12, Math.ceil(text.length / 30)));
     this.note.textContent = note;
     this.note.hidden = note === "";

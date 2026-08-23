@@ -216,9 +216,9 @@ impl Evaluator {
             return fail(match &r.ty {
                 Ty::Magic(_) => "Magic bytes are fixed by the format.".to_string(),
                 Ty::Bytes(_) | Ty::Utf8(_) => format!(
-                    "Too long to edit here: {} bytes, and the limit is {}. Use the hex view.",
-                    size / 8,
-                    encode::EDIT_LIMIT_BYTES
+                    "Too long to edit: {} bytes; the limit is {}. Use the hex view.",
+                    encode::commas(size / 8),
+                    encode::commas(encode::EDIT_LIMIT_BYTES)
                 ),
                 _ => "This field can't be edited here. Use the hex view.".to_string(),
             });
