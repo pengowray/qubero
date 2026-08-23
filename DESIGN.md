@@ -285,12 +285,14 @@ Edits live only in the tab: `Save as` writes a copy, so nothing on disk holds
 them. Opening a second file therefore asks before discarding them, whether it
 arrives by drop or by the Open button.
 
-### Files with no template
-A file none of the built-in templates match is identified instead, using the
-rule database of the `file` command through the `pure-magic` crate. That gives
-the format's name and its media type. It does not give fields: nothing in the
-rule language describes a layout the type table could show, so the hex view
-stays plain and the template select still says `No template`.
+### Naming a file
+Every file is identified using the rule database of the `file` command, through
+the `pure-magic` crate, and the rule's own sentence goes in the toolbar beside
+the file's name. A format with a template gets one too: `PNG image data, 8 x 4,
+8-bit/color RGBA, non-interlaced` says things the template does not. Only a file
+without a template is kept waiting for it, so a templated file says nothing
+until it knows rather than flashing a progress message over a file it can
+already lay out.
 
 The rules and the engine that runs them come to 1.7 MB of wasm, more than five
 times the editor itself, so they are their own module (`crates/magic`, built to
