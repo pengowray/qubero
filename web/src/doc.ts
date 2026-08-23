@@ -24,7 +24,12 @@ export type TemplateNode = {
   readonly ok: boolean;
   readonly child_count: number;
   readonly composite: boolean;
+  /** True when `writeNode` accepts typed text for this field. */
+  readonly editable: boolean;
 };
+
+/** The bit range a successful `writeNode` replaced. */
+export type WrittenRange = { readonly offset_bits: number; readonly size_bits: number };
 
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
@@ -166,6 +171,18 @@ export class Doc {
 
   templateChildren(path: readonly number[], from: number, to: number): TemplateReply<TemplateNode[]> {
     return this.handleReply(this.editor.template_children(Uint32Array.from(path), from, to));
+  }
+
+  /**
+   * Write `text` into the field at `path`, encoded as that field's type. The
+   * core writes exactly the field's own bits, so nothing after it shifts.
+   * A "pending" reply means the field's position could not be worked out yet;
+   * the chunks are on their way and the caller should ask again.
+   */
+  writeNode(path: readonly number[], text: string): TemplateReply<WrittenRange> {
+    const r = this.handleReply<WrittenRange>(this.editor.write_node(Uint32Array.from(path), text));
+    if (r.status === "ok") this.notify();
+    return r;
   }
 
   /** Synchronous read. Missing chunks are zero and fetched in the background. */

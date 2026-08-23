@@ -27,6 +27,15 @@ struct NodeDto {
     ok: bool,
     child_count: f64,
     composite: bool,
+    /// True when `write_node` accepts text for this field.
+    editable: bool,
+}
+
+/// The range a successful `write_node` touched.
+#[derive(Serialize)]
+struct WriteDto {
+    offset_bits: f64,
+    size_bits: f64,
 }
 
 #[derive(Serialize)]
@@ -68,6 +77,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         ok,
         child_count: n.child_count as f64,
         composite: n.composite,
+        editable: n.editable,
     }
 }
 
@@ -137,6 +147,24 @@ impl Editor {
         match &mut self.eval {
             None => reply::<Vec<NodeDto>>(Err(EvalError::Failed("no template".into()))),
             Some(e) => reply(e.children(&self.doc, &p, from as u64, to as u64).map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>())),
+        }
+    }
+
+    /// Write `text` into the field at `path`, encoded as that field's type.
+    /// Same envelope as `template_node`; on success `node` is the bit range written.
+    pub fn write_node(&mut self, path: &[u32], text: &str) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        let prepared = match &mut self.eval {
+            None => return reply::<WriteDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => e.prepare_write(&self.doc, &p, text),
+        };
+        match prepared {
+            Ok(w) => {
+                self.doc.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
+                self.changed();
+                reply(Ok(WriteDto { offset_bits: w.offset_bits as f64, size_bits: w.n_bits as f64 }))
+            }
+            Err(e) => reply::<WriteDto>(Err(e)),
         }
     }
 

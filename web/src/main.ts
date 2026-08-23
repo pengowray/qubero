@@ -30,6 +30,7 @@ function mount(doc: Doc): void {
     view.setHighlight({ start: startByte, end: endByte });
     view.setCursor(startByte, { pane: "hex" });
   };
+  view.onHighlightClear = () => table.clearSelection();
 
   const tmpl = el("select", { className: "tb-tmpl" });
   tmpl.setAttribute("aria-label", "Template");

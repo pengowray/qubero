@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::bits::bytes_for;
 use crate::document::Document;
+use crate::encode;
 use crate::source::{Missing, Source};
 use crate::template::{Endian, Expr, Template, Ty, Until};
 
@@ -61,6 +62,17 @@ pub struct NodeInfo {
     pub child_count: u64,
     /// True for structs, arrays and repeats.
     pub composite: bool,
+    /// True when `write` accepts text for this field.
+    pub editable: bool,
+}
+
+/// Bits to write, and where. Produced by `Evaluator::prepare_write`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Write {
+    pub offset_bits: u64,
+    /// MSB-first packed, `n_bits` long.
+    pub data: Vec<u8>,
+    pub n_bits: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +128,7 @@ impl Evaluator {
         };
         Ok(NodeInfo {
             path: path.to_vec(),
+            editable: !composite && encode::editable(&r.ty, size),
             name: r.name,
             type_name: r.ty.display_name(),
             offset_bits: r.offset,
@@ -124,6 +137,29 @@ impl Evaluator {
             child_count,
             composite,
         })
+    }
+
+    /// Encode `text` for the field at `path`, ready to be written.
+    ///
+    /// Resolving a field can touch unloaded chunks, so this reports the same
+    /// tri-state as a read: the caller fetches the chunks and asks again.
+    /// Nothing is written here. The caller applies the result to the document
+    /// and then calls `invalidate`.
+    pub fn prepare_write<S: Source>(&mut self, doc: &Document<S>, path: &[usize], text: &str) -> R<Write> {
+        self.resolve(doc, path)?;
+        let size = self.size_of(doc, path)?;
+        let r = self.memo.get(path).expect("resolved").clone();
+        if !encode::editable(&r.ty, size) {
+            return fail(match &r.ty {
+                Ty::Magic(_) => "A magic field is fixed by the format and cannot be edited.".to_string(),
+                Ty::Bytes(_) | Ty::Utf8(_) => {
+                    format!("This field is {} bytes long. Editing here is limited to short fields; use the hex view.", size / 8)
+                }
+                _ => "This field cannot be edited directly.".to_string(),
+            });
+        }
+        let data = encode::encode(&r.ty, text, size).map_err(EvalError::Failed)?;
+        Ok(Write { offset_bits: r.offset, data, n_bits: size })
     }
 
     /// Children `from..to` of the node at `path` (clamped to the child count).
@@ -519,7 +555,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
 /// Interpret `bits` bits (MSB-first packed in `buf`) as an unsigned integer.
 /// Little-endian applies byte order for whole-byte widths; narrower fields read
 /// as packed big-endian bit strings.
-fn read_uint(buf: &[u8], bits: u32, endian: Endian) -> u128 {
+pub(crate) fn read_uint(buf: &[u8], bits: u32, endian: Endian) -> u128 {
     let nbytes = bytes_for(bits as u64);
     let mut v: u128 = 0;
     if endian == Endian::Little && bits % 8 == 0 {
@@ -536,7 +572,7 @@ fn read_uint(buf: &[u8], bits: u32, endian: Endian) -> u128 {
     v
 }
 
-fn f16_to_f64(h: u16) -> f64 {
+pub(crate) fn f16_to_f64(h: u16) -> f64 {
     let s = if h >> 15 == 1 { -1.0 } else { 1.0 };
     let e = ((h >> 10) & 0x1f) as i32;
     let f = (h & 0x3ff) as f64;
@@ -681,5 +717,44 @@ mod tests {
         assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0b101));
         assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(0b01100));
         assert_eq!(ev.node(&d, &[1]).unwrap().offset_bits, 3);
+    }
+
+    #[test]
+    fn writing_a_field_hits_only_its_own_bits() {
+        let t = Template {
+            name: "t".into(),
+            root: T::structure(
+                "B",
+                vec![
+                    ("a", T::UInt { bits: 3, endian: Big }),
+                    ("b", T::UInt { bits: 5, endian: Big }),
+                    ("n", T::u16(Little)),
+                    ("tag", T::utf8(E::lit(4))),
+                ],
+            ),
+        };
+        let mut d = doc(&[0b101_01100, 0x34, 0x12, b'I', b'H', b'D', b'R']);
+        let mut ev = Evaluator::new(t);
+        assert!(ev.node(&d, &[0]).unwrap().editable);
+        assert!(!ev.node(&d, &[]).unwrap().editable);
+
+        for (path, text) in [(vec![1], "31"), (vec![2], "0xbeef"), (vec![3], "iend")] {
+            let w = ev.prepare_write(&d, &path, text).unwrap();
+            d.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
+            ev.invalidate();
+        }
+        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0b101));
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(31));
+        assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::UInt(0xbeef));
+        assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Str("iend".into()));
+
+        let mut out = [0u8; 7];
+        d.read_bytes(0, &mut out);
+        assert_eq!(out, [0b101_11111, 0xef, 0xbe, b'i', b'e', b'n', b'd']);
+
+        // Rejections carry a reason and leave the document alone.
+        assert!(matches!(ev.prepare_write(&d, &[1], "32"), Err(EvalError::Failed(_))));
+        assert!(matches!(ev.prepare_write(&d, &[3], "toolong"), Err(EvalError::Failed(_))));
+        assert!(matches!(ev.prepare_write(&d, &[], "1"), Err(EvalError::Failed(_))));
     }
 }

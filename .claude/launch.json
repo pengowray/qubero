@@ -1,6 +1,16 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "web", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "cwd": "web", "port": 5173 }
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "cwd": "web",
+      "port": 5173,
+      "autoPort": true
+    }
   ]
 }

@@ -136,6 +136,9 @@ export class HexView {
     this.onCursorChange(this.cursorState);
   }
 
+  /** Called when the user dismisses the field highlight with Escape. */
+  onHighlightClear: () => void = () => {};
+
   setHighlight(range: { start: number; end: number } | null): void {
     this.highlight = range;
     this.render();
@@ -263,6 +266,10 @@ export class HexView {
         }
         return;
       case "Escape":
+        if (this.highlight !== null) {
+          this.setHighlight(null);
+          this.onHighlightClear();
+        }
         return this.setCursor(this.cursor, { nibble: 0 });
     }
 

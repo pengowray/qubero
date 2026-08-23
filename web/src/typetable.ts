@@ -1,15 +1,31 @@
 // Tree table of the template's fields with live values. Only expanded nodes are
 // evaluated; long arrays are paged so a 100k-element array costs nothing until
-// the user opens it.
+// the user opens it. Editable leaf values are typed in place: the core encodes
+// the text as that field's type and writes only that field's bits.
 
 import type { Doc, TemplateNode } from "./doc.js";
 
 const PAGE = 200;
+/** Give up after this many chunk-loading retries on one commit. */
+const WRITE_RETRIES = 8;
 
 export type FieldPick = { readonly startByte: number; readonly endByte: number };
 
+type Editing = {
+  readonly key: string;
+  readonly path: readonly number[];
+  text: string;
+  caret: readonly [number, number] | null;
+  waiting: boolean;
+  tries: number;
+};
+
 function key(path: readonly number[]): string {
   return path.join("/");
+}
+
+function pathOf(k: string): number[] {
+  return k === "" ? [] : k.split("/").map(Number);
 }
 
 function hexOffset(bits: number): string {
@@ -34,9 +50,15 @@ export class TypeTable {
   readonly el: HTMLElement;
   private readonly body: HTMLElement;
   private readonly empty: HTMLElement;
+  private readonly status: HTMLElement;
   private readonly expanded = new Set<string>();
   private readonly shown = new Map<string, number>();
   private selected: string | null = null;
+  private editing: Editing | null = null;
+  /** Cell to focus once the table has been rebuilt. */
+  private focusKey: string | null = null;
+  /** True while render() is replacing the rows, so blur is not a cancel. */
+  private rebuilding = false;
 
   onPick: (pick: FieldPick) => void = () => {};
 
@@ -52,15 +74,31 @@ export class TypeTable {
     table.append(head, this.body);
     this.empty = document.createElement("p");
     this.empty.className = "tt-empty";
-    this.el.append(this.empty, table);
+    this.status = document.createElement("p");
+    this.status.className = "tt-status";
+    this.status.setAttribute("role", "status");
+    this.el.append(this.empty, table, this.status);
     this.expanded.add("");
     this.body.addEventListener("click", (e) => this.onClick(e));
-    doc.onChange(() => this.render());
+    this.body.addEventListener("keydown", (e) => this.onKey(e));
+    doc.onChange(() => {
+      if (this.editing?.waiting) this.commit();
+      else this.render();
+    });
+  }
+
+  /** Drop the selection and any half-typed value. */
+  clearSelection(): void {
+    this.selected = null;
+    this.editing = null;
+    this.status.textContent = "";
+    this.render();
   }
 
   private onClick(e: MouseEvent): void {
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
+    if (t.closest(".tt-input")) return;
     const more = t.closest<HTMLElement>("[data-more]");
     if (more) {
       const k = more.dataset["more"] ?? "";
@@ -80,8 +118,60 @@ export class TypeTable {
     const start = Number(row.dataset["start"]);
     const end = Number(row.dataset["end"]);
     this.selected = k;
+    if (t.closest("[data-edit]")) this.beginEdit(k, row.dataset["value"] ?? "");
+    else this.editing = null;
     this.render();
     this.onPick({ startByte: start, endByte: end });
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    const t = e.target;
+    if (!(t instanceof HTMLElement)) return;
+    const cell = t.closest<HTMLElement>("[data-edit]");
+    if (!cell || this.editing) return;
+    if (e.key === "Enter" || e.key === "F2") {
+      e.preventDefault();
+      const k = cell.dataset["edit"] ?? "";
+      this.selected = k;
+      this.beginEdit(k, cell.closest("tr")?.dataset["value"] ?? "");
+      this.render();
+    }
+  }
+
+  private beginEdit(k: string, current: string): void {
+    this.status.textContent = "";
+    this.editing = { key: k, path: pathOf(k), text: current, caret: null, waiting: false, tries: 0 };
+  }
+
+  private cancelEdit(refocus: boolean): void {
+    this.editing = null;
+    this.status.textContent = "";
+    this.status.classList.remove("warn");
+    if (refocus) this.focusKey = this.selected;
+    this.render();
+  }
+
+  private commit(): void {
+    const e = this.editing;
+    if (e === null) return;
+    const r = this.doc.writeNode(e.path, e.text);
+    if (r.status === "ok") {
+      this.editing = null;
+      this.focusKey = e.key;
+      this.status.textContent = "";
+    } else if (r.status === "pending") {
+      // The field's offset depends on bytes that are not loaded yet. Doc has
+      // asked for them; this runs again when they land.
+      e.waiting = e.tries < WRITE_RETRIES;
+      e.tries += 1;
+      this.status.textContent = e.waiting ? "Reading the file around this field" : "Could not read this part of the file.";
+      this.status.classList.toggle("warn", !e.waiting);
+    } else {
+      e.waiting = false;
+      this.status.textContent = r.message;
+      this.status.classList.add("warn");
+    }
+    this.render();
   }
 
   render(): void {
@@ -96,7 +186,32 @@ export class TypeTable {
     const root = this.doc.templateNode([]);
     if (root.status === "ok") this.addRows(frag, root.node, 0);
     else this.addStatusRow(frag, root, 0, "file");
+    this.rebuilding = true;
     this.body.replaceChildren(frag);
+    this.rebuilding = false;
+    this.restoreFocus();
+  }
+
+  /** Put the caret back where it was: an edit in progress, or the cell just left. */
+  private restoreFocus(): void {
+    const e = this.editing;
+    if (e !== null) {
+      const input = this.body.querySelector<HTMLInputElement>(".tt-input");
+      if (input === null) {
+        // The row is gone (an edit changed the structure around it).
+        this.editing = null;
+        return;
+      }
+      input.focus();
+      if (e.caret) input.setSelectionRange(e.caret[0], e.caret[1]);
+      else input.select();
+      return;
+    }
+    if (this.focusKey !== null) {
+      const cell = this.body.querySelector<HTMLElement>(`[data-edit="${CSS.escape(this.focusKey)}"]`);
+      this.focusKey = null;
+      cell?.focus();
+    }
   }
 
   private addStatusRow(frag: DocumentFragment, r: { status: "pending" } | { status: "error"; message: string }, depth: number, what: string): void {
@@ -116,6 +231,7 @@ export class TypeTable {
     tr.dataset["path"] = k;
     tr.dataset["start"] = String(Math.floor(n.offset_bits / 8));
     tr.dataset["end"] = String(Math.ceil((n.offset_bits + n.size_bits) / 8));
+    tr.dataset["value"] = n.value;
     if (k === this.selected) tr.classList.add("tt-selected");
     if (!n.ok) tr.classList.add("tt-bad");
 
@@ -139,7 +255,17 @@ export class TypeTable {
 
     const value = document.createElement("td");
     value.className = `tt-val tt-${n.kind}`;
-    value.textContent = n.composite ? countText(n.child_count, n.type.endsWith("[]") ? "item" : "field") : n.value;
+    if (this.editing?.key === k) {
+      value.append(this.editor(n));
+    } else if (n.editable) {
+      value.classList.add("tt-editable");
+      value.dataset["edit"] = k;
+      value.tabIndex = 0;
+      value.title = `Edit this ${n.type} value`;
+      value.textContent = n.value;
+    } else {
+      value.textContent = n.composite ? countText(n.child_count, n.type.endsWith("[]") ? "item" : "field") : n.value;
+    }
 
     const type = document.createElement("td");
     type.className = "tt-type";
@@ -176,5 +302,50 @@ export class TypeTable {
         frag.append(tr2);
       }
     }
+  }
+
+  private editor(n: TemplateNode): HTMLInputElement {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "tt-input";
+    input.spellcheck = false;
+    input.autocomplete = "off";
+    input.value = this.editing?.text ?? n.value;
+    input.setAttribute("aria-label", `${n.name}, ${n.type}`);
+    if (this.status.classList.contains("warn")) input.classList.add("invalid");
+    input.addEventListener("input", () => {
+      if (this.editing === null) return;
+      this.editing.text = input.value;
+      this.editing.caret = [input.selectionStart ?? 0, input.selectionEnd ?? 0];
+      input.classList.remove("invalid");
+      this.status.textContent = "";
+      this.status.classList.remove("warn");
+    });
+    const track = (): void => {
+      if (this.editing) this.editing.caret = [input.selectionStart ?? 0, input.selectionEnd ?? 0];
+    };
+    input.addEventListener("keyup", track);
+    input.addEventListener("click", track);
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.commit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.cancelEdit(true);
+      }
+    });
+    input.addEventListener("blur", () => {
+      if (this.rebuilding) return;
+      // Let the click that moved focus land first: rebuilding the table here
+      // would delete the row it is headed for. If that click opened another
+      // editor, `editing` is a different object and this cancel is stale.
+      const mine = this.editing;
+      setTimeout(() => {
+        if (this.editing === mine) this.cancelEdit(false);
+      }, 0);
+    });
+    return input;
   }
 }
