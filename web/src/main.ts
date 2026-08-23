@@ -31,19 +31,21 @@ const IDENTIFYING_MSG = "Identifying file type...";
 const IDENTIFY_FAILED_MSG = "Couldn't check the file type";
 const IDENTIFY_FAILED_TITLE = "The identification rules failed to download.";
 const UNKNOWN_TYPE_MSG = "Unknown file type";
-/** The whole sentence, where it came from, and what it does not come with.
- *  The last line is there because "No template" sits in the same toolbar, and
- *  without it, knowing the format but offering no template reads as a fault. */
-const identifyTitle = (id: Identification): string => {
-  const lines = [
-    id.message,
-    `Identified from the file's first bytes, using the rule database of the Unix "file" command.`,
-  ];
-  if (id.mime !== "") lines.push(`Media type: ${id.mime}`);
-  if (id.ext.length > 0) lines.push(`Extensions: ${id.ext.join(", ")}`);
-  lines.push("Qubero has no field template for this format.");
-  return lines.join("\n");
-};
+const INFO_LABEL = "File type details";
+const DIALOG_TITLE = "File type";
+const DIALOG_CLOSE = "Close";
+const IDENTIFIED_FROM = `Identified from the file's first bytes, using the rule database of the Unix "file" command.`;
+const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
+const NO_TEMPLATE_LINE = "Qubero has no field template for this format.";
+const SIGNATURE_LINE =
+  "The Fields table shows only the format's signature, generated from this rule. Qubero has no full template for this format.";
+const SIGNATURE_NOTE =
+  "Signature only. Generated from the identification rule; Qubero has no full template for this format.";
+/** The select value that stands for the generated template. Not a built-in
+ *  name, so it can never collide with one. */
+const SIGNATURE_VALUE = "generated-signature";
+const signatureOption = (name: string): string =>
+  name === "" ? "Template: signature only" : `Template: ${name} (signature only)`;
 
 /**
  * Open a file, in place of the one already open. Unsaved edits live only in
@@ -157,7 +159,17 @@ function mount(doc: Doc): void {
   tmpl.setAttribute("aria-label", "Template");
   tmpl.append(el("option", { value: "", textContent: "No template" }));
   for (const n of doc.templateNames) tmpl.append(el("option", { value: n, textContent: `Template: ${n}` }));
-  tmpl.addEventListener("change", () => doc.setTemplate(tmpl.value === "" ? null : tmpl.value));
+  // The generated template is not one of the built-ins, so switching back to it
+  // rebuilds it rather than looking it up by name.
+  let reapplySignature: (() => Promise<void>) | null = null;
+  tmpl.addEventListener("change", () => {
+    table.setNote("");
+    if (tmpl.value === SIGNATURE_VALUE) {
+      void reapplySignature?.();
+      return;
+    }
+    doc.setTemplate(tmpl.value === "" ? null : tmpl.value);
+  });
   void doc.sniffTemplate().then(async (name) => {
     if (name !== null) {
       tmpl.value = name;
@@ -173,12 +185,35 @@ function mount(doc: Doc): void {
     }, 300);
     try {
       const id = await doc.identify();
+      // Stop the timer the moment there is an answer, and before the rule file
+      // is fetched for the template: that second wait must not be able to
+      // write "identifying" over a name already on screen.
+      clearTimeout(waiting);
       if (id === null) {
         kindLabel.textContent = UNKNOWN_TYPE_MSG;
-      } else {
-        kindLabel.textContent = id.message;
-        kindLabel.title = identifyTitle(id);
+        showDetails(null, NO_TEMPLATE_LINE);
+        return;
       }
+      kindLabel.textContent = id.message;
+      // The toolbar copy is cut short, so the whole sentence stays reachable
+      // on hover as well as in the dialog.
+      kindLabel.title = id.message;
+      // The rule that named the format also says where its signature is. That
+      // is one field, but it is a field: clickable, highlighted, and true.
+      const signature = await doc.signatureTemplate(id);
+      if (signature === null) {
+        showDetails(id, NO_TEMPLATE_LINE);
+        return;
+      }
+      const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
+      tmpl.append(option);
+      tmpl.value = SIGNATURE_VALUE;
+      table.setNote(SIGNATURE_NOTE);
+      showDetails(id, SIGNATURE_LINE);
+      reapplySignature = async (): Promise<void> => {
+        await doc.signatureTemplate(id);
+        table.setNote(SIGNATURE_NOTE);
+      };
     } catch (e) {
       console.error("identify", e);
       kindLabel.textContent = IDENTIFY_FAILED_MSG;
@@ -193,6 +228,46 @@ function mount(doc: Doc): void {
   // than the message slot: a save message is an event and passes, this is a
   // fact about the file and stays.
   const kindLabel = el("span", { className: "tb-kind" });
+  // The details behind the readout. A button and a dialog rather than a
+  // tooltip: the rule's sentence is long, worth copying, and worth reading at
+  // leisure, none of which a title attribute allows.
+  const kindInfo = el("button", { type: "button", className: "tb-info", textContent: "i" });
+  kindInfo.setAttribute("aria-label", INFO_LABEL);
+  kindInfo.hidden = true;
+  const dlgBody = el("div", { className: "dlg-body" });
+  const dialog = el(
+    "dialog",
+    { className: "dlg" },
+    el("h2", { textContent: DIALOG_TITLE }),
+    dlgBody,
+    el("form", { method: "dialog", className: "dlg-close" }, el("button", { type: "submit", textContent: DIALOG_CLOSE })),
+  );
+  kindInfo.addEventListener("click", () => dialog.showModal());
+  // The dialog element covers only the middle of the screen, so a click that
+  // lands on it rather than on its contents is a click on the backdrop.
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+
+  /** Fill the dialog for one outcome, and show the button that opens it. */
+  const showDetails = (id: Identification | null, templateLine: string): void => {
+    const rows: HTMLElement[] = [];
+    const row = (label: string, value: string): void => {
+      rows.push(el("div", { className: "dlg-row" }, el("span", { className: "dlg-key", textContent: label }), value));
+    };
+    if (id === null) {
+      rows.push(el("p", { textContent: NO_MATCH_BODY }));
+    } else {
+      rows.push(el("p", { className: "dlg-sentence", textContent: id.message }));
+      if (id.mime !== "") row("Media type", id.mime);
+      if (id.ext.length > 0) row("Extensions", id.ext.join(", "));
+      if (id.source !== "") row("Rule file", id.source);
+      rows.push(el("p", { className: "dlg-muted", textContent: IDENTIFIED_FROM }));
+    }
+    rows.push(el("p", { className: "dlg-muted", textContent: templateLine }));
+    dlgBody.replaceChildren(...rows);
+    kindInfo.hidden = false;
+  };
   const posLabel = el("span", { className: "tb-pos" });
   const undoBtn = el("button", { type: "button", textContent: "Undo", title: "Undo (Ctrl+Z)" });
   const redoBtn = el("button", { type: "button", textContent: "Redo", title: "Redo (Ctrl+Y)" });
@@ -289,6 +364,7 @@ function mount(doc: Doc): void {
     saveBtn,
     fileLabel,
     kindLabel,
+    kindInfo,
     saveMsg,
     el("span", { className: "tb-spacer" }),
     goto,
@@ -337,6 +413,7 @@ function mount(doc: Doc): void {
     toolbar,
     el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, bottom), right),
     statusbar,
+    dialog,
   );
   view.relayout();
   refresh();

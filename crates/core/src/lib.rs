@@ -13,6 +13,7 @@ pub mod document;
 pub mod encode;
 pub mod eval;
 pub mod formats;
+pub mod magicrule;
 pub mod piece;
 pub mod save;
 pub mod source;

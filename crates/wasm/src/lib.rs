@@ -3,7 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::{formats, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
+use qubero_core::{formats, magicrule, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -198,6 +198,24 @@ impl Editor {
         match formats::builtin(name) {
             Some(t) => {
                 self.eval = Some(Evaluator::new(t));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Build a template from a `file(1)` rule file and select it, for a format
+    /// with no built-in. `rules` is the text of the one rule file the
+    /// identification named, `head` the file's first bytes.
+    ///
+    /// What comes out covers the format's signature and nothing else, so most
+    /// of the file stays unannotated. Returns false when the rule pins no fixed
+    /// bytes to a fixed place, which is the honest answer for a format found by
+    /// searching rather than by looking.
+    pub fn set_magic_template(&mut self, name: &str, rules: &str, head: &[u8]) -> bool {
+        match magicrule::match_signature(rules, head) {
+            Some(sig) => {
+                self.eval = Some(Evaluator::new(magicrule::signature_template(name, &sig)));
                 true
             }
             None => false,

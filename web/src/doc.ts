@@ -127,6 +127,21 @@ export type Identification = {
   readonly source: string;
 };
 
+/**
+ * What to call a template built from a rule.
+ *
+ * One extension is the best name there is: `gif` says more than the `images`
+ * rule file it came from. Several are no use, because the rules hand them over
+ * as an unordered set, so "the first" is whichever way they fell: a Windows
+ * executable would be called `com` as readily as `exe`. In that case the rule
+ * file's own name is at least stable and is what the dialog says beside it.
+ */
+function signatureName(id: Identification): string {
+  if (id.ext.length === 1) return id.ext[0] ?? id.source;
+  if (id.source !== "") return id.source;
+  return (id.mime.split("/").pop() ?? "").replace(/^x-/, "");
+}
+
 
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
@@ -242,6 +257,38 @@ export class Doc {
 
   get templateNames(): string[] {
     return this.editor.template_names();
+  }
+
+  /**
+   * Install a template built from the rule that identified this file, for a
+   * format no built-in covers. It describes the format's signature and nothing
+   * else, so most of the file stays unannotated; that is the whole of what the
+   * rule proves.
+   *
+   * Returns the name to show for it, or null when the rule pins no fixed bytes
+   * to a fixed place, which is the case for a format found by searching.
+   */
+  async signatureTemplate(id: Identification): Promise<string | null> {
+    if (id.source === "") return null;
+    // The rule files are static assets, one per format family, a few KiB each.
+    // Only the one the identification named is fetched.
+    let rules: string;
+    try {
+      const res = await fetch(`magdir/${encodeURIComponent(id.source)}`);
+      if (!res.ok) return null;
+      rules = await res.text();
+    } catch {
+      return null;
+    }
+    const n = Math.min(IDENTIFY_WINDOW, this.lengthBytes);
+    await this.ensureRange(0, n);
+    const { bytes, complete } = this.read(0, n);
+    if (!complete) return null;
+    const name = signatureName(id);
+    if (!this.editor.set_magic_template(name, rules, bytes)) return null;
+    this.template = name;
+    this.notify();
+    return name;
   }
 
   /** Built-in template name matching the file's first bytes, or null. */

@@ -6,9 +6,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "wasm": "npm run wasm:core && npm run wasm:magic",
+    "wasm": "npm run wasm:core && npm run wasm:magic && npm run magdir",
     "wasm:core": "cd ../crates/wasm && wasm-pack build --target web --out-dir ../../web/src/pkg --release",
-    "wasm:magic": "cd ../crates/magic && wasm-pack build --target web --out-dir ../../web/src/pkg-magic --release"
+    "wasm:magic": "cd ../crates/magic && wasm-pack build --target web --out-dir ../../web/src/pkg-magic --release",
+    "magdir": "node ../tools/magdir.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9",

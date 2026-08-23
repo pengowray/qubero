@@ -786,3 +786,69 @@ input.invalid {
 .hv-chip-wide {
   max-width: none;
 }
+
+/* ---- file type details ---- */
+.tb-info {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1;
+  cursor: pointer;
+}
+.tb-info:hover,
+.tb-info:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dlg {
+  max-width: min(46em, calc(100vw - 32px));
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.dlg::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+.dlg h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.dlg p {
+  margin: 0 0 8px;
+}
+.dlg-sentence {
+  font-family: var(--mono);
+  /* Rule sentences are long and worth copying in one piece. */
+  overflow-wrap: anywhere;
+}
+.dlg-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.dlg-key {
+  min-width: 7em;
+  color: var(--muted);
+}
+.dlg-muted {
+  color: var(--muted);
+}
+.dlg-close {
+  margin-top: 12px;
+  text-align: right;
+}
+.tt-note {
+  margin: 6px 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+}

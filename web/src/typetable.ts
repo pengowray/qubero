@@ -66,6 +66,7 @@ export class TypeTable {
   private readonly body: HTMLElement;
   private readonly empty: HTMLElement;
   private readonly status: HTMLElement;
+  private readonly note: HTMLParagraphElement;
   private readonly expanded = new Set<string>();
   private readonly shown = new Map<string, number>();
   private selected: string | null = null;
@@ -92,7 +93,10 @@ export class TypeTable {
     this.status = document.createElement("p");
     this.status.className = "tt-status";
     this.status.setAttribute("role", "status");
-    this.el.append(this.empty, table, this.status);
+    this.note = document.createElement("p");
+    this.note.className = "tt-note";
+    this.note.hidden = true;
+    this.el.append(this.empty, table, this.note, this.status);
     this.expanded.add("");
     this.body.addEventListener("click", (e) => this.onClick(e));
     this.body.addEventListener("keydown", (e) => this.onKey(e));
@@ -100,6 +104,16 @@ export class TypeTable {
       if (this.editing?.waiting) this.commit();
       else this.render();
     });
+  }
+
+  /**
+   * A standing note under the rows, for a template that needs one. A generated
+   * signature template has a single row, which without a word of explanation
+   * reads as a format Qubero supports badly rather than one it only names.
+   */
+  setNote(text: string): void {
+    this.note.textContent = text;
+    this.note.hidden = text === "";
   }
 
   /** Open the path down to `path` and select it, scrolling it into view. */
