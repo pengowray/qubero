@@ -57,12 +57,16 @@ coarse (whole memo on any edit), so on a large templated file every keystroke
 re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker that
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
-Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4), one file
-per format plus `wasm_opcodes.rs` for the instruction table. A text format for templates,
+Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3), one
+file per format plus `wasm_opcodes.rs` for the instruction table. A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
 Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
-Text encodings still to add: CP437, JIS, UTF-16, Latin-1. Text is decoded as
-UTF-8 whatever the field says, so `StrLen` will grow an encoding beside it.
+Text encodings live in `text.rs`: UTF-8, ASCII, Latin-1, CP437, UTF-16 either
+way, plus two that the bytes settle. Hand-rolled rather than pulled in, against
+the usual preference for libraries: `encoding_rs` carries the whole WHATWG set
+into a wasm bundle and still lacks CP437, which DOS-era formats are full of.
+The CP437 table is generated from Python's codec rather than typed out. JIS is
+still to come.
 
 Later additions to the IR, each paying for itself in a format:
 * `Enum` names the values of an integer field without changing it, so a switch
@@ -79,6 +83,17 @@ Later additions to the IR, each paying for itself in a format:
   cannot change without shifting everything after it). A padded field whose tail
   is not all padding is not editable, since writing what is shown would drop what
   is not. MP4's `hdlr` name and `compressor_name`, PNG's `tEXt` keyword.
+* `Encoding` sits beside `StrLen` on a text field. Two of its cases are vague on
+  purpose: `Bom` lets a byte-order mark decide (and falls back when there is
+  none), `Unknown` reads as UTF-8 when the bytes are valid UTF-8 and Latin-1
+  otherwise. Either way the node says what it settled on, so a guess is never
+  passed off as fact. A format that names its own encoding in a byte, as ID3
+  does, needs nothing new: `Switch` picks the text type from that field.
+  Scanning, padding and terminators step in whole code units, so UTF-16 text
+  does not stop at the first zero byte of "H"; a mark belongs to the field but
+  not to the value, which is why `NodeInfo` carries where the value starts as
+  well as how long it is. Text is written back in the encoding it was read in,
+  mark included, and a character the encoding cannot hold is refused.
 * `Expr::SizeOf` measures an earlier field, which is how a field that runs to the
   end of its container knows where the variable-length one before it stopped.
 * `Named` looks a type up in `Template::types`, which is what lets an MP4 box
@@ -168,6 +183,9 @@ and the inspector rows have the same shape. Editing either side writes through i
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
 ### Known gaps
+ID3 frame sizes are read as plain 32-bit numbers, which is right for ID3v2.3;
+2.4 makes them synchsafe, and the size expression cannot say that yet.
+
 Bit order is MSB-first everywhere: bit 0 of a byte is its top bit, and a field
 narrower than a byte is packed big-endian, with `endian` on such a field silently
 ignored. Formats that pack the other way (DEFLATE, Zig packed structs) need an
