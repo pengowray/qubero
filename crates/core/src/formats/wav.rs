@@ -13,6 +13,11 @@
 //! `wamd` is Wildlife Acoustics' own metadata: a flat stream of 16-bit tag,
 //! 32-bit length, payload. Its tag numbers here were read out of files, not
 //! from a specification.
+//!
+//! The rest is what studio files carry: the extensible format header, the
+//! broadcast extension `bext` (EBU Tech 3285), `smpl` and `inst` for samplers,
+//! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
+//! read by the same template that reads one at the front of an MP3.
 
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
@@ -30,6 +35,25 @@ const FORMAT_TAG: &[(i128, &str)] = &[
     (0x5741, "w4v"),
     (0xfffe, "extensible"),
 ];
+
+/// Speaker layouts the extensible format's channel mask spells out. The mask is
+/// one bit per speaker; these are the combinations that have a name.
+const CHANNEL_MASK: &[(i128, &str)] = &[
+    (0x003, "stereo"),
+    (0x004, "mono"),
+    (0x033, "quad"),
+    (0x03f, "5.1"),
+    (0x60f, "5.1 side"),
+    (0x0ff, "7.1"),
+    (0x63f, "7.1 side"),
+];
+
+/// How a sampler plays a loop.
+const LOOP_TYPE: &[(i128, &str)] = &[(0, "forward"), (1, "alternating"), (2, "backward")];
+
+/// The frame rates `smpl` can give its offset in.
+const SMPTE_FORMAT: &[(i128, &str)] =
+    &[(0, "none"), (24, "24 fps"), (25, "25 fps"), (29, "30 fps drop"), (30, "30 fps")];
 
 /// `wamd` tag numbers, as seen in Song Meter files.
 const WAMD_TAG: &[(i128, &str)] = &[
@@ -91,6 +115,17 @@ pub(super) fn chunk_body(data: Option<T>) -> T {
             (cc("cue "), cue()),
             (cc("LIST"), list()),
             (cc("ds64"), ds64()),
+            (cc("bext"), bext()),
+            (cc("smpl"), smpl()),
+            (cc("inst"), inst()),
+            (cc("plst"), plst()),
+            // Whole documents kept inside a chunk: XML from recorders and
+            // editing suites, and an ID3 tag as it appears in an MP3.
+            (cc("iXML"), xml()),
+            (cc("_PMX"), xml()),
+            (cc("axml"), xml()),
+            (cc("id3 "), super::id3::tag()),
+            (cc("ID3 "), super::id3::tag()),
     ];
     if let Some(d) = data {
         cases.push((cc("data"), d));
@@ -108,8 +143,31 @@ fn fmt() -> T {
             ("byte_rate", T::u32(Little)),
             ("block_align", T::u16(Little)),
             ("bits_per_sample", T::u16(Little)),
-            // 16-byte fmt chunks stop here; longer ones carry an extension.
-            ("extra", T::bytes(E::Remaining)),
+            // 16-byte fmt chunks stop here. Longer ones carry an extension,
+            // which the extensible format fills in and others leave opaque.
+            ("extra", T::switch(E::field("format"), vec![(0xfffe, extensible())], T::bytes(E::Remaining))),
+        ],
+    )
+}
+
+/// What `WAVE_FORMAT_EXTENSIBLE` adds: how many of the bits per sample are
+/// real, which speaker each channel drives, and the format tag again, this
+/// time as the first two bytes of a GUID.
+fn extensible() -> T {
+    let sub_format = T::structure(
+        "SubFormat",
+        vec![
+            ("format", T::enumeration_hex("FormatTag", T::u16(Little), FORMAT_TAG)),
+            ("guid", T::bytes(E::lit(14))),
+        ],
+    );
+    T::structure(
+        "Extensible",
+        vec![
+            ("extension_size", T::u16(Little)),
+            ("valid_bits_per_sample", T::u16(Little)),
+            ("channel_mask", T::enumeration_hex("ChannelMask", T::u32(Little), CHANNEL_MASK)),
+            ("sub_format", sub_format),
         ],
     )
 }
@@ -188,6 +246,7 @@ fn list_item() -> T {
                         vec![
                             (cc("labl"), labelled()),
                             (cc("note"), labelled()),
+                            (cc("ltxt"), labelled_text()),
                         ],
                         // INFO items are NUL-terminated Latin-1 text.
                         T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Latin1),
@@ -207,6 +266,127 @@ fn labelled() -> T {
             ("text", T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Latin1)),
         ],
     )
+}
+
+/// `ltxt`: a label that covers a stretch of samples rather than a point.
+fn labelled_text() -> T {
+    T::structure(
+        "LabelledText",
+        vec![
+            ("cue_id", T::u32(Little)),
+            ("sample_length", T::u32(Little)),
+            ("purpose", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
+            ("country", T::u16(Little)),
+            ("language", T::u16(Little)),
+            ("dialect", T::u16(Little)),
+            ("code_page", T::u16(Little)),
+            ("text", T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Latin1)),
+        ],
+    )
+}
+
+/// The Broadcast Wave extension (EBU Tech 3285). All three versions are 602
+/// bytes before the coding history: version 1 took the UMID out of the reserved
+/// area, version 2 took the loudness values out of what was left. So the version
+/// says which of those two exist, and what is reserved is what they did not use.
+fn bext() -> T {
+    let ascii = |n: i128| T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii);
+    let i16le = || T::Int { bits: 16, endian: Little };
+    // Each of these is hundredths of a unit, so -2300 is -23.00 LUFS.
+    let loudness = T::structure(
+        "Loudness",
+        vec![
+            ("integrated", i16le()),
+            ("range", i16le()),
+            ("max_true_peak", i16le()),
+            ("max_momentary", i16le()),
+            ("max_short_term", i16le()),
+        ],
+    );
+    T::structure(
+        "Broadcast",
+        vec![
+            ("description", ascii(256)),
+            ("originator", ascii(32)),
+            ("originator_reference", ascii(32)),
+            ("origination_date", ascii(10)),
+            ("origination_time", ascii(8)),
+            // Samples since midnight, as the two halves of a 64-bit count.
+            ("time_reference_low", T::u32(Little)),
+            ("time_reference_high", T::u32(Little)),
+            ("version", T::u16(Little)),
+            ("umid", T::switch(E::field("version"), vec![(0, T::bytes(E::lit(0)))], T::bytes(E::lit(64)))),
+            ("loudness", T::switch(E::field("version"), vec![(2, loudness)], T::bytes(E::lit(0)))),
+            // 254 bytes, minus whatever those two took out of them.
+            ("reserved", T::bytes(E::lit(254).sub(E::size_of("umid")).sub(E::size_of("loudness")))),
+            ("coding_history", T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Ascii)),
+        ],
+    )
+}
+
+/// `smpl`: what a sampler needs to play the file as an instrument.
+fn smpl() -> T {
+    let sample_loop = T::structure(
+        "Loop",
+        vec![
+            ("id", T::u32(Little)),
+            ("type", T::enumeration("LoopType", T::u32(Little), LOOP_TYPE)),
+            ("start", T::u32(Little)),
+            ("end", T::u32(Little)),
+            ("fraction", T::u32(Little)),
+            // Zero means keep looping.
+            ("play_count", T::u32(Little)),
+        ],
+    );
+    T::structure(
+        "Sampler",
+        vec![
+            ("manufacturer", T::u32(Little)),
+            ("product", T::u32(Little)),
+            // Nanoseconds per sample: 22675 at 44.1 kHz.
+            ("sample_period", T::u32(Little)),
+            ("midi_unity_note", T::u32(Little)),
+            ("midi_pitch_fraction", T::u32(Little)),
+            ("smpte_format", T::enumeration("SmpteFormat", T::u32(Little), SMPTE_FORMAT)),
+            ("smpte_offset", T::u32(Little)),
+            ("loop_count", T::u32(Little)),
+            ("sampler_data", T::u32(Little)),
+            ("loops", T::array(sample_loop, E::field("loop_count"))),
+            ("extra", T::bytes(E::Remaining)),
+        ],
+    )
+}
+
+/// `inst`: the same idea in seven bytes, for samplers that want no more.
+fn inst() -> T {
+    let i8 = || T::Int { bits: 8, endian: Little };
+    T::structure(
+        "Instrument",
+        vec![
+            ("unshifted_note", T::u8()),
+            // Cents, and decibels, either side of zero.
+            ("fine_tune", i8()),
+            ("gain", i8()),
+            ("low_note", T::u8()),
+            ("high_note", T::u8()),
+            ("low_velocity", T::u8()),
+            ("high_velocity", T::u8()),
+        ],
+    )
+}
+
+/// `plst`: play these stretches, in this order.
+fn plst() -> T {
+    let segment = T::structure(
+        "Segment",
+        vec![("cue_id", T::u32(Little)), ("length", T::u32(Little)), ("repeats", T::u32(Little))],
+    );
+    T::structure("Playlist", vec![("count", T::u32(Little)), ("segments", T::array(segment, E::field("count")))])
+}
+
+/// A chunk holding a whole XML document, padded out with NULs.
+fn xml() -> T {
+    T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Utf8)
 }
 
 fn ds64() -> T {
@@ -281,6 +461,181 @@ mod tests {
         out.extend_from_slice(&(body.len() as u32).to_le_bytes());
         out.extend_from_slice(&body);
         out
+    }
+
+    /// Text in a fixed field, padded out with NULs.
+    fn padded(v: &mut Vec<u8>, s: &[u8], n: usize) {
+        let mut f = s.to_vec();
+        f.resize(n, 0);
+        v.extend_from_slice(&f);
+    }
+
+    /// A version 2 broadcast extension: 602 fixed bytes, then coding history.
+    fn bext_bytes() -> Vec<u8> {
+        let mut v = Vec::new();
+        padded(&mut v, b"Nightjar, 2 km east of the dam", 256);
+        padded(&mut v, b"Song Meter SM4BAT", 32);
+        padded(&mut v, b"ZA-WLA-20260823-01", 32);
+        padded(&mut v, b"2026-08-23", 10);
+        padded(&mut v, b"21:14:07", 8);
+        v.extend_from_slice(&76_412_928u32.to_le_bytes()); // samples since midnight
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&2u16.to_le_bytes());
+        v.extend_from_slice(&[0x06; 64]); // umid
+        for x in [-2300i16, 700, -150, -1800, -2000] {
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        v.extend_from_slice(&[0u8; 180]);
+        v.extend_from_slice(b"A=PCM,F=256000,W=16,M=mono");
+        v
+    }
+
+    /// A tag as an MP3 carries it, here inside a chunk instead.
+    fn id3_bytes() -> Vec<u8> {
+        let mut frame = b"TIT2".to_vec();
+        let text = b"\x03Dawn chorus";
+        frame.extend_from_slice(&(text.len() as u32).to_be_bytes());
+        frame.extend_from_slice(&[0, 0]);
+        frame.extend_from_slice(text);
+
+        let mut v = b"ID3".to_vec();
+        v.extend_from_slice(&[3, 0, 0]);
+        let n = frame.len();
+        v.extend_from_slice(&[(n >> 21) as u8 & 0x7f, (n >> 14) as u8 & 0x7f, (n >> 7) as u8 & 0x7f, n as u8 & 0x7f]);
+        v.extend_from_slice(&frame);
+        v
+    }
+
+    /// The other half of what WAVE files hold: a studio file rather than a
+    /// recorder's, with the extensible header and the chunks an editor writes.
+    fn studio() -> Vec<u8> {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&0xfffeu16.to_le_bytes());
+        fmt.extend_from_slice(&2u16.to_le_bytes());
+        fmt.extend_from_slice(&48_000u32.to_le_bytes());
+        fmt.extend_from_slice(&288_000u32.to_le_bytes());
+        fmt.extend_from_slice(&6u16.to_le_bytes());
+        fmt.extend_from_slice(&24u16.to_le_bytes());
+        fmt.extend_from_slice(&22u16.to_le_bytes()); // extension size
+        fmt.extend_from_slice(&24u16.to_le_bytes()); // valid bits
+        fmt.extend_from_slice(&3u32.to_le_bytes()); // stereo
+        // The PCM sub-format GUID: a format tag, then the fixed rest of it.
+        fmt.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71]);
+
+        let mut smpl = Vec::new();
+        for x in [0u32, 0, 20_833, 60, 0, 0, 0, 1, 0] {
+            smpl.extend_from_slice(&x.to_le_bytes());
+        }
+        for x in [0u32, 1, 4_800, 96_000, 0, 0] {
+            smpl.extend_from_slice(&x.to_le_bytes()); // one alternating loop
+        }
+
+        let inst = [60u8, 250, 251, 48, 72, 1, 127]; // fine tune -6, gain -5
+
+        let mut adtl = b"adtl".to_vec();
+        let mut labl = 7u32.to_le_bytes().to_vec();
+        labl.extend_from_slice(b"Take 3\0");
+        adtl.extend_from_slice(&chunk_bytes(b"labl", &labl));
+        let mut ltxt = 7u32.to_le_bytes().to_vec();
+        ltxt.extend_from_slice(&4_800u32.to_le_bytes());
+        ltxt.extend_from_slice(b"rgn ");
+        ltxt.extend_from_slice(&[0; 8]);
+        ltxt.extend_from_slice(b"Chorus");
+        adtl.extend_from_slice(&chunk_bytes(b"ltxt", &ltxt));
+
+        let mut body = b"WAVE".to_vec();
+        body.extend_from_slice(&chunk_bytes(b"fmt ", &fmt));
+        body.extend_from_slice(&chunk_bytes(b"bext", &bext_bytes()));
+        body.extend_from_slice(&chunk_bytes(b"iXML", b"<BWFXML><PROJECT>Dam</PROJECT></BWFXML>"));
+        body.extend_from_slice(&chunk_bytes(b"smpl", &smpl));
+        body.extend_from_slice(&chunk_bytes(b"inst", &inst));
+        body.extend_from_slice(&chunk_bytes(b"LIST", &adtl));
+        body.extend_from_slice(&chunk_bytes(b"id3 ", &id3_bytes()));
+        body.extend_from_slice(&chunk_bytes(b"data", &[0x22; 12]));
+
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn a_studio_file_reads_down_to_its_metadata() {
+        let d = Document::new(MemSource(studio()));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 8);
+
+        // The extensible header names the same format twice: once as a tag,
+        // once at the front of the sub-format GUID.
+        assert_eq!(ev.node(&d, &[3, 0, 2, 6]).unwrap().type_name, "Extensible");
+        assert_eq!(
+            ev.node(&d, &[3, 0, 2, 6, 2]).unwrap().value,
+            Value::Enum { raw: 3, name: Some("stereo".into()), hex: true }
+        );
+        assert_eq!(
+            ev.node(&d, &[3, 0, 2, 6, 3, 0]).unwrap().value,
+            Value::Enum { raw: 1, name: Some("pcm".into()), hex: true }
+        );
+
+        // Broadcast extension, version 2: the UMID and the loudness values are
+        // both there, and the reserved area is what they left.
+        assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().type_name, "Broadcast");
+        assert_eq!(
+            ev.node(&d, &[3, 1, 2, 0]).unwrap().value,
+            Value::Str("Nightjar, 2 km east of the dam".into())
+        );
+        assert_eq!(ev.node(&d, &[3, 1, 2, 7]).unwrap().value, Value::UInt(2));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 8]).unwrap().size_bits, 64 * 8);
+        assert_eq!(ev.node(&d, &[3, 1, 2, 9, 0]).unwrap().value, Value::Int(-2300));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 10]).unwrap().size_bits, 180 * 8);
+        assert_eq!(
+            ev.node(&d, &[3, 1, 2, 11]).unwrap().value,
+            Value::Str("A=PCM,F=256000,W=16,M=mono".into())
+        );
+
+        // A version 0 extension has no UMID, and 254 bytes reserved instead.
+        // The coding history lands in the same place either way.
+        let mut v0 = studio();
+        let version_at = v0.windows(4).position(|w| w == b"bext").unwrap() + 8 + 346;
+        v0[version_at] = 0;
+        let d0 = Document::new(MemSource(v0));
+        let mut ev0 = Evaluator::new(wav());
+        assert_eq!(ev0.node(&d0, &[3, 1, 2, 8]).unwrap().size_bits, 0);
+        assert_eq!(ev0.node(&d0, &[3, 1, 2, 10]).unwrap().size_bits, 254 * 8);
+        assert_eq!(
+            ev0.node(&d0, &[3, 1, 2, 11]).unwrap().value,
+            Value::Str("A=PCM,F=256000,W=16,M=mono".into())
+        );
+
+        assert_eq!(
+            ev.node(&d, &[3, 2, 2]).unwrap().value,
+            Value::Str("<BWFXML><PROJECT>Dam</PROJECT></BWFXML>".into())
+        );
+
+        // The sampler chunk and its one loop.
+        assert_eq!(ev.node(&d, &[3, 3, 2, 7]).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &[3, 3, 2, 9]).unwrap().child_count, 1);
+        assert_eq!(
+            ev.node(&d, &[3, 3, 2, 9, 0, 1]).unwrap().value,
+            Value::Enum { raw: 1, name: Some("alternating".into()), hex: false }
+        );
+        assert_eq!(ev.node(&d, &[3, 3, 2, 9, 0, 3]).unwrap().value, Value::UInt(96_000));
+
+        // Instrument settings run either side of zero, so they are signed.
+        assert_eq!(ev.node(&d, &[3, 4, 2, 1]).unwrap().value, Value::Int(-6));
+        assert_eq!(ev.node(&d, &[3, 4, 2, 2]).unwrap().value, Value::Int(-5));
+
+        // A labelled point and a labelled stretch, inside the adtl list.
+        assert_eq!(ev.node(&d, &[3, 5, 2, 0]).unwrap().value, Value::Str("adtl".into()));
+        assert_eq!(ev.node(&d, &[3, 5, 2, 1, 0, 2, 1]).unwrap().value, Value::Str("Take 3".into()));
+        assert_eq!(ev.node(&d, &[3, 5, 2, 1, 1, 2]).unwrap().type_name, "LabelledText");
+        assert_eq!(ev.node(&d, &[3, 5, 2, 1, 1, 2, 2]).unwrap().value, Value::Str("rgn ".into()));
+        assert_eq!(ev.node(&d, &[3, 5, 2, 1, 1, 2, 7]).unwrap().value, Value::Str("Chorus".into()));
+
+        // An ID3 tag in a chunk reads as the tag it is.
+        assert_eq!(ev.node(&d, &[3, 6, 2]).unwrap().type_name, "ID3");
+        assert_eq!(ev.node(&d, &[3, 6, 2, 8, 0, 0]).unwrap().value, Value::Str("TIT2".into()));
+        assert_eq!(ev.node(&d, &[3, 6, 2, 8, 0, 3, 1]).unwrap().value, Value::Str("Dawn chorus".into()));
     }
 
     #[test]

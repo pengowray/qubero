@@ -22,6 +22,11 @@ fn cc(s: &str) -> i128 {
 }
 
 pub fn id3() -> Template {
+    Template::new("id3", tag())
+}
+
+/// The tag itself, which is also what a WAVE file keeps in an `id3 ` chunk.
+pub(super) fn tag() -> T {
     // The tag's own length is four bytes of seven bits each, so a tag can never
     // contain a run that looks like an MPEG frame header.
     let synchsafe = E::field("size_0")
@@ -30,28 +35,25 @@ pub fn id3() -> Template {
         .add(E::field("size_2").mul(E::lit(1 << 7)))
         .add(E::field("size_3"));
 
-    Template::new(
-        "id3",
-        T::structure(
-            "ID3",
-            vec![
-                ("magic", T::magic(b"ID3")),
-                ("version", T::u8()),
-                ("revision", T::u8()),
-                ("flags", T::u8()),
-                ("size_0", T::u8()),
-                ("size_1", T::u8()),
-                ("size_2", T::u8()),
-                ("size_3", T::u8()),
-                (
-                    "frames",
-                    T::sized(
-                        synchsafe,
-                        T::repeat(frame(), Until::FieldBytes { field: "id".into(), bytes: vec![0, 0, 0, 0] }),
-                    ),
+    T::structure(
+        "ID3",
+        vec![
+            ("magic", T::magic(b"ID3")),
+            ("version", T::u8()),
+            ("revision", T::u8()),
+            ("flags", T::u8()),
+            ("size_0", T::u8()),
+            ("size_1", T::u8()),
+            ("size_2", T::u8()),
+            ("size_3", T::u8()),
+            (
+                "frames",
+                T::sized(
+                    synchsafe,
+                    T::repeat(frame(), Until::FieldBytes { field: "id".into(), bytes: vec![0, 0, 0, 0] }),
                 ),
-            ],
-        ),
+            ),
+        ],
     )
 }
 
