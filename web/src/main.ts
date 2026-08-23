@@ -1,4 +1,4 @@
-import { Doc, formatBytes } from "./doc.js";
+import { Doc, formatBytes, formatOffset } from "./doc.js";
 import { HexView } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
@@ -26,9 +26,9 @@ function mount(doc: Doc): void {
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
-  table.onPick = ({ startByte, endByte }) => {
-    view.setHighlight({ start: startByte, end: endByte });
-    view.setCursor(startByte, { pane: "hex" });
+  table.onPick = ({ startBit, endBit }) => {
+    view.setHighlight({ startBit, endBit });
+    view.setBitCursor(startBit, { pane: "hex" });
   };
   view.onHighlightClear = () => table.clearSelection();
 
@@ -90,6 +90,21 @@ function mount(doc: Doc): void {
   view.setBytesPerRow(narrow ? 8 : 16);
   width.addEventListener("change", () => view.setBytesPerRow(Number(width.value)));
 
+  const mode = el("select", { className: "tb-mode" });
+  mode.setAttribute("aria-label", "Show bytes as");
+  for (const [value, label] of [["hex", "Hex"], ["binary", "Binary"]] as const) {
+    mode.append(el("option", { value, textContent: label }));
+  }
+  mode.addEventListener("change", () => {
+    const binary = mode.value === "binary";
+    view.setMode(binary ? "binary" : "hex");
+    // Eight binary digits per byte: a wide row has to narrow to stay readable.
+    if (binary && Number(width.value) > 8) {
+      width.value = "8";
+      view.setBytesPerRow(8);
+    }
+  });
+
   const openBtn = el("button", { type: "button", textContent: "Open" });
   openBtn.addEventListener("click", () => pick());
 
@@ -103,6 +118,7 @@ function mount(doc: Doc): void {
     el("span", { className: "tb-spacer" }),
     goto,
     width,
+    mode,
     tmpl,
     undoBtn,
     redoBtn,
@@ -115,9 +131,13 @@ function mount(doc: Doc): void {
     undoBtn.disabled = !doc.canUndo;
     redoBtn.disabled = !doc.canRedo;
     const c = view.cursorState;
-    posLabel.textContent =
-      `Offset 0x${c.offset.toString(16).toUpperCase()} (${c.offset.toLocaleString()})` +
-      `  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${c.pane === "hex" ? "Hex" : "Text"}`;
+    // Inside a byte the decimal counts bits, so the two halves agree.
+    const where =
+      c.bitOffset % 8 === 0
+        ? `Offset ${formatOffset(c.bitOffset)} (${c.offset.toLocaleString()})`
+        : `Offset ${formatOffset(c.bitOffset)} (bit ${c.bitOffset.toLocaleString()})`;
+    const pane = c.pane === "ascii" ? "Text" : c.mode === "binary" ? "Binary" : "Hex";
+    posLabel.textContent = `${where}  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${pane}`;
   };
   view.onCursorChange = (c) => {
     inspector.setOffset(c.offset);

@@ -3,13 +3,14 @@
 // the user opens it. Editable leaf values are typed in place: the core encodes
 // the text as that field's type and writes only that field's bits.
 
+import { formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 
 const PAGE = 200;
 /** Give up after this many chunk-loading retries on one commit. */
 const WRITE_RETRIES = 8;
 
-export type FieldPick = { readonly startByte: number; readonly endByte: number };
+export type FieldPick = { readonly startBit: number; readonly endBit: number };
 
 type Editing = {
   readonly key: string;
@@ -26,12 +27,6 @@ function key(path: readonly number[]): string {
 
 function pathOf(k: string): number[] {
   return k === "" ? [] : k.split("/").map(Number);
-}
-
-function hexOffset(bits: number): string {
-  const byte = Math.floor(bits / 8);
-  const rem = bits % 8;
-  return `0x${byte.toString(16).toUpperCase()}${rem ? `+${rem}b` : ""}`;
 }
 
 function countText(n: number, noun: string): string {
@@ -126,13 +121,13 @@ export class TypeTable {
       this.render();
       return;
     }
-    const start = Number(row.dataset["start"]);
-    const end = Number(row.dataset["end"]);
+    const startBit = Number(row.dataset["start"]);
+    const endBit = Number(row.dataset["end"]);
     this.selected = k;
     if (t.closest("[data-edit]")) this.beginEdit(k, row.dataset["value"] ?? "");
     else this.editing = null;
     this.render();
-    this.onPick({ startByte: start, endByte: end });
+    this.onPick({ startBit, endBit });
   }
 
   private onKey(e: KeyboardEvent): void {
@@ -242,8 +237,8 @@ export class TypeTable {
     const k = key(n.path);
     const tr = document.createElement("tr");
     tr.dataset["path"] = k;
-    tr.dataset["start"] = String(Math.floor(n.offset_bits / 8));
-    tr.dataset["end"] = String(Math.ceil((n.offset_bits + n.size_bits) / 8));
+    tr.dataset["start"] = String(n.offset_bits);
+    tr.dataset["end"] = String(n.offset_bits + n.size_bits);
     tr.dataset["value"] = n.edit_text;
     if (k === this.selected) tr.classList.add("tt-selected");
     if (!n.ok) tr.classList.add("tt-bad");
@@ -286,7 +281,7 @@ export class TypeTable {
     type.textContent = n.type;
     const off = document.createElement("td");
     off.className = "tt-num";
-    off.textContent = hexOffset(n.offset_bits);
+    off.textContent = formatOffset(n.offset_bits);
     const size = document.createElement("td");
     size.className = "tt-num";
     size.textContent = sizeText(n.size_bits);

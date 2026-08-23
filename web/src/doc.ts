@@ -65,6 +65,13 @@ function describeReadFailure(offset: number, length: number, cause: unknown): st
   return `Could not read ${where} from the original file. ${reason}`;
 }
 
+/** An offset as `0x1F`, or `0x1F+3b` when it falls inside a byte. */
+export function formatOffset(bits: number): string {
+  const byte = Math.floor(bits / 8);
+  const rem = bits % 8;
+  return `0x${byte.toString(16).toUpperCase()}${rem === 0 ? "" : `+${rem}b`}`;
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];

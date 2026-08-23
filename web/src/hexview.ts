@@ -7,11 +7,16 @@
 import type { Doc } from "./doc.js";
 
 export type Pane = "hex" | "ascii";
+/** Hex shows two digits per byte; binary shows the eight bits. */
+export type ViewMode = "hex" | "binary";
 
 export type CursorState = {
   readonly offset: number;
+  /** Absolute bit position. In hex mode this is always `offset * 8`. */
+  readonly bitOffset: number;
   readonly pane: Pane;
   readonly insertMode: boolean;
+  readonly mode: ViewMode;
 };
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
@@ -34,11 +39,15 @@ export class HexView {
   private bytesPerRow = 16;
   private cursor = 0;
   private nibble: 0 | 1 = 0;
+  /** Bit within the cursor byte, 0 = most significant. Set by a bit move or by
+   * picking a field that starts inside a byte; any byte-level move clears it. */
+  private bit = 0;
+  private mode: ViewMode = "hex";
   private pane: Pane = "hex";
   private insertMode = false;
   private dragging: { startY: number; startRow: number } | null = null;
-  /** Byte range [start, end) to highlight, e.g. the selected template field. */
-  private highlight: { start: number; end: number } | null = null;
+  /** Bit range [startBit, endBit) to highlight, e.g. the selected field. */
+  private highlight: { startBit: number; endBit: number } | null = null;
 
   onCursorChange: (c: CursorState) => void = () => {};
 
@@ -95,6 +104,7 @@ export class HexView {
     this.topRow = Math.min(this.topRow, this.maxTopRow);
     this.relayout();
     this.scrollCursorIntoView();
+    this.render();
   }
 
   relayout(): void {
@@ -123,13 +133,40 @@ export class HexView {
   // ----- cursor & scrolling -----
 
   get cursorState(): CursorState {
-    return { offset: this.cursor, pane: this.pane, insertMode: this.insertMode };
+    return {
+      offset: this.cursor,
+      bitOffset: this.cursor * 8 + this.bit,
+      pane: this.pane,
+      insertMode: this.insertMode,
+      mode: this.mode,
+    };
   }
 
-  setCursor(offset: number, opts: { pane?: Pane; nibble?: 0 | 1 } = {}): void {
+  setMode(mode: ViewMode): void {
+    this.mode = mode;
+    this.nibble = 0;
+    this.scrollCursorIntoView();
+    this.render();
+    this.onCursorChange(this.cursorState);
+  }
+
+  /** Move the cursor to an absolute bit. Bit 0 is the top bit of byte 0. */
+  setBitCursor(bitOffset: number, opts: { pane?: Pane } = {}): void {
+    if (opts.pane) this.pane = opts.pane;
+    const at = Math.max(0, Math.min(this.doc.lengthBits, Math.floor(bitOffset)));
+    this.cursor = Math.floor(at / 8);
+    this.bit = at % 8;
+    this.nibble = 0;
+    this.scrollCursorIntoView();
+    this.render();
+    this.onCursorChange(this.cursorState);
+  }
+
+  setCursor(offset: number, opts: { pane?: Pane; nibble?: 0 | 1; bit?: number } = {}): void {
     const max = this.doc.lengthBytes; // one past the end is a valid insert position
     this.cursor = Math.max(0, Math.min(max, Math.floor(offset)));
     this.nibble = opts.nibble ?? 0;
+    this.bit = Math.max(0, Math.min(7, opts.bit ?? 0));
     if (opts.pane) this.pane = opts.pane;
     this.scrollCursorIntoView();
     this.render();
@@ -139,7 +176,7 @@ export class HexView {
   /** Called when the user dismisses the field highlight with Escape. */
   onHighlightClear: () => void = () => {};
 
-  setHighlight(range: { start: number; end: number } | null): void {
+  setHighlight(range: { startBit: number; endBit: number } | null): void {
     this.highlight = range;
     this.render();
   }
@@ -190,7 +227,8 @@ export class HexView {
     const off = target.dataset["off"];
     const pane = target.dataset["pane"];
     if (off === undefined || (pane !== "hex" && pane !== "ascii")) return;
-    this.setCursor(Number(off), { pane });
+    const bit = target.dataset["bit"];
+    this.setCursor(Number(off), { pane, bit: bit === undefined ? 0 : Number(bit) });
   }
 
   private onTrackDown(e: PointerEvent): void {
@@ -218,13 +256,16 @@ export class HexView {
       return void (e.preventDefault(), this.doc.redo());
     if (mod) return;
 
+    const bitMode = this.mode === "binary" && this.pane === "hex";
     switch (e.key) {
       case "ArrowLeft":
         e.preventDefault();
+        if (bitMode) return this.setBitCursor(this.cursorState.bitOffset - 1);
         if (this.pane === "hex" && this.nibble === 1) return this.setCursor(this.cursor, { nibble: 0 });
         return this.setCursor(this.cursor - 1);
       case "ArrowRight":
         e.preventDefault();
+        if (bitMode) return this.setBitCursor(this.cursorState.bitOffset + 1);
         return this.setCursor(this.cursor + 1);
       case "ArrowUp":
         e.preventDefault();
@@ -256,10 +297,23 @@ export class HexView {
         return this.onCursorChange(this.cursorState);
       case "Delete":
         e.preventDefault();
+        if (bitMode) {
+          const at = this.cursorState.bitOffset;
+          if (at < this.doc.lengthBits) this.doc.deleteBits(at, 1);
+          return this.setBitCursor(at);
+        }
         if (this.cursor < this.doc.lengthBytes) this.doc.delete(this.cursor, 1);
         return this.setCursor(this.cursor);
       case "Backspace":
         e.preventDefault();
+        if (bitMode) {
+          const at = this.cursorState.bitOffset;
+          if (at > 0) {
+            this.doc.deleteBits(at - 1, 1);
+            this.setBitCursor(at - 1);
+          }
+          return;
+        }
         if (this.cursor > 0) {
           this.doc.delete(this.cursor - 1, 1);
           this.setCursor(this.cursor - 1);
@@ -275,8 +329,18 @@ export class HexView {
 
     if (e.key.length !== 1 || e.altKey) return;
     e.preventDefault();
-    if (this.pane === "hex") this.typeHex(e.key);
+    if (bitMode) this.typeBit(e.key);
+    else if (this.pane === "hex") this.typeHex(e.key);
     else this.typeAscii(e.key);
+  }
+
+  private typeBit(ch: string): void {
+    if (ch !== "0" && ch !== "1") return;
+    const at = this.cursorState.bitOffset;
+    const data = Uint8Array.of(ch === "1" ? 0x80 : 0);
+    if (this.insertMode || at >= this.doc.lengthBits) this.doc.insertBits(at, data, 1);
+    else this.doc.overwriteBits(at, data, 1);
+    this.setBitCursor(at + 1);
   }
 
   private currentByte(): number {
@@ -311,15 +375,63 @@ export class HexView {
 
   // ----- rendering -----
 
+  /** Which bits of byte `off` the highlight covers, as [from, to) within 0..8. */
+  private highlightBits(off: number): { from: number; to: number } | null {
+    const h = this.highlight;
+    if (h === null) return null;
+    const from = Math.max(h.startBit, off * 8) - off * 8;
+    const to = Math.min(h.endBit, off * 8 + 8) - off * 8;
+    return to > from ? { from, to } : null;
+  }
+
+  /** Mark part of a byte in hex mode: a bar under the bits the field covers. */
+  private markBits(el: HTMLElement, from: number, to: number): void {
+    // The cell is 3ch wide: half a character of padding, two digits, half again.
+    const pad = 100 / 6;
+    const step = (100 - 2 * pad) / 8;
+    el.classList.add("hv-hlbits");
+    el.style.setProperty("--from", `${pad + from * step}%`);
+    el.style.setProperty("--to", `${pad + to * step}%`);
+  }
+
+  /** The eight bits of one byte, split into spans only where that is needed. */
+  private fillBits(cell: HTMLElement, byte: number | null, off: number, hl: { from: number; to: number } | null): void {
+    const text = byte === null ? "········" : byte.toString(2).padStart(8, "0");
+    if (byte === null) cell.classList.add("hv-pending");
+    const onCursor = off === this.cursor;
+    const whole = hl !== null && hl.from === 0 && hl.to === 8;
+    if (!onCursor && (hl === null || whole)) {
+      cell.textContent = text;
+      if (whole) cell.classList.add("hv-hl");
+      return;
+    }
+    for (let k = 0; k < 8; k++) {
+      const s = document.createElement("span");
+      s.textContent = text[k] ?? "0";
+      s.dataset["off"] = String(off);
+      s.dataset["bit"] = String(k);
+      s.dataset["pane"] = "hex";
+      if (hl !== null && k >= hl.from && k < hl.to) s.classList.add("hv-hl");
+      if (onCursor && k === this.bit) {
+        s.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
+        if (this.insertMode) s.classList.add("hv-ins");
+      }
+      cell.append(s);
+    }
+  }
+
   render(): void {
     const bpr = this.bytesPerRow;
     const len = this.doc.lengthBytes;
     const addrWidth = Math.max(8, len.toString(16).length);
     const start = this.topRow * bpr;
     const { bytes, complete } = this.doc.read(start, this.visibleRows * bpr);
+    const binary = this.mode === "binary";
 
     this.header.textContent =
-      " ".repeat(addrWidth) + "  " + Array.from({ length: bpr }, (_, i) => HEX[i]).join(" ");
+      " ".repeat(addrWidth) +
+      "  " +
+      Array.from({ length: bpr }, (_, i) => (binary ? (HEX[i] ?? "").padEnd(8) : HEX[i])).join(" ");
 
     for (let r = 0; r < this.rowEls.length; r++) {
       const row = this.rowEls[r];
@@ -335,8 +447,8 @@ export class HexView {
       addr.textContent = rowStart.toString(16).padStart(addrWidth, "0");
       frag.append(addr);
 
-      const hex = document.createElement("span");
-      hex.className = "hv-hex";
+      const cells = document.createElement("span");
+      cells.className = binary ? "hv-bits" : "hv-hex";
       const asc = document.createElement("span");
       asc.className = "hv-ascii";
       for (let i = 0; i < bpr; i++) {
@@ -346,34 +458,47 @@ export class HexView {
         h.dataset["off"] = a.dataset["off"] = String(off);
         h.dataset["pane"] = "hex";
         a.dataset["pane"] = "ascii";
+        const hl = this.highlightBits(off);
         if (off < len) {
           const b = bytes[off - start] ?? 0;
-          h.textContent = complete ? HEX[b] ?? "" : "··";
           a.textContent = complete ? asciiGlyph(b) : " ";
-          if (!complete) h.classList.add("hv-pending");
           if (complete && !(b >= 0x20 && b < 0x7f)) a.classList.add("hv-np");
+          if (binary) {
+            this.fillBits(h, complete ? b : null, off, hl);
+          } else {
+            h.textContent = complete ? HEX[b] ?? "" : "··";
+            if (!complete) h.classList.add("hv-pending");
+          }
         } else if (off === len) {
-          h.textContent = "  ";
+          h.textContent = binary ? "        " : "  ";
           a.textContent = " ";
           h.classList.add("hv-end");
         } else {
-          h.textContent = "  ";
+          h.textContent = binary ? "        " : "  ";
           a.textContent = " ";
         }
-        if (this.highlight && off >= this.highlight.start && off < this.highlight.end) {
-          h.classList.add("hv-hl");
-          a.classList.add("hv-hl");
+
+        if (hl !== null) {
+          // The text column cannot show part of a byte, so a partly covered
+          // byte is marked more faintly there than a fully covered one.
+          a.classList.add(hl.from === 0 && hl.to === 8 ? "hv-hl" : "hv-hl-weak");
+          if (!binary && off < len) {
+            if (hl.from === 0 && hl.to === 8) h.classList.add("hv-hl");
+            else this.markBits(h, hl.from, hl.to);
+          }
         }
         if (off === this.cursor) {
-          h.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
+          if (!binary) {
+            h.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
+            if (this.pane === "hex" && this.nibble === 1) h.classList.add("hv-nib1");
+            if (this.insertMode) h.classList.add("hv-ins");
+          }
           a.classList.add("hv-cur", this.pane === "ascii" ? "hv-focus" : "hv-dim");
-          if (this.pane === "hex" && this.nibble === 1) h.classList.add("hv-nib1");
-          if (this.insertMode) h.classList.add("hv-ins");
         }
-        hex.append(h);
+        cells.append(h);
         asc.append(a);
       }
-      frag.append(hex, asc);
+      frag.append(cells, asc);
       row.replaceChildren(frag);
     }
 
