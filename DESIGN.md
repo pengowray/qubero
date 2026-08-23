@@ -285,6 +285,20 @@ Edits live only in the tab: `Save as` writes a copy, so nothing on disk holds
 them. Opening a second file therefore asks before discarding them, whether it
 arrives by drop or by the Open button.
 
+### What a type permits
+An enum knows the values it names, a magic field knows the bytes it wanted, and
+a `Flags` field knows what each of its bits means. None of that is in the value,
+so `Evaluator::explain` returns it separately and the At cursor panel shows it
+under the editor: one section, three renderings, absent for a type whose value
+already says everything. For the two editable kinds it is also the input, since
+clicking a named value or a named bit beats retyping a number.
+
+`Ty::Flags` names bits from the least significant up, which is how every format
+that has them numbers them. A bit with no name is still listed: a set bit the
+format does not describe is the kind of thing worth noticing, not hiding.
+Writing a flags field writes the number underneath, because typing a name would
+mean deciding whether it replaced the other bits or joined them.
+
 ### PE
 The DOS header, the PE header, the optional header and the section table.
 Three things in it are worth knowing, because each is a thing the IR had to be
