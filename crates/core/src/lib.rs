@@ -9,11 +9,16 @@
 
 pub mod bits;
 pub mod document;
+pub mod eval;
+pub mod formats;
 pub mod piece;
 pub mod save;
 pub mod source;
+pub mod template;
 
 pub use document::Document;
+pub use eval::{EvalError, Evaluator, NodeInfo, Value};
 pub use piece::PieceTable;
 pub use save::{Run, RunKind};
 pub use source::{ChunkStore, MemSource, Missing, Source};
+pub use template::{Endian, Expr, Template, Ty, Until};

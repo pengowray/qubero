@@ -1,0 +1,175 @@
+//! Template IR: a description of the structure a file is expected to have.
+//!
+//! Nothing here is a static layout. Lengths, counts and choices are expressions
+//! over earlier fields, so a template can say "an array of u32 whose count is
+//! the field named `n`" or "bytes whose length is `size`, parsed as the section
+//! type selected by `id`". Evaluation lives in `eval.rs`.
+
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Endian {
+    Little,
+    Big,
+}
+
+/// An integer-valued expression. `Ref` names a field that appears earlier in the
+/// same struct, or in an enclosing struct before the current field.
+#[derive(Debug, Clone)]
+pub enum Expr {
+    Lit(i128),
+    Ref(String),
+    Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    Div(Box<Expr>, Box<Expr>),
+}
+
+impl Expr {
+    pub fn lit(v: impl Into<i128>) -> Expr {
+        Expr::Lit(v.into())
+    }
+    pub fn field(name: &str) -> Expr {
+        Expr::Ref(name.to_string())
+    }
+    pub fn add(self, rhs: Expr) -> Expr {
+        Expr::Add(Box::new(self), Box::new(rhs))
+    }
+    pub fn sub(self, rhs: Expr) -> Expr {
+        Expr::Sub(Box::new(self), Box::new(rhs))
+    }
+    pub fn mul(self, rhs: Expr) -> Expr {
+        Expr::Mul(Box::new(self), Box::new(rhs))
+    }
+    pub fn div(self, rhs: Expr) -> Expr {
+        Expr::Div(Box::new(self), Box::new(rhs))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Until {
+    /// Repeat until the enclosing size limit (or end of file) is reached.
+    End,
+    /// Repeat until an element whose field `field` has the given raw bytes
+    /// (that element is included).
+    FieldBytes { field: String, bytes: Vec<u8> },
+}
+
+#[derive(Debug, Clone)]
+pub struct Field {
+    pub name: String,
+    pub ty: Ty,
+}
+
+#[derive(Debug, Clone)]
+pub enum Ty {
+    UInt { bits: u32, endian: Endian },
+    Int { bits: u32, endian: Endian },
+    F16(Endian),
+    F32(Endian),
+    F64(Endian),
+    /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
+    Leb128 { signed: bool },
+    /// Fixed bytes that must match.
+    Magic(Vec<u8>),
+    /// Raw bytes of computed length (in bytes).
+    Bytes(Expr),
+    /// UTF-8 text of computed length (in bytes).
+    Utf8(Expr),
+    Struct(Arc<StructDef>),
+    Array { elem: Box<Ty>, count: Expr },
+    Repeat { elem: Box<Ty>, until: Until },
+    /// Occupies exactly `size` bytes; `inner` is parsed within that window.
+    Sized { size: Expr, inner: Box<Ty> },
+    /// Pick a type by the value of `on`; falls back to `default`.
+    Switch { on: Expr, cases: Vec<(i128, Ty)>, default: Box<Ty> },
+}
+
+#[derive(Debug)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<Field>,
+}
+
+impl Ty {
+    pub fn u8() -> Ty {
+        Ty::UInt { bits: 8, endian: Endian::Little }
+    }
+    pub fn u16(e: Endian) -> Ty {
+        Ty::UInt { bits: 16, endian: e }
+    }
+    pub fn u32(e: Endian) -> Ty {
+        Ty::UInt { bits: 32, endian: e }
+    }
+    pub fn u64(e: Endian) -> Ty {
+        Ty::UInt { bits: 64, endian: e }
+    }
+    pub fn i32(e: Endian) -> Ty {
+        Ty::Int { bits: 32, endian: e }
+    }
+    pub fn leb_u() -> Ty {
+        Ty::Leb128 { signed: false }
+    }
+    pub fn bytes(len: Expr) -> Ty {
+        Ty::Bytes(len)
+    }
+    pub fn utf8(len: Expr) -> Ty {
+        Ty::Utf8(len)
+    }
+    pub fn magic(b: &[u8]) -> Ty {
+        Ty::Magic(b.to_vec())
+    }
+    pub fn structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
+        Ty::Struct(Arc::new(StructDef {
+            name: name.to_string(),
+            fields: fields.into_iter().map(|(n, ty)| Field { name: n.to_string(), ty }).collect(),
+        }))
+    }
+    pub fn array(elem: Ty, count: Expr) -> Ty {
+        Ty::Array { elem: Box::new(elem), count }
+    }
+    pub fn repeat(elem: Ty, until: Until) -> Ty {
+        Ty::Repeat { elem: Box::new(elem), until }
+    }
+    pub fn sized(size: Expr, inner: Ty) -> Ty {
+        Ty::Sized { size, inner: Box::new(inner) }
+    }
+    pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
+        Ty::Switch { on, cases, default: Box::new(default) }
+    }
+
+    /// Short human-readable type name for the type table.
+    pub fn display_name(&self) -> String {
+        fn e(en: Endian) -> &'static str {
+            match en {
+                Endian::Little => "le",
+                Endian::Big => "be",
+            }
+        }
+        match self {
+            Ty::UInt { bits, endian } if *bits <= 8 => format!("u{bits}"),
+            Ty::UInt { bits, endian } => format!("u{bits} {}", e(*endian)),
+            Ty::Int { bits, endian } if *bits <= 8 => format!("i{bits}"),
+            Ty::Int { bits, endian } => format!("i{bits} {}", e(*endian)),
+            Ty::F16(en) => format!("f16 {}", e(*en)),
+            Ty::F32(en) => format!("f32 {}", e(*en)),
+            Ty::F64(en) => format!("f64 {}", e(*en)),
+            Ty::Leb128 { signed: false } => "leb128".into(),
+            Ty::Leb128 { signed: true } => "sleb128".into(),
+            Ty::Magic(b) => format!("magic[{}]", b.len()),
+            Ty::Bytes(_) => "bytes[]".into(),
+            Ty::Utf8(_) => "utf8[]".into(),
+            Ty::Struct(s) => s.name.clone(),
+            Ty::Array { elem, .. } => format!("{}[]", elem.display_name()),
+            Ty::Repeat { elem, .. } => format!("{}[]", elem.display_name()),
+            Ty::Sized { inner, .. } => inner.display_name(),
+            Ty::Switch { .. } => "switch".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Template {
+    pub name: String,
+    pub root: Ty,
+}
