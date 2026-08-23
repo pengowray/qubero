@@ -1,6 +1,7 @@
 import { Doc } from "./doc.js";
 import { HexView } from "./hexview.js";
 import { Inspector } from "./inspector.js";
+import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
 
 const appEl = document.getElementById("app");
@@ -38,6 +39,25 @@ function mount(doc: Doc): void {
   const posLabel = el("span", { className: "tb-pos" });
   const undoBtn = el("button", { type: "button", textContent: "Undo", title: "Undo (Ctrl+Z)" });
   const redoBtn = el("button", { type: "button", textContent: "Redo", title: "Redo (Ctrl+Y)" });
+  const saveBtn = el("button", { type: "button", textContent: "Save as", title: "Save as a new file (Ctrl+S)" });
+  const saveMsg = el("span", { className: "tb-msg" });
+  saveMsg.setAttribute("role", "status");
+  const save = async (): Promise<void> => {
+    saveBtn.disabled = true;
+    saveMsg.textContent = "Saving";
+    const r = await saveDoc(doc);
+    saveBtn.disabled = false;
+    saveMsg.textContent =
+      r.kind === "saved" ? `Saved ${formatSize(r.bytes)}` : r.kind === "cancelled" ? "" : `Save failed: ${r.message}`;
+    saveMsg.classList.toggle("warn", r.kind === "failed");
+  };
+  saveBtn.addEventListener("click", () => void save());
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      void save();
+    }
+  });
   undoBtn.addEventListener("click", () => doc.undo());
   redoBtn.addEventListener("click", () => doc.redo());
 
@@ -68,7 +88,9 @@ function mount(doc: Doc): void {
     "header",
     { className: "toolbar" },
     openBtn,
+    saveBtn,
     fileLabel,
+    saveMsg,
     el("span", { className: "tb-spacer" }),
     goto,
     width,
@@ -98,6 +120,7 @@ function mount(doc: Doc): void {
   refresh();
   inspector.setOffset(0);
   view.el.focus();
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector } });
 }
 
 function pick(): void {

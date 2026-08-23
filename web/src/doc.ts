@@ -10,7 +10,7 @@ const CHUNK_CAPACITY = 512; // 32 MiB resident at most
 export type ByteSource = {
   readonly size: number;
   readonly name: string;
-  slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> };
+  slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> } | Blob;
 };
 
 export type ReadResult = {
@@ -92,6 +92,67 @@ export class Doc {
         this.inflight.delete(chunk);
         this.notify();
       });
+  }
+
+  /** Resolve once every chunk covering [at, at+len) is loaded. */
+  async ensureRange(at: number, len: number): Promise<void> {
+    const first = Math.floor(at / CHUNK_SIZE);
+    const last = Math.floor((at + len - 1) / CHUNK_SIZE);
+    const waits: Promise<void>[] = [];
+    for (let c = first; c <= last; c++) {
+      if (!this.editor.has_chunk(c)) waits.push(this.loadChunk(c));
+    }
+    await Promise.all(waits);
+  }
+
+  private loadChunk(chunk: number): Promise<void> {
+    const start = chunk * CHUNK_SIZE;
+    return Promise.resolve(this.blob.slice(start, Math.min(start + CHUNK_SIZE, this.blob.size)).arrayBuffer()).then(
+      (buf) => {
+        this.editor.feed_chunk(chunk, new Uint8Array(buf));
+      },
+    );
+  }
+
+  /**
+   * Build the saved file as a Blob of lazy parts. Unchanged stretches of the
+   * original are referenced, not copied, so this works for any file size.
+   */
+  async buildOutput(): Promise<Blob> {
+    const plan = this.editor.save_plan();
+    const add = this.editor.add_bytes();
+    const parts: BlobPart[] = [];
+    for (let i = 0; i < plan.length; i += 4) {
+      const kind = plan[i] ?? 0;
+      const docOff = plan[i + 1] ?? 0;
+      const srcOff = plan[i + 2] ?? 0;
+      const len = plan[i + 3] ?? 0;
+      if (kind === 0) {
+        const part = this.blob.slice(srcOff, srcOff + len);
+        if (part instanceof Blob) {
+          parts.push(part); // lazy reference, nothing copied
+        } else {
+          // Non-Blob sources (dev synthetic files) must be read; keep pieces bounded.
+          const STEP = 16 * 1024 * 1024;
+          for (let o = 0; o < len; o += STEP) {
+            parts.push(await this.blob.slice(srcOff + o, srcOff + Math.min(len, o + STEP)).arrayBuffer());
+          }
+        }
+      } else if (kind === 1) {
+        parts.push(add.slice(srcOff, srcOff + len));
+      } else {
+        // Bit-unaligned stretch: read it through the piece table in chunks.
+        const STEP = 4 * 1024 * 1024;
+        for (let o = 0; o < len; o += STEP) {
+          const n = Math.min(STEP, len - o);
+          await this.ensureRange(docOff + o, n);
+          const { bytes, complete } = this.read(docOff + o, n);
+          if (!complete) throw new Error("Some of the file could not be read.");
+          parts.push(new Uint8Array(bytes) as Uint8Array<ArrayBuffer>);
+        }
+      }
+    }
+    return new Blob(parts, { type: "application/octet-stream" });
   }
 
   overwrite(at: number, data: Uint8Array): void {

@@ -108,6 +108,12 @@ input.invalid {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tb-msg {
+  color: var(--muted);
+}
+.tb-msg.warn {
+  color: var(--warn);
+}
 .tb-spacer {
   flex: 1;
 }

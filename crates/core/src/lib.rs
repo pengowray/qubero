@@ -10,8 +10,10 @@
 pub mod bits;
 pub mod document;
 pub mod piece;
+pub mod save;
 pub mod source;
 
 pub use document::Document;
 pub use piece::PieceTable;
+pub use save::{Run, RunKind};
 pub use source::{ChunkStore, MemSource, Missing, Source};

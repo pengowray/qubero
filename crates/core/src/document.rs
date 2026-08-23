@@ -1,6 +1,7 @@
 //! A document: original source + piece table + add buffer + undo history.
 
 use crate::piece::{AddBuffer, Piece, PieceTable, Src};
+use crate::save::{save_plan, Run};
 use crate::source::{Missing, Source};
 
 pub struct Document<S: Source> {
@@ -125,6 +126,14 @@ impl<S: Source> Document<S> {
     }
     pub fn amend_overwrite_bytes(&mut self, at_byte: u64, data: &[u8]) {
         self.amend_overwrite_bits(at_byte * 8, data, data.len() as u64 * 8);
+    }
+
+    pub fn add_bytes(&self) -> &[u8] {
+        self.add.bytes()
+    }
+
+    pub fn save_plan(&self) -> Vec<Run> {
+        save_plan(&self.table)
     }
 
     pub fn read_bits(&self, at: u64, n: u64, out: &mut [u8]) -> Vec<Missing> {

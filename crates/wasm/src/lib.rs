@@ -3,7 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::{ChunkStore, Document};
+use qubero_core::{ChunkStore, Document, RunKind};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -72,6 +72,26 @@ impl Editor {
     }
     pub fn delete_bits(&mut self, at_bit: f64, n: f64) {
         self.doc.delete_bits(at_bit as u64, n as u64);
+    }
+
+    /// Save plan as flat quads: kind (0 orig, 1 add, 2 materialize), doc_off, src_off, len.
+    pub fn save_plan(&self) -> Vec<f64> {
+        self.doc
+            .save_plan()
+            .iter()
+            .flat_map(|r| {
+                let k = match r.kind {
+                    RunKind::Orig => 0.0,
+                    RunKind::Add => 1.0,
+                    RunKind::Materialize => 2.0,
+                };
+                [k, r.doc_off as f64, r.src_off as f64, r.len as f64]
+            })
+            .collect()
+    }
+
+    pub fn add_bytes(&self) -> Vec<u8> {
+        self.doc.add_bytes().to_vec()
     }
 
     pub fn undo(&mut self) -> bool {
