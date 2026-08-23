@@ -28,6 +28,9 @@ const BUNDLES = [
   { dir: "COM", out: "com.sig" },
   // An MZ executable's rules test from the instruction the loader jumps to.
   { dir: "MSDOS", out: "msdos.sig" },
+  // A Windows executable's too, though there the header gives that as an
+  // address in memory and the section table turns it back into an offset.
+  { dir: "PE", out: "pe.sig" },
 ];
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");

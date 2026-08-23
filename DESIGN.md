@@ -330,8 +330,11 @@ executable to find out.
 
 A rule is a small JavaScript program. `diescript.rs` reads the ones that say
 everything in their own text, which is a test on a byte pattern and some
-assignments, and counts the rest by reason. Of the 596 DOS rules shipped, 494
-are read; every one of them recognises bytes built to its own pattern. The
+assignments, and counts the rest by reason. Of the 1,435 rules shipped, 649
+are read; every one of them recognises bytes built to its own pattern. The DOS
+rules read far better than the Windows ones (494 of 596 against 155 of 839),
+because a PE rule usually asks about imports, sections or .NET metadata rather
+than about a run of bytes. The
 pattern language is implemented from its definition in the engine's `xbinary.h`
 rather than from the shapes these rules happen to use, because the same engine
 is a shared submodule across the author's other detectors.
@@ -341,10 +344,18 @@ Two anchors. A `.COM` is loaded flat, so its rules test from the first byte; an
 the header. An entry point outside the file, or a packer's negative code
 segment, means the rule is skipped rather than tested somewhere wrong.
 
-Which bundle to fetch comes from the file: `msdos.sig` for anything starting
-`MZ`, `com.sig` for a small file nothing else could name, since a `.COM` has no
-header to declare itself and the format's own 64 KiB limit is the only
-constraint there is.
+Three anchors, then. A `.COM` is loaded flat, so its rules test from the first
+byte. An `MZ` executable's test from the instruction the loader jumps to, worked
+out from the header. A Windows executable's do too, except that its header gives
+the entry point as an address in memory, so the section table has to turn it
+back into a place in the file; an address in the part of a section that only
+exists once loaded has no bytes behind it and the rule is skipped.
+
+Which bundle to fetch comes from the file. Anything starting `MZ` gets `pe.sig`
+or `msdos.sig` depending on whether a PE header sits where the DOS header
+points, the same question the built-in sniffer asks. A small file nothing else
+could name gets `com.sig`, since a `.COM` has no header to declare itself and
+the format's own 64 KiB limit is the only constraint there is.
 
 Nothing is converted. `tools/die.mjs` fetches a pinned commit and concatenates
 the rule files byte for byte, author credits included, with a marker line before

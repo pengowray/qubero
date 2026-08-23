@@ -340,7 +340,10 @@ impl Editor {
     /// rather than tested at the start of the file.
     pub fn detect_tools(&self, rules: &str, head: &[u8]) -> String {
         let db = diescript::parse_bundle(rules);
-        let entry = diescript::mz_entry_point(head, self.doc.len_bytes());
+        // A file is a DOS executable or a Windows one, never both, so one
+        // entry point covers whichever rules were handed over.
+        let entry = diescript::pe_entry_point(head)
+            .or_else(|| diescript::mz_entry_point(head, self.doc.len_bytes()));
         let found: Vec<ToolDto> = diescript::detect(&db, head, entry)
             .into_iter()
             .map(|d| ToolDto {

@@ -64,6 +64,10 @@ pub enum Anchor {
     /// `MSDOS.compareEP`: the instruction the loader jumps to, which for an
     /// `MZ` executable is worked out from the header rather than fixed.
     EntryPoint,
+    /// `PE.compareEP`: the same for a Windows executable, where the header
+    /// gives the entry point as an address in memory and the section table is
+    /// what turns it back into a place in the file.
+    PeEntryPoint,
 }
 
 /// One test in a rule, and what the rule concludes when it passes.
@@ -285,6 +289,8 @@ fn parse_condition(cond: &str) -> Option<Branch> {
         (Anchor::FileStart, r)
     } else if let Some(r) = cond.strip_prefix("MSDOS.compareEP(") {
         (Anchor::EntryPoint, r)
+    } else if let Some(r) = cond.strip_prefix("PE.compareEP(") {
+        (Anchor::PeEntryPoint, r)
     } else {
         return None;
     };
@@ -408,10 +414,73 @@ pub fn mz_entry_point(head: &[u8], file_len: u64) -> Option<u64> {
     if at >= file_len { None } else { Some(at) }
 }
 
+/// Where a Windows executable starts running, as a file offset.
+///
+/// The header gives it as an address in memory, so the section table has to
+/// turn it back into a place in the file: find the section the address falls
+/// in, and count from where that section's bytes actually start. An address
+/// before the first section is in the headers, where the two are the same.
+///
+/// Returns nothing when any of that is missing or does not add up, which is
+/// the normal state of a deliberately broken file.
+pub fn pe_entry_point(head: &[u8]) -> Option<u64> {
+    let word = |at: usize| -> Option<u32> {
+        let b = head.get(at..at + 2)?;
+        Some(u32::from(u16::from_le_bytes([b[0], b[1]])))
+    };
+    let long = |at: usize| -> Option<u32> {
+        let b = head.get(at..at + 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    if !head.starts_with(b"MZ") {
+        return None;
+    }
+    let pe = long(0x3c)? as usize;
+    if head.get(pe..pe + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let sections = word(pe + 6)? as usize;
+    let optional_size = word(pe + 20)? as usize;
+    let optional = pe + 24;
+    let rva = long(optional + 16)?;
+    let table = optional.checked_add(optional_size)?;
+
+    let mut best: Option<u64> = None;
+    let mut lowest = u32::MAX;
+    for i in 0..sections.min(96) {
+        let at = table.checked_add(i.checked_mul(40)?)?;
+        let virtual_size = long(at + 8)?;
+        let virtual_address = long(at + 12)?;
+        let raw_size = long(at + 16)?;
+        let raw_offset = long(at + 20)?;
+        lowest = lowest.min(virtual_address);
+        // A section holds whichever of the two sizes is larger: the memory
+        // image may be padded past the bytes on disk, and packers rely on it.
+        let span = virtual_size.max(raw_size);
+        if rva >= virtual_address && rva < virtual_address.saturating_add(span) {
+            let into = rva - virtual_address;
+            if into >= raw_size {
+                // The address is in the part of the section that exists only
+                // once loaded, so there are no bytes here to compare.
+                return None;
+            }
+            best = Some(u64::from(raw_offset) + u64::from(into));
+        }
+    }
+    // Before the first section is the headers, where an address and an offset
+    // are the same thing.
+    if best.is_none() && sections > 0 && rva < lowest {
+        best = Some(u64::from(rva));
+    }
+    best.filter(|at| (*at as usize) < head.len())
+}
+
 /// Every rule that recognises these bytes.
 ///
 /// `entry` is where the file starts running, for the rules that test there;
-/// without one those rules are skipped rather than tested at offset zero.
+/// without one those rules are skipped rather than tested at offset zero. A
+/// DOS and a Windows executable each have their own, and a file is only ever
+/// one of the two, so one argument carries whichever applies.
 /// All matches are returned, because a file is often several things at once: a
 /// packed Borland executable is both the packer and the compiler.
 pub fn detect(db: &Database, head: &[u8], entry: Option<u64>) -> Vec<Detection> {
@@ -434,7 +503,7 @@ pub fn detect(db: &Database, head: &[u8], entry: Option<u64>) -> Vec<Detection> 
 fn branch_matches(b: &Branch, head: &[u8], entry: Option<u64>) -> bool {
     let base = match b.anchor {
         Anchor::FileStart => 0i64,
-        Anchor::EntryPoint => match entry {
+        Anchor::EntryPoint | Anchor::PeEntryPoint => match entry {
             Some(e) => match i64::try_from(e) {
                 Ok(v) => v,
                 Err(_) => return false,
@@ -619,6 +688,45 @@ function detect() {
         // Without one, the rule is not tested rather than tested at zero.
         assert!(detect(&db, &head, None).is_empty());
         assert_eq!(detect(&db, &head, Some(16)).len(), 1);
+    }
+
+    /// A PE with one section, whose entry point is inside it.
+    fn pe_sample(rva: u32) -> Vec<u8> {
+        let mut v = vec![0u8; 0x200];
+        v[0..2].copy_from_slice(b"MZ");
+        let pe = 0x80usize;
+        v[0x3c..0x40].copy_from_slice(&(pe as u32).to_le_bytes());
+        v[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        v[pe + 6..pe + 8].copy_from_slice(&1u16.to_le_bytes()); // one section
+        v[pe + 20..pe + 22].copy_from_slice(&0xe0u16.to_le_bytes()); // optional size
+        let optional = pe + 24;
+        v[optional + 16..optional + 20].copy_from_slice(&rva.to_le_bytes());
+        let table = optional + 0xe0;
+        v[table + 8..table + 12].copy_from_slice(&0x1000u32.to_le_bytes()); // virtual size
+        v[table + 12..table + 16].copy_from_slice(&0x1000u32.to_le_bytes()); // virtual address
+        v[table + 16..table + 20].copy_from_slice(&0x100u32.to_le_bytes()); // raw size
+        v[table + 20..table + 24].copy_from_slice(&0x180u32.to_le_bytes()); // raw offset
+        v
+    }
+
+    #[test]
+    fn the_entry_point_of_a_pe_comes_back_through_its_section_table() {
+        // 0x1010 is 0x10 into a section whose bytes start at 0x180.
+        assert_eq!(pe_entry_point(&pe_sample(0x1010)), Some(0x190));
+    }
+
+    #[test]
+    fn an_entry_point_in_the_headers_is_already_a_file_offset() {
+        assert_eq!(pe_entry_point(&pe_sample(0x40)), Some(0x40));
+    }
+
+    #[test]
+    fn an_entry_point_with_no_bytes_behind_it_is_no_answer() {
+        // Past the section's bytes on disk, in the part that exists only once
+        // the loader has made room for it.
+        assert_eq!(pe_entry_point(&pe_sample(0x1500)), None);
+        // Not a PE at all.
+        assert_eq!(pe_entry_point(b"MZ and nothing else"), None);
     }
 
     #[test]

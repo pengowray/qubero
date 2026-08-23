@@ -434,7 +434,15 @@ export class Doc {
     if (!complete) return [];
     const bundles: string[] = [];
     const mz = bytes[0] === 0x4d && bytes[1] === 0x5a;
-    if (mz) bundles.push("msdos.sig");
+    if (mz) {
+      // Both start MZ. Which rules apply is decided by whether there is a PE
+      // header where the DOS header points, the same question the built-in
+      // sniffer asks.
+      const byteAt = (i: number): number => bytes[i] ?? 0;
+      const at = byteAt(0x3c) + (byteAt(0x3d) << 8) + (byteAt(0x3e) << 16) + byteAt(0x3f) * 0x1000000;
+      const pe = at + 4 <= bytes.length && byteAt(at) === 0x50 && byteAt(at + 1) === 0x45 && byteAt(at + 2) === 0 && byteAt(at + 3) === 0;
+      bundles.push(pe ? "pe.sig" : "msdos.sig");
+    }
     // A .COM is bytes with no header at all, so nothing but its size and its
     // name suggest one. Asking for every unknown small file would be worse.
     if (!mz && this.lengthBytes <= COM_LIMIT && (!identified || this.name.toLowerCase().endsWith(".com"))) {

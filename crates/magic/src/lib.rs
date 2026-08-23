@@ -29,6 +29,19 @@ struct MatchDto {
     source: String,
 }
 
+/// Tidy the front of a rule's sentence without rewording it.
+///
+/// A rule builds its sentence from every line that matched, and a line whose
+/// message starts with `` is written to continue the one before it: `MS-DOS
+/// executable` then `, MZ for MS-DOS`. When the earlier line does not match,
+/// which happens where a rule reads an offset out of the file and it lands
+/// somewhere unreadable, the continuation is all there is and the sentence
+/// opens with its joining comma. The words are still the rule's own; only the
+/// separator that now joins nothing is dropped.
+fn tidy(message: &str) -> String {
+    message.trim_start().trim_start_matches([',', ';', ':']).trim_start().to_string()
+}
+
 /// Identify the bytes at the start of a file. Returns JSON, or "" for no match.
 ///
 /// `head` should be the file's first bytes and nothing else: rules count from
@@ -50,7 +63,7 @@ pub fn identify(head: &[u8]) -> String {
     if m.is_default() {
         return String::new();
     }
-    let message = m.message();
+    let message = tidy(&m.message());
     if message.is_empty() {
         return String::new();
     }
@@ -64,4 +77,23 @@ pub fn identify(head: &[u8]) -> String {
         source: m.source().unwrap_or_default().to_string(),
     };
     serde_json::to_string(&dto).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tidy;
+
+    #[test]
+    fn a_sentence_does_not_open_with_a_comma_that_joins_nothing() {
+        assert_eq!(tidy(", MZ for MS-DOS"), "MZ for MS-DOS");
+        assert_eq!(tidy("  ; version 2"), "version 2");
+    }
+
+    #[test]
+    fn a_whole_sentence_is_left_exactly_as_the_rule_wrote_it() {
+        assert_eq!(tidy("MS-DOS executable, MZ for MS-DOS"), "MS-DOS executable, MZ for MS-DOS");
+        assert_eq!(tidy("PNG image data, 8 x 4"), "PNG image data, 8 x 4");
+        // Punctuation that is part of the words stays.
+        assert_eq!(tidy("(compressed) data"), "(compressed) data");
+    }
 }
