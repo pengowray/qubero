@@ -251,8 +251,8 @@ impl Ty {
             Ty::Bytes(_) => "bytes[]".into(),
             Ty::Str { len } => match len {
                 StrLen::Fixed(_) => "utf8[]".into(),
-                StrLen::Padded { pad: 0, .. } => "utf8[] nul-padded".into(),
-                StrLen::Padded { pad, .. } => format!("utf8[] padded 0x{pad:02x}"),
+                StrLen::Padded { pad: 0, .. } => "utf8 nul-pad".into(),
+                StrLen::Padded { pad, .. } => format!("utf8 pad 0x{pad:02x}"),
                 StrLen::Terminated { end: 0 } => "cstr".into(),
                 StrLen::Terminated { end } => format!("utf8 to 0x{end:02x}"),
             },

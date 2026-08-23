@@ -123,7 +123,7 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
                     // The terminator is the field's, not the reader's, so the
                     // text has to be one byte shorter than the field.
                     if want == 0 {
-                        return Err("This field has no room for text.".into());
+                        return Err("The field is 0 bytes; there's no room for text.".into());
                     }
                     if bytes.len() != want - 1 {
                         return Err(length_msg(bytes.len(), want - 1, "bytes of UTF-8"));
@@ -209,11 +209,11 @@ fn range_msg(type_name: &str, min: &str, max: &str) -> String {
 }
 
 fn too_long_msg(got: usize, want: usize) -> String {
-    format!("Too long for this field: {got} bytes of UTF-8, and it holds {want}.")
+    format!("Too long for this field: {got} bytes of UTF-8; it holds {want}.")
 }
 
 fn no_pad_byte_msg(pad: u8) -> String {
-    format!("Cannot contain the byte 0x{pad:02x}, which is what ends this field.")
+    format!("Can't contain 0x{pad:02x}; that's the byte that ends this text.")
 }
 
 fn length_msg(got: usize, want: usize, noun: &str) -> String {

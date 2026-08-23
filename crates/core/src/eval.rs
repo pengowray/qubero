@@ -229,7 +229,13 @@ impl Evaluator {
             });
         }
         if !self.padding_is_clean(doc, &r, size)? {
-            return fail("There are bytes after the padding here, which this field does not show. Use the hex view.");
+            let pad = match &r.ty {
+                Ty::Str { len: StrLen::Padded { pad, .. } } => *pad,
+                _ => 0,
+            };
+            return fail(format!(
+                "Bytes after the first 0x{pad:02x} aren't shown here; writing would overwrite them. Use the hex view."
+            ));
         }
         let data = encode::encode(&r.ty, text, size).map_err(EvalError::Failed)?;
         Ok(Write { offset_bits: r.offset, data, n_bits: size })
@@ -633,7 +639,7 @@ impl Evaluator {
             out.extend_from_slice(&block);
             at += n;
         }
-        fail(format!("no 0x{end:02x} byte to end this text within {} bytes", (stop - r.offset) / 8))
+        fail(format!("no 0x{end:02x} terminator within {} bytes", (stop - r.offset) / 8))
     }
 
     fn read_leb<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(u128, u64)> {

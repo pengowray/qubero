@@ -61,9 +61,10 @@ Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4), one file
 per format plus `wasm_opcodes.rs` for the instruction table. A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
 Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
-Text encodings still to add: CP437, JIS.
+Text encodings still to add: CP437, JIS, UTF-16, Latin-1. Text is decoded as
+UTF-8 whatever the field says, so `StrLen` will grow an encoding beside it.
 
-Three later additions to the IR, each paying for itself in a format:
+Later additions to the IR, each paying for itself in a format:
 * `Enum` names the values of an integer field without changing it, so a switch
   keyed on that field still sees the number. PNG colour types, wasm section ids
   and opcodes, H.264 NAL unit types. Values with no name show the number and are
@@ -71,6 +72,15 @@ Three later additions to the IR, each paying for itself in a format:
   value its format never defined.
 * `Fixed` is fixed-point, so MP4's 16.16 track width reads 64 rather than
   4194304. Typing a value rounds to the nearest representable step.
+* `StrLen` says how a text field ends: a fixed run of bytes, a run whose tail is
+  padding (the value stops at the first pad byte, and writing pads back out to
+  the field's size, so a name can be shortened without moving the file), or a run
+  that ends at a terminator which belongs to the field (a C string, whose length
+  cannot change without shifting everything after it). A padded field whose tail
+  is not all padding is not editable, since writing what is shown would drop what
+  is not. MP4's `hdlr` name and `compressor_name`, PNG's `tEXt` keyword.
+* `Expr::SizeOf` measures an earlier field, which is how a field that runs to the
+  end of its container knows where the variable-length one before it stopped.
 * `Named` looks a type up in `Template::types`, which is what lets an MP4 box
   contain more boxes. Resolution has a 64-hop limit, so an alias that resolves
   to itself errors instead of spinning.
