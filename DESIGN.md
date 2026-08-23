@@ -285,6 +285,29 @@ Edits live only in the tab: `Save as` writes a copy, so nothing on disk holds
 them. Opening a second file therefore asks before discarding them, whether it
 arrives by drop or by the Open button.
 
+### PE
+The DOS header, the PE header, the optional header and the section table.
+Three things in it are worth knowing, because each is a thing the IR had to be
+able to say. The stub between the DOS header and the real one has a length of
+`pe_header_offset - 64`, and since a length expression can only name a field
+beside it or above it, never one inside a sibling, the stub belongs to the DOS
+header rather than sitting next to it. The optional header comes in a 32-bit
+and a 64-bit shape told apart by its own first two bytes, so `Switch` picks
+between them from a field inside the struct being switched. And a data
+directory entry is an address and a length with nothing saying which directory
+it is: position decides, so `Switch` on `Expr::idx()` gives entry three the
+type name `exception`.
+
+Sniffing it needs more than a magic number. A DOS executable and a Windows one
+both start `MZ`; only a `PE  ` at the offset held at 0x3c separates them, so
+`sniff` is given 1 KiB rather than 64 bytes. A file whose header sits past that
+is left unclaimed, since claiming it would put this template on every DOS
+program ever written.
+
+Not yet described: the section contents, so imports, exports, resources and
+relocations are all gaps. The characteristics fields are numbers, and want the
+named-bit type the IR does not have.
+
 ### Naming a file
 Every file is identified using the rule database of the `file` command, through
 the `pure-magic` crate, and the rule's own sentence goes in the toolbar beside
