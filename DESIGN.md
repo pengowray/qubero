@@ -349,9 +349,9 @@ Which `MZ` files it claims turns on `relocation_table` at 0x18. A DOS program's
 relocations start before 0x40, which is where the pointer to a later header
 would have to be, so such a file is a DOS program and nothing else. A file that
 leaves room for one is claimed only once the bytes it points at have been seen
-and are none of `PE`, `NE` or `LE`: a Windows 3.x program is left to the rule
-database, which can name it, rather than to a template that would describe its
-stub.
+and are none of `PE`, `NE`, `LE` or `LX`: a Windows 3.x program is left to the
+rule database, which can name it, rather than to a template that would describe
+its stub.
 
 ### What made a file
 A second database answers a different question. Where `file(1)` says what

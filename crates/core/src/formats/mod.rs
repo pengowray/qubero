@@ -86,8 +86,8 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
 /// header of a later format follows is `relocation_table` at 0x18: a DOS
 /// program's relocations start before 0x40, which is where the pointer to such
 /// a header would have to be. A file that leaves room for one is claimed here
-/// only once the bytes it points at have been seen and are not `PE`, `NE` or
-/// `LE`. A pointer past what has been read leaves the file unclaimed, which is
+/// only once the bytes it points at have been seen and are none of `PE`, `NE`,
+/// `LE` or `LX`. A pointer past what has been read leaves the file unclaimed, which is
 /// the same answer `is_pe` gives to a short read and for the same reason.
 fn is_dos(head: &[u8]) -> bool {
     if !head.starts_with(b"MZ") || head.len() < 0x1c {
