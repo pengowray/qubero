@@ -7,6 +7,9 @@ import { formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 
 const PAGE = 200;
+/** The Value column shows a preview of a long field, so editing it here would
+ * write back what the preview left out. Longer fields are edited at the cursor. */
+const INLINE_LIMIT = { bytes: 16, str: 64 } as const;
 /** Give up after this many chunk-loading retries on one commit. */
 const WRITE_RETRIES = 8;
 
@@ -23,6 +26,12 @@ type Editing = {
 
 function key(path: readonly number[]): string {
   return path.join("/");
+}
+
+function editableHere(n: TemplateNode): boolean {
+  if (!n.editable) return false;
+  const cap = n.kind === "bytes" ? INLINE_LIMIT.bytes : n.kind === "str" ? INLINE_LIMIT.str : null;
+  return cap === null || n.size_bits <= cap * 8;
 }
 
 function pathOf(k: string): number[] {
@@ -276,7 +285,7 @@ export class TypeTable {
     value.className = `tt-val tt-${n.kind}`;
     if (this.editing?.key === k) {
       value.append(this.editor(n));
-    } else if (n.editable) {
+    } else if (editableHere(n)) {
       value.classList.add("tt-editable");
       value.dataset["edit"] = k;
       value.tabIndex = 0;

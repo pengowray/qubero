@@ -19,6 +19,7 @@ pub mod source;
 pub mod template;
 
 pub use document::Document;
+pub use encode::EDIT_LIMIT_BYTES;
 pub use eval::{EvalError, Evaluator, NodeInfo, Value, Write};
 pub use piece::PieceTable;
 pub use save::{Run, RunKind};

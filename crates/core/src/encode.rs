@@ -11,17 +11,21 @@
 use crate::bits::bytes_for;
 use crate::template::{Endian, Ty};
 
+/// The longest text or byte field that can be written as text. Past this a
+/// value is not something anyone retypes, and the whole of it would have to be
+/// held in the page to be edited at all.
+pub const EDIT_LIMIT_BYTES: u64 = 4096;
+
 /// Can a field of this type and current size be written from text?
 ///
-/// Text and byte fields are capped: the type table shows a preview of a long
-/// one, and typing a replacement for something you cannot fully see is a trap.
-/// Bytes stop at the 16 the preview shows.
+/// A caller that only shows a preview of the value must apply its own, smaller
+/// limit: writing back a value the user could not see would replace the part
+/// the preview elided.
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } => editable(inner, size_bits),
         Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Fixed { .. } => true,
-        Ty::Bytes(_) => size_bits <= 16 * 8,
-        Ty::Utf8(_) => size_bits <= 64 * 8,
+        Ty::Bytes(_) | Ty::Utf8(_) => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
 }

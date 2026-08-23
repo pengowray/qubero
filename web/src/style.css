@@ -473,6 +473,30 @@ input.invalid {
   min-height: 28px;
   background: var(--bg);
 }
+.insp-area {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 4px 6px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+  max-height: 14rem;
+}
+.insp-area:disabled {
+  color: var(--muted);
+}
+.insp-area.invalid {
+  border-color: var(--warn);
+}
+.insp-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
 .insp-field::placeholder {
   color: var(--muted);
   font-style: italic;

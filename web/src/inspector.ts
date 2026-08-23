@@ -158,6 +158,9 @@ export class Inspector {
   private readonly struct: HTMLElement;
   private readonly crumbs: HTMLElement;
   private readonly field: HTMLInputElement;
+  /** Long values (bytes, text) are edited here instead, wrapped over lines. */
+  private readonly area: HTMLTextAreaElement;
+  private readonly note: HTMLElement;
   private readonly detail: HTMLElement;
   private readonly fieldRow: HTMLElement;
   /** Path of the field the structure panel is showing, if any. */
@@ -212,7 +215,10 @@ export class Inspector {
       input.setAttribute("aria-label", lens.label);
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") this.commit(lens, input);
-        if (e.key === "Escape") this.render();
+        if (e.key === "Escape") {
+          input.dataset["dirty"] = "0";
+          this.render();
+        }
       });
       input.addEventListener("blur", () => {
         if (input.dataset["dirty"] === "1") this.commit(lens, input);
@@ -247,7 +253,10 @@ export class Inspector {
     this.field.className = "insp-field";
     this.field.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.commitField();
-      if (e.key === "Escape") this.render();
+      if (e.key === "Escape") {
+        this.field.dataset["dirty"] = "0";
+        this.clearError();
+      }
     });
     this.field.addEventListener("blur", () => {
       if (this.field.dataset["dirty"] === "1") this.commitField();
@@ -256,11 +265,36 @@ export class Inspector {
       this.field.dataset["dirty"] = "1";
       this.field.classList.remove("invalid");
     });
+    this.area = document.createElement("textarea");
+    this.area.className = "insp-area";
+    this.area.spellcheck = false;
+    this.area.rows = 3;
+    this.area.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        this.commitField();
+      }
+      if (e.key === "Escape") {
+        this.area.dataset["dirty"] = "0";
+        this.clearError();
+      }
+      e.stopPropagation();
+    });
+    this.area.addEventListener("blur", () => {
+      if (this.area.dataset["dirty"] === "1") this.commitField();
+    });
+    this.area.addEventListener("input", () => {
+      this.area.dataset["dirty"] = "1";
+      this.area.classList.remove("invalid");
+    });
+
+    this.note = document.createElement("div");
+    this.note.className = "insp-note";
     this.detail = document.createElement("div");
     this.detail.className = "insp-detail";
     this.fieldRow = document.createElement("div");
     this.fieldRow.className = "insp-fieldrow";
-    this.fieldRow.append(this.field, this.detail);
+    this.fieldRow.append(this.field, this.area, this.note, this.detail);
     this.struct.append(this.crumbs, this.fieldRow);
 
     this.status = document.createElement("div");
@@ -294,12 +328,21 @@ export class Inspector {
     this.render();
   }
 
+  /** Drop a rejection message and put the stored value back. */
+  private clearError(): void {
+    this.status.textContent = "";
+    this.field.classList.remove("invalid");
+    this.area.classList.remove("invalid");
+    this.render();
+  }
+
   private commitField(): void {
-    this.field.dataset["dirty"] = "0";
+    const widget: HTMLInputElement | HTMLTextAreaElement = this.area.hidden ? this.field : this.area;
+    widget.dataset["dirty"] = "0";
     if (this.at === null) return;
-    const r = this.doc.writeNode(this.at, this.field.value);
+    const r = this.doc.writeNode(this.at, widget.value);
     if (r.status === "error") {
-      this.field.classList.add("invalid");
+      widget.classList.add("invalid");
       this.status.textContent = r.message;
       return;
     }
@@ -379,6 +422,15 @@ export class Inspector {
     this.crumbs.replaceChildren(...this.trail(path));
     this.fieldRow.hidden = false;
     this.detail.textContent = `${n.type} · ${formatOffset(n.offset_bits)} · ${sizeText(n.size_bits)}`;
+    const long = !n.composite && (n.kind === "bytes" || n.kind === "str");
+    this.area.hidden = !long;
+    this.field.hidden = long;
+    if (long) this.fillArea(n);
+    else this.fillField(n);
+  }
+
+  private fillField(n: TemplateNode): void {
+    this.note.hidden = true;
     if (this.field.dataset["dirty"] === "1" && document.activeElement === this.field) return;
     this.field.disabled = !n.editable;
     this.field.classList.remove("invalid");
@@ -388,35 +440,102 @@ export class Inspector {
   }
 
   /**
-   * The last few steps of the path, each one selectable. The whole chain is in
-   * the field table below, which follows the cursor too, so this stays short.
+   * The whole value, wrapped over as many lines as it takes: hex pairs for a
+   * byte field, the text itself for a text field. Read from the document rather
+   * than from the node, whose value is a preview once a field gets long.
+   */
+  private fillArea(n: TemplateNode): void {
+    if (this.area.dataset["dirty"] === "1" && document.activeElement === this.area) return;
+    const shownBytes = Math.min(n.size_bits / 8, SHOW_LIMIT);
+    const { bytes, complete } = this.doc.readBits(n.offset_bits, shownBytes * 8);
+    this.area.classList.remove("invalid");
+    this.area.setAttribute("aria-label", `${n.name}, ${n.type}`);
+    if (!complete) {
+      this.area.value = "";
+      this.area.placeholder = "Loading this part of the file…";
+      this.area.disabled = true;
+      this.note.hidden = true;
+      return;
+    }
+    this.area.placeholder = "";
+    let text: string;
+    let editable = n.editable;
+    let note = "";
+    if (n.kind === "str") {
+      const decoded = decodeUtf8(bytes);
+      if (decoded === null) {
+        text = hexText(bytes);
+        editable = false;
+        note = "Not valid UTF-8, so it is shown as bytes. Edit it in the hex view.";
+      } else {
+        text = decoded;
+      }
+    } else {
+      text = hexText(bytes);
+    }
+    const total = n.size_bits / 8;
+    if (total > shownBytes) {
+      // Past the limit the panel neither shows nor edits the whole field.
+      note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${total.toLocaleString()}. Too long to edit here.`;
+    }
+    this.area.value = text;
+    this.area.disabled = !editable;
+    this.area.rows = Math.max(2, Math.min(12, Math.ceil(text.length / 30)));
+    this.note.textContent = note;
+    this.note.hidden = note === "";
+  }
+
+  /**
+   * Every step from the root down, each one selectable. A list and the element
+   * taken from it are one crumb, `boxes[0]`, because two crumbs for one step
+   * doubles the length of a deep path without saying more.
    */
   private trail(path: readonly number[]): HTMLElement[] {
     const out: HTMLElement[] = [];
-    const from = Math.max(0, path.length - 2);
-    if (from > 0) {
-      const more = document.createElement("span");
-      more.className = "insp-crumb insp-crumb-more";
-      more.textContent = "…";
-      out.push(more);
-    }
-    for (let i = from; i <= path.length; i++) {
-      const p = path.slice(0, i);
-      const node = this.doc.templateNode(p);
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = i === path.length ? "insp-crumb insp-crumb-here" : "insp-crumb";
-      b.dataset["path"] = p.join("/");
+    for (let i = 0; i <= path.length; i++) {
+      const node = this.doc.templateNode(path.slice(0, i));
+      if (node.status !== "ok") {
+        out.push(this.crumb("?", path.slice(0, i), i === path.length));
+        continue;
+      }
+      const n = node.node;
+      const isList = n.composite && n.type.endsWith("[]");
+      if (isList && i < path.length) {
+        // Fold the element index into the list's own name.
+        const to = path.slice(0, i + 1);
+        out.push(this.crumb(`${n.name}[${path[i]}]`, to, i + 1 === path.length));
+        i += 1;
+        continue;
+      }
       // A struct field is often called `body`; its type says what it holds.
-      b.textContent =
-        node.status !== "ok"
-          ? "?"
-          : node.node.composite && node.node.type !== node.node.name
-            ? `${node.node.name} (${node.node.type})`
-            : node.node.name;
-      out.push(b);
+      const label = n.composite && n.type !== n.name ? `${n.name} (${n.type})` : n.name;
+      out.push(this.crumb(label, path.slice(0, i), i === path.length));
     }
     return out;
+  }
+
+  private crumb(label: string, path: readonly number[], here: boolean): HTMLElement {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = here ? "insp-crumb insp-crumb-here" : "insp-crumb";
+    b.dataset["path"] = path.join("/");
+    b.textContent = label;
+    return b;
+  }
+}
+
+/** How much of a long field the panel reads; the core stops editing there too. */
+const SHOW_LIMIT = 4096;
+
+function hexText(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
+}
+
+function decodeUtf8(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
   }
 }
 
