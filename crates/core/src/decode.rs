@@ -5,7 +5,7 @@
 //! into a number, plus the static size questions the evaluator asks of a type.
 
 use crate::bits::bytes_for;
-use crate::template::{Endian, Expr, Ty};
+use crate::template::{Endian, Expr, StrLen, Ty};
 
 /// A short text or byte field used in an expression is its bytes as a
 /// big-endian number, so a switch can key on e.g. "IHDR".
@@ -22,7 +22,11 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::F32(_) => 32,
         Ty::F64(_) => 64,
         Ty::Magic(b) => b.len() as u64 * 8,
-        Ty::Bytes(Expr::Lit(n)) | Ty::Utf8(Expr::Lit(n)) => (*n).max(0) as u64 * 8,
+        Ty::Bytes(Expr::Lit(n)) => (*n).max(0) as u64 * 8,
+        // Text is fixed-size only when its length does not depend on the bytes.
+        Ty::Str { len: StrLen::Fixed(Expr::Lit(n)) } | Ty::Str { len: StrLen::Padded { size: Expr::Lit(n), .. } } => {
+            (*n).max(0) as u64 * 8
+        }
         Ty::Struct(s) => s.fields.iter().map(|f| fixed_bits(&f.ty)).sum::<Option<u64>>()?,
         Ty::Array { elem, count: Expr::Lit(n) } => fixed_bits(elem)? * (*n).max(0) as u64,
         Ty::Sized { size: Expr::Lit(n), .. } => (*n).max(0) as u64 * 8,

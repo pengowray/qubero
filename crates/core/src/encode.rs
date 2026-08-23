@@ -9,7 +9,7 @@
 //! belongs with the redundant-editing work, not here.
 
 use crate::bits::bytes_for;
-use crate::template::{Endian, Ty};
+use crate::template::{Endian, StrLen, Ty};
 
 /// The longest text or byte field that can be written as text. Past this a
 /// value is not something anyone retypes, and the whole of it would have to be
@@ -25,7 +25,7 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } => editable(inner, size_bits),
         Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Fixed { .. } => true,
-        Ty::Bytes(_) | Ty::Utf8(_) => size_bits <= EDIT_LIMIT_BYTES * 8,
+        Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
 }
@@ -98,13 +98,44 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
                 format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
             })
         }
-        Ty::Utf8(_) => {
+        Ty::Str { len } => {
             let want = (size_bits / 8) as usize;
             let bytes = text.as_bytes().to_vec();
-            if bytes.len() != want {
-                return Err(length_msg(bytes.len(), want, "bytes of UTF-8"));
+            match len {
+                StrLen::Fixed(_) => {
+                    if bytes.len() != want {
+                        return Err(length_msg(bytes.len(), want, "bytes of UTF-8"));
+                    }
+                    Ok(bytes)
+                }
+                StrLen::Padded { pad, .. } => {
+                    if bytes.len() > want {
+                        return Err(too_long_msg(bytes.len(), want));
+                    }
+                    if bytes.contains(pad) {
+                        return Err(no_pad_byte_msg(*pad));
+                    }
+                    let mut out = bytes;
+                    out.resize(want, *pad);
+                    Ok(out)
+                }
+                StrLen::Terminated { end } => {
+                    // The terminator is the field's, not the reader's, so the
+                    // text has to be one byte shorter than the field.
+                    if want == 0 {
+                        return Err("This field has no room for text.".into());
+                    }
+                    if bytes.len() != want - 1 {
+                        return Err(length_msg(bytes.len(), want - 1, "bytes of UTF-8"));
+                    }
+                    if bytes.contains(end) {
+                        return Err(no_pad_byte_msg(*end));
+                    }
+                    let mut out = bytes;
+                    out.push(*end);
+                    Ok(out)
+                }
             }
-            Ok(bytes)
         }
         Ty::Bytes(_) => {
             let want = (size_bits / 8) as usize;
@@ -175,6 +206,14 @@ fn article(name: &str) -> &'static str {
 
 fn range_msg(type_name: &str, min: &str, max: &str) -> String {
     format!("{type_name} range is {min} to {max}.")
+}
+
+fn too_long_msg(got: usize, want: usize) -> String {
+    format!("Too long for this field: {got} bytes of UTF-8, and it holds {want}.")
+}
+
+fn no_pad_byte_msg(pad: u8) -> String {
+    format!("Cannot contain the byte 0x{pad:02x}, which is what ends this field.")
 }
 
 fn length_msg(got: usize, want: usize, noun: &str) -> String {
@@ -430,8 +469,8 @@ mod tests {
 
     #[test]
     fn text_and_bytes_must_keep_their_length() {
-        assert!(encode(&Ty::Utf8(Expr::lit(4)), "IHDR", 32).is_ok());
-        assert!(encode(&Ty::Utf8(Expr::lit(4)), "IHD", 32).is_err());
+        assert!(encode(&Ty::utf8(Expr::lit(4)), "IHDR", 32).is_ok());
+        assert!(encode(&Ty::utf8(Expr::lit(4)), "IHD", 32).is_err());
         assert_eq!(encode(&Ty::Bytes(Expr::lit(2)), "de ad", 16).unwrap(), vec![0xde, 0xad]);
         assert!(encode(&Ty::Bytes(Expr::lit(2)), "dead be", 16).is_err());
         assert!(encode(&Ty::Magic(vec![1]), "01", 8).is_err());
@@ -443,6 +482,28 @@ mod tests {
         assert_eq!(commas(999), "999");
         assert_eq!(commas(4096), "4,096");
         assert_eq!(commas(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn padded_text_keeps_the_field_size() {
+        let ty = Ty::utf8_padded(Expr::lit(8), 0);
+        assert_eq!(encode(&ty, "hi", 64).unwrap(), b"hi\0\0\0\0\0\0".to_vec());
+        assert_eq!(encode(&ty, "12345678", 64).unwrap(), b"12345678".to_vec());
+        // One byte too many, and a value that would look truncated when read back.
+        assert!(encode(&ty, "123456789", 64).is_err());
+        assert!(encode(&ty, "a\0b", 64).is_err());
+        let spaces = Ty::utf8_padded(Expr::lit(4), b' ');
+        assert_eq!(encode(&spaces, "ab", 32).unwrap(), b"ab  ".to_vec());
+    }
+
+    #[test]
+    fn terminated_text_leaves_room_for_the_terminator() {
+        let ty = Ty::cstr();
+        // Five bytes of field: four of text, then the NUL.
+        assert_eq!(encode(&ty, "abcd", 40).unwrap(), b"abcd\0".to_vec());
+        assert!(encode(&ty, "abc", 40).is_err());
+        assert!(encode(&ty, "abcde", 40).is_err());
+        assert!(encode(&ty, "ab\0d", 40).is_err());
     }
 
     #[test]

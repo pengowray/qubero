@@ -231,7 +231,9 @@ fn hdlr(len: E) -> T {
         // The handler is four characters, and they read as themselves.
         ("handler_type", T::utf8(E::lit(4))),
         ("reserved", T::bytes(E::lit(12))),
-        ("name", T::utf8(len.sub(E::lit(24)))),
+        // Fills the rest of the box and ends at a NUL, which some writers leave
+        // out; padded rather than terminated so a box without one still reads.
+        ("name", T::utf8_padded(len.sub(E::lit(24)), 0)),
     ]);
     T::structure("Handler", fields)
 }
@@ -278,7 +280,14 @@ fn visual_sample_entry() -> T {
             ("vert_resolution", T::fixed(32, 16, Big)),
             ("reserved2", u32be()),
             ("frame_count", u16be()),
-            ("compressor_name", T::bytes(E::lit(32))),
+            // 32 bytes: a length byte, then that many characters, then padding.
+            (
+                "compressor_name",
+                T::structure(
+                    "CompressorName",
+                    vec![("length", T::u8()), ("text", T::utf8_padded(E::lit(31), 0))],
+                ),
+            ),
             ("depth", u16be()),
             ("pre_defined3", T::Int { bits: 16, endian: Big }),
             ("boxes", T::repeat(T::Named("Box".into()), Until::End)),
@@ -360,7 +369,14 @@ mod tests {
         avcc.extend_from_slice(&sps);
         avcc.push(0); // no PPS
 
+        let mut hdlr = vec![0u8, 0, 0, 0]; // version, flags
+        hdlr.extend_from_slice(&0u32.to_be_bytes()); // pre_defined
+        hdlr.extend_from_slice(b"vide");
+        hdlr.extend_from_slice(&[0; 12]); // reserved
+        hdlr.extend_from_slice(b"VideoHandler\0");
+
         let mut moov = boxed(b"mvhd", &mvhd);
+        moov.extend_from_slice(&boxed(b"hdlr", &hdlr));
         moov.extend_from_slice(&boxed(b"avcC", &avcc));
 
         let mut out = boxed(b"ftyp", &ftyp);
@@ -379,21 +395,32 @@ mod tests {
         assert_eq!(ev.node(&d, &[0, 2, 2]).unwrap().child_count, 2);
 
         // moov holds boxes, reached through Ty::Named.
-        assert_eq!(ev.node(&d, &[1, 2]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[1, 2]).unwrap().child_count, 3);
         assert_eq!(ev.node(&d, &[1, 2, 0, 1]).unwrap().value, Value::Str("mvhd".into()));
         assert_eq!(ev.node(&d, &[1, 2, 0, 2, 2, 2]).unwrap().value, Value::UInt(600));
         assert_eq!(ev.node(&d, &[1, 2, 0, 2, 2, 3]).unwrap().value, Value::UInt(1200));
 
+        // hdlr's name is padded text: the trailing NUL is not part of the value.
+        let name = ev.node(&d, &[1, 2, 1, 2, 5]).unwrap();
+        assert_eq!(name.value, Value::Str("VideoHandler".into()));
+        assert_eq!(name.size_bits, 13 * 8);
+        assert!(name.editable);
+        let w = ev.prepare_write(&d, &[1, 2, 1, 2, 5], "Cam").unwrap();
+        assert_eq!(w.data, b"Cam\0\0\0\0\0\0\0\0\0\0".to_vec());
+
         // avcC, down to the bits of the SPS NAL header.
-        let avcc = &[1usize, 2, 1, 2];
-        assert_eq!(ev.node(&d, &[1, 2, 1, 1]).unwrap().value, Value::Str("avcC".into()));
+        let avcc = &[1usize, 2, 2, 2];
+        assert_eq!(ev.node(&d, &[1, 2, 2, 1]).unwrap().value, Value::Str("avcC".into()));
         let profile = ev.node(&d, &[avcc[0], avcc[1], avcc[2], avcc[3], 1]).unwrap();
         assert_eq!(profile.value, Value::Enum { raw: 66, name: Some("baseline".into()), hex: false });
-        assert_eq!(ev.node(&d, &[1, 2, 1, 2, 5]).unwrap().value, Value::UInt(3)); // length_size_minus_one
-        assert_eq!(ev.node(&d, &[1, 2, 1, 2, 7]).unwrap().value, Value::UInt(1)); // sps_count
-        let nal_type = ev.node(&d, &[1, 2, 1, 2, 8, 0, 1, 2]).unwrap();
+        assert_eq!(ev.node(&d, &[1, 2, 2, 2, 5]).unwrap().value, Value::UInt(3)); // length_size_minus_one
+        assert_eq!(ev.node(&d, &[1, 2, 2, 2, 7]).unwrap().value, Value::UInt(1)); // sps_count
+        let nal_type = ev.node(&d, &[1, 2, 2, 2, 8, 0, 1, 2]).unwrap();
         assert_eq!(nal_type.value, Value::Enum { raw: 7, name: Some("SPS".into()), hex: false });
-        assert_eq!(ev.node(&d, &[1, 2, 1, 2, 8, 0, 1, 3]).unwrap().size_bits, 24);
+        assert_eq!(ev.node(&d, &[1, 2, 2, 2, 8, 0, 1, 3]).unwrap().size_bits, 24);
+
+        // hdlr's name is padded, so it reads without the trailing NUL.
+        // (The sample's compressor_name is all zeros, so its length byte reads 0.)
 
         // mdat is left as bytes.
         assert_eq!(ev.node(&d, &[2, 2]).unwrap().size_bits, 16 * 8);

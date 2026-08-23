@@ -20,6 +20,9 @@ pub enum Endian {
 pub enum Expr {
     Lit(i128),
     Ref(String),
+    /// Size in bytes of an earlier field. Needed when a field runs to the end
+    /// of a container and what came before it was variable length.
+    SizeOf(String),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -32,6 +35,10 @@ impl Expr {
     }
     pub fn field(name: &str) -> Expr {
         Expr::Ref(name.to_string())
+    }
+    /// The byte size of an earlier field.
+    pub fn size_of(name: &str) -> Expr {
+        Expr::SizeOf(name.to_string())
     }
     pub fn add(self, rhs: Expr) -> Expr {
         Expr::Add(Box::new(self), Box::new(rhs))
@@ -77,6 +84,20 @@ impl EnumDef {
     }
 }
 
+/// How far a text field runs. Formats disagree, so the template says which:
+/// a fixed run of bytes, a fixed run whose tail is padding, or a run that ends
+/// at a terminator byte.
+#[derive(Debug, Clone)]
+pub enum StrLen {
+    /// Exactly this many bytes, all of them part of the value.
+    Fixed(Expr),
+    /// This many bytes, of which the value is everything before the first `pad`
+    /// byte. Writing a shorter value pads the rest, so the field keeps its size.
+    Padded { size: Expr, pad: u8 },
+    /// Runs to the first `end` byte, which belongs to the field. A C string.
+    Terminated { end: u8 },
+}
+
 #[derive(Debug, Clone)]
 pub struct Field {
     pub name: String,
@@ -99,8 +120,8 @@ pub enum Ty {
     Magic(Vec<u8>),
     /// Raw bytes of computed length (in bytes).
     Bytes(Expr),
-    /// UTF-8 text of computed length (in bytes).
-    Utf8(Expr),
+    /// UTF-8 text. How its length is decided is up to `StrLen`.
+    Str { len: StrLen },
     Struct(Arc<StructDef>),
     Array { elem: Box<Ty>, count: Expr },
     Repeat { elem: Box<Ty>, until: Until },
@@ -148,7 +169,15 @@ impl Ty {
         Ty::Bytes(len)
     }
     pub fn utf8(len: Expr) -> Ty {
-        Ty::Utf8(len)
+        Ty::Str { len: StrLen::Fixed(len) }
+    }
+    /// Text in a field of `size` bytes, ending at the first `pad` byte.
+    pub fn utf8_padded(size: Expr, pad: u8) -> Ty {
+        Ty::Str { len: StrLen::Padded { size, pad } }
+    }
+    /// Text that ends at a NUL, which is part of the field.
+    pub fn cstr() -> Ty {
+        Ty::Str { len: StrLen::Terminated { end: 0 } }
     }
     pub fn magic(b: &[u8]) -> Ty {
         Ty::Magic(b.to_vec())
@@ -220,7 +249,13 @@ impl Ty {
             Ty::Leb128 { signed: true } => "sleb128".into(),
             Ty::Magic(b) => format!("magic[{}]", b.len()),
             Ty::Bytes(_) => "bytes[]".into(),
-            Ty::Utf8(_) => "utf8[]".into(),
+            Ty::Str { len } => match len {
+                StrLen::Fixed(_) => "utf8[]".into(),
+                StrLen::Padded { pad: 0, .. } => "utf8[] nul-padded".into(),
+                StrLen::Padded { pad, .. } => format!("utf8[] padded 0x{pad:02x}"),
+                StrLen::Terminated { end: 0 } => "cstr".into(),
+                StrLen::Terminated { end } => format!("utf8 to 0x{end:02x}"),
+            },
             Ty::Struct(s) => s.name.clone(),
             Ty::Array { elem, .. } => format!("{}[]", elem.display_name()),
             Ty::Repeat { elem, .. } => format!("{}[]", elem.display_name()),

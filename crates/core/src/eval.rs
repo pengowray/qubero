@@ -12,7 +12,7 @@ use crate::decode::{be_int, f16_to_f64, fixed_bits, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::source::{Missing, Source};
-use crate::template::{Expr, Template, Ty, Until};
+use crate::template::{Expr, StrLen, Template, Ty, Until};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
@@ -133,7 +133,7 @@ impl Evaluator {
         };
         Ok(NodeInfo {
             path: path.to_vec(),
-            editable: !composite && encode::editable(&r.ty, size),
+            editable: !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)?,
             name: r.name,
             type_name: r.ty.display_name(),
             offset_bits: r.offset,
@@ -215,13 +215,16 @@ impl Evaluator {
         if !encode::editable(&r.ty, size) {
             return fail(match &r.ty {
                 Ty::Magic(_) => "Magic bytes are fixed by the format.".to_string(),
-                Ty::Bytes(_) | Ty::Utf8(_) => format!(
+                Ty::Bytes(_) | Ty::Str { .. } => format!(
                     "Too long to edit: {} bytes; the limit is {}. Use the hex view.",
                     encode::commas(size / 8),
                     encode::commas(encode::EDIT_LIMIT_BYTES)
                 ),
                 _ => "This field can't be edited here. Use the hex view.".to_string(),
             });
+        }
+        if !self.padding_is_clean(doc, &r, size)? {
+            return fail("There are bytes after the padding here, which this field does not show. Use the hex view.");
         }
         let data = encode::encode(&r.ty, text, size).map_err(EvalError::Failed)?;
         Ok(Write { offset_bits: r.offset, data, n_bits: size })
@@ -373,13 +376,26 @@ impl Evaluator {
             f
         } else {
             match &r.ty {
-                Ty::Bytes(e) | Ty::Utf8(e) => {
+                Ty::Bytes(e) => {
                     let n = self.eval_expr(doc, path, e)?;
                     if n < 0 {
                         return fail("negative length");
                     }
                     n as u64 * 8
                 }
+                Ty::Str { len } => match len {
+                    StrLen::Fixed(e) | StrLen::Padded { size: e, .. } => {
+                        let n = self.eval_expr(doc, path, e)?;
+                        if n < 0 {
+                            return fail("negative length");
+                        }
+                        n as u64 * 8
+                    }
+                    StrLen::Terminated { end } => {
+                        let (_, n) = self.read_terminated(doc, &r, *end)?;
+                        n * 8
+                    }
+                },
                 Ty::Leb128 { .. } => {
                     let (_, n) = self.read_leb(doc, &r)?;
                     n * 8
@@ -503,7 +519,11 @@ impl Evaluator {
     fn eval_expr<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr) -> R<i128> {
         Ok(match e {
             Expr::Lit(v) => *v,
-            Expr::Ref(name) => self.lookup(doc, at, name)?,
+            Expr::Ref(name) => match self.lookup(doc, at, name)? {
+                (Some(v), _) => v,
+                (None, _) => return fail(format!("{name} is not a number")),
+            },
+            Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
             Expr::Add(a, b) => self.eval_expr(doc, at, a)? + self.eval_expr(doc, at, b)?,
             Expr::Sub(a, b) => self.eval_expr(doc, at, a)? - self.eval_expr(doc, at, b)?,
             Expr::Mul(a, b) => self.eval_expr(doc, at, a)? * self.eval_expr(doc, at, b)?,
@@ -517,8 +537,9 @@ impl Evaluator {
         })
     }
 
-    /// Find `name` among the fields before `at` in its struct, then in enclosing structs.
-    fn lookup<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<i128> {
+    /// Find `name` among the fields before `at` in its struct, then in
+    /// enclosing structs. Returns its value and its size in bytes.
+    fn lookup<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<(Option<i128>, i128)> {
         let mut cur = at.to_vec();
         while !cur.is_empty() {
             let idx = cur.pop().expect("non-empty");
@@ -528,10 +549,8 @@ impl Evaluator {
                     let mut p = parent;
                     p.push(j);
                     let info = self.node(doc, &p)?;
-                    return match info.value.as_int() {
-                        Some(v) => Ok(v),
-                        None => fail(format!("{name} is not a number")),
-                    };
+                    // A field with no numeric reading can still be measured.
+                    return Ok((info.value.as_int(), (info.size_bits / 8) as i128));
                 }
             }
         }
@@ -551,6 +570,47 @@ impl Evaluator {
         } else {
             Err(EvalError::Pending(missing))
         }
+    }
+
+    /// A padded text field shows only what is before its first pad byte. If the
+    /// rest is not all padding, writing back what is shown would drop bytes the
+    /// reader never saw, so such a field is not editable here.
+    fn padding_is_clean<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<bool> {
+        let Ty::Str { len: StrLen::Padded { pad, .. } } = &r.ty else { return Ok(true) };
+        if size == 0 || size > crate::encode::EDIT_LIMIT_BYTES * 8 {
+            return Ok(true); // too long to edit anyway
+        }
+        let bytes = self.read(doc, r, r.offset, size)?;
+        Ok(match bytes.iter().position(|b| b == pad) {
+            None => true,
+            Some(i) => bytes[i..].iter().all(|b| b == pad),
+        })
+    }
+
+    /// Bytes up to and including the first `end` byte, and the total length in
+    /// bytes. Read in blocks: a long string should not be one call per byte.
+    fn read_terminated<S: Source>(&self, doc: &Document<S>, r: &Resolved, end: u8) -> R<(Vec<u8>, u64)> {
+        const BLOCK: u64 = 256 * 8;
+        /// A file with no terminator in it must fail rather than walk to the end.
+        const CAP: u64 = 64 * 1024 * 8;
+        let stop = r.limit.min(r.offset + CAP);
+        let mut out: Vec<u8> = Vec::new();
+        let mut at = r.offset;
+        while at < stop {
+            let n = BLOCK.min(stop - at) / 8 * 8;
+            if n == 0 {
+                break;
+            }
+            let block = self.read(doc, r, at, n)?;
+            if let Some(i) = block.iter().position(|b| *b == end) {
+                out.extend_from_slice(&block[..=i]);
+                let total = out.len() as u64;
+                return Ok((out, total));
+            }
+            out.extend_from_slice(&block);
+            at += n;
+        }
+        fail(format!("no 0x{end:02x} byte to end this text within {} bytes", (stop - r.offset) / 8))
     }
 
     fn read_leb<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(u128, u64)> {
@@ -595,11 +655,21 @@ impl Evaluator {
                 let preview = self.read(doc, r, r.offset, len.min(16) * 8)?;
                 Value::Bytes { len, preview }
             }
-            Ty::Utf8(_) => {
-                let len = size / 8;
-                let bytes = self.read(doc, r, r.offset, len.min(256) * 8)?;
-                let mut s = String::from_utf8_lossy(&bytes).into_owned();
-                if len > 256 {
+            Ty::Str { len } => {
+                let n = size / 8;
+                let shown = n.min(256);
+                let bytes = self.read(doc, r, r.offset, shown * 8)?;
+                let text = match len {
+                    StrLen::Fixed(_) => &bytes[..],
+                    // The value stops at the pad byte or the terminator; what
+                    // follows is the format's, not the reader's.
+                    StrLen::Padded { pad, .. } => &bytes[..bytes.iter().position(|b| b == pad).unwrap_or(bytes.len())],
+                    StrLen::Terminated { end } => {
+                        &bytes[..bytes.iter().position(|b| b == end).unwrap_or(bytes.len())]
+                    }
+                };
+                let mut s = String::from_utf8_lossy(text).into_owned();
+                if n > shown && text.len() as u64 == shown {
                     s.push('…');
                 }
                 Value::Str(s)

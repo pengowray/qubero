@@ -25,6 +25,14 @@ pub fn png() -> Template {
             ("interlace", T::enumeration("Interlace", T::u8(), &[(0, "none"), (1, "adam7")])),
         ],
     );
+    // tEXt: a NUL-terminated keyword, then the text filling the rest.
+    let text = T::structure(
+        "tEXt",
+        vec![
+            ("keyword", T::cstr()),
+            ("text", T::utf8(E::field("length").sub(E::size_of("keyword")))),
+        ],
+    );
     let chunk = T::structure(
         "Chunk",
         vec![
@@ -35,7 +43,11 @@ pub fn png() -> Template {
                 T::sized(
                     E::field("length"),
                     // A text field in an expression is its bytes as a big-endian number.
-                    T::switch(E::field("type"), vec![(0x4948_4452, ihdr)], T::bytes(E::field("length"))),
+                    T::switch(
+                        E::field("type"),
+                        vec![(0x4948_4452, ihdr), (0x7445_5874, text)],
+                        T::bytes(E::field("length")),
+                    ),
                 ),
             ),
             ("crc", T::u32(Big)),
@@ -59,6 +71,40 @@ mod tests {
     use crate::document::Document;
     use crate::eval::{Evaluator, Value};
     use crate::source::MemSource;
+
+    fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut v = (data.len() as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(kind);
+        v.extend_from_slice(data);
+        v.extend_from_slice(&[0; 4]); // CRC, not checked by the template
+        v
+    }
+
+    #[test]
+    fn text_chunk_splits_at_the_nul() {
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        b.extend_from_slice(&chunk(b"tEXt", b"Author\0Ada Lovelace"));
+        b.extend_from_slice(&chunk(b"IEND", b""));
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(png());
+        let keyword = ev.node(&d, &[1, 0, 2, 0]).unwrap();
+        assert_eq!(keyword.value, Value::Str("Author".into()));
+        assert_eq!(keyword.type_name, "cstr");
+        assert_eq!(keyword.size_bits, 7 * 8); // the NUL belongs to the keyword
+        let text = ev.node(&d, &[1, 0, 2, 1]).unwrap();
+        assert_eq!(text.value, Value::Str("Ada Lovelace".into()));
+        assert_eq!(text.offset_bits, (8 + 8 + 7) * 8);
+    }
+
+    #[test]
+    fn text_chunk_without_a_nul_is_an_error() {
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        b.extend_from_slice(&chunk(b"tEXt", b"nokeyword"));
+        b.extend_from_slice(&chunk(b"IEND", b""));
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(png());
+        assert!(ev.node(&d, &[1, 0, 2, 0]).is_err());
+    }
 
     #[test]
     fn png_parses_ihdr_and_stops_at_iend() {
