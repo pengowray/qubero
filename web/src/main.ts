@@ -30,9 +30,14 @@ function mount(doc: Doc): void {
   // it; moving it picks the field it lands in. `picking` stops that going round.
   let picking = false;
   let followWhenLoaded: number | null = null;
+  let followedBit: number | null = null;
 
   const followCursor = (bitOffset: number): void => {
     if (doc.template === null) return;
+    // Only an actual move picks a field, so Escape can clear the highlight
+    // without the cursor event putting it straight back.
+    if (bitOffset === followedBit) return;
+    followedBit = bitOffset;
     const at = doc.locate(bitOffset);
     if (at.status === "pending") {
       followWhenLoaded = bitOffset;
@@ -68,7 +73,10 @@ function mount(doc: Doc): void {
     goToField(path);
     table.reveal(path);
   };
-  view.onHighlightClear = () => table.clearSelection();
+  view.onHighlightClear = () => {
+    followedBit = null;
+    table.clearSelection();
+  };
 
   const tmpl = el("select", { className: "tb-tmpl" });
   tmpl.setAttribute("aria-label", "Template");

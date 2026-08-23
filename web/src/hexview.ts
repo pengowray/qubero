@@ -320,11 +320,14 @@ export class HexView {
         }
         return;
       case "Escape":
+        // Move first, then drop the highlight: the cursor event can pick a new
+        // field, and Escape's job is to leave nothing highlighted.
+        this.setCursor(this.cursor, { nibble: 0 });
         if (this.highlight !== null) {
           this.setHighlight(null);
           this.onHighlightClear();
         }
-        return this.setCursor(this.cursor, { nibble: 0 });
+        return;
     }
 
     if (e.key.length !== 1 || e.altKey) return;
