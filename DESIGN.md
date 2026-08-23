@@ -285,6 +285,31 @@ Edits live only in the tab: `Save as` writes a copy, so nothing on disk holds
 them. Opening a second file therefore asks before discarding them, whether it
 arrives by drop or by the Open button.
 
+### Files with no template
+A file none of the built-in templates match is identified instead, using the
+rule database of the `file` command through the `pure-magic` crate. That gives
+the format's name and its media type. It does not give fields: nothing in the
+rule language describes a layout the type table could show, so the hex view
+stays plain and the template select still says `No template`.
+
+The rules and the engine that runs them come to 1.7 MB of wasm, more than five
+times the editor itself, so they are their own module (`crates/magic`, built to
+`web/src/pkg-magic`) and `doc.ts` imports it only after `formats::sniff` has
+come up empty. A file the editor has a template for never fetches it; one that
+does not fetches it once for the session, and the toolbar says `Identifying
+file type...` if that takes longer than 300 ms.
+
+Rules count offsets from the start of a file, so `identify` hands them the
+first 64 KiB and nothing else. Rules that search rather than test a fixed
+offset see only that far, and the handful that measure from the end of a file
+cannot be answered at all. The database's own last-resort answers (`data`,
+`ASCII text`) are dropped: they say less than the hex view already shows.
+
+Licences travel with the code, so `tools/notices.mjs` regenerates
+`THIRD-PARTY-NOTICES.md` from `cargo metadata`; run it after changing
+dependencies. It lists only the licence arm actually taken, since reproducing
+the GPL under a crate taken under BSD terms would claim otherwise.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing

@@ -3,3 +3,4 @@ node_modules/
 web/dist/
 web/src/pkg/
 *.log
+web/src/pkg-magic/

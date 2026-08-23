@@ -6,6 +6,32 @@ import init, { Editor } from "./pkg/qubero_wasm.js";
 const CHUNK_SIZE = 64 * 1024;
 const CHUNK_CAPACITY = 512; // 32 MiB resident at most
 
+// What the file(1) rules get to look at. Their offsets count from the start of
+// the file, so this is always the head and never a window from elsewhere. Rules
+// that search rather than test a fixed offset stop where it stops: the widest
+// in the database reaches 16 KiB, and a handful measure from the end of the
+// file, which nothing here can answer.
+const IDENTIFY_WINDOW = 64 * 1024;
+
+type MagicModule = typeof import("./pkg-magic/qubero_magic.js");
+let magic: Promise<MagicModule> | null = null;
+
+/** The rule database, fetched the first time a file needs it and kept after. */
+function loadMagic(): Promise<MagicModule> {
+  magic ??= import("./pkg-magic/qubero_magic.js")
+    .then(async (m) => {
+      await m.default();
+      return m;
+    })
+    .catch((e: unknown) => {
+      // A failed fetch is forgotten rather than remembered, so opening the next
+      // file tries again instead of inheriting one bad moment offline.
+      magic = null;
+      throw e;
+    });
+  return magic;
+}
+
 /** The subset of Blob we need; lets tests and dev tooling supply synthetic files. */
 export type ByteSource = {
   readonly size: number;
@@ -56,6 +82,21 @@ export type Span = {
 };
 
 export type WrittenRange = { readonly offset_bits: number; readonly size_bits: number };
+
+/** What the file(1) rules made of a file the editor has no template for. */
+export type Identification = {
+  /** The rule's own sentence, values and all: `PNG image data, 1280 x 720`. */
+  readonly message: string;
+  /** Media type, or "" where the rule carries none. */
+  readonly mime: string;
+  /** Extensions the rule lists, alphabetical. */
+  readonly ext: readonly string[];
+  /** The matching rule's strength; higher beat it to the answer. */
+  readonly strength: number;
+  /** The rule file it came from. */
+  readonly source: string;
+};
+
 
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
@@ -182,6 +223,27 @@ export class Doc {
     await this.ensureRange(0, n);
     const name = this.editor.sniff_template(this.read(0, n).bytes);
     return name === "" ? null : name;
+  }
+
+  /**
+   * Ask the file(1) rule database what this file is, for the files no template
+   * covers. The rules and the engine that runs them outweigh the rest of the
+   * editor, so they live in their own wasm module that is fetched on the first
+   * call and never at all for a file `sniffTemplate` already answered.
+   *
+   * The answer is a label, not a layout: it names the format without
+   * describing a single field.
+   */
+  async identify(): Promise<Identification | null> {
+    const n = Math.min(IDENTIFY_WINDOW, this.lengthBytes);
+    if (n === 0) return null;
+    await this.ensureRange(0, n);
+    const { bytes, complete } = this.read(0, n);
+    // Rules read what they are given, so a short window would answer for a
+    // different file. Nothing is better than a wrong name.
+    if (!complete) throw new Error("identify: the head of the file did not arrive");
+    const json = (await loadMagic()).identify(bytes);
+    return json === "" ? null : (JSON.parse(json) as Identification);
   }
 
   setTemplate(name: string | null): boolean {

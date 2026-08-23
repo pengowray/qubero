@@ -108,6 +108,25 @@ input.invalid {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tb-kind {
+  color: var(--muted);
+  /* Rule sentences run long, past 90 characters for an ELF binary. This takes
+     what is left of the row instead of a width of its own, so a long one is cut
+     short rather than pushing the controls onto a second line. The whole
+     sentence is in the tooltip either way. */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* With nothing to say it takes no room, and the spacer does the pushing again. */
+.tb-kind:empty {
+  display: none;
+}
+.tb-kind:not(:empty) ~ .tb-spacer {
+  flex: 0 0 0;
+}
 .tb-msg {
   color: var(--muted);
 }

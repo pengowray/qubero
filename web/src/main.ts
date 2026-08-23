@@ -1,4 +1,4 @@
-import { Doc, formatBytes, formatOffset } from "./doc.js";
+import { Doc, formatBytes, formatOffset, type Identification } from "./doc.js";
 import { HexView } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
@@ -26,6 +26,24 @@ const discardMsg = (open: string, next: string): string =>
 /** Says what letting go costs: the open file closes. Not "replaces", which
  *  during a drag reads as overwriting that file on disk, which never happens. */
 const closesMsg = (doc: Doc): string => `Closes ${doc.name}${doc.modified ? " (unsaved edits)" : ""}`;
+
+const IDENTIFYING_MSG = "Identifying file type...";
+const IDENTIFY_FAILED_MSG = "Couldn't check the file type";
+const IDENTIFY_FAILED_TITLE = "The identification rules failed to download.";
+const UNKNOWN_TYPE_MSG = "Unknown file type";
+/** The whole sentence, where it came from, and what it does not come with.
+ *  The last line is there because "No template" sits in the same toolbar, and
+ *  without it, knowing the format but offering no template reads as a fault. */
+const identifyTitle = (id: Identification): string => {
+  const lines = [
+    id.message,
+    `Identified from the file's first bytes, using the rule database of the Unix "file" command.`,
+  ];
+  if (id.mime !== "") lines.push(`Media type: ${id.mime}`);
+  if (id.ext.length > 0) lines.push(`Extensions: ${id.ext.join(", ")}`);
+  lines.push("Qubero has no field template for this format.");
+  return lines.join("\n");
+};
 
 /**
  * Open a file, in place of the one already open. Unsaved edits live only in
@@ -140,17 +158,41 @@ function mount(doc: Doc): void {
   tmpl.append(el("option", { value: "", textContent: "No template" }));
   for (const n of doc.templateNames) tmpl.append(el("option", { value: n, textContent: `Template: ${n}` }));
   tmpl.addEventListener("change", () => doc.setTemplate(tmpl.value === "" ? null : tmpl.value));
-  void doc.sniffTemplate().then((name) => {
+  void doc.sniffTemplate().then(async (name) => {
     if (name !== null) {
       tmpl.value = name;
       doc.setTemplate(name);
-    } else {
-      // Nothing to read a field from, so start on the raw reading instead.
-      inspector.setMode("le");
+      return;
+    }
+    // Nothing to read a field from, so start on the raw reading instead.
+    inspector.setMode("le");
+    // The rule database is a separate download. Say so once the wait is long
+    // enough to notice, so a file answered from cache says nothing at all.
+    const waiting = setTimeout(() => {
+      kindLabel.textContent = IDENTIFYING_MSG;
+    }, 300);
+    try {
+      const id = await doc.identify();
+      if (id === null) {
+        kindLabel.textContent = UNKNOWN_TYPE_MSG;
+      } else {
+        kindLabel.textContent = id.message;
+        kindLabel.title = identifyTitle(id);
+      }
+    } catch (e) {
+      console.error("identify", e);
+      kindLabel.textContent = IDENTIFY_FAILED_MSG;
+      kindLabel.title = IDENTIFY_FAILED_TITLE;
+    } finally {
+      clearTimeout(waiting);
     }
   });
 
   const fileLabel = el("span", { className: "tb-file" });
+  // What the file is, for a file no template covers. Its own element rather
+  // than the message slot: a save message is an event and passes, this is a
+  // fact about the file and stays.
+  const kindLabel = el("span", { className: "tb-kind" });
   const posLabel = el("span", { className: "tb-pos" });
   const undoBtn = el("button", { type: "button", textContent: "Undo", title: "Undo (Ctrl+Z)" });
   const redoBtn = el("button", { type: "button", textContent: "Redo", title: "Redo (Ctrl+Y)" });
@@ -246,6 +288,7 @@ function mount(doc: Doc): void {
     openBtn,
     saveBtn,
     fileLabel,
+    kindLabel,
     saveMsg,
     el("span", { className: "tb-spacer" }),
     goto,

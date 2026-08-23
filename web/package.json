@@ -6,7 +6,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "wasm": "cd ../crates/wasm && wasm-pack build --target web --out-dir ../../web/src/pkg --release"
+    "wasm": "npm run wasm:core && npm run wasm:magic",
+    "wasm:core": "cd ../crates/wasm && wasm-pack build --target web --out-dir ../../web/src/pkg --release",
+    "wasm:magic": "cd ../crates/magic && wasm-pack build --target web --out-dir ../../web/src/pkg-magic --release"
   },
   "devDependencies": {
     "typescript": "^5.9",
