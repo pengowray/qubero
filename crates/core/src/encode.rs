@@ -137,7 +137,7 @@ fn int_range(bits: u32) -> (i128, i128) {
     }
 }
 
-/// The exact inverse of `eval::read_uint`: little-endian applies to whole-byte
+/// The exact inverse of `decode::read_uint`: little-endian applies to whole-byte
 /// widths only; narrower fields are packed big-endian, left-aligned in the buffer.
 fn write_uint(v: u128, bits: u32, endian: Endian) -> Vec<u8> {
     let n = bytes_for(bits as u64);
@@ -247,7 +247,7 @@ fn leb_signed(v: i128, room: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Inverse of `eval::f16_to_f64`.
+/// Inverse of `decode::f16_to_f64`.
 fn f64_to_f16(x: f64) -> u16 {
     if x.is_nan() {
         return 0x7e00;
@@ -287,7 +287,7 @@ fn f64_to_f16(x: f64) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::{f16_to_f64, read_uint};
+    use crate::decode::{f16_to_f64, read_uint};
     use crate::template::Expr;
 
     #[test]

@@ -8,10 +8,11 @@
 use std::collections::HashMap;
 
 use crate::bits::bytes_for;
+use crate::decode::{be_int, f16_to_f64, fixed_bits, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::source::{Missing, Source};
-use crate::template::{Endian, Expr, Template, Ty, Until};
+use crate::template::{Expr, Template, Ty, Until};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
@@ -523,67 +524,10 @@ impl Evaluator {
     }
 }
 
-fn be_int(b: &[u8]) -> i128 {
-    b.iter().fold(0i128, |acc, &x| (acc << 8) | x as i128)
-}
-
 fn child_elem(ty: &Ty) -> &Ty {
     match ty {
         Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => elem,
         other => other,
-    }
-}
-
-/// Size in bits if it does not depend on data.
-pub fn fixed_bits(ty: &Ty) -> Option<u64> {
-    Some(match ty {
-        Ty::UInt { bits, .. } | Ty::Int { bits, .. } => *bits as u64,
-        Ty::F16(_) => 16,
-        Ty::F32(_) => 32,
-        Ty::F64(_) => 64,
-        Ty::Magic(b) => b.len() as u64 * 8,
-        Ty::Bytes(Expr::Lit(n)) | Ty::Utf8(Expr::Lit(n)) => (*n).max(0) as u64 * 8,
-        Ty::Struct(s) => s.fields.iter().map(|f| fixed_bits(&f.ty)).sum::<Option<u64>>()?,
-        Ty::Array { elem, count: Expr::Lit(n) } => fixed_bits(elem)? * (*n).max(0) as u64,
-        Ty::Sized { size: Expr::Lit(n), .. } => (*n).max(0) as u64 * 8,
-        _ => return None,
-    })
-}
-
-/// Interpret `bits` bits (MSB-first packed in `buf`) as an unsigned integer.
-/// Little-endian applies byte order for whole-byte widths; narrower fields read
-/// as packed big-endian bit strings.
-pub(crate) fn read_uint(buf: &[u8], bits: u32, endian: Endian) -> u128 {
-    let nbytes = bytes_for(bits as u64);
-    let mut v: u128 = 0;
-    if endian == Endian::Little && bits % 8 == 0 {
-        for i in (0..nbytes).rev() {
-            v = (v << 8) | buf[i] as u128;
-        }
-    } else {
-        for &b in &buf[..nbytes] {
-            v = (v << 8) | b as u128;
-        }
-        let extra = (nbytes as u32 * 8) - bits;
-        v >>= extra;
-    }
-    v
-}
-
-pub(crate) fn f16_to_f64(h: u16) -> f64 {
-    let s = if h >> 15 == 1 { -1.0 } else { 1.0 };
-    let e = ((h >> 10) & 0x1f) as i32;
-    let f = (h & 0x3ff) as f64;
-    match e {
-        0 => s * 2f64.powi(-14) * (f / 1024.0),
-        0x1f => {
-            if f == 0.0 {
-                s * f64::INFINITY
-            } else {
-                f64::NAN
-            }
-        }
-        _ => s * 2f64.powi(e - 15) * (1.0 + f / 1024.0),
     }
 }
 

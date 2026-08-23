@@ -1,71 +1,6 @@
-//! Built-in templates. These double as the test-bed for the IR: anything a
-//! format needs that the IR cannot say is a gap in the IR, not in the format.
+//! WebAssembly binary format: header plus a run of sections.
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
-
-pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm"]
-}
-
-pub fn builtin(name: &str) -> Option<Template> {
-    match name {
-        "png" => Some(png()),
-        "wasm" => Some(wasm()),
-        _ => None,
-    }
-}
-
-/// Pick a built-in template from the first bytes of a file.
-pub fn sniff(head: &[u8]) -> Option<&'static str> {
-    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Some("png")
-    } else if head.starts_with(b"\0asm") {
-        Some("wasm")
-    } else {
-        None
-    }
-}
-
-pub fn png() -> Template {
-    let ihdr = T::structure(
-        "IHDR",
-        vec![
-            ("width", T::u32(Big)),
-            ("height", T::u32(Big)),
-            ("bit_depth", T::u8()),
-            ("color_type", T::u8()),
-            ("compression", T::u8()),
-            ("filter", T::u8()),
-            ("interlace", T::u8()),
-        ],
-    );
-    let chunk = T::structure(
-        "Chunk",
-        vec![
-            ("length", T::u32(Big)),
-            ("type", T::utf8(E::lit(4))),
-            (
-                "data",
-                T::sized(
-                    E::field("length"),
-                    // A text field in an expression is its bytes as a big-endian number.
-                    T::switch(E::field("type"), vec![(0x4948_4452, ihdr)], T::bytes(E::field("length"))),
-                ),
-            ),
-            ("crc", T::u32(Big)),
-        ],
-    );
-    Template {
-        name: "png".into(),
-        root: T::structure(
-            "PNG",
-            vec![
-                ("signature", T::magic(b"\x89PNG\r\n\x1a\n")),
-                ("chunks", T::repeat(chunk, Until::FieldBytes { field: "type".into(), bytes: b"IEND".to_vec() })),
-            ],
-        ),
-    }
-}
 
 pub fn wasm() -> Template {
     let valtype = T::u8();
@@ -143,29 +78,6 @@ mod tests {
     use crate::document::Document;
     use crate::eval::{Evaluator, Value};
     use crate::source::MemSource;
-
-    #[test]
-    fn png_parses_ihdr_and_stops_at_iend() {
-        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
-        b.extend_from_slice(&13u32.to_be_bytes());
-        b.extend_from_slice(b"IHDR");
-        b.extend_from_slice(&640u32.to_be_bytes());
-        b.extend_from_slice(&480u32.to_be_bytes());
-        b.extend_from_slice(&[8, 6, 0, 0, 0]);
-        b.extend_from_slice(&[0; 4]);
-        b.extend_from_slice(&0u32.to_be_bytes());
-        b.extend_from_slice(b"IEND");
-        b.extend_from_slice(&[0; 4]);
-        b.extend_from_slice(b"trailing junk");
-        let d = Document::new(MemSource(b));
-        let mut ev = Evaluator::new(png());
-        let chunks = ev.node(&d, &[1]).unwrap();
-        assert_eq!(chunks.child_count, 2);
-        let ihdr = ev.node(&d, &[1, 0, 2]).unwrap();
-        assert_eq!(ihdr.type_name, "IHDR");
-        assert_eq!(ev.node(&d, &[1, 0, 2, 1]).unwrap().value, Value::UInt(480));
-        assert_eq!(ev.node(&d, &[1, 1, 1]).unwrap().value, Value::Str("IEND".into()));
-    }
 
     #[test]
     fn wasm_type_section() {

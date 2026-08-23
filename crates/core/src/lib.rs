@@ -8,6 +8,7 @@
 //!   [`Source`], which may report that a range is not loaded yet.
 
 pub mod bits;
+pub mod decode;
 pub mod document;
 pub mod encode;
 pub mod eval;
