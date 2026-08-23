@@ -11,6 +11,7 @@ mod sqlite;
 mod w4v;
 mod wav;
 mod wasm;
+pub mod wasm_disasm;
 mod wasm_opcodes;
 
 pub use id3::id3;
@@ -22,6 +23,7 @@ pub use sqlite::sqlite;
 pub use w4v::w4v;
 pub use wav::wav;
 pub use wasm::wasm;
+pub use wasm_disasm::Module as WasmModule;
 
 use crate::template::Template;
 
