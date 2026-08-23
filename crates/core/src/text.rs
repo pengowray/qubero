@@ -82,21 +82,21 @@ pub fn settle(enc: &Encoding, head: &[u8]) -> (Settled, usize, Option<String>) {
         Encoding::Cp437 => (Settled::Cp437, 0, None),
         Encoding::Utf16(e) => (Settled::Utf16(*e), 0, None),
         Encoding::Bom { fallback } => match head {
-            [0xef, 0xbb, 0xbf, ..] => (Settled::Utf8, 3, Some("UTF-8, from a byte-order mark".into())),
-            [0xff, 0xfe, ..] => (Settled::Utf16(Endian::Little), 2, Some("UTF-16 LE, from a byte-order mark".into())),
-            [0xfe, 0xff, ..] => (Settled::Utf16(Endian::Big), 2, Some("UTF-16 BE, from a byte-order mark".into())),
+            [0xef, 0xbb, 0xbf, ..] => (Settled::Utf8, 3, Some("Read as UTF-8, from a byte-order mark".into())),
+            [0xff, 0xfe, ..] => (Settled::Utf16(Endian::Little), 2, Some("Read as UTF-16 LE, from a byte-order mark".into())),
+            [0xfe, 0xff, ..] => (Settled::Utf16(Endian::Big), 2, Some("Read as UTF-16 BE, from a byte-order mark".into())),
             _ => {
                 let (s, _, _) = settle(fallback, head);
-                (s, 0, Some(format!("{}, with no byte-order mark", s.name())))
+                (s, 0, Some(format!("Read as {}; no byte-order mark found", s.name())))
             }
         },
         // Not stated by the format: take UTF-8 if the bytes are valid UTF-8,
         // since arbitrary bytes rarely are, and Latin-1 otherwise.
         Encoding::Unknown => {
             if std::str::from_utf8(head).is_ok() {
-                (Settled::Utf8, 0, Some("UTF-8, a guess".into()))
+                (Settled::Utf8, 0, Some("Read as UTF-8, a guess (valid UTF-8)".into()))
             } else {
-                (Settled::Latin1, 0, Some("Latin-1, a guess".into()))
+                (Settled::Latin1, 0, Some("Read as Latin-1, a guess (not valid UTF-8)".into()))
             }
         }
     }
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(r.settled, Settled::Utf16(Endian::Little));
         assert_eq!(r.bom, 2);
         assert_eq!(r.text, "H");
-        assert!(r.note.is_some());
+        assert_eq!(r.note.as_deref(), Some("Read as UTF-16 LE, from a byte-order mark"));
 
         let plain = decode(&bom, &[0x48, 0xe9]);
         assert_eq!(plain.settled, Settled::Latin1);

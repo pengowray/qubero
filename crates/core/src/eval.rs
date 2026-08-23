@@ -681,7 +681,14 @@ impl Evaluator {
         let shown = span.len.min(crate::encode::EDIT_LIMIT_BYTES);
         let bytes = self.read(doc, r, r.offset + span.start * 8, shown * 8)?;
         let (_, lossy) = text::decode_settled(span.settled, &bytes);
-        let note = if lossy { Some(format!("not valid {}", span.settled.name())) } else { span.note };
+        let note = if lossy {
+            Some(format!(
+                "Not valid {}; the bad bytes show as \u{fffd}. Edit it in the hex view.",
+                span.settled.name()
+            ))
+        } else {
+            span.note
+        };
         Ok(((r.offset + span.start * 8, span.len), lossy, note))
     }
 
@@ -1032,7 +1039,7 @@ mod tests {
         // The mark is part of the field, not of the value.
         assert_eq!(wide.value_offset_bits, wide.offset_bits + 16);
         assert_eq!(wide.value_bytes, 4);
-        assert_eq!(wide.read_as.as_deref(), Some("UTF-16 LE, from a byte-order mark"));
+        assert_eq!(wide.read_as.as_deref(), Some("Read as UTF-16 LE, from a byte-order mark"));
 
         // Writing keeps the encoding and the mark, and pads in whole units.
         let w = ev.prepare_write(&d, &[1], "Sun").unwrap();

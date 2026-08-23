@@ -13,7 +13,7 @@ use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T,
 
 /// The byte at the front of a text frame, and what it means.
 const TEXT_ENCODING: &[(i128, &str)] =
-    &[(0, "latin-1"), (1, "utf-16 with mark"), (2, "utf-16 be"), (3, "utf-8")];
+    &[(0, "latin-1"), (1, "utf-16 bom"), (2, "utf-16 be"), (3, "utf-8")];
 
 /// A four-character frame id as the big-endian number a switch compares.
 fn cc(s: &str) -> i128 {
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(ev.node(&d, &[8, 0, 0]).unwrap().value, Value::Str("TIT2".into()));
         let title = ev.node(&d, &[8, 0, 3, 1]).unwrap();
         assert_eq!(title.value, Value::Str("Blue".into()));
-        assert_eq!(title.read_as.as_deref(), Some("UTF-16 LE, from a byte-order mark"));
+        assert_eq!(title.read_as.as_deref(), Some("Read as UTF-16 LE, from a byte-order mark"));
         assert_eq!(title.value_offset_bits, title.offset_bits + 16);
 
         // TPE1: Latin-1, where 0xF6 is a letter rather than half a character.

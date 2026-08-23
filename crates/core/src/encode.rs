@@ -127,17 +127,19 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
             let bom = &state.bom;
             let body = text::encode_settled(settled, text).map_err(|c| cannot_hold_msg(settled, c))?;
             let room = want.saturating_sub(bom.len());
-            let noun = format!("bytes of {}", settled.name());
+            // A character is not a byte in UTF-16, so both counts are given
+            // when they differ; when they agree the extra count is noise.
+            let chars = text.chars().count();
             match len {
                 StrLen::Fixed(_) => {
                     if body.len() != room {
-                        return Err(length_msg(body.len(), room, &noun));
+                        return Err(str_length_msg(body.len(), room, chars, settled));
                     }
                     Ok([bom.as_slice(), &body].concat())
                 }
                 StrLen::Padded { pad, .. } => {
                     if body.len() > room {
-                        return Err(too_long_msg(body.len(), room, &noun));
+                        return Err(str_too_long_msg(body.len(), room, chars, settled));
                     }
                     let term = text::unit_bytes(settled, *pad);
                     if find_unit(&body, &term).is_some() {
@@ -157,7 +159,7 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
                         return Err(format!("The field is {want} bytes; there's no room for text."));
                     }
                     if body.len() != room - unit {
-                        return Err(length_msg(body.len(), room - unit, &noun));
+                        return Err(str_length_msg(body.len(), room - unit, chars, settled));
                     }
                     let term = text::unit_bytes(settled, *end);
                     if find_unit(&body, &term).is_some() {
@@ -228,8 +230,25 @@ fn range_msg(type_name: &str, min: &str, max: &str) -> String {
     format!("{type_name} range is {min} to {max}.")
 }
 
-fn too_long_msg(got: usize, want: usize, noun: &str) -> String {
-    format!("Too long for this field: {got} {noun}; it holds {want}.")
+/// Byte counts are what the field is measured in; character counts are what the
+/// typist counted. In UTF-16 they differ, so both are given.
+fn str_length_msg(got: usize, want: usize, chars: usize, settled: Settled) -> String {
+    if got == chars {
+        format!("Needs exactly {want} bytes of {}; got {got}. Field sizes can't change yet.", settled.name())
+    } else {
+        format!(
+            "Needs exactly {want} bytes; got {got} ({chars} characters in {}). Field sizes can't change yet.",
+            settled.name()
+        )
+    }
+}
+
+fn str_too_long_msg(got: usize, want: usize, chars: usize, settled: Settled) -> String {
+    if got == chars {
+        format!("Too long for this field: {got} bytes of {}; it holds {want}.", settled.name())
+    } else {
+        format!("Too long for this field: {got} bytes ({chars} characters in {}); it holds {want}.", settled.name())
+    }
 }
 
 fn cannot_hold_msg(settled: Settled, c: char) -> String {
@@ -237,7 +256,7 @@ fn cannot_hold_msg(settled: Settled, c: char) -> String {
 }
 
 fn odd_size_msg(settled: Settled, want: usize) -> String {
-    format!("This field is {want} bytes, which is not a whole number of {} characters.", settled.name())
+    format!("Odd size for {}: {want} bytes. The last character is incomplete.", settled.name())
 }
 
 /// Index of `term` in `hay`, aligned to whole units of its length.

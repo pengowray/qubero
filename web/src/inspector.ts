@@ -477,7 +477,7 @@ export class Inspector {
     const r = this.doc.fieldText(n.path);
     if (r.status === "pending") return null;
     if (r.status === "error") return { text: "", truncated: false, note: r.message };
-    return { text: r.node.text, truncated: r.node.truncated, note: n.read_as === null ? null : `Read as ${n.read_as}` };
+    return { text: r.node.text, truncated: r.node.truncated, note: n.read_as };
   }
 
   /** A byte field is its own value: hex pairs, wrapped. */
