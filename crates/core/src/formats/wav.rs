@@ -257,9 +257,23 @@ mod tests {
         wamd.extend_from_slice(&9u32.to_le_bytes());
         wamd.extend_from_slice(b"SM4BAT-FS");
 
+        // One cue point, and a LIST of INFO text.
+        let mut cue = 1u32.to_le_bytes().to_vec();
+        cue.extend_from_slice(&7u32.to_le_bytes()); // id
+        cue.extend_from_slice(&1000u32.to_le_bytes()); // position
+        cue.extend_from_slice(b"data");
+        cue.extend_from_slice(&0u32.to_le_bytes());
+        cue.extend_from_slice(&0u32.to_le_bytes());
+        cue.extend_from_slice(&1000u32.to_le_bytes()); // sample offset
+
+        let mut list = b"INFO".to_vec();
+        list.extend_from_slice(&chunk_bytes(b"IART", b"Wildlife Acoustics\0"));
+
         let mut body = b"WAVE".to_vec();
         body.extend_from_slice(&chunk_bytes(b"fmt ", &fmt));
         body.extend_from_slice(&chunk_bytes(b"data", &[0x11; 6]));
+        body.extend_from_slice(&chunk_bytes(b"cue ", &cue));
+        body.extend_from_slice(&chunk_bytes(b"LIST", &list));
         body.extend_from_slice(&chunk_bytes(b"guan", &guano));
         body.extend_from_slice(&chunk_bytes(b"wamd", &wamd));
 
@@ -273,7 +287,7 @@ mod tests {
     fn chunks_pad_to_even_and_guano_reads_as_lines() {
         let d = Document::new(MemSource(sample()));
         let mut ev = Evaluator::new(wav());
-        assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 4);
+        assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 6);
 
         let fmt = ev.node(&d, &[3, 0, 2]).unwrap();
         assert_eq!(fmt.type_name, "Format");
@@ -282,24 +296,33 @@ mod tests {
 
         // The data chunk is six bytes, so no pad; guano is odd, so one.
         assert_eq!(ev.node(&d, &[3, 1, 3]).unwrap().size_bits, 0);
-        assert_eq!(ev.node(&d, &[3, 2, 3]).unwrap().size_bits, 8);
+        assert_eq!(ev.node(&d, &[3, 4, 3]).unwrap().size_bits, 8);
+
+        // A cue point, then a LIST whose members are chunks like any other.
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0]).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 1, 0, 1]).unwrap().value, Value::UInt(1000));
+        assert_eq!(ev.node(&d, &[3, 3, 2, 0]).unwrap().value, Value::Str("INFO".into()));
+        let item = ev.node(&d, &[3, 3, 2, 1, 0]).unwrap();
+        assert_eq!(item.type_name, "Chunk");
+        assert_eq!(ev.node(&d, &[3, 3, 2, 1, 0, 0]).unwrap().value, Value::Str("IART".into()));
+        assert_eq!(ev.node(&d, &[3, 3, 2, 1, 0, 2]).unwrap().value, Value::Str("Wildlife Acoustics".into()));
 
         // GUANO lines.
-        let lines = ev.node(&d, &[3, 2, 2]).unwrap();
+        let lines = ev.node(&d, &[3, 4, 2]).unwrap();
         assert_eq!(lines.child_count, 4); // three fields and the trailing NUL
-        assert_eq!(ev.node(&d, &[3, 2, 2, 0]).unwrap().value, Value::Str("GUANO|Version:1.0".into()));
+        assert_eq!(ev.node(&d, &[3, 4, 2, 0]).unwrap().value, Value::Str("GUANO|Version:1.0".into()));
         assert_eq!(
-            ev.node(&d, &[3, 2, 2, 2]).unwrap().value,
+            ev.node(&d, &[3, 4, 2, 2]).unwrap().value,
             Value::Str("Loc Position:-26.46550 31.94508".into())
         );
 
         // wamd is a stream of tagged items.
-        let item = ev.node(&d, &[3, 3, 2, 0]).unwrap();
-        assert_eq!(item.child_count, 3);
+        let wamd = ev.node(&d, &[3, 5, 2, 0]).unwrap();
+        assert_eq!(wamd.child_count, 3);
         assert_eq!(
-            ev.node(&d, &[3, 3, 2, 0, 0]).unwrap().value,
+            ev.node(&d, &[3, 5, 2, 0, 0]).unwrap().value,
             Value::Enum { raw: 1, name: Some("model".into()), hex: false }
         );
-        assert_eq!(ev.node(&d, &[3, 3, 2, 0, 2]).unwrap().value, Value::Str("SM4BAT-FS".into()));
+        assert_eq!(ev.node(&d, &[3, 5, 2, 0, 2]).unwrap().value, Value::Str("SM4BAT-FS".into()));
     }
 }

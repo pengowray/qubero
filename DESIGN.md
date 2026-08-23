@@ -209,6 +209,9 @@ than lengths) needs a "scan until these bytes" primitive that does not exist.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 
+A field the panel will not let you edit says why only when you try to: the box
+is simply disabled until then, because the reasons live in the write path.
+
 Save shows no progress while rewriting bit-shifted stretches. The type table has no
 keyboard navigation between rows, so a value cell is reached by clicking or tabbing.
 Text fields in the type table are displayed through `from_utf8_lossy`, so invalid
