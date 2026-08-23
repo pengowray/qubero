@@ -68,6 +68,24 @@ pub enum Anchor {
     /// gives the entry point as an address in memory and the section table is
     /// what turns it back into a place in the file.
     PeEntryPoint,
+    /// `PE.compareOverlay`: the bytes past the last section, which an
+    /// installer or a self-extracting archive puts its payload in.
+    Overlay,
+}
+
+/// What a branch asks of the file. Rules join these with `&&` and `||`, and
+/// occasionally negate one, so a branch is a tree rather than a single test.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Test {
+    /// A run of bytes at a place the file decides.
+    Pattern { anchor: Anchor, offset: i64, pattern: Vec<SigByte> },
+    /// `PE.isSectionNamePresent(".rsrc")`: a section of exactly this name.
+    SectionName(String),
+    /// `PE.isNet()`: the file carries a .NET runtime header.
+    IsNet,
+    All(Vec<Test>),
+    Any(Vec<Test>),
+    Not(Box<Test>),
 }
 
 /// One test in a rule, and what the rule concludes when it passes.
@@ -79,10 +97,7 @@ pub struct Branch {
     /// Appended to whichever name applies, for a variant of the same tool:
     /// `sName += ' N2'`.
     pub name_suffix: String,
-    pub anchor: Anchor,
-    /// Added to the anchor. Only `compareEP` takes one, and it is usually zero.
-    pub offset: i64,
-    pub pattern: Vec<SigByte>,
+    pub test: Test,
     pub version: Option<String>,
     pub options: Option<String>,
 }
@@ -144,6 +159,79 @@ impl Database {
     }
 }
 
+/// What a file says about itself, worked out once and asked many times.
+///
+/// A rule may want the entry point, the section names, the overlay or whether
+/// there is a .NET header. Reading those out of the headers for every one of a
+/// thousand rules would be a thousand times the work for the same answer.
+#[derive(Debug, Clone, Default)]
+pub struct Facts {
+    /// Where the file starts running, as a file offset.
+    pub entry: Option<u64>,
+    /// Where the bytes past the last section begin, for a PE that has any.
+    pub overlay: Option<u64>,
+    /// Section names, with the padding taken off.
+    pub sections: Vec<String>,
+    /// Whether the file carries a .NET runtime header.
+    pub is_net: bool,
+}
+
+impl Facts {
+    /// Read what can be read. A file that is none of these things gets a
+    /// `Facts` saying so rather than an error: the rules that care will not
+    /// match, which is the right answer.
+    pub fn of(head: &[u8], file_len: u64) -> Facts {
+        let mut f = Facts {
+            entry: pe_entry_point(head).or_else(|| mz_entry_point(head, file_len)),
+            ..Facts::default()
+        };
+        let Some(pe) = pe_header_at(head) else { return f };
+        let long = |at: usize| -> Option<u32> {
+            let b = head.get(at..at + 4)?;
+            Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        };
+        let word = |at: usize| -> Option<u32> {
+            let b = head.get(at..at + 2)?;
+            Some(u32::from(u16::from_le_bytes([b[0], b[1]])))
+        };
+        let Some(count) = word(pe + 6) else { return f };
+        let Some(optional_size) = word(pe + 20) else { return f };
+        let optional = pe + 24;
+        // The fifteenth data directory is the .NET header. A PE32+ puts the
+        // directories 16 bytes further on, since four of its fields are wider.
+        if let Some(magic) = word(optional) {
+            let dirs = optional + if magic == 0x20b { 112 } else { 96 };
+            f.is_net = long(dirs + 14 * 8).is_some_and(|rva| rva != 0);
+        }
+        let table = optional + optional_size as usize;
+        let mut end: u64 = 0;
+        for i in 0..(count as usize).min(96) {
+            let at = table + i * 40;
+            let Some(name) = head.get(at..at + 8) else { break };
+            let name = name.split(|b| *b == 0).next().unwrap_or(name);
+            if let Ok(text) = std::str::from_utf8(name) {
+                f.sections.push(text.to_string());
+            }
+            if let (Some(raw_size), Some(raw_offset)) = (long(at + 16), long(at + 20)) {
+                end = end.max(u64::from(raw_offset) + u64::from(raw_size));
+            }
+        }
+        // Bytes past the last section, if the file has any.
+        f.overlay = if end > 0 && end < file_len { Some(end) } else { None };
+        f
+    }
+}
+
+/// Where a file's PE header sits, if it has one.
+fn pe_header_at(head: &[u8]) -> Option<usize> {
+    if !head.starts_with(b"MZ") {
+        return None;
+    }
+    let b = head.get(0x3c..0x40)?;
+    let at = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
+    if head.get(at..at + 4)? == b"PE\0\0" { Some(at) } else { None }
+}
+
 /// The marker `tools/die.mjs` writes between the signature files it bundles.
 /// The files themselves are copied byte for byte, so a new version of the
 /// database drops in without anything being rewritten.
@@ -185,21 +273,32 @@ pub fn parse_rule(source: &str, text: &str) -> Result<Rule, Skipped> {
     let mut current: Option<Branch> = None;
     let mut computed = false;
 
-    for raw in text.lines() {
+    // A condition may run over several lines when it joins two tests, so the
+    // lines are put back together before anything is read out of them.
+    let joined = join_conditions(text);
+    // How deep in braces the line is. A branch is an `if` directly inside
+    // `detect()`; one deeper than that is a rule doing something conditional
+    // within a branch, which is not a shape this module follows.
+    let mut depth = 0i32;
+    for raw in joined.lines() {
         let line = strip_comment(raw).trim();
         if line.is_empty() {
             continue;
         }
+        let here = depth;
+        depth += braces(line);
         if is_boilerplate(line) {
             continue;
         }
         if let Some(cond) = condition_of(line) {
-            // Two tests joined together, or a call this module does not
-            // implement: the rule is out, not partly in.
-            if cond.contains("&&") || cond.contains("||") {
+            // `if` at the top of `detect()`, or `} else if` closing the branch
+            // before it. Anything deeper is nested.
+            let opens_branch = if line.starts_with("if (") { here == 1 } else { here == 2 };
+            if !opens_branch {
                 return Err(Skipped::NeedsMoreThanBytes);
             }
-            let branch = parse_condition(cond).ok_or(Skipped::NeedsMoreThanBytes)?;
+            let test = parse_test(cond).ok_or(Skipped::NeedsMoreThanBytes)?;
+            let branch = Branch { name: None, name_suffix: String::new(), test, version: None, options: None };
             if let Some(b) = current.take() {
                 branches.push(b);
             }
@@ -253,6 +352,78 @@ pub fn parse_rule(source: &str, text: &str) -> Result<Rule, Skipped> {
     Ok(Rule { category, name, branches, source: source.to_string() })
 }
 
+/// Put a condition that runs over several lines back onto one.
+///
+/// Rules break a long `if` after `&&`, and a line-by-line reading would see
+/// half a test twice. Counting brackets says where the condition really ends.
+fn join_conditions(text: &str) -> String {
+    let mut out = String::new();
+    let mut pending: Option<String> = None;
+    for raw in text.lines() {
+        let line = strip_comment(raw);
+        match pending.take() {
+            Some(mut open) => {
+                open.push(' ');
+                open.push_str(line.trim());
+                if balanced(&open) {
+                    out.push_str(&open);
+                    out.push('\n');
+                } else {
+                    pending = Some(open);
+                }
+            }
+            None => {
+                let trimmed = line.trim();
+                if (trimmed.starts_with("if (") || trimmed.starts_with("} else if (")) && !balanced(trimmed) {
+                    pending = Some(trimmed.to_string());
+                } else {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    if let Some(open) = pending {
+        out.push_str(&open);
+        out.push('\n');
+    }
+    out
+}
+
+/// How much deeper in braces a line leaves things, ignoring braces in strings.
+fn braces(line: &str) -> i32 {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for c in line.chars() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '{') => depth += 1,
+            (None, '}') => depth -= 1,
+            _ => {}
+        }
+    }
+    depth
+}
+
+/// Whether a line closes every bracket it opens, ignoring brackets in strings.
+fn balanced(line: &str) -> bool {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for c in line.chars() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => depth -= 1,
+            _ => {}
+        }
+    }
+    depth <= 0
+}
+
 fn strip_comment(line: &str) -> &str {
     match line.find("//") {
         Some(i) => &line[..i],
@@ -277,20 +448,125 @@ fn parse_meta(text: &str) -> Option<(String, String)> {
 }
 
 /// The text inside `if (...)`, for a line that opens a test.
+///
+/// The condition ends at the bracket that closes the `if`, which is not the
+/// last bracket on the line: `if (a() && b())` ends three brackets from the
+/// end, and taking the last one would cut a call in half.
 fn condition_of(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("if (").or_else(|| line.strip_prefix("} else if ("))?;
-    let end = rest.rfind(')')?;
-    Some(rest[..end].trim().trim_end_matches(')').trim())
+    let b = rest.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    for (i, c) in b.iter().enumerate() {
+        match (quote, *c) {
+            (Some(q), _) if *c == q => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(*c),
+            (None, b'(') => depth += 1,
+            (None, b')') => {
+                if depth == 0 {
+                    return Some(rest[..i].trim());
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
-/// `MSDOS.compareEP("e9$$$$", 2)` or `Binary.compare("'MZ'")`.
-fn parse_condition(cond: &str) -> Option<Branch> {
+/// Read a whole condition: calls joined by `&&` and `||`, any of them negated.
+///
+/// `||` binds loosest, so it is split first. A condition holding anything this
+/// module does not implement fails as a whole rather than in part, because half
+/// a test is not a weaker test, it is a different one.
+fn parse_test(cond: &str) -> Option<Test> {
+    let cond = unwrap_parens(cond.trim());
+    if let Some(parts) = split_top(cond, "||") {
+        let tests: Option<Vec<Test>> = parts.iter().map(|p| parse_test(p)).collect();
+        return Some(Test::Any(tests?));
+    }
+    if let Some(parts) = split_top(cond, "&&") {
+        let tests: Option<Vec<Test>> = parts.iter().map(|p| parse_test(p)).collect();
+        return Some(Test::All(tests?));
+    }
+    if let Some(rest) = cond.strip_prefix('!') {
+        return Some(Test::Not(Box::new(parse_test(rest)?)));
+    }
+    parse_call(cond)
+}
+
+/// Drop brackets that wrap the whole of a condition, so `(a && b)` reads as
+/// what is inside it.
+fn unwrap_parens(cond: &str) -> &str {
+    let mut cond = cond.trim();
+    while cond.starts_with('(') && cond.ends_with(')') && balanced(&cond[1..cond.len() - 1]) {
+        let inner = cond[1..cond.len() - 1].trim();
+        if inner.is_empty() {
+            break;
+        }
+        cond = inner;
+    }
+    cond
+}
+
+/// Split on an operator, but only where it is not inside brackets or a string.
+/// `None` means the operator does not appear at that level.
+fn split_top(cond: &str, op: &str) -> Option<Vec<String>> {
+    let b = cond.as_bytes();
+    let mut parts: Vec<String> = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(c),
+            (None, b'(') => depth += 1,
+            (None, b')') => depth -= 1,
+            (None, _) if depth == 0 && b[i..].starts_with(op.as_bytes()) => {
+                parts.push(cond[start..i].to_string());
+                i += op.len();
+                start = i;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    parts.push(cond[start..].to_string());
+    Some(parts)
+}
+
+/// One call: `MSDOS.compareEP("e9$$$$", 2)`, `PE.isNet()`, and the rest.
+fn parse_call(cond: &str) -> Option<Test> {
+    let cond = cond.trim();
+    if cond == "PE.isNet()" {
+        return Some(Test::IsNet);
+    }
+    if let Some(r) = cond.strip_prefix("PE.isSectionNamePresent(") {
+        let start = r.find('"')? + 1;
+        let end = r[start..].find('"')? + start;
+        // Only a name written out in full. A name the rule works out is a name
+        // this module does not know.
+        if !r[end + 1..].trim_start().starts_with(')') {
+            return None;
+        }
+        return Some(Test::SectionName(r[start..end].to_string()));
+    }
     let (anchor, rest) = if let Some(r) = cond.strip_prefix("Binary.compare(") {
         (Anchor::FileStart, r)
     } else if let Some(r) = cond.strip_prefix("MSDOS.compareEP(") {
         (Anchor::EntryPoint, r)
     } else if let Some(r) = cond.strip_prefix("PE.compareEP(") {
         (Anchor::PeEntryPoint, r)
+    } else if let Some(r) = cond.strip_prefix("PE.compareOverlay(") {
+        (Anchor::Overlay, r)
     } else {
         return None;
     };
@@ -300,7 +576,7 @@ fn parse_condition(cond: &str) -> Option<Branch> {
     // Whatever follows the pattern is the optional offset.
     let tail = rest[end + 1..].trim_start().trim_start_matches(',').trim();
     let offset = if tail.is_empty() || tail.starts_with(')') { 0 } else { parse_offset(tail)? };
-    Some(Branch { name: None, name_suffix: String::new(), anchor, offset, pattern, version: None, options: None })
+    Some(Test::Pattern { anchor, offset, pattern })
 }
 
 fn parse_offset(tail: &str) -> Option<i64> {
@@ -477,18 +753,14 @@ pub fn pe_entry_point(head: &[u8]) -> Option<u64> {
 
 /// Every rule that recognises these bytes.
 ///
-/// `entry` is where the file starts running, for the rules that test there;
-/// without one those rules are skipped rather than tested at offset zero. A
-/// DOS and a Windows executable each have their own, and a file is only ever
-/// one of the two, so one argument carries whichever applies.
 /// All matches are returned, because a file is often several things at once: a
 /// packed Borland executable is both the packer and the compiler.
-pub fn detect(db: &Database, head: &[u8], entry: Option<u64>) -> Vec<Detection> {
+pub fn detect(db: &Database, head: &[u8], facts: &Facts) -> Vec<Detection> {
     let mut out = Vec::new();
     for rule in &db.rules {
         // The rule's own order decides: a chain of `else if` stops at the
         // first branch that passes.
-        let Some(b) = rule.branches.iter().find(|b| branch_matches(b, head, entry)) else { continue };
+        let Some(b) = rule.branches.iter().find(|b| holds(&b.test, head, facts)) else { continue };
         out.push(Detection {
             category: rule.category.clone(),
             name: format!("{}{}", b.name.as_deref().unwrap_or(&rule.name), b.name_suffix),
@@ -500,24 +772,37 @@ pub fn detect(db: &Database, head: &[u8], entry: Option<u64>) -> Vec<Detection> 
     out
 }
 
-fn branch_matches(b: &Branch, head: &[u8], entry: Option<u64>) -> bool {
-    let base = match b.anchor {
-        Anchor::FileStart => 0i64,
-        Anchor::EntryPoint | Anchor::PeEntryPoint => match entry {
-            Some(e) => match i64::try_from(e) {
-                Ok(v) => v,
-                Err(_) => return false,
-            },
-            None => return false,
-        },
-    };
-    let Some(at) = base.checked_add(b.offset).filter(|v| *v >= 0) else { return false };
-    let at = at as usize;
-    let Some(end) = at.checked_add(b.pattern.len()) else { return false };
-    if end > head.len() {
-        return false;
+fn holds(test: &Test, head: &[u8], facts: &Facts) -> bool {
+    match test {
+        Test::All(parts) => parts.iter().all(|t| holds(t, head, facts)),
+        Test::Any(parts) => parts.iter().any(|t| holds(t, head, facts)),
+        Test::Not(inner) => !holds(inner, head, facts),
+        Test::IsNet => facts.is_net,
+        Test::SectionName(name) => facts.sections.iter().any(|s| s == name),
+        Test::Pattern { anchor, offset, pattern } => {
+            let base = match anchor {
+                Anchor::FileStart => 0u64,
+                // A rule that measures from somewhere the file does not have
+                // is not satisfied by measuring from somewhere else.
+                Anchor::EntryPoint | Anchor::PeEntryPoint => match facts.entry {
+                    Some(e) => e,
+                    None => return false,
+                },
+                Anchor::Overlay => match facts.overlay {
+                    Some(o) => o,
+                    None => return false,
+                },
+            };
+            let Ok(base) = i64::try_from(base) else { return false };
+            let Some(at) = base.checked_add(*offset).filter(|v| *v >= 0) else { return false };
+            let at = at as usize;
+            let Some(end) = at.checked_add(pattern.len()) else { return false };
+            if end > head.len() {
+                return false;
+            }
+            pattern.iter().zip(&head[at..end]).all(|(p, byte)| p.accepts(*byte))
+        }
     }
-    b.pattern.iter().zip(&head[at..end]).all(|(p, byte)| p.accepts(*byte))
 }
 
 #[cfg(test)]
@@ -553,20 +838,17 @@ function detect() {
         assert_eq!(r.category, "packer");
         assert_eq!(r.name, "UPX");
         assert_eq!(r.branches.len(), 1);
-        assert_eq!(r.branches[0].anchor, Anchor::FileStart);
         assert_eq!(r.branches[0].version.as_deref(), Some("3.96"));
-        assert_eq!(r.branches[0].pattern, [
-            SigByte::Exact(b'U'),
-            SigByte::Exact(b'P'),
-            SigByte::Exact(b'X'),
-            SigByte::Exact(b'!')
-        ]);
+        let Test::Pattern { anchor, pattern, .. } = &r.branches[0].test else { panic!("a pattern") };
+        assert_eq!(*anchor, Anchor::FileStart);
+        assert_eq!(pattern, &[SigByte::Exact(b'U'), SigByte::Exact(b'P'), SigByte::Exact(b'X'), SigByte::Exact(b'!')]);
     }
 
     #[test]
     fn a_rule_measured_from_where_the_file_starts_running() {
         let r = parse_rule("ada", ADA).expect("readable");
-        assert_eq!(r.branches[0].anchor, Anchor::EntryPoint);
+        let Test::Pattern { anchor, .. } = &r.branches[0].test else { panic!("a pattern") };
+        assert_eq!(*anchor, Anchor::EntryPoint);
         assert_eq!(r.branches[0].options.as_deref(), Some("1989 by RR Software, Inc."));
     }
 
@@ -593,8 +875,8 @@ function detect() {
     fn a_branch_may_name_a_variant_of_the_same_tool() {
         let text = "meta(\"packer\", \"Trojan\");\nfunction detect() {\n    if (Binary.compare(\"aa\")) {\n        bDetected = true;\n    } else if (Binary.compare(\"bb\")) {\n        sName += ' N2';\n        sOptions = \"by ZeroCoder\";\n        bDetected = true;\n    }\n    return result();\n}";
         let db = parse_bundle(&format!("{FILE_MARKER}t\n{text}\n"));
-        assert_eq!(detect(&db, b"\xaa", None)[0].name, "Trojan");
-        let second = &detect(&db, b"\xbb", None)[0];
+        assert_eq!(detect(&db, b"\xaa", &Facts::default())[0].name, "Trojan");
+        let second = &detect(&db, b"\xbb", &Facts::default())[0];
         assert_eq!(second.name, "Trojan N2");
         assert_eq!(second.options.as_deref(), Some("by ZeroCoder"));
     }
@@ -603,8 +885,66 @@ function detect() {
     fn a_rule_may_cover_a_family_and_name_the_member() {
         let text = "meta(\"cryptor\", \"Cryptor\");\nfunction detect() {\n    if (Binary.compare(\"aa\")) {\n        bDetected = true;\n    } else if (Binary.compare(\"bb\")) {\n        sName = \"crypt 95-97\";\n        bDetected = true;\n    }\n    return result();\n}";
         let db = parse_bundle(&format!("{FILE_MARKER}c\n{text}\n"));
-        assert_eq!(detect(&db, b"\xaa", None)[0].name, "Cryptor");
-        assert_eq!(detect(&db, b"\xbb", None)[0].name, "crypt 95-97");
+        assert_eq!(detect(&db, b"\xaa", &Facts::default())[0].name, "Cryptor");
+        assert_eq!(detect(&db, b"\xbb", &Facts::default())[0].name, "crypt 95-97");
+    }
+
+    #[test]
+    fn two_tests_joined_are_both_required() {
+        let text = "meta(\"packer\", \"P\");\nfunction detect() {\n    if (Binary.compare(\"aa\") && PE.isSectionNamePresent(\".rsrc\")) {\n        bDetected = true;\n    }\n    return result();\n}";
+        let db = parse_bundle(&format!("{FILE_MARKER}p\n{text}\n"));
+        let with_section = Facts { sections: vec![".rsrc".into()], ..Facts::default() };
+        assert_eq!(detect(&db, b"\xaa", &with_section).len(), 1);
+        assert!(detect(&db, b"\xaa", &Facts::default()).is_empty(), "the section is missing");
+        assert!(detect(&db, b"\xbb", &with_section).is_empty(), "the bytes are wrong");
+    }
+
+    #[test]
+    fn a_condition_may_run_over_several_lines() {
+        let text = "meta(\"packer\", \"P\");\nfunction detect() {\n    if (Binary.compare(\"aa\") &&\n        PE.isNet()) {\n        bDetected = true;\n    }\n    return result();\n}";
+        let db = parse_bundle(&format!("{FILE_MARKER}p\n{text}\n"));
+        assert_eq!(db.rules.len(), 1, "the rule should be read, not skipped");
+        let net = Facts { is_net: true, ..Facts::default() };
+        assert_eq!(detect(&db, b"\xaa", &net).len(), 1);
+        assert!(detect(&db, b"\xaa", &Facts::default()).is_empty());
+    }
+
+    #[test]
+    fn either_of_two_tests_will_do() {
+        let text = "meta(\"packer\", \"P\");\nfunction detect() {\n    if (Binary.compare(\"aa\") || Binary.compare(\"bb\")) {\n        bDetected = true;\n    }\n    return result();\n}";
+        let db = parse_bundle(&format!("{FILE_MARKER}p\n{text}\n"));
+        assert_eq!(detect(&db, b"\xaa", &Facts::default()).len(), 1);
+        assert_eq!(detect(&db, b"\xbb", &Facts::default()).len(), 1);
+        assert!(detect(&db, b"\xcc", &Facts::default()).is_empty());
+    }
+
+    #[test]
+    fn a_test_may_be_negated() {
+        let text = "meta(\"packer\", \"P\");\nfunction detect() {\n    if (Binary.compare(\"aa\") && !PE.isSectionNamePresent(\".rsrc\")) {\n        bDetected = true;\n    }\n    return result();\n}";
+        let db = parse_bundle(&format!("{FILE_MARKER}p\n{text}\n"));
+        assert_eq!(detect(&db, b"\xaa", &Facts::default()).len(), 1);
+        let with_section = Facts { sections: vec![".rsrc".into()], ..Facts::default() };
+        assert!(detect(&db, b"\xaa", &with_section).is_empty());
+    }
+
+    #[test]
+    fn the_overlay_starts_past_the_last_section() {
+        let mut head = pe_sample(0x1010);
+        head.resize(0x400, 0);
+        // The one section holds 0x100 bytes from 0x180, so anything past 0x280
+        // is overlay.
+        let f = Facts::of(&head, 0x400);
+        assert_eq!(f.overlay, Some(0x280));
+        assert_eq!(f.sections, [".text"]);
+    }
+
+    #[test]
+    fn a_test_inside_a_branch_is_not_a_branch_of_its_own() {
+        // AZProtect's shape: matching sets a flag, and a second test inside
+        // that only refines the answer. Reading the inner test as an
+        // alternative would have it match every file without that section.
+        let text = "meta(\"protector\", \"AZProtect\");\nfunction detect() {\n    if (PE.compareEP(\"eb70\")) {\n        bDetected = true;\n\n        if (!PE.isSectionNamePresent(\"AZPR0001\")) {\n            sOptions = \"modified\";\n        }\n    }\n    return result();\n}";
+        assert_eq!(parse_rule("az", text), Err(Skipped::NeedsMoreThanBytes));
     }
 
     #[test]
@@ -672,12 +1012,12 @@ function detect() {
     #[test]
     fn finds_what_is_there_and_says_where_it_came_from() {
         let db = parse_bundle(&format!("{FILE_MARKER}upx\n{UPX}\n"));
-        let found = detect(&db, b"UPX!rest of the file", None);
+        let found = detect(&db, b"UPX!rest of the file", &Facts::default());
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "UPX");
         assert_eq!(found[0].version.as_deref(), Some("3.96"));
         assert_eq!(found[0].source, "upx");
-        assert!(detect(&db, b"not upx at all", None).is_empty());
+        assert!(detect(&db, b"not upx at all", &Facts::default()).is_empty());
     }
 
     #[test]
@@ -686,8 +1026,8 @@ function detect() {
         let mut head = vec![0u8; 64];
         head[16..21].copy_from_slice(&[0xe9, 0x11, 0x22, 0x8c, 0xda]);
         // Without one, the rule is not tested rather than tested at zero.
-        assert!(detect(&db, &head, None).is_empty());
-        assert_eq!(detect(&db, &head, Some(16)).len(), 1);
+        assert!(detect(&db, &head, &Facts::default()).is_empty());
+        assert_eq!(detect(&db, &head, &Facts { entry: Some(16), ..Facts::default() }).len(), 1);
     }
 
     /// A PE with one section, whose entry point is inside it.
@@ -702,6 +1042,7 @@ function detect() {
         let optional = pe + 24;
         v[optional + 16..optional + 20].copy_from_slice(&rva.to_le_bytes());
         let table = optional + 0xe0;
+        v[table..table + 5].copy_from_slice(b".text");
         v[table + 8..table + 12].copy_from_slice(&0x1000u32.to_le_bytes()); // virtual size
         v[table + 12..table + 16].copy_from_slice(&0x1000u32.to_le_bytes()); // virtual address
         v[table + 16..table + 20].copy_from_slice(&0x100u32.to_le_bytes()); // raw size

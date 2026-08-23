@@ -330,11 +330,18 @@ executable to find out.
 
 A rule is a small JavaScript program. `diescript.rs` reads the ones that say
 everything in their own text, which is a test on a byte pattern and some
-assignments, and counts the rest by reason. Of the 1,435 rules shipped, 649
+assignments, and counts the rest by reason. Of the 1,435 rules shipped, 683
 are read; every one of them recognises bytes built to its own pattern. The DOS
-rules read far better than the Windows ones (494 of 596 against 155 of 839),
-because a PE rule usually asks about imports, sections or .NET metadata rather
-than about a run of bytes. The
+rules read far better than the Windows ones (490 of 596 against 193 of 839),
+because a PE rule usually asks about imports or .NET metadata rather than about
+a run of bytes.
+
+A branch's test is a tree, not one comparison: rules join tests with `&&` and
+`||`, negate them, and break them over lines. What they may not do is nest.
+A rule whose branch body holds another `if` is refining its answer rather than
+offering an alternative, and reading the inner test as a branch of its own would
+have it match every file the inner test happens to be true of. Such a rule is
+skipped. The
 pattern language is implemented from its definition in the engine's `xbinary.h`
 rather than from the shapes these rules happen to use, because the same engine
 is a shared submodule across the author's other detectors.

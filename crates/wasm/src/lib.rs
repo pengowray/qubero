@@ -335,16 +335,16 @@ impl Editor {
     /// signature rules. `rules` is the bundle text, `head` the file's first
     /// bytes. Returns JSON, an array that is usually empty.
     ///
-    /// Rules that test from the entry point need one: it is worked out from
-    /// the DOS header here, and where there is none those rules are skipped
-    /// rather than tested at the start of the file.
+    /// Rules asking where the file starts running, what its sections are
+    /// called or where its overlay begins are answered from the bytes here.
+    /// A question the file cannot answer means the rule does not match, rather
+    /// than being answered from somewhere else.
     pub fn detect_tools(&self, rules: &str, head: &[u8]) -> String {
         let db = diescript::parse_bundle(rules);
-        // A file is a DOS executable or a Windows one, never both, so one
-        // entry point covers whichever rules were handed over.
-        let entry = diescript::pe_entry_point(head)
-            .or_else(|| diescript::mz_entry_point(head, self.doc.len_bytes()));
-        let found: Vec<ToolDto> = diescript::detect(&db, head, entry)
+        // What the file says about itself: where it starts running, what its
+        // sections are called, where the overlay begins. Worked out once.
+        let facts = diescript::Facts::of(head, self.doc.len_bytes());
+        let found: Vec<ToolDto> = diescript::detect(&db, head, &facts)
             .into_iter()
             .map(|d| ToolDto {
                 category: d.category,
