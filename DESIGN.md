@@ -58,8 +58,8 @@ re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker t
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
 Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3, WAV,
-W4V, MIDI, SQLite), one file per format plus `wasm_opcodes.rs` for the instruction
-table. WAV carries the metadata chunks bat recorders write: GUANO (`guan`) as
+W4V, MIDI, SQLite, PE, MS-DOS), one file per format plus `wasm_opcodes.rs` for the
+instruction table. WAV carries the metadata chunks bat recorders write: GUANO (`guan`) as
 UTF-8 lines,
 and `wamd` as a stream of tagged items whose tag numbers were read out of files
 rather than a specification. W4V is the same RIFF container with a format tag of
@@ -315,12 +315,43 @@ type name `exception`.
 Sniffing it needs more than a magic number. A DOS executable and a Windows one
 both start `MZ`; only a `PE  ` at the offset held at 0x3c separates them, so
 `sniff` is given 1 KiB rather than 64 bytes. A file whose header sits past that
-is left unclaimed, since claiming it would put this template on every DOS
-program ever written.
+is left unclaimed, since reading a Windows program as a DOS one would describe
+the stub that exists to say it needs Windows.
 
 Not yet described: the section contents, so imports, exports, resources and
 relocations are all gaps. The characteristics fields are numbers, and want the
 named-bit type the IR does not have.
+
+### MS-DOS executables
+The same fourteen words, and then a different file. `dos.rs` owns them and
+`pe.rs` extends them, so the header a DOS program shares with every Windows one
+is written once.
+
+What follows those words is where the format earns a template. The relocation
+table is at the offset the header gives rather than where it falls, so a gap of
+`relocation_table - 28` precedes it; a file with no relocations points nowhere,
+and `Switch` on the count is how the IR says that the field means nothing then.
+The header ends at `header_paragraphs * 16`, which is what `SizeOf` on the
+relocation area is for: what ends the header is the count in it, not the sum of
+what has been read. The program is whole pages less the unused tail of the last
+one, with a count of zero bytes meaning a full page, and since there is no
+conditional expression the full page is its own `Switch` case rather than a
+subtraction that would have to know it is zero. What is left is the overlay:
+bytes DOS never loaded, which is where a self-extracting archive keeps its
+payload. Across 162 DOS executables in hand, every one of these adds up with no
+field in error.
+
+The fields are flat in the root struct, as SQLite's are and for the same
+reason: `pages` and `header_paragraphs` have to be in scope where the program
+after them is sized.
+
+Which `MZ` files it claims turns on `relocation_table` at 0x18. A DOS program's
+relocations start before 0x40, which is where the pointer to a later header
+would have to be, so such a file is a DOS program and nothing else. A file that
+leaves room for one is claimed only once the bytes it points at have been seen
+and are none of `PE`, `NE` or `LE`: a Windows 3.x program is left to the rule
+database, which can name it, rather than to a template that would describe its
+stub.
 
 ### What made a file
 A second database answers a different question. Where `file(1)` says what

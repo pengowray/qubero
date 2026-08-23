@@ -65,35 +65,21 @@ fn optional_tail(pointer: T) -> Vec<(&'static str, T)> {
 
 pub fn pe() -> Template {
     // The 64-byte DOS header, then the stub filling the gap to the real one.
-    // MS-DOS itself read only as far as `relocation_table`; everything from
-    // `reserved` on exists to hold this one pointer.
-    let dos = T::structure(
-        "DOSHeader",
-        vec![
-            ("magic", T::magic(b"MZ")),
-            ("bytes_on_last_page", T::u16(Little)),
-            ("pages", T::u16(Little)),
-            ("relocations", T::u16(Little)),
-            ("header_paragraphs", T::u16(Little)),
-            ("min_extra_paragraphs", T::u16(Little)),
-            ("max_extra_paragraphs", T::u16(Little)),
-            ("initial_ss", T::u16(Little)),
-            ("initial_sp", T::u16(Little)),
-            ("checksum", T::u16(Little)),
-            ("initial_ip", T::u16(Little)),
-            ("initial_cs", T::u16(Little)),
-            ("relocation_table", T::u16(Little)),
-            ("overlay_number", T::u16(Little)),
-            ("reserved", T::bytes(E::lit(8))),
-            ("oem_id", T::u16(Little)),
-            ("oem_info", T::u16(Little)),
-            ("reserved2", T::bytes(E::lit(20))),
-            ("pe_header_offset", T::u32(Little)),
-            // The refusal message and the code that prints it. A file whose
-            // real header starts at 64 has none at all.
-            ("dos_stub", T::bytes(E::field("pe_header_offset").sub(E::lit(64)))),
-        ],
-    );
+    // The words up to `overlay_number` are the DOS executable's own, shared
+    // with the `msdos` template: MS-DOS read only that far, and everything
+    // from `reserved` on exists to hold this one pointer.
+    let mut dos_fields = super::dos::header_fields();
+    dos_fields.extend(vec![
+        ("reserved", T::bytes(E::lit(8))),
+        ("oem_id", T::u16(Little)),
+        ("oem_info", T::u16(Little)),
+        ("reserved2", T::bytes(E::lit(20))),
+        ("pe_header_offset", T::u32(Little)),
+        // The refusal message and the code that prints it. A file whose real
+        // header starts at 64 has none at all.
+        ("dos_stub", T::bytes(E::field("pe_header_offset").sub(E::lit(64)))),
+    ]);
+    let dos = T::structure("DOSHeader", dos_fields);
 
     let section = T::structure(
         "Section",
