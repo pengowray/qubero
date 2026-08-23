@@ -158,7 +158,9 @@ export class Doc {
 
   /** Built-in template name matching the file's first bytes, or null. */
   async sniffTemplate(): Promise<string | null> {
-    const n = Math.min(16, this.lengthBytes);
+    // Enough for a magic number, and for the format tag inside a WAVE's first
+    // chunk, which is the only thing that tells a W4V from a WAV.
+    const n = Math.min(64, this.lengthBytes);
     if (n === 0) return null;
     await this.ensureRange(0, n);
     const name = this.editor.sniff_template(this.read(0, n).bytes);

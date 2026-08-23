@@ -4,18 +4,22 @@
 mod id3;
 mod mp4;
 mod png;
+mod w4v;
+mod wav;
 mod wasm;
 mod wasm_opcodes;
 
 pub use id3::id3;
 pub use mp4::mp4;
 pub use png::png;
+pub use w4v::w4v;
+pub use wav::wav;
 pub use wasm::wasm;
 
 use crate::template::Template;
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -24,6 +28,8 @@ pub fn builtin(name: &str) -> Option<Template> {
         "wasm" => Some(wasm()),
         "mp4" => Some(mp4()),
         "id3" => Some(id3()),
+        "wav" => Some(wav()),
+        "w4v" => Some(w4v()),
         _ => None,
     }
 }
@@ -38,6 +44,14 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("mp4")
     } else if head.starts_with(b"ID3") {
         Some("id3")
+    } else if head.starts_with(b"RIFF") && head.len() >= 12 && &head[8..12] == b"WAVE" {
+        // The only thing that marks a W4V is the format tag inside `fmt `, so
+        // this needs a few more bytes than a magic number would.
+        if head.len() >= 22 && &head[12..16] == b"fmt " && &head[20..22] == b"AW" {
+            Some("w4v")
+        } else {
+            Some("wav")
+        }
     } else {
         None
     }
