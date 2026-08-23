@@ -32,6 +32,36 @@ function loadMagic(): Promise<MagicModule> {
   return magic;
 }
 
+/**
+ * Fetch the rule database before a file asks for it, so the wait lands on an
+ * idle browser rather than on someone watching. Called once a file is open and
+ * the page has settled.
+ *
+ * It costs a megabyte to someone who only ever opens formats the editor has a
+ * template for, which is why it waits for idle and stops on a connection that
+ * would rather not: Save Data on, or anything the browser rates below 4G.
+ * Those cases still identify on demand, and say they are doing it.
+ */
+export function prefetchMagic(): void {
+  if (magic !== null) return;
+  const link = (navigator as Navigator & { connection?: NetworkInformation }).connection;
+  if (link?.saveData === true) return;
+  if (link?.effectiveType !== undefined && link.effectiveType !== "4g") return;
+  const start = (): void => {
+    // Nothing waits on this. A failure clears itself in `loadMagic`, so the
+    // first file that needs the rules asks for them again.
+    void loadMagic().catch(() => {});
+  };
+  // Safari only got requestIdleCallback in 16.4, so this checks rather than
+  // assumes. The timeout stops a busy page putting it off forever.
+  const idle: unknown = window.requestIdleCallback;
+  if (typeof idle === "function") window.requestIdleCallback(start, { timeout: 5000 });
+  else window.setTimeout(start, 2000);
+}
+
+/** The parts of the Network Information API we use; Safari has none of it. */
+type NetworkInformation = { saveData?: boolean; effectiveType?: string };
+
 /** The subset of Blob we need; lets tests and dev tooling supply synthetic files. */
 export type ByteSource = {
   readonly size: number;

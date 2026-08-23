@@ -294,10 +294,15 @@ stays plain and the template select still says `No template`.
 
 The rules and the engine that runs them come to 1.7 MB of wasm, more than five
 times the editor itself, so they are their own module (`crates/magic`, built to
-`web/src/pkg-magic`) and `doc.ts` imports it only after `formats::sniff` has
-come up empty. A file the editor has a template for never fetches it; one that
-does not fetches it once for the session, and the toolbar says `Identifying
-file type...` if that takes longer than 300 ms.
+`web/src/pkg-magic`) rather than part of the editor's. `doc.ts` imports it on
+two occasions: when `formats::sniff` has come up empty and a file needs naming
+now, and speculatively once a file is open and the browser is idle, since the
+next file dropped may be one no template covers. The speculative fetch stops on
+a connection that would rather not have it, meaning Save Data or anything the
+browser rates below 4G; those sessions fetch on demand instead, and the toolbar
+says `Identifying file type...` while they wait. Identifying against a database
+already in memory takes tens of milliseconds, under the 300 ms that message
+waits for, so a prefetched session never shows it.
 
 Rules count offsets from the start of a file, so `identify` hands them the
 first 64 KiB and nothing else. Rules that search rather than test a fixed

@@ -1,4 +1,4 @@
-import { Doc, formatBytes, formatOffset, type Identification } from "./doc.js";
+import { Doc, formatBytes, formatOffset, prefetchMagic, type Identification } from "./doc.js";
 import { HexView } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
@@ -342,6 +342,9 @@ function mount(doc: Doc): void {
   refresh();
   inspector.setOffset(0);
   view.el.focus();
+  // The next file dropped may be one no template covers. Fetch the rules while
+  // nothing is waiting on them, so that file is named as soon as it opens.
+  prefetchMagic();
   if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table } });
 }
 
