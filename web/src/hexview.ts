@@ -89,7 +89,7 @@ export class HexView {
   private highlight: { startBit: number; endBit: number } | null = null;
   private rightColumn: RightColumn = "text";
   /** Spans for the rows on screen, kept until the view or the file moves. */
-  private spanCache: { key: string; spans: Span[]; more: boolean } | null = null;
+  private spanCache: { key: string; spans: Span[]; more: boolean; error: string | null } | null = null;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
 
@@ -505,13 +505,17 @@ export class HexView {
 
   /** Spans for the rows on screen. A pending reply leaves the column empty
    *  for one frame; the fetched chunks trigger another render. */
-  private spansForView(start: number, count: number): { spans: Span[]; more: boolean } {
+  private spansForView(start: number, count: number): { spans: Span[]; more: boolean; error: string | null } {
     const key = `${start}:${count}:${this.doc.template ?? ""}`;
     if (this.spanCache?.key === key) return this.spanCache;
     const max = Math.min(SPAN_LIMIT, count * 8);
     const r = this.doc.spans(start * 8, (start + count) * 8, max);
-    if (r.status !== "ok") return { spans: [], more: false };
-    this.spanCache = { key, spans: r.node, more: r.node.length >= max };
+    // Pending: the bytes are on their way and another render follows. Error:
+    // the template cannot read what is here, usually after an edit that
+    // changed a length, and an empty column would not say that.
+    if (r.status === "pending") return { spans: [], more: false, error: null };
+    if (r.status === "error") return { spans: [], more: false, error: r.message };
+    this.spanCache = { key, spans: r.node, more: r.node.length >= max, error: null };
     return this.spanCache;
   }
 
@@ -567,10 +571,11 @@ export class HexView {
     // Which span covers each byte on screen, and which start on each row.
     let spans: Span[] = [];
     let more = false;
+    let trouble: string | null = null;
     const byteSpan = new Int32Array(windowBytes).fill(-1);
     const byRow: { span: Span; carried: boolean }[][] = [];
     if (fields && templated) {
-      ({ spans, more } = this.spansForView(start, windowBytes));
+      ({ spans, more, error: trouble } = this.spansForView(start, windowBytes));
       for (let r = 0; r < this.visibleRows; r++) byRow.push([]);
       for (const [i, s] of spans.entries()) {
         const from = Math.floor(s.offset_bits / 8);
@@ -673,11 +678,12 @@ export class HexView {
       if (fields) {
         const note = document.createElement("span");
         note.className = "hv-note";
-        if (!templated) {
+        if (!templated || trouble !== null) {
           if (r === 0) {
             const none = document.createElement("span");
-            none.className = "hv-chip hv-chip-gap";
-            none.textContent = NO_TEMPLATE;
+            none.className = "hv-chip hv-chip-gap hv-chip-wide";
+            none.textContent = trouble ?? NO_TEMPLATE;
+            if (trouble !== null) none.title = trouble;
             note.append(none);
           }
           frag.append(cells, note);

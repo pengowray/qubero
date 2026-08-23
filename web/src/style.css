@@ -730,3 +730,6 @@ input.invalid {
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
 }
+.hv-chip-wide {
+  max-width: none;
+}
