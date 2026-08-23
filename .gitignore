@@ -5,3 +5,4 @@ web/src/pkg/
 *.log
 web/src/pkg-magic/
 web/public/magdir/
+web/public/diesig/
