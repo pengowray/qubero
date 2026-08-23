@@ -57,8 +57,16 @@ coarse (whole memo on any edit), so on a large templated file every keystroke
 re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker that
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
-Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3), one
-file per format plus `wasm_opcodes.rs` for the instruction table. A text format for templates,
+Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3, WAV,
+W4V), one file per format plus `wasm_opcodes.rs` for the instruction table. WAV
+carries the metadata chunks bat recorders write: GUANO (`guan`) as UTF-8 lines,
+and `wamd` as a stream of tagged items whose tag numbers were read out of files
+rather than a specification. W4V is the same RIFF container with a format tag of
+0x5741, its `data` chunk a run of 392-byte blocks: a predictor, a scale, five
+undocumented bytes, and 512 six-bit codes packed MSB first. That layout follows
+the reverse-engineered decoder in the batchi project and covers only the six-bit
+flavour; wider ones would need the code width read from a sibling chunk, which a
+field cannot do. A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
 Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
 Text encodings live in `text.rs`: UTF-8, ASCII, Latin-1, CP437, UTF-16 either
@@ -80,7 +88,9 @@ Later additions to the IR, each paying for itself in a format:
   padding (the value stops at the first pad byte, and writing pads back out to
   the field's size, so a name can be shortened without moving the file), or a run
   that ends at a terminator which belongs to the field (a C string, whose length
-  cannot change without shifting everything after it). A padded field whose tail
+  cannot change without shifting everything after it; with `or_end`, a field with
+  no terminator in it reads to the end of its container and is read-only, which
+  is what a last GUANO line without a newline needs). A padded field whose tail
   is not all padding is not editable, since writing what is shown would drop what
   is not. MP4's `hdlr` name and `compressor_name`, PNG's `tEXt` keyword.
 * `Encoding` sits beside `StrLen` on a text field. Two of its cases are vague on
@@ -96,6 +106,10 @@ Later additions to the IR, each paying for itself in a format:
   mark included, and a character the encoding cannot hold is refused.
 * `Expr::SizeOf` measures an earlier field, which is how a field that runs to the
   end of its container knows where the variable-length one before it stopped.
+  `Expr::Remaining` measures the other way, from a field to the end of its
+  container: an MP4 box of size 0, an ID3 frame body whichever way its version
+  counts, the tail of a RIFF chunk. There is no modulo, so RIFF's pad byte is
+  `size - (size / 2) * 2`.
 * `Named` looks a type up in `Template::types`, which is what lets an MP4 box
   contain more boxes. Resolution has a 64-hop limit, so an alias that resolves
   to itself errors instead of spinning.
@@ -183,20 +197,17 @@ and the inspector rows have the same shape. Editing either side writes through i
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
 ### Known gaps
-ID3 frame sizes are read as plain 32-bit numbers, which is right for ID3v2.3;
-2.4 makes them synchsafe, and the size expression cannot say that yet.
-
 Bit order is MSB-first everywhere: bit 0 of a byte is its top bit, and a field
 narrower than a byte is packed big-endian, with `endian` on such a field silently
 ignored. Formats that pack the other way (DEFLATE, Zig packed structs) need an
 LSB-first order on the field type, which is a real addition to the IR rather than
 a display option.
 
-MP4: a box with size 0 (meaning "to the end of the file") is an error, because
-there is no "rest of this container" expression yet. Sample tables past `stsd`
-are bytes. An SPS or PPS is exp-golomb coded, which the IR cannot describe, so a
-NAL unit stops at its header bits. An H.264 Annex B stream (start codes rather
+MP4: sample tables past `stsd` are bytes. An SPS or PPS is exp-golomb coded,
+which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 Annex B stream (start codes rather
 than lengths) needs a "scan until these bytes" primitive that does not exist.
+
+W4V covers the six-bit flavour only, and `.wac` is not read at all.
 
 Save shows no progress while rewriting bit-shifted stretches. The type table has no
 keyboard navigation between rows, so a value cell is reached by clicking or tabbing.

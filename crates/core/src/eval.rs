@@ -272,7 +272,7 @@ impl Evaluator {
         if !self.padding_is_clean(doc, &r, size)? {
             return fail(match &r.ty {
                 Ty::Str { len: StrLen::Terminated { end, .. }, .. } => format!(
-                    "This text has no 0x{end:02x} to end it, so writing would have to add one. Use the hex view."
+                    "This text has no 0x{end:02x} to end it; writing would add one and make the field longer. Use the hex view."
                 ),
                 Ty::Str { len: StrLen::Padded { pad, .. }, .. } => format!(
                     "Bytes after the first 0x{pad:02x} aren't shown here; writing would overwrite them. Use the hex view."

@@ -173,8 +173,9 @@ fn list() -> T {
 
 fn list_item() -> T {
     let pad = E::field("size").sub(E::field("size").div(E::lit(2)).mul(E::lit(2)));
+    // A LIST member is a chunk like any other, so it is called one.
     T::structure(
-        "Item",
+        "Chunk",
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
             ("size", T::u32(Little)),

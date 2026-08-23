@@ -33,8 +33,9 @@ fn block() -> T {
         vec![
             ("predictor", T::Int { bits: 16, endian: Little }),
             ("scale", T::u8()),
-            // Not zero in real files, so something lives here.
-            ("reserved", T::bytes(E::lit(5))),
+            // Not zero in real files, and not documented as reserved either:
+            // nobody outside Wildlife Acoustics knows what these five carry.
+            ("unknown", T::bytes(E::lit(5))),
             ("codes", T::array(T::Int { bits: CODE_BITS, endian: Big }, E::lit(BLOCK_SAMPLES))),
         ],
     )
