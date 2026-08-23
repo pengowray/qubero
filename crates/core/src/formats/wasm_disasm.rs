@@ -194,6 +194,14 @@ impl Module {
                 }
                 Err(e) => return Err(e),
             };
+            // The SIMD and thread groups read their sub-opcode and stop: their
+            // immediates are not parsed, so the bytes after one are read as if
+            // they were instructions and are not. Nothing errors, which is why
+            // this has to be caught by name rather than left to the evaluator.
+            if let Some(group) = undecoded_group(&line.0) {
+                let _ = writeln!(out, "{:indent$};; stops here: {group}", "", indent = depth * 2);
+                break;
+            }
             // `end` and `else` close the block they belong to, so they sit at
             // the depth of the instruction that opened it.
             if matches!(line.0.as_str(), "end" | "else") {
@@ -300,6 +308,10 @@ impl Module {
                 }
                 s
             }
+            // f32.const, f64.const. `scalar` would truncate these to an
+            // integer, which is a wrong number rather than a rough one.
+            0x43 => float(f64::from(*float_of(value) as f32)),
+            0x44 => float(*float_of(value)),
             _ => match value {
                 Value::Composite { .. } => composite_args(ev, doc, path)?,
                 Value::Enum { name: Some(n), .. } => n.clone(),
@@ -325,6 +337,28 @@ fn composite_args<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usiz
     Ok(parts.join(" "))
 }
 
+/// Which group an opcode hands off to without the immediate being read. Both
+/// are gaps in the instruction table rather than in the file.
+fn undecoded_group(mnemonic: &str) -> Option<&'static str> {
+    match mnemonic {
+        "simd prefix" => Some("SIMD immediates are not read yet"),
+        "thread prefix" => Some("thread immediates are not read yet"),
+        _ => None,
+    }
+}
+
+/// A float as text, keeping the point so a whole number still reads as one.
+fn float(v: f64) -> String {
+    if v.is_finite() { format!("{v:?}") } else { format!("{v}") }
+}
+
+fn float_of(v: &Value) -> &f64 {
+    match v {
+        Value::Float(f) => f,
+        _ => &0.0,
+    }
+}
+
 fn child(path: &[usize], i: usize) -> Vec<usize> {
     let mut p = path.to_vec();
     p.push(i);
@@ -336,7 +370,6 @@ fn scalar(v: &Value) -> i128 {
         Value::UInt(n) => *n as i128,
         Value::Int(n) => *n,
         Value::Enum { raw, .. } => *raw,
-        Value::Float(f) => *f as i128,
         _ => 0,
     }
 }
@@ -565,5 +598,34 @@ mod tests {
         let text = m.disassemble(&mut ev, &d, 0).unwrap();
         assert!(text.contains("nop"), "{text}");
         assert!(text.contains(";; stops here: opcode 0x06 is not in the table"), "{text}");
+    }
+
+    #[test]
+    fn a_simd_instruction_stops_the_body_rather_than_guessing() {
+        let mut b = b" asm".to_vec();
+        b.extend_from_slice(&1u32.to_le_bytes());
+        section(3, &[1, 0], &mut b);
+        // f64.const 3.5, then v128.const, whose sixteen bytes of immediate the
+        // table does not read. Left alone they would decode as instructions.
+        let mut body = vec![0u8, 0x44];
+        body.extend_from_slice(&3.5f64.to_le_bytes());
+        body.extend_from_slice(&[0xfd, 0x0c]);
+        body.extend_from_slice(&[0x41; 16]);
+        body.push(0x0b);
+        let mut code = vec![1u8];
+        leb_u(body.len() as u64, &mut code);
+        code.extend_from_slice(&body);
+        section(10, &code, &mut b);
+
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(wasm());
+        let m = Module::read(&mut ev, &d).unwrap();
+        let text = m.disassemble(&mut ev, &d, 0).unwrap();
+        // A float immediate keeps its point rather than truncating.
+        assert!(text.contains("f64.const 3.5"), "{text}");
+        assert!(text.contains(";; stops here: SIMD immediates are not read yet"), "{text}");
+        // Nothing after the SIMD instruction is printed, because none of it was
+        // read as what it is.
+        assert!(!text.contains("i32.const"), "{text}");
     }
 }
