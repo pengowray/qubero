@@ -57,10 +57,29 @@ coarse (whole memo on any edit), so on a large templated file every keystroke
 re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker that
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
-Built-in templates live in `formats.rs` (PNG, wasm). A text format for templates,
+Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4), one file
+per format plus `wasm_opcodes.rs` for the instruction table. A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
 Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
 Text encodings still to add: CP437, JIS.
+
+Three later additions to the IR, each paying for itself in a format:
+* `Enum` names the values of an integer field without changing it, so a switch
+  keyed on that field still sees the number. PNG colour types, wasm section ids
+  and opcodes, H.264 NAL unit types. Values with no name show the number and are
+  flagged. Editing takes the name or any number: a file is allowed to hold a
+  value its format never defined.
+* `Fixed` is fixed-point, so MP4's 16.16 track width reads 64 rather than
+  4194304. Typing a value rounds to the nearest representable step.
+* `Named` looks a type up in `Template::types`, which is what lets an MP4 box
+  contain more boxes. Resolution has a 64-hop limit, so an alias that resolves
+  to itself errors instead of spinning.
+
+A wasm function body reads as a list of instructions: the opcode is an `Enum`
+over the byte and its immediate is a `Switch` on that byte. The 0xFD (SIMD) and
+0xFE (thread) prefixes read their sub-opcode but not its immediates, so a body
+using them desyncs from that point; the enclosing `Sized` window keeps it inside
+one function.
 
 ### Editing a typed field writes only that field
 `crates/core/src/encode.rs` is the inverse of the readers in `eval.rs`: text in,
@@ -101,6 +120,12 @@ and the inspector rows have the same shape. Editing either side writes through i
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
 ### Known gaps
+MP4: a box with size 0 (meaning "to the end of the file") is an error, because
+there is no "rest of this container" expression yet. Sample tables past `stsd`
+are bytes. An SPS or PPS is exp-golomb coded, which the IR cannot describe, so a
+NAL unit stops at its header bits. An H.264 Annex B stream (start codes rather
+than lengths) needs a "scan until these bytes" primitive that does not exist.
+
 Save shows no progress while rewriting bit-shifted stretches. The type table has no
 keyboard navigation between rows, so a value cell is reached by clicking or tabbing.
 Text fields are displayed through `from_utf8_lossy`, so invalid bytes show as U+FFFD;
