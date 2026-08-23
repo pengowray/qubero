@@ -5,6 +5,7 @@ mod id3;
 mod midi;
 mod mp4;
 mod png;
+mod sqlite;
 mod w4v;
 mod wav;
 mod wasm;
@@ -14,6 +15,7 @@ pub use id3::id3;
 pub use midi::midi;
 pub use mp4::mp4;
 pub use png::png;
+pub use sqlite::sqlite;
 pub use w4v::w4v;
 pub use wav::wav;
 pub use wasm::wasm;
@@ -21,7 +23,7 @@ pub use wasm::wasm;
 use crate::template::Template;
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -33,13 +35,16 @@ pub fn builtin(name: &str) -> Option<Template> {
         "wav" => Some(wav()),
         "w4v" => Some(w4v()),
         "midi" => Some(midi()),
+        "sqlite" => Some(sqlite()),
         _ => None,
     }
 }
 
 /// Pick a built-in template from the first bytes of a file.
 pub fn sniff(head: &[u8]) -> Option<&'static str> {
-    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+    if head.starts_with(b"SQLite format 3\0") {
+        Some("sqlite")
+    } else if head.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("png")
     } else if head.starts_with(b"\0asm") {
         Some("wasm")

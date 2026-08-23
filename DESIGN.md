@@ -58,7 +58,8 @@ re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker t
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
 Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3, WAV,
-W4V, MIDI), one file per format plus `wasm_opcodes.rs` for the instruction table. WAV
+W4V, MIDI, SQLite), one file per format plus `wasm_opcodes.rs` for the instruction
+table. WAV
 carries the metadata chunks bat recorders write: GUANO (`guan`) as UTF-8 lines,
 and `wamd` as a stream of tagged items whose tag numbers were read out of files
 rather than a specification. W4V is the same RIFF container with a format tag of
@@ -66,7 +67,25 @@ rather than a specification. W4V is the same RIFF container with a format tag of
 undocumented bytes, and 512 six-bit codes packed MSB first. That layout follows
 the reverse-engineered decoder in the batchi project and covers only the six-bit
 flavour; wider ones would need the code width read from a sibling chunk, which a
-field cannot do. A text format for templates,
+field cannot do.
+
+SQLite is the first format the IR can only half read, and it is worth keeping for
+what it shows. The header and the page grid come out fine: the fields are flat in
+the root struct so the page size is in scope where the pages are sized, a page
+size of 1 (which means 65536, since the field is two bytes) is a `Switch` because
+there is no conditional expression, and the run of pages ends at the end of the
+file rather than trusting the header's page count, which legacy files leave
+stale. A page reads down to its cell pointer array, and stops. Three things are
+missing to go further. Cells sit at the offsets in that array, counted from the
+start of the page, and no type says "the thing at this offset"; that is the one
+worth adding, and it means children that are not in file order, which `spans` and
+`locate` currently assume. SQLite's varint is nine bytes at most and the ninth
+contributes all eight of its bits, so `Vlq` cannot stand in for it. And a record's
+columns are typed by a list of serial types read just before them, one per column,
+which an expression cannot index into. A page whose first byte is not a b-tree
+type reads as bytes, which is what a freelist, overflow or pointer-map page is.
+
+A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
 Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
 Text encodings live in `text.rs`: UTF-8, ASCII, Latin-1, CP437, UTF-16 either
