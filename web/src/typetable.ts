@@ -38,6 +38,17 @@ function countText(n: number, noun: string): string {
   return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
 }
 
+/// A named value reads as `local.get (0x20)`. Hundreds of instruction rows in a
+/// row are easier to scan with the number behind the name played down.
+function label(n: TemplateNode): (Node | string)[] {
+  const m = n.kind === "enum" ? /^(.*) (\([^()]*\))$/.exec(n.value) : null;
+  if (m === null) return [n.value];
+  const num = document.createElement("span");
+  num.className = "tt-num-note";
+  num.textContent = m[2] ?? "";
+  return [`${m[1]} `, num];
+}
+
 function sizeText(bits: number): string {
   if (bits % 8 === 0) {
     const b = bits / 8;
@@ -264,9 +275,10 @@ export class TypeTable {
       value.dataset["edit"] = k;
       value.tabIndex = 0;
       value.title = "Click to edit";
-      value.textContent = n.value;
+      value.append(...label(n));
     } else {
-      value.textContent = n.composite ? countText(n.child_count, n.type.endsWith("[]") ? "item" : "field") : n.value;
+      if (n.composite) value.textContent = countText(n.child_count, n.type.endsWith("[]") ? "item" : "field");
+      else value.append(...label(n));
     }
 
     const type = document.createElement("td");

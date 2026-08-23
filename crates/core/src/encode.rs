@@ -56,8 +56,15 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64) -> Result<Vec<u8>, String> {
                 (0.0, mask(*bits) as f64)
             };
             if !scaled.is_finite() || scaled < min || scaled > max {
-                let unit = 1.0 / (1u64 << frac) as f64;
-                return Err(range_msg(&ty.display_name(), &(min * unit).to_string(), &(max * unit).to_string()));
+                // The true maximum is one step short of a power of two; printing
+                // 65535.99998474121 helps nobody.
+                let whole = bits - frac;
+                let (lo, hi) = if *signed {
+                    ((-(1i128 << (whole - 1))).to_string(), (1i128 << (whole - 1)).to_string())
+                } else {
+                    ("0".to_string(), (1i128 << whole).to_string())
+                };
+                return Err(format!("{} range is {lo} to just under {hi}.", ty.display_name()));
             }
             Ok(write_uint((scaled as i128 as u128) & mask(*bits), *bits, *endian))
         }
@@ -126,14 +133,26 @@ fn whole_number_msg(signed: bool) -> String {
     }
 }
 
-/// Names the field accepts, trimmed to something readable in a status line.
+/// The names a field accepts, when the whole list fits on a status line.
+/// A partial list of 200 opcodes would help nobody, so a long set is offered
+/// the number formats instead.
 fn enum_msg(name: &str, cases: &[(i128, String)]) -> String {
-    const SHOW: usize = 6;
-    let mut names: Vec<&str> = cases.iter().take(SHOW).map(|(_, n)| n.as_str()).collect();
-    let more = cases.len().saturating_sub(SHOW);
-    let tail = if more > 0 { format!(", and {more} more") } else { String::new() };
-    names.dedup();
-    format!("Not a {name} name or number. Names: {}{tail}.", names.join(", "))
+    let names: Vec<&str> = cases.iter().map(|(_, n)| n.as_str()).collect();
+    let joined = names.join(", ");
+    let a = article(name);
+    if names.len() <= 8 && joined.len() <= 60 {
+        format!("Not {a} {name} name or number. Names: {joined}.")
+    } else {
+        format!("Not {a} {name} name or number. Or type a number: 12, 0x1f, 0b1010.")
+    }
+}
+
+/// Type names come from the template, so the article has to be worked out.
+fn article(name: &str) -> &'static str {
+    match name.chars().next() {
+        Some(c) if "AEIOUaeiou".contains(c) => "an",
+        _ => "a",
+    }
 }
 
 fn range_msg(type_name: &str, min: &str, max: &str) -> String {

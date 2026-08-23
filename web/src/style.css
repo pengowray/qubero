@@ -232,6 +232,9 @@ input.invalid {
 .tt-enum {
   color: var(--accent);
 }
+.tt-num-note {
+  color: var(--muted);
+}
 .tt-bad .tt-val {
   color: var(--warn);
 }
