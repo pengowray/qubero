@@ -155,6 +155,10 @@ pub enum Ty {
     F64(Endian),
     /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
     Leb128 { signed: bool },
+    /// MIDI's variable-length quantity: seven bits per byte, most significant
+    /// group first, high bit set on every byte but the last. LEB128 packs the
+    /// same seven bits the other way round, so it cannot stand in for this.
+    Vlq,
     /// Fixed-point: `bits` wide with `frac` fraction bits, so MP4's 16.16 rate
     /// of 0x00010000 reads as 1.
     Fixed { bits: u32, frac: u32, endian: Endian, signed: bool },
@@ -206,6 +210,9 @@ impl Ty {
     }
     pub fn leb_u() -> Ty {
         Ty::Leb128 { signed: false }
+    }
+    pub fn vlq() -> Ty {
+        Ty::Vlq
     }
     pub fn bytes(len: Expr) -> Ty {
         Ty::Bytes(len)
@@ -290,6 +297,7 @@ impl Ty {
             Ty::Fixed { bits, frac, endian, signed } => {
                 format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
             }
+            Ty::Vlq => "vlq".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),
             Ty::Magic(b) => format!("magic[{}]", b.len()),

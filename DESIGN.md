@@ -58,7 +58,7 @@ re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker t
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
 Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3, WAV,
-W4V), one file per format plus `wasm_opcodes.rs` for the instruction table. WAV
+W4V, MIDI), one file per format plus `wasm_opcodes.rs` for the instruction table. WAV
 carries the metadata chunks bat recorders write: GUANO (`guan`) as UTF-8 lines,
 and `wamd` as a stream of tagged items whose tag numbers were read out of files
 rather than a specification. W4V is the same RIFF container with a format tag of
@@ -113,6 +113,11 @@ Later additions to the IR, each paying for itself in a format:
 * `Named` looks a type up in `Template::types`, which is what lets an MP4 box
   contain more boxes. Resolution has a 64-hop limit, so an alias that resolves
   to itself errors instead of spinning.
+* `Vlq` is MIDI's variable-length quantity: seven bits per byte, most
+  significant group first. LEB128 packs the same seven bits the other way
+  round, so it could not stand in. Writing one keeps the field's size by
+  padding at the front with 0x80, a group of zero bits that says "more
+  follows": redundant, legal, and what stops a delta time moving the track.
 
 A wasm function body reads as a list of instructions: the opcode is an `Enum`
 over the byte and its immediate is a `Switch` on that byte. The 0xFD (SIMD) and
@@ -208,6 +213,19 @@ which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 A
 than lengths) needs a "scan until these bytes" primitive that does not exist.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
+
+MIDI running status is the sharpest gap, because it is the normal case rather
+than a corner one: a message may leave its status byte out and mean "the same
+as the last one", and every one of the three MIDI files Windows ships hits that
+within three events, so the rest of each track reads as bytes. Following it
+needs three small additions that no format has needed yet, and which would
+serve any format that carries state between elements: an expression that reads
+the next bytes without consuming them (so a field can exist only when the byte
+says so), one that reads a field of the previous element of a repeat, and a
+zero-width field whose value is an expression. The last event's status would
+then be `Or(status, Prev(effective_status))`, since a real status byte is never
+zero and an absent one is a field of no bits. Element `n` would depend on
+`n - 1`, so it also needs the evaluator to work forwards rather than recurse.
 
 A field the panel will not let you edit says why only when you try to: the box
 is simply disabled until then, because the reasons live in the write path.

@@ -2,6 +2,7 @@
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
 mod id3;
+mod midi;
 mod mp4;
 mod png;
 mod w4v;
@@ -10,6 +11,7 @@ mod wasm;
 mod wasm_opcodes;
 
 pub use id3::id3;
+pub use midi::midi;
 pub use mp4::mp4;
 pub use png::png;
 pub use w4v::w4v;
@@ -19,7 +21,7 @@ pub use wasm::wasm;
 use crate::template::Template;
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -30,6 +32,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "id3" => Some(id3()),
         "wav" => Some(wav()),
         "w4v" => Some(w4v()),
+        "midi" => Some(midi()),
         _ => None,
     }
 }
@@ -42,6 +45,8 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("wasm")
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
+    } else if head.starts_with(b"MThd") {
+        Some("midi")
     } else if head.starts_with(b"ID3") {
         Some("id3")
     } else if head.starts_with(b"RIFF") && head.len() >= 12 && &head[8..12] == b"WAVE" {

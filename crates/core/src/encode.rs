@@ -25,7 +25,7 @@ pub const EDIT_LIMIT_BYTES: u64 = 4096;
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Fixed { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
@@ -107,6 +107,14 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
             };
             bytes.ok_or_else(|| {
                 let (min, max) = leb_limits(room, *signed);
+                format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
+            })
+        }
+        Ty::Vlq => {
+            let room = (size_bits / 8) as usize;
+            let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
+            vlq(v, room).ok_or_else(|| {
+                let (min, max) = leb_limits(room, false);
                 format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
             })
         }
@@ -387,6 +395,29 @@ fn leb_unsigned(mut v: u128, room: usize) -> Option<Vec<u8>> {
     }
     if v != 0 {
         return None; // the value needs more bytes than the field has
+    }
+    Some(out)
+}
+
+/// A variable-length quantity in exactly `room` bytes. Fewer bytes than the
+/// field has are padded at the front with 0x80, a group of seven zero bits and
+/// a "more follows" bit: redundant, legal, and what keeps the size fixed.
+fn vlq(v: u128, room: usize) -> Option<Vec<u8>> {
+    if room == 0 || room > 19 {
+        return None;
+    }
+    let mut groups = vec![(v & 0x7f) as u8];
+    let mut rest = v >> 7;
+    while rest != 0 {
+        groups.push((rest & 0x7f) as u8);
+        rest >>= 7;
+    }
+    if groups.len() > room {
+        return None;
+    }
+    let mut out = vec![0x80; room - groups.len()];
+    while let Some(g) = groups.pop() {
+        out.push(if groups.is_empty() { g } else { g | 0x80 });
     }
     Some(out)
 }

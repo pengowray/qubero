@@ -475,9 +475,17 @@ impl Evaluator {
                     let (_, n) = self.read_leb(doc, &r)?;
                     n * 8
                 }
+                Ty::Vlq => {
+                    let (_, n) = self.read_vlq(doc, &r)?;
+                    n * 8
+                }
                 Ty::Enum { inner, .. } => match **inner {
                     Ty::Leb128 { .. } => {
                         let (_, n) = self.read_leb(doc, &r)?;
+                        n * 8
+                    }
+                    Ty::Vlq => {
+                        let (_, n) = self.read_vlq(doc, &r)?;
                         n * 8
                     }
                     _ => return fail("enum over a type with no fixed size"),
@@ -796,6 +804,21 @@ impl Evaluator {
         fail("LEB128 longer than 10 bytes")
     }
 
+    /// A variable-length quantity: the high bit says another byte follows, and
+    /// the seven bits below it are the next group down. Four bytes is the most
+    /// a Standard MIDI File is allowed to use.
+    fn read_vlq<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(u128, u64)> {
+        let mut value: u128 = 0;
+        for i in 0..4u64 {
+            let b = self.read(doc, r, r.offset + i * 8, 8)?[0];
+            value = (value << 7) | (b & 0x7f) as u128;
+            if b & 0x80 == 0 {
+                return Ok((value, i + 1));
+            }
+        }
+        fail("variable-length number longer than 4 bytes")
+    }
+
     fn primitive_value<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
@@ -812,6 +835,7 @@ impl Evaluator {
                 let (v, _) = self.read_leb(doc, r)?;
                 if *signed { Value::Int(v as i128) } else { Value::UInt(v) }
             }
+            Ty::Vlq => Value::UInt(self.read_vlq(doc, r)?.0),
             Ty::Magic(want) => Value::Magic { ok: self.read(doc, r, r.offset, size)? == *want },
             Ty::Bytes(_) => {
                 let len = size / 8;
