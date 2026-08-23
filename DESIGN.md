@@ -171,6 +171,41 @@ one replacement character be written back over three valid-length bad bytes.
 what displaying it costs. The memo makes the next call cheap until the next edit,
 which is the same coarse-invalidation limit described above.
 
+### The field column
+The hex view's right-hand column shows either the bytes as text or, with a
+template, what each byte is: every field tinted where it sits, and its name and
+value on a chip beside the row it starts on. Clicking a chip selects the field
+in all three views. The point is to read a file's structure without clicking
+through it field by field, so a template being selected now shows the field
+column by default; the text column leads when no template is set, and each of
+those two states remembers what the user last chose for it.
+
+`Evaluator::spans` feeds it: one call per screenful rather than one per field.
+It walks `locate` forwards from the first bit on screen, and does two things
+that are not one field each. Slack inside a structure comes back as a gap,
+since `locate` answers with the enclosing composite when no child covers a bit,
+and reporting that composite would mislabel everything before it. And a long
+run of plain numbers comes back as the run: W4V's 512 six-bit codes would
+otherwise be 512 entries saying `[0]`, `[1]`, `[2]`, which is less information
+than one saying `codes  512 values`. Text repeats are not collapsed, because
+GUANO lines are each worth reading.
+
+Colour comes from the field's path, not from its position on screen, so
+scrolling never repaints the file in different colours. Six hues, and the name
+is always on the chip, so colour is never the only signal. Selection and the
+cursor are painted after the tints and keep the upper hand where they overlap;
+the tints themselves are deliberately weak against the background (about 1.6:1)
+because they sit under hex digits that have to stay readable.
+
+How many chips fit is worked out from the text before any are drawn, from the
+column width measured on the previous frame, and what is left over is counted
+on a `+N` chip rather than quietly cut off. The same applies to the 600-field
+limit on one screenful, which says so on the last row.
+
+Both side panels fold to a title bar that still names them: the bottom one to a
+strip, the right one to a narrow vertical tab. The bar is also where those two
+panels got names, which they did not have before.
+
 ### Sub-byte fields in the hex view
 A field of three bits that straddles two bytes is normal in these formats, so the
 byte-granular highlight was not enough. A fully covered byte keeps the block
@@ -229,6 +264,18 @@ zero and an absent one is a field of no bits. Element `n` would depend on
 
 A field the panel will not let you edit says why only when you try to: the box
 is simply disabled until then, because the reasons live in the write path.
+
+A chip in the field column says `body` where the useful name is in a sibling:
+a RIFF chunk is identified by its `id` field, not by the name of the field
+holding its contents. Nothing generic can know which sibling that is, and
+guessing at the first primitive child works for RIFF and fails on PNG, where
+the length comes before the type. The fix is for a struct to be able to declare
+which of its fields names it, which is a small addition to the IR and is worth
+doing when the template text format lands.
+
+`Value::Magic` carries only whether the bytes matched, so a mismatch reads
+`does not match` without saying what was expected. The expected bytes are in
+the template and could be carried with the value.
 
 Save shows no progress while rewriting bit-shifted stretches. The type table has no
 keyboard navigation between rows, so a value cell is reached by clicking or tabbing.
