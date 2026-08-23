@@ -38,6 +38,23 @@ export type TemplateNode = {
 };
 
 /** The bit range a successful `writeNode` replaced. */
+/** One entry of the annotation column: a field, a run of them, or a stretch
+ *  the template does not describe. */
+export type Span = {
+  readonly path: number[];
+  readonly name: string;
+  /** What it sits inside, outermost first. */
+  readonly trail: string[];
+  readonly type: string;
+  readonly offset_bits: number;
+  readonly size_bits: number;
+  readonly value: string;
+  readonly kind: string;
+  readonly gap: boolean;
+  /** Fields this entry stands for, when a run of numbers is shown as one. */
+  readonly count: number;
+};
+
 export type WrittenRange = { readonly offset_bits: number; readonly size_bits: number };
 
 export type TemplateReply<T> =
@@ -194,6 +211,15 @@ export class Doc {
   /** The whole text of a text field, decoded in the field's own encoding. */
   fieldText(path: readonly number[]): TemplateReply<{ text: string; truncated: boolean }> {
     return this.handleReply(this.editor.field_text(Uint32Array.from(path)));
+  }
+
+  /**
+   * Every field between two bit offsets, in order. One call covers what is on
+   * screen, so the annotation column costs one round trip per view rather than
+   * one per field.
+   */
+  spans(fromBit: number, toBit: number, max: number): TemplateReply<Span[]> {
+    return this.handleReply<Span[]>(this.editor.spans(fromBit, toBit, max));
   }
 
   /** Path of the deepest template field covering `bitOffset`. */

@@ -144,10 +144,9 @@ input.invalid {
 
 /* ---- type table ---- */
 .typetable {
-  flex: 0 0 38%;
+  flex: 1;
   min-height: 0;
   overflow: auto;
-  border-top: 1px solid var(--line);
   font-size: 13px;
 }
 .typetable table {
@@ -281,6 +280,7 @@ input.invalid {
   padding: 0 8px;
 }
 .hv-header {
+  display: flex;
   white-space: pre;
   color: var(--muted);
   border-bottom: 1px solid var(--line);
@@ -320,6 +320,51 @@ input.invalid {
 }
 .hv-pending {
   color: var(--muted);
+}
+/* Field colours for the annotation column. Six hues, told apart by name as
+   well as colour: every tinted stretch has its name beside it. */
+.hv-t0 {
+  --tint: #0072b2;
+}
+.hv-t1 {
+  --tint: #d55e00;
+}
+.hv-t2 {
+  --tint: #009e73;
+}
+.hv-t3 {
+  --tint: #cc79a7;
+}
+.hv-t4 {
+  --tint: #b07d00;
+}
+.hv-t5 {
+  --tint: #6a4bc4;
+}
+@media (prefers-color-scheme: dark) {
+  .hv-t0 {
+    --tint: #4ea3e8;
+  }
+  .hv-t1 {
+    --tint: #ef8a4a;
+  }
+  .hv-t2 {
+    --tint: #3fbf98;
+  }
+  .hv-t3 {
+    --tint: #e79cc4;
+  }
+  .hv-t4 {
+    --tint: #d8ab3a;
+  }
+  .hv-t5 {
+    --tint: #a68cf0;
+  }
+}
+/* The bytes of a field. Selection and the cursor are defined after this, so
+   they keep the upper hand where they overlap. */
+.hv-tint {
+  background: color-mix(in srgb, var(--tint) 18%, transparent);
 }
 .hv-hl {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
@@ -386,6 +431,150 @@ input.invalid {
   background: var(--muted);
   border-radius: 6px;
   opacity: 0.6;
+}
+
+/* ---- annotation column ---- */
+.hv-note {
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  margin-left: 1ch;
+  padding-left: 1ch;
+  border-left: 1px solid var(--line);
+  display: flex;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.hexview.has-notes {
+  line-height: 24px;
+}
+.hexview.has-notes .hv-row {
+  height: 24px;
+}
+.hv-chip {
+  font: inherit;
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 20px;
+  height: 20px;
+  min-height: 0;
+  max-width: 26ch;
+  padding: 0 6px;
+  border: 0;
+  border-left: 3px solid var(--tint);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--tint) 22%, transparent);
+  color: var(--fg);
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  overflow: hidden;
+  cursor: pointer;
+}
+.hv-chip:hover {
+  background: color-mix(in srgb, var(--tint) 34%, transparent);
+}
+.hv-chip > b {
+  font-weight: 600;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hv-chip-val {
+  color: var(--muted);
+  font-family: var(--mono);
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A field that began above the top row: named here so nothing on screen is
+   left unexplained. */
+.hv-chip-carried > b::before {
+  content: "\2191 ";
+  color: var(--muted);
+}
+.hv-chip-gap {
+  --tint: var(--muted);
+  border-left-style: dashed;
+  color: var(--muted);
+  cursor: default;
+}
+.hv-head-note {
+  border-left-color: transparent;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+
+/* ---- collapsing panels ---- */
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.panel-bottom {
+  flex: 0 0 38%;
+  border-top: 1px solid var(--line);
+}
+.panel-right {
+  flex: 0 0 auto;
+  border-left: 1px solid var(--line);
+}
+.panel-bar {
+  display: flex;
+  align-items: center;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.panel-toggle {
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  padding: 2px 8px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+.panel-toggle:hover {
+  color: var(--fg);
+}
+.panel-chevron {
+  font-size: 10px;
+  width: 1em;
+}
+.panel.is-collapsed {
+  flex: 0 0 auto;
+}
+.panel.is-collapsed > :not(.panel-bar) {
+  display: none;
+}
+.panel-right.is-collapsed .panel-bar {
+  height: 100%;
+  border-bottom: 0;
+}
+.panel-right.is-collapsed .panel-toggle {
+  writing-mode: vertical-rl;
+  height: 100%;
+  width: auto;
+  padding: 8px 2px;
+}
+@media (max-width: 700px) {
+  .panel-right {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .panel-right.is-collapsed .panel-toggle {
+    writing-mode: horizontal-tb;
+    height: auto;
+    width: 100%;
+  }
 }
 
 /* ---- inspector ---- */
@@ -534,4 +723,8 @@ input.invalid {
   color: var(--warn);
   min-height: 1.4em;
   margin-top: 4px;
+}
+.hv-chip-rest {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
 }

@@ -4,9 +4,12 @@
 // does not use native scrolling for the document. It keeps a `topRow` and renders
 // only the rows that fit, with its own scrollbar mapped row <-> file offset.
 
-import type { Doc } from "./doc.js";
+import type { Doc, Span } from "./doc.js";
 
 export type Pane = "hex" | "ascii";
+/** What sits to the right of the bytes: their text, or what the template says
+ *  each one is. */
+export type RightColumn = "text" | "fields";
 /** Hex shows two digits per byte; binary shows the eight bits. */
 export type ViewMode = "hex" | "binary";
 
@@ -20,6 +23,41 @@ export type CursorState = {
 };
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+
+/** How many entries one screenful of the annotation column may hold. */
+const SPAN_LIMIT = 600;
+/** Colours the annotation column cycles through, as class suffixes. */
+const TINTS = 6;
+/** What a stretch of bytes no field covers is called. */
+const GAP_LABEL = "not described";
+/** Longest value shown on a chip before it is cut short. */
+const CHIP_VALUE = 32;
+/** Rough width of a character in the chip font, for working out how many
+ *  chips fit before any of them are drawn. */
+const CHIP_CHAR = 6.7;
+/** Padding, border and gap around a chip's text. */
+const CHIP_CHROME = 20;
+
+/** What a chip says after the name. A run of numbers says how many; raw bytes
+ *  say how many, since the bytes themselves are already on the left. */
+function chipDetail(s: Span): string {
+  if (s.gap) return "";
+  if (s.count > 0) return `${s.count.toLocaleString()} values`;
+  if (s.kind === "bytes") {
+    return s.size_bits % 8 === 0
+      ? `${(s.size_bits / 8).toLocaleString()} bytes`
+      : `${s.size_bits.toLocaleString()} bits`;
+  }
+  return s.value.length > CHIP_VALUE ? `${s.value.slice(0, CHIP_VALUE)}\u2026` : s.value;
+}
+
+/** A field's colour, from its place in the tree rather than its place on the
+ *  screen, so scrolling never repaints the file in different colours. */
+function tintOf(path: readonly number[]): number {
+  let n = path.length;
+  for (const i of path) n = (n * 31 + i) % (TINTS * 7919);
+  return n % TINTS;
+}
 
 function asciiGlyph(b: number): string {
   return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
@@ -48,8 +86,15 @@ export class HexView {
   private dragging: { startY: number; startRow: number } | null = null;
   /** Bit range [startBit, endBit) to highlight, e.g. the selected field. */
   private highlight: { startBit: number; endBit: number } | null = null;
+  private rightColumn: RightColumn = "text";
+  /** Spans for the rows on screen, kept until the view or the file moves. */
+  private spanCache: { key: string; spans: Span[]; more: boolean } | null = null;
+  /** Width of the annotation column, measured from the last frame. */
+  private noteWidth = 0;
 
   onCursorChange: (c: CursorState) => void = () => {};
+  /** A field picked in the annotation column. */
+  onPickField: (path: readonly number[]) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("div");
@@ -87,7 +132,10 @@ export class HexView {
     this.track.addEventListener("pointermove", (e) => this.onTrackMove(e));
     this.track.addEventListener("pointerup", (e) => this.onTrackUp(e));
     this.track.addEventListener("pointercancel", (e) => this.onTrackUp(e));
-    doc.onChange(() => this.render());
+    doc.onChange(() => {
+      this.spanCache = null;
+      this.render();
+    });
   }
 
   // ----- geometry -----
@@ -105,6 +153,18 @@ export class HexView {
     this.relayout();
     this.scrollCursorIntoView();
     this.render();
+  }
+
+  setRightColumn(c: RightColumn): void {
+    this.rightColumn = c;
+    // The text column is where the "ascii" pane lives; without it the cursor
+    // has nowhere to be but the bytes.
+    if (c !== "text" && this.pane === "ascii") this.pane = "hex";
+    this.spanCache = null;
+    // Rows are taller while the field column is shown, so the number of rows
+    // that fit has to be worked out again.
+    this.el.classList.toggle("has-notes", c === "fields");
+    this.relayout();
   }
 
   relayout(): void {
@@ -423,18 +483,93 @@ export class HexView {
     }
   }
 
+  /** Spans for the rows on screen. A pending reply leaves the column empty
+   *  for one frame; the fetched chunks trigger another render. */
+  private spansForView(start: number, count: number): { spans: Span[]; more: boolean } {
+    const key = `${start}:${count}:${this.doc.template ?? ""}`;
+    if (this.spanCache?.key === key) return this.spanCache;
+    const max = Math.min(SPAN_LIMIT, count * 8);
+    const r = this.doc.spans(start * 8, (start + count) * 8, max);
+    if (r.status !== "ok") return { spans: [], more: false };
+    this.spanCache = { key, spans: r.node, more: r.node.length >= max };
+    return this.spanCache;
+  }
+
+  /** One entry in the annotation column, coloured to match its bytes. */
+  private chip(s: Span, carried: boolean): HTMLElement {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "hv-chip";
+    if (s.gap) el.classList.add("hv-chip-gap");
+    else el.classList.add(`hv-t${tintOf(s.path)}`);
+    if (carried) el.classList.add("hv-chip-carried");
+    const name = document.createElement("b");
+    name.textContent = s.gap ? GAP_LABEL : s.name;
+    el.append(name);
+    const detail = chipDetail(s);
+    if (detail !== "" && !s.gap) {
+      const v = document.createElement("span");
+      v.className = "hv-chip-val";
+      v.textContent = detail;
+      el.append(v);
+    }
+    const where = s.trail.length > 0 ? `${s.trail.join(" ")} ` : "";
+    el.title = s.gap
+      ? `${GAP_LABEL}: ${(s.size_bits / 8).toLocaleString()} bytes inside ${where}${s.name}`
+      : `${where}${s.name} \u00b7 ${s.type}`;
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!s.gap) this.onPickField(s.path);
+    });
+    if (s.gap) el.disabled = true;
+    return el;
+  }
+
   render(): void {
     const bpr = this.bytesPerRow;
     const len = this.doc.lengthBytes;
     const addrWidth = Math.max(8, len.toString(16).length);
     const start = this.topRow * bpr;
-    const { bytes, complete } = this.doc.read(start, this.visibleRows * bpr);
+    const windowBytes = this.visibleRows * bpr;
+    const { bytes, complete } = this.doc.read(start, windowBytes);
     const binary = this.mode === "binary";
+    const fields = this.rightColumn === "fields" && this.doc.template !== null;
 
-    this.header.textContent =
+    // Which span covers each byte on screen, and which start on each row.
+    let spans: Span[] = [];
+    let more = false;
+    const byteSpan = new Int32Array(windowBytes).fill(-1);
+    const byRow: { span: Span; carried: boolean }[][] = [];
+    if (fields) {
+      ({ spans, more } = this.spansForView(start, windowBytes));
+      for (let r = 0; r < this.visibleRows; r++) byRow.push([]);
+      for (const [i, s] of spans.entries()) {
+        const from = Math.floor(s.offset_bits / 8);
+        const to = Math.ceil((s.offset_bits + s.size_bits) / 8);
+        for (let b = Math.max(from, start); b < Math.min(to, start + windowBytes); b++) {
+          byteSpan[b - start] = i;
+        }
+        // A field is named on the row it starts on. One that started above the
+        // view is named on the first row, so nothing on screen is unexplained.
+        const row = from < start ? 0 : Math.floor((from - start) / bpr);
+        if (row >= 0 && row < this.visibleRows && to > start) {
+          byRow[row]?.push({ span: s, carried: from < start });
+        }
+      }
+    }
+
+    const columns = document.createElement("span");
+    columns.textContent =
       " ".repeat(addrWidth) +
       "  " +
       Array.from({ length: bpr }, (_, i) => (binary ? (HEX[i] ?? "").padEnd(8) : HEX[i])).join(" ");
+    this.header.replaceChildren(columns);
+    if (fields) {
+      const title = document.createElement("span");
+      title.className = "hv-note hv-head-note";
+      title.textContent = "Fields";
+      this.header.append(title);
+    }
 
     for (let r = 0; r < this.rowEls.length; r++) {
       const row = this.rowEls[r];
@@ -481,6 +616,11 @@ export class HexView {
           a.textContent = " ";
         }
 
+        const si = fields && off >= start && off < start + windowBytes ? byteSpan[off - start] ?? -1 : -1;
+        if (si >= 0) {
+          const s = spans[si];
+          if (s !== undefined && !s.gap) h.classList.add("hv-tint", `hv-t${tintOf(s.path)}`);
+        }
         if (hl !== null) {
           // The text column cannot show part of a byte, so a partly covered
           // byte is marked more faintly there than a fully covered one.
@@ -501,8 +641,54 @@ export class HexView {
         cells.append(h);
         asc.append(a);
       }
-      frag.append(cells, asc);
+      if (fields) {
+        const note = document.createElement("span");
+        note.className = "hv-note";
+        const entries = byRow[r] ?? [];
+        // Work out how many fit before drawing any, so what is left over can be
+        // counted rather than quietly cut off.
+        let room = this.noteWidth || 320;
+        let shown = 0;
+        for (const { span } of entries) {
+          const w = CHIP_CHROME + (span.name.length + chipDetail(span).length + 1) * CHIP_CHAR;
+          if (shown > 0 && w > room - (shown < entries.length - 1 ? 44 : 0)) break;
+          room -= w;
+          shown += 1;
+        }
+        for (const { span, carried } of entries.slice(0, shown)) note.append(this.chip(span, carried));
+        if (shown < entries.length) {
+          const rest = document.createElement("span");
+          rest.className = "hv-chip hv-chip-gap hv-chip-rest";
+          rest.textContent = `+${entries.length - shown}`;
+          rest.title = entries
+            .slice(shown)
+            .map(({ span }) => span.name)
+            .join(", ");
+          note.append(rest);
+        }
+        if (more && r === this.rowEls.length - 1) {
+          const rest = document.createElement("span");
+          rest.className = "hv-chip hv-chip-gap";
+          rest.textContent = "more below";
+          note.append(rest);
+        }
+        frag.append(cells, note);
+      } else {
+        frag.append(cells, asc);
+      }
       row.replaceChildren(frag);
+    }
+
+    if (fields) {
+      const w = this.rowEls[0]?.querySelector(".hv-note")?.clientWidth ?? 0;
+      // One redraw when the measured width first disagrees with the guess, so
+      // the count of what did not fit is right rather than nearly right.
+      const remeasured = w > 0 && Math.abs(w - this.noteWidth) > 4;
+      this.noteWidth = w;
+      if (remeasured) {
+        this.render();
+        return;
+      }
     }
 
     // Scrollbar thumb: position is the fraction of rows above the viewport.

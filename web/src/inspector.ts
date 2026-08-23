@@ -178,8 +178,6 @@ export class Inspector {
 
     const head = document.createElement("div");
     head.className = "insp-head";
-    const title = document.createElement("span");
-    title.textContent = "At cursor";
     const seg = document.createElement("div");
     seg.className = "seg";
     seg.setAttribute("role", "radiogroup");
@@ -198,7 +196,7 @@ export class Inspector {
       });
       seg.append(b);
     }
-    head.append(title, seg);
+    head.append(seg);
 
     const table = document.createElement("table");
     table.className = "insp-table";

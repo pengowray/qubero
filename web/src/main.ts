@@ -22,6 +22,30 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+
+/** A section that can be folded down to its title bar, and remembers whether
+ *  it was. */
+function panel(title: string, side: "bottom" | "right", content: HTMLElement, onToggle: () => void): HTMLElement {
+  const key = `qubero.panel.${side}`;
+  const chevron = el("span", { className: "panel-chevron" });
+  const toggle = el("button", { type: "button", className: "panel-toggle" }, chevron, title);
+  const section = el("section", { className: `panel panel-${side}` }, el("header", { className: "panel-bar" }, toggle), content);
+  const apply = (collapsed: boolean): void => {
+    section.classList.toggle("is-collapsed", collapsed);
+    chevron.textContent = collapsed ? (side === "right" ? "\u25c2" : "\u25b8") : "\u25be";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.title = collapsed ? `Show ${title}` : `Hide ${title}`;
+  };
+  apply(localStorage.getItem(key) === "collapsed");
+  toggle.addEventListener("click", () => {
+    const collapsed = !section.classList.contains("is-collapsed");
+    localStorage.setItem(key, collapsed ? "collapsed" : "open");
+    apply(collapsed);
+    onToggle();
+  });
+  return section;
+}
+
 function mount(doc: Doc): void {
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
@@ -70,6 +94,10 @@ function mount(doc: Doc): void {
     inspector.setPath(path);
   };
   inspector.onPick = (path) => {
+    goToField(path);
+    table.reveal(path);
+  };
+  view.onPickField = (path) => {
     goToField(path);
     table.reveal(path);
   };
@@ -154,6 +182,22 @@ function mount(doc: Doc): void {
     }
   });
 
+  const column = el("select", { className: "tb-col" });
+  column.setAttribute("aria-label", "Right of the bytes");
+  for (const [value, label] of [
+    ["text", "Text column"],
+    ["fields", "Field column"],
+  ] as const) {
+    column.append(el("option", { value, textContent: label }));
+  }
+  column.value = localStorage.getItem("qubero.column") === "fields" ? "fields" : "text";
+  view.setRightColumn(column.value === "fields" ? "fields" : "text");
+  column.addEventListener("change", () => {
+    const c = column.value === "fields" ? "fields" : "text";
+    localStorage.setItem("qubero.column", c);
+    view.setRightColumn(c);
+  });
+
   const openBtn = el("button", { type: "button", textContent: "Open" });
   openBtn.addEventListener("click", () => pick());
 
@@ -168,6 +212,7 @@ function mount(doc: Doc): void {
     goto,
     width,
     mode,
+    column,
     tmpl,
     undoBtn,
     redoBtn,
@@ -198,7 +243,14 @@ function mount(doc: Doc): void {
     if (followWhenLoaded !== null) followCursor(followWhenLoaded);
   });
 
-  app.replaceChildren(toolbar, el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, table.el), inspector.el), statusbar);
+  const relayout = (): void => view.relayout();
+  const bottom = panel("Structure", "bottom", table.el, relayout);
+  const right = panel("At cursor", "right", inspector.el, relayout);
+  app.replaceChildren(
+    toolbar,
+    el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, bottom), right),
+    statusbar,
+  );
   view.relayout();
   refresh();
   inspector.setOffset(0);
