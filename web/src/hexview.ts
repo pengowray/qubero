@@ -525,10 +525,13 @@ export class HexView {
     if (s.gap) el.classList.add("hv-chip-gap");
     else el.classList.add(`hv-t${tintOf(s.path)}`);
     if (carried) el.classList.add("hv-chip-carried");
+    // A structure that reads on one line is the whole chip: `[47]` is the
+    // element's number in a repeat and says nothing, and the line says
+    // everything.
     const name = document.createElement("b");
-    name.textContent = s.gap ? GAP_LABEL : s.name;
+    name.textContent = s.gap ? GAP_LABEL : (s.line ?? s.name);
     el.append(name);
-    const detail = chipDetail(s);
+    const detail = s.line === null ? chipDetail(s) : "";
     if (detail !== "") {
       const v = document.createElement("span");
       v.className = "hv-chip-val";

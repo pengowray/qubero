@@ -99,6 +99,8 @@ export class ListingView {
   private rowHeight = 20;
   private selected: string | null = null;
   private dragging = false;
+  /** Where the cursor went while this view was hidden. */
+  private pendingBit: number | null = null;
 
   onPick: (pick: FieldPick) => void = () => {};
 
@@ -139,6 +141,11 @@ export class ListingView {
   }
 
   relayout(): void {
+    if (this.pendingBit !== null && !this.el.hidden) {
+      const bit = this.pendingBit;
+      this.pendingBit = null;
+      this.setBit(bit);
+    }
     const probe = this.rowsEl.firstElementChild as HTMLElement | null;
     const h = probe?.getBoundingClientRect().height ?? 0;
     if (h > 0) this.rowHeight = h;
@@ -162,8 +169,14 @@ export class ListingView {
     this.render();
   }
 
-  /** Bring the field covering `bit` on screen, leaving the selection alone. */
+  /** Bring the field covering `bit` on screen, leaving the selection alone.
+   *  The hex view sends one of these per cursor move, so a hidden listing must
+   *  not go looking through the file for a row nobody can see. */
   setBit(bit: number): void {
+    if (this.el.hidden) {
+      this.pendingBit = bit;
+      return;
+    }
     const rows = this.rowsFrom(this.topBit, this.visibleRows);
     const shown = rows.some((r) => r.kind === "field" && r.span.offset_bits <= bit && bit < r.span.offset_bits + r.span.size_bits);
     if (shown) return;

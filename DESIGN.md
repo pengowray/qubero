@@ -192,7 +192,7 @@ table: they are byte-aligned and `DataView`-sized, while a template field can be
 bits at an odd offset. Core owns encoding; the inspector's lenses stay where they are
 until the redundant-editing work gives both sides one model.
 
-### One position, three views
+### One position, four views
 The hex cursor is a bit position, and it is what the views agree on.
 `Evaluator::locate` walks the template down to the deepest field covering a bit,
 so moving the cursor selects that field in the table and marks its bits in the
@@ -216,6 +216,33 @@ one replacement character be written back over three valid-length bad bytes.
 `locate` walks a repeat to find an element, so on a large templated file it costs
 what displaying it costs. The memo makes the next call cheap until the next edit,
 which is the same coarse-invalidation limit described above.
+
+### The listing
+The hex view answers "what is at this address" and the field tree answers "how
+is this file put together". Neither reads a file straight through, which is what
+a listing is for: one row per field, in file order, with its offset, its own
+bytes, and what those bytes say. It takes the main pane rather than sitting
+beside the hex rows, since it carries its own bytes column and two of those
+would say the same thing twice.
+
+Its scroll position is a bit offset rather than a row number, because nothing
+can know how many rows a file has without walking all of it, and `spans` is
+windowed by bit range, which is the same shape. Both directions scroll by
+counting fields rather than rows on screen, so a notch down and a notch up land
+back where they started: how many headings a screenful carries depends on where
+it starts, and that is not the same going the other way. Scrolling back has to
+ask for a window that reaches the current top row rather than one that merely
+starts before it, since a fixed number of fields from further back returns the
+first of them and the wanted ones are the last.
+
+Headings come from the trail of enclosing structures. Entering several at once
+is one heading rather than one per level, because five rows reading `sections[9]`,
+`body`, `entries[0]`, `body`, `code` push the fields off the screen to say what
+one row can say.
+
+The bytes are shown as text as well, but only where they read as text: three
+bytes or more, and mostly printable. A one-byte count of 65 beside an `A`
+invites reading a number as a letter.
 
 ### The field column
 The hex view's right-hand column shows either the bytes as text or, with a
