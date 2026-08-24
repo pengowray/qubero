@@ -81,6 +81,7 @@ pub(super) fn plain(ty: &Ty) -> bool {
         Ty::UInt { .. }
         | Ty::Int { .. }
         | Ty::F16(_)
+        | Ty::BF16(_)
         | Ty::F32(_)
         | Ty::F64(_)
         | Ty::Fixed { .. }

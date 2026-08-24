@@ -25,7 +25,7 @@ pub const EDIT_LIMIT_BYTES: u64 = 4096;
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
@@ -87,6 +87,10 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
         Ty::F16(e) => {
             let x = parse_float(text)?;
             Ok(write_uint(f64_to_f16(x) as u128, 16, *e))
+        }
+        Ty::BF16(e) => {
+            let x = parse_float(text)?;
+            Ok(write_uint(f64_to_bf16(x) as u128, 16, *e))
         }
         Ty::F32(e) => {
             let x = parse_float(text)?;
@@ -482,6 +486,17 @@ fn leb_signed(v: i128, room: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Inverse of `decode::bf16_to_f64`: the top half of the nearest f32, with the
+/// half thrown away deciding whether the half kept rounds up. A tie goes to
+/// the even one, which is what everything that writes these does.
+pub(crate) fn f64_to_bf16(x: f64) -> u16 {
+    let bits = (x as f32).to_bits();
+    if (x as f32).is_nan() {
+        return (bits >> 16) as u16 | 0x0040;
+    }
+    ((bits + 0x7fff + ((bits >> 16) & 1)) >> 16) as u16
+}
+
 /// Inverse of `decode::f16_to_f64`.
 pub(crate) fn f64_to_f16(x: f64) -> u16 {
     if x.is_nan() {
@@ -522,7 +537,7 @@ pub(crate) fn f64_to_f16(x: f64) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decode::{f16_to_f64, read_uint};
+    use crate::decode::{bf16_to_f64, f16_to_f64, read_uint};
     use crate::template::Expr;
 
     #[test]
@@ -575,6 +590,28 @@ mod tests {
         assert_eq!(encode(&Ty::F64(Endian::Little), "1.5", 64, &StrState::default()).unwrap(), vec![0, 0, 0, 0, 0, 0, 0xf8, 0x3f]);
         assert!(encode(&Ty::F64(Endian::Little), "nan", 64, &StrState::default()).is_ok());
         assert!(encode(&Ty::F32(Endian::Big), "one", 32, &StrState::default()).is_err());
+    }
+
+    #[test]
+    fn brain_floats_round_trip() {
+        // Anything a brain float can hold exactly comes back exactly, and it
+        // reaches as far as a float does: an f16 stops at 65504, and these do
+        // not.
+        for x in [0.0f64, 1.0, -2.5, 0.5, 2f64.powi(127), -2f64.powi(-126)] {
+            assert_eq!(bf16_to_f64(f64_to_bf16(x)), x, "bf16 {x}");
+        }
+        // The eight bits thrown away decide the last bit kept, and a tie goes
+        // to the even one, whichever way that is: both of these sit exactly
+        // between two brain floats, and they round in opposite directions.
+        assert_eq!(f64_to_bf16(1.0), 0x3f80);
+        assert_eq!(f64_to_bf16(1.0078125), 0x3f81); // exact, not a tie
+        assert_eq!(f64_to_bf16(1.003_906_25), 0x3f80); // tie, down to even
+        assert_eq!(f64_to_bf16(1.011_718_75), 0x3f82); // tie, up to even
+        assert_eq!(f64_to_bf16(f64::NEG_INFINITY), 0xff80);
+        assert!(bf16_to_f64(f64_to_bf16(f64::NAN)).is_nan());
+        assert_eq!(encode(&Ty::BF16(Endian::Big), "1.5", 16, &StrState::default()).unwrap(), vec![0x3f, 0xc0]);
+        assert_eq!(encode(&Ty::BF16(Endian::Little), "1.5", 16, &StrState::default()).unwrap(), vec![0xc0, 0x3f]);
+        assert!(encode(&Ty::BF16(Endian::Big), "one", 16, &StrState::default()).is_err());
     }
 
     #[test]

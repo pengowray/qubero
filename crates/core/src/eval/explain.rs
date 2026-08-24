@@ -25,7 +25,9 @@ pub enum Explain {
     /// A binary float, as its bits: 16, 32 or 64 of them, in value order with
     /// the byte order already resolved, so a reader can take the sign, the
     /// exponent and the significand apart without knowing how it was stored.
-    Float { width: u32, bits: u64 },
+    /// A float, by the name of its layout rather than only its width: two
+    /// sixteen-bit floats are in use and they divide their bits differently.
+    Float { format: &'static str, width: u32, bits: u64 },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
@@ -73,14 +75,15 @@ impl Evaluator {
                     .collect();
                 Explain::Flags { name: def.name.clone(), raw, bits }
             }
-            Ty::F16(e) | Ty::F32(e) | Ty::F64(e) => {
-                let width: u32 = match r.ty {
-                    Ty::F16(_) => 16,
-                    Ty::F32(_) => 32,
-                    _ => 64,
+            Ty::F16(e) | Ty::BF16(e) | Ty::F32(e) | Ty::F64(e) => {
+                let (format, width): (&'static str, u32) = match r.ty {
+                    Ty::F16(_) => ("binary16", 16),
+                    Ty::BF16(_) => ("bfloat16", 16),
+                    Ty::F32(_) => ("binary32", 32),
+                    _ => ("binary64", 64),
                 };
                 let raw = self.read(doc, &r, r.offset, u64::from(width))?;
-                Explain::Float { width, bits: crate::decode::read_uint(&raw, width, *e) as u64 }
+                Explain::Float { format, width, bits: crate::decode::read_uint(&raw, width, *e) as u64 }
             }
             _ => Explain::Plain,
         })

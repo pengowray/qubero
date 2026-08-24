@@ -170,7 +170,8 @@ export type TypeInfo = {
   readonly hex: boolean;
   /** Flags: one entry per bit of the field, from bit 0 up. */
   readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];
-  /** Float: how wide it is, and its bits in value order, written in hex. */
+  /** Float: which layout it is, how wide, and its bits in value order in hex. */
+  readonly format: string;
   readonly width: number;
   readonly pattern: string;
 };

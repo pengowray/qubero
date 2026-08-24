@@ -74,8 +74,10 @@ struct ExplainDto {
     hex: bool,
     /// Flags: one entry per bit of the field, from bit 0 up.
     bits: Vec<BitDto>,
-    /// Float: how many bits wide it is, and those bits in value order, written
-    /// in hex because a 64-bit pattern does not survive a JSON number.
+    /// Float: which layout it is, how many bits wide, and those bits in value
+    /// order, written in hex because a 64-bit pattern does not survive a JSON
+    /// number.
+    format: String,
     width: f64,
     pattern: String,
 }
@@ -104,6 +106,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
         current: 0.0,
         hex: false,
         bits: Vec::new(),
+        format: String::new(),
         width: 0.0,
         pattern: String::new(),
     };
@@ -121,8 +124,9 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.current = current as f64;
             dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
         }
-        Explain::Float { width, bits } => {
+        Explain::Float { format, width, bits } => {
             dto.kind = "float";
+            dto.format = format.to_string();
             dto.width = f64::from(width);
             dto.pattern = format!("{bits:0>width$x}", width = width as usize / 4);
         }

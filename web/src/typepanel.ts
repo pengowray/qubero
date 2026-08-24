@@ -5,7 +5,7 @@
 // through the callback the inspector passes in.
 
 import type { TemplateNode, TypeInfo } from "./doc.js";
-import { f16ToNumber, numberToF16 } from "./lenses.js";
+import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.js";
 
 /** Write a value the reader picked here rather than typed. */
 export type Apply = (path: readonly number[], text: string) => void;
@@ -39,24 +39,30 @@ function headingFor(info: TypeInfo): string {
  */
 type FloatShape = { exp: number; sig: number; bias: number; name: string };
 
-const FLOATS: Record<number, FloatShape> = {
-  16: { exp: 5, sig: 10, bias: 15, name: "binary16" },
-  32: { exp: 8, sig: 23, bias: 127, name: "binary32" },
-  64: { exp: 11, sig: 52, bias: 1023, name: "binary64" },
+/** Keyed by the name of the layout rather than by its width: a brain float and
+ *  a half float are both sixteen bits and divide them differently. */
+const FLOATS: Record<string, FloatShape> = {
+  binary16: { exp: 5, sig: 10, bias: 15, name: "binary16" },
+  bfloat16: { exp: 8, sig: 7, bias: 127, name: "bfloat16" },
+  binary32: { exp: 8, sig: 23, bias: 127, name: "binary32" },
+  binary64: { exp: 11, sig: 52, bias: 1023, name: "binary64" },
 };
 
 /**
- * The shortest decimal that reads back as the same number at this width. A f32
+ * The shortest decimal that reads back as the same number in this layout. A f32
  * pi is 3.1415927, not the 3.1415927410125732 its widening to a double prints:
  * the digits past the seventh are an artefact of the reading, not the file.
  */
-function shortest(x: number, width: number): string {
+function shortest(x: number, format: string): string {
   if (!Number.isFinite(x)) return x > 0 ? "Infinity" : x < 0 ? "-Infinity" : "NaN";
   const same = (t: string): boolean => {
     const v = Number(t);
-    return width === 64 ? v === x : width === 32 ? Math.fround(v) === x : f16ToNumber(numberToF16(v)) === x;
+    if (format === "binary64") return v === x;
+    if (format === "binary32") return Math.fround(v) === x;
+    if (format === "bfloat16") return bf16ToNumber(numberToBf16(v)) === x;
+    return f16ToNumber(numberToF16(v)) === x;
   };
-  const digits = width === 64 ? 17 : width === 32 ? 9 : 5;
+  const digits = format === "binary64" ? 17 : format === "binary32" ? 9 : format === "bfloat16" ? 4 : 5;
   for (let p = 1; p < digits; p++) {
     const t = Number(x.toPrecision(p));
     if (same(String(t))) return String(t);
@@ -122,7 +128,7 @@ function floatRow(label: string, ...value: (Node | string)[]): HTMLElement {
  */
 function floatBody(info: TypeInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
-  const shape = FLOATS[info.width];
+  const shape = FLOATS[info.format];
   if (shape === undefined) return frag;
   const width = info.width;
   const raw = BigInt(`0x${info.pattern === "" ? "0" : info.pattern}`);
@@ -187,7 +193,7 @@ function floatBody(info: TypeInfo): DocumentFragment {
     ),
     floatRow(
       "Significand",
-      shortest(significand, width),
+      shortest(significand, info.format),
       span("insp-frow-note", subnormal ? " (no leading 1)" : " (leading 1 not stored)"),
     ),
   );
@@ -195,7 +201,7 @@ function floatBody(info: TypeInfo): DocumentFragment {
 
   const line = document.createElement("div");
   line.className = "insp-fvalue";
-  line.append(`${negative ? "-" : ""}${shortest(significand, width)} × `, power(e), ` = ${shortest(value, width)}`);
+  line.append(`${negative ? "-" : ""}${shortest(significand, info.format)} × `, power(e), ` = ${shortest(value, info.format)}`);
   frag.append(line);
   return frag;
 }

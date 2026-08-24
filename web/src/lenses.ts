@@ -38,6 +38,25 @@ export function numberToF16(x: number): number {
   return sign | ((e + 15) << 10) | f;
 }
 
+/** A brain float is the top half of a single-precision float, so reading one
+ *  is putting the other half back: same reach as a float, three digits instead
+ *  of seven. Not a half float, which spends its sixteen bits the other way. */
+export function bf16ToNumber(h: number): number {
+  const buf = new DataView(new ArrayBuffer(4));
+  buf.setUint32(0, (h << 16) >>> 0, false);
+  return buf.getFloat32(0, false);
+}
+
+export function numberToBf16(x: number): number {
+  const buf = new DataView(new ArrayBuffer(4));
+  buf.setFloat32(0, x, false);
+  const bits = buf.getUint32(0, false);
+  if (Number.isNaN(x)) return ((bits >>> 16) | 0x40) & 0xffff;
+  // The half thrown away decides whether the half kept rounds up, and a tie
+  // goes to the even one.
+  return ((bits + 0x7fff + ((bits >>> 16) & 1)) >>> 16) & 0xffff;
+}
+
 function intLens(label: string, size: number, signed: boolean): Lens {
   const bits = BigInt(size * 8);
   const min = signed ? -(1n << (bits - 1n)) : 0n;
@@ -74,23 +93,52 @@ function intLens(label: string, size: number, signed: boolean): Lens {
   };
 }
 
+/** What a float lens accepts as text: a number, or a word for either end of
+ *  the scale. Null when it is neither. */
+function readFloat(text: string): number | null {
+  const t = text.trim().toLowerCase();
+  if (t === "") return null;
+  if (t === "nan") return NaN;
+  if (t === "inf" || t === "infinity") return Infinity;
+  if (t === "-inf" || t === "-infinity") return -Infinity;
+  const x = Number(t);
+  return Number.isNaN(x) ? null : x;
+}
+
+function showFloat(x: number): string {
+  return Number.isFinite(x) ? String(x) : x > 0 ? "Infinity" : x < 0 ? "-Infinity" : "NaN";
+}
+
 function floatLens(label: string, size: 2 | 4 | 8): Lens {
   return {
     label,
     size,
-    decode: (v, le) => {
-      const x = size === 2 ? f16ToNumber(v.getUint16(0, le)) : size === 4 ? v.getFloat32(0, le) : v.getFloat64(0, le);
-      return Number.isFinite(x) ? String(x) : x > 0 ? "Infinity" : x < 0 ? "-Infinity" : "NaN";
-    },
+    decode: (v, le) => showFloat(size === 2 ? f16ToNumber(v.getUint16(0, le)) : size === 4 ? v.getFloat32(0, le) : v.getFloat64(0, le)),
     encode: (text, le) => {
-      const t = text.trim().toLowerCase();
-      const x = t === "nan" ? NaN : t === "inf" || t === "infinity" ? Infinity : t === "-inf" || t === "-infinity" ? -Infinity : Number(t);
-      if (t === "" || (Number.isNaN(x) && t !== "nan")) return null;
+      const x = readFloat(text);
+      if (x === null) return null;
       const buf = new ArrayBuffer(size);
       const v = new DataView(buf);
       if (size === 2) v.setUint16(0, numberToF16(x), le);
       else if (size === 4) v.setFloat32(0, x, le);
       else v.setFloat64(0, x, le);
+      return new Uint8Array(buf);
+    },
+  };
+}
+
+/** The same, for the sixteen bits that are the top half of a float rather than
+ *  a float of their own. */
+function bfloatLens(label: string): Lens {
+  return {
+    label,
+    size: 2,
+    decode: (v, le) => showFloat(bf16ToNumber(v.getUint16(0, le))),
+    encode: (text, le) => {
+      const x = readFloat(text);
+      if (x === null) return null;
+      const buf = new ArrayBuffer(2);
+      new DataView(buf).setUint16(0, numberToBf16(x), le);
       return new Uint8Array(buf);
     },
   };
@@ -112,6 +160,7 @@ export const LENSES: readonly Lens[] = [
   intLens("uint64", 8, false),
   intLens("int64", 8, true),
   floatLens("float16", 2),
+  bfloatLens("bfloat16"),
   floatLens("float32", 4),
   floatLens("float64", 8),
   {

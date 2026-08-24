@@ -516,6 +516,37 @@ fn a_narrow_float_reads_at_the_width_it_was_stored_in() {
 }
 
 #[test]
+fn a_brain_float_reads_as_the_float_it_is_the_top_half_of() {
+    // The same sixteen bits read as both sixteen-bit floats. 0x3f80 is 1.0 as
+    // a brain float and 1.875 as a half float: same bits, different meaning,
+    // which is why the two are separate types rather than one width.
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("brain", T::BF16(Little)), ("half", T::F16(Little))]),
+    );
+    let mut bytes = 0x3f80u16.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&0x3f80u16.to_le_bytes());
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let brain = ev.node(&d, &[0]).unwrap();
+    assert_eq!((brain.value.clone(), brain.type_name.as_str()), (Value::Float(1.0), "bf16 le"));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Float(1.875));
+
+    // Three digits is what eight bits of significand hold, and writing those
+    // three digits back gives the same sixteen bits.
+    let mut bytes = 0x3e59u16.to_le_bytes().to_vec(); // 0.212
+    bytes.extend_from_slice(&[0, 0]);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", T::structure("Root", vec![("v", T::BF16(Little))])));
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Float(0.212));
+    let w = ev.prepare_write(&d, &[0], "0.212").unwrap();
+    assert_eq!(w.data, 0x3e59u16.to_le_bytes().to_vec());
+    // A number too fine for the type lands on the nearest one it has.
+    let w = ev.prepare_write(&d, &[0], "0.2121").unwrap();
+    assert_eq!(w.data, 0x3e59u16.to_le_bytes().to_vec());
+}
+
+#[test]
 fn a_run_of_same_sized_blocks_is_counted_by_division() {
     // What a paged file is: a header saying how big a block is, then blocks of
     // that size until the file runs out. Nothing here is fixed at template

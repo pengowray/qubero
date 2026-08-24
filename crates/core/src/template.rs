@@ -267,6 +267,10 @@ pub enum Ty {
     UInt { bits: u32, endian: Endian },
     Int { bits: u32, endian: Endian },
     F16(Endian),
+    /// Brain float: the top half of an f32, so it reaches as far as a float
+    /// does and holds three digits rather than seven. Not an f16, which trades
+    /// the other way: same sixteen bits, five of exponent and ten of fraction.
+    BF16(Endian),
     F32(Endian),
     F64(Endian),
     /// A field of no bits whose value is worked out rather than read. What it
@@ -517,6 +521,7 @@ impl Ty {
             Ty::Int { bits, endian } if *bits <= 8 => format!("i{bits}"),
             Ty::Int { bits, endian } => format!("i{bits} {}", e(*endian)),
             Ty::F16(en) => format!("f16 {}", e(*en)),
+            Ty::BF16(en) => format!("bf16 {}", e(*en)),
             Ty::F32(en) => format!("f32 {}", e(*en)),
             Ty::F64(en) => format!("f64 {}", e(*en)),
             Ty::Fixed { bits, frac, endian, signed } => {

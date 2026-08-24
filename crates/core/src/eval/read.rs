@@ -195,6 +195,7 @@ impl Evaluator {
                 Value::Float(raw / (1u64 << frac) as f64)
             }
             Ty::F16(e) => Value::Float(narrow_f16(read_uint(&self.read(doc, r, r.offset, 16)?, 16, *e) as u16)),
+            Ty::BF16(e) => Value::Float(narrow_bf16(read_uint(&self.read(doc, r, r.offset, 16)?, 16, *e) as u16)),
             Ty::F32(e) => Value::Float(narrow_f32(f32::from_bits(read_uint(&self.read(doc, r, r.offset, 32)?, 32, *e) as u32))),
             Ty::F64(e) => Value::Float(f64::from_bits(read_uint(&self.read(doc, r, r.offset, 64)?, 64, *e) as u64)),
             Ty::Leb128 { signed } => {

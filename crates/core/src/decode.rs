@@ -17,7 +17,7 @@ pub(crate) fn be_int(b: &[u8]) -> i128 {
 pub fn fixed_bits(ty: &Ty) -> Option<u64> {
     Some(match ty {
         Ty::UInt { bits, .. } | Ty::Int { bits, .. } => *bits as u64,
-        Ty::F16(_) => 16,
+        Ty::F16(_) | Ty::BF16(_) => 16,
         Ty::Fixed { bits, .. } => *bits as u64,
         Ty::F32(_) => 32,
         Ty::F64(_) => 64,
@@ -96,6 +96,28 @@ pub(crate) fn narrow_f16(h: u16) -> f64 {
 /// for an `f32` already; widening first is what spells out the rest.
 pub(crate) fn narrow_f32(x: f32) -> f64 {
     if x.is_finite() { format!("{x}").parse().unwrap_or(x as f64) } else { x as f64 }
+}
+
+/// A brain float is the first sixteen bits of a single-precision float, so
+/// reading one is putting the other sixteen back.
+pub(crate) fn bf16_to_f64(h: u16) -> f64 {
+    f32::from_bits((h as u32) << 16) as f64
+}
+
+/// The shortest decimal that reads back as this same brain float. Eight bits
+/// of significand is between two and three decimal digits; four always say
+/// which of them it is.
+pub(crate) fn narrow_bf16(h: u16) -> f64 {
+    let v = bf16_to_f64(h);
+    if !v.is_finite() {
+        return v;
+    }
+    (1..=4)
+        .find_map(|digits| {
+            let short: f64 = format!("{v:.*e}", digits - 1).parse().ok()?;
+            (crate::encode::f64_to_bf16(short) == h).then_some(short)
+        })
+        .unwrap_or(v)
 }
 
 pub(crate) fn f16_to_f64(h: u16) -> f64 {

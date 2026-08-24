@@ -212,9 +212,7 @@ fn weights() -> T {
             (27, run(T::Int { bits: 64, endian: Little })),
             (28, run(T::F64(Little))),
             (29, opaque(256, 56, "IQ1_M")),
-            // bf16 is a float this reader has no type for: the top half of an
-            // f32, which is not an f16.
-            (30, run(T::u16(Little))),
+            (30, run(T::BF16(Little))),
             (34, opaque(256, 54, "TQ1_0")),
             (35, opaque(256, 66, "TQ2_0")),
             (39, blocks(32, "MXFP4", vec![("e", T::u8()), ("qs", raw(16))])),
@@ -431,6 +429,21 @@ mod tests {
         assert_eq!(ev.node(&d, &[6, 0, 1, 0]).unwrap().value, Value::Float(1.0));
         assert_eq!(ev.node(&d, &[6, 0, 1, 1, 31]).unwrap().value, Value::Int(32));
         assert_eq!(ev.node(&d, &[6, 0, 1]).unwrap().size_bits, 34 * 8);
+    }
+
+    #[test]
+    fn a_bf16_tensor_reads_as_brain_floats() {
+        // Two brain floats, which are two bytes each like a half float and
+        // hold quite different numbers in them.
+        let mut payload = 0x3f80u16.to_le_bytes().to_vec();
+        payload.extend_from_slice(&0xbe59u16.to_le_bytes());
+        payload.resize(64 * 2, 0); // the record says sixty-four of them
+        let d = Document::new(MemSource(one_tensor_file(30, &payload)));
+        let mut ev = Evaluator::new(gguf());
+        let t = ev.node(&d, &[6, 0]).unwrap();
+        assert_eq!(t.type_name, "bf16 le[]");
+        assert_eq!(ev.node(&d, &[6, 0, 0]).unwrap().value, Value::Float(1.0));
+        assert_eq!(ev.node(&d, &[6, 0, 1]).unwrap().value, Value::Float(-0.212));
     }
 
     #[test]
