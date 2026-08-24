@@ -498,6 +498,54 @@ mod tests {
     }
 
     #[test]
+    fn a_tensors_weights_say_which_record_shaped_them() {
+        use crate::eval::Role;
+        let bytes = two_tensor_file();
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(gguf());
+        let o = ev.origins(&d, &[6, 1]).unwrap();
+        let roles: Vec<_> = o.iter().map(|x| (x.role, x.label.as_str(), x.value.as_str())).collect();
+        // Placed by the offset in its record, read as the type that record
+        // names, and as many numbers as its shape multiplies out to.
+        assert!(roles.contains(&(Role::Position, "tensors[1].offset", "64")), "{roles:?}");
+        assert!(roles.contains(&(Role::Type, "tensors[1].type", "f32")), "{roles:?}");
+        assert!(roles.contains(&(Role::Count, "tensors[1].dims", "16")), "{roles:?}");
+    }
+
+    #[test]
+    fn a_tensor_offset_points_at_the_weights_it_places() {
+        use crate::eval::Role;
+        let bytes = two_tensor_file();
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(gguf());
+        let weights = ev.node(&d, &[6, 1]).unwrap().offset_bits;
+        // tensors[1].offset is the `offset` field of the second record.
+        let o = ev.origins(&d, &[5, 1, 4]).unwrap();
+        let points = o.iter().find(|x| x.role == Role::Points).expect("points somewhere");
+        assert_eq!(points.target_bits, Some(weights));
+        assert_eq!(points.label, "data[1]");
+    }
+
+    #[test]
+    fn a_strings_bytes_are_as_long_as_the_count_before_them() {
+        use crate::eval::Role;
+        let d = Document::new(MemSource(file()));
+        let mut ev = Evaluator::new(gguf());
+        // metadata[0].key.text is `len` bytes long.
+        let o = ev.origins(&d, &[4, 0, 0, 1]).unwrap();
+        assert_eq!(o.len(), 1);
+        assert_eq!((o[0].role, o[0].label.as_str(), o[0].value.as_str()), (Role::Length, "len", "20"));
+        assert_eq!(o[0].path, vec![4, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_field_the_template_placed_outright_came_from_nowhere_else() {
+        let d = Document::new(MemSource(file()));
+        let mut ev = Evaluator::new(gguf());
+        assert_eq!(ev.origins(&d, &[1]).unwrap(), Vec::new());
+    }
+
+    #[test]
     fn each_tensors_bytes_are_a_child_of_the_data_section() {
         let bytes = two_tensor_file();
         let d = Document::new(MemSource(bytes.clone()));

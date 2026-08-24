@@ -17,6 +17,7 @@ use crate::text::{self, Settled};
 
 mod explain;
 mod listing;
+mod origin;
 mod expr;
 mod read;
 mod walk;
@@ -25,6 +26,7 @@ mod tests;
 
 pub use explain::{Explain, FlagBit};
 pub use listing::Span;
+pub use origin::{Origin, Role};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
