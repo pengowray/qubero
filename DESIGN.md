@@ -326,6 +326,43 @@ format does not describe is the kind of thing worth noticing, not hiding.
 Writing a flags field writes the number underneath, because typing a name would
 mean deciding whether it replaced the other bits or joined them.
 
+### Search
+A search is a series of bounded steps rather than one scan. The file may be
+larger than memory and its bytes arrive a chunk at a time, so a call that ran
+to the end would either block for minutes or read bytes that are not there. One
+step reads a window and answers with a match, with the chunks it needs, or with
+where to carry on; the browser drives that loop on a frame budget, so a scan
+over gigabytes still repaints and still takes a click to stop.
+
+Windows overlap, or a match lying across a join would vanish. A literal
+overlaps by one byte less than itself. A pattern has no length to go on and
+overlaps by four kilobytes, which is the one limit here: a regex match longer
+than that and lying across a join is missed, and that is written down rather
+than hidden.
+
+Offsets are bytes. Everything else in the core is bits and this is the
+deliberate exception: a needle that could start at any bit would match noise in
+most files.
+
+`^` and `$` are refused with a reason and a way round. A window is not a line
+and not the file, so they would match wherever the search happened to stop
+reading, and quietly finding the wrong thing is worse than saying no.
+
+Case folding is ASCII. Matching E-acute to e-acute means knowing the encoding,
+and a hex editor does not know what encoding a stretch of a file is in.
+
+Replacing every match is one thing the user did, so `Document::begin_batch`
+folds the edits into one undo step. A batch that changes nothing leaves no step
+behind, since the snapshot is taken at the first edit rather than when the
+batch opens.
+
+regex-automata is the core's only dependency, and it costs 537 KB of the
+module. The Unicode tables are left out, which is most of a regex engine's
+weight and no loss over bytes. The signature database is already a module of
+its own fetched on first use, and doing the same for the regex engine is the
+obvious next move: the main module would hand it windows rather than owning the
+search.
+
 ### A field that says "the same as the last one"
 MIDI running status is what this is for. A message may leave its status byte
 out and mean the same status as the message before it, which most files written

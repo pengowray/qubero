@@ -1158,3 +1158,12 @@ input.invalid {
   color: var(--muted);
   min-height: 1.2em;
 }
+.sb-expand {
+  min-width: 0;
+}
+.sb-foldbox.is-off {
+  opacity: 0.5;
+}
+.sb-replace {
+  padding-left: 0;
+}

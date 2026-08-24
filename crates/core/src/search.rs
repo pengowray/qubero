@@ -28,8 +28,13 @@ pub const WINDOW: u64 = 64 * 1024;
 /// across a window join is the one thing this search can miss.
 pub const REGEX_OVERLAP: u64 = 4 * 1024;
 
-/// Why a pattern with `^` or `$` is refused.
-pub const ANCHOR_REFUSED: &str = "^ and $ would match where this search stopped reading, not where a line starts";
+/// Why a pattern with `^` or `$` is refused. It says what to do instead
+/// rather than why the search cannot: a window is not a line, but that is the
+/// search's problem, and an escaped newline is the reader's answer. A
+/// pattern's windows overlap by four kilobytes, so one does match across a
+/// join.
+pub const ANCHOR_REFUSED: &str =
+    "^ and $ are not supported. To match a line boundary, put \\n in the pattern.";
 
 /// What one step of a search found.
 #[derive(Debug, Clone, PartialEq)]

@@ -293,7 +293,7 @@ enum StepDto {
 /// "regex"; `fold` only means anything for text.
 fn needle(kind: &str, text: &str, fold: bool) -> Result<Needle, String> {
     match kind {
-        "hex" => search::parse_hex(text).map(Needle::Bytes).ok_or_else(|| HEX_REFUSED.to_string()),
+        "hex" => search::parse_hex(text).map(Needle::Bytes).ok_or_else(|| hex_trouble(text).to_string()),
         "regex" => search::Pattern::new(text).map(Needle::Regex),
         _ => {
             let bytes = text.as_bytes().to_vec();
@@ -302,8 +302,19 @@ fn needle(kind: &str, text: &str, fold: bool) -> Result<Needle, String> {
     }
 }
 
-/// Said when a hex needle is not pairs of hex digits.
-const HEX_REFUSED: &str = "Hex needs pairs of digits: 89 50 4e 47";
+/// What is wrong with a hex needle. The two are different mistakes: a letter
+/// that is not a digit is one, and a byte with one digit so far is the state
+/// every valid needle passes through while it is being typed.
+fn hex_trouble(text: &str) -> &'static str {
+    if text.chars().any(|c| !c.is_whitespace() && !c.is_ascii_hexdigit()) {
+        HEX_NOT_A_DIGIT
+    } else {
+        HEX_HALF_A_BYTE
+    }
+}
+
+const HEX_NOT_A_DIGIT: &str = "Hex is pairs of digits 0-9 a-f, like 89 50 4e 47";
+const HEX_HALF_A_BYTE: &str = "Unfinished byte: each byte is two digits, like 4e";
 
 #[wasm_bindgen]
 impl Editor {
@@ -516,8 +527,15 @@ impl Editor {
 
     /// Whether the search bar holds something that can be searched for, and
     /// what is wrong with it when not. Empty string means it is fine.
-    pub fn check_needle(&self, kind: &str, text: &str) -> String {
-        needle(kind, text, false).err().unwrap_or_default()
+    /// `typing` suppresses the one complaint that is not a mistake yet: a hex
+    /// byte with a single digit so far, which every valid needle passes
+    /// through on its way to being typed.
+    pub fn check_needle(&self, kind: &str, text: &str, typing: bool) -> String {
+        match needle(kind, text, false) {
+            Ok(_) => String::new(),
+            Err(why) if typing && why == HEX_HALF_A_BYTE => String::new(),
+            Err(why) => why,
+        }
     }
 
     /// One step of a search, from byte `from`. The reply is the same tri-state

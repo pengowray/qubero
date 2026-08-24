@@ -6,7 +6,18 @@
 // so a scan over gigabytes still repaints and still takes a click to stop.
 
 import type { Doc, NeedleKind, Query } from "./doc.js";
-import { COUNTED, COUNTING, COUNT_STOPPED, NO_MATCH, REPLACED, SEARCH_LABELS, WRAPPED_BACK, WRAPPED_ON } from "./strings.js";
+import {
+  BAD_REPLACEMENT,
+  COUNTED,
+  COUNTING,
+  COUNT_STOPPED,
+  NO_MATCH,
+  REPLACED,
+  SEARCH_LABELS,
+  SEARCH_PLACEHOLDER,
+  WRAPPED_BACK,
+  WRAPPED_ON,
+} from "./strings.js";
 
 /** Milliseconds of one frame a search may take before yielding. */
 const SLICE = 8;
@@ -32,6 +43,9 @@ export class SearchBar {
   private readonly fold: HTMLInputElement;
   private readonly status: HTMLElement;
   private readonly replaceRow: HTMLElement;
+  private readonly countBtn: HTMLButtonElement;
+  private readonly expand: HTMLButtonElement;
+  private readonly foldLabel: HTMLLabelElement;
 
   /** The match the cursor is on, which is what "the next one" is next to.
    *  Direction decides which side of it a search starts from, so turning
@@ -61,11 +75,18 @@ export class SearchBar {
     }
 
     this.fold = el("input", { type: "checkbox", className: "sb-fold" });
-    const foldLabel = el("label", { className: "sb-foldbox" }, this.fold, SEARCH_LABELS.fold);
+    const foldLabel = el("label", { className: "sb-foldbox", title: SEARCH_LABELS.foldNote }, this.fold, SEARCH_LABELS.fold);
+    this.foldLabel = foldLabel;
 
     const next = this.button(SEARCH_LABELS.next, () => void this.run(false));
     const prev = this.button(SEARCH_LABELS.previous, () => void this.run(true));
-    const count = this.button(SEARCH_LABELS.count, () => void this.count());
+    // While a count is running this is the only way to stop it. Closing the
+    // bar also stops it, but the message then lands on a bar that is going.
+    this.countBtn = this.button(SEARCH_LABELS.count, () => {
+      if (this.running) this.cancel = true;
+      else void this.count();
+    });
+    const count = this.countBtn;
     const one = this.button(SEARCH_LABELS.replaceOne, () => void this.replaceOne());
     const all = this.button(SEARCH_LABELS.replaceAll, () => void this.replaceAll());
     const close = this.button(SEARCH_LABELS.close, () => this.hide());
@@ -74,15 +95,19 @@ export class SearchBar {
     this.status = el("span", { className: "sb-status" });
     this.status.setAttribute("role", "status");
 
-    this.replaceRow = el("div", { className: "sb-row" }, this.repl, one, all);
+    this.expand = this.button(SEARCH_LABELS.showReplace, () => this.setReplace(this.replaceRow.hidden));
+    this.expand.className = "sb-expand";
+    this.replaceRow = el("div", { className: "sb-row sb-replace" }, this.repl, one, all);
     this.el = el(
       "div",
       { className: "searchbar" },
-      el("div", { className: "sb-row" }, this.kind, this.find, foldLabel, prev, next, count, close),
-      this.replaceRow,
+      el("div", { className: "sb-row" }, this.expand, this.kind, this.find, foldLabel, prev, next, count, close),
       this.status,
+      this.replaceRow,
     );
     this.el.hidden = true;
+    this.setReplace(false);
+    this.setKind("text");
 
     this.find.addEventListener("keydown", (e) => this.onKey(e));
     this.repl.addEventListener("keydown", (e) => this.onKey(e));
@@ -92,14 +117,27 @@ export class SearchBar {
         this.hide();
       }
     });
-    this.find.addEventListener("input", () => this.recheck());
-    this.kind.addEventListener("change", () => {
-      // Folding is a property of text. A hex needle has no case and a pattern
-      // says so itself with (?i).
-      foldLabel.hidden = this.kind.value !== "text";
-      this.recheck();
-    });
-    foldLabel.hidden = true;
+    this.find.addEventListener("input", () => this.recheck(true));
+    this.kind.addEventListener("change", () => this.setKind(this.kind.value as NeedleKind));
+    // Half a hex byte is not a mistake until you stop typing.
+    this.find.addEventListener("blur", () => this.recheck(false));
+  }
+
+  /** Folding is a property of text: a hex needle has no case, and a pattern
+   *  says so itself with `(?i)`. The box is disabled rather than hidden, so
+   *  the buttons beside it do not move when the kind changes. */
+  private setKind(kind: NeedleKind): void {
+    this.fold.disabled = kind !== "text";
+    this.foldLabel.classList.toggle("is-off", kind !== "text");
+    this.find.placeholder = SEARCH_PLACEHOLDER[kind].find;
+    this.repl.placeholder = SEARCH_PLACEHOLDER[kind].replace;
+    this.recheck(true);
+  }
+
+  private setReplace(show: boolean): void {
+    this.replaceRow.hidden = !show;
+    this.expand.textContent = show ? SEARCH_LABELS.hideReplace : SEARCH_LABELS.showReplace;
+    this.expand.setAttribute("aria-expanded", String(show));
   }
 
   private button(text: string, run: () => void): HTMLButtonElement {
@@ -116,8 +154,9 @@ export class SearchBar {
 
   // ----- showing -----
 
-  show(): void {
+  show(replacing = false): void {
     this.el.hidden = false;
+    if (replacing) this.setReplace(true);
     this.find.focus();
     this.find.select();
   }
@@ -144,8 +183,8 @@ export class SearchBar {
   /** Say what is wrong with the needle as it is typed, and nothing when it is
    *  fine: a search box that only complains when you press Enter makes you
    *  press Enter to find out. */
-  private recheck(): void {
-    const why = this.doc.checkNeedle(this.kind.value as NeedleKind, this.find.value);
+  private recheck(typing: boolean): void {
+    const why = this.doc.checkNeedle(this.kind.value as NeedleKind, this.find.value, typing);
     this.find.classList.toggle("invalid", why !== "" && this.find.value !== "");
     this.status.textContent = this.find.value === "" ? "" : why;
     this.origin = -1;
@@ -196,8 +235,8 @@ export class SearchBar {
   private async run(backward: boolean): Promise<void> {
     if (this.running || this.find.value === "") return;
     const q = this.query(backward);
-    if (this.doc.checkNeedle(q.kind, q.text) !== "") {
-      this.recheck();
+    if (this.doc.checkNeedle(q.kind, q.text, false) !== "") {
+      this.recheck(false);
       return;
     }
     this.running = true;
@@ -237,9 +276,10 @@ export class SearchBar {
   private async count(): Promise<void> {
     if (this.running || this.find.value === "") return;
     const q = this.query(false);
-    if (this.doc.checkNeedle(q.kind, q.text) !== "") return;
+    if (this.doc.checkNeedle(q.kind, q.text, false) !== "") return;
     this.running = true;
     this.cancel = false;
+    this.countBtn.textContent = SEARCH_LABELS.stop;
     try {
       let n = 0;
       let at = 0;
@@ -255,6 +295,7 @@ export class SearchBar {
       }
       this.status.textContent = this.cancel ? COUNT_STOPPED(n) : COUNTED(n);
     } finally {
+      this.countBtn.textContent = SEARCH_LABELS.count;
       this.running = false;
     }
   }
@@ -277,11 +318,11 @@ export class SearchBar {
   private async replaceOne(): Promise<void> {
     const bytes = this.replacement();
     if (bytes === null) {
-      this.status.textContent = SEARCH_LABELS.badReplacement;
+      this.status.textContent = BAD_REPLACEMENT;
       return;
     }
     const q = this.query(false);
-    if (this.find.value === "" || this.doc.checkNeedle(q.kind, q.text) !== "") return;
+    if (this.find.value === "" || this.doc.checkNeedle(q.kind, q.text, false) !== "") return;
     if (this.origin < 0) {
       this.origin = this.onCursor();
       this.last = null;
@@ -300,11 +341,11 @@ export class SearchBar {
   private async replaceAll(): Promise<void> {
     const bytes = this.replacement();
     if (bytes === null) {
-      this.status.textContent = SEARCH_LABELS.badReplacement;
+      this.status.textContent = BAD_REPLACEMENT;
       return;
     }
     const q = this.query(false);
-    if (this.running || this.find.value === "" || this.doc.checkNeedle(q.kind, q.text) !== "") return;
+    if (this.running || this.find.value === "" || this.doc.checkNeedle(q.kind, q.text, false) !== "") return;
     this.running = true;
     this.cancel = false;
     // One thing the user did, so one thing to undo.

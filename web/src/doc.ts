@@ -454,9 +454,11 @@ export class Doc {
     return this.handleReply<Span[]>(this.editor.spans(fromBit, toBit, max));
   }
 
-  /** What is wrong with what the search bar holds, or "" when nothing is. */
-  checkNeedle(kind: NeedleKind, text: string): string {
-    return this.editor.check_needle(kind, text);
+  /** What is wrong with what the search bar holds, or "" when nothing is.
+   *  `typing` suppresses the one complaint that is not a mistake yet: half a
+   *  hex byte, which every valid needle passes through on the way in. */
+  checkNeedle(kind: NeedleKind, text: string, typing: boolean): string {
+    return this.editor.check_needle(kind, text, typing);
   }
 
   /**

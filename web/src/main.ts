@@ -641,9 +641,13 @@ function mount(doc: Doc): void {
   );
   setView(localStorage.getItem("qubero.view") === "listing" ? "listing" : "hex");
   document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    // Ctrl+H opens the bar with the replace row already open, since asking to
+    // replace is asking for both halves of it.
+    if (key === "f" || key === "h") {
       e.preventDefault();
-      search.show();
+      search.show(key === "h");
     }
   });
   view.relayout();
