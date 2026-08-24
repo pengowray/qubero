@@ -8,7 +8,7 @@
 
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::time::Instant;
 
 use qubero_core::document::Document;
@@ -20,7 +20,7 @@ use qubero_core::source::{Missing, Source};
 /// ones it has not got yet; this one always has them, so the timings here are
 /// the work itself without the fetching.
 struct FileSource {
-    file: RefCell<BufReader<File>>,
+    file: RefCell<File>,
     len: u64,
 }
 
@@ -41,7 +41,7 @@ fn main() {
     let file = File::open(&path).expect("open");
     let len = file.metadata().expect("metadata").len();
     println!("{path}: {len} bytes");
-    let doc = Document::new(FileSource { file: RefCell::new(BufReader::new(file)), len });
+    let doc = Document::new(FileSource { file: RefCell::new(file), len });
     let mut ev = Evaluator::new(gguf());
 
     // The metadata is the expensive half: entries of uneven size, some holding
@@ -89,5 +89,21 @@ fn main() {
         }
         Err(e) => println!("  locate at 0x{:x} failed: {e:?}", mid / 8),
     }
+    // What an edit in the weights costs: the walk over the metadata should
+    // survive it, since nothing there could have read a byte from back here.
+    let edit = data.offset_bits + data.size_bits / 2;
+    let t = Instant::now();
+    ev.invalidate_from(edit);
+    let dropped = t.elapsed();
+    let t = Instant::now();
+    let again = ev.node(&doc, &[6]).expect("data");
+    println!(
+        "  after an overwrite at 0x{:x}: {} nodes kept, data placed again in {:?} (dropped in {:?})",
+        edit / 8,
+        ev.memo_len(),
+        t.elapsed(),
+        dropped
+    );
+    assert_eq!(again.child_count, data.child_count);
     println!("  {} nodes kept in all", ev.memo_len());
 }

@@ -565,3 +565,70 @@ fn the_field_under_a_bit_is_found_without_the_list_coming_back() {
     // thousand elements back in the memo.
     assert!(ev.memo_len() < 5_000, "locating kept {} nodes", ev.memo_len());
 }
+
+#[test]
+fn an_overwrite_keeps_what_it_could_not_have_changed() {
+    // A count, then that many strings of uneven length, then a run of bytes
+    // standing in for the part of a file an edit usually lands in.
+    let n = 20_000u64;
+    let mut bytes = n.to_le_bytes().to_vec();
+    for i in 0..n {
+        let s = "z".repeat((i % 11) as usize + 1);
+        bytes.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(s.as_bytes());
+    }
+    let list_end = bytes.len() as u64;
+    bytes.extend_from_slice(&[0x11; 64]);
+    let string = T::structure("String", vec![("len", T::u64(Little)), ("text", T::utf8(E::field("len")))]);
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("n", T::u64(Little)),
+                ("items", T::array(string, E::field("n"))),
+                ("tail", T::bytes(E::Remaining)),
+            ],
+        ),
+    );
+    let mut d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, list_end * 8);
+    let after_sizing = ev.memo_len();
+
+    // An overwrite in the tail: everything the walk learned about the list
+    // still holds, so asking where the tail starts does not walk it again.
+    d.overwrite_bytes(list_end + 8, &[0x22]);
+    ev.invalidate_from((list_end + 8) * 8);
+    assert!(ev.memo_len() >= after_sizing / 2, "the edit threw away work it did not have to");
+    assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, list_end * 8);
+    assert!(ev.memo_len() < 200, "and it is still not the whole list: {}", ev.memo_len());
+
+    // The edited bytes read as what was written, and a field before the edit
+    // still reads as what the file says.
+    let tail = ev.node(&d, &[2]).unwrap();
+    let Value::Bytes { preview, .. } = tail.value else { panic!("not bytes") };
+    assert_eq!(preview[8], 0x22);
+    assert_eq!(ev.node(&d, &[1, 5, 1]).unwrap().value, Value::Str("zzzzzz".into()));
+
+    // An overwrite inside the list drops what came after it and keeps the rest.
+    let kept = ev.memo_len();
+    ev.invalidate_from(8 * 8);
+    assert!(ev.memo_len() < kept);
+    assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, list_end * 8);
+}
+
+#[test]
+fn an_edit_that_moves_bytes_throws_the_whole_memo_away() {
+    let bytes = [4u8, 0, 0, 0, 1, 2, 3, 4];
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::u32(Little)), ("data", T::bytes(E::field("n")))]),
+    );
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    ev.node(&d, &[1]).unwrap();
+    assert!(ev.memo_len() > 0);
+    ev.invalidate();
+    assert_eq!(ev.memo_len(), 0);
+}

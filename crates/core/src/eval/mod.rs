@@ -194,7 +194,51 @@ impl Evaluator {
         self.memo.len()
     }
 
-    /// Drop every cached offset/size. Call after any document change.
+    /// Drop what an overwrite at `bit` could have changed, and keep the rest.
+    /// Call instead of `invalidate` when an edit replaced bits in place: an
+    /// insertion or a deletion moves everything behind it, and needs the whole
+    /// memo thrown away.
+    ///
+    /// Every expression a template can write looks backwards: a length, a
+    /// count or a switch reads fields before the one it places, and the bytes
+    /// after `bit` cannot have been what it read. So a node that ends at or
+    /// before `bit` still starts where it did and is still the size it was,
+    /// and what a list learned about its own first elements still holds.
+    ///
+    /// This is what makes editing a large file bearable: a byte changed in a
+    /// GGUF's weights leaves the walk over its two million metadata elements
+    /// standing, where throwing everything away would do that walk again.
+    pub fn invalidate_from(&mut self, bit: u64) {
+        self.journals.clear();
+        // A node with no size worked out yet is dropped: nothing says where it
+        // ends, so nothing says it ended before the edit.
+        self.memo.retain(|_, r| r.size.is_some_and(|size| r.offset + size <= bit));
+        self.lists.retain(|path, l| {
+            l.checkpoints.retain(|(_, at)| *at <= bit);
+            if l.walk_at.is_some_and(|(_, at)| at > bit) {
+                l.walk_at = None;
+            }
+            // A repeat's count is only as good as the walk that reached it.
+            if l.repeat_end.is_none_or(|end| end > bit) {
+                l.repeat_len = 0;
+                l.repeat_end = None;
+                l.repeat_done = false;
+            }
+            // Where a pointer list's children start was read from a field that
+            // may be anywhere, and where a sequential walk had got to counts
+            // children some of which have just gone. Both are cheap to redo.
+            l.pointer_starts = None;
+            l.seq_end = 0;
+            let empty = l.checkpoints.is_empty()
+                && l.walk_at.is_none()
+                && l.repeat_len == 0
+                && !l.repeat_done;
+            !empty || self.memo.contains_key(path)
+        });
+    }
+
+    /// Drop every cached offset/size. Call after any document change that is
+    /// not an overwrite, and whenever the template changes.
     pub fn invalidate(&mut self) {
         self.memo.clear();
         self.lists.clear();

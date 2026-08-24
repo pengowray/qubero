@@ -346,6 +346,15 @@ impl Editor {
         self.disasm = None;
     }
 
+    /// An edit that replaced bits in place at `bit`. What the template made of
+    /// the bytes before it still holds, so only the rest is worked out again.
+    fn changed_at(&mut self, bit: u64) {
+        if let Some(e) = &mut self.eval {
+            e.invalidate_from(bit);
+        }
+        self.disasm = None;
+    }
+
     // ----- templates -----
 
     pub fn template_names(&self) -> Vec<String> {
@@ -529,7 +538,7 @@ impl Editor {
         match prepared {
             Ok(w) => {
                 self.doc.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
-                self.changed();
+                self.changed_at(w.offset_bits);
                 reply(Ok(WriteDto { offset_bits: w.offset_bits as f64, size_bits: w.n_bits as f64 }))
             }
             Err(e) => reply::<WriteDto>(Err(e)),
@@ -618,12 +627,12 @@ impl Editor {
     }
 
     pub fn overwrite_bytes(&mut self, at: f64, data: &[u8]) {
-        self.changed();
+        self.changed_at(at as u64 * 8);
         self.doc.overwrite_bytes(at as u64, data);
     }
     /// Overwrite that folds into the previous undo step.
     pub fn amend_overwrite_bytes(&mut self, at: f64, data: &[u8]) {
-        self.changed();
+        self.changed_at(at as u64 * 8);
         self.doc.amend_overwrite_bytes(at as u64, data);
     }
     pub fn insert_bytes(&mut self, at: f64, data: &[u8]) {
@@ -635,7 +644,7 @@ impl Editor {
         self.doc.delete_bytes(at as u64, n as u64);
     }
     pub fn overwrite_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
-        self.changed();
+        self.changed_at(at_bit as u64);
         self.doc.overwrite_bits(at_bit as u64, data, n as u64);
     }
     pub fn insert_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
