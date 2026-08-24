@@ -216,8 +216,19 @@ impl Evaluator {
             Ty::Magic(want) => Value::Magic { ok: self.read(doc, r, r.offset, size)? == *want },
             Ty::Bytes(_) => {
                 let len = size / 8;
-                let preview = self.read(doc, r, r.offset, len.min(16) * 8)?;
-                Value::Bytes { len, preview }
+                match self.read(doc, r, r.offset, len.min(16) * 8) {
+                    Ok(preview) => Value::Bytes { len, preview },
+                    // A run of bytes too long to mean anything as a number is
+                    // only ever shown, never read from. Where it is and how
+                    // long it is are known already, so the row is worth having
+                    // now, with the first few bytes filled in when they come.
+                    // Short fields stay strict: a switch may be keying on them.
+                    Err(EvalError::Pending(m)) if len > 15 => {
+                        self.want(m);
+                        Value::Unread { len }
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             Ty::Str { .. } => {
                 let span = self.str_span(doc, r, size)?.expect("text field");

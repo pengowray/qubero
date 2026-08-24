@@ -64,6 +64,9 @@ pub enum Value {
     /// A named integer. `name` is None when the file holds a value the enum
     /// does not list. `hex` is how the number should be shown.
     Enum { raw: i128, name: Option<String>, hex: bool },
+    /// A run of bytes whose first few have not arrived yet. The field's place
+    /// and length are known; only what it holds is still coming.
+    Unread { len: u64 },
     /// An integer read as independent bits. `set` names the bits that are on,
     /// in bit order; `unnamed` counts the bits that are on and have no name,
     /// which is worth saying rather than hiding.
@@ -81,6 +84,8 @@ impl Value {
             // Short text/byte fields used in expressions are their bytes as a
             // big-endian number, so a switch can key on e.g. "IHDR".
             Value::Bytes { len, preview } if *len <= 15 => Some(be_int(preview)),
+            // A field whose bytes have not arrived is not a number yet.
+            Value::Unread { .. } => None,
             Value::Str(s) if s.len() <= 15 => Some(be_int(s.as_bytes())),
             _ => None,
         }
@@ -194,6 +199,9 @@ pub struct Evaluator {
     slice: Option<u64>,
     /// How far into the file the reading has got, at its furthest.
     reached_bits: u64,
+    /// Bytes an answer was given without: previews that have not arrived. The
+    /// caller fetches them and asks again, and meanwhile has its rows.
+    wanted: Vec<Missing>,
 }
 
 impl Evaluator {
@@ -206,6 +214,7 @@ impl Evaluator {
             left: None,
             slice: None,
             reached_bits: 0,
+            wanted: Vec::new(),
         }
     }
 
@@ -226,6 +235,20 @@ impl Evaluator {
     /// allowance is refilled.
     pub fn begin_slice(&mut self) {
         self.left = self.slice;
+        self.wanted.clear();
+    }
+
+    /// Bytes wanted for previews that were answered without them, since the
+    /// last `begin_slice`. Fetching these and asking again fills them in.
+    pub fn wanted(&self) -> Vec<Missing> {
+        let mut out = self.wanted.clone();
+        out.sort_by_key(|m| m.chunk);
+        out.dedup();
+        out
+    }
+
+    pub(super) fn want(&mut self, missing: Vec<Missing>) {
+        self.wanted.extend(missing);
     }
 
     /// How far into the file the reading has got, at its furthest.
@@ -406,11 +429,27 @@ impl Evaluator {
     pub fn children<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, to: u64) -> R<Vec<NodeInfo>> {
         let n = self.child_count(doc, path)?;
         let mut out = Vec::new();
+        let mut missing: Vec<Missing> = Vec::new();
         let mut p = path.to_vec();
         for i in from..to.min(n) {
             p.push(i as usize);
-            out.push(self.node(doc, &p)?);
+            let got = self.node(doc, &p);
             p.pop();
+            match got {
+                Ok(info) => out.push(info),
+                // Children placed by offsets sit apart from one another, so the
+                // bytes one of them needs say nothing about the next. Asking
+                // for all of them together is one wait; stopping at the first
+                // is one wait per child, and a page of two hundred tensors
+                // would trickle in over two hundred goes.
+                Err(EvalError::Pending(m)) => missing.extend(m),
+                Err(e) => return Err(e),
+            }
+        }
+        if !missing.is_empty() {
+            missing.sort_by_key(|m| m.chunk);
+            missing.dedup();
+            return Err(EvalError::Pending(missing));
         }
         Ok(out)
     }

@@ -160,7 +160,13 @@ struct WriteDto {
 #[serde(tag = "status")]
 enum Reply<T: Serialize> {
     #[serde(rename = "ok")]
-    Ok { node: T },
+    Ok {
+        node: T,
+        /// Chunks the answer was given without: previews that had not arrived.
+        /// Fetching these and asking again fills them in.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        wanted: Vec<f64>,
+    },
     #[serde(rename = "pending")]
     Pending { chunks: Vec<f64>, reached_bytes: f64 },
     #[serde(rename = "working")]
@@ -226,6 +232,9 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
             }
             ("bytes", s.clone(), s, true)
         }
+        // The bytes have not arrived; the row stands on what the file's own
+        // table already said about where they are and how many there are.
+        Value::Unread { .. } => ("unread", "\u{2026}".into(), String::new(), true),
         Value::Str(s) => ("str", s.clone(), s.clone(), true),
         Value::Magic { ok } => {
             // A signature that matches says nothing a reader needs: the bytes
@@ -281,9 +290,14 @@ fn dto(n: NodeInfo) -> NodeDto {
     }
 }
 
-fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f64) -> String {
+/// Chunks the evaluator answered without, as the host counts them.
+fn wanted(e: &Evaluator) -> Vec<f64> {
+    e.wanted().into_iter().map(|m| m.chunk as f64).collect()
+}
+
+fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f64, wanted: Vec<f64>) -> String {
     let rep = match r {
-        Ok(node) => Reply::Ok { node },
+        Ok(node) => Reply::Ok { node, wanted },
         Err(EvalError::Pending(m)) => {
             Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect(), reached_bytes }
         }
@@ -293,9 +307,9 @@ fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f64) -> Stri
     serde_json::to_string(&rep).unwrap_or_else(|e| format!("{{\"status\":\"error\",\"message\":{:?}}}", e.to_string()))
 }
 
-/// The same, for the callers that have no evaluator to ask how far it has got.
+/// The same, for the callers with nothing further to say.
 fn reply<T: Serialize>(r: Result<T, EvalError>) -> String {
-    reply_with(r, 0.0)
+    reply_with(r, 0.0, Vec::new())
 }
 
 /// What one step of a search found, as the host reads it. `status` is the same
@@ -478,7 +492,7 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 let r = e.node(&self.doc, &p).map(dto);
-                reply_with(r, (e.reached_bits() / 8) as f64)
+                reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
             }
         }
     }
@@ -493,7 +507,7 @@ impl Editor {
                 let r = e
                     .children(&self.doc, &p, from as u64, to as u64)
                     .map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
-                reply_with(r, (e.reached_bits() / 8) as f64)
+                reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
             }
         }
     }

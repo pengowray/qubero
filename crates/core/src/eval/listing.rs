@@ -62,6 +62,8 @@ pub(super) fn brief(v: &Value) -> String {
             let s = s.trim_end().to_string();
             if *len as usize > preview.len() { format!("{s}…") } else { s }
         }
+        // The bytes are on their way; the row says where and how long.
+        Value::Unread { .. } => "\u{2026}".to_string(),
         // Nothing to say when the bytes are what the format asked for. The
         // mismatch is the only half worth a reader's attention.
         Value::Magic { ok } => (if *ok { "" } else { "does not match" }).to_string(),

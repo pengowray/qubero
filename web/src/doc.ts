@@ -6,8 +6,9 @@ import init, { Editor } from "./pkg/qubero_wasm.js";
 const CHUNK_SIZE = 64 * 1024;
 /** Chunks to fetch past one the template asked for and did not have. Placing
  * fields runs forward through a file, so the chunk after the missing one is
- * nearly always the next one wanted; asking for a run of them turns hundreds
- * of round trips into a handful. */
+ * nearly always the next one wanted. They are read in one go: asking the file
+ * for 64 KiB at a time costs a round trip each time, and reading a file's
+ * worth of metadata that way is hundreds of them. */
 const READ_AHEAD = 48;
 const CHUNK_CAPACITY = 512; // 32 MiB resident at most
 
@@ -98,7 +99,7 @@ export type TemplateNode = {
   readonly value: string;
   /** What the in-place editor starts with; differs from `value` for enums. */
   readonly edit_text: string;
-  readonly kind: "uint" | "int" | "float" | "bytes" | "str" | "magic" | "enum" | "composite";
+  readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "magic" | "enum" | "composite";
   readonly ok: boolean;
   readonly child_count: number;
   readonly composite: boolean;
@@ -251,7 +252,7 @@ export type TemplateReply<T> =
   | { readonly status: "error"; readonly message: string };
 
 type RawReply<T> =
-  | { status: "ok"; node: T }
+  | { status: "ok"; node: T; wanted?: number[] }
   | { status: "pending"; chunks: number[]; reached_bytes: number }
   | { status: "working"; reached_bytes: number }
   | { status: "error"; message: string };
@@ -441,11 +442,20 @@ export class Doc {
     const r: RawReply<T> = JSON.parse(json);
     if (r.status === "pending") {
       for (const c of r.chunks) this.fetchChunk(c);
-      // And the run after them, which is where this is going next.
-      let last = 0;
-      for (const c of r.chunks) last = Math.max(last, c);
-      for (let i = 1; i <= READ_AHEAD; i++) this.fetchChunk(last + i);
+      // One chunk missing means something is being read through from front to
+      // back, so the chunks after it are what comes next: worth reading in one
+      // go. Many at once means fields scattered across the file wanting a byte
+      // each, and reading around those would evict what they asked for.
+      if (r.chunks.length === 1 && r.chunks[0] !== undefined) {
+        this.fetchRun(r.chunks[0] + 1, READ_AHEAD);
+      }
       return { status: "pending", reachedBytes: r.reached_bytes };
+    }
+    if (r.status === "ok" && r.wanted !== undefined && r.wanted.length > 0) {
+      // Answered without some previews, so the rows are here and their first
+      // bytes are on their way. Asking again once they land fills them in.
+      for (const c of r.wanted) this.fetchChunk(c);
+      return { status: "ok", node: r.node };
     }
     if (r.status === "working") {
       // Nothing is going to arrive to wake this up, the way a chunk does, so
@@ -607,6 +617,43 @@ export class Doc {
     const missing = this.editor.read_bits(atBit, nBits, bytes);
     for (const chunk of missing) this.fetchChunk(chunk);
     return { bytes, complete: missing.length === 0 };
+  }
+
+  /**
+   * Read `count` chunks from `from` onwards in a single go, skipping any that
+   * are already here or already on their way. One read of three megabytes
+   * costs about what one read of sixty-four kilobytes costs, and the file is
+   * being walked forwards, so this is most of what makes a large file open in
+   * seconds rather than minutes.
+   */
+  private fetchRun(from: number, count: number): void {
+    const total = Math.ceil(this.blob.size / CHUNK_SIZE);
+    let start = from;
+    while (start < from + count && start < total && (this.inflight.has(start) || this.editor.has_chunk(start))) {
+      start += 1;
+    }
+    let end = start;
+    while (end < from + count && end < total && !this.inflight.has(end) && !this.editor.has_chunk(end)) {
+      end += 1;
+    }
+    if (end <= start) return;
+    for (let c = start; c < end; c++) this.inflight.add(c);
+    const at = start * CHUNK_SIZE;
+    void this.blob
+      .slice(at, Math.min(end * CHUNK_SIZE, this.blob.size))
+      .arrayBuffer()
+      .then((buf) => {
+        const bytes = new Uint8Array(buf);
+        for (let c = start; c < end; c++) {
+          const off = (c - start) * CHUNK_SIZE;
+          if (off >= bytes.length) break;
+          this.editor.feed_chunk(c, bytes.subarray(off, Math.min(off + CHUNK_SIZE, bytes.length)));
+        }
+      })
+      .finally(() => {
+        for (let c = start; c < end; c++) this.inflight.delete(c);
+        this.notify();
+      });
   }
 
   private fetchChunk(chunk: number): void {

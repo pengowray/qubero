@@ -1245,3 +1245,8 @@ input.invalid {
 .tt-not-yet {
   color: var(--muted);
 }
+
+/* A field whose bytes have not arrived: the row is real, the value is coming. */
+.tt-unread {
+  color: var(--muted);
+}

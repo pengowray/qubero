@@ -105,5 +105,13 @@ fn main() {
         dropped
     );
     assert_eq!(again.child_count, data.child_count);
+    // What the annotation column shows in the middle of the weights.
+    let inside = data.offset_bits + data.size_bits / 2;
+    if let Ok(spans) = ev.spans(&doc, inside, inside + 256 * 8, 6) {
+        println!("  inside the weights at 0x{:x}: {} entries", inside / 8, spans.len());
+        for s in spans.iter().take(3) {
+            println!("    {:<44} {:>14} bytes  type {}", s.name, s.size_bits / 8, s.type_name);
+        }
+    }
     println!("  {} nodes kept in all", ev.memo_len());
 }

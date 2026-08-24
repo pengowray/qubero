@@ -31,6 +31,8 @@ function key(path: readonly number[]): string {
 }
 
 function editableHere(n: TemplateNode): boolean {
+  // Nothing to edit yet in a field whose bytes have not arrived.
+  if (n.kind === "unread") return false;
   if (!n.editable) return false;
   const cap = n.kind === "bytes" ? INLINE_LIMIT.bytes : n.kind === "str" ? INLINE_LIMIT.str : null;
   return cap === null || n.size_bits <= cap * 8;
@@ -243,7 +245,7 @@ export class TypeTable {
       // placed, and on a large file that takes a while. The fields already
       // placed are worth showing meanwhile: the head of a file is what says
       // what the file is.
-      this.showProgress(root.reachedBytes);
+      if (root.status === "working") this.showProgress(root.reachedBytes);
       this.addPlaceholderRoot(frag);
       this.addReadyChildren(frag, [], 1);
     } else {
@@ -288,13 +290,23 @@ export class TypeTable {
    * the first one that cannot. A field is placed by the fields before it, so
    * the ones that are ready are always the ones at the front.
    */
-  private addReadyChildren(frag: DocumentFragment, path: readonly number[], depth: number): void {
-    const limit = this.shown.get(key(path)) ?? PAGE;
+  private addReadyChildren(frag: DocumentFragment, path: readonly number[], depth: number, count = Infinity): number {
+    const limit = Math.min(this.shown.get(key(path)) ?? PAGE, count);
+    let waiting = 0;
     for (let i = 0; i < limit; i++) {
       const child = this.doc.templateNode([...path, i]);
-      if (child.status !== "ok") return;
-      this.addRows(frag, child.node, depth);
+      if (child.status === "ok") {
+        this.addRows(frag, child.node, depth);
+        continue;
+      }
+      waiting += 1;
+      // A field is placed by the fields before it, so once one cannot be
+      // placed neither can the rest: asking each of them would be a walk each.
+      // Bytes are another matter, and a field waiting on bytes says nothing
+      // about the next one, which may be here already.
+      if (child.status === "working") return waiting;
     }
+    return waiting;
   }
 
   /** Put the caret back where it was: an edit in progress, or the cell just left. */
@@ -330,7 +342,7 @@ export class TypeTable {
   ): void {
     // Work still going on is said once, under the rows, rather than again on
     // every row waiting for it.
-    if (r.status === "working" || (r.status === "pending" && r.reachedBytes > 0)) {
+    if (r.status === "working") {
       this.showProgress(r.reachedBytes);
       return;
     }
@@ -408,13 +420,13 @@ export class TypeTable {
     if (n.composite && open) {
       const limit = this.shown.get(k) ?? PAGE;
       const kids = this.doc.templateChildren(n.path, 0, limit);
-      if (kids.status === "working" || (kids.status === "pending" && kids.reachedBytes > 0)) {
-        this.showProgress(kids.reachedBytes);
-        this.addReadyChildren(frag, n.path, depth + 1);
-        return;
-      }
       if (kids.status !== "ok") {
-        this.addStatusRow(frag, kids, depth + 1, n.name);
+        if (kids.status === "working") this.showProgress(kids.reachedBytes);
+        // Whatever is holding the rest up, the rows that are ready are worth
+        // showing: a page that empties itself while one row waits for bytes
+        // reads as the file being reread from the start.
+        const waiting = this.addReadyChildren(frag, n.path, depth + 1, n.child_count);
+        if (waiting > 0 && kids.status !== "working") this.addStatusRow(frag, kids, depth + 1, n.name);
         return;
       }
       for (const c of kids.node) this.addRows(frag, c, depth + 1);
