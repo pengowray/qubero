@@ -278,6 +278,15 @@ input.invalid {
   min-height: 24px;
   font-size: 12px;
 }
+/* The run between the page of rows and one row fetched from further down,
+   so a jump into the middle of a long list does not read as the row after. */
+.tt-skip td {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+}
 .tt-empty {
   color: var(--muted);
   padding: 8px 10px;

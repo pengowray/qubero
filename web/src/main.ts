@@ -416,7 +416,12 @@ function mount(doc: Doc): void {
       syncColumn();
     }
     refresh();
-    if (followWhenLoaded !== null) followCursor(followWhenLoaded);
+    if (followWhenLoaded !== null) {
+      // The first try was turned away for want of bytes, and `followCursor`
+      // skips a bit it has already seen. Forget it, so this one goes through.
+      followedBit = null;
+      followCursor(followWhenLoaded);
+    }
   });
 
   // A match moves the cursor and marks its bytes in whichever view is showing.

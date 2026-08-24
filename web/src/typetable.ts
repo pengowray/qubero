@@ -88,7 +88,7 @@ export class TypeTable {
 
     const table = document.createElement("table");
     const head = document.createElement("thead");
-    head.innerHTML = "<tr><th>Field</th><th>Value</th><th>Type</th><th>Offset</th><th>Size</th></tr>";
+    head.innerHTML = "<tr><th>Offset</th><th>Field</th><th>Value</th><th>Type</th><th>Size</th></tr>";
     this.body = document.createElement("tbody");
     table.append(head, this.body);
     this.empty = document.createElement("p");
@@ -278,7 +278,7 @@ export class TypeTable {
     const size = document.createElement("td");
     size.className = "tt-num tt-not-yet";
     size.textContent = NOT_YET;
-    tr.append(name, value, type, off, size);
+    tr.append(off, name, value, type, size);
     frag.append(tr);
   }
 
@@ -412,7 +412,7 @@ export class TypeTable {
     const size = document.createElement("td");
     size.className = "tt-num";
     size.textContent = sizeText(n.size_bits);
-    tr.append(name, value, type, off, size);
+    tr.append(off, name, value, type, size);
     frag.append(tr);
 
     if (n.composite && open) {
@@ -425,6 +425,7 @@ export class TypeTable {
         // reads as the file being reread from the start.
         const waiting = this.addReadyChildren(frag, n.path, depth + 1, n.child_count);
         if (waiting > 0 && kids.status !== "working") this.addStatusRow(frag, kids, depth + 1, n.name);
+        this.addSelectedChild(frag, n, depth, limit);
         return;
       }
       for (const c of kids.node) this.addRows(frag, c, depth + 1);
@@ -442,7 +443,44 @@ export class TypeTable {
         tr2.append(td);
         frag.append(tr2);
       }
+      this.addSelectedChild(frag, n, depth, limit);
     }
+  }
+
+  /**
+   * The one child on the way to the selected field, when it sits past the end
+   * of the page. Opening a list of four million blocks at the block the cursor
+   * is in must not mean drawing the four million before it, so that row is
+   * fetched on its own and shown under the page with the run between them
+   * marked. Only the selected path gets this: one row, not a second page.
+   */
+  private addSelectedChild(frag: DocumentFragment, n: TemplateNode, depth: number, limit: number): void {
+    const i = this.selectedChildIndex(n.path);
+    if (i === null || i < limit || i >= n.child_count) return;
+    const child = this.doc.templateNode([...n.path, i]);
+    const skipped = i - limit;
+    if (skipped > 0) {
+      const tr = document.createElement("tr");
+      tr.className = "tt-skip";
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.style.paddingLeft = `${(depth + 1) * 16 + 8}px`;
+      const list = n.type.endsWith("[]") || n.type.startsWith("offsets ");
+      td.textContent = `${countText(skipped, list ? (n.unit ?? "item") : "field")} between`;
+      tr.append(td);
+      frag.append(tr);
+    }
+    if (child.status === "ok") this.addRows(frag, child.node, depth + 1);
+    else this.addStatusRow(frag, child, depth + 1, `${n.name}[${i}]`);
+  }
+
+  /** Which child of `path` the selected field is inside, if any. */
+  private selectedChildIndex(path: readonly number[]): number | null {
+    if (this.selected === null) return null;
+    const sel = pathOf(this.selected);
+    if (sel.length <= path.length) return null;
+    for (let i = 0; i < path.length; i++) if (sel[i] !== path[i]) return null;
+    return sel[path.length] ?? null;
   }
 
   private editor(n: TemplateNode): HTMLInputElement {

@@ -301,7 +301,7 @@ export class Inspector {
     const at = document.createElement("span");
     at.className = "addr";
     at.textContent = formatOffset(n.offset_bits);
-    this.detail.replaceChildren(`${n.type} · `, at, ` · ${sizeText(n.size_bits)}`);
+    this.detail.replaceChildren(at, ` · ${n.type} · ${sizeText(n.size_bits)}`);
     const long = !n.composite && (n.kind === "bytes" || n.kind === "str");
     this.area.hidden = !long;
     this.field.hidden = long;
