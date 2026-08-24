@@ -512,7 +512,7 @@ impl Evaluator {
                     if hops > 64 {
                         return fail(format!("type {n} refers to itself with nothing in between"));
                     }
-                    match self.template.types.get(&n) {
+                    match self.template.types.get(&*n) {
                         Some(t) => ty = t.clone(),
                         None => return fail(format!("no type named {n} in this template")),
                     }
@@ -535,7 +535,12 @@ impl Evaluator {
                     // to be handed over: a switch that looks at the byte it is
                     // about to read needs to know where that byte is.
                     let v = self.eval_expr_at(doc, path, &on, Some((offset, limit)))?;
-                    ty = cases.into_iter().find(|(k, _)| *k == v).map(|(_, t)| t).unwrap_or(*default);
+                    // Only the case this file takes is cloned; the others
+                    // stay shared.
+                    ty = match cases.iter().find(|(k, _)| *k == v) {
+                        Some((_, t)) => t.clone(),
+                        None => (*default).clone(),
+                    };
                 }
                 other => {
                     return Ok(Resolved {

@@ -289,15 +289,18 @@ pub enum Ty {
     SqliteVarint,
     /// Occupies exactly `size` bytes; `inner` is parsed within that window.
     Sized { size: Expr, inner: Box<Ty> },
-    /// Pick a type by the value of `on`; falls back to `default`.
-    Switch { on: Expr, cases: Vec<(i128, Ty)>, default: Box<Ty> },
+    /// Pick a type by the value of `on`; falls back to `default`. The cases
+    /// are shared rather than owned: resolving a field clones its type, and
+    /// a switch with thirteen cases is cloned once per element of a list
+    /// that may run to millions.
+    Switch { on: Expr, cases: Arc<[(i128, Ty)]>, default: Arc<Ty> },
     /// An integer type whose values have names.
     Enum { inner: Box<Ty>, def: Arc<EnumDef> },
     /// An integer type whose bits have names.
     Flags { inner: Box<Ty>, def: Arc<FlagsDef> },
     /// A type from the template's table, by name. This is what makes a format
     /// whose boxes contain boxes expressible: the type refers to itself.
-    Named(String),
+    Named(Arc<str>),
 }
 
 #[derive(Debug)]
@@ -441,7 +444,7 @@ impl Ty {
         Ty::Sized { size, inner: Box::new(inner) }
     }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
-        Ty::Switch { on, cases, default: Box::new(default) }
+        Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
     pub fn enumeration(name: &str, inner: Ty, cases: &[(i128, &str)]) -> Ty {
         Ty::enum_with(name, inner, cases, false)
@@ -528,7 +531,7 @@ impl Ty {
             Ty::Switch { .. } => "switch".into(),
             Ty::Enum { def, .. } => def.name.clone(),
             Ty::Flags { def, .. } => def.name.clone(),
-            Ty::Named(n) => n.clone(),
+            Ty::Named(n) => n.to_string(),
         }
     }
 }
