@@ -387,16 +387,17 @@ function mount(doc: Doc): void {
     undoBtn.disabled = !doc.canUndo;
     redoBtn.disabled = !doc.canRedo;
     const c = view.cursorState;
+    const at = document.createElement("span");
+    at.className = "addr";
+    at.textContent = formatOffset(c.bitOffset);
     // Inside a byte the decimal counts bits, so the two halves agree.
-    const where =
-      c.bitOffset % 8 === 0
-        ? `Offset ${formatOffset(c.bitOffset)} (${c.offset.toLocaleString()})`
-        : `Offset ${formatOffset(c.bitOffset)} (bit ${c.bitOffset.toLocaleString()})`;
+    const decimal =
+      c.bitOffset % 8 === 0 ? `(${c.offset.toLocaleString()})` : `(bit ${c.bitOffset.toLocaleString()})`;
     // Overwrite/Insert and the pane are the hex grid's, so they go with it:
     // reading `· Hex` under a listing says the wrong thing about both.
     const pane = c.pane === "ascii" ? "Text" : c.mode === "binary" ? "Binary" : "Hex";
     const editing = `  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${pane}`;
-    posLabel.textContent = `${where}${listingShowing ? "" : editing}`;
+    posLabel.replaceChildren("Offset ", at, ` ${decimal}${listingShowing ? "" : editing}`);
   };
   view.onCursorChange = (c) => {
     inspector.setOffset(c.bitOffset);

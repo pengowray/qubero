@@ -7,6 +7,7 @@
   --accent: #2457c5;
   --accent-soft: #dbe5fb;
   --warn: #b4361f;
+  --addr: #8a6100;
   --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
@@ -21,6 +22,7 @@
     --accent: #7ea2ff;
     --accent-soft: #2a3a63;
     --warn: #ff8a6a;
+    --addr: #c9a45c;
   }
 }
 
@@ -222,6 +224,12 @@ input.invalid {
   color: var(--muted);
   font-size: 12px;
 }
+/* Anything that names a place in the file, as opposed to a value read from
+   it, shares one color so an address can be told from data at a glance. */
+.addr,
+.tt-addr {
+  color: var(--addr);
+}
 .tt-editable {
   cursor: text;
   text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent);
@@ -331,7 +339,7 @@ input.invalid {
 .hv-header {
   display: flex;
   white-space: pre;
-  color: var(--muted);
+  color: var(--addr);
   border-bottom: 1px solid var(--line);
   padding-left: 0;
 }
@@ -346,7 +354,7 @@ input.invalid {
   height: 20px;
 }
 .hv-addr {
-  color: var(--muted);
+  color: var(--addr);
   margin-right: 1ch;
 }
 .hv-hex > span {
@@ -1101,7 +1109,9 @@ input.invalid {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
   box-shadow: inset 3px 0 0 var(--accent);
 }
-.lv-addr,
+.lv-addr {
+  color: var(--addr);
+}
 .lv-bytes,
 .lv-type {
   color: var(--muted);

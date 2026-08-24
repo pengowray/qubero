@@ -297,7 +297,10 @@ export class Inspector {
     const n = node.node;
     this.crumbs.replaceChildren(...this.trail(path));
     this.fieldRow.hidden = false;
-    this.detail.textContent = `${n.type} · ${formatOffset(n.offset_bits)} · ${sizeText(n.size_bits)}`;
+    const at = document.createElement("span");
+    at.className = "addr";
+    at.textContent = formatOffset(n.offset_bits);
+    this.detail.replaceChildren(`${n.type} · `, at, ` · ${sizeText(n.size_bits)}`);
     const long = !n.composite && (n.kind === "bytes" || n.kind === "str");
     this.area.hidden = !long;
     this.field.hidden = long;

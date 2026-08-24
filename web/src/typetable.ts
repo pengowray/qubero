@@ -276,7 +276,7 @@ export class TypeTable {
     const type = document.createElement("td");
     type.className = "tt-type";
     const off = document.createElement("td");
-    off.className = "tt-num";
+    off.className = "tt-num tt-addr";
     off.textContent = formatOffset(0);
     const size = document.createElement("td");
     size.className = "tt-num tt-not-yet";
@@ -409,7 +409,7 @@ export class TypeTable {
     type.className = "tt-type";
     type.textContent = n.type;
     const off = document.createElement("td");
-    off.className = "tt-num";
+    off.className = "tt-num tt-addr";
     off.textContent = formatOffset(n.offset_bits);
     const size = document.createElement("td");
     size.className = "tt-num";
