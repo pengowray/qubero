@@ -166,9 +166,28 @@ struct ListState {
     seq_end: usize,
 }
 
+/// What to call a node: the name of the field it is, or where it sits in the
+/// list it belongs to. An index is kept as a number and spelled `[7]` only
+/// when something asks for it, because placing a million elements would
+/// otherwise spell a million names that nobody reads.
+#[derive(Debug, Clone)]
+enum Name {
+    Field(std::sync::Arc<str>),
+    Index(usize),
+}
+
+impl Name {
+    fn text(&self) -> String {
+        match self {
+            Name::Field(s) => s.to_string(),
+            Name::Index(i) => format!("[{i}]"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Resolved {
-    name: String,
+    name: Name,
     /// Effective type after unwrapping `Sized` and `Switch`.
     ty: Ty,
     offset: u64,
@@ -463,7 +482,7 @@ impl Evaluator {
         if path.is_empty() {
             let limit = doc.len_bits();
             let root = self.template.root.clone();
-            let r = self.effective(doc, &[], "file".into(), root, 0, limit)?;
+            let r = self.effective(doc, &[], Name::Field("file".into()), root, 0, limit)?;
             self.remember(&[], r);
             return Ok(());
         }
@@ -472,11 +491,11 @@ impl Evaluator {
         let pr = self.memo.get(parent).expect("parent resolved").clone();
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
-                Some(f) => (f.name.clone(), f.ty.clone()),
+                Some(f) => (Name::Field(f.name.clone()), f.ty.clone()),
                 None => return fail("no such field"),
             },
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
-                (format!("[{idx}]"), (**elem).clone())
+                (Name::Index(idx), (**elem).clone())
             }
             _ => return fail("not a composite"),
         };
@@ -548,7 +567,7 @@ impl Evaluator {
         let adj = self.eval_expr(doc, list, &adjust)?;
         let bits = base as i128 + (at + adj) * 8;
         if bits < lr.offset as i128 || bits >= lr.limit as i128 {
-            return fail(format!("offset {at} points outside {}", lr.name));
+            return fail(format!("offset {at} points outside {}", lr.name.text()));
         }
         Ok(bits as u64)
     }
@@ -595,7 +614,7 @@ impl Evaluator {
         &mut self,
         doc: &Document<S>,
         path: &[usize],
-        name: String,
+        name: Name,
         mut ty: Ty,
         offset: u64,
         mut limit: u64,
@@ -838,7 +857,7 @@ impl Evaluator {
     /// Raw bytes of a named field directly inside the struct at `path`.
     fn child_raw_bytes<S: Source>(&mut self, doc: &Document<S>, path: &[usize], field: &str) -> R<Vec<u8>> {
         let idx = match &self.memo[path].ty {
-            Ty::Struct(s) => s.fields.iter().position(|f| f.name == field),
+            Ty::Struct(s) => s.fields.iter().position(|f| *f.name == *field),
             _ => None,
         };
         let Some(idx) = idx else { return fail(format!("no field named {field}")) };

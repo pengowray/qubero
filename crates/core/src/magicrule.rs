@@ -678,7 +678,7 @@ mod tests {
         assert_eq!(t.name, "zip");
         let Ty::Struct(s) = &t.root else { panic!("expected a struct") };
         assert_eq!(s.fields.len(), 1);
-        assert_eq!(s.fields[0].name, "signature");
+        assert_eq!(&*s.fields[0].name, "signature");
         assert!(matches!(&s.fields[0].ty, Ty::Magic(b) if b == b"PK\x03\x04"));
     }
 
@@ -692,7 +692,7 @@ mod tests {
         let t = signature_template("tar", &sig);
         let Ty::Struct(s) = &t.root else { panic!("expected a struct") };
         assert_eq!(s.fields.len(), 2);
-        assert_eq!(s.fields[0].name, "before signature");
-        assert_eq!(s.fields[1].name, "signature");
+        assert_eq!(&*s.fields[0].name, "before signature");
+        assert_eq!(&*s.fields[1].name, "signature");
     }
 }

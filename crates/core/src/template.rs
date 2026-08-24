@@ -19,13 +19,15 @@ pub enum Endian {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Lit(i128),
-    Ref(String),
+    /// Names are shared rather than copied: a type is cloned every time an
+    /// element of a list is placed, and a list may have a million elements.
+    Ref(Arc<str>),
     /// Bytes from here to the end of the enclosing container: what a field that
     /// runs to the end is worth. An MP4 box of size 0 means exactly this.
     Remaining,
     /// Size in bytes of an earlier field. Needed when a field runs to the end
     /// of a container and what came before it was variable length.
-    SizeOf(String),
+    SizeOf(Arc<str>),
     /// This element's index in the nearest list it sits in. Zero outside one.
     Idx,
     /// The value of one element of an earlier array, by index. `Ref` names a
@@ -34,7 +36,7 @@ pub enum Expr {
     /// walks named fields down to the number: `tensors[i].offset` is
     /// `Elem { array: "tensors", field: ["offset"] }`. Empty when the elements
     /// are the numbers themselves.
-    Elem { array: String, index: Box<Expr>, field: Vec<String> },
+    Elem { array: Arc<str>, index: Box<Expr>, field: Arc<[String]> },
     /// The numbers of one earlier array multiplied together: what a shape
     /// describes. A GGUF tensor says it is 2560 by 5120 and never says it is
     /// 13,107,200 numbers, and the room between one tensor and the next is not
@@ -42,14 +44,14 @@ pub enum Expr {
     /// Reached the same way as `Elem`, but landing on an array rather than on
     /// a number: `tensors[i].dims` is
     /// `Product { array: "tensors", index: Idx, field: ["dims"] }`.
-    Product { array: String, index: Box<Expr>, field: Vec<String> },
+    Product { array: Arc<str>, index: Box<Expr>, field: Arc<[String]> },
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     Peek(u32),
     /// The value of field `name` in the element before this one, in the nearest
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
-    Prev(String),
+    Prev(Arc<str>),
     /// The value at `field` in the nearest earlier element that has one,
     /// searching backwards through the enclosing list and then outwards
     /// through the lists that one sits in. `Prev` asks only the element just
@@ -58,7 +60,7 @@ pub enum Expr {
     /// declared, however many chunks sit in between, and one sample is two
     /// lists further in again. Zero when nothing earlier has it, so `Or` can
     /// name what to do without one.
-    Sibling(Vec<String>),
+    Sibling(Arc<[String]>),
     /// The first of the two that is not zero. Pairs with `Prev` to say "this
     /// one, or the last one that had one".
     Or(Box<Expr>, Box<Expr>),
@@ -73,11 +75,11 @@ impl Expr {
         Expr::Lit(v.into())
     }
     pub fn field(name: &str) -> Expr {
-        Expr::Ref(name.to_string())
+        Expr::Ref(name.into())
     }
     /// The byte size of an earlier field.
     pub fn size_of(name: &str) -> Expr {
-        Expr::SizeOf(name.to_string())
+        Expr::SizeOf(name.into())
     }
     /// This element's index in the nearest enclosing list.
     pub fn idx() -> Expr {
@@ -85,13 +87,13 @@ impl Expr {
     }
     /// Element `index` of the earlier array field `array`.
     pub fn elem(array: &str, index: Expr) -> Expr {
-        Expr::Elem { array: array.to_string(), index: Box::new(index), field: Vec::new() }
+        Expr::Elem { array: array.into(), index: Box::new(index), field: Arc::from(Vec::new()) }
     }
     /// Field `field` of element `index` of the earlier array `array`, for an
     /// array whose elements are structures rather than numbers.
     pub fn elem_field(array: &str, index: Expr, field: &[&str]) -> Expr {
         Expr::Elem {
-            array: array.to_string(),
+            array: array.into(),
             index: Box::new(index),
             field: field.iter().map(|s| s.to_string()).collect(),
         }
@@ -100,7 +102,7 @@ impl Expr {
     /// together.
     pub fn product(array: &str, index: Expr, field: &[&str]) -> Expr {
         Expr::Product {
-            array: array.to_string(),
+            array: array.into(),
             index: Box::new(index),
             field: field.iter().map(|s| s.to_string()).collect(),
         }
@@ -111,7 +113,7 @@ impl Expr {
     }
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {
-        Expr::Prev(name.to_string())
+        Expr::Prev(name.into())
     }
     /// The value at `field` in the nearest earlier element of the enclosing
     /// list that has one, e.g. `sibling(&["body", "bits_per_sample"])`.
@@ -256,7 +258,7 @@ pub enum Anchor {
 
 #[derive(Debug, Clone)]
 pub struct Field {
-    pub name: String,
+    pub name: Arc<str>,
     pub ty: Ty,
 }
 
@@ -298,7 +300,7 @@ pub enum Ty {
     /// tensor table holds each offset inside a record, not as a bare number.
     /// With `to_next`, a child runs to the start of the next child above it
     /// (or the end of the list), for formats that store no per-child size.
-    PointerList { offsets: String, field: Option<String>, anchor: Anchor, adjust: Expr, elem: Box<Ty>, to_next: bool },
+    PointerList { offsets: Arc<str>, field: Option<String>, anchor: Anchor, adjust: Expr, elem: Box<Ty>, to_next: bool },
     /// SQLite's variable-length integer: seven bits per byte, most significant
     /// group first, up to nine bytes, where a ninth byte contributes all eight
     /// of its bits. `Vlq` stops at four bytes and never does that, so it
@@ -396,7 +398,7 @@ impl Ty {
     pub fn structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
         Ty::Struct(Arc::new(StructDef {
             name: name.to_string(),
-            fields: fields.into_iter().map(|(n, ty)| Field { name: n.to_string(), ty }).collect(),
+            fields: fields.into_iter().map(|(n, ty)| Field { name: n.into(), ty }).collect(),
             named_by: None,
             contents: None,
             inline: false,
@@ -440,13 +442,13 @@ impl Ty {
     }
     /// Elements at the offsets held in an earlier array field.
     pub fn pointer_list(offsets: &str, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
-        Ty::PointerList { offsets: offsets.to_string(), field: None, anchor, adjust, elem: Box::new(elem), to_next: false }
+        Ty::PointerList { offsets: offsets.into(), field: None, anchor, adjust, elem: Box::new(elem), to_next: false }
     }
     /// A pointer list whose offsets sit inside the records of `offsets`, in
     /// field `field`, and whose children run to the next child's start.
     pub fn pointer_list_records(offsets: &str, field: &str, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
         Ty::PointerList {
-            offsets: offsets.to_string(),
+            offsets: offsets.into(),
             field: Some(field.to_string()),
             anchor,
             adjust,

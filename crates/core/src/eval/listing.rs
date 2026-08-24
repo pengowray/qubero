@@ -115,27 +115,27 @@ impl Evaluator {
         if let Some(name) = self.pointed_from_name(doc, path) {
             return Ok(name);
         }
-        let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.clone()) };
-        let Some(by) = s.named_by.clone() else { return Ok(r.name.clone()) };
-        let Some(i) = s.fields.iter().position(|f| f.name == by) else { return Ok(r.name.clone()) };
+        let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.text()) };
+        let Some(by) = s.named_by.clone() else { return Ok(r.name.text()) };
+        let Some(i) = s.fields.iter().position(|f| *f.name == *by) else { return Ok(r.name.text()) };
         let mut child = path.to_vec();
         child.push(i);
         // A field that cannot be read yet leaves the node with the name it had.
-        let Ok(mut info) = self.node(doc, &child) else { return Ok(r.name.clone()) };
+        let Ok(mut info) = self.node(doc, &child) else { return Ok(r.name.text()) };
         // A name a format wraps in a structure of its own, as GGUF wraps every
         // string in a length and then its bytes, is still the name. Follow the
         // field that is only the structure's contents until a value turns up.
         while info.composite {
             let Ty::Struct(inner) = self.memo[&child].ty.base().clone() else { break };
             let Some(c) = inner.contents.clone() else { break };
-            let Some(j) = inner.fields.iter().position(|f| f.name == c) else { break };
+            let Some(j) = inner.fields.iter().position(|f| *f.name == *c) else { break };
             child.push(j);
             let Ok(next) = self.node(doc, &child) else { break };
             info = next;
         }
         let text = brief(&info.value);
         let text = text.trim_end();
-        Ok(if text.is_empty() { r.name.clone() } else { format!("{} {text}", r.name) })
+        Ok(if text.is_empty() { r.name.text() } else { format!("{} {text}", r.name.text()) })
     }
 
     /// The name of the record whose offset placed this pointer-list child, when
@@ -284,7 +284,7 @@ impl Evaluator {
         let Some(r) = self.memo.get(parent) else { return false };
         let Ty::Struct(s) = r.ty.base() else { return false };
         let Some(by) = &s.contents else { return false };
-        s.fields.get(last).is_some_and(|f| &f.name == by)
+        s.fields.get(last).is_some_and(|f| *f.name == *by)
     }
 
     /// A structure that reads on one row, as its fields' values in order. A

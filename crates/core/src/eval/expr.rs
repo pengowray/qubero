@@ -133,7 +133,7 @@ impl Evaluator {
             elem.push(idx - 1);
             self.resolve(doc, &elem)?;
             let Ty::Struct(s) = self.memo[&elem].ty.base() else { return Ok(0) };
-            let Some(j) = s.fields.iter().position(|f| f.name == name) else { return Ok(0) };
+            let Some(j) = s.fields.iter().position(|f| *f.name == *name) else { return Ok(0) };
             elem.push(j);
             return Ok(self.node(doc, &elem)?.value.as_int().unwrap_or(0));
         }
@@ -182,7 +182,7 @@ impl Evaluator {
                 return Ok(None);
             }
             let Ty::Struct(s) = self.memo[path.as_slice()].ty.base() else { return Ok(None) };
-            let Some(j) = s.fields.iter().position(|f| &f.name == name) else { return Ok(None) };
+            let Some(j) = s.fields.iter().position(|f| *f.name == **name) else { return Ok(None) };
             path.push(j);
         }
         Ok(match self.node(doc, path) {
@@ -220,7 +220,7 @@ impl Evaluator {
             let Ty::Struct(s) = self.memo[&p].ty.base() else {
                 return fail(format!("{array}[{i}] has no fields to look in"));
             };
-            let Some(j) = s.fields.iter().position(|f| &f.name == name) else {
+            let Some(j) = s.fields.iter().position(|f| *f.name == **name) else {
                 return fail(format!("{array}[{i}] has no field named {name}"));
             };
             p.push(j);
@@ -232,7 +232,7 @@ impl Evaluator {
         let mut cur = at.to_vec();
         while let Some(idx) = cur.pop() {
             if let Some(Ty::Struct(s)) = self.memo.get(&cur).map(|r| &r.ty) {
-                if let Some(j) = s.fields.iter().take(idx).position(|f| f.name == name) {
+                if let Some(j) = s.fields.iter().take(idx).position(|f| *f.name == *name) {
                     let mut p = cur.clone();
                     p.push(j);
                     return Some(p);
@@ -250,7 +250,7 @@ impl Evaluator {
             let idx = cur.pop().expect("non-empty");
             let parent = cur.clone();
             if let Ty::Struct(s) = &self.memo[&parent].ty {
-                if let Some(j) = s.fields[..idx].iter().position(|f| f.name == name) {
+                if let Some(j) = s.fields[..idx].iter().position(|f| *f.name == *name) {
                     let mut p = parent;
                     p.push(j);
                     let info = self.node(doc, &p)?;
