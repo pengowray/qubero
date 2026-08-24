@@ -342,6 +342,13 @@ impl Module {
             // naturally aligned, so a well-formed file never says otherwise
             // and the alignment is never worth printing.
             (0xfe, _) if raw != 0x03 => mem_text(ev, doc, &args, thread_align(raw))?,
+            // The byte after `atomic.fence` is reserved and has to be zero, so
+            // saying so adds nothing. A file that says otherwise is worth
+            // seeing.
+            (0xfe, 0x03) => match int_at(ev, doc, &args)? {
+                0 => String::new(),
+                other => other.to_string(),
+            },
             (0xfd, 0x54..=0x5b) => {
                 let mem = mem_text(ev, doc, &args, simd_align(raw))?;
                 let lane = int_at(ev, doc, &child(&args, 2))?;
@@ -734,7 +741,9 @@ mod tests {
         // never worth printing and only the offset is.
         assert!(text.contains("i32.atomic.load offset=16"), "{text}");
         assert!(!text.contains("align="), "{text}");
-        assert!(text.contains("atomic.fence 0"), "{text}");
+        // The reserved byte is zero in every valid file, so it is not printed.
+        assert!(text.contains("atomic.fence
+"), "{text}");
         assert!(text.contains("i64.atomic.rmw8.add_u"), "{text}");
         assert!(text.trim_end().ends_with("end
 )"), "{text}");
