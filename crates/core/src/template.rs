@@ -42,6 +42,15 @@ pub enum Expr {
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
     Prev(String),
+    /// The value at `field` in the nearest earlier element that has one,
+    /// searching backwards through the enclosing list and then outwards
+    /// through the lists that one sits in. `Prev` asks only the element just
+    /// before, which is no use when what a chunk means was settled by a chunk
+    /// further back: a WAVE `data` chunk is samples of whatever width `fmt `
+    /// declared, however many chunks sit in between, and one sample is two
+    /// lists further in again. Zero when nothing earlier has it, so `Or` can
+    /// name what to do without one.
+    Sibling(Vec<String>),
     /// The first of the two that is not zero. Pairs with `Prev` to say "this
     /// one, or the last one that had one".
     Or(Box<Expr>, Box<Expr>),
@@ -86,6 +95,11 @@ impl Expr {
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {
         Expr::Prev(name.to_string())
+    }
+    /// The value at `field` in the nearest earlier element of the enclosing
+    /// list that has one, e.g. `sibling(&["body", "bits_per_sample"])`.
+    pub fn sibling(field: &[&str]) -> Expr {
+        Expr::Sibling(field.iter().map(|s| s.to_string()).collect())
     }
     /// This, or `rhs` when this is zero.
     pub fn or(self, rhs: Expr) -> Expr {

@@ -831,6 +831,7 @@ impl Evaluator {
                 read_uint(&buf, *bits, crate::template::Endian::Big) as i128
             }
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
+            Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {
                 0 => self.eval_expr_at(doc, at, b, here)?,
                 v => v,
@@ -877,6 +878,60 @@ impl Evaluator {
             return Ok(self.node(doc, &elem)?.value.as_int().unwrap_or(0));
         }
         Ok(0)
+    }
+
+    /// The value at `field` in the nearest earlier element of the enclosing
+    /// list that has one. Elements between are passed over: a WAVE file can put
+    /// `fact` or `LIST` between `fmt ` and `data`, and the samples are still
+    /// the width `fmt ` gave them.
+    ///
+    /// This reads earlier elements, which in a list long enough to be walked
+    /// with its middle dropped means placing them again. Formats that need it
+    /// have tens of elements, not millions; it does not belong in a long list.
+    fn sibling_field<S: Source>(&mut self, doc: &Document<S>, at: &[usize], field: &[String]) -> R<i128> {
+        let mut cur = at.to_vec();
+        while let Some(idx) = cur.pop() {
+            let listy = matches!(
+                self.memo.get(&cur).map(|r| &r.ty),
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
+            );
+            if !listy {
+                continue;
+            }
+            for earlier in (0..idx).rev() {
+                let mut elem = cur.clone();
+                elem.push(earlier);
+                if let Some(v) = self.field_in(doc, &mut elem, field)? {
+                    return Ok(v);
+                }
+            }
+            // Nothing in this list has it, so ask the list this one sits in.
+            // A WAVE sample is inside a frame, inside the samples of a chunk,
+            // and what declared its width is a chunk two levels out.
+        }
+        Ok(0)
+    }
+
+    /// Follow `field` down from the node at `path`, through whatever the
+    /// template resolved it to, and read the number at the end. None when this
+    /// node has no such field, which is how a search over siblings passes over
+    /// the ones that are something else.
+    fn field_in<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>, field: &[String]) -> R<Option<i128>> {
+        for name in field {
+            if self.resolve(doc, path).is_err() {
+                return Ok(None);
+            }
+            let Ty::Struct(s) = self.memo[path.as_slice()].ty.base() else { return Ok(None) };
+            let Some(j) = s.fields.iter().position(|f| &f.name == name) else { return Ok(None) };
+            path.push(j);
+        }
+        Ok(match self.node(doc, path) {
+            Ok(info) => info.value.as_int(),
+            // A field that cannot be read yet is not an answer, and must not be
+            // taken for the absence of one.
+            Err(e @ EvalError::Pending(_)) => return Err(e),
+            Err(_) => None,
+        })
     }
 
     /// The path of the field named `name`, found the way `lookup` finds it.

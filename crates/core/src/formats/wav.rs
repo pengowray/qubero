@@ -68,7 +68,7 @@ const WAMD_TAG: &[(i128, &str)] = &[
 ];
 
 pub fn wav() -> Template {
-    riff("wav", chunk_body(None))
+    riff("wav", chunk_body(Some(samples())))
 }
 
 /// The RIFF frame shared by WAVE and its relatives.
@@ -103,6 +103,57 @@ fn chunk(body: T) -> T {
             ("body", T::sized(E::field("size"), body)),
             ("pad", T::bytes(pad)),
         ],
+    )
+}
+
+/// The samples in a `data` chunk, read as what the `fmt ` chunk earlier in the
+/// file said they are. `fmt ` is a sibling chunk rather than a field of this
+/// one, and a `fact` or a `LIST` can sit between the two, so the width is
+/// asked of the nearest earlier chunk that declares one.
+///
+/// The samples in a `data` chunk, read as what the `fmt ` chunk earlier in the
+/// file said they are. `fmt ` is a sibling chunk rather than a field of this
+/// one, and a `fact` or a `LIST` can sit between the two, so the width is
+/// asked of the nearest earlier chunk that declares one.
+///
+/// Samples are interleaved: with two channels the values alternate left,
+/// right, in the order they sit in. Which width to read is settled once, above
+/// the list, so every element of it is the same size and the millionth sample
+/// can be reached without reading the ones before it.
+///
+/// A file whose format nobody here knows keeps its data as bytes, rather than
+/// being read as something it was never said to be.
+fn samples() -> T {
+    let bits = || E::sibling(&["body", "bits_per_sample"]);
+    let raw = || T::bytes(E::Remaining);
+    // A run of samples `width` bytes apart, which is what the rest of the
+    // chunk holds.
+    let run = |width: i128, elem: T| T::array(elem, E::Remaining.div(E::lit(width)));
+    // Integer samples are signed, except 8-bit, which the format defines as
+    // unsigned with 128 for silence.
+    let pcm = |bits: u32| T::Int { bits, endian: Little };
+    let by_width = || {
+        T::switch(
+            bits(),
+            vec![
+                (8, run(1, T::u8())),
+                (16, run(2, pcm(16))),
+                (24, run(3, pcm(24))),
+                (32, run(4, pcm(32))),
+            ],
+            raw(),
+        )
+    };
+    let floats = || T::switch(bits(), vec![(32, run(4, T::F32(Little))), (64, run(8, T::F64(Little)))], raw());
+    let by_format = |format: E| {
+        T::switch(format, vec![(0x0001, by_width()), (0x0003, floats())], raw())
+    };
+    // An extensible file gives its real format at the front of the sub-format
+    // GUID, and the tag in front only says to look there.
+    T::switch(
+        E::sibling(&["body", "format"]),
+        vec![(0xfffe, by_format(E::sibling(&["body", "extra", "sub_format", "format"])))],
+        by_format(E::sibling(&["body", "format"])),
     )
 }
 
@@ -682,4 +733,76 @@ mod tests {
         );
         assert_eq!(ev.node(&d, &[3, 5, 2, 0, 2]).unwrap().value, Value::Str("SM4BAT-FS".into()));
     }
+    /// A `fmt ` chunk, something in between, and then samples: the width comes
+    /// from the chunk that declared it however far back it sits.
+    fn with_samples(bits: u16, format: u16, channels: u16, body: &[u8]) -> Vec<u8> {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&format.to_le_bytes());
+        fmt.extend_from_slice(&channels.to_le_bytes());
+        fmt.extend_from_slice(&44_100u32.to_le_bytes());
+        fmt.extend_from_slice(&0u32.to_le_bytes()); // byte rate, not read here
+        let align = channels * bits / 8;
+        fmt.extend_from_slice(&align.to_le_bytes());
+        fmt.extend_from_slice(&bits.to_le_bytes());
+        let mut inner = chunk_bytes(b"fmt ", &fmt);
+        // A chunk between the two, which is what `Prev` could not see past.
+        inner.extend_from_slice(&chunk_bytes(b"fact", &1234u32.to_le_bytes()));
+        inner.extend_from_slice(&chunk_bytes(b"data", body));
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&((inner.len() + 4) as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(&inner);
+        out
+    }
+
+    #[test]
+    fn samples_are_read_as_the_width_an_earlier_chunk_declared() {
+        // 16-bit stereo: four frames of two samples each.
+        let body: Vec<u8> = [0i16, -1, 32767, -32768, 100, -100, 7, 8]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let d = Document::new(MemSource(with_samples(16, 1, 2, &body)));
+        let mut ev = Evaluator::new(wav());
+        // chunks[2] is data; its body is the frames.
+        // Two channels interleaved: eight samples, left and right in turn.
+        let samples = ev.node(&d, &[3, 2, 2]).unwrap();
+        assert_eq!(samples.child_count, 8);
+        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::Int(-1));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 2]).unwrap().value, Value::Int(32767));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 7]).unwrap().value, Value::Int(8));
+    }
+
+    #[test]
+    fn float_samples_read_as_floats_and_8_bit_ones_as_unsigned() {
+        let body: Vec<u8> = [1.0f32, -0.5, 0.25].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let d = Document::new(MemSource(with_samples(32, 3, 1, &body)));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::Float(-0.5));
+
+        // 8-bit PCM is unsigned, with 128 for silence.
+        let d = Document::new(MemSource(with_samples(8, 1, 1, &[0, 128, 255])));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::UInt(128));
+    }
+
+    #[test]
+    fn data_with_no_format_to_read_it_by_stays_bytes() {
+        // No `fmt ` at all: nothing says what the bytes are, so they stay bytes
+        // rather than being read as a width nobody declared.
+        let mut inner = chunk_bytes(b"data", &[1, 2, 3, 4, 5, 6, 7, 8]);
+        inner.extend_from_slice(&chunk_bytes(b"fact", &9u32.to_le_bytes()));
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&((inner.len() + 4) as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(&inner);
+        let d = Document::new(MemSource(out));
+        let mut ev = Evaluator::new(wav());
+        let body = ev.node(&d, &[3, 0, 2]).unwrap();
+        assert!(!body.composite);
+        assert_eq!(body.size_bits, 8 * 8);
+    }
+
 }

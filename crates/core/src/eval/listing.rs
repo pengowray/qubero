@@ -319,8 +319,16 @@ impl Evaluator {
                 _ => continue,
             };
             // Text stays one entry per line: GUANO lines are each worth reading.
+            // A type that only says what it is once it is placed, such as a
+            // WAVE sample whose width an earlier chunk declared, is judged by
+            // what the first element turned out to be.
             if !plain(&elem) {
-                continue;
+                let mut first = path[..k].to_vec();
+                first.push(0);
+                match self.node(doc, &first) {
+                    Ok(info) if !info.composite => {}
+                    _ => continue,
+                }
             }
             let n = self.child_count(doc, &path[..k])?;
             if n >= COLLAPSE_RUN {
