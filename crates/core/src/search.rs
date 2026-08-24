@@ -260,6 +260,23 @@ impl Search {
     }
 }
 
+/// Put `with` where a match was found.
+///
+/// A replacement of the same length is an overwrite and nothing moves. One of
+/// a different length shifts every byte after it, which is why a search
+/// carries on from where the replacement ends rather than from where the match
+/// started: the offsets behind it are the old file's.
+pub fn replace<S: Source>(doc: &mut Document<S>, at: u64, len: u64, with: &[u8]) {
+    if with.len() as u64 == len {
+        doc.overwrite_bytes(at, with);
+        return;
+    }
+    doc.delete_bytes(at, len);
+    if !with.is_empty() {
+        doc.insert_bytes(at, with);
+    }
+}
+
 /// Read a range, or say which chunks are missing.
 fn read<S: Source>(doc: &Document<S>, at: u64, len: u64) -> Result<Vec<u8>, Vec<Missing>> {
     let mut buf = vec![0u8; len as usize];
@@ -397,6 +414,40 @@ mod tests {
         let why = Pattern::new("a(b").unwrap_err();
         assert!(!why.is_empty());
         assert!(!why.contains('\n'), "{why}");
+    }
+
+    #[test]
+    fn replacing_every_match_is_one_undo_step() {
+        let mut d = doc(b"cat dog cat dog cat");
+        let s = Search::forward(Needle::Bytes(b"cat".to_vec()));
+        d.begin_batch();
+        let mut at = 0;
+        let mut done = 0;
+        // The same loop the search bar runs: replace, then carry on from the
+        // end of what was written, not from where the match was.
+        while let Step::Found { at: hit, len } = s.step(&d, at) {
+            replace(&mut d, hit, len, b"bird!");
+            at = hit + 5;
+            done += 1;
+        }
+        d.end_batch();
+        assert_eq!(done, 3);
+        let mut out = vec![0u8; d.len_bytes() as usize];
+        d.read_bytes(0, &mut out);
+        assert_eq!(out, b"bird! dog bird! dog bird!");
+        assert!(d.undo());
+        let mut back = vec![0u8; d.len_bytes() as usize];
+        d.read_bytes(0, &mut back);
+        assert_eq!(back, b"cat dog cat dog cat", "one undo puts the whole file back");
+        assert!(!d.can_undo(), "and there is nothing behind it");
+    }
+
+    #[test]
+    fn a_batch_that_changed_nothing_leaves_no_undo_step() {
+        let mut d = doc(b"abc");
+        d.begin_batch();
+        d.end_batch();
+        assert!(!d.can_undo());
     }
 
     #[test]

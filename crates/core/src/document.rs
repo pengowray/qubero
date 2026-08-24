@@ -10,12 +10,18 @@ pub struct Document<S: Source> {
     add: AddBuffer,
     undo: Vec<PieceTable>,
     redo: Vec<PieceTable>,
+    /// While a batch is open, edits fold into one undo step.
+    batching: bool,
+    /// True until the batch's first edit, which is where its snapshot goes:
+    /// opening a batch and changing nothing must not leave an undo step
+    /// behind.
+    batch_pending: bool,
 }
 
 impl<S: Source> Document<S> {
     pub fn new(source: S) -> Self {
         let table = PieceTable::new(source.len_bytes() * 8);
-        Self { source, table, add: AddBuffer::default(), undo: vec![], redo: vec![] }
+        Self { source, table, add: AddBuffer::default(), undo: vec![], redo: vec![], batching: false, batch_pending: false }
     }
 
     pub fn source(&self) -> &S {
@@ -45,8 +51,29 @@ impl<S: Source> Document<S> {
     }
 
     fn snapshot(&mut self) {
+        if self.batching && !self.batch_pending {
+            // Already inside this batch: still a new edit, so redo is stale.
+            self.redo.clear();
+            return;
+        }
+        self.batch_pending = false;
         self.undo.push(self.table.clone());
         self.redo.clear();
+    }
+
+    /// Start folding edits into one undo step. Replacing every match is one
+    /// thing the user did, and undoing it should be one thing too.
+    pub fn begin_batch(&mut self) {
+        if !self.batching {
+            self.batching = true;
+            self.batch_pending = true;
+        }
+    }
+
+    /// Stop folding. A batch that changed nothing leaves no undo step.
+    pub fn end_batch(&mut self) {
+        self.batching = false;
+        self.batch_pending = false;
     }
 
     pub fn undo(&mut self) -> bool {
