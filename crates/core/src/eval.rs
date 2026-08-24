@@ -294,7 +294,18 @@ impl Evaluator {
         let mut child = path.to_vec();
         child.push(i);
         // A field that cannot be read yet leaves the node with the name it had.
-        let Ok(info) = self.node(doc, &child) else { return Ok(r.name.clone()) };
+        let Ok(mut info) = self.node(doc, &child) else { return Ok(r.name.clone()) };
+        // A name a format wraps in a structure of its own, as GGUF wraps every
+        // string in a length and then its bytes, is still the name. Follow the
+        // field that is only the structure's contents until a value turns up.
+        while info.composite {
+            let Ty::Struct(inner) = self.memo[&child].ty.base().clone() else { break };
+            let Some(c) = inner.contents.clone() else { break };
+            let Some(j) = inner.fields.iter().position(|f| f.name == c) else { break };
+            child.push(j);
+            let Ok(next) = self.node(doc, &child) else { break };
+            info = next;
+        }
         let text = brief(&info.value);
         let text = text.trim_end();
         Ok(if text.is_empty() { r.name.clone() } else { format!("{} {text}", r.name) })

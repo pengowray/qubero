@@ -2,6 +2,7 @@
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
 mod dos;
+mod gguf;
 mod id3;
 mod midi;
 mod mp4;
@@ -16,6 +17,7 @@ pub mod wasm_disasm;
 mod wasm_opcodes;
 
 pub use dos::dos;
+pub use gguf::gguf;
 pub use id3::id3;
 pub use midi::midi;
 pub use mp4::mp4;
@@ -30,7 +32,7 @@ pub use wasm_disasm::Module as WasmModule;
 use crate::template::Template;
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -45,6 +47,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "sqlite" => Some(sqlite()),
         "pe" => Some(pe()),
         "msdos" => Some(dos()),
+        "gguf" => Some(gguf()),
         _ => None,
     }
 }
@@ -57,6 +60,8 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("png")
     } else if head.starts_with(b"\0asm") {
         Some("wasm")
+    } else if head.starts_with(b"GGUF") {
+        Some("gguf")
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
     } else if head.starts_with(b"MThd") {
