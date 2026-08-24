@@ -43,7 +43,6 @@ const SIGNATURE_LINE =
 const SIGNATURE_NOTE = "Signature only.";
 const fullTemplateLine = (name: string): string => `The Fields table uses Qubero's full ${name} template.`;
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
-const NO_TOOL_MATCH = "No matches in the Detect It Easy signature database.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
 
 /**
@@ -409,22 +408,20 @@ function mount(doc: Doc): void {
     }
     // What made the file, when anything knows. Its own block after the file
     // type's, so each muted credit line sits under the answers it covers.
-    if (tools !== null) {
-      if (tools.length === 0) {
-        rows.push(el("p", { className: "dlg-muted", textContent: NO_TOOL_MATCH }));
-      } else {
-        for (const m of sortTools(tools)) {
-          rows.push(el("p", { className: "dlg-tool", textContent: toolLine(m) }));
-        }
-        // Each credit covers only the answers it found. An answer the editor
-        // read out of the file itself is not the database's to be credited
-        // with, and the database's rules are not this editor's.
-        if (tools.some((m) => m.source !== OWN_SOURCE)) {
-          rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
-        }
-        if (tools.some((m) => m.source === OWN_SOURCE)) {
-          rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
-        }
+    // Nothing to add when the signature database found nothing: a line saying
+    // so is a line about the check rather than about the file.
+    if (tools !== null && tools.length > 0) {
+      for (const m of sortTools(tools)) {
+        rows.push(el("p", { className: "dlg-tool", textContent: toolLine(m) }));
+      }
+      // Each credit covers only the answers it found. An answer the editor
+      // read out of the file itself is not the database's to be credited
+      // with, and the database's rules are not this editor's.
+      if (tools.some((m) => m.source !== OWN_SOURCE)) {
+        rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
+      }
+      if (tools.some((m) => m.source === OWN_SOURCE)) {
+        rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
       }
     }
     if (templateLine !== "") rows.push(el("p", { className: "dlg-muted", textContent: templateLine }));

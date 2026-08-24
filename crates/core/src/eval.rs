@@ -145,7 +145,9 @@ fn brief(v: &Value) -> String {
             let s = s.trim_end().to_string();
             if *len as usize > preview.len() { format!("{s}…") } else { s }
         }
-        Value::Magic { ok } => (if *ok { "ok" } else { "does not match" }).to_string(),
+        // Nothing to say when the bytes are what the format asked for. The
+        // mismatch is the only half worth a reader's attention.
+        Value::Magic { ok } => (if *ok { "" } else { "does not match" }).to_string(),
         Value::Composite { .. } => String::new(),
     }
 }
@@ -383,6 +385,11 @@ impl Evaluator {
                     let mut elem = run.clone();
                     elem.push(i as usize);
                     span.sample.push(brief(&self.node(doc, &elem)?.value));
+                }
+                // A run of values that each read as nothing, such as matching
+                // signatures, is better left to say only how many there are.
+                if span.sample.iter().all(|s| s.is_empty()) {
+                    span.sample.clear();
                 }
             }
             let next = span.offset_bits + span.size_bits;

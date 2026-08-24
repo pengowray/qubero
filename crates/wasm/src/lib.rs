@@ -215,7 +215,9 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
         }
         Value::Str(s) => ("str", s.clone(), s.clone(), true),
         Value::Magic { ok } => {
-            let s: String = if *ok { "matches".into() } else { "does not match".into() };
+            // A signature that matches says nothing a reader needs: the bytes
+            // are already beside it. Only the mismatch earns a word.
+            let s: String = if *ok { String::new() } else { "does not match".into() };
             ("magic", s.clone(), s, *ok)
         }
         Value::Composite { count } => ("composite", count.to_string(), count.to_string(), true),
