@@ -69,8 +69,10 @@ fn boxes() -> T {
     // 64-bit field after the type.
     let short = E::field("size").sub(E::lit(8));
     let long = E::field("largesize").sub(E::lit(16));
-    T::structure(
+    T::structure_named(
         "Box",
+        "type",
+        "body",
         vec![
             ("size", u32be()),
             ("type", T::utf8(E::lit(4))),

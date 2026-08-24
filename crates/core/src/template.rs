@@ -243,6 +243,17 @@ pub enum Ty {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
+    /// Which of this structure's fields names it. A RIFF chunk is identified
+    /// by its `id`, not by the name of the field holding its contents, and
+    /// nothing generic can work out which sibling that is: guessing at the
+    /// first primitive child works for RIFF and fails on PNG, where the length
+    /// comes before the type.
+    pub named_by: Option<String>,
+    /// Which field is merely this structure's contents. Its name says nothing
+    /// the structure has not already said, so the linear views leave it out of
+    /// the trail: `sections[9] code` beats `sections[9] code, body`. The field
+    /// tree keeps it, because there it is a row the reader opens.
+    pub contents: Option<String>,
     /// Read this structure as one thing rather than as its fields. A wasm
     /// instruction is an opcode and its immediate, and splitting those across
     /// two rows says less than one row saying `local.get 0`. Only the linear
@@ -301,8 +312,26 @@ impl Ty {
         Ty::Struct(Arc::new(StructDef {
             name: name.to_string(),
             fields: fields.into_iter().map(|(n, ty)| Field { name: n.to_string(), ty }).collect(),
+            named_by: None,
+            contents: None,
             inline: false,
         }))
+    }
+    /// A structure that one of its own fields names, and one field that is
+    /// only its contents. Either may be empty. See [`StructDef::named_by`] and
+    /// [`StructDef::contents`].
+    pub fn structure_named(name: &str, named_by: &str, contents: &str, fields: Vec<(&str, Ty)>) -> Ty {
+        let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
+        match Ty::structure(name, fields) {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
+                name: s.name.clone(),
+                fields: s.fields.clone(),
+                named_by: some(named_by),
+                contents: some(contents),
+                inline: s.inline,
+            })),
+            other => other,
+        }
     }
     /// A structure the linear views show on one row, rather than one row per
     /// field. See [`StructDef::inline`].
@@ -311,6 +340,8 @@ impl Ty {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
                 name: s.name.clone(),
                 fields: s.fields.clone(),
+                named_by: s.named_by.clone(),
+                contents: s.contents.clone(),
                 inline: true,
             })),
             other => other,

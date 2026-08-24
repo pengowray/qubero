@@ -37,8 +37,10 @@ pub fn png() -> Template {
             ),
         ],
     );
-    let chunk = T::structure(
+    let chunk = T::structure_named(
         "Chunk",
+        "type",
+        "data",
         vec![
             ("length", T::u32(Big)),
             ("type", T::utf8(E::lit(4))),

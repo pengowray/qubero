@@ -118,11 +118,14 @@ pub fn wasm() -> Template {
             ("code", T::repeat(instr(), Until::End)),
         ],
     );
-    let code = T::structure("Code", vec![("size", T::leb_u()), ("body", T::sized(E::field("size"), func))]);
+    let code =
+        T::structure_named("Code", "", "body", vec![("size", T::leb_u()), ("body", T::sized(E::field("size"), func))]);
     let code_section =
         T::structure("CodeSection", vec![("count", T::leb_u()), ("entries", T::array(code, E::field("count")))]);
-    let section = T::structure(
+    let section = T::structure_named(
         "Section",
+        "id",
+        "body",
         vec![
             ("id", T::enumeration("SectionId", T::u8(), SECTION)),
             ("size", T::leb_u()),
@@ -293,5 +296,25 @@ mod tests {
         // the byte it is on: only the linear views join them.
         assert_eq!(ev.node(&d, &[2, 0, 2, 1, 0, 1, 2, 0]).unwrap().child_count, 2);
         assert_eq!(ev.locate(&d, from + 8).unwrap(), vec![2, 0, 2, 1, 0, 1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn a_section_is_named_by_its_id() {
+        let mut b = b" asm".to_vec();
+        b.extend_from_slice(&1u32.to_le_bytes());
+        let body = [1u8, 0x60, 0, 0];
+        b.push(1);
+        b.push(body.len() as u8);
+        b.extend_from_slice(&body);
+
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(wasm());
+        // `[0]` says which of thirteen, and `type` says which one it is. Both
+        // are worth having, so the label carries both.
+        assert_eq!(ev.node(&d, &[2, 0]).unwrap().name, "[0] type");
+        // The trail a listing heading is built from says the same.
+        let spans = ev.spans(&d, 0, 200 * 8, 20).unwrap();
+        let section = spans.iter().find(|s| s.name == "count").unwrap();
+        assert_eq!(section.trail, vec!["sections", "[0] type"]);
     }
 }

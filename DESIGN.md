@@ -326,6 +326,23 @@ format does not describe is the kind of thing worth noticing, not hiding.
 Writing a flags field writes the number underneath, because typing a name would
 mean deciding whether it replaced the other bits or joined them.
 
+### A structure that says which field names it
+A RIFF chunk is identified by its `id`, a PNG chunk by its `type`, a wasm
+section by its `id`. Nothing generic can work that out: guessing at the first
+primitive child works for RIFF and fails on PNG, where the length comes before
+the type. So a structure declares it. `named_by` is the field whose value names
+the structure, and `contents` is the field that is merely what it holds.
+
+A node is then labelled `[9] code` rather than `[9]`: the index says which of
+thirteen, and the name says which one it is, and both are worth having when two
+of the thirteen are custom sections. `contents` drops a step from the trail the
+linear views build their headings from, since `sections[9] code, body` says
+nothing `sections[9] code` did not.
+
+The label is worked out where a node is read rather than where it is resolved,
+because it means reading a sibling and resolving has to stay cheap. A naming
+field that has not streamed in yet leaves the node with the name it had.
+
 ### A structure that reads on one row
 `StructDef::inline` says that a structure is one thing rather than several. A
 wasm instruction is an opcode and its immediate, and an `op` row followed by an
@@ -572,14 +589,6 @@ zero and an absent one is a field of no bits. Element `n` would depend on
 
 A field the panel will not let you edit says why only when you try to: the box
 is simply disabled until then, because the reasons live in the write path.
-
-A chip in the field column says `body` where the useful name is in a sibling:
-a RIFF chunk is identified by its `id` field, not by the name of the field
-holding its contents. Nothing generic can know which sibling that is, and
-guessing at the first primitive child works for RIFF and fails on PNG, where
-the length comes before the type. The fix is for a struct to be able to declare
-which of its fields names it, which is a small addition to the IR and is worth
-doing when the template text format lands.
 
 `Value::Magic` carries only whether the bytes matched, so a mismatch reads
 `does not match` without saying what was expected. The expected bytes are in

@@ -29,12 +29,13 @@ type Row =
   | { readonly kind: "heading"; readonly depth: number; readonly text: string; readonly key: string }
   | { readonly kind: "field"; readonly depth: number; readonly span: Span; readonly key: string };
 
-/** `sections[0] › body › entries[0]`: an index belongs to the name before it
- *  rather than on a line of its own. */
+/** `sections[0] type › body`: an index belongs to the name before it rather
+ *  than on a line of its own, and so does whatever the structure says names
+ *  it. */
 function trailParts(trail: readonly string[]): string[] {
   const out: string[] = [];
   for (const part of trail) {
-    if (/^\[\d+\]$/.test(part) && out.length > 0) out[out.length - 1] += part;
+    if (/^\[\d+\]/.test(part) && out.length > 0) out[out.length - 1] += part;
     else out.push(part);
   }
   return out;

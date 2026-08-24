@@ -72,8 +72,10 @@ fn frame() -> T {
         .add(b2.mul(E::lit(1 << 7)))
         .add(b3);
 
-    T::structure(
+    T::structure_named(
         "Frame",
+        "id",
+        "body",
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
             ("size", T::u32(Big)),

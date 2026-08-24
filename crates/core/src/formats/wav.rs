@@ -93,8 +93,10 @@ fn chunk(body: T) -> T {
     // A chunk body is padded to an even length. The pad byte is not counted in
     // the size, so it is a field of its own: size - (size / 2) * 2.
     let pad = E::field("size").sub(E::field("size").div(E::lit(2)).mul(E::lit(2)));
-    T::structure(
+    T::structure_named(
         "Chunk",
+        "id",
+        "body",
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
             ("size", T::u32(Little)),

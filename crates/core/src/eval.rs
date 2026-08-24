@@ -258,7 +258,7 @@ impl Evaluator {
             value_offset_bits: reading.0 .0,
             value_bytes: reading.0 .1,
             read_as: reading.2,
-            name: r.name,
+            name: self.label(doc, path, &r)?,
             type_name: r.ty.display_name(),
             offset_bits: r.offset,
             size_bits: size,
@@ -275,6 +275,25 @@ impl Evaluator {
     /// Walking a repeat has to resolve its elements, so on a large templated
     /// file this costs what displaying it costs; the memo makes the second call
     /// cheap until the next edit.
+    /// What to call this node: its field name, and what the structure says
+    /// names it. `[9]` alone does not say which section it is; `[9] code`
+    /// does, and keeping the index says which of the two custom ones this is.
+    ///
+    /// This is worked out here rather than when the node is resolved, because
+    /// it means reading a sibling and resolving has to stay cheap.
+    fn label<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<String> {
+        let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.clone()) };
+        let Some(by) = s.named_by.clone() else { return Ok(r.name.clone()) };
+        let Some(i) = s.fields.iter().position(|f| f.name == by) else { return Ok(r.name.clone()) };
+        let mut child = path.to_vec();
+        child.push(i);
+        // A field that cannot be read yet leaves the node with the name it had.
+        let Ok(info) = self.node(doc, &child) else { return Ok(r.name.clone()) };
+        let text = brief(&info.value);
+        let text = text.trim_end();
+        Ok(if text.is_empty() { r.name.clone() } else { format!("{} {text}", r.name) })
+    }
+
     pub fn locate<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<usize>> {
         let mut path: Vec<usize> = Vec::new();
         self.resolve(doc, &path)?;
@@ -375,7 +394,13 @@ impl Evaluator {
         let mut trail = Vec::new();
         for k in 1..path.len() {
             self.resolve(doc, &path[..k])?;
-            trail.push(self.memo[&path[..k]].name.clone());
+            // A field a structure calls its contents adds a step to the trail
+            // and nothing to what it says.
+            if self.is_contents(&path[..k]) {
+                continue;
+            }
+            let r = self.memo[&path[..k]].clone();
+            trail.push(self.label(doc, &path[..k], &r)?);
         }
         Ok(Span {
             path: path.to_vec(),
@@ -390,6 +415,15 @@ impl Evaluator {
             line: None,
             sample: Vec::new(),
         })
+    }
+
+    /// Whether this node is the field its parent calls its own contents.
+    fn is_contents(&self, path: &[usize]) -> bool {
+        let Some((&last, parent)) = path.split_last() else { return false };
+        let Some(r) = self.memo.get(parent) else { return false };
+        let Ty::Struct(s) = r.ty.base() else { return false };
+        let Some(by) = &s.contents else { return false };
+        s.fields.get(last).is_some_and(|f| &f.name == by)
     }
 
     /// A structure that reads on one row, as its fields' values in order. A
