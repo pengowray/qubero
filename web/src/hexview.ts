@@ -5,6 +5,7 @@
 // only the rows that fit, with its own scrollbar mapped row <-> file offset.
 
 import type { Doc, Span } from "./doc.js";
+import { GAP_LABEL, NO_TEMPLATE } from "./strings.js";
 
 export type Pane = "hex" | "ascii";
 /** What sits to the right of the bytes: their text, or what the template says
@@ -29,10 +30,6 @@ const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"
 const SPAN_LIMIT = 600;
 /** Colours the annotation column cycles through, as class suffixes. */
 const TINTS = 6;
-/** What a stretch of bytes no field covers is called. */
-const GAP_LABEL = "no field";
-/** Shown in the field column when nothing has said what the file's fields are. */
-const NO_TEMPLATE = "No template selected";
 /** Longest value shown on a chip before it is cut short. */
 const CHIP_VALUE = 32;
 /** Rough width of a character in the chip font, for working out how many

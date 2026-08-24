@@ -523,11 +523,15 @@ function mount(doc: Doc): void {
   const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
   const views = el("div", { className: "tb-views" }, hexBtn, listBtn);
   views.setAttribute("role", "group");
-  views.setAttribute("aria-label", "How to read the file");
+  views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
   const hexOnly = [width, mode, column];
+  /** True while the listing is showing, which is also while the hex grid's
+   *  editing state is not the user's to act on. */
+  let listingShowing = false;
   const setView = (which: "hex" | "listing"): void => {
     const listingOn = which === "listing";
+    listingShowing = listingOn;
     view.el.hidden = listingOn;
     listing.el.hidden = !listingOn;
     for (const c of hexOnly) c.hidden = listingOn;
@@ -539,6 +543,7 @@ function mount(doc: Doc): void {
     if (listingOn) listing.relayout();
     else view.relayout();
     (listingOn ? listing.el : view.el).focus();
+    refresh();
   };
   hexBtn.addEventListener("click", () => setView("hex"));
   listBtn.addEventListener("click", () => setView("listing"));
@@ -578,8 +583,11 @@ function mount(doc: Doc): void {
       c.bitOffset % 8 === 0
         ? `Offset ${formatOffset(c.bitOffset)} (${c.offset.toLocaleString()})`
         : `Offset ${formatOffset(c.bitOffset)} (bit ${c.bitOffset.toLocaleString()})`;
+    // Overwrite/Insert and the pane are the hex grid's, so they go with it:
+    // reading `· Hex` under a listing says the wrong thing about both.
     const pane = c.pane === "ascii" ? "Text" : c.mode === "binary" ? "Binary" : "Hex";
-    posLabel.textContent = `${where}  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${pane}`;
+    const editing = `  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${pane}`;
+    posLabel.textContent = `${where}${listingShowing ? "" : editing}`;
   };
   view.onCursorChange = (c) => {
     inspector.setOffset(c.bitOffset);

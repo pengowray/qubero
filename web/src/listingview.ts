@@ -7,6 +7,7 @@
 // windowed by bit range, which is the same shape.
 
 import { formatOffset } from "./doc.js";
+import { GAP_LABEL, NO_TEMPLATE_HINT } from "./strings.js";
 import type { Doc, Span } from "./doc.js";
 
 /** Rows fetched beyond the ones on screen, so a wheel notch has somewhere to
@@ -106,7 +107,7 @@ export class ListingView {
     this.el.className = "listing";
     this.el.tabIndex = 0;
     this.el.setAttribute("role", "grid");
-    this.el.setAttribute("aria-label", "Fields in order");
+    this.el.setAttribute("aria-label", "Listing");
 
     this.header = document.createElement("div");
     this.header.className = "lv-header";
@@ -299,7 +300,7 @@ export class ListingView {
     if (this.doc.template === null) {
       this.rowsEl.replaceChildren();
       this.header.replaceChildren();
-      this.status.textContent = NO_TEMPLATE;
+      this.status.textContent = NO_TEMPLATE_HINT;
       return;
     }
     if (this.header.childElementCount === 0) this.drawHeader();
@@ -389,6 +390,3 @@ const COLUMNS = [
   ["lv-value", "Value"],
   ["lv-type", "Type"],
 ] as const;
-
-const GAP_LABEL = "not described";
-const NO_TEMPLATE = "Pick a template to list what is in this file.";
