@@ -3,7 +3,9 @@
 //! A header, then two lists: the metadata, which is where a model says what
 //! architecture it is and how it was trained, and one entry per tensor saying
 //! where in the file its weights start. The weights themselves are the rest of
-//! the file, and are not described here beyond where they begin.
+//! the file, and read as whatever the tensor's own record says they are: a run
+//! of floats, or a run of quantised blocks of the size that type packs. See
+//! [`weights`].
 //!
 //! Everything is little-endian. A big-endian GGUF exists for a few published
 //! models, and is told apart by reading the version as a wildly wrong number
@@ -144,6 +146,81 @@ fn tensor() -> T {
     )
 }
 
+/// What one tensor's numbers actually are, by the type its record names.
+///
+/// A quantised tensor is not a run of numbers: it is a run of blocks, each
+/// holding one scale (sometimes two) shared by the weights packed after it,
+/// four or five or six bits apiece. Which block, and how big, is what the
+/// type says, so `q4_k` is 256 weights in 144 bytes and `q8_0` is 32 in 34.
+/// The blocks are all one size, so the run is counted by division and a block
+/// in the middle of a tensor of a hundred thousand is one step away.
+///
+/// The packed weights are left as bytes. Unpacking them would mean shifting
+/// four-bit fields out of a byte and scaling each by a six-bit scale that is
+/// itself packed six to a byte, and no template says that; what is here says
+/// where every block and every scale is, which is what a file this size is
+/// usually opened to check.
+///
+/// Sizes and layouts are those of ggml's own block structs. The IQ types and
+/// the ternary ones pack their weights in ways nothing outside ggml reads, so
+/// those blocks are the right size and opaque inside.
+fn weights() -> T {
+    let f16 = || T::F16(Little);
+    let raw = |n: i128| T::bytes(E::lit(n));
+    // A run of plain numbers, and a run of blocks: both counted by dividing
+    // the room this tensor was given, since the file records where each
+    // tensor starts and never how long it is.
+    let run = |each: i128, ty: T| T::array(ty, E::Remaining.div(E::lit(each)));
+    let blocks = |size: i128, name: &str, fields: Vec<(&str, T)>| run(size, T::inline_structure(name, fields));
+    // A block nothing outside ggml unpacks: the right size, and no claim
+    // about what is inside it.
+    let opaque = |size: i128, name: &str| blocks(size, name, vec![("packed", raw(size))]);
+    T::switch(
+        E::elem_field("tensors", E::idx(), &["type"]),
+        vec![
+            (0, run(4, T::F32(Little))),
+            (1, run(2, f16())),
+            (2, blocks(18, "Q4_0", vec![("d", f16()), ("qs", raw(16))])),
+            (3, blocks(20, "Q4_1", vec![("d", f16()), ("m", f16()), ("qs", raw(16))])),
+            (6, blocks(22, "Q5_0", vec![("d", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
+            (7, blocks(24, "Q5_1", vec![("d", f16()), ("m", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
+            (8, blocks(34, "Q8_0", vec![("d", f16()), ("qs", T::array(T::Int { bits: 8, endian: Little }, E::lit(32)))])),
+            (9, blocks(40, "Q8_1", vec![("d", f16()), ("s", f16()), ("qs", raw(36))])),
+            (10, blocks(84, "Q2_K", vec![("scales", raw(16)), ("qs", raw(64)), ("d", f16()), ("dmin", f16())])),
+            (11, blocks(110, "Q3_K", vec![("hmask", raw(32)), ("qs", raw(64)), ("scales", raw(12)), ("d", f16())])),
+            (12, blocks(144, "Q4_K", vec![("d", f16()), ("dmin", f16()), ("scales", raw(12)), ("qs", raw(128))])),
+            (13, blocks(176, "Q5_K", vec![("d", f16()), ("dmin", f16()), ("scales", raw(12)), ("qh", raw(32)), ("qs", raw(128))])),
+            (14, blocks(210, "Q6_K", vec![("ql", raw(128)), ("qh", raw(64)), ("scales", raw(16)), ("d", f16())])),
+            (15, blocks(292, "Q8_K", vec![("d", T::F32(Little)), ("qs", raw(256)), ("bsums", raw(32))])),
+            (16, opaque(66, "IQ2_XXS")),
+            (17, opaque(74, "IQ2_XS")),
+            (18, opaque(98, "IQ3_XXS")),
+            (19, opaque(50, "IQ1_S")),
+            (20, blocks(18, "IQ4_NL", vec![("d", f16()), ("qs", raw(16))])),
+            (21, opaque(110, "IQ3_S")),
+            (22, opaque(82, "IQ2_S")),
+            (23, blocks(136, "IQ4_XS", vec![("d", f16()), ("scales_h", T::u16(Little)), ("scales_l", raw(4)), ("qs", raw(128))])),
+            (24, run(1, T::Int { bits: 8, endian: Little })),
+            (25, run(2, T::Int { bits: 16, endian: Little })),
+            (26, run(4, T::i32(Little))),
+            (27, run(8, T::Int { bits: 64, endian: Little })),
+            (28, run(8, T::F64(Little))),
+            (29, opaque(56, "IQ1_M")),
+            // bf16 is a float this reader has no type for: the top half of an
+            // f32, which is not an f16.
+            (30, run(2, T::u16(Little))),
+            (34, opaque(54, "TQ1_0")),
+            (35, opaque(66, "TQ2_0")),
+            (39, blocks(17, "MXFP4", vec![("e", T::u8()), ("qs", raw(16))])),
+            (40, opaque(36, "NVFP4")),
+            (41, opaque(18, "Q1_0")),
+        ],
+        // A type added to ggml since this was written: where it is and how
+        // much of it there is, and nothing invented about the rest.
+        T::bytes(E::Remaining),
+    )
+}
+
 pub fn gguf() -> Template {
     let root = T::structure(
         "GGUF",
@@ -161,7 +238,7 @@ pub fn gguf() -> Template {
             // `general.alignment`, which is a metadata value rather than a
             // field, so 32 is assumed; the padding before the first tensor
             // reads as a gap.
-            ("data", T::pointer_list_records("tensors", "offset", Anchor::SelfAligned(32), E::lit(0), T::bytes(E::Remaining))),
+            ("data", T::pointer_list_records("tensors", "offset", Anchor::SelfAligned(32), E::lit(0), weights())),
         ],
     );
     Template::new("gguf", root)
@@ -272,6 +349,63 @@ mod tests {
         let mut ev = Evaluator::new(gguf());
         let data = ev.node(&d, &[6]).unwrap();
         assert_eq!(data.child_count, 1);
+    }
+
+    #[test]
+    fn a_tensor_of_floats_reads_as_floats() {
+        let bytes = two_tensor_file();
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(gguf());
+        let first = ev.node(&d, &[6, 0]).unwrap();
+        // Sixteen f32s, because that is what the record says this tensor is.
+        assert_eq!(first.type_name, "f32 le[]");
+        assert_eq!(first.child_count, 16);
+        assert_eq!(ev.node(&d, &[6, 0, 3]).unwrap().size_bits, 32);
+    }
+
+    /// One tensor of the named ggml type, holding `payload` as its weights.
+    fn one_tensor_file(ty: u32, payload: &[u8]) -> Vec<u8> {
+        let mut b = b"GGUF".to_vec();
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&1u64.to_le_bytes()); // tensors
+        b.extend_from_slice(&0u64.to_le_bytes()); // metadata entries
+        b.extend_from_slice(&gstr("blk.0.ffn_up.weight"));
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&64u64.to_le_bytes());
+        b.extend_from_slice(&ty.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        b.resize(b.len().div_ceil(32) * 32, 0);
+        b.extend_from_slice(payload);
+        b
+    }
+
+    #[test]
+    fn a_quantised_tensor_reads_as_the_blocks_its_type_packs() {
+        // Two q8_0 blocks: a scale and thirty-two weights apiece, 34 bytes each.
+        let mut payload = Vec::new();
+        for block in 0..2u8 {
+            payload.extend_from_slice(&[0x00, 0x3c]); // f16 1.0
+            payload.extend((0..32).map(|i| i + block));
+        }
+        let d = Document::new(MemSource(one_tensor_file(8, &payload)));
+        let mut ev = Evaluator::new(gguf());
+        let t = ev.node(&d, &[6, 0]).unwrap();
+        assert_eq!((t.type_name.as_str(), t.child_count), ("Q8_0[]", 2));
+        // The scale of the second block, and the weight after the last one it
+        // holds, which is where the block after it starts.
+        assert_eq!(ev.node(&d, &[6, 0, 1, 0]).unwrap().value, Value::Float(1.0));
+        assert_eq!(ev.node(&d, &[6, 0, 1, 1, 31]).unwrap().value, Value::Int(32));
+        assert_eq!(ev.node(&d, &[6, 0, 1]).unwrap().size_bits, 34 * 8);
+    }
+
+    #[test]
+    fn a_type_this_reader_does_not_know_is_still_bytes() {
+        // A ggml type from after this was written: how much of it there is,
+        // and nothing invented about what is inside it.
+        let d = Document::new(MemSource(one_tensor_file(200, &[0; 64])));
+        let mut ev = Evaluator::new(gguf());
+        let t = ev.node(&d, &[6, 0]).unwrap();
+        assert_eq!((t.type_name.as_str(), t.size_bits), ("bytes[]", 64 * 8));
     }
 
     /// Two tensors: the data section has one child per tensor, placed at its

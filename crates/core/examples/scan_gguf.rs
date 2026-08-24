@@ -99,6 +99,27 @@ fn main() {
             t.elapsed()
         );
     }
+    // Every tensor, as the template reads it: what it is made of, how many
+    // of those there are, and whether they fill the room the file gave them.
+    // `--tensors` prints one line each, for checking against ggml's own idea
+    // of how big a tensor of that type and shape should be.
+    let listing = std::env::args().any(|a| a == "--tensors");
+    let t = Instant::now();
+    let mut ragged = 0;
+    for i in 0..n as usize {
+        let c = ev.node(&doc, &[6, i]).expect("child");
+        let blocks = c.child_count;
+        let bytes = c.size_bits / 8;
+        let left = if blocks > 0 { bytes % blocks } else { bytes };
+        if left != 0 {
+            ragged += 1;
+        }
+        if listing {
+            println!("    {:<48} {:>10} {:>12} blocks {:>14} bytes {left:>3} over", c.name, c.type_name, blocks, bytes);
+        }
+    }
+    println!("  {n} tensors read as blocks in {:?}, {ragged} not filling their room", t.elapsed());
+
     // What the hex view asks when the cursor lands in the middle of a long
     // list: the field under a bit, found without the list being all in memory.
     let mid = md.offset_bits + md.size_bits / 2;
