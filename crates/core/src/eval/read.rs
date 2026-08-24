@@ -1,0 +1,262 @@
+//! Turning bytes into values: how far a field runs, and what it says.
+
+use super::*;
+
+/// Index of `term` in `hay`, aligned to whole units of its length.
+pub(super) fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
+    let unit = term.len();
+    (0..hay.len().saturating_sub(unit - 1)).step_by(unit).find(|i| hay[*i..*i + unit] == *term)
+}
+
+impl Evaluator {
+    pub(super) fn read<S: Source>(&self, doc: &Document<S>, r: &Resolved, at: u64, n: u64) -> R<Vec<u8>> {
+        if at + n > r.limit {
+            return fail("runs past the end of its container");
+        }
+        let mut buf = vec![0u8; bytes_for(n)];
+        let missing = doc.read_bits(at, n, &mut buf);
+        if missing.is_empty() {
+            Ok(buf)
+        } else {
+            Err(EvalError::Pending(missing))
+        }
+    }
+
+    /// Where the value sits inside a text field, and how the bytes read.
+    ///
+    /// A byte-order mark belongs to the field but not to the value, and the
+    /// padding or terminator ends it. Everything is measured in whole code
+    /// units, so UTF-16LE text does not stop at the first zero byte of "H".
+    pub(super) fn str_span<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<Option<StrSpan>> {
+        let Ty::Str { len, enc } = &r.ty else { return Ok(None) };
+        let n = size / 8;
+        let cap = n.min(crate::encode::EDIT_LIMIT_BYTES);
+        let bytes = if cap == 0 { Vec::new() } else { self.read(doc, r, r.offset, cap * 8)? };
+        let (settled, bom, note) = text::settle(enc, &bytes);
+        let bom = (bom as u64).min(cap);
+        let body = &bytes[bom as usize..];
+        let unit = settled.unit();
+        let rest = cap - bom;
+        let (text_len, dirty) = match len {
+            StrLen::Fixed(_) => (rest, false),
+            StrLen::Padded { pad, .. } => {
+                let term = text::unit_bytes(settled, *pad);
+                match find_unit(body, &term) {
+                    None => (rest, false),
+                    Some(i) => {
+                        let tail = &body[i..];
+                        // Anything in the padding that is not padding would be
+                        // lost by writing back only what is shown.
+                        let dirty = !tail.chunks(unit).all(|u| u == term);
+                        (i as u64, dirty)
+                    }
+                }
+            }
+            StrLen::Terminated { end, .. } => {
+                let term = text::unit_bytes(settled, *end);
+                match find_unit(body, &term) {
+                    Some(i) => (i as u64, false),
+                    // No terminator to write back, so this one is read-only.
+                    None => (rest, true),
+                }
+            }
+        };
+        Ok(Some(StrSpan { start: bom, len: text_len, settled, dirty, note }))
+    }
+
+    /// Where a field's value sits, whether the bytes fit the encoding, and how
+    /// the encoding was decided. Everything a node needs beyond its value.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn reading<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<((u64, u64), bool, Option<String>)> {
+        let Some(span) = self.str_span(doc, r, size)? else { return Ok(((r.offset, size / 8), false, None)) };
+        let shown = span.len.min(crate::encode::EDIT_LIMIT_BYTES);
+        let bytes = self.read(doc, r, r.offset + span.start * 8, shown * 8)?;
+        let (_, lossy) = text::decode_settled(span.settled, &bytes);
+        let note = if lossy {
+            Some(format!(
+                "Not valid {}; the bad bytes show as \u{fffd}. Edit it in the hex view.",
+                span.settled.name()
+            ))
+        } else {
+            span.note
+        };
+        Ok(((r.offset + span.start * 8, span.len), lossy, note))
+    }
+
+    /// A padded text field shows only what is before its first pad byte. If the
+    /// rest is not all padding, writing back what is shown would drop bytes the
+    /// reader never saw, so such a field is not editable here.
+    pub(super) fn padding_is_clean<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<bool> {
+        if size > crate::encode::EDIT_LIMIT_BYTES * 8 {
+            return Ok(true); // too long to edit anyway
+        }
+        Ok(!self.str_span(doc, r, size)?.map(|s| s.dirty).unwrap_or(false))
+    }
+
+    /// How a text field reads before its length is known: the encoding the
+    /// scanner should step in, and the bytes any byte-order mark takes.
+    pub(super) fn str_head<S: Source>(&self, doc: &Document<S>, r: &Resolved, enc: &Encoding) -> R<(Settled, u64)> {
+        let want = 4u64.min((r.limit - r.offset) / 8);
+        let head = if want == 0 { Vec::new() } else { self.read(doc, r, r.offset, want * 8)? };
+        let (settled, bom, _) = text::settle(enc, &head);
+        Ok((settled, bom as u64))
+    }
+
+    /// Scan for the terminator, whole code units at a time, and return the
+    /// bytes of text and the bytes of the whole field. Read in blocks: a long
+    /// string should not be one call per unit.
+    pub(super) fn read_terminated<S: Source>(&self, doc: &Document<S>, r: &Resolved, term: &[u8], bom: u64) -> R<(u64, u64)> {
+        const BLOCK: u64 = 256;
+        /// A file with no terminator in it must fail rather than walk to the end.
+        const CAP: u64 = 64 * 1024;
+        let unit = term.len() as u64;
+        let start = r.offset + bom * 8;
+        let stop = r.limit.min(start + CAP * 8);
+        let mut at = start;
+        let mut text_bytes = 0u64;
+        while at < stop {
+            let mut n = BLOCK.min((stop - at) / 8);
+            n -= n % unit;
+            if n == 0 {
+                break;
+            }
+            let block = self.read(doc, r, at, n * 8)?;
+            for i in (0..block.len()).step_by(unit as usize) {
+                if block[i..i + unit as usize] == *term {
+                    let len = text_bytes + i as u64;
+                    return Ok((len, bom + len + unit));
+                }
+            }
+            text_bytes += n;
+            at += n * 8;
+        }
+        fail(format!("no 0x{:02x} terminator within {} bytes", term[0], (stop - start) / 8))
+    }
+
+    pub(super) fn read_leb<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(u128, u64)> {
+        let mut value: u128 = 0;
+        let mut shift = 0;
+        for i in 0..10u64 {
+            let b = self.read(doc, r, r.offset + i * 8, 8)?[0];
+            value |= ((b & 0x7f) as u128) << shift;
+            shift += 7;
+            if b & 0x80 == 0 {
+                if let Ty::Leb128 { signed: true } = r.ty.base() {
+                    if b & 0x40 != 0 {
+                        let v = value as i128 - (1i128 << shift);
+                        return Ok((v as u128, i + 1));
+                    }
+                }
+                return Ok((value, i + 1));
+            }
+        }
+        fail("LEB128 longer than 10 bytes")
+    }
+
+    /// A variable-length quantity: the high bit says another byte follows, and
+    /// the seven bits below it are the next group down. Four bytes is the most
+    /// a Standard MIDI File is allowed to use.
+    pub(super) fn read_vlq<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(u128, u64)> {
+        let mut value: u128 = 0;
+        for i in 0..4u64 {
+            let b = self.read(doc, r, r.offset + i * 8, 8)?[0];
+            value = (value << 7) | (b & 0x7f) as u128;
+            if b & 0x80 == 0 {
+                return Ok((value, i + 1));
+            }
+        }
+        fail("variable-length number longer than 4 bytes")
+    }
+
+    /// SQLite's varint: seven bits per byte, most significant group first, and
+    /// a ninth byte that contributes all eight of its bits. The result is
+    /// 64-bit two's complement, so a negative row id reads as one.
+    pub(super) fn read_sqlite_varint<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(i128, u64)> {
+        let mut value: u64 = 0;
+        for i in 0..8u64 {
+            let b = self.read(doc, r, r.offset + i * 8, 8)?[0];
+            value = (value << 7) | (b & 0x7f) as u64;
+            if b & 0x80 == 0 {
+                return Ok((value as i64 as i128, i + 1));
+            }
+        }
+        let last = self.read(doc, r, r.offset + 64, 8)?[0];
+        value = (value << 8) | last as u64;
+        Ok((value as i64 as i128, 9))
+    }
+
+    pub(super) fn primitive_value<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
+        Ok(match ty {
+            Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
+            Ty::Int { bits, endian } => Value::Int(read_int(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
+            Ty::Fixed { bits, frac, endian, signed } => {
+                let buf = self.read(doc, r, r.offset, size)?;
+                let raw = if *signed { read_int(&buf, *bits, *endian) as f64 } else { read_uint(&buf, *bits, *endian) as f64 };
+                Value::Float(raw / (1u64 << frac) as f64)
+            }
+            Ty::F16(e) => Value::Float(f16_to_f64(read_uint(&self.read(doc, r, r.offset, 16)?, 16, *e) as u16)),
+            Ty::F32(e) => Value::Float(f32::from_bits(read_uint(&self.read(doc, r, r.offset, 32)?, 32, *e) as u32) as f64),
+            Ty::F64(e) => Value::Float(f64::from_bits(read_uint(&self.read(doc, r, r.offset, 64)?, 64, *e) as u64)),
+            Ty::Leb128 { signed } => {
+                let (v, _) = self.read_leb(doc, r)?;
+                if *signed { Value::Int(v as i128) } else { Value::UInt(v) }
+            }
+            Ty::Vlq => Value::UInt(self.read_vlq(doc, r)?.0),
+            Ty::Computed(e) => {
+                if let Some(v) = self.memo.get(at).and_then(|m| m.computed) {
+                    return Ok(Value::Int(v));
+                }
+                let v = self.eval_expr_at(doc, at, e, Some((r.offset, r.limit)))?;
+                if let Some(m) = self.memo.get_mut(at) {
+                    m.computed = Some(v);
+                }
+                Value::Int(v)
+            }
+            Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
+            Ty::Magic(want) => Value::Magic { ok: self.read(doc, r, r.offset, size)? == *want },
+            Ty::Bytes(_) => {
+                let len = size / 8;
+                let preview = self.read(doc, r, r.offset, len.min(16) * 8)?;
+                Value::Bytes { len, preview }
+            }
+            Ty::Str { .. } => {
+                let span = self.str_span(doc, r, size)?.expect("text field");
+                let shown = span.len.min(256);
+                let bytes = self.read(doc, r, r.offset + span.start * 8, shown * 8)?;
+                let (mut text, _) = text::decode_settled(span.settled, &bytes);
+                if span.len > shown {
+                    text.push('\u{2026}');
+                }
+                Value::Str(text)
+            }
+            Ty::Enum { inner, def } => {
+                let raw = match self.primitive_value(doc, at, r, inner, size)? {
+                    Value::UInt(v) => i128::try_from(v).unwrap_or(i128::MAX),
+                    Value::Int(v) => v,
+                    _ => return fail("an enum must sit on an integer"),
+                };
+                Value::Enum { raw, name: def.label(raw).map(str::to_string), hex: def.hex }
+            }
+            Ty::Flags { inner, def } => {
+                let raw = match self.primitive_value(doc, at, r, inner, size)? {
+                    Value::UInt(v) => v,
+                    Value::Int(v) => v as u128,
+                    _ => return fail("flags must sit on an integer"),
+                };
+                let mut set: Vec<String> = Vec::new();
+                let mut unnamed = 0u32;
+                for bit in 0..size.min(128) as u32 {
+                    if raw >> bit & 1 == 0 {
+                        continue;
+                    }
+                    match def.label(bit) {
+                        Some(n) => set.push(n.to_string()),
+                        None => unnamed += 1,
+                    }
+                }
+                Value::Flags { raw, set, unnamed }
+            }
+            _ => unreachable!("composite handled by caller"),
+        })
+    }
+}
