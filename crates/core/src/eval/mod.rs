@@ -497,6 +497,16 @@ impl Evaluator {
                         end - r.offset
                     }
                 }
+                // Fixed-stride elements: the whole array is count × stride,
+                // with no element resolved. An array of a billion samples is
+                // sized by arithmetic, not by a walk.
+                Ty::Array { elem, count } if fixed_bits(elem).is_some() => {
+                    let n = self.eval_expr(doc, path, count)?;
+                    if n < 0 {
+                        return fail("negative count");
+                    }
+                    n as u64 * fixed_bits(elem).expect("checked")
+                }
                 Ty::Array { .. } | Ty::Repeat { .. } => {
                     let n = self.child_count(doc, path)?;
                     if n == 0 {

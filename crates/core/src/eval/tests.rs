@@ -473,3 +473,25 @@ fn sqlite_varints_read_and_write_at_their_own_size() {
     let mut ev2 = Evaluator::new(Template::new("t", T::structure("R", vec![("v", T::sqlite_varint())])));
     assert_eq!(ev2.node(&d2, &[0]).unwrap().value, Value::Int(-2));
 }
+
+#[test]
+fn a_fixed_stride_array_is_sized_without_touching_its_elements() {
+    // A count and then that many u16s. The count says two hundred thousand;
+    // the file holds them all, and sizing the array must not resolve them.
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::u32(Little)), ("samples", T::array(T::u16(Little), E::field("n")))]),
+    );
+    let n: u32 = 200_000;
+    let mut bytes = n.to_le_bytes().to_vec();
+    bytes.resize(4 + n as usize * 2, 0);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let arr = ev.node(&d, &[1]).unwrap();
+    assert_eq!(arr.size_bits, n as u64 * 16);
+    assert_eq!(arr.child_count, n as u64);
+    // Sizing memoised the array and its parent, not two hundred thousand rows.
+    assert!(ev.memo.len() < 10, "sized by arithmetic, not by a walk: {} entries", ev.memo.len());
+    // An element in the middle is still one lookup.
+    assert_eq!(ev.node(&d, &[1, 150_000]).unwrap().offset_bits, (4 + 300_000) * 8);
+}
