@@ -544,6 +544,13 @@ ignored. Formats that pack the other way (DEFLATE, Zig packed structs) need an
 LSB-first order on the field type, which is a real addition to the IR rather than
 a display option.
 
+wasm reads the core instruction set, the 0xFC group and the 0xFD group, which
+is SIMD plus the relaxed instructions numbered past a byte. The 0xFE (threads)
+group reads its sub-opcode and stops: an instruction list containing one goes
+wrong from that point on, which the enclosing `Sized` window keeps inside a
+single function body and the disassembler says out loud rather than printing
+what the following bytes happen to decode to.
+
 MP4: sample tables past `stsd` are bytes. An SPS or PPS is exp-golomb coded,
 which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 Annex B stream (start codes rather
 than lengths) needs a "scan until these bytes" primitive that does not exist.

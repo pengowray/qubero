@@ -5,11 +5,13 @@
 //! immediate select a zero-length `bytes` field, so every instruction row has
 //! the same two children.
 //!
-//! Coverage is the core instruction set plus the 0xFC (bulk memory, saturating
-//! truncation) group. The 0xFD (SIMD) and 0xFE (threads) groups read their
-//! sub-opcode and stop there: their immediates are not parsed, so an
-//! instruction list containing them goes wrong from that point on. The enclosing
-//! `Sized` window keeps the damage inside one function body.
+//! Coverage is the core instruction set, the 0xFC group (bulk memory and
+//! saturating truncation) and the 0xFD group (SIMD, including the relaxed
+//! instructions numbered past a byte). The 0xFE (threads) group reads its
+//! sub-opcode and stops there: its immediates are not parsed, so an instruction
+//! list containing one goes wrong from that point on. The enclosing `Sized`
+//! window keeps the damage inside one function body, and the disassembler says
+//! where it stopped rather than printing what the following bytes decode to.
 
 use crate::template::{Endian::*, Expr as E, Ty as T};
 
@@ -203,6 +205,268 @@ pub const OPCODE: &[(i128, &str)] = &[
     (0xfe, "thread prefix"),
 ];
 
+/// The 0xFD group: the fixed-width SIMD instructions, and the relaxed ones
+/// numbered above 0xFF. The sub-opcode is a LEB128, which is how the relaxed
+/// group fits past a byte. Names from the table wabt maintains.
+pub const SIMD_OP: &[(i128, &str)] = &[
+    (0, "v128.load"),
+    (1, "v128.load8x8_s"),
+    (2, "v128.load8x8_u"),
+    (3, "v128.load16x4_s"),
+    (4, "v128.load16x4_u"),
+    (5, "v128.load32x2_s"),
+    (6, "v128.load32x2_u"),
+    (7, "v128.load8_splat"),
+    (8, "v128.load16_splat"),
+    (9, "v128.load32_splat"),
+    (10, "v128.load64_splat"),
+    (11, "v128.store"),
+    (12, "v128.const"),
+    (13, "i8x16.shuffle"),
+    (14, "i8x16.swizzle"),
+    (15, "i8x16.splat"),
+    (16, "i16x8.splat"),
+    (17, "i32x4.splat"),
+    (18, "i64x2.splat"),
+    (19, "f32x4.splat"),
+    (20, "f64x2.splat"),
+    (21, "i8x16.extract_lane_s"),
+    (22, "i8x16.extract_lane_u"),
+    (23, "i8x16.replace_lane"),
+    (24, "i16x8.extract_lane_s"),
+    (25, "i16x8.extract_lane_u"),
+    (26, "i16x8.replace_lane"),
+    (27, "i32x4.extract_lane"),
+    (28, "i32x4.replace_lane"),
+    (29, "i64x2.extract_lane"),
+    (30, "i64x2.replace_lane"),
+    (31, "f32x4.extract_lane"),
+    (32, "f32x4.replace_lane"),
+    (33, "f64x2.extract_lane"),
+    (34, "f64x2.replace_lane"),
+    (35, "i8x16.eq"),
+    (36, "i8x16.ne"),
+    (37, "i8x16.lt_s"),
+    (38, "i8x16.lt_u"),
+    (39, "i8x16.gt_s"),
+    (40, "i8x16.gt_u"),
+    (41, "i8x16.le_s"),
+    (42, "i8x16.le_u"),
+    (43, "i8x16.ge_s"),
+    (44, "i8x16.ge_u"),
+    (45, "i16x8.eq"),
+    (46, "i16x8.ne"),
+    (47, "i16x8.lt_s"),
+    (48, "i16x8.lt_u"),
+    (49, "i16x8.gt_s"),
+    (50, "i16x8.gt_u"),
+    (51, "i16x8.le_s"),
+    (52, "i16x8.le_u"),
+    (53, "i16x8.ge_s"),
+    (54, "i16x8.ge_u"),
+    (55, "i32x4.eq"),
+    (56, "i32x4.ne"),
+    (57, "i32x4.lt_s"),
+    (58, "i32x4.lt_u"),
+    (59, "i32x4.gt_s"),
+    (60, "i32x4.gt_u"),
+    (61, "i32x4.le_s"),
+    (62, "i32x4.le_u"),
+    (63, "i32x4.ge_s"),
+    (64, "i32x4.ge_u"),
+    (65, "f32x4.eq"),
+    (66, "f32x4.ne"),
+    (67, "f32x4.lt"),
+    (68, "f32x4.gt"),
+    (69, "f32x4.le"),
+    (70, "f32x4.ge"),
+    (71, "f64x2.eq"),
+    (72, "f64x2.ne"),
+    (73, "f64x2.lt"),
+    (74, "f64x2.gt"),
+    (75, "f64x2.le"),
+    (76, "f64x2.ge"),
+    (77, "v128.not"),
+    (78, "v128.and"),
+    (79, "v128.andnot"),
+    (80, "v128.or"),
+    (81, "v128.xor"),
+    (82, "v128.bitselect"),
+    (83, "v128.any_true"),
+    (84, "v128.load8_lane"),
+    (85, "v128.load16_lane"),
+    (86, "v128.load32_lane"),
+    (87, "v128.load64_lane"),
+    (88, "v128.store8_lane"),
+    (89, "v128.store16_lane"),
+    (90, "v128.store32_lane"),
+    (91, "v128.store64_lane"),
+    (92, "v128.load32_zero"),
+    (93, "v128.load64_zero"),
+    (94, "f32x4.demote_f64x2_zero"),
+    (95, "f64x2.promote_low_f32x4"),
+    (96, "i8x16.abs"),
+    (97, "i8x16.neg"),
+    (98, "i8x16.popcnt"),
+    (99, "i8x16.all_true"),
+    (100, "i8x16.bitmask"),
+    (101, "i8x16.narrow_i16x8_s"),
+    (102, "i8x16.narrow_i16x8_u"),
+    (107, "i8x16.shl"),
+    (108, "i8x16.shr_s"),
+    (109, "i8x16.shr_u"),
+    (110, "i8x16.add"),
+    (111, "i8x16.add_sat_s"),
+    (112, "i8x16.add_sat_u"),
+    (113, "i8x16.sub"),
+    (114, "i8x16.sub_sat_s"),
+    (115, "i8x16.sub_sat_u"),
+    (118, "i8x16.min_s"),
+    (119, "i8x16.min_u"),
+    (120, "i8x16.max_s"),
+    (121, "i8x16.max_u"),
+    (123, "i8x16.avgr_u"),
+    (124, "i16x8.extadd_pairwise_i8x16_s"),
+    (125, "i16x8.extadd_pairwise_i8x16_u"),
+    (126, "i32x4.extadd_pairwise_i16x8_s"),
+    (127, "i32x4.extadd_pairwise_i16x8_u"),
+    (128, "i16x8.abs"),
+    (129, "i16x8.neg"),
+    (130, "i16x8.q15mulr_sat_s"),
+    (131, "i16x8.all_true"),
+    (132, "i16x8.bitmask"),
+    (133, "i16x8.narrow_i32x4_s"),
+    (134, "i16x8.narrow_i32x4_u"),
+    (135, "i16x8.extend_low_i8x16_s"),
+    (136, "i16x8.extend_high_i8x16_s"),
+    (137, "i16x8.extend_low_i8x16_u"),
+    (138, "i16x8.extend_high_i8x16_u"),
+    (139, "i16x8.shl"),
+    (140, "i16x8.shr_s"),
+    (141, "i16x8.shr_u"),
+    (142, "i16x8.add"),
+    (143, "i16x8.add_sat_s"),
+    (144, "i16x8.add_sat_u"),
+    (145, "i16x8.sub"),
+    (146, "i16x8.sub_sat_s"),
+    (147, "i16x8.sub_sat_u"),
+    (149, "i16x8.mul"),
+    (150, "i16x8.min_s"),
+    (151, "i16x8.min_u"),
+    (152, "i16x8.max_s"),
+    (153, "i16x8.max_u"),
+    (155, "i16x8.avgr_u"),
+    (156, "i16x8.extmul_low_i8x16_s"),
+    (157, "i16x8.extmul_high_i8x16_s"),
+    (158, "i16x8.extmul_low_i8x16_u"),
+    (159, "i16x8.extmul_high_i8x16_u"),
+    (160, "i32x4.abs"),
+    (161, "i32x4.neg"),
+    (163, "i32x4.all_true"),
+    (164, "i32x4.bitmask"),
+    (167, "i32x4.extend_low_i16x8_s"),
+    (168, "i32x4.extend_high_i16x8_s"),
+    (169, "i32x4.extend_low_i16x8_u"),
+    (170, "i32x4.extend_high_i16x8_u"),
+    (171, "i32x4.shl"),
+    (172, "i32x4.shr_s"),
+    (173, "i32x4.shr_u"),
+    (174, "i32x4.add"),
+    (177, "i32x4.sub"),
+    (181, "i32x4.mul"),
+    (182, "i32x4.min_s"),
+    (183, "i32x4.min_u"),
+    (184, "i32x4.max_s"),
+    (185, "i32x4.max_u"),
+    (186, "i32x4.dot_i16x8_s"),
+    (188, "i32x4.extmul_low_i16x8_s"),
+    (189, "i32x4.extmul_high_i16x8_s"),
+    (190, "i32x4.extmul_low_i16x8_u"),
+    (191, "i32x4.extmul_high_i16x8_u"),
+    (192, "i64x2.abs"),
+    (193, "i64x2.neg"),
+    (195, "i64x2.all_true"),
+    (196, "i64x2.bitmask"),
+    (199, "i64x2.extend_low_i32x4_s"),
+    (200, "i64x2.extend_high_i32x4_s"),
+    (201, "i64x2.extend_low_i32x4_u"),
+    (202, "i64x2.extend_high_i32x4_u"),
+    (203, "i64x2.shl"),
+    (204, "i64x2.shr_s"),
+    (205, "i64x2.shr_u"),
+    (206, "i64x2.add"),
+    (209, "i64x2.sub"),
+    (213, "i64x2.mul"),
+    (214, "i64x2.eq"),
+    (215, "i64x2.ne"),
+    (216, "i64x2.lt_s"),
+    (217, "i64x2.gt_s"),
+    (218, "i64x2.le_s"),
+    (219, "i64x2.ge_s"),
+    (220, "i64x2.extmul_low_i32x4_s"),
+    (221, "i64x2.extmul_high_i32x4_s"),
+    (222, "i64x2.extmul_low_i32x4_u"),
+    (223, "i64x2.extmul_high_i32x4_u"),
+    (103, "f32x4.ceil"),
+    (104, "f32x4.floor"),
+    (105, "f32x4.trunc"),
+    (106, "f32x4.nearest"),
+    (116, "f64x2.ceil"),
+    (117, "f64x2.floor"),
+    (122, "f64x2.trunc"),
+    (148, "f64x2.nearest"),
+    (224, "f32x4.abs"),
+    (225, "f32x4.neg"),
+    (227, "f32x4.sqrt"),
+    (228, "f32x4.add"),
+    (229, "f32x4.sub"),
+    (230, "f32x4.mul"),
+    (231, "f32x4.div"),
+    (232, "f32x4.min"),
+    (233, "f32x4.max"),
+    (234, "f32x4.pmin"),
+    (235, "f32x4.pmax"),
+    (236, "f64x2.abs"),
+    (237, "f64x2.neg"),
+    (239, "f64x2.sqrt"),
+    (240, "f64x2.add"),
+    (241, "f64x2.sub"),
+    (242, "f64x2.mul"),
+    (243, "f64x2.div"),
+    (244, "f64x2.min"),
+    (245, "f64x2.max"),
+    (246, "f64x2.pmin"),
+    (247, "f64x2.pmax"),
+    (248, "i32x4.trunc_sat_f32x4_s"),
+    (249, "i32x4.trunc_sat_f32x4_u"),
+    (250, "f32x4.convert_i32x4_s"),
+    (251, "f32x4.convert_i32x4_u"),
+    (252, "i32x4.trunc_sat_f64x2_s_zero"),
+    (253, "i32x4.trunc_sat_f64x2_u_zero"),
+    (254, "f64x2.convert_low_i32x4_s"),
+    (255, "f64x2.convert_low_i32x4_u"),
+    (256, "i8x16.relaxed_swizzle"),
+    (257, "i32x4.relaxed_trunc_f32x4_s"),
+    (258, "i32x4.relaxed_trunc_f32x4_u"),
+    (259, "i32x4.relaxed_trunc_f64x2_s_zero"),
+    (260, "i32x4.relaxed_trunc_f64x2_u_zero"),
+    (261, "f32x4.relaxed_madd"),
+    (262, "f32x4.relaxed_nmadd"),
+    (263, "f64x2.relaxed_madd"),
+    (264, "f64x2.relaxed_nmadd"),
+    (265, "i8x16.relaxed_laneselect"),
+    (266, "i16x8.relaxed_laneselect"),
+    (267, "i32x4.relaxed_laneselect"),
+    (268, "i64x2.relaxed_laneselect"),
+    (269, "f32x4.relaxed_min"),
+    (270, "f32x4.relaxed_max"),
+    (271, "f64x2.relaxed_min"),
+    (272, "f64x2.relaxed_max"),
+    (273, "i16x8.relaxed_q15mulr_s"),
+    (274, "i16x8.relaxed_dot_i8x16_i7x16_s"),
+    (275, "i32x4.relaxed_dot_i8x16_i7x16_add_s"),
+];
+
 /// The 0xFC group: saturating truncation, then bulk memory and table.
 const FC_OP: &[(i128, &str)] = &[
     (0, "i32.trunc_sat_f32_s"),
@@ -244,6 +508,11 @@ pub(super) fn valtype() -> T {
     T::enumeration_hex("ValType", T::u8(), VALTYPE)
 }
 
+/// Alignment and offset, carried by every memory access.
+fn memarg() -> T {
+    T::structure("MemArg", vec![("align", T::leb_u()), ("offset", T::leb_u())])
+}
+
 fn nothing() -> T {
     T::bytes(E::lit(0))
 }
@@ -255,7 +524,7 @@ fn sleb() -> T {
 /// One instruction: opcode, then whatever that opcode carries.
 pub fn instr() -> T {
     let idx = T::leb_u();
-    let memarg = T::structure("MemArg", vec![("align", T::leb_u()), ("offset", T::leb_u())]);
+    let memarg = memarg();
     let blocktype = T::enumeration("BlockType", sleb(), BLOCK_TYPE);
     let valtype = valtype();
 
@@ -288,7 +557,7 @@ pub fn instr() -> T {
         (0x44, T::F64(Little)),
         (0xd0, valtype),
         (0xfc, fc_group()),
-        (0xfd, T::structure("SimdOp", vec![("sub", T::leb_u())])),
+        (0xfd, simd_group()),
         (0xfe, T::structure("ThreadOp", vec![("sub", T::leb_u())])),
     ];
     // Single index immediate: branches, calls, locals, globals, tables, refs.
@@ -307,6 +576,36 @@ pub fn instr() -> T {
         vec![
             ("op", T::enumeration_hex("Op", T::u8(), OPCODE)),
             ("imm", T::switch(E::field("op"), cases, nothing())),
+        ],
+    )
+}
+
+/// The 0xFD group. A vector load or store carries the same alignment and offset
+/// as a scalar one; the lane forms carry a lane number after it; `v128.const`
+/// carries its sixteen bytes and `i8x16.shuffle` its sixteen lane numbers.
+fn simd_group() -> T {
+    let lane = T::u8();
+    let mut cases: Vec<(i128, T)> = vec![
+        (0x0c, T::bytes(E::lit(16))),
+        (0x0d, T::array(T::u8(), E::lit(16))),
+    ];
+    for op in (0x00..=0x0b).chain(0x5c..=0x5d) {
+        cases.push((op, memarg()));
+    }
+    for op in 0x54..=0x5b {
+        cases.push((
+            op,
+            T::structure("MemLane", vec![("align", T::leb_u()), ("offset", T::leb_u()), ("lane", T::u8())]),
+        ));
+    }
+    for op in 0x15..=0x22 {
+        cases.push((op, lane.clone()));
+    }
+    T::structure(
+        "SimdInstr",
+        vec![
+            ("sub", T::enumeration("SimdOp", T::leb_u(), SIMD_OP)),
+            ("args", T::switch(E::field("sub"), cases, nothing())),
         ],
     )
 }
