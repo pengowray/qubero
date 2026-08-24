@@ -1,6 +1,7 @@
 //! Read-only access to the original file, without holding all of it in memory.
 
-use std::collections::{HashMap, VecDeque};
+use std::cell::Cell;
+use std::collections::HashMap;
 
 /// A byte range of the original that is not currently loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,20 +30,30 @@ impl Source for MemSource {
     }
 }
 
+/// One chunk, and when it was last read. Reading is what keeps a chunk alive:
+/// the head of a file is loaded first and read constantly, and dropping it
+/// because it was loaded first would take the top of the structure away every
+/// time someone looked at the end of the file.
+struct Cached {
+    data: Box<[u8]>,
+    used: Cell<u64>,
+}
+
 /// Fixed-size chunk cache fed from outside (the JS host reads the File/Blob and
-/// pushes chunks in). Evicts least recently used chunks beyond `capacity`.
+/// pushes chunks in). Beyond `capacity`, the chunk read longest ago goes.
 pub struct ChunkStore {
     len: u64,
     chunk_size: u64,
     capacity: usize,
-    chunks: HashMap<u64, Box<[u8]>>,
-    lru: VecDeque<u64>,
+    chunks: HashMap<u64, Cached>,
+    /// Counts reads, so "longest ago" has something to compare.
+    clock: Cell<u64>,
 }
 
 impl ChunkStore {
     pub fn new(len: u64, chunk_size: u64, capacity: usize) -> Self {
         assert!(chunk_size > 0);
-        Self { len, chunk_size, capacity, chunks: HashMap::new(), lru: VecDeque::new() }
+        Self { len, chunk_size, capacity, chunks: HashMap::new(), clock: Cell::new(0) }
     }
 
     pub fn chunk_size(&self) -> u64 {
@@ -54,14 +65,20 @@ impl ChunkStore {
     }
 
     pub fn insert(&mut self, chunk: u64, data: Box<[u8]>) {
-        if self.chunks.insert(chunk, data).is_none() {
-            self.lru.push_back(chunk);
-        }
+        let now = self.tick();
+        self.chunks.insert(chunk, Cached { data, used: Cell::new(now) });
         while self.chunks.len() > self.capacity {
-            if let Some(old) = self.lru.pop_front() {
-                self.chunks.remove(&old);
-            }
+            let Some(oldest) = self.chunks.iter().min_by_key(|(_, c)| c.used.get()).map(|(k, _)| *k) else {
+                break;
+            };
+            self.chunks.remove(&oldest);
         }
+    }
+
+    fn tick(&self) -> u64 {
+        let now = self.clock.get() + 1;
+        self.clock.set(now);
+        now
     }
 }
 
@@ -80,7 +97,9 @@ impl Source for ChunkStore {
             let in_chunk = (cur % self.chunk_size) as usize;
             let take = ((self.chunk_size - in_chunk as u64).min(end - cur)) as usize;
             match self.chunks.get(&chunk) {
-                Some(data) => {
+                Some(cached) => {
+                    cached.used.set(self.tick());
+                    let data = &cached.data;
                     let avail = data.len().saturating_sub(in_chunk).min(take);
                     out[pos..pos + avail].copy_from_slice(&data[in_chunk..in_chunk + avail]);
                     out[pos + avail..pos + take].fill(0);

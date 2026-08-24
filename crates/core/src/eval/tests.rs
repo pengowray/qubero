@@ -694,3 +694,21 @@ fn work_done_in_goes_reaches_the_same_answer() {
     assert_eq!(mid.value, want_mid.value);
     assert_eq!(mid.offset_bits, want_mid.offset_bits);
 }
+
+#[test]
+fn the_chunk_read_longest_ago_is_the_one_that_goes() {
+    use crate::source::ChunkStore;
+    // Room for two chunks. The first is read again and again; the second is
+    // loaded and left alone. Loading a third must take the idle one.
+    let mut store = ChunkStore::new(3 * 8, 8, 2);
+    store.insert(0, vec![1u8; 8].into_boxed_slice());
+    store.insert(1, vec![2u8; 8].into_boxed_slice());
+    let mut buf = [0u8; 8];
+    for _ in 0..3 {
+        assert!(store.read_bytes(0, &mut buf).is_empty());
+    }
+    store.insert(2, vec![3u8; 8].into_boxed_slice());
+    assert!(store.has(0), "the chunk being read is the one to keep");
+    assert!(!store.has(1), "the one nothing has looked at since it arrived goes");
+    assert!(store.has(2));
+}
