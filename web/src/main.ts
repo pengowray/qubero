@@ -4,6 +4,7 @@ import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingView } from "./listingview.js";
+import { SearchBar } from "./searchbar.js";
 import { TypeTable } from "./typetable.js";
 
 const appEl = document.getElementById("app");
@@ -176,6 +177,7 @@ function mount(doc: Doc): void {
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
   const listing = new ListingView(doc);
+  const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
   // it; moving it picks the field it lands in. `picking` stops that going round.
   let picking = false;
@@ -592,7 +594,12 @@ function mount(doc: Doc): void {
   };
   view.onCursorChange = (c) => {
     inspector.setOffset(c.bitOffset);
-    if (!picking) followCursor(c.bitOffset);
+    if (!picking) {
+      followCursor(c.bitOffset);
+      // Moving the cursor by hand starts the next search from there rather
+      // than carrying on from the last match.
+      search.reset();
+    }
     refresh();
   };
   let hadTemplate = doc.template;
@@ -605,6 +612,16 @@ function mount(doc: Doc): void {
     if (followWhenLoaded !== null) followCursor(followWhenLoaded);
   });
 
+  // A match moves the cursor and marks its bytes in whichever view is showing.
+  search.onCursor = () => view.cursorState.offset;
+  search.onFound = ({ at, len }) => {
+    picking = true;
+    view.setHighlight({ startBit: at * 8, endBit: (at + len) * 8 });
+    view.setCursor(at, { pane: "hex" });
+    listing.setBit(at * 8);
+    inspector.setOffset(at * 8);
+    picking = false;
+  };
   const relayout = (): void => {
     view.relayout();
     listing.relayout();
@@ -613,11 +630,22 @@ function mount(doc: Doc): void {
   const right = panel("At cursor", "right", inspector.el, relayout);
   app.replaceChildren(
     toolbar,
-    el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, listing.el, bottom), right),
+    el(
+      "main",
+      { className: "workspace" },
+      el("div", { className: "left" }, search.el, view.el, listing.el, bottom),
+      right,
+    ),
     statusbar,
     dialog,
   );
   setView(localStorage.getItem("qubero.view") === "listing" ? "listing" : "hex");
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      search.show();
+    }
+  });
   view.relayout();
   refresh();
   inspector.setOffset(0);

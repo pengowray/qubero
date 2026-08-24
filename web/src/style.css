@@ -1121,3 +1121,40 @@ input.invalid {
   font-style: normal;
   margin-left: 2ch;
 }
+
+/* ---- search ---- */
+.searchbar {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.sb-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.sb-find,
+.sb-repl {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+}
+.sb-foldbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.sb-close {
+  margin-left: auto;
+}
+.sb-status {
+  color: var(--muted);
+  min-height: 1.2em;
+}

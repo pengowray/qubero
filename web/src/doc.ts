@@ -132,6 +132,24 @@ export type Span = {
   readonly sample: string[];
 };
 
+/** How the text in the search bar is read. */
+export type NeedleKind = "hex" | "text" | "regex";
+
+/** Everything a search needs to know, which is everything the bar holds. */
+export type Query = {
+  readonly kind: NeedleKind;
+  readonly text: string;
+  /** Text only: match letters in either case. */
+  readonly fold: boolean;
+  readonly backward: boolean;
+};
+
+/** What one window of a search found. Offsets are bytes. */
+export type SearchStep =
+  | { readonly step: "found"; readonly at: number; readonly len: number }
+  | { readonly step: "more"; readonly resume: number }
+  | { readonly step: "end" };
+
 /** What a type permits, beyond what this file's bytes happen to say. */
 export type TypeInfo = {
   readonly kind: "magic" | "enum" | "flags" | "plain";
@@ -434,6 +452,36 @@ export class Doc {
    */
   spans(fromBit: number, toBit: number, max: number): TemplateReply<Span[]> {
     return this.handleReply<Span[]>(this.editor.spans(fromBit, toBit, max));
+  }
+
+  /** What is wrong with what the search bar holds, or "" when nothing is. */
+  checkNeedle(kind: NeedleKind, text: string): string {
+    return this.editor.check_needle(kind, text);
+  }
+
+  /**
+   * One window of a search. The reply is the usual tri-state: a step, or
+   * pending while the bytes it needs are fetched. The caller loops.
+   */
+  searchStep(needle: Query, from: number): TemplateReply<SearchStep> {
+    return this.handleReply<SearchStep>(
+      this.editor.search_step(needle.kind, needle.text, needle.fold, needle.backward, from),
+    );
+  }
+
+  /** Put bytes where a match was found. */
+  replaceAt(at: number, len: number, bytes: Uint8Array): void {
+    this.editor.replace_at(at, len, bytes);
+    this.notify();
+  }
+
+  /** Fold the edits that follow into one undo step. */
+  beginBatch(): void {
+    this.editor.begin_batch();
+  }
+
+  endBatch(): void {
+    this.editor.end_batch();
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */
