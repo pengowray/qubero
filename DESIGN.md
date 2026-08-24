@@ -326,6 +326,32 @@ format does not describe is the kind of thing worth noticing, not hiding.
 Writing a flags field writes the number underneath, because typing a name would
 mean deciding whether it replaced the other bits or joined them.
 
+### A field that says "the same as the last one"
+MIDI running status is what this is for. A message may leave its status byte
+out and mean the same status as the message before it, which most files written
+by a sequencer do, so it is the normal case and not a corner one: the three
+files Windows ships have 24,420 events between them that leave it out.
+
+Three additions carry it, and none of them is about MIDI. `Expr::Peek(bits)`
+reads where a field starts without taking the bits, so a field can exist only
+when the byte says it does: `Peek(8) / 128` is 1 for a status byte and 0 for a
+data byte, and the switch already there does the rest. `Expr::Prev(name)` is
+field `name` of the element before this one in the nearest enclosing list, and
+zero outside one. `Expr::Or(a, b)` is the first of the two that is not zero.
+`Ty::Computed(expr)` is a field of no bits whose value is worked out, so
+`Or(status, Prev(effective_status))` is a field and not a special case. It is
+not editable, because there is nothing in the file to write.
+
+Element `n` asks element `n - 1`, so a computed value is kept on the resolved
+node. Without that a track of ten thousand events is ten thousand frames deep,
+which is a stack overflow rather than a slow answer. The elements of a list are
+already resolved in order, so every one of those lookups is a memo hit.
+
+The spec says a system message cancels running status; this carries it through
+one instead, which is what lenient sequencers accept. It can only misread a
+file that is already invalid, where the alternative was to stop reading valid
+ones.
+
 ### A structure that says which field names it
 A RIFF chunk is identified by its `id`, a PNG chunk by its `type`, a wasm
 section by its `id`. Nothing generic can work that out: guessing at the first
@@ -566,19 +592,6 @@ which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 A
 than lengths) needs a "scan until these bytes" primitive that does not exist.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
-
-MIDI running status is the sharpest gap, because it is the normal case rather
-than a corner one: a message may leave its status byte out and mean "the same
-as the last one", and every one of the three MIDI files Windows ships hits that
-within three events, so the rest of each track reads as bytes. Following it
-needs three small additions that no format has needed yet, and which would
-serve any format that carries state between elements: an expression that reads
-the next bytes without consuming them (so a field can exist only when the byte
-says so), one that reads a field of the previous element of a repeat, and a
-zero-width field whose value is an expression. The last event's status would
-then be `Or(status, Prev(effective_status))`, since a real status byte is never
-zero and an absent one is a field of no bits. Element `n` would depend on
-`n - 1`, so it also needs the evaluator to work forwards rather than recurse.
 
 A field the panel will not let you edit says why only when you try to: the box
 is simply disabled until then, because the reasons live in the write path.

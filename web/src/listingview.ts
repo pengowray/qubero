@@ -29,13 +29,19 @@ type Row =
   | { readonly kind: "heading"; readonly depth: number; readonly text: string; readonly key: string }
   | { readonly kind: "field"; readonly depth: number; readonly span: Span; readonly key: string };
 
-/** `sections[0] type › body`: an index belongs to the name before it rather
- *  than on a line of its own, and so does whatever the structure says names
- *  it. */
+/** An index belongs to the name before it rather than on a line of its own:
+ *  `sections[0] type`, and `matrix[0][1]` for a list of lists.
+ *
+ *  A labelled index joins a plain name only. Two labelled ones run together
+ *  as `[2] MTrk[35] pitch bend ch1`, which reads as one thing and is two.
+ */
 function trailParts(trail: readonly string[]): string[] {
   const out: string[] = [];
   for (const part of trail) {
-    if (/^\[\d+\]/.test(part) && out.length > 0) out[out.length - 1] += part;
+    const last = out[out.length - 1];
+    const bare = /^\[\d+\]$/.test(part);
+    const labelled = !bare && /^\[\d+\] /.test(part);
+    if (last !== undefined && (bare || (labelled && !last.includes("[")))) out[out.length - 1] = last + part;
     else out.push(part);
   }
   return out;

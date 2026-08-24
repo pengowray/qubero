@@ -8,13 +8,18 @@
 //! high bit meaning "another byte follows". That is `Ty::Vlq`, added for this
 //! format: LEB128 packs the same seven bits in the opposite order.
 //!
-//! Running status is the one thing here the template cannot follow. A message
-//! whose status byte is left out repeats the status of the message before it,
-//! so reading it needs to remember the previous event; expressions only see
-//! fields, and only within the current structure. Such a byte is under 0x80,
-//! matches no case, and the rest of the track reads as bytes. Most files
-//! written by a sequencer use running status, so this is the common case, not
-//! a corner one.
+//! Running status is why an event has both a `status` field and an
+//! `effective_status` one. A message may leave its status byte out and mean
+//! "the same as last time", which most files written by a sequencer do, so it
+//! is the common case rather than a corner one. A real status byte is 0x80 or
+//! above, so the field exists only when the byte at its own start says so, and
+//! is no bits wide when it does not. `effective_status` is then this event's
+//! status or, when there is none, the one the event before it settled on.
+//!
+//! Per the spec a system message cancels running status, and this carries it
+//! through one instead. That matches what lenient sequencers accept and only
+//! misreads a file that is already invalid, where the alternative would be to
+//! stop reading a valid one.
 
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
@@ -71,8 +76,10 @@ pub fn midi() -> Template {
 }
 
 fn chunk() -> T {
-    T::structure(
+    T::structure_named(
         "Chunk",
+        "id",
+        "body",
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
             ("size", T::u32(Big)),
@@ -153,15 +160,31 @@ fn event() -> T {
     }
     let names: Vec<(i128, &str)> = names.iter().map(|(v, s)| (*v, s.as_str())).collect();
 
-    T::structure(
+    // The status an event runs on is a field of no bits, so no linear view
+    // would show it. Naming the event by it puts `note on ch1` on the row
+    // whether or not this event is the one that spelled it out.
+    T::structure_named(
         "Event",
+        "effective_status",
+        "message",
         vec![
             ("delta", T::vlq()),
-            ("status", T::enumeration_hex("Status", T::u8(), &names)),
-            // A byte under 0x80 is a message with its status left out, which
-            // means "the same as last time". Nothing here can look back at the
-            // last event, so the rest of the track stops being events.
-            ("message", T::switch(E::field("status"), cases, running_status())),
+            // A status byte has its top bit set. Where it does not, this event
+            // left the byte out and the field is no bits wide.
+            (
+                "status",
+                T::switch(
+                    E::peek(8).div(E::lit(128)),
+                    vec![(1, T::enumeration_hex("Status", T::u8(), &names))],
+                    T::computed(E::lit(0)),
+                ),
+            ),
+            // This event's status, or the one the event before it settled on.
+            (
+                "effective_status",
+                T::enumeration_hex("Status", T::computed(E::field("status").or(E::prev("effective_status"))), &names),
+            ),
+            ("message", T::switch(E::field("effective_status"), cases, running_status())),
         ],
     )
 }
@@ -244,8 +267,11 @@ fn meta() -> T {
     )
 }
 
+/// A track that opens with a data byte has no status to run from, which no
+/// valid file does. The rest of it is bytes, because guessing a status would
+/// be inventing one.
 fn running_status() -> T {
-    T::structure("RunningStatus", vec![("rest_of_track", T::bytes(E::Remaining))])
+    T::structure("NoStatus", vec![("rest_of_track", T::bytes(E::Remaining))])
 }
 
 #[cfg(test)]
@@ -322,19 +348,19 @@ mod tests {
 
         // A meta event: the name of the track.
         assert_eq!(
-            ev.node(&d, &[1, 2, 0, 2, 0]).unwrap().value,
+            ev.node(&d, &[1, 2, 0, 3, 0]).unwrap().value,
             Value::Enum { raw: 3, name: Some("track name".into()), hex: true }
         );
-        assert_eq!(ev.node(&d, &[1, 2, 0, 2, 2]).unwrap().value, Value::Str("Piano".into()));
-        assert_eq!(ev.node(&d, &[1, 2, 1, 2, 2, 0]).unwrap().value, Value::UInt(500_000));
+        assert_eq!(ev.node(&d, &[1, 2, 0, 3, 2]).unwrap().value, Value::Str("Piano".into()));
+        assert_eq!(ev.node(&d, &[1, 2, 1, 3, 2, 0]).unwrap().value, Value::UInt(500_000));
 
         // A note, and the wait before the one that ends it.
         assert_eq!(
             ev.node(&d, &[1, 2, 2, 1]).unwrap().value,
             Value::Enum { raw: 0x90, name: Some("note on ch1".into()), hex: true }
         );
-        assert_eq!(ev.node(&d, &[1, 2, 2, 2, 0]).unwrap().value, Value::UInt(60));
-        assert_eq!(ev.node(&d, &[1, 2, 2, 2, 1]).unwrap().value, Value::UInt(100));
+        assert_eq!(ev.node(&d, &[1, 2, 2, 3, 0]).unwrap().value, Value::UInt(60));
+        assert_eq!(ev.node(&d, &[1, 2, 2, 3, 1]).unwrap().value, Value::UInt(100));
         let off = ev.node(&d, &[1, 2, 3, 0]).unwrap();
         assert_eq!(off.value, Value::UInt(480));
         assert_eq!(off.size_bits, 16); // two bytes of seven bits each
@@ -361,12 +387,16 @@ mod tests {
     }
 
     #[test]
-    fn running_status_stops_the_events_and_says_so() {
+    fn running_status_carries_the_status_forward() {
         let mut track = vlq_bytes(0);
         track.extend_from_slice(&[0x90, 60, 100]);
-        // The same note off, with the status byte left out.
+        // The same note, off, with the status byte left out.
         track.extend_from_slice(&vlq_bytes(480));
         track.extend_from_slice(&[60, 0]);
+        // And once more, so the status has been carried through an event that
+        // did not carry it either.
+        track.extend_from_slice(&vlq_bytes(10));
+        track.extend_from_slice(&[62, 0]);
         let mut out = Vec::new();
         let mut head = 0u16.to_be_bytes().to_vec();
         head.extend_from_slice(&1u16.to_be_bytes());
@@ -376,9 +406,31 @@ mod tests {
 
         let d = Document::new(MemSource(out));
         let mut ev = Evaluator::new(midi());
-        assert_eq!(ev.node(&d, &[1, 2]).unwrap().child_count, 2);
-        let stopped = ev.node(&d, &[1, 2, 1, 2]).unwrap();
-        assert_eq!(stopped.type_name, "RunningStatus");
-        assert_eq!(stopped.size_bits, 8);
+        // Three events, not one event and a stretch of bytes.
+        assert_eq!(ev.node(&d, &[1, 2]).unwrap().child_count, 3);
+        let on = Value::Enum { raw: 0x90, name: Some("note on ch1".into()), hex: true };
+        // The first event carries its status byte and the field has bits.
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1]).unwrap().value, on);
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1]).unwrap().size_bits, 8);
+        // The second leaves it out, so the field is no bits wide and the
+        // effective status is the one before it.
+        assert_eq!(ev.node(&d, &[1, 2, 1, 1]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[1, 2, 1, 2]).unwrap().value, on);
+        assert_eq!(ev.node(&d, &[1, 2, 1, 3, 0]).unwrap().value, Value::UInt(60));
+        assert_eq!(ev.node(&d, &[1, 2, 1, 3, 1]).unwrap().value, Value::UInt(0));
+        // The third is carried through an event that had no status of its own.
+        assert_eq!(ev.node(&d, &[1, 2, 2, 2]).unwrap().value, on);
+        assert_eq!(ev.node(&d, &[1, 2, 2, 3, 0]).unwrap().value, Value::UInt(62));
+    }
+
+    #[test]
+    fn a_track_that_opens_with_a_data_byte_has_no_status_to_run_from() {
+        // No valid file does this: there is nothing to repeat.
+        let mut track = vlq_bytes(0);
+        track.extend_from_slice(&[60, 100]);
+        let d = Document::new(MemSource(chunk_bytes(b"MTrk", &track)));
+        let mut ev = Evaluator::new(midi());
+        let stopped = ev.node(&d, &[0, 2, 0, 3]).unwrap();
+        assert_eq!(stopped.type_name, "NoStatus");
     }
 }

@@ -32,6 +32,16 @@ pub enum Expr {
     /// field; this reaches inside one, which is what a list of pointers or a
     /// list of column types needs.
     Elem { array: String, index: Box<Expr> },
+    /// The next `bits` bits, read without consuming them. A field can then
+    /// exist only when the byte at its own start says it does.
+    Peek(u32),
+    /// The value of field `name` in the element before this one, in the nearest
+    /// enclosing list. Zero for the first element, and for anything not in a
+    /// list. This is what a format carrying state between elements needs.
+    Prev(String),
+    /// The first of the two that is not zero. Pairs with `Prev` to say "this
+    /// one, or the last one that had one".
+    Or(Box<Expr>, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -56,6 +66,18 @@ impl Expr {
     /// Element `index` of the earlier array field `array`.
     pub fn elem(array: &str, index: Expr) -> Expr {
         Expr::Elem { array: array.to_string(), index: Box::new(index) }
+    }
+    /// The next `bits` bits without consuming them.
+    pub fn peek(bits: u32) -> Expr {
+        Expr::Peek(bits)
+    }
+    /// Field `name` of the previous element of the enclosing list.
+    pub fn prev(name: &str) -> Expr {
+        Expr::Prev(name.to_string())
+    }
+    /// This, or `rhs` when this is zero.
+    pub fn or(self, rhs: Expr) -> Expr {
+        Expr::Or(Box::new(self), Box::new(rhs))
     }
     pub fn add(self, rhs: Expr) -> Expr {
         Expr::Add(Box::new(self), Box::new(rhs))
@@ -196,6 +218,9 @@ pub enum Ty {
     F16(Endian),
     F32(Endian),
     F64(Endian),
+    /// A field of no bits whose value is worked out rather than read. What it
+    /// takes to say "the same as the last one" without inventing a byte.
+    Computed(Expr),
     /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
     Leb128 { signed: bool },
     /// MIDI's variable-length quantity: seven bits per byte, most significant
@@ -284,6 +309,10 @@ impl Ty {
     }
     pub fn leb_u() -> Ty {
         Ty::Leb128 { signed: false }
+    }
+    /// A field of no bits whose value is an expression.
+    pub fn computed(e: Expr) -> Ty {
+        Ty::Computed(e)
     }
     pub fn vlq() -> Ty {
         Ty::Vlq
@@ -424,6 +453,7 @@ impl Ty {
                 format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
             }
             Ty::Vlq => "vlq".into(),
+            Ty::Computed(_) => "computed".into(),
             Ty::SqliteVarint => "varint".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),

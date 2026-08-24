@@ -211,6 +211,10 @@ struct Resolved {
     /// Size fixed by an enclosing `Sized`, if any.
     declared_size: Option<u64>,
     size: Option<u64>,
+    /// A computed field's value, once worked out. Element `n` of a list asks
+    /// element `n - 1` for its value, so without this a track of ten thousand
+    /// events is ten thousand deep rather than one.
+    computed: Option<i128>,
     /// For `Repeat`: end offsets of elements resolved so far, and whether the
     /// walk reached its terminating condition.
     repeat_ends: Vec<u64>,
@@ -249,7 +253,7 @@ impl Evaluator {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
-            _ => (self.primitive_value(doc, &r, &r.ty, size)?, 0, false),
+            _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
         Ok(NodeInfo {
@@ -736,7 +740,10 @@ impl Evaluator {
                     ty = *inner;
                 }
                 Ty::Switch { on, cases, default } => {
-                    let v = self.eval_expr(doc, path, &on)?;
+                    // The node is not in the memo yet, so where it starts has
+                    // to be handed over: a switch that looks at the byte it is
+                    // about to read needs to know where that byte is.
+                    let v = self.eval_expr_at(doc, path, &on, Some((offset, limit)))?;
                     ty = cases.into_iter().find(|(k, _)| *k == v).map(|(_, t)| t).unwrap_or(*default);
                 }
                 other => {
@@ -747,6 +754,7 @@ impl Evaluator {
                         limit,
                         declared_size,
                         size: None,
+                        computed: None,
                         repeat_ends: Vec::new(),
                         repeat_done: false,
                         seq_end: 0,
@@ -998,6 +1006,25 @@ impl Evaluator {
                 (None, _) => return fail(format!("{name} is not a number")),
             },
             Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
+            // Read where this field starts without taking the bits: what a
+            // field that exists only when the byte says so has to ask.
+            Expr::Peek(bits) => {
+                let Some((offset, limit)) = here else { return fail("nothing to look at") };
+                if offset + u64::from(*bits) > limit {
+                    return fail("looks past the end of its container");
+                }
+                let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
+                let missing = doc.read_bits(offset, u64::from(*bits), &mut buf);
+                if !missing.is_empty() {
+                    return Err(EvalError::Pending(missing));
+                }
+                read_uint(&buf, *bits, crate::template::Endian::Big) as i128
+            }
+            Expr::Prev(name) => self.prev_field(doc, at, name)?,
+            Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {
+                0 => self.eval_expr_at(doc, at, b, here)?,
+                v => v,
+            },
             Expr::Add(a, b) => self.eval_expr_at(doc, at, a, here)? + self.eval_expr_at(doc, at, b, here)?,
             Expr::Sub(a, b) => self.eval_expr_at(doc, at, a, here)? - self.eval_expr_at(doc, at, b, here)?,
             Expr::Mul(a, b) => self.eval_expr_at(doc, at, a, here)? * self.eval_expr_at(doc, at, b, here)?,
@@ -1009,6 +1036,37 @@ impl Evaluator {
                 self.eval_expr_at(doc, at, a, here)? / d
             }
         })
+    }
+
+    /// Field `name` of the element before this one, in the nearest enclosing
+    /// list. Zero for the first element and outside a list, which is what lets
+    /// `Or` fall through to the case for a message with no state behind it.
+    ///
+    /// The elements of a list are resolved in order, so by the time element `n`
+    /// asks, element `n - 1` is already in the memo: this is a lookup, not a
+    /// walk back to the start.
+    fn prev_field<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<i128> {
+        let mut cur = at.to_vec();
+        while let Some(idx) = cur.pop() {
+            let listy = matches!(
+                self.memo.get(&cur).map(|r| &r.ty),
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
+            );
+            if !listy {
+                continue;
+            }
+            if idx == 0 {
+                return Ok(0);
+            }
+            let mut elem = cur.clone();
+            elem.push(idx - 1);
+            self.resolve(doc, &elem)?;
+            let Ty::Struct(s) = self.memo[&elem].ty.base() else { return Ok(0) };
+            let Some(j) = s.fields.iter().position(|f| f.name == name) else { return Ok(0) };
+            elem.push(j);
+            return Ok(self.node(doc, &elem)?.value.as_int().unwrap_or(0));
+        }
+        Ok(0)
     }
 
     /// The path of the field named `name`, found the way `lookup` finds it.
@@ -1224,7 +1282,7 @@ impl Evaluator {
         Ok((value as i64 as i128, 9))
     }
 
-    fn primitive_value<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
+    fn primitive_value<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
             Ty::Int { bits, endian } => Value::Int(read_int(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
@@ -1241,6 +1299,16 @@ impl Evaluator {
                 if *signed { Value::Int(v as i128) } else { Value::UInt(v) }
             }
             Ty::Vlq => Value::UInt(self.read_vlq(doc, r)?.0),
+            Ty::Computed(e) => {
+                if let Some(v) = self.memo.get(at).and_then(|m| m.computed) {
+                    return Ok(Value::Int(v));
+                }
+                let v = self.eval_expr_at(doc, at, e, Some((r.offset, r.limit)))?;
+                if let Some(m) = self.memo.get_mut(at) {
+                    m.computed = Some(v);
+                }
+                Value::Int(v)
+            }
             Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
             Ty::Magic(want) => Value::Magic { ok: self.read(doc, r, r.offset, size)? == *want },
             Ty::Bytes(_) => {
@@ -1259,7 +1327,7 @@ impl Evaluator {
                 Value::Str(text)
             }
             Ty::Enum { inner, def } => {
-                let raw = match self.primitive_value(doc, r, inner, size)? {
+                let raw = match self.primitive_value(doc, at, r, inner, size)? {
                     Value::UInt(v) => i128::try_from(v).unwrap_or(i128::MAX),
                     Value::Int(v) => v,
                     _ => return fail("an enum must sit on an integer"),
@@ -1267,7 +1335,7 @@ impl Evaluator {
                 Value::Enum { raw, name: def.label(raw).map(str::to_string), hex: def.hex }
             }
             Ty::Flags { inner, def } => {
-                let raw = match self.primitive_value(doc, r, inner, size)? {
+                let raw = match self.primitive_value(doc, at, r, inner, size)? {
                     Value::UInt(v) => v,
                     Value::Int(v) => v as u128,
                     _ => return fail("flags must sit on an integer"),
