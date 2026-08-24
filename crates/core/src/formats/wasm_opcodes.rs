@@ -5,13 +5,11 @@
 //! immediate select a zero-length `bytes` field, so every instruction row has
 //! the same two children.
 //!
-//! Coverage is the core instruction set, the 0xFC group (bulk memory and
-//! saturating truncation) and the 0xFD group (SIMD, including the relaxed
-//! instructions numbered past a byte). The 0xFE (threads) group reads its
-//! sub-opcode and stops there: its immediates are not parsed, so an instruction
-//! list containing one goes wrong from that point on. The enclosing `Sized`
-//! window keeps the damage inside one function body, and the disassembler says
-//! where it stopped rather than printing what the following bytes decode to.
+//! Coverage is every instruction group the core spec and its finished proposals
+//! define: the base set, 0xFC (bulk memory and saturating truncation), 0xFD
+//! (SIMD, including the relaxed instructions numbered past a byte) and 0xFE
+//! (atomics). An opcode outside them still stops a disassembled body with a
+//! line saying so, rather than reading the bytes after it as instructions.
 
 use crate::template::{Endian::*, Expr as E, Ty as T};
 
@@ -467,6 +465,149 @@ pub const SIMD_OP: &[(i128, &str)] = &[
     (275, "i32x4.relaxed_dot_i8x16_i7x16_add_s"),
 ];
 
+/// The 0xFE group: atomics. Names from the table wabt maintains.
+pub const THREAD_OP: &[(i128, &str)] = &[
+    (0, "memory.atomic.notify"),
+    (1, "memory.atomic.wait32"),
+    (2, "memory.atomic.wait64"),
+    (3, "atomic.fence"),
+    (16, "i32.atomic.load"),
+    (17, "i64.atomic.load"),
+    (18, "i32.atomic.load8_u"),
+    (19, "i32.atomic.load16_u"),
+    (20, "i64.atomic.load8_u"),
+    (21, "i64.atomic.load16_u"),
+    (22, "i64.atomic.load32_u"),
+    (23, "i32.atomic.store"),
+    (24, "i64.atomic.store"),
+    (25, "i32.atomic.store8"),
+    (26, "i32.atomic.store16"),
+    (27, "i64.atomic.store8"),
+    (28, "i64.atomic.store16"),
+    (29, "i64.atomic.store32"),
+    (30, "i32.atomic.rmw.add"),
+    (31, "i64.atomic.rmw.add"),
+    (32, "i32.atomic.rmw8.add_u"),
+    (33, "i32.atomic.rmw16.add_u"),
+    (34, "i64.atomic.rmw8.add_u"),
+    (35, "i64.atomic.rmw16.add_u"),
+    (36, "i64.atomic.rmw32.add_u"),
+    (37, "i32.atomic.rmw.sub"),
+    (38, "i64.atomic.rmw.sub"),
+    (39, "i32.atomic.rmw8.sub_u"),
+    (40, "i32.atomic.rmw16.sub_u"),
+    (41, "i64.atomic.rmw8.sub_u"),
+    (42, "i64.atomic.rmw16.sub_u"),
+    (43, "i64.atomic.rmw32.sub_u"),
+    (44, "i32.atomic.rmw.and"),
+    (45, "i64.atomic.rmw.and"),
+    (46, "i32.atomic.rmw8.and_u"),
+    (47, "i32.atomic.rmw16.and_u"),
+    (48, "i64.atomic.rmw8.and_u"),
+    (49, "i64.atomic.rmw16.and_u"),
+    (50, "i64.atomic.rmw32.and_u"),
+    (51, "i32.atomic.rmw.or"),
+    (52, "i64.atomic.rmw.or"),
+    (53, "i32.atomic.rmw8.or_u"),
+    (54, "i32.atomic.rmw16.or_u"),
+    (55, "i64.atomic.rmw8.or_u"),
+    (56, "i64.atomic.rmw16.or_u"),
+    (57, "i64.atomic.rmw32.or_u"),
+    (58, "i32.atomic.rmw.xor"),
+    (59, "i64.atomic.rmw.xor"),
+    (60, "i32.atomic.rmw8.xor_u"),
+    (61, "i32.atomic.rmw16.xor_u"),
+    (62, "i64.atomic.rmw8.xor_u"),
+    (63, "i64.atomic.rmw16.xor_u"),
+    (64, "i64.atomic.rmw32.xor_u"),
+    (65, "i32.atomic.rmw.xchg"),
+    (66, "i64.atomic.rmw.xchg"),
+    (67, "i32.atomic.rmw8.xchg_u"),
+    (68, "i32.atomic.rmw16.xchg_u"),
+    (69, "i64.atomic.rmw8.xchg_u"),
+    (70, "i64.atomic.rmw16.xchg_u"),
+    (71, "i64.atomic.rmw32.xchg_u"),
+    (72, "i32.atomic.rmw.cmpxchg"),
+    (73, "i64.atomic.rmw.cmpxchg"),
+    (74, "i32.atomic.rmw8.cmpxchg_u"),
+    (75, "i32.atomic.rmw16.cmpxchg_u"),
+    (76, "i64.atomic.rmw8.cmpxchg_u"),
+    (77, "i64.atomic.rmw16.cmpxchg_u"),
+    (78, "i64.atomic.rmw32.cmpxchg_u"),
+];
+
+/// The alignment each atomic access has of its own accord, as the log2 the
+/// format stores. An atomic access must be naturally aligned, so this is the
+/// only value a well-formed file carries, and printing it would say nothing.
+const THREAD_ALIGN: &[(i128, u8)] = &[
+    (0, 2),
+    (1, 2),
+    (2, 3),
+    (16, 2),
+    (17, 3),
+    (18, 0),
+    (19, 1),
+    (20, 0),
+    (21, 1),
+    (22, 2),
+    (23, 2),
+    (24, 3),
+    (25, 0),
+    (26, 1),
+    (27, 0),
+    (28, 1),
+    (29, 2),
+    (30, 2),
+    (31, 3),
+    (32, 0),
+    (33, 1),
+    (34, 0),
+    (35, 1),
+    (36, 2),
+    (37, 2),
+    (38, 3),
+    (39, 0),
+    (40, 1),
+    (41, 0),
+    (42, 1),
+    (43, 2),
+    (44, 2),
+    (45, 3),
+    (46, 0),
+    (47, 1),
+    (48, 0),
+    (49, 1),
+    (50, 2),
+    (51, 2),
+    (52, 3),
+    (53, 0),
+    (54, 1),
+    (55, 0),
+    (56, 1),
+    (57, 2),
+    (58, 2),
+    (59, 3),
+    (60, 0),
+    (61, 1),
+    (62, 0),
+    (63, 1),
+    (64, 2),
+    (65, 2),
+    (66, 3),
+    (67, 0),
+    (68, 1),
+    (69, 0),
+    (70, 1),
+    (71, 2),
+    (72, 2),
+    (73, 3),
+    (74, 0),
+    (75, 1),
+    (76, 0),
+    (77, 1),
+    (78, 2),
+];
+
 /// The 0xFC group: saturating truncation, then bulk memory and table.
 const FC_OP: &[(i128, &str)] = &[
     (0, "i32.trunc_sat_f32_s"),
@@ -558,7 +699,7 @@ pub fn instr() -> T {
         (0xd0, valtype),
         (0xfc, fc_group()),
         (0xfd, simd_group()),
-        (0xfe, T::structure("ThreadOp", vec![("sub", T::leb_u())])),
+        (0xfe, thread_group()),
     ];
     // Single index immediate: branches, calls, locals, globals, tables, refs.
     for op in [0x0c, 0x0d, 0x10, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x3f, 0x40, 0xd2] {
@@ -608,6 +749,28 @@ fn simd_group() -> T {
             ("args", T::switch(E::field("sub"), cases, nothing())),
         ],
     )
+}
+
+/// The 0xFE group. Every atomic access carries the alignment and offset a
+/// plain one does; `atomic.fence` carries a byte the spec reserves and
+/// requires to be zero.
+fn thread_group() -> T {
+    let mut cases: Vec<(i128, T)> = vec![(0x03, T::u8())];
+    for (op, _) in THREAD_OP.iter().filter(|(op, _)| *op != 0x03) {
+        cases.push((*op, memarg()));
+    }
+    T::structure(
+        "ThreadInstr",
+        vec![
+            ("sub", T::enumeration("ThreadOp", T::leb_u(), THREAD_OP)),
+            ("args", T::switch(E::field("sub"), cases, nothing())),
+        ],
+    )
+}
+
+/// What an atomic access is aligned to of its own accord.
+pub fn thread_align(sub: i128) -> u8 {
+    THREAD_ALIGN.iter().find(|(op, _)| *op == sub).map_or(0, |(_, a)| *a)
 }
 
 fn fc_group() -> T {

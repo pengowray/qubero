@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use super::wasm_opcodes::thread_align;
 use crate::document::Document;
 use crate::eval::{EvalError, Evaluator, R, Value};
 use crate::source::Source;
@@ -194,14 +195,6 @@ impl Module {
                 }
                 Err(e) => return Err(e),
             };
-            // The SIMD and thread groups read their sub-opcode and stop: their
-            // immediates are not parsed, so the bytes after one are read as if
-            // they were instructions and are not. Nothing errors, which is why
-            // this has to be caught by name rather than left to the evaluator.
-            if let Some(group) = undecoded_group(&line.0) {
-                let _ = writeln!(out, "{:indent$};; stops here: {group}", "", indent = depth * 2);
-                break;
-            }
             // `end` and `else` close the block they belong to, so they sit at
             // the depth of the instruction that opened it.
             if matches!(line.0.as_str(), "end" | "else") {
@@ -220,11 +213,7 @@ impl Module {
     /// mnemonic and its immediate, with any index that names something given
     /// that name.
     pub fn instruction_line<S: Source>(&self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<String> {
-        let (mnemonic, text) = self.instruction(ev, doc, path)?;
-        Ok(match undecoded_group(&mnemonic) {
-            Some(group) => format!("{text}  ;; {group}"),
-            None => text,
-        })
+        Ok(self.instruction(ev, doc, path)?.1)
     }
 
     /// One instruction as its mnemonic and its full text.
@@ -251,7 +240,7 @@ impl Module {
         let args = self.immediate(ev, doc, &imm_path, raw, &imm.value)?;
         // A prefix byte is not part of what the instruction is called: the
         // group's own table names it, and `0xfd v128.load` names it twice.
-        let text = if raw == 0xfd || raw == 0xfc {
+        let text = if raw == 0xfc || raw == 0xfd || raw == 0xfe {
             args
         } else if args.is_empty() {
             mnemonic.clone()
@@ -313,8 +302,8 @@ impl Module {
             // access has anyway. Naming those would put `align=4` on most of
             // the instructions in a file and mean nothing by it.
             0x28..=0x3e => mem_text(ev, doc, path, NATURAL_ALIGN[(op - 0x28) as usize])?,
-            // The 0xFC and 0xFD groups name themselves in their own table.
-            0xfc | 0xfd => self.prefixed(ev, doc, path, op)?,
+            // The prefixed groups name themselves in their own table.
+            0xfc | 0xfd | 0xfe => self.prefixed(ev, doc, path, op)?,
             // f32.const, f64.const. `scalar` would truncate these to an
             // integer, which is a wrong number rather than a rough one.
             0x43 => float(f64::from(*float_of(value) as f32)),
@@ -349,6 +338,10 @@ impl Module {
         let text = match (op, raw) {
             // A vector load or store, with or without a lane number after it.
             (0xfd, 0x00..=0x0b) | (0xfd, 0x5c..=0x5d) => mem_text(ev, doc, &args, simd_align(raw))?,
+            // Every atomic access but the fence. An atomic access has to be
+            // naturally aligned, so a well-formed file never says otherwise
+            // and the alignment is never worth printing.
+            (0xfe, _) if raw != 0x03 => mem_text(ev, doc, &args, thread_align(raw))?,
             (0xfd, 0x54..=0x5b) => {
                 let mem = mem_text(ev, doc, &args, simd_align(raw))?;
                 let lane = int_at(ev, doc, &child(&args, 2))?;
@@ -422,15 +415,6 @@ fn composite_args<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usiz
         });
     }
     Ok(parts.join(" "))
-}
-
-/// Which group an opcode hands off to without the immediate being read. A gap
-/// in the instruction table rather than in the file.
-fn undecoded_group(mnemonic: &str) -> Option<&'static str> {
-    match mnemonic {
-        "thread prefix" => Some("thread immediates are not read yet"),
-        _ => None,
-    }
 }
 
 /// A float as text, keeping the point so a whole number still reads as one.
@@ -724,12 +708,19 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_instruction_still_stops_the_body() {
+    fn an_atomic_instruction_reads_its_immediate() {
         let mut b = b" asm".to_vec();
         b.extend_from_slice(&1u32.to_le_bytes());
         section(3, &[1, 0], &mut b);
-        // memory.atomic.notify, whose immediate the table does not read.
-        let body: &[u8] = &[0, 0x01, 0xfe, 0x00, 0x02, 0x00, 0x0b];
+        // i32.atomic.load offset=16 (aligned 4, which it must be), then
+        // atomic.fence, then i64.atomic.rmw8.add_u offset=0.
+        let body: &[u8] = &[
+            0, //
+            0xfe, 0x10, 0x02, 0x10, //
+            0xfe, 0x03, 0x00, //
+            0xfe, 0x22, 0x00, 0x00, //
+            0x0b,
+        ];
         let mut code = vec![1u8];
         leb_u(body.len() as u64, &mut code);
         code.extend_from_slice(body);
@@ -739,8 +730,15 @@ mod tests {
         let mut ev = Evaluator::new(wasm());
         let m = Module::read(&mut ev, &d).unwrap();
         let text = m.disassemble(&mut ev, &d, 0).unwrap();
-        assert!(text.contains("nop"), "{text}");
-        assert!(text.contains(";; stops here: thread immediates are not read yet"), "{text}");
+        // An atomic access must be naturally aligned, so its alignment is
+        // never worth printing and only the offset is.
+        assert!(text.contains("i32.atomic.load offset=16"), "{text}");
+        assert!(!text.contains("align="), "{text}");
+        assert!(text.contains("atomic.fence 0"), "{text}");
+        assert!(text.contains("i64.atomic.rmw8.add_u"), "{text}");
+        assert!(text.trim_end().ends_with("end
+)"), "{text}");
+        assert!(!text.contains(";; stops here"), "{text}");
     }
 
 }
