@@ -190,7 +190,7 @@ impl Module {
                 // not a broken file. Say where it stopped rather than printing
                 // whatever the bytes happened to decode to.
                 Err(EvalError::Failed(why)) => {
-                    let _ = writeln!(out, "{:indent$};; stops here: {why}", "", indent = depth * 2);
+                    let _ = writeln!(out, "{:indent$};; disassembly stopped: {why}", "", indent = depth * 2);
                     break;
                 }
                 Err(e) => return Err(e),
@@ -223,11 +223,11 @@ impl Module {
         let op = ev.node(doc, &op_path)?;
         let (raw, name) = match op.value {
             Value::Enum { raw, name, .. } => (raw, name),
-            _ => return Err(EvalError::Failed("an instruction did not start with an opcode".into())),
+            _ => return Err(EvalError::Failed("instruction has no opcode".into())),
         };
         let mnemonic = match name {
             Some(n) => n,
-            None => return Err(EvalError::Failed(format!("opcode 0x{raw:02x} is not in the table"))),
+            None => return Err(EvalError::Failed(format!("unknown opcode 0x{raw:02x}"))),
         };
         let mut imm_path = path.to_vec();
         imm_path.push(1);
@@ -328,7 +328,7 @@ impl Module {
             _ => return Err(EvalError::Failed("a prefixed instruction has no sub-opcode".into())),
         };
         let Some(mnemonic) = name else {
-            return Err(EvalError::Failed(format!("0x{op:02x} 0x{raw:02x} is not in the table")));
+            return Err(EvalError::Failed(format!("unknown opcode 0x{op:02x} 0x{raw:02x}")));
         };
         let args = child(path, 1);
         let node = ev.node(doc, &args)?;
@@ -674,7 +674,7 @@ mod tests {
         let m = Module::read(&mut ev, &d).unwrap();
         let text = m.disassemble(&mut ev, &d, 0).unwrap();
         assert!(text.contains("nop"), "{text}");
-        assert!(text.contains(";; stops here: opcode 0x06 is not in the table"), "{text}");
+        assert!(text.contains(";; disassembly stopped: unknown opcode 0x06"), "{text}");
     }
 
     #[test]
@@ -711,7 +711,7 @@ mod tests {
         // The body now runs to its end rather than stopping partway.
         assert!(text.trim_end().ends_with("end
 )"), "{text}");
-        assert!(!text.contains(";; stops here"), "{text}");
+        assert!(!text.contains(";; disassembly stopped"), "{text}");
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
         assert!(text.contains("i64.atomic.rmw8.add_u"), "{text}");
         assert!(text.trim_end().ends_with("end
 )"), "{text}");
-        assert!(!text.contains(";; stops here"), "{text}");
+        assert!(!text.contains(";; disassembly stopped"), "{text}");
     }
 
 }

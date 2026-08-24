@@ -43,7 +43,7 @@ fn check(path: &str) {
     let take = m.func_count().min(200);
     for n in 0..take {
         let text = m.disassemble(&mut ev, &d, n).unwrap();
-        if text.contains(";; stops here") {
+        if text.contains(";; disassembly stopped") {
             stopped += 1;
         }
         if text.contains("call $") {
