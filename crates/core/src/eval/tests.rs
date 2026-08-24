@@ -632,3 +632,65 @@ fn an_edit_that_moves_bytes_throws_the_whole_memo_away() {
     ev.invalidate();
     assert_eq!(ev.memo_len(), 0);
 }
+
+#[test]
+fn work_done_in_goes_reaches_the_same_answer() {
+    // A list long enough that a small allowance cannot finish it in one go.
+    let n = 20_000u64;
+    let mut bytes = n.to_le_bytes().to_vec();
+    for i in 0..n {
+        let s = "w".repeat((i % 7) as usize + 1);
+        bytes.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(s.as_bytes());
+    }
+    let end = bytes.len() as u64;
+    let string = T::structure("String", vec![("len", T::u64(Little)), ("text", T::utf8(E::field("len")))]);
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::u64(Little)), ("items", T::array(string, E::field("n")))]),
+    );
+    let d = doc(&bytes);
+
+    let mut whole = Evaluator::new(t.clone());
+    let want = whole.node(&d, &[1]).unwrap();
+    assert_eq!(want.offset_bits + want.size_bits, end * 8);
+
+    // The same question, answered five hundred elements at a time.
+    let mut sliced = Evaluator::new(t);
+    sliced.set_slice(Some(500));
+    let mut goes = 0;
+    let got = loop {
+        goes += 1;
+        assert!(goes < 500, "asking again is not getting anywhere");
+        sliced.begin_slice();
+        match sliced.node(&d, &[1]) {
+            Ok(node) => break node,
+            Err(EvalError::Busy { reached_bits }) => {
+                // Each go says how far it has got, and it only ever goes forward.
+                assert!(reached_bits <= end * 8);
+                assert_eq!(reached_bits, sliced.reached_bits());
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    assert!(goes > 5, "a small allowance should have taken several goes, took {goes}");
+    assert_eq!(got.offset_bits, want.offset_bits);
+    assert_eq!(got.size_bits, want.size_bits);
+    assert_eq!(got.child_count, want.child_count);
+    assert!(sliced.memo_len() < 500, "and it is still bounded: {}", sliced.memo_len());
+
+    // Reading one element after the goes is the same either way.
+    sliced.begin_slice();
+    let mut mid = loop {
+        sliced.begin_slice();
+        match sliced.node(&d, &[1, 9_999, 1]) {
+            Ok(node) => break node,
+            Err(EvalError::Busy { .. }) => continue,
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    let want_mid = whole.node(&d, &[1, 9_999, 1]).unwrap();
+    mid.path.clone_from(&want_mid.path);
+    assert_eq!(mid.value, want_mid.value);
+    assert_eq!(mid.offset_bits, want_mid.offset_bits);
+}

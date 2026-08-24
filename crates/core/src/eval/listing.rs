@@ -370,7 +370,7 @@ impl Evaluator {
             p.pop();
             let (off, size) = match placed {
                 Ok(v) => v,
-                Err(e) if scattered && !matches!(e, EvalError::Pending(_)) => continue,
+                Err(e) if scattered && !e.interrupted() => continue,
                 Err(e) => return Err(e),
             };
             if bit < off && !scattered {
@@ -398,7 +398,7 @@ impl Evaluator {
             match placed {
                 Ok(off) if off > bit => best = Some(best.map_or(off, |b: u64| b.min(off))),
                 Ok(_) => {}
-                Err(e @ EvalError::Pending(_)) => return Err(e),
+                Err(e) if e.interrupted() => return Err(e),
                 Err(_) => {}
             }
         }

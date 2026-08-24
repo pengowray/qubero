@@ -29,7 +29,21 @@ pub use listing::Span;
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
     Pending(Vec<Missing>),
+    /// The work allowed for one go ran out before this could be worked out.
+    /// Asking again carries on from where it stopped. `reached_bits` is how far
+    /// into the file the reading has got, which is what someone watching it
+    /// wants to know.
+    Busy { reached_bits: u64 },
     Failed(String),
+}
+
+impl EvalError {
+    /// The work is not finished rather than not possible: bytes are on their
+    /// way, or the time allowed for one go ran out. Either way the answer is to
+    /// ask again, and neither means the field is wrong.
+    pub fn interrupted(&self) -> bool {
+        matches!(self, EvalError::Pending(_) | EvalError::Busy { .. })
+    }
 }
 
 pub type R<T> = Result<T, EvalError>;
@@ -173,6 +187,13 @@ pub struct Evaluator {
     /// What each guarded walk has added to the memo, so it can drop the nodes
     /// it has moved past. One entry per walk, since a list can hold a list.
     journals: Vec<walk::WalkJournal>,
+    /// Elements left before this go has to hand back, and how many each go is
+    /// allowed. None works to the end, which is what a caller with nothing to
+    /// draw meanwhile wants.
+    left: Option<u64>,
+    slice: Option<u64>,
+    /// How far into the file the reading has got, at its furthest.
+    reached_bits: u64,
 }
 
 impl Evaluator {
@@ -182,11 +203,46 @@ impl Evaluator {
             memo: FxHashMap::default(),
             lists: FxHashMap::default(),
             journals: Vec::new(),
+            left: None,
+            slice: None,
+            reached_bits: 0,
         }
     }
 
     pub fn template(&self) -> &Template {
         &self.template
+    }
+
+    /// Work in goes of `elements` at a time, handing back `EvalError::Busy` in
+    /// between so the caller can draw what it has and say how far it has got.
+    /// None, the default, works until the answer is ready however long that
+    /// takes.
+    pub fn set_slice(&mut self, elements: Option<u64>) {
+        self.slice = elements;
+        self.left = elements;
+    }
+
+    /// Start another go. What was worked out already is kept; only the
+    /// allowance is refilled.
+    pub fn begin_slice(&mut self) {
+        self.left = self.slice;
+    }
+
+    /// How far into the file the reading has got, at its furthest.
+    pub fn reached_bits(&self) -> u64 {
+        self.reached_bits
+    }
+
+    /// Charge one element against this go's allowance, and note how far the
+    /// reading has reached.
+    pub(super) fn spend(&mut self, at_bits: u64) -> R<()> {
+        self.reached_bits = self.reached_bits.max(at_bits);
+        let Some(left) = self.left.as_mut() else { return Ok(()) };
+        if *left == 0 {
+            return Err(EvalError::Busy { reached_bits: self.reached_bits });
+        }
+        *left -= 1;
+        Ok(())
     }
 
     /// How many nodes are currently memoised. What a walk over a long list
@@ -244,6 +300,8 @@ impl Evaluator {
         self.memo.clear();
         self.lists.clear();
         self.journals.clear();
+        self.left = self.slice;
+        self.reached_bits = 0;
     }
 
     /// What the list at `path` has learned about itself. A node that is not
@@ -470,7 +528,7 @@ impl Evaluator {
         for i in 0..n as usize {
             match self.pointer_offset(doc, list, lr, i) {
                 Ok(off) => starts.push(off),
-                Err(e @ EvalError::Pending(_)) => return Err(e),
+                Err(e) if e.interrupted() => return Err(e),
                 Err(_) => {}
             }
         }
@@ -593,7 +651,7 @@ impl Evaluator {
                             // No terminator: the field runs to the end of its
                             // container, if the format allows for that.
                             Err(e) => {
-                                if *or_end && !matches!(e, EvalError::Pending(_)) {
+                                if *or_end && !e.interrupted() {
                                     r.limit - r.offset
                                 } else {
                                     return Err(e);
@@ -709,6 +767,7 @@ impl Evaluator {
                         self.list_mut(path).repeat_done = true;
                         return Ok(ends as u64);
                     }
+                    self.spend(start)?;
                     p.push(ends);
                     self.resolve(doc, &p)?;
                     let size = self.size_of(doc, &p)?;

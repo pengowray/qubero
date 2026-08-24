@@ -191,7 +191,7 @@ impl Evaluator {
             Ok(info) => info.value.as_int(),
             // A field that cannot be read yet is not an answer, and must not be
             // taken for the absence of one.
-            Err(e @ EvalError::Pending(_)) => return Err(e),
+            Err(e) if e.interrupted() => return Err(e),
             Err(_) => None,
         })
     }

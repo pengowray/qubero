@@ -162,7 +162,9 @@ enum Reply<T: Serialize> {
     #[serde(rename = "ok")]
     Ok { node: T },
     #[serde(rename = "pending")]
-    Pending { chunks: Vec<f64> },
+    Pending { chunks: Vec<f64>, reached_bytes: f64 },
+    #[serde(rename = "working")]
+    Working { reached_bytes: f64 },
     #[serde(rename = "error")]
     Error { message: String },
 }
@@ -279,13 +281,21 @@ fn dto(n: NodeInfo) -> NodeDto {
     }
 }
 
-fn reply<T: Serialize>(r: Result<T, EvalError>) -> String {
+fn reply_with<T: Serialize>(r: Result<T, EvalError>, reached_bytes: f64) -> String {
     let rep = match r {
         Ok(node) => Reply::Ok { node },
-        Err(EvalError::Pending(m)) => Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect() },
+        Err(EvalError::Pending(m)) => {
+            Reply::Pending { chunks: m.into_iter().map(|m| m.chunk as f64).collect(), reached_bytes }
+        }
+        Err(EvalError::Busy { reached_bits }) => Reply::Working { reached_bytes: (reached_bits / 8) as f64 },
         Err(EvalError::Failed(message)) => Reply::Error { message },
     };
     serde_json::to_string(&rep).unwrap_or_else(|e| format!("{{\"status\":\"error\",\"message\":{:?}}}", e.to_string()))
+}
+
+/// The same, for the callers that have no evaluator to ask how far it has got.
+fn reply<T: Serialize>(r: Result<T, EvalError>) -> String {
+    reply_with(r, 0.0)
 }
 
 /// What one step of a search found, as the host reads it. `status` is the same
@@ -325,6 +335,13 @@ fn hex_trouble(text: &str) -> &'static str {
         HEX_HALF_A_BYTE
     }
 }
+
+/// How many elements of a list to place before handing back, so the page can
+/// draw what it has and say how far it has got. Around a twentieth of a second
+/// of work: short enough that the page stays under the hand, long enough that
+/// handing back is not most of what is done. Asking again carries on where the
+/// last go left off rather than starting over.
+const WORK_SLICE: u64 = 5_000;
 
 const HEX_NOT_A_DIGIT: &str = "Hex is pairs of digits 0-9 a-f, like 89 50 4e 47";
 const HEX_HALF_A_BYTE: &str = "Unfinished byte: each byte is two digits, like 4e";
@@ -376,7 +393,9 @@ impl Editor {
         }
         match formats::builtin(name) {
             Some(t) => {
-                self.eval = Some(Evaluator::new(t));
+                let mut e = Evaluator::new(t);
+                e.set_slice(Some(WORK_SLICE));
+                self.eval = Some(e);
                 true
             }
             None => false,
@@ -412,7 +431,10 @@ impl Editor {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         match &mut self.eval {
             None => reply::<ExplainDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => reply(e.explain(&self.doc, &p).map(explain_dto)),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.explain(&self.doc, &p).map(explain_dto))
+            }
         }
     }
 
@@ -453,7 +475,11 @@ impl Editor {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         match &mut self.eval {
             None => reply::<NodeDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => reply(e.node(&self.doc, &p).map(dto)),
+            Some(e) => {
+                e.begin_slice();
+                let r = e.node(&self.doc, &p).map(dto);
+                reply_with(r, (e.reached_bits() / 8) as f64)
+            }
         }
     }
 
@@ -462,7 +488,13 @@ impl Editor {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         match &mut self.eval {
             None => reply::<Vec<NodeDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => reply(e.children(&self.doc, &p, from as u64, to as u64).map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>())),
+            Some(e) => {
+                e.begin_slice();
+                let r = e
+                    .children(&self.doc, &p, from as u64, to as u64)
+                    .map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
+                reply_with(r, (e.reached_bits() / 8) as f64)
+            }
         }
     }
 
@@ -472,7 +504,10 @@ impl Editor {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         match &mut self.eval {
             None => reply::<TextDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => reply(e.text_value(&self.doc, &p).map(|(text, truncated)| TextDto { text, truncated })),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.text_value(&self.doc, &p).map(|(text, truncated)| TextDto { text, truncated }))
+            }
         }
     }
 
@@ -482,6 +517,7 @@ impl Editor {
         let Some(e) = &mut self.eval else {
             return reply::<Vec<SpanDto>>(Err(EvalError::Failed("no template".into())));
         };
+        e.begin_slice();
         let found = match e.spans(&self.doc, from_bit as u64, to_bit as u64, max as usize) {
             Ok(v) => v,
             Err(err) => return reply::<Vec<SpanDto>>(Err(err)),
@@ -523,7 +559,10 @@ impl Editor {
     pub fn locate(&mut self, bit: f64) -> String {
         match &mut self.eval {
             None => reply::<Vec<usize>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => reply(e.locate(&self.doc, bit as u64)),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.locate(&self.doc, bit as u64))
+            }
         }
     }
 
@@ -533,7 +572,14 @@ impl Editor {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let prepared = match &mut self.eval {
             None => return reply::<WriteDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => e.prepare_write(&self.doc, &p, text),
+            Some(e) => {
+                // An edit is not something to do by halves, so this one runs to
+                // an answer however long it takes.
+                e.set_slice(None);
+                let prepared = e.prepare_write(&self.doc, &p, text);
+                e.set_slice(Some(WORK_SLICE));
+                prepared
+            }
         };
         match prepared {
             Ok(w) => {

@@ -79,6 +79,7 @@ impl Evaluator {
     ) -> R<u64> {
         let parent = p.clone();
         while *j < idx {
+            self.spend(*at)?;
             let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(*j);
             // The element may already be here, from the walk that sized the
@@ -193,6 +194,7 @@ impl Evaluator {
     ) -> R<Option<usize>> {
         let parent = p.clone();
         while (*j as u64) < n {
+            self.spend(*at)?;
             let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(*j);
             let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| (r.offset, s)));
