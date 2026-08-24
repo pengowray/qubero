@@ -175,6 +175,8 @@ struct SpanDto {
     /// A structure that reads on one row, already joined. Null for a field that
     /// reads as its own value.
     line: Option<String>,
+    /// The first few values of a run shown as one entry.
+    sample: Vec<String>,
 }
 
 fn span_dto(s: Span) -> SpanDto {
@@ -191,6 +193,7 @@ fn span_dto(s: Span) -> SpanDto {
         gap: s.gap,
         count: s.count as f64,
         line: s.line,
+        sample: s.sample,
     }
 }
 

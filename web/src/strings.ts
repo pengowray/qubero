@@ -9,3 +9,7 @@ export const NO_TEMPLATE = "No template selected";
 
 /** The same, with the way out, where there is room for a second sentence. */
 export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu to see the file's fields.`;
+
+/** For a file whose first bytes matched no built-in template. Saying "none
+ *  selected" there would suggest an answer exists and the user missed it. */
+export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";

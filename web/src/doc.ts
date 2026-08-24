@@ -128,6 +128,8 @@ export type Span = {
    *  than its opcode and its immediate. Null for a field that reads as its own
    *  value. */
   readonly line: string | null;
+  /** The first few values of a run shown as one entry. */
+  readonly sample: string[];
 };
 
 /** What a type permits, beyond what this file's bytes happen to say. */

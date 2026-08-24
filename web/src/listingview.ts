@@ -7,7 +7,7 @@
 // windowed by bit range, which is the same shape.
 
 import { formatOffset } from "./doc.js";
-import { GAP_LABEL, NO_TEMPLATE_HINT } from "./strings.js";
+import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
 import type { Doc, Span } from "./doc.js";
 
 /** Rows fetched beyond the ones on screen, so a wheel notch has somewhere to
@@ -38,6 +38,16 @@ function trailParts(trail: readonly string[]): string[] {
     else out.push(part);
   }
   return out;
+}
+
+/** `0, 1, 4, 9 … 512 values`. The count alone tells a run of zeroes and a run
+ *  of samples apart not at all, and the row is where the reader decides
+ *  whether to open it. */
+function runText(s: Span): string {
+  const count = `${s.count.toLocaleString()} values`;
+  if (s.sample.length === 0) return count;
+  const shown = s.sample.join(", ");
+  return s.sample.length < s.count ? `${shown} … ${count}` : `${shown} (${count})`;
 }
 
 function samePrefix(a: readonly string[], b: readonly string[], n: number): boolean {
@@ -101,6 +111,9 @@ export class ListingView {
   private dragging = false;
   /** Where the cursor went while this view was hidden. */
   private pendingBit: number | null = null;
+  /** Whether the file's first bytes matched a template, which decides what an
+   *  empty listing has to say for itself. */
+  private matched = true;
 
   onPick: (pick: FieldPick) => void = () => {};
 
@@ -161,6 +174,12 @@ export class ListingView {
       const n = this.doc.templateNode(path);
       if (n.status === "ok") this.topBit = n.node.offset_bits;
     }
+    this.render();
+  }
+
+  /** Whether sniffing the file's first bytes found a template. */
+  setMatched(matched: boolean): void {
+    this.matched = matched;
     this.render();
   }
 
@@ -313,7 +332,7 @@ export class ListingView {
     if (this.doc.template === null) {
       this.rowsEl.replaceChildren();
       this.header.replaceChildren();
-      this.status.textContent = NO_TEMPLATE_HINT;
+      this.status.textContent = this.matched ? NO_TEMPLATE_HINT : NO_TEMPLATE_MATCH;
       return;
     }
     if (this.header.childElementCount === 0) this.drawHeader();
@@ -380,7 +399,7 @@ export class ListingView {
       type.textContent = "";
     } else {
       name.textContent = s.name;
-      value.textContent = s.count > 0 ? `${s.count.toLocaleString()} values` : s.value;
+      value.textContent = s.count > 0 ? runText(s) : s.value;
       type.textContent = s.type;
     }
     el.append(...cells);

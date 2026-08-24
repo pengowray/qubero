@@ -264,6 +264,7 @@ function mount(doc: Doc): void {
   });
   void doc.sniffTemplate().then(async (name) => {
     const templated = name !== null;
+    listing.setMatched(templated);
     if (name !== null) {
       tmpl.value = name;
       doc.setTemplate(name);

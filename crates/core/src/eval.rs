@@ -107,7 +107,14 @@ pub struct Span {
     /// rather than an `op` row and an `imm` row. None for everything else,
     /// which reads as its own value.
     pub line: Option<String>,
+    /// The first few values of a run shown as one entry. `512 values` says how
+    /// many and nothing about what, and a run of zeroes and a run of samples
+    /// are worth telling apart without opening either.
+    pub sample: Vec<String>,
 }
+
+/// Values from the front of a collapsed run, at most this many.
+const SAMPLE: u64 = 4;
 
 /// One value on a shared row, which is terser than the same value on a row of
 /// its own: a named number gives its name and drops the number behind it,
@@ -349,6 +356,11 @@ impl Evaluator {
                 let run_info = self.node(doc, &run)?;
                 span = self.span_of(doc, &run, &run_info)?;
                 span.count = count;
+                for i in 0..count.min(SAMPLE) {
+                    let mut elem = run.clone();
+                    elem.push(i as usize);
+                    span.sample.push(brief(&self.node(doc, &elem)?.value));
+                }
             }
             let next = span.offset_bits + span.size_bits;
             at = if next > at { next } else { at + 8 };
@@ -376,6 +388,7 @@ impl Evaluator {
             gap: false,
             count: 0,
             line: None,
+            sample: Vec::new(),
         })
     }
 
