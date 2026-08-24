@@ -175,7 +175,7 @@ impl Module {
     pub fn disassemble<S: Source>(&self, ev: &mut Evaluator, doc: &Document<S>, n: usize) -> R<String> {
         let path = match self.bodies.get(n) {
             Some(p) => p.clone(),
-            None => return Err(EvalError::Failed(format!("no function {n} in the code section"))),
+            None => return Err(EvalError::Failed(format!("no function {n}: the code section has {} functions", self.bodies.len()))),
         };
         let mut out = String::new();
         let _ = writeln!(out, "(func ${}", self.func_name((self.imported + n) as u32));
@@ -325,7 +325,7 @@ impl Module {
         let sub = ev.node(doc, &child(path, 0))?;
         let (raw, name) = match sub.value {
             Value::Enum { raw, name, .. } => (raw, name),
-            _ => return Err(EvalError::Failed("a prefixed instruction has no sub-opcode".into())),
+            _ => return Err(EvalError::Failed(format!("instruction 0x{op:02x} has no sub-opcode"))),
         };
         let Some(mnemonic) = name else {
             return Err(EvalError::Failed(format!("unknown opcode 0x{op:02x} 0x{raw:02x}")));
