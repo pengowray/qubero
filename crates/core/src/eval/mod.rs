@@ -5,7 +5,7 @@
 //! touches an unloaded chunk yields `EvalError::Pending` rather than a value, so
 //! zero-filled bytes can never be mistaken for data.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::bits::bytes_for;
 use crate::decode::{be_int, f16_to_f64, fixed_bits, read_int, read_uint};
@@ -165,10 +165,10 @@ struct Resolved {
 
 pub struct Evaluator {
     template: Template,
-    memo: HashMap<Vec<usize>, Resolved>,
+    memo: FxHashMap<Vec<usize>, Resolved>,
     /// What each list has learned about itself, for the few nodes that are
     /// lists. Kept apart from `memo` so resolving a child stays cheap.
-    lists: HashMap<Vec<usize>, ListState>,
+    lists: FxHashMap<Vec<usize>, ListState>,
     /// Nodes recorded while a guarded walk is running, so the walk can drop
     /// the ones it has moved past. Empty when no walk is running.
     journal: Vec<Vec<usize>>,
@@ -180,8 +180,8 @@ impl Evaluator {
     pub fn new(template: Template) -> Self {
         Self {
             template,
-            memo: HashMap::new(),
-            lists: HashMap::new(),
+            memo: FxHashMap::default(),
+            lists: FxHashMap::default(),
             journal: Vec::new(),
             guard_depth: 0,
         }

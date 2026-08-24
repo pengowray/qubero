@@ -17,19 +17,25 @@ fn main() {
             bytes.extend_from_slice(s.as_bytes());
         }
         let string = T::structure("String", vec![("len", T::u64(Little)), ("text", T::utf8(E::field("len")))]);
-        let t = Template::new(
-            "t",
-            T::structure("Root", vec![("n", T::u64(Little)), ("items", T::array(string, E::field("n")))]),
-        );
-        let d = Document::new(MemSource(bytes));
+        // The same list twice: once as the element type itself, once reached
+        // through a named type and a thirteen-case switch, which is how GGUF
+        // says "a value of whichever kind the entry declared".
+        let plain = T::array(string.clone(), E::field("n"));
+        let cases: Vec<(i128, T)> = (0..13).map(|k| (k, if k == 8 { T::Named("String".into()) } else { T::u8() })).collect();
+        let switched = T::array(T::switch(E::lit(8), cases, T::bytes(E::lit(0))), E::field("n"));
+        for (what, elem) in [("plain", plain), ("switched", switched)] {
+        let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("items", elem)]))
+            .with_type("String", string.clone());
+        let d = Document::new(MemSource(bytes.clone()));
         let mut ev = Evaluator::new(t);
         let start = Instant::now();
         let items = ev.node(&d, &[1]).expect("items");
         println!(
-            "{n:>7} strings: {:?}  ({} bytes, {} memo entries)",
+            "{n:>7} strings {what:<9}: {:?}  ({} bytes, {} memo entries)",
             start.elapsed(),
             items.size_bits / 8,
             ev.memo_len()
         );
+        }
     }
 }

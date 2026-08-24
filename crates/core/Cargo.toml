@@ -8,4 +8,7 @@ license.workspace = true
 proptest = "1"
 
 [dependencies]
+# Hashing a path of child indices happens several times per field; the default
+# hasher is built to resist collision attacks the memo has no exposure to.
+rustc-hash = "2"
 regex-automata = { version = "0.4.18", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "hybrid", "perf-literal"] }
