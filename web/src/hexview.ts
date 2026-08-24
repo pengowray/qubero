@@ -511,7 +511,9 @@ export class HexView {
     // Pending: the bytes are on their way and another render follows. Error:
     // the template cannot read what is here, usually after an edit that
     // changed a length, and an empty column would not say that.
-    if (r.status === "pending") return { spans: [], more: false, error: null };
+    // Nothing to annotate yet, whether the bytes are on their way or the
+    // structure is still being worked out. Both come back on their own.
+    if (r.status === "pending" || r.status === "working") return { spans: [], more: false, error: null };
     if (r.status === "error") return { spans: [], more: false, error: r.message };
     this.spanCache = { key, spans: r.node, more: r.node.length >= max, error: null };
     return this.spanCache;

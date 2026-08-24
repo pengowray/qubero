@@ -4,6 +4,11 @@
 import init, { Editor } from "./pkg/qubero_wasm.js";
 
 const CHUNK_SIZE = 64 * 1024;
+/** Chunks to fetch past one the template asked for and did not have. Placing
+ * fields runs forward through a file, so the chunk after the missing one is
+ * nearly always the next one wanted; asking for a run of them turns hundreds
+ * of round trips into a handful. */
+const READ_AHEAD = 48;
 const CHUNK_CAPACITY = 512; // 32 MiB resident at most
 
 // What the file(1) rules get to look at. Their offsets count from the start of
@@ -239,12 +244,16 @@ function signatureName(id: Identification): string {
 
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
-  | { readonly status: "pending" }
+  | { readonly status: "pending"; readonly reachedBytes: number }
+  /** Still being worked out. `reachedBytes` is how far into the file the
+   * reading has got. Asking again carries on from there. */
+  | { readonly status: "working"; readonly reachedBytes: number }
   | { readonly status: "error"; readonly message: string };
 
 type RawReply<T> =
   | { status: "ok"; node: T }
-  | { status: "pending"; chunks: number[] }
+  | { status: "pending"; chunks: number[]; reached_bytes: number }
+  | { status: "working"; reached_bytes: number }
   | { status: "error"; message: string };
 
 export class ReadFailure extends Error {
@@ -303,6 +312,8 @@ function ensureWasm(): Promise<unknown> {
 export class Doc {
   private readonly inflight = new Set<number>();
   private readonly listeners = new Set<() => void>();
+  /** A go at unfinished work is already queued. */
+  private workScheduled = false;
 
   private constructor(
     private readonly editor: Editor,
@@ -430,9 +441,30 @@ export class Doc {
     const r: RawReply<T> = JSON.parse(json);
     if (r.status === "pending") {
       for (const c of r.chunks) this.fetchChunk(c);
-      return { status: "pending" };
+      // And the run after them, which is where this is going next.
+      let last = 0;
+      for (const c of r.chunks) last = Math.max(last, c);
+      for (let i = 1; i <= READ_AHEAD; i++) this.fetchChunk(last + i);
+      return { status: "pending", reachedBytes: r.reached_bytes };
+    }
+    if (r.status === "working") {
+      // Nothing is going to arrive to wake this up, the way a chunk does, so
+      // it has to ask itself again. Yielding first lets the page draw what it
+      // has and stay usable while the rest is worked out.
+      this.scheduleMoreWork();
+      return { status: "working", reachedBytes: r.reached_bytes };
     }
     return r;
+  }
+
+  /** Carry on with unfinished work after the page has had a chance to draw. */
+  private scheduleMoreWork(): void {
+    if (this.workScheduled) return;
+    this.workScheduled = true;
+    setTimeout(() => {
+      this.workScheduled = false;
+      this.notify();
+    }, 0);
   }
 
   templateNode(path: readonly number[]): TemplateReply<TemplateNode> {
@@ -578,6 +610,9 @@ export class Doc {
   }
 
   private fetchChunk(chunk: number): void {
+    // Reading ahead can run off the end, and a chunk past the end is not a
+    // chunk: feeding an empty one would look like bytes that are all zero.
+    if (chunk * CHUNK_SIZE >= this.blob.size) return;
     if (this.inflight.has(chunk)) return;
     this.inflight.add(chunk);
     const start = chunk * CHUNK_SIZE;

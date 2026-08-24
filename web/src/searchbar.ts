@@ -197,7 +197,7 @@ export class SearchBar {
         this.status.textContent = r.message;
         return null;
       }
-      if (r.status === "pending") {
+      if (r.status === "pending" || r.status === "working") {
         await frame();
         since = performance.now();
         continue;

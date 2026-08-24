@@ -3,7 +3,7 @@
 // the user opens it. Editable leaf values are typed in place: the core encodes
 // the text as that field's type and writes only that field's bits.
 
-import { formatOffset } from "./doc.js";
+import { formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 
 const PAGE = 200;
@@ -12,6 +12,8 @@ const PAGE = 200;
 const INLINE_LIMIT = { bytes: 16, str: 64 } as const;
 /** Give up after this many chunk-loading retries on one commit. */
 const WRITE_RETRIES = 8;
+/** A cell whose value is still being worked out. Not zero, and not nothing. */
+const NOT_YET = "…";
 
 export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
@@ -67,6 +69,8 @@ export class TypeTable {
   private readonly empty: HTMLElement;
   private readonly status: HTMLElement;
   private readonly note: HTMLParagraphElement;
+  /** How far the structure has been worked out, while that is still going on. */
+  private readonly progress: HTMLParagraphElement;
   private readonly expanded = new Set<string>();
   private readonly shown = new Map<string, number>();
   private selected: string | null = null;
@@ -96,7 +100,11 @@ export class TypeTable {
     this.note = document.createElement("p");
     this.note.className = "tt-note";
     this.note.hidden = true;
-    this.el.append(this.empty, table, this.note, this.status);
+    this.progress = document.createElement("p");
+    this.progress.className = "tt-progress";
+    this.progress.setAttribute("role", "status");
+    this.progress.hidden = true;
+    this.el.append(this.empty, table, this.progress, this.note, this.status);
     this.expanded.add("");
     this.body.addEventListener("click", (e) => this.onClick(e));
     this.body.addEventListener("keydown", (e) => this.onKey(e));
@@ -199,9 +207,10 @@ export class TypeTable {
       this.editing = null;
       this.focusKey = e.key;
       this.status.textContent = "";
-    } else if (r.status === "pending") {
+    } else if (r.status === "pending" || r.status === "working") {
       // The field's offset depends on bytes that are not loaded yet. Doc has
-      // asked for them; this runs again when they land.
+      // asked for them; this runs again when they land. An edit is never
+      // handed back half-done, so "working" does not arrive here.
       e.waiting = e.tries < WRITE_RETRIES;
       e.tries += 1;
       this.status.textContent = e.waiting
@@ -226,12 +235,66 @@ export class TypeTable {
     this.empty.hidden = true;
     const frag = document.createDocumentFragment();
     const root = this.doc.templateNode([]);
-    if (root.status === "ok") this.addRows(frag, root.node, 0);
-    else this.addStatusRow(frag, root, 0, "file");
+    if (root.status === "ok") {
+      this.progress.hidden = true;
+      this.addRows(frag, root.node, 0);
+    } else if (root.status === "working" || root.status === "pending") {
+      // How far a file runs is only known once every field in it has been
+      // placed, and on a large file that takes a while. The fields already
+      // placed are worth showing meanwhile: the head of a file is what says
+      // what the file is.
+      this.showProgress(root.reachedBytes);
+      this.addPlaceholderRoot(frag);
+      this.addReadyChildren(frag, [], 1);
+    } else {
+      this.progress.hidden = true;
+      this.addStatusRow(frag, root, 0, "file");
+    }
     this.rebuilding = true;
     this.body.replaceChildren(frag);
     this.rebuilding = false;
     this.restoreFocus();
+  }
+
+  private showProgress(reachedBytes: number): void {
+    this.progress.textContent = `Working out the file's structure… ${formatBytes(reachedBytes)} read so far`;
+    this.progress.hidden = false;
+  }
+
+  /** The row for the file itself, before its length is known. */
+  private addPlaceholderRoot(frag: DocumentFragment): void {
+    const tr = document.createElement("tr");
+    tr.dataset["path"] = "";
+    const name = document.createElement("td");
+    name.style.paddingLeft = "4px";
+    const spacer = document.createElement("span");
+    spacer.className = "tt-toggle tt-leaf";
+    name.append(spacer, document.createTextNode("file"));
+    const value = document.createElement("td");
+    const type = document.createElement("td");
+    type.className = "tt-type";
+    const off = document.createElement("td");
+    off.className = "tt-num";
+    off.textContent = formatOffset(0);
+    const size = document.createElement("td");
+    size.className = "tt-num tt-not-yet";
+    size.textContent = NOT_YET;
+    tr.append(name, value, type, off, size);
+    frag.append(tr);
+  }
+
+  /**
+   * The children of `path` that can be placed already, in order, stopping at
+   * the first one that cannot. A field is placed by the fields before it, so
+   * the ones that are ready are always the ones at the front.
+   */
+  private addReadyChildren(frag: DocumentFragment, path: readonly number[], depth: number): void {
+    const limit = this.shown.get(key(path)) ?? PAGE;
+    for (let i = 0; i < limit; i++) {
+      const child = this.doc.templateNode([...path, i]);
+      if (child.status !== "ok") return;
+      this.addRows(frag, child.node, depth);
+    }
   }
 
   /** Put the caret back where it was: an edit in progress, or the cell just left. */
@@ -256,7 +319,21 @@ export class TypeTable {
     }
   }
 
-  private addStatusRow(frag: DocumentFragment, r: { status: "pending" } | { status: "error"; message: string }, depth: number, what: string): void {
+  private addStatusRow(
+    frag: DocumentFragment,
+    r:
+      | { status: "pending"; reachedBytes: number }
+      | { status: "working"; reachedBytes: number }
+      | { status: "error"; message: string },
+    depth: number,
+    what: string,
+  ): void {
+    // Work still going on is said once, under the rows, rather than again on
+    // every row waiting for it.
+    if (r.status === "working" || (r.status === "pending" && r.reachedBytes > 0)) {
+      this.showProgress(r.reachedBytes);
+      return;
+    }
     const tr = document.createElement("tr");
     tr.className = r.status === "pending" ? "tt-pending" : "tt-error";
     const td = document.createElement("td");
@@ -331,6 +408,11 @@ export class TypeTable {
     if (n.composite && open) {
       const limit = this.shown.get(k) ?? PAGE;
       const kids = this.doc.templateChildren(n.path, 0, limit);
+      if (kids.status === "working" || (kids.status === "pending" && kids.reachedBytes > 0)) {
+        this.showProgress(kids.reachedBytes);
+        this.addReadyChildren(frag, n.path, depth + 1);
+        return;
+      }
       if (kids.status !== "ok") {
         this.addStatusRow(frag, kids, depth + 1, n.name);
         return;

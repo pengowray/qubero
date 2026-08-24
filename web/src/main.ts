@@ -97,7 +97,7 @@ function mount(doc: Doc): void {
     if (bitOffset === followedBit) return;
     followedBit = bitOffset;
     const at = doc.locate(bitOffset);
-    if (at.status === "pending") {
+    if (at.status === "pending" || at.status === "working") {
       followWhenLoaded = bitOffset;
       return;
     }

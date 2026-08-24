@@ -1234,3 +1234,14 @@ input.invalid {
 .sb-replace {
   padding-left: 0;
 }
+
+/* What the structure panel says while it is still working a large file out,
+   and the cells that are waiting on it. */
+.tt-progress {
+  margin: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tt-not-yet {
+  color: var(--muted);
+}

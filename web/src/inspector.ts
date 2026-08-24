@@ -218,7 +218,7 @@ export class Inspector {
       this.status.textContent = r.message;
       return;
     }
-    if (r.status === "pending") {
+    if (r.status === "pending" || r.status === "working") {
       this.status.textContent = "Loading this part of the file…";
       return;
     }
@@ -277,7 +277,10 @@ export class Inspector {
     const found = this.pinned === null ? this.doc.locate(this.offset) : ({ status: "ok", node: this.pinned } as const);
     if (found.status !== "ok") {
       this.at = null;
-      this.crumbs.textContent = found.status === "pending" ? "Loading this part of the file…" : "No field at this offset.";
+      this.crumbs.textContent =
+        found.status === "pending" || found.status === "working"
+          ? "Loading this part of the file…"
+          : "No field at this offset.";
       this.fieldRow.hidden = true;
       return;
     }
@@ -285,7 +288,8 @@ export class Inspector {
     const node = this.doc.templateNode(path);
     if (node.status !== "ok") {
       this.at = null;
-      this.crumbs.textContent = node.status === "pending" ? "Loading this part of the file…" : node.message;
+      this.crumbs.textContent =
+        node.status === "pending" || node.status === "working" ? "Loading this part of the file…" : node.message;
       this.fieldRow.hidden = true;
       return;
     }
@@ -367,7 +371,7 @@ export class Inspector {
   /** Text comes decoded from the core, which knows the field's encoding. */
   private readText(n: TemplateNode): { text: string; truncated: boolean; note: string | null } | null {
     const r = this.doc.fieldText(n.path);
-    if (r.status === "pending") return null;
+    if (r.status === "pending" || r.status === "working") return null;
     if (r.status === "error") return { text: "", truncated: false, note: r.message };
     return { text: r.node.text, truncated: r.node.truncated, note: n.read_as };
   }
