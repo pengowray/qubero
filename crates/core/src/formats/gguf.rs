@@ -176,7 +176,7 @@ fn weights() -> T {
     // however many weights that type packs together.
     let run = |ty: T| T::array(ty, count(1));
     let blocks = |per_block: i128, name: &str, fields: Vec<(&str, T)>| {
-        T::array(T::inline_structure(name, fields), count(per_block))
+        T::array(T::inline_structure(name, fields).counted_as("block"), count(per_block))
     };
     // A block nothing outside ggml unpacks: the right size, and no claim
     // about what is inside it.
@@ -429,6 +429,28 @@ mod tests {
         assert_eq!(ev.node(&d, &[6, 0, 1, 0]).unwrap().value, Value::Float(1.0));
         assert_eq!(ev.node(&d, &[6, 0, 1, 1, 31]).unwrap().value, Value::Int(32));
         assert_eq!(ev.node(&d, &[6, 0, 1]).unwrap().size_bits, 34 * 8);
+    }
+
+    #[test]
+    fn a_list_says_what_its_children_are_called() {
+        // A run of numbers holds values and a run of quantised weights holds
+        // blocks. Only the format knows the second word.
+        let mut payload = Vec::new();
+        for _ in 0..2 {
+            payload.extend_from_slice(&[0x00, 0x3c]);
+            payload.extend(std::iter::repeat_n(0u8, 32));
+        }
+        let d = Document::new(MemSource(one_tensor_file(8, &payload)));
+        let mut ev = Evaluator::new(gguf());
+        assert_eq!(ev.node(&d, &[6, 0]).unwrap().unit.as_deref(), Some("block"));
+        // The weights inside one of those blocks are numbers, and so values.
+        assert_eq!(ev.node(&d, &[6, 0, 0, 1]).unwrap().unit.as_deref(), Some("value"));
+        // A tensor of plain floats is values too, and the tensor table itself
+        // is a list of records the format has no word for.
+        let d = Document::new(MemSource(one_tensor_file(0, &[0; 64 * 4])));
+        let mut ev = Evaluator::new(gguf());
+        assert_eq!(ev.node(&d, &[6, 0]).unwrap().unit.as_deref(), Some("value"));
+        assert_eq!(ev.node(&d, &[5]).unwrap().unit, None);
     }
 
     #[test]

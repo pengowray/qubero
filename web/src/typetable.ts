@@ -4,6 +4,7 @@
 // the text as that field's type and writes only that field's bits.
 
 import { formatBytes, formatOffset } from "./doc.js";
+import { countText } from "./strings.js";
 import type { Doc, TemplateNode } from "./doc.js";
 
 const PAGE = 200;
@@ -40,10 +41,6 @@ function editableHere(n: TemplateNode): boolean {
 
 function pathOf(k: string): number[] {
   return k === "" ? [] : k.split("/").map(Number);
-}
-
-function countText(n: number, noun: string): string {
-  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
 }
 
 /// A named value reads as `local.get (0x20)`. Hundreds of instruction rows in a
@@ -395,12 +392,13 @@ export class TypeTable {
       value.title = "Click to edit";
       value.append(...label(n));
     } else {
-      // A structure has named fields; a list has items, however its
-      // children are placed. A list reads as `X[]`, or as `offsets → X`
-      // when its children sit where an earlier array of offsets says.
+      // A structure has named fields; a list has whatever the format calls
+      // its children, and items when it has no word for them. A list reads as
+      // `X[]`, or as `offsets → X` when its children sit where an earlier
+      // array of offsets says.
       if (n.composite) {
         const list = n.type.endsWith("[]") || n.type.startsWith("offsets ");
-        value.textContent = countText(n.child_count, list ? "item" : "field");
+        value.textContent = countText(n.child_count, list ? (n.unit ?? "item") : "field");
       }
       else value.append(...label(n));
     }

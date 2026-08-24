@@ -114,6 +114,10 @@ pub struct NodeInfo {
     /// How the encoding was settled when the template did not say outright, or
     /// that the bytes do not fit the encoding the template named.
     pub read_as: Option<String>,
+    /// What one child of this list is called, for counting them: `value` for a
+    /// run of numbers, whatever the format calls them for a run it has a word
+    /// for, and nothing at all when the honest answer is `item`.
+    pub unit: Option<String>,
 }
 
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
@@ -381,6 +385,7 @@ impl Evaluator {
             read_as: reading.2,
             name: self.label(doc, path, &r)?,
             type_name: r.ty.display_name(),
+            unit: unit_of(&r.ty).map(str::to_string),
             offset_bits: r.offset,
             size_bits: size,
             value,
@@ -874,6 +879,22 @@ impl Evaluator {
 
     // ----- reading -----
 
+}
+
+/// What one child of this list is called. A run of numbers holds values; a run
+/// of anything the format has a word for holds those; everything else holds
+/// items, which is what saying nothing here means.
+fn unit_of(ty: &Ty) -> Option<&str> {
+    let elem = match ty {
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => elem.base(),
+        _ => return None,
+    };
+    if let Ty::Struct(s) = elem {
+        if let Some(unit) = &s.unit {
+            return Some(unit);
+        }
+    }
+    listing::plain(elem).then_some("value")
 }
 
 /// Whether an expression asks nothing about the element it sits in, so that

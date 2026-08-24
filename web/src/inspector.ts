@@ -8,6 +8,7 @@
 import { formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
+import { countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
 
 /** Structure reads the template's field; the other two read raw bytes. */
@@ -334,7 +335,8 @@ export class Inspector {
     this.field.disabled = !n.editable;
     this.field.classList.remove("invalid");
     this.field.value = n.composite ? "" : n.edit_text;
-    this.field.placeholder = n.composite ? countText(n.child_count, n.type.endsWith("[]") ? "item" : "field") : "";
+    const noun = n.type.endsWith("[]") || n.type.startsWith("offsets ") ? (n.unit ?? "item") : "field";
+    this.field.placeholder = n.composite ? countText(n.child_count, noun) : "";
     this.field.setAttribute("aria-label", `${n.name}, ${n.type}`);
   }
 
@@ -436,10 +438,6 @@ function hexText(bytes: Uint8Array): string {
 
 function modeLabel(mode: Mode): string {
   return mode === "structure" ? "Field" : mode === "le" ? "Little-endian" : "Big-endian";
-}
-
-function countText(n: number, noun: string): string {
-  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
 }
 
 function sizeText(bits: number): string {

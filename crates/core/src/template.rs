@@ -341,6 +341,11 @@ pub struct StructDef {
     /// the trail: `sections[9] code` beats `sections[9] code, body`. The field
     /// tree keeps it, because there it is a row the reader opens.
     pub contents: Option<String>,
+    /// What one of these is called when they are counted: a run of quantised
+    /// weights is `97,280 blocks`, not `97,280 items`. Only the format knows
+    /// the word, so only the format sets it; without one, a list counts its
+    /// children as items.
+    pub unit: Option<Arc<str>>,
     /// Read this structure as one thing rather than as its fields. A wasm
     /// instruction is an opcode and its immediate, and splitting those across
     /// two rows says less than one row saying `local.get 0`. Only the linear
@@ -405,6 +410,7 @@ impl Ty {
             fields: fields.into_iter().map(|(n, ty)| Field { name: n.into(), ty }).collect(),
             named_by: None,
             contents: None,
+            unit: None,
             inline: false,
         }))
     }
@@ -419,11 +425,28 @@ impl Ty {
                 fields: s.fields.clone(),
                 named_by: some(named_by),
                 contents: some(contents),
+                unit: s.unit.clone(),
                 inline: s.inline,
             })),
             other => other,
         }
     }
+    /// What one of these is called when a list of them is counted, e.g.
+    /// `block`, so the row reads `97,280 blocks`. See [`StructDef::unit`].
+    pub fn counted_as(self, unit: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
+                name: s.name.clone(),
+                fields: s.fields.clone(),
+                named_by: s.named_by.clone(),
+                contents: s.contents.clone(),
+                unit: Some(unit.into()),
+                inline: s.inline,
+            })),
+            other => other,
+        }
+    }
+
     /// A structure the linear views show on one row, rather than one row per
     /// field. See [`StructDef::inline`].
     pub fn inline_structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
@@ -433,6 +456,7 @@ impl Ty {
                 fields: s.fields.clone(),
                 named_by: s.named_by.clone(),
                 contents: s.contents.clone(),
+                unit: s.unit.clone(),
                 inline: true,
             })),
             other => other,

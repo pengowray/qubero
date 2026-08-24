@@ -14,6 +14,13 @@ export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu
  *  selected" there would suggest an answer exists and the user missed it. */
 export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";
 
+/** How many children a row stands for, named by what they are: `97,280 blocks`
+ *  for a run of quantised weights, `2,560 values` for a run of numbers, and
+ *  `items` for a list whose format has no word of its own for them. */
+export function countText(n: number, noun: string): string {
+  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 // ---- searching ----
 
 export const SEARCH_LABELS = {

@@ -102,6 +102,8 @@ export type TemplateNode = {
   readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "magic" | "enum" | "composite";
   readonly ok: boolean;
   readonly child_count: number;
+  /** What one child is called, for counting them. Absent when they are items. */
+  readonly unit?: string;
   readonly composite: boolean;
   /** True when `writeNode` accepts typed text for this field. */
   readonly editable: boolean;

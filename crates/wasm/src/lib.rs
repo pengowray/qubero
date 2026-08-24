@@ -38,6 +38,9 @@ struct NodeDto {
     kind: &'static str,
     ok: bool,
     child_count: f64,
+    /// What one child is called, for counting them: empty when they are items.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    unit: String,
     composite: bool,
     /// True when `write_node` accepts text for this field.
     editable: bool,
@@ -286,6 +289,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         kind,
         ok,
         child_count: n.child_count as f64,
+        unit: n.unit.unwrap_or_default(),
         composite: n.composite,
         editable: n.editable,
         value_bytes: n.value_bytes as f64,
