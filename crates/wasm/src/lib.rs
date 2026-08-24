@@ -60,7 +60,7 @@ struct TextDto {
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -74,6 +74,10 @@ struct ExplainDto {
     hex: bool,
     /// Flags: one entry per bit of the field, from bit 0 up.
     bits: Vec<BitDto>,
+    /// Float: how many bits wide it is, and those bits in value order, written
+    /// in hex because a 64-bit pattern does not survive a JSON number.
+    width: f64,
+    pattern: String,
 }
 
 #[derive(Serialize)]
@@ -100,6 +104,8 @@ fn explain_dto(e: Explain) -> ExplainDto {
         current: 0.0,
         hex: false,
         bits: Vec::new(),
+        width: 0.0,
+        pattern: String::new(),
     };
     match e {
         Explain::Plain => {}
@@ -114,6 +120,11 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.hex = hex;
             dto.current = current as f64;
             dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
+        }
+        Explain::Float { width, bits } => {
+            dto.kind = "float";
+            dto.width = f64::from(width);
+            dto.pattern = format!("{bits:0>width$x}", width = width as usize / 4);
         }
         Explain::Flags { name, raw, bits } => {
             dto.kind = "flags";

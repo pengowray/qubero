@@ -943,6 +943,73 @@ input.invalid {
 .insp-bit-off {
   color: var(--muted);
 }
+/* A float taken apart. Each field of the number is boxed and named, rather
+   than told apart by colour, so the three groups read the same in either
+   theme and a 64-bit significand can wrap onto its own line. */
+.insp-fgroups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.insp-fgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+.insp-fgroup-label {
+  font-family: var(--sans);
+  font-size: 10px;
+  color: var(--muted);
+}
+.insp-fbits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.insp-frows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+}
+.insp-frow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.insp-frow-label {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 88px;
+}
+.insp-frow-value {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.insp-frow-note {
+  color: var(--muted);
+}
+.insp-fvalue {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.insp-fspecial {
+  font-family: var(--sans);
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+.insp-type-head-note {
+  float: right;
+  font-weight: 400;
+}
 .insp-bits {
   display: flex;
   flex-direction: column;

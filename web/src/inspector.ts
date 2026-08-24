@@ -153,17 +153,187 @@ function span(cls: string, text: string): HTMLElement {
   return e;
 }
 
-function heading(text: string): HTMLElement {
+function heading(text: string, suffix = ""): HTMLElement {
   const h = document.createElement("div");
   h.className = "insp-type-head";
-  h.textContent = text;
+  h.append(text);
+  // The format's own name, kept out of the way of the heading it qualifies.
+  if (suffix !== "") h.append(span("insp-type-head-note", suffix));
   return h;
 }
 
 function headingFor(info: TypeInfo): string {
   if (info.kind === "magic") return "Expected bytes";
   if (info.kind === "flags") return "Flags";
+  if (info.kind === "float") return "Bit layout";
   return `Defined values (${info.cases.length})`;
+}
+
+/**
+ * What one binary float is made of. The three fields are fixed by the width,
+ * and everything the panel says is worked out from them.
+ */
+type FloatShape = { exp: number; sig: number; bias: number; name: string };
+
+const FLOATS: Record<number, FloatShape> = {
+  16: { exp: 5, sig: 10, bias: 15, name: "binary16" },
+  32: { exp: 8, sig: 23, bias: 127, name: "binary32" },
+  64: { exp: 11, sig: 52, bias: 1023, name: "binary64" },
+};
+
+/**
+ * The shortest decimal that reads back as the same number at this width. A f32
+ * pi is 3.1415927, not the 3.1415927410125732 its widening to a double prints:
+ * the digits past the seventh are an artefact of the reading, not the file.
+ */
+function shortest(x: number, width: number): string {
+  if (!Number.isFinite(x)) return x > 0 ? "Infinity" : x < 0 ? "-Infinity" : "NaN";
+  const same = (t: string): boolean => {
+    const v = Number(t);
+    return width === 64 ? v === x : width === 32 ? Math.fround(v) === x : f16ToNumber(numberToF16(v)) === x;
+  };
+  const digits = width === 64 ? 17 : width === 32 ? 9 : 5;
+  for (let p = 1; p < digits; p++) {
+    const t = Number(x.toPrecision(p));
+    if (same(String(t))) return String(t);
+  }
+  return String(x);
+}
+
+/** `2^-126`, with the power raised rather than written with a caret. */
+function power(e: number): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const sup = document.createElement("sup");
+  sup.textContent = String(e);
+  frag.append("2", sup);
+  return frag;
+}
+
+/** The field's bits, in fours from the low end, the way they are read. */
+function clusters(digits: string): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  // The odd bits go in the first cluster, so the fours line up from the low
+  // end: an 11-bit exponent reads 100 0000 0000.
+  let at = digits.length % 4 === 0 ? 4 : digits.length % 4;
+  let i = 0;
+  while (i < digits.length) {
+    const cluster = document.createElement("span");
+    cluster.className = "insp-fcluster";
+    for (const d of digits.slice(i, i + at)) {
+      cluster.append(span(d === "1" ? "insp-bit-on" : "insp-bit-off", d));
+    }
+    out.push(cluster);
+    i += at;
+    at = 4;
+  }
+  return out;
+}
+
+function bitGroup(label: string, digits: string): HTMLElement {
+  const g = document.createElement("div");
+  g.className = "insp-fgroup";
+  g.append(span("insp-fgroup-label", label));
+  const row = document.createElement("div");
+  row.className = "insp-fbits";
+  row.append(...clusters(digits));
+  g.append(row);
+  return g;
+}
+
+/** One `Exponent  2^1 (stored 128 - bias 127)` line. */
+function floatRow(label: string, ...value: (Node | string)[]): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "insp-frow";
+  row.append(span("insp-frow-label", label));
+  const v = document.createElement("span");
+  v.className = "insp-frow-value";
+  v.append(...value);
+  row.append(v);
+  return row;
+}
+
+/**
+ * A float taken apart: which bits are the sign, the exponent and the
+ * significand, what each of them says, and the number they add up to.
+ */
+function floatBody(info: TypeInfo): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const shape = FLOATS[info.width];
+  if (shape === undefined) return frag;
+  const width = info.width;
+  const raw = BigInt(`0x${info.pattern === "" ? "0" : info.pattern}`);
+  const digits = raw.toString(2).padStart(width, "0");
+  const negative = digits[0] === "1";
+  const expDigits = digits.slice(1, 1 + shape.exp);
+  const sigDigits = digits.slice(1 + shape.exp);
+  const stored = parseInt(expDigits, 2);
+  const frac = BigInt(`0b${sigDigits}`);
+
+  const groups = document.createElement("div");
+  groups.className = "insp-fgroups";
+  groups.append(bitGroup("sign", digits[0] ?? "0"), bitGroup("exponent", expDigits), bitGroup("significand", sigDigits));
+  frag.append(groups);
+
+  const special = (text: string, ...rest: HTMLElement[]): DocumentFragment => {
+    const p = document.createElement("p");
+    p.className = "insp-fspecial";
+    p.textContent = text;
+    frag.append(p, ...rest);
+    return frag;
+  };
+  const muted = (text: string): HTMLElement => {
+    const e = document.createElement("p");
+    e.className = "insp-type-note";
+    e.textContent = text;
+    return e;
+  };
+
+  const top = stored === (1 << shape.exp) - 1;
+  if (top && frac === 0n) {
+    return special(negative ? "-Infinity (exponent all 1s, significand 0)" : "Infinity (exponent all 1s, significand 0)");
+  }
+  if (top) {
+    const quiet = sigDigits[0] === "1";
+    return special(
+      quiet ? "Quiet NaN" : "Signaling NaN",
+      muted("exponent all 1s, significand not 0"),
+      muted(`significand 0x${frac.toString(16)}`),
+    );
+  }
+  if (stored === 0 && frac === 0n) {
+    return special(negative ? "Negative zero (only the sign bit is set)" : "Zero (all bits 0)");
+  }
+
+  // A subnormal has no leading 1 and does not step its exponent down with the
+  // stored zero: it stays at the smallest a normal number reaches.
+  const subnormal = stored === 0;
+  const e = subnormal ? 1 - shape.bias : stored - shape.bias;
+  const fraction = Number(frac) / 2 ** shape.sig;
+  const significand = (subnormal ? 0 : 1) + fraction;
+  const value = (negative ? -1 : 1) * significand * 2 ** e;
+
+  const rows = document.createElement("div");
+  rows.className = "insp-frows";
+  rows.append(
+    floatRow("Sign", negative ? "-" : "+", span("insp-frow-note", negative ? " negative" : " positive")),
+    floatRow(
+      "Exponent",
+      power(e),
+      span("insp-frow-note", subnormal ? " (stored 0, subnormal)" : ` (stored ${stored} - bias ${shape.bias})`),
+    ),
+    floatRow(
+      "Significand",
+      shortest(significand, width),
+      span("insp-frow-note", subnormal ? " (no leading 1)" : " (leading 1 not stored)"),
+    ),
+  );
+  frag.append(rows);
+
+  const line = document.createElement("div");
+  line.className = "insp-fvalue";
+  line.append(`${negative ? "-" : ""}${shortest(significand, width)} × `, power(e), ` = ${shortest(value, width)}`);
+  frag.append(line);
+  return frag;
 }
 
 /** An enum's numbers are read the way the format writes them. */
@@ -508,8 +678,9 @@ export class Inspector {
     }
     const info = reply.node;
     const frag = document.createDocumentFragment();
-    frag.append(heading(headingFor(info)));
-    if (info.kind === "magic") frag.append(magicBody(info));
+    frag.append(heading(headingFor(info), info.kind === "float" ? (FLOATS[info.width]?.name ?? "") : ""));
+    if (info.kind === "float") frag.append(floatBody(info));
+    else if (info.kind === "magic") frag.append(magicBody(info));
     else if (info.kind === "enum") frag.append(this.enumBody(info, path));
     else frag.append(this.flagsBody(info, path, n));
     this.types.replaceChildren(frag);

@@ -1868,6 +1868,10 @@ pub enum Explain {
     /// Every bit of the field, from bit 0 up, whether it is set and what it is
     /// called. A bit with no name is still a bit, and is still listed.
     Flags { name: String, raw: u128, bits: Vec<FlagBit> },
+    /// A binary float, as its bits: 16, 32 or 64 of them, in value order with
+    /// the byte order already resolved, so a reader can take the sign, the
+    /// exponent and the significand apart without knowing how it was stored.
+    Float { width: u32, bits: u64 },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
@@ -1914,6 +1918,15 @@ impl Evaluator {
                     })
                     .collect();
                 Explain::Flags { name: def.name.clone(), raw, bits }
+            }
+            Ty::F16(e) | Ty::F32(e) | Ty::F64(e) => {
+                let width: u32 = match r.ty {
+                    Ty::F16(_) => 16,
+                    Ty::F32(_) => 32,
+                    _ => 64,
+                };
+                let raw = self.read(doc, &r, r.offset, u64::from(width))?;
+                Explain::Float { width, bits: crate::decode::read_uint(&raw, width, *e) as u64 }
             }
             _ => Explain::Plain,
         })

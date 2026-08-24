@@ -152,7 +152,7 @@ export type SearchStep =
 
 /** What a type permits, beyond what this file's bytes happen to say. */
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -164,6 +164,9 @@ export type TypeInfo = {
   readonly hex: boolean;
   /** Flags: one entry per bit of the field, from bit 0 up. */
   readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];
+  /** Float: how wide it is, and its bits in value order, written in hex. */
+  readonly width: number;
+  readonly pattern: string;
 };
 
 /** What one rule, or the editor itself, concluded about what produced a file. */
