@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+regex-automata = { version = "0.4.18", default-features = false, features = ["std", "syntax", "meta", "nfa", "dfa", "hybrid", "perf-literal", "unicode-perl", "unicode-case"] }
 
 [dev-dependencies]
 proptest = "1"

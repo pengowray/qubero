@@ -542,6 +542,7 @@ name = "qubero-core"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "regex-automata",
 ]
 
 [[package]]

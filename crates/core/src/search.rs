@@ -14,11 +14,22 @@
 //! join is still found. The caller does not have to know that: `resume` says
 //! where to start the next step, and it is not simply the end of the last one.
 
+use regex_automata::meta::Regex;
+use regex_automata::{Anchored, Input};
+
 use crate::document::Document;
 use crate::source::{Missing, Source};
 
 /// How far one step reads when the caller does not say.
 pub const WINDOW: u64 = 64 * 1024;
+
+/// How much of the next window a step also reads for a pattern, whose match
+/// has no length known in advance. A regex match longer than this and lying
+/// across a window join is the one thing this search can miss.
+pub const REGEX_OVERLAP: u64 = 4 * 1024;
+
+/// Why a pattern with `^` or `$` is refused.
+pub const ANCHOR_REFUSED: &str = "^ and $ would match where this search stopped reading, not where a line starts";
 
 /// What one step of a search found.
 #[derive(Debug, Clone, PartialEq)]
@@ -42,45 +53,129 @@ pub enum Needle {
     /// ASCII only: matching É to é means knowing the encoding, and a hex
     /// editor does not know what encoding a stretch of a file is in.
     Fold(Vec<u8>),
+    /// A pattern.
+    Regex(Pattern),
+}
+
+/// A compiled pattern. Two are the same when they were written the same way,
+/// which is what a search box needs to know and all it needs to know.
+#[derive(Clone)]
+pub struct Pattern {
+    source: String,
+    re: Regex,
+}
+
+impl Pattern {
+    /// Compile a pattern, or say what is wrong with it.
+    ///
+    /// `^` and `$` are refused. A search reads a window at a time, so they
+    /// would match the edges of whatever it happened to read rather than
+    /// anything in the file, and quietly finding the wrong thing is worse than
+    /// saying no.
+    pub fn new(source: &str) -> Result<Pattern, String> {
+        if has_anchor(source) {
+            return Err(ANCHOR_REFUSED.into());
+        }
+        match Regex::new(source) {
+            Ok(re) => Ok(Pattern { source: source.to_string(), re }),
+            Err(e) => Err(first_line(&e.to_string())),
+        }
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+impl std::fmt::Debug for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Pattern({:?})", self.source)
+    }
+}
+
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+    }
+}
+
+/// A regex error runs to several lines with a diagram under it. The first line
+/// is what went wrong.
+fn first_line(s: &str) -> String {
+    s.lines().find(|l| !l.trim().is_empty()).unwrap_or(s).trim().to_string()
+}
+
+/// Whether `^` or `$` appears other than escaped or inside a character class,
+/// where they are ordinary characters.
+fn has_anchor(source: &str) -> bool {
+    let mut chars = source.chars();
+    let mut in_class = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '^' | '$' if !in_class => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 impl Needle {
-    /// The needle's bytes, whatever kind it is.
+    /// The needle's bytes, for the kinds that are bytes.
     pub fn bytes(&self) -> &[u8] {
         match self {
             Needle::Bytes(b) | Needle::Fold(b) => b,
+            Needle::Regex(_) => &[],
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.bytes().len()
+    /// How much of the next window a step has to read as well. A literal needs
+    /// one byte less than itself; a pattern has no length to go on.
+    fn overlap(&self) -> u64 {
+        match self {
+            Needle::Regex(_) => REGEX_OVERLAP,
+            _ => self.bytes().len().saturating_sub(1) as u64,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bytes().is_empty()
+        match self {
+            Needle::Regex(p) => p.source.is_empty(),
+            _ => self.bytes().is_empty(),
+        }
     }
 
-    /// Whether `hay` starts with this needle.
-    fn matches_at(&self, hay: &[u8]) -> bool {
+    /// Whether `hay` starts with this needle, and how far it runs.
+    fn matches_at(&self, hay: &[u8]) -> Option<usize> {
+        if let Needle::Regex(p) = self {
+            return p.re.find(Input::new(hay).anchored(Anchored::Yes)).map(|m| m.len());
+        }
         let want = self.bytes();
         if hay.len() < want.len() {
-            return false;
+            return None;
         }
-        match self {
-            Needle::Bytes(_) => &hay[..want.len()] == want,
+        let same = match self {
             Needle::Fold(_) => hay[..want.len()].iter().zip(want).all(|(a, b)| fold(*a) == fold(*b)),
-        }
+            _ => &hay[..want.len()] == want,
+        };
+        same.then_some(want.len())
     }
 
-    /// The first place in `hay` this needle matches.
-    fn first_in(&self, hay: &[u8]) -> Option<usize> {
-        let n = self.len();
+    /// The first place in `hay` this needle matches, and how far it runs.
+    fn first_in(&self, hay: &[u8]) -> Option<(usize, usize)> {
+        if let Needle::Regex(p) = self {
+            return p.re.find(hay).map(|m| (m.start(), m.len()));
+        }
+        let n = self.bytes().len();
         if hay.len() < n {
             return None;
         }
-        (0..=hay.len() - n).find(|&i| self.matches_at(&hay[i..]))
+        (0..=hay.len() - n).find(|&i| self.matches_at(&hay[i..]).is_some()).map(|i| (i, n))
     }
-
 }
 
 fn fold(b: u8) -> u8 {
@@ -120,34 +215,32 @@ impl Search {
 
     fn step_forward<S: Source>(&self, doc: &Document<S>, from: u64) -> Step {
         let end = doc.len_bytes();
-        let n = self.needle.len() as u64;
-        if from + n > end {
+        if from >= end {
             return Step::End;
         }
         // Read one window plus the tail a match starting at its last byte
         // would need.
-        let stop = (from + self.window + n - 1).min(end);
+        let stop = (from + self.window + self.needle.overlap()).min(end);
         let hay = match read(doc, from, stop - from) {
             Ok(hay) => hay,
             Err(missing) => return Step::Pending(missing),
         };
         match self.needle.first_in(&hay) {
-            Some(i) => Step::Found { at: from + i as u64, len: n },
+            Some((i, len)) => Step::Found { at: from + i as u64, len: len as u64 },
             None if stop == end => Step::End,
             // The next window starts where a match could still begin, which is
-            // one short of the needle before this one's end.
+            // short of this one's end by the needle's reach.
             None => Step::More { resume: from + self.window },
         }
     }
 
     fn step_back<S: Source>(&self, doc: &Document<S>, from: u64) -> Step {
-        let n = self.needle.len() as u64;
         if from == 0 {
             return Step::End;
         }
         let lo = from.saturating_sub(self.window);
         // A match starting just before `from` still runs past it.
-        let stop = (from + n - 1).min(doc.len_bytes());
+        let stop = (from + self.needle.overlap()).min(doc.len_bytes());
         if stop <= lo {
             return Step::End;
         }
@@ -157,12 +250,10 @@ impl Search {
         };
         // Only matches that start before `from` count, or a search would find
         // the one the cursor is already on, for ever.
-        let cap = (from - lo) as usize;
-        let look = &hay[..cap.min(hay.len())];
-        let room = hay.len();
-        let found = (0..look.len()).rev().find(|&i| self.needle.matches_at(&hay[i..room]));
+        let cap = ((from - lo) as usize).min(hay.len());
+        let found = (0..cap).rev().find_map(|i| self.needle.matches_at(&hay[i..]).map(|len| (i, len)));
         match found {
-            Some(i) => Step::Found { at: lo + i as u64, len: n },
+            Some((i, len)) => Step::Found { at: lo + i as u64, len: len as u64 },
             None if lo == 0 => Step::End,
             None => Step::More { resume: lo },
         }
@@ -261,6 +352,51 @@ mod tests {
         let d = doc(b"ab");
         let s = Search::forward(Needle::Bytes(b"abc".to_vec()));
         assert_eq!(s.step(&d, 0), Step::End);
+    }
+
+    fn pattern(p: &str) -> Needle {
+        Needle::Regex(Pattern::new(p).expect("a pattern the tests wrote"))
+    }
+
+    #[test]
+    fn a_pattern_finds_what_it_describes_both_ways() {
+        let d = doc(b"a1b22c333d");
+        let s = Search::forward(pattern("[0-9]+"));
+        assert_eq!(s.step(&d, 0), Step::Found { at: 1, len: 1 });
+        assert_eq!(s.step(&d, 2), Step::Found { at: 3, len: 2 });
+        assert_eq!(all(&s, &d, 0), vec![1, 3, 4, 6, 7, 8]);
+        // Backwards finds the last match starting before the cursor, which for
+        // a greedy pattern is the longest one starting there.
+        let back = Search::backward(pattern("[0-9]+"));
+        assert_eq!(back.step(&d, 10), Step::Found { at: 8, len: 1 });
+    }
+
+    #[test]
+    fn a_pattern_reaches_across_a_window_join() {
+        let mut bytes = vec![b'.'; 300];
+        bytes[126..130].copy_from_slice(b"1234");
+        let d = doc(&bytes);
+        let mut s = Search::forward(pattern("[0-9]{4}"));
+        s.window = 64;
+        assert_eq!(all(&s, &d, 0), vec![126]);
+    }
+
+    #[test]
+    fn an_anchor_is_refused_rather_than_answered_wrongly() {
+        // A window is not a line, so `^` here would mean "where this search
+        // happened to stop reading".
+        assert_eq!(Pattern::new("^abc").unwrap_err(), ANCHOR_REFUSED);
+        assert_eq!(Pattern::new("abc$").unwrap_err(), ANCHOR_REFUSED);
+        // Escaped, and inside a character class, they are ordinary characters.
+        assert!(Pattern::new(r"\^abc").is_ok());
+        assert!(Pattern::new("[a^$]bc").is_ok());
+    }
+
+    #[test]
+    fn a_broken_pattern_says_what_is_wrong_in_one_line() {
+        let why = Pattern::new("a(b").unwrap_err();
+        assert!(!why.is_empty());
+        assert!(!why.contains('\n'), "{why}");
     }
 
     #[test]
