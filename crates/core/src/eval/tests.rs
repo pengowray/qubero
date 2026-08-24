@@ -534,3 +534,34 @@ fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
     }
     assert!(ev.memo_len() < 100, "reaching into it kept {} nodes", ev.memo_len());
 }
+
+#[test]
+fn the_field_under_a_bit_is_found_without_the_list_coming_back() {
+    // The same long list of uneven strings, asked the question the hex cursor
+    // asks: what is under this bit, in the middle of ten thousand elements.
+    let n = 20_000u64;
+    let mut bytes = n.to_le_bytes().to_vec();
+    let mut starts = vec![8u64];
+    for i in 0..n {
+        let s = "y".repeat((i % 13) as usize + 1);
+        bytes.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(s.as_bytes());
+        starts.push(bytes.len() as u64);
+    }
+    let string = T::structure("String", vec![("len", T::u64(Little)), ("text", T::utf8(E::field("len")))]);
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::u64(Little)), ("items", T::array(string, E::field("n")))]),
+    );
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    ev.node(&d, &[1]).unwrap();
+
+    // A bit inside element 12,345: the length, and then a byte of its text.
+    let elem = 12_345usize;
+    assert_eq!(ev.locate(&d, starts[elem] * 8).unwrap(), vec![1, elem, 0]);
+    assert_eq!(ev.locate(&d, (starts[elem] + 9) * 8).unwrap(), vec![1, elem, 1]);
+    // The answer came from a walk between checkpoints, not from putting twelve
+    // thousand elements back in the memo.
+    assert!(ev.memo_len() < 5_000, "locating kept {} nodes", ev.memo_len());
+}

@@ -342,6 +342,12 @@ impl Evaluator {
                 }
             }
         }
+        // A long list is walked from the nearest kept offset instead, so that
+        // finding the element under the cursor does not put the list back in
+        // memory element by element.
+        if matches!(r.ty, Ty::Array { .. } | Ty::Repeat { .. }) && self.guarded(doc, path, &r)? {
+            return self.child_covering(doc, path, n, bit);
+        }
         // Children of a pointer list are in the order their offsets are in,
         // not the order they sit in, so every one has to be looked at, and one
         // that does not parse is passed over rather than taking the page with it.

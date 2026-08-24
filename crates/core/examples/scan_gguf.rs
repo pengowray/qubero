@@ -8,7 +8,7 @@
 
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::Instant;
 
 use qubero_core::document::Document;
@@ -20,7 +20,7 @@ use qubero_core::source::{Missing, Source};
 /// ones it has not got yet; this one always has them, so the timings here are
 /// the work itself without the fetching.
 struct FileSource {
-    file: RefCell<File>,
+    file: RefCell<BufReader<File>>,
     len: u64,
 }
 
@@ -41,7 +41,7 @@ fn main() {
     let file = File::open(&path).expect("open");
     let len = file.metadata().expect("metadata").len();
     println!("{path}: {len} bytes");
-    let doc = Document::new(FileSource { file: RefCell::new(file), len });
+    let doc = Document::new(FileSource { file: RefCell::new(BufReader::new(file)), len });
     let mut ev = Evaluator::new(gguf());
 
     // The metadata is the expensive half: entries of uneven size, some holding
@@ -76,6 +76,18 @@ fn main() {
         let t = Instant::now();
         let c = ev.node(&doc, &[6, i as usize]).expect("child");
         println!("    {:<44} 0x{:>10x} {:>14} bytes ({:?})", c.name, c.offset_bits / 8, c.size_bits / 8, t.elapsed());
+    }
+    // What the hex view asks when the cursor lands in the middle of a long
+    // list: the field under a bit, found without the list being all in memory.
+    let mid = md.offset_bits + md.size_bits / 2;
+    let t = Instant::now();
+    match ev.locate(&doc, mid) {
+        Ok(path) => {
+            let elapsed = t.elapsed();
+            let node = ev.node(&doc, &path).expect("located");
+            println!("  locate at 0x{:x}: {} ({:?})", mid / 8, node.name, elapsed);
+        }
+        Err(e) => println!("  locate at 0x{:x} failed: {e:?}", mid / 8),
     }
     println!("  {} nodes kept in all", ev.memo_len());
 }

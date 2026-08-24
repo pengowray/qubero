@@ -148,10 +148,102 @@ impl Evaluator {
         Ok(())
     }
 
+    /// Which element of a long list covers `bit`, found by walking from the
+    /// nearest kept offset. Looking at every element from the start instead
+    /// would put the whole list back in memory, which is what the walk was for:
+    /// putting the cursor in the middle of a million rules must not undo it.
+    pub(super) fn child_covering<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        n: u64,
+        bit: u64,
+    ) -> R<Option<usize>> {
+        let pr = self.memo[path].clone();
+        if bit < pr.offset {
+            return Ok(None);
+        }
+        let (mut j, mut at) = self.nearest_start_before(path, bit);
+        if j as u64 >= n {
+            return Ok(None);
+        }
+        let mut p = path.to_vec();
+        self.journals.push(WalkJournal::default());
+        let found = self.scan_from(doc, &pr, &mut p, &mut j, &mut at, n, bit);
+        let journal = self.journals.pop().expect("pushed above");
+        // The element the bit is in stays: it is the one about to be read.
+        let mut keep = path.to_vec();
+        if let Ok(Some(i)) = found {
+            keep.push(i);
+        }
+        self.drop_nodes(journal.added, &keep);
+        found
+    }
+
+    /// Walk forward from element `j` until one covers `bit`.
+    fn scan_from<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        pr: &Resolved,
+        p: &mut Vec<usize>,
+        j: &mut usize,
+        at: &mut u64,
+        n: u64,
+        bit: u64,
+    ) -> R<Option<usize>> {
+        let parent = p.clone();
+        while (*j as u64) < n {
+            let before = self.journals.last().map_or(0, |w| w.added.len());
+            p.push(*j);
+            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| (r.offset, s)));
+            let (start, size) = match known {
+                Some(v) => v,
+                None => {
+                    self.place(doc, p, pr, *j, *at)?;
+                    let size = self.size_of(doc, p)?;
+                    (self.memo[p.as_slice()].offset, size)
+                }
+            };
+            p.pop();
+            // Before the first element, or in the slack between two of them.
+            if bit < start {
+                self.close_step(before);
+                return Ok(None);
+            }
+            if bit < start + size {
+                return Ok(Some(*j));
+            }
+            *j += 1;
+            *at = start + size;
+            self.list_mut(&parent).walk_at = Some((*j, *at));
+            if *j % CHECKPOINT == 0 {
+                self.checkpoint(&parent, *j, *at);
+            }
+            self.close_step(before);
+        }
+        Ok(None)
+    }
+
+    /// The nearest known element start at or before the bit `bit`, as an
+    /// element index and its offset. Checkpoints rise in both index and offset,
+    /// so the one to start from can be found by halving rather than scanning.
+    fn nearest_start_before(&self, parent: &[usize], bit: u64) -> (usize, u64) {
+        let Some(state) = self.lists.get(parent) else { return (0, self.memo[parent].offset) };
+        let mut best = (0, self.memo[parent].offset);
+        let k = state.checkpoints.partition_point(|(_, at)| *at <= bit);
+        if k > 0 {
+            best = state.checkpoints[k - 1];
+        }
+        match state.walk_at {
+            Some((j, at)) if at <= bit && j >= best.0 => (j, at),
+            _ => best,
+        }
+    }
+
     /// Whether this list is long enough to be walked with its middle dropped.
     /// A `Repeat` does not know how many elements it has without walking it,
     /// and so is guarded from the start rather than found to be long too late.
-    fn guarded<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<bool> {
+    pub(super) fn guarded<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<bool> {
         Ok(match &r.ty {
             Ty::Repeat { .. } => true,
             Ty::Array { count, .. } => {
