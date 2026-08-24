@@ -343,13 +343,12 @@ impl Evaluator {
     /// Which child of `path` covers `bit`, if any.
     pub(super) fn child_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], n: u64, bit: u64) -> R<Option<usize>> {
         let r = self.memo[path].clone();
-        // Fixed-size elements: go straight to the one that covers the bit.
-        if let Ty::Array { elem, .. } | Ty::Repeat { elem, .. } = &r.ty {
-            if let Some(each) = fixed_bits(elem) {
-                if each > 0 {
-                    let i = (bit - r.offset) / each;
-                    return Ok(if i < n { Some(i as usize) } else { None });
-                }
+        // Same-sized elements: go straight to the one that covers the bit,
+        // without putting a single other element in memory.
+        if let Some(each) = self.stride(doc, path, &r.ty)? {
+            if each > 0 {
+                let i = (bit - r.offset) / each;
+                return Ok(if i < n { Some(i as usize) } else { None });
             }
         }
         // A long list is walked from the nearest kept offset instead, so that

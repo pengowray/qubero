@@ -486,9 +486,8 @@ impl Evaluator {
             self.pointer_offset(doc, parent, &pr, idx)?
         } else if idx == 0 {
             pr.offset
-        } else if let (Ty::Array { elem, .. }, Some(fs)) = (&pr.ty, fixed_bits(child_elem(&pr.ty))) {
-            let _ = elem;
-            pr.offset + idx as u64 * fs
+        } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
+            pr.offset + idx as u64 * stride
         } else {
             // Place after the previous sibling, walking the elements in
             // between. A long list drops what the walk moves past, so this
@@ -655,6 +654,37 @@ impl Evaluator {
         }
     }
 
+    /// The distance from one element of the list at `path` to the next, when
+    /// every element takes the same room. A file of same-sized pages says how
+    /// big a page is once, in its header, and then never again: a database is
+    /// a run of 4 KiB pages, a disc image a run of 2 KiB sectors. Knowing the
+    /// stride turns "which page is byte 900,000,000 in" from a walk through
+    /// two hundred thousand pages into a division.
+    ///
+    /// `None` when the elements can differ, which is when the walk is the only
+    /// way to find out.
+    pub(super) fn stride<S: Source>(&mut self, doc: &Document<S>, path: &[usize], ty: &Ty) -> R<Option<u64>> {
+        let elem = match ty {
+            Ty::Array { elem, .. } => elem,
+            // A run that stops on what it reads cannot be counted by division:
+            // the element that ends it could be anywhere.
+            Ty::Repeat { elem, until: Until::End } => elem,
+            _ => return Ok(None),
+        };
+        if let Some(f) = fixed_bits(elem) {
+            return Ok(Some(f));
+        }
+        let Ty::Sized { size, .. } = &**elem else { return Ok(None) };
+        if !uniform(size) {
+            return Ok(None);
+        }
+        // The size is asked of the list rather than of an element, which is
+        // the same question: it names a field of an enclosing struct, and an
+        // element's own fields are not in scope for it.
+        let n = self.eval_expr(doc, path, size)?;
+        Ok(if n > 0 { Some(n as u64 * 8) } else { None })
+    }
+
     fn size_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
         self.resolve(doc, path)?;
         let r = self.memo[path].clone();
@@ -735,15 +765,14 @@ impl Evaluator {
                         end - r.offset
                     }
                 }
-                // Fixed-stride elements: the whole array is count × stride,
-                // with no element resolved. An array of a billion samples is
-                // sized by arithmetic, not by a walk.
-                Ty::Array { elem, count } if fixed_bits(elem).is_some() => {
-                    let n = self.eval_expr(doc, path, count)?;
-                    if n < 0 {
-                        return fail("negative count");
-                    }
-                    n as u64 * fixed_bits(elem).expect("checked")
+                // Same-sized elements: the whole list is count × stride,
+                // with no element resolved. An array of a billion samples, or
+                // a database of a million pages, is sized by arithmetic.
+                Ty::Array { .. } | Ty::Repeat { until: Until::End, .. }
+                    if self.stride(doc, path, &r.ty)?.is_some() =>
+                {
+                    let stride = self.stride(doc, path, &r.ty)?.expect("checked");
+                    self.child_count(doc, path)? * stride
                 }
                 Ty::Array { .. } | Ty::Repeat { .. } => {
                     let n = self.child_count(doc, path)?;
@@ -786,6 +815,14 @@ impl Evaluator {
                     return fail("negative count");
                 }
                 Ok(n as u64)
+            }
+            // A run of same-sized elements filling its container is as
+            // long as the room divides. Anything left over at the end is less
+            // than one element and belongs to no element, so it reads as a gap
+            // rather than taking the whole run down with it.
+            Ty::Repeat { until: Until::End, .. } if self.stride(doc, path, &r.ty)?.is_some() => {
+                let stride = self.stride(doc, path, &r.ty)?.expect("checked");
+                Ok((r.limit - r.offset) / stride)
             }
             Ty::Repeat { until, .. } => {
                 let state = self.list(path);
@@ -854,9 +891,19 @@ impl Evaluator {
 
 }
 
-fn child_elem(ty: &Ty) -> &Ty {
-    match ty {
-        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => elem,
-        other => other,
+/// Whether an expression asks nothing about the element it sits in, so that
+/// every element of a list gets the same answer. A page size named in a file's
+/// header is the same for every page; a length read from the element itself,
+/// or one counted from where the element starts, is not.
+fn uniform(e: &Expr) -> bool {
+    match e {
+        Expr::Lit(_) | Expr::Ref(_) => true,
+        Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Or(a, b) => {
+            uniform(a) && uniform(b)
+        }
+        // Remaining and Idx count from the element; Peek reads it; Prev,
+        // Sibling and Elem ask another one; SizeOf asks a field beside it.
+        _ => false,
     }
 }
+

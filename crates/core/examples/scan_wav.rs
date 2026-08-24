@@ -17,10 +17,21 @@ fn main() {
     for i in 0..chunks.child_count as usize {
         let c = ev.node(&d, &[3, i]).expect("chunk");
         let body = ev.node(&d, &[3, i, 2]).expect("body");
-        println!("  {:<14} {:>12} bytes  body {} ({})", c.name, c.size_bits / 8, body.type_name, body.child_count);
+        println!(
+            "  {:<14} {:>12} bytes  body {} ({})",
+            c.name,
+            c.size_bits / 8,
+            body.type_name,
+            body.child_count
+        );
         if c.name.contains("data") && body.composite {
-            let spans = ev.spans(&d, body.offset_bits, body.offset_bits + 512 * 8, 8).expect("spans");
-            println!("    annotation column: {} entries over the first 512 bytes", spans.len());
+            let spans = ev
+                .spans(&d, body.offset_bits, body.offset_bits + 512 * 8, 8)
+                .expect("spans");
+            println!(
+                "    annotation column: {} entries over the first 512 bytes",
+                spans.len()
+            );
             for s in spans.iter().take(3) {
                 println!(
                     "      {:<10} {:>6} bytes  count {}  sample {:?}",
@@ -32,7 +43,11 @@ fn main() {
             }
             for f in 0..body.child_count.min(3) {
                 let sample = ev.node(&d, &[3, i, 2, f as usize]).expect("sample");
-                println!("    sample {f} at 0x{:x}: {:?}", sample.offset_bits / 8, sample.value);
+                println!(
+                    "    sample {f} at 0x{:x}: {:?}",
+                    sample.offset_bits / 8,
+                    sample.value
+                );
             }
         }
     }

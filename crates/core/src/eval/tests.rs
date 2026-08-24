@@ -497,6 +497,69 @@ fn a_fixed_stride_array_is_sized_without_touching_its_elements() {
 }
 
 #[test]
+fn a_run_of_same_sized_blocks_is_counted_by_division() {
+    // What a paged file is: a header saying how big a block is, then blocks of
+    // that size until the file runs out. Nothing here is fixed at template
+    // time, and the count is still arithmetic.
+    let block = T::sized(E::field("block_size"), T::structure("Block", vec![("kind", T::u8())]));
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("block_size", T::u16(Little)), ("blocks", T::repeat(block, Until::End))]),
+    );
+    let (size, count) = (4096usize, 50_000usize);
+    let mut bytes = (size as u16).to_le_bytes().to_vec();
+    bytes.resize(2 + size * count, 0);
+    bytes[2] = 9;
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let all = ev.node(&d, &[1]).unwrap();
+    assert_eq!((all.child_count, all.size_bits), (count as u64, (size * count) as u64 * 8));
+    assert!(ev.memo.len() < 10, "counted by division, not by a walk: {} entries", ev.memo.len());
+    // A block near the end is one division away, and so is the cursor
+    // standing in it.
+    let at = (2 + size * 49_999) as u64 * 8;
+    assert_eq!(ev.node(&d, &[1, 49_999, 0]).unwrap().offset_bits, at);
+    assert_eq!(ev.locate(&d, at).unwrap(), vec![1, 49_999, 0]);
+    assert!(ev.memo.len() < 20, "{} entries", ev.memo.len());
+}
+
+#[test]
+fn a_file_cut_off_mid_block_keeps_the_blocks_it_has() {
+    // Half a block at the end is not a block. It belongs to nothing, rather
+    // than taking the whole run down with it.
+    let block = T::sized(E::field("block_size"), T::bytes(E::Remaining));
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("block_size", T::u16(Little)), ("blocks", T::repeat(block, Until::End))]),
+    );
+    let mut bytes = 16u16.to_le_bytes().to_vec();
+    bytes.resize(2 + 16 * 3 + 5, 0);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let all = ev.node(&d, &[1]).unwrap();
+    assert_eq!((all.child_count, all.size_bits), (3, 3 * 16 * 8));
+    assert!(ev.locate(&d, (2 + 16 * 3 + 1) as u64 * 8).is_err());
+}
+
+#[test]
+fn a_run_that_stops_on_what_it_reads_is_still_walked() {
+    // The elements are all the same size, but the run ends at the one holding
+    // a chosen value, and where that is cannot be divided out.
+    let block = T::sized(E::field("block_size"), T::structure("Block", vec![("kind", T::u8())]));
+    let until = Until::FieldBytes { field: "kind".into(), bytes: vec![0xff] };
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("block_size", T::u16(Little)), ("blocks", T::repeat(block, until))]),
+    );
+    let mut bytes = 4u16.to_le_bytes().to_vec();
+    bytes.resize(2 + 4 * 10, 0);
+    bytes[2 + 4 * 2] = 0xff;
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 3);
+}
+
+#[test]
 fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
     // Strings of growing length, so every element sits at an offset only the
     // walk can find, and one the test can work out for itself.

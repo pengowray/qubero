@@ -37,11 +37,16 @@ impl Source for FileSource {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: scan_gguf <file.gguf>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: scan_gguf <file.gguf>");
     let file = File::open(&path).expect("open");
     let len = file.metadata().expect("metadata").len();
     println!("{path}: {len} bytes");
-    let doc = Document::new(FileSource { file: RefCell::new(file), len });
+    let doc = Document::new(FileSource {
+        file: RefCell::new(file),
+        len,
+    });
     let mut ev = Evaluator::new(gguf());
 
     // The metadata is the expensive half: entries of uneven size, some holding
@@ -49,7 +54,11 @@ fn main() {
     // the end of it is known.
     let t = Instant::now();
     let md = ev.node(&doc, &[4]).expect("metadata");
-    println!("  metadata: {} entries in {:?}", md.child_count, t.elapsed());
+    println!(
+        "  metadata: {} entries in {:?}",
+        md.child_count,
+        t.elapsed()
+    );
     let mut elements = 0u64;
     for i in 0..md.child_count as usize {
         // metadata[i].value.items, when the value is an array.
@@ -61,11 +70,18 @@ fn main() {
             elements += items.child_count;
         }
     }
-    println!("    {elements} array elements in all, {} nodes kept", ev.memo_len());
+    println!(
+        "    {elements} array elements in all, {} nodes kept",
+        ev.memo_len()
+    );
 
     let t = Instant::now();
     let tensors = ev.node(&doc, &[5]).expect("tensors");
-    println!("  tensor table: {} records in {:?}", tensors.child_count, t.elapsed());
+    println!(
+        "  tensor table: {} records in {:?}",
+        tensors.child_count,
+        t.elapsed()
+    );
 
     let t = Instant::now();
     let data = ev.node(&doc, &[6]).expect("data");
@@ -75,7 +91,13 @@ fn main() {
     for i in (0..n.min(4)).chain(n.saturating_sub(2)..n) {
         let t = Instant::now();
         let c = ev.node(&doc, &[6, i as usize]).expect("child");
-        println!("    {:<44} 0x{:>10x} {:>14} bytes ({:?})", c.name, c.offset_bits / 8, c.size_bits / 8, t.elapsed());
+        println!(
+            "    {:<44} 0x{:>10x} {:>14} bytes ({:?})",
+            c.name,
+            c.offset_bits / 8,
+            c.size_bits / 8,
+            t.elapsed()
+        );
     }
     // What the hex view asks when the cursor lands in the middle of a long
     // list: the field under a bit, found without the list being all in memory.
@@ -108,9 +130,18 @@ fn main() {
     // What the annotation column shows in the middle of the weights.
     let inside = data.offset_bits + data.size_bits / 2;
     if let Ok(spans) = ev.spans(&doc, inside, inside + 256 * 8, 6) {
-        println!("  inside the weights at 0x{:x}: {} entries", inside / 8, spans.len());
+        println!(
+            "  inside the weights at 0x{:x}: {} entries",
+            inside / 8,
+            spans.len()
+        );
         for s in spans.iter().take(3) {
-            println!("    {:<44} {:>14} bytes  type {}", s.name, s.size_bits / 8, s.type_name);
+            println!(
+                "    {:<44} {:>14} bytes  type {}",
+                s.name,
+                s.size_bits / 8,
+                s.type_name
+            );
         }
     }
     println!("  {} nodes kept in all", ev.memo_len());
