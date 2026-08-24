@@ -42,30 +42,50 @@ fn tidy(message: &str) -> String {
     message.trim_start().trim_start_matches([',', ';', ':']).trim_start().to_string()
 }
 
+/// A byte no text encoding allows, added past the end of the window to make
+/// the engine read what it is given as bytes rather than as text. See `identify`.
+const NOT_TEXT: u8 = 0xff;
+
 /// Identify the bytes at the start of a file. Returns JSON, or "" for no match.
 ///
 /// `head` should be the file's first bytes and nothing else: rules count from
 /// the start of what they are given, so a window taken from anywhere else
 /// reads as a file that happens to begin there. Rules that search rather than
 /// test a fixed offset only see as far as the window reaches.
+///
+/// A file made only of text is asked about twice. The engine decides up front
+/// whether it is looking at text, and skips every rule whose test is a number
+/// when it is: an RTF file opens with the characters `{\rtf` and is then told
+/// apart by two tests on the byte after them, so nothing names it. `file(1)`
+/// itself runs those rules whatever the file is made of, so the second pass
+/// puts a byte no text encoding allows past the end of the window and asks
+/// again. It only happens when the first pass had no answer, so the most it
+/// can do is name a file that would otherwise have gone unnamed.
 #[wasm_bindgen]
 pub fn identify(head: &[u8]) -> String {
     let db = match magic_db::global() {
         Ok(db) => db,
         Err(_) => return String::new(),
     };
-    let m = match db.best_magic_slice(head) {
-        Ok(m) => m,
-        Err(_) => return String::new(),
-    };
-    // `is_default` is the database's own last resort ("data", "ASCII text"),
-    // which tells the reader nothing the hex view is not already showing.
+    if let Some(found) = describe(db, head) {
+        return found;
+    }
+    let mut as_bytes = head.to_vec();
+    as_bytes.push(NOT_TEXT);
+    describe(db, &as_bytes).unwrap_or_default()
+}
+
+/// What the rules make of these bytes, as JSON. None when they make nothing of
+/// them, which includes the database's own last resort ("data", "ASCII text"):
+/// that tells the reader nothing the hex view is not already showing.
+fn describe(db: &pure_magic::MagicDb, head: &[u8]) -> Option<String> {
+    let m = db.best_magic_slice(head).ok()?;
     if m.is_default() {
-        return String::new();
+        return None;
     }
     let message = tidy(&m.message());
     if message.is_empty() {
-        return String::new();
+        return None;
     }
     let mut ext: Vec<String> = m.extensions().iter().map(|e| e.to_string()).collect();
     ext.sort();
@@ -76,7 +96,7 @@ pub fn identify(head: &[u8]) -> String {
         strength: m.strength() as f64,
         source: m.source().unwrap_or_default().to_string(),
     };
-    serde_json::to_string(&dto).unwrap_or_default()
+    serde_json::to_string(&dto).ok()
 }
 
 #[cfg(test)]
