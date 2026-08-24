@@ -4,14 +4,14 @@
 //! grouped, because an expression can only name a field in its own struct or
 //! an enclosing one, and the page size decides how big every page is.
 //!
-//! Where this stops: a b-tree page keeps its cells at the offsets in its cell
-//! pointer array, counting from the start of the page, and the IR has no way
-//! to say "the thing at this offset". So a page reads down to its pointer
-//! array and the rest of it is one run of bytes. Reading the rows themselves
-//! needs that, plus SQLite's own varint (nine bytes, the last contributing all
-//! eight bits, which `Vlq` cannot stand in for) and a column list whose types
-//! come from an array read earlier, element by element, which `Expr::Ref`
-//! cannot reach.
+//! Page 1 is the schema table, so its rows read as the five columns SQLite
+//! keeps there rather than as a numbered list.
+//!
+//! Where this stops: a payload too big for its page spills onto an overflow
+//! page, and telling a spilled one apart takes a comparison the IR cannot make,
+//! so a row that spills reads as an error where its record should be. A
+//! freelist page, an overflow page and a pointer map all read as bytes: what
+//! they are is decided by what points at them, not by anything in the page.
 
 use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
@@ -51,8 +51,7 @@ const SERIAL_TYPE: &[(i128, &str)] = &[
 /// rather than names: even is a blob, odd is text, and both count from the
 /// same place. There is no remainder operator, so the parity is worked out the
 /// long way round.
-fn column() -> T {
-    let serial = || E::elem("types", E::idx());
+fn column(serial: impl Fn() -> E) -> T {
     let blob_len = serial().sub(E::lit(12)).div(E::lit(2));
     let text_len = serial().sub(E::lit(13)).div(E::lit(2));
     let text = |enc| T::text(StrLen::Fixed(text_len.clone()), enc);
@@ -94,27 +93,50 @@ fn column() -> T {
 /// A row: a header of serial types, one per column, then the columns
 /// themselves. The header counts its own length in its first number.
 fn record() -> T {
-    T::structure(
-        "Record",
-        vec![
-            ("header_size", T::sqlite_varint()),
-            (
-                "types",
-                T::sized(
-                    E::field("header_size").sub(E::size_of("header_size")),
-                    T::repeat(T::enumeration("SerialType", T::sqlite_varint(), SERIAL_TYPE), Until::End),
-                ),
-            ),
-            ("columns", T::array(column(), E::field("types"))),
-        ],
+    T::structure("Record", header_fields(vec![("columns", T::array(column(|| E::elem("types", E::idx())), E::field("types")))]))
+}
+
+/// The row of `sqlite_master` that every schema entry is. Page 1 holds these
+/// and nothing else, and their five columns have names worth more than
+/// `columns[4]`: the last of them is the CREATE statement as typed.
+fn schema_record() -> T {
+    let at = |i: i128| column(move || E::elem("types", E::lit(i)));
+    T::structure_named(
+        "SchemaRecord",
+        "name",
+        "",
+        header_fields(vec![
+            ("type", at(0)),
+            ("name", at(1)),
+            ("tbl_name", at(2)),
+            ("rootpage", at(3)),
+            ("sql", at(4)),
+        ]),
     )
+}
+
+/// The part every record starts with: how long the header is, then one serial
+/// type per column, which is what says how to read the columns after it.
+fn header_fields(columns: Vec<(&str, T)>) -> Vec<(&str, T)> {
+    let mut fields = vec![
+        ("header_size", T::sqlite_varint()),
+        (
+            "types",
+            T::sized(
+                E::field("header_size").sub(E::size_of("header_size")),
+                T::repeat(T::enumeration("SerialType", T::sqlite_varint(), SERIAL_TYPE), Until::End),
+            ),
+        ),
+    ];
+    fields.extend(columns);
+    fields
 }
 
 /// The four shapes a cell takes, one per kind of page. A payload is parsed in
 /// a window of its own declared size, so a spilled one errors there and
 /// nowhere else.
-fn cell(page_type: i128) -> T {
-    let payload = || T::sized(E::field("payload_size"), record());
+fn cell(page_type: i128, rec: T) -> T {
+    let payload = || T::sized(E::field("payload_size"), rec.clone());
     let fields = match page_type {
         5 => vec![("left_child_page", T::u32(Big)), ("rowid", T::sqlite_varint())],
         13 => vec![
@@ -132,7 +154,7 @@ fn cell(page_type: i128) -> T {
     T::structure("Cell", fields)
 }
 
-fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E) -> T {
+fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, rec: T) -> T {
     let mut fields = vec![
         ("first_freeblock", T::u16(Big)),
         ("cell_count", T::u16(Big)),
@@ -145,14 +167,14 @@ fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E) -> T {
     fields.push(("cell_pointers", T::array(T::u16(Big), E::field("cell_count"))));
     // The cells fill the rest of the page, at the offsets just read, in no
     // particular order. What none of them covers is free space.
-    fields.push(("cells", T::pointer_list("cell_pointers", Anchor::Window, adjust, cell(page_type))));
+    fields.push(("cells", T::pointer_list("cell_pointers", Anchor::Window, adjust, cell(page_type, rec))));
     T::structure(name, fields)
 }
 
 /// `adjust` shifts every cell offset, and is what page 1 needs: its offsets
 /// count from the start of the file, 100 bytes before the page itself.
-fn page(adjust: E) -> T {
-    let body = |name, interior, ty| btree_body(name, interior, ty, adjust.clone());
+fn page(adjust: E, rec: T) -> T {
+    let body = |name, interior, ty| btree_body(name, interior, ty, adjust.clone(), rec.clone());
     T::structure(
         "Page",
         vec![
@@ -177,8 +199,8 @@ fn page(adjust: E) -> T {
 pub fn sqlite() -> Template {
     // A page size of 1 means 65536: the field is two bytes and cannot hold it.
     // There is no conditional expression, so a switch says it instead.
-    let first = |size: E| T::sized(size.sub(E::lit(100)), page(E::lit(-100)));
-    let rest = |size: E| T::repeat(T::sized(size, page(E::lit(0))), Until::End);
+    let first = |size: E| T::sized(size.sub(E::lit(100)), page(E::lit(-100), schema_record()));
+    let rest = |size: E| T::repeat(T::sized(size, page(E::lit(0), record())), Until::End);
     Template::new(
         "sqlite",
         T::structure(
@@ -308,12 +330,28 @@ mod tests {
         b
     }
 
-    /// Two pages: rows on page 1, and an empty page after it.
+    /// One row of `sqlite_master`: what it is, what it is called, which table
+    /// it belongs to, which page it starts on, and how it was declared.
+    fn schema_cell(rowid: u8, name: &str, root: u8, sql: &str) -> Vec<u8> {
+        let text = |s: &str| 13 + 2 * s.len() as u8;
+        let mut r = vec![6, text("table"), text(name), text(name), 1, text(sql)];
+        r.extend_from_slice(b"table");
+        r.extend_from_slice(name.as_bytes());
+        r.extend_from_slice(name.as_bytes());
+        r.push(root);
+        r.extend_from_slice(sql.as_bytes());
+        let mut c = vec![r.len() as u8, rowid];
+        c.extend_from_slice(&r);
+        c
+    }
+
+    /// Two pages, laid out the way SQLite lays a database out: the schema on
+    /// page 1, and the table it describes on the page after it.
     fn db() -> Vec<u8> {
         let mut b = header(PAGE);
+        b.extend_from_slice(&leaf_page(&[schema_cell(1, "m", 2, "CREATE TABLE m(x)")], PAGE - 100, 100));
         let cells = [cell_bytes(1, 42, "hi"), cell_bytes(2, -3, "there")];
-        b.extend_from_slice(&leaf_page(&cells, PAGE - 100, 100));
-        b.extend_from_slice(&leaf_page(&[], PAGE, 0));
+        b.extend_from_slice(&leaf_page(&cells, PAGE, 0));
         b
     }
 
@@ -328,53 +366,67 @@ mod tests {
         let kind = ev.node(&d, &[PAGE1, 0]).unwrap();
         assert_eq!(kind.offset_bits, 100 * 8);
         assert_eq!(kind.value, Value::Enum { raw: 13, name: Some("table leaf".into()), hex: false });
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELL_COUNT]).unwrap().value, Value::UInt(2));
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, POINTERS]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELL_COUNT]).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &[PAGE1, BODY, POINTERS]).unwrap().child_count, 1);
         // One more page, starting at a page boundary.
         assert_eq!(ev.node(&d, &[PAGES]).unwrap().child_count, 1);
         assert_eq!(ev.node(&d, &[PAGES, 0, 0]).unwrap().offset_bits, PAGE as u64 * 8);
     }
 
     #[test]
+    fn the_schema_row_reads_as_the_five_columns_sqlite_keeps_there() {
+        let d = Document::new(MemSource(db()));
+        let mut ev = Evaluator::new(sqlite());
+        let row = [PAGE1, BODY, CELLS, 0, 2];
+        let col = |i: usize| [row.as_slice(), &[i]].concat();
+        assert_eq!(ev.node(&d, &col(2)).unwrap().value, Value::Str("table".into()));
+        assert_eq!(ev.node(&d, &col(3)).unwrap().name, "name");
+        assert_eq!(ev.node(&d, &col(3)).unwrap().value, Value::Str("m".into()));
+        assert_eq!(ev.node(&d, &col(5)).unwrap().value, Value::Int(2)); // rootpage
+        assert_eq!(ev.node(&d, &col(6)).unwrap().value, Value::Str("CREATE TABLE m(x)".into()));
+    }
+
+    #[test]
     fn a_row_reads_as_its_columns() {
         let d = Document::new(MemSource(db()));
         let mut ev = Evaluator::new(sqlite());
-        let cells = ev.node(&d, &[PAGE1, BODY, CELLS]).unwrap();
+        let cells = ev.node(&d, &[PAGES, 0, BODY, CELLS]).unwrap();
         assert_eq!(cells.child_count, 2);
         // The second row sits before the first one in the file, and reading it
         // means following its offset rather than walking forward.
-        let second = ev.node(&d, &[PAGE1, BODY, CELLS, 1]).unwrap();
-        let first = ev.node(&d, &[PAGE1, BODY, CELLS, 0]).unwrap();
+        let second = ev.node(&d, &[PAGES, 0, BODY, CELLS, 1]).unwrap();
+        let first = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0]).unwrap();
         assert!(second.offset_bits < first.offset_bits);
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELLS, 1, 1]).unwrap().value, Value::Int(2)); // row id
-        let types = ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 1]).unwrap();
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 1]).unwrap().value, Value::Int(2)); // row id
+        let types = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 1]).unwrap();
         assert_eq!(types.child_count, 3);
         assert_eq!(
-            ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 1, 0]).unwrap().value,
+            ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 1, 0]).unwrap().value,
             Value::Enum { raw: 0, name: Some("null".into()), hex: false }
         );
-        let columns = ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 2]).unwrap();
+        let columns = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2]).unwrap();
         assert_eq!(columns.child_count, 3);
         // A column with no bytes, a number, and text, each typed by the header.
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 2, 0]).unwrap().size_bits, 0);
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 2, 1]).unwrap().value, Value::Int(42));
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 2, 2]).unwrap().value, Value::Str("hi".into()));
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELLS, 1, 2, 2, 1]).unwrap().value, Value::Int(-3));
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 0]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 1]).unwrap().value, Value::Int(42));
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 2]).unwrap().value, Value::Str("hi".into()));
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 1]).unwrap().value, Value::Int(-3));
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
     }
 
     #[test]
     fn the_cursor_lands_in_the_row_it_is_standing_in() {
         let d = Document::new(MemSource(db()));
         let mut ev = Evaluator::new(sqlite());
-        let text = ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 2, 2]).unwrap();
-        assert_eq!(ev.locate(&d, text.offset_bits).unwrap(), vec![PAGE1, BODY, CELLS, 0, 2, 2, 2]);
+        let text = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 2]).unwrap();
+        assert_eq!(ev.locate(&d, text.offset_bits).unwrap(), vec![PAGES, 0, BODY, CELLS, 0, 2, 2, 2]);
         // Free space between the pointer array and the first row belongs to no
         // field, and stops where that row starts.
-        let free = ev.spans(&d, 120 * 8, PAGE as u64 * 8, 4).unwrap();
+        let from = (PAGE + 20) as u64 * 8;
+        let free = ev.spans(&d, from, 2 * PAGE as u64 * 8, 4).unwrap();
         assert!(free[0].gap);
-        assert_eq!(free[0].offset_bits, 120 * 8);
-        let first_cell = ev.node(&d, &[PAGE1, BODY, CELLS, 1]).unwrap();
+        assert_eq!(free[0].offset_bits, from);
+        let first_cell = ev.node(&d, &[PAGES, 0, BODY, CELLS, 1]).unwrap();
         assert_eq!(free[0].offset_bits + free[0].size_bits, first_cell.offset_bits);
         assert!(!free[1].gap);
     }
@@ -386,11 +438,12 @@ mod tests {
         utf16.push(9);
         utf16.extend_from_slice(&[b'h', 0, b'i', 0]);
         let cell = [vec![utf16.len() as u8, 1], utf16].concat();
-        cells.extend_from_slice(&leaf_page(&[cell], PAGE - 100, 100));
+        cells.extend_from_slice(&leaf_page(&[], PAGE - 100, 100));
+        cells.extend_from_slice(&leaf_page(&[cell], PAGE, 0));
         cells[59] = 2; // text encoding: utf16le
         let d = Document::new(MemSource(cells));
         let mut ev = Evaluator::new(sqlite());
-        let col = ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2, 2, 2]).unwrap();
+        let col = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 2]).unwrap();
         assert_eq!(col.value, Value::Str("hi".into()));
         assert_eq!(col.type_name, "utf16le[]");
     }
@@ -425,6 +478,7 @@ mod tests {
     fn a_page_that_is_not_a_btree_reads_as_bytes() {
         let mut b = db();
         b[PAGE] = 0; // a freelist trunk page: the type byte means nothing here
+
         let d = Document::new(MemSource(b));
         let mut ev = Evaluator::new(sqlite());
         let body = ev.node(&d, &[PAGES, 0, 1]).unwrap();
@@ -435,12 +489,13 @@ mod tests {
     #[test]
     fn a_payload_too_big_for_its_page_is_an_error_for_that_row_alone() {
         let mut b = db();
-        // The first row claims a payload longer than the page can hold.
-        let at = b.len() - PAGE - 9;
+        // The first row claims a payload longer than the page can hold. It is
+        // the last cell in the file, since the cells fill a page from the back.
+        let at = b.len() - 9;
         b[at] = 250;
         let d = Document::new(MemSource(b));
         let mut ev = Evaluator::new(sqlite());
-        assert!(ev.node(&d, &[PAGE1, BODY, CELLS, 0, 2]).is_err());
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
+        assert!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2]).is_err());
+        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
     }
 }
