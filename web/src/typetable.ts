@@ -306,7 +306,13 @@ export class TypeTable {
       value.title = "Click to edit";
       value.append(...label(n));
     } else {
-      if (n.composite) value.textContent = countText(n.child_count, n.type.endsWith("[]") ? "item" : "field");
+      // A structure has named fields; a list has items, however its
+      // children are placed. A list reads as `X[]`, or as `offsets → X`
+      // when its children sit where an earlier array of offsets says.
+      if (n.composite) {
+        const list = n.type.endsWith("[]") || n.type.startsWith("offsets ");
+        value.textContent = countText(n.child_count, list ? "item" : "field");
+      }
       else value.append(...label(n));
     }
 

@@ -507,7 +507,9 @@ impl Ty {
             Ty::Struct(s) => s.name.clone(),
             Ty::Array { elem, .. } => format!("{}[]", elem.display_name()),
             Ty::Repeat { elem, .. } => format!("{}[]", elem.display_name()),
-            Ty::PointerList { elem, .. } => format!("{}[] at offsets", elem.display_name()),
+            // Not `{elem}[]`: that promises children laid out end to end,
+            // and these are placed one per offset, in any order.
+            Ty::PointerList { elem, .. } => format!("offsets \u{2192} {}", elem.display_name()),
             Ty::Sized { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Enum { def, .. } => def.name.clone(),
