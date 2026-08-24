@@ -8,7 +8,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::bits::bytes_for;
-use crate::decode::{be_int, f16_to_f64, fixed_bits, read_int, read_uint};
+use crate::decode::{be_int, fixed_bits, narrow_f16, narrow_f32, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::source::{Missing, Source};

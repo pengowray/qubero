@@ -238,7 +238,7 @@ pub fn gguf() -> Template {
             // `general.alignment`, which is a metadata value rather than a
             // field, so 32 is assumed; the padding before the first tensor
             // reads as a gap.
-            ("data", T::pointer_list_records("tensors", "offset", Anchor::SelfAligned(32), E::lit(0), weights())),
+            ("data", T::pointer_list_records("tensors", "offset", Anchor::SelfAligned(32), E::lit(0), T::Named("Weights".into()))),
         ],
     );
     Template::new("gguf", root)
@@ -246,6 +246,7 @@ pub fn gguf() -> Template {
         .with_type("Array", array())
         .with_type("Metadata", metadata())
         .with_type("Tensor", tensor())
+        .with_type("Weights", weights())
 }
 
 #[cfg(test)]

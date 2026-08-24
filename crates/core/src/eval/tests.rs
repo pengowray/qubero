@@ -497,6 +497,25 @@ fn a_fixed_stride_array_is_sized_without_touching_its_elements() {
 }
 
 #[test]
+fn a_narrow_float_reads_at_the_width_it_was_stored_in() {
+    // The same number in sixteen bits and in thirty-two. Widening either to an
+    // f64 and printing that gives a dozen digits the file never held.
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("half", T::F16(Little)), ("single", T::F32(Little))]),
+    );
+    let mut bytes = 0x1bedu16.to_le_bytes().to_vec(); // f16 0.00387
+    bytes.extend_from_slice(&0.3f32.to_le_bytes());
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Float(0.00387));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Float(0.3));
+    // Shorter, and still the same bits: writing it back changes nothing.
+    let w = ev.prepare_write(&d, &[0], "0.00387").unwrap();
+    assert_eq!(w.data, 0x1bedu16.to_le_bytes().to_vec());
+}
+
+#[test]
 fn a_run_of_same_sized_blocks_is_counted_by_division() {
     // What a paged file is: a header saying how big a block is, then blocks of
     // that size until the file runs out. Nothing here is fixed at template

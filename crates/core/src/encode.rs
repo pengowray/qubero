@@ -483,7 +483,7 @@ fn leb_signed(v: i128, room: usize) -> Option<Vec<u8>> {
 }
 
 /// Inverse of `decode::f16_to_f64`.
-fn f64_to_f16(x: f64) -> u16 {
+pub(crate) fn f64_to_f16(x: f64) -> u16 {
     if x.is_nan() {
         return 0x7e00;
     }

@@ -6,3 +6,8 @@ web/src/pkg/
 web/src/pkg-magic/
 web/public/magdir/
 web/public/diesig/
+
+# Sample files dropped in to try the editor against, which are not the editor.
+web/public/*.gguf
+web/public/*.db
+web/public/*.wav

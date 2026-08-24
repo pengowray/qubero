@@ -69,6 +69,35 @@ pub(crate) fn read_uint(buf: &[u8], bits: u32, endian: Endian) -> u128 {
     v
 }
 
+/// The shortest decimal that reads back as this same half-precision number.
+///
+/// An f16 holds between three and four decimal digits. Widening one to an f64
+/// and printing that spells out every digit of the wider number: a scale of
+/// 0.00387 becomes 0.0038700103759765625, of which three digits are in the
+/// file and the rest are an artefact of the widening. Rounding to the shortest
+/// form that still reads back as the same sixteen bits loses nothing, and says
+/// only what the file says.
+pub(crate) fn narrow_f16(h: u16) -> f64 {
+    let v = f16_to_f64(h);
+    if !v.is_finite() {
+        return v;
+    }
+    // Five significant digits always suffice for an f16; the loop stops at the
+    // first that comes back as the same bits.
+    (1..=5)
+        .find_map(|digits| {
+            let short: f64 = format!("{v:.*e}", digits - 1).parse().ok()?;
+            (crate::encode::f64_to_f16(short) == h).then_some(short)
+        })
+        .unwrap_or(v)
+}
+
+/// The same for single precision, where the shortest form is what Rust prints
+/// for an `f32` already; widening first is what spells out the rest.
+pub(crate) fn narrow_f32(x: f32) -> f64 {
+    if x.is_finite() { format!("{x}").parse().unwrap_or(x as f64) } else { x as f64 }
+}
+
 pub(crate) fn f16_to_f64(h: u16) -> f64 {
     let s = if h >> 15 == 1 { -1.0 } else { 1.0 };
     let e = ((h >> 10) & 0x1f) as i32;
