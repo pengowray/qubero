@@ -1119,8 +1119,10 @@ input.invalid {
 .lv-value {
   color: var(--fg);
 }
-/* An instruction is one thing, so it reads across the two columns a field
-   would have split between a name and a value. */
+/* An instruction, or a block of weights, is one thing, so it reads across the
+   two columns a field would have split between a name and a value. Such a row
+   leaves its name cell out: this claims column three, and a cell already
+   sitting there would put this one on a grid row of its own. */
 .lv-inline .lv-value {
   grid-column: 3 / 5;
 }

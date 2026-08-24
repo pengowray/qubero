@@ -396,10 +396,16 @@ export class ListingView {
     bytes.append(raw.hex, ascii);
     if (s.line !== null) {
       // A structure that reads on one row has no name worth a column of its
-      // own: the line is the whole of it.
+      // own: the line is the whole of it, and takes the name's column too.
+      // The name cell is left out rather than emptied, because an empty one
+      // still holds column three and would push the line onto a second grid
+      // row, where a row one line high shows half of each of them.
       el.classList.add("lv-inline");
       value.textContent = s.line;
-    } else if (s.gap) {
+      el.append(addr, bytes, value, type);
+      return el;
+    }
+    if (s.gap) {
       name.textContent = GAP_LABEL;
       value.textContent = "";
       type.textContent = "";
