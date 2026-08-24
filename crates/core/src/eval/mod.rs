@@ -18,6 +18,7 @@ use crate::text::{self, Settled};
 mod explain;
 mod listing;
 mod read;
+mod walk;
 #[cfg(test)]
 mod tests;
 
@@ -117,6 +118,34 @@ struct StrSpan {
     note: Option<String>,
 }
 
+/// What a list has learned about itself as it is walked. This is kept apart
+/// from `Resolved` because resolving a child clones its parent, and a list
+/// that has been walked a million elements holds a thousand checkpoints:
+/// cloning those per child is what turns reading a long list into a crawl.
+#[derive(Debug, Default, Clone)]
+struct ListState {
+    /// For `Repeat`: how many elements the walk has reached, where the last
+    /// of them ends, and whether the walk reached its terminating
+    /// condition. A count and one offset rather than one offset per
+    /// element, since a repeat can run to millions of them.
+    repeat_len: usize,
+    repeat_end: Option<u64>,
+    repeat_done: bool,
+    /// How far a walk over this list has got: an element index and where it
+    /// starts. Walking on from here is what keeps reading a list in order
+    /// one step per element rather than one walk per element.
+    walk_at: Option<(usize, u64)>,
+    /// The offset of every thousandth element of a long list, so one can be
+    /// reached without walking from the start. See `walk.rs`.
+    checkpoints: Vec<(usize, u64)>,
+    /// For `PointerList` with `to_next`: every child's start, sorted, worked
+    /// out once so each child can find the one after it without a walk.
+    pointer_starts: Option<Vec<u64>>,
+    /// Children `0..seq_end` are resolved and sized, so child `seq_end` can
+    /// be placed without walking back. Keeps sibling resolution iterative.
+    seq_end: usize,
+}
+
 #[derive(Debug, Clone)]
 struct Resolved {
     name: String,
@@ -132,35 +161,59 @@ struct Resolved {
     /// element `n - 1` for its value, so without this a track of ten thousand
     /// events is ten thousand deep rather than one.
     computed: Option<i128>,
-    /// For `Repeat`: end offsets of elements resolved so far, and whether the
-    /// walk reached its terminating condition.
-    repeat_ends: Vec<u64>,
-    repeat_done: bool,
-    /// For `PointerList` with `to_next`: every child's start, sorted, worked
-    /// out once so each child can find the one after it without a walk.
-    pointer_starts: Option<Vec<u64>>,
-    /// Children `0..seq_end` are resolved and sized, so child `seq_end` can be
-    /// placed without walking back. Keeps sibling resolution iterative.
-    seq_end: usize,
 }
 
 pub struct Evaluator {
     template: Template,
     memo: HashMap<Vec<usize>, Resolved>,
+    /// What each list has learned about itself, for the few nodes that are
+    /// lists. Kept apart from `memo` so resolving a child stays cheap.
+    lists: HashMap<Vec<usize>, ListState>,
+    /// Nodes recorded while a guarded walk is running, so the walk can drop
+    /// the ones it has moved past. Empty when no walk is running.
+    journal: Vec<Vec<usize>>,
+    /// How many guarded walks are running, since a list can hold a list.
+    guard_depth: u32,
 }
 
 impl Evaluator {
     pub fn new(template: Template) -> Self {
-        Self { template, memo: HashMap::new() }
+        Self {
+            template,
+            memo: HashMap::new(),
+            lists: HashMap::new(),
+            journal: Vec::new(),
+            guard_depth: 0,
+        }
     }
 
     pub fn template(&self) -> &Template {
         &self.template
     }
 
+    /// How many nodes are currently memoised. What a walk over a long list
+    /// costs in memory is measured here rather than guessed at.
+    pub fn memo_len(&self) -> usize {
+        self.memo.len()
+    }
+
     /// Drop every cached offset/size. Call after any document change.
     pub fn invalidate(&mut self) {
         self.memo.clear();
+        self.lists.clear();
+        self.journal.clear();
+        self.guard_depth = 0;
+    }
+
+    /// What the list at `path` has learned about itself. A node that is not
+    /// a list, or one nothing has been learned about yet, has learned
+    /// nothing, which is what the default says.
+    fn list(&self, path: &[usize]) -> ListState {
+        self.lists.get(path).cloned().unwrap_or_default()
+    }
+
+    fn list_mut(&mut self, path: &[usize]) -> &mut ListState {
+        self.lists.entry(path.to_vec()).or_default()
     }
 
     pub fn node<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<NodeInfo> {
@@ -273,7 +326,7 @@ impl Evaluator {
             let limit = doc.len_bits();
             let root = self.template.root.clone();
             let r = self.effective(doc, &[], "file".into(), root, 0, limit)?;
-            self.memo.insert(vec![], r);
+            self.remember(&[], r);
             return Ok(());
         }
         let (parent, idx) = (&path[..path.len() - 1], path[path.len() - 1]);
@@ -299,14 +352,12 @@ impl Evaluator {
             let _ = elem;
             pr.offset + idx as u64 * fs
         } else {
-            // Place after the previous sibling. Siblings are resolved in order,
-            // iteratively, so deep arrays do not recurse element by element.
+            // Place after the previous sibling, walking the elements in
+            // between. A long list drops what the walk moves past, so this
+            // stays bounded in memory; see `walk.rs`.
             // Note: asking for an element past a Repeat's terminating condition
             // is not prevented here; `children()` clamps, direct callers must too.
-            self.resolve_upto(doc, parent, idx)?;
-            let mut prev = parent.to_vec();
-            prev.push(idx - 1);
-            self.memo[&prev].offset + self.size_of(doc, &prev)?
+            self.walk_to(doc, parent, idx)?
         };
         if offset > pr.limit {
             return fail("runs past the end of its container");
@@ -321,7 +372,7 @@ impl Evaluator {
             }
         }
         let r = self.effective(doc, path, name, ty, offset, limit)?;
-        self.memo.insert(path.to_vec(), r);
+        self.remember(path, r);
         Ok(())
     }
 
@@ -370,7 +421,7 @@ impl Evaluator {
     /// list with it; a child whose bytes are not loaded yet is still an answer
     /// the caller has to wait for.
     fn pointer_starts<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved) -> R<Vec<u64>> {
-        if let Some(starts) = self.memo.get(list).and_then(|r| r.pointer_starts.clone()) {
+        if let Some(starts) = self.lists.get(list).and_then(|l| l.pointer_starts.clone()) {
             return Ok(starts);
         }
         let n = self.child_count(doc, list)?;
@@ -383,13 +434,13 @@ impl Evaluator {
             }
         }
         starts.sort_unstable();
-        self.memo.get_mut(list).expect("resolved").pointer_starts = Some(starts.clone());
+        self.list_mut(list).pointer_starts = Some(starts.clone());
         Ok(starts)
     }
 
     /// Resolve and size children `0..idx` of `parent`, in order, without recursion.
     fn resolve_upto<S: Source>(&mut self, doc: &Document<S>, parent: &[usize], idx: usize) -> R<()> {
-        let mut j = self.memo[parent].seq_end;
+        let mut j = self.list(parent).seq_end;
         let mut p = parent.to_vec();
         while j < idx {
             p.push(j);
@@ -397,7 +448,7 @@ impl Evaluator {
             self.size_of(doc, &p)?;
             p.pop();
             j += 1;
-            self.memo.get_mut(parent).expect("resolved").seq_end = j;
+            self.list_mut(parent).seq_end = j;
         }
         Ok(())
     }
@@ -455,10 +506,6 @@ impl Evaluator {
                         declared_size,
                         size: None,
                         computed: None,
-                        repeat_ends: Vec::new(),
-                        repeat_done: false,
-                        pointer_starts: None,
-                        seq_end: 0,
                     });
                 }
             }
@@ -562,7 +609,6 @@ impl Evaluator {
                     } else {
                         let mut last = path.to_vec();
                         last.push(n as usize - 1);
-                        self.resolve_upto(doc, path, n as usize - 1)?;
                         self.resolve(doc, &last)?;
                         let end = self.memo[&last].offset + self.size_of(doc, &last)?;
                         end - r.offset
@@ -599,21 +645,22 @@ impl Evaluator {
                 Ok(n as u64)
             }
             Ty::Repeat { until, .. } => {
-                if r.repeat_done {
-                    return Ok(r.repeat_ends.len() as u64);
+                let state = self.list(path);
+                if state.repeat_done {
+                    return Ok(state.repeat_len as u64);
                 }
                 let mut p = path.to_vec();
                 loop {
                     let (ends, done) = {
-                        let m = &self.memo[path];
-                        (m.repeat_ends.len(), m.repeat_done)
+                        let l = self.list(path);
+                        (l.repeat_len, l.repeat_done)
                     };
                     if done {
                         return Ok(ends as u64);
                     }
-                    let start = self.memo[path].repeat_ends.last().copied().unwrap_or(r.offset);
+                    let start = self.list(path).repeat_end.unwrap_or(r.offset);
                     if start >= r.limit {
-                        self.memo.get_mut(path).expect("resolved").repeat_done = true;
+                        self.list_mut(path).repeat_done = true;
                         return Ok(ends as u64);
                     }
                     p.push(ends);
@@ -632,8 +679,9 @@ impl Evaluator {
                         }
                     };
                     p.pop();
-                    let m = self.memo.get_mut(path).expect("resolved");
-                    m.repeat_ends.push(end);
+                    let m = self.list_mut(path);
+                    m.repeat_len += 1;
+                    m.repeat_end = Some(end);
                     if stop {
                         m.repeat_done = true;
                     }
