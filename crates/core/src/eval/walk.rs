@@ -86,7 +86,14 @@ impl Evaluator {
         }
         // The journal is opened part way through, once the run turns out to be
         // a long one, so a short run costs nothing to count: see `count_from`.
+        // A count that was interrupted and is being carried on already knows
+        // its run is long, and opens one now: it will never pass the mark
+        // again, and without this every count after the first interruption
+        // would keep every element it counted.
         let depth = self.journals.len();
+        if self.list(path).repeat_len > GUARD_ABOVE {
+            self.journals.push(WalkJournal::default());
+        }
         let out = self.count_from(doc, path, r, until);
         if self.journals.len() > depth {
             let journal = self.journals.pop().expect("opened during the count");

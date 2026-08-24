@@ -605,6 +605,39 @@ fn counting_a_long_run_costs_the_same_however_long_it_is() {
 }
 
 #[test]
+fn counting_a_long_run_a_bit_at_a_time_costs_no_more_than_counting_it_at_once() {
+    // The browser counts in goes of a few thousand elements, so that the page
+    // can draw between them. Every go but the first carries on a count that
+    // already knows its run is long, and must keep dropping what it walks
+    // past: this is the shape the count actually has when a file is open.
+    let n = 40_000usize;
+    let mut bytes = Vec::new();
+    for i in 0..n {
+        let s = "x".repeat(i % 17 + 1);
+        bytes.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(s.as_bytes());
+    }
+    let string = T::structure("String", vec![("len", T::u64(Little)), ("text", T::utf8(E::field("len")))]);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", T::repeat(string, Until::End)));
+    ev.set_slice(Some(500));
+    let mut goes = 0;
+    let counted = loop {
+        goes += 1;
+        assert!(goes < 1000, "the count is not getting anywhere");
+        ev.begin_slice();
+        match ev.node(&d, &[]) {
+            Ok(info) => break info.child_count,
+            Err(e) if e.interrupted() => continue,
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    assert_eq!(counted, n as u64);
+    assert!(goes > 10, "the count was not interrupted, so this proves nothing");
+    assert!(ev.memo_len() < 20_000, "counting in goes kept {} nodes", ev.memo_len());
+}
+
+#[test]
 fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
     // Strings of growing length, so every element sits at an offset only the
     // walk can find, and one the test can work out for itself.
