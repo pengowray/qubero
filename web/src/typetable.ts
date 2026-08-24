@@ -483,7 +483,7 @@ export class TypeTable {
       td.colSpan = 5;
       td.style.paddingLeft = `${(depth + 1) * 16 + 8}px`;
       const list = n.type.endsWith("[]") || n.type.startsWith("offsets ");
-      td.textContent = `${countText(skipped, list ? (n.unit ?? "item") : "field")} between`;
+      td.textContent = `${countText(skipped, list ? (n.unit ?? "item") : "field")} hidden`;
       tr.append(td);
       frag.append(tr);
     }
