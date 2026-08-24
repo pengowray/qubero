@@ -150,6 +150,12 @@ fn main() {
     assert_eq!(again.child_count, data.child_count);
     // What the annotation column shows in the middle of the weights.
     let inside = data.offset_bits + data.size_bits / 2;
+    // A screenful of them, which is what the listing view asks for on every
+    // scroll: this is the number that decides whether scrolling is smooth.
+    let t = Instant::now();
+    if let Ok(screen) = ev.spans(&doc, inside, inside + 64 * 256 * 8, 64) {
+        println!("  a screenful of {} spans in the weights: {:?}", screen.len(), t.elapsed());
+    }
     if let Ok(spans) = ev.spans(&doc, inside, inside + 256 * 8, 6) {
         println!(
             "  inside the weights at 0x{:x}: {} entries",

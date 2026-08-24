@@ -160,7 +160,10 @@ struct ListState {
     checkpoints: Vec<(usize, u64)>,
     /// For `PointerList` with `to_next`: every child's start, sorted, worked
     /// out once so each child can find the one after it without a walk.
-    pointer_starts: Option<Vec<u64>>,
+    /// Where each child of a pointer list starts, in order of where rather
+    /// than in order of which, with the child it belongs to. Sorted, so the
+    /// child covering a bit is a halving rather than a walk through all of them.
+    pointer_starts: Option<Vec<(u64, usize)>>,
     /// Children `0..seq_end` are resolved and sized, so child `seq_end` can
     /// be placed without walking back. Keeps sibling resolution iterative.
     seq_end: usize,
@@ -523,7 +526,7 @@ impl Evaluator {
         let mut limit = pr.limit;
         if let Ty::PointerList { to_next: true, .. } = &pr.ty {
             let starts = self.pointer_starts(doc, parent, &pr)?;
-            if let Some(next) = starts.get(starts.partition_point(|s| *s <= offset)) {
+            if let Some((next, _)) = starts.get(starts.partition_point(|(s, _)| *s <= offset)) {
                 limit = limit.min(*next);
             }
         }
@@ -576,7 +579,7 @@ impl Evaluator {
     /// A child whose offset does not parse is left out rather than taking the
     /// list with it; a child whose bytes are not loaded yet is still an answer
     /// the caller has to wait for.
-    fn pointer_starts<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved) -> R<Vec<u64>> {
+    fn pointer_starts<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved) -> R<Vec<(u64, usize)>> {
         if let Some(starts) = self.lists.get(list).and_then(|l| l.pointer_starts.clone()) {
             return Ok(starts);
         }
@@ -584,7 +587,7 @@ impl Evaluator {
         let mut starts = Vec::with_capacity(n as usize);
         for i in 0..n as usize {
             match self.pointer_offset(doc, list, lr, i) {
-                Ok(off) => starts.push(off),
+                Ok(off) => starts.push((off, i)),
                 Err(e) if e.interrupted() => return Err(e),
                 Err(_) => {}
             }

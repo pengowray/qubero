@@ -358,6 +358,32 @@ impl Evaluator {
         if matches!(r.ty, Ty::Array { .. } | Ty::Repeat { .. }) && self.guarded(doc, path, &r)? {
             return self.child_covering(doc, path, n, bit);
         }
+        // A pointer list knows where its children start, in order: the one
+        // that covers a bit is the last one starting at or before it. Asking
+        // all four hundred tensors of a model which of them the cursor is in,
+        // for every row of every screen, is what this is instead of.
+        if matches!(r.ty, Ty::PointerList { .. }) {
+            let starts = self.pointer_starts(doc, path, &r)?;
+            let k = starts.partition_point(|(s, _)| *s <= bit);
+            if k > 0 {
+                let i = starts[k - 1].1;
+                let mut p = path.to_vec();
+                p.push(i);
+                let covers = match self.resolve(doc, &p) {
+                    Ok(()) => self.size_of(doc, &p).map(|size| bit < self.memo[&p].offset + size),
+                    Err(e) => Err(e),
+                };
+                match covers {
+                    Ok(true) => return Ok(Some(i)),
+                    Err(e) if e.interrupted() => return Err(e),
+                    // Between two children, or a child that will not parse:
+                    // fall through and look properly, since children may
+                    // overlap or be missing and the nearest start is only a
+                    // good guess.
+                    _ => {}
+                }
+            }
+        }
         // Children of a pointer list are in the order their offsets are in,
         // not the order they sit in, so every one has to be looked at, and one
         // that does not parse is passed over rather than taking the page with it.
@@ -390,6 +416,12 @@ impl Evaluator {
     /// next one begins: free space inside a page sits between cells, not after
     /// all of them.
     pub(super) fn next_child_start<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<u64>> {
+        // The starts are in order, so the first one past the bit is a halving.
+        if matches!(self.memo[path].ty, Ty::PointerList { .. }) {
+            let r = self.memo[path].clone();
+            let starts = self.pointer_starts(doc, path, &r)?;
+            return Ok(starts.get(starts.partition_point(|(s, _)| *s <= bit)).map(|(s, _)| *s));
+        }
         let n = self.child_count(doc, path)?;
         let mut best: Option<u64> = None;
         let mut p = path.to_vec();
