@@ -137,6 +137,15 @@ function mount(doc: Doc): void {
     inspector.setPath(path);
     table.reveal(path);
   };
+  // Following an offset: put the cursor where it points, and let the views
+  // catch up the same way they do for a search hit.
+  const goToBit = (bitOffset: number): void => {
+    view.setBitCursor(bitOffset, { pane: "hex" });
+    inspector.setOffset(bitOffset);
+    followCursor(bitOffset);
+  };
+  table.onJump = goToBit;
+  inspector.onGoTo = goToBit;
   inspector.onPick = (path) => {
     goToField(path);
     table.reveal(path);

@@ -3,7 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::eval::Explain;
+use qubero_core::eval::{Explain, Origin};
 use qubero_core::{diescript, dosbasic};
 use qubero_core::search::{self, Needle, Search, Step};
 use qubero_core::{formats, magicrule, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
@@ -85,6 +85,22 @@ struct ExplainDto {
     pattern: String,
 }
 
+/// One field another field's shape came from.
+#[derive(Serialize)]
+struct OriginDto {
+    /// "length" | "count" | "type" | "position" | "points"
+    role: &'static str,
+    /// The field as the reader would name it: `len`, or `tensors[3].offset`.
+    label: String,
+    /// Where it is, so the reader can go there. Empty for a bit this field
+    /// points at rather than a field it came from.
+    path: Vec<f64>,
+    /// What it says, in brief. Empty when it could not be read.
+    value: String,
+    /// For "points": the bit this field's value points at.
+    target_bits: Option<f64>,
+}
+
 #[derive(Serialize)]
 struct CaseDto {
     value: f64,
@@ -97,6 +113,16 @@ struct BitDto {
     /// Absent for a bit the format does not name.
     name: Option<String>,
     set: bool,
+}
+
+fn origin_dto(o: Origin) -> OriginDto {
+    OriginDto {
+        role: o.role.as_str(),
+        label: o.label,
+        path: o.path.into_iter().map(|x| x as f64).collect(),
+        value: o.value,
+        target_bits: o.target_bits.map(|b| b as f64),
+    }
 }
 
 fn explain_dto(e: Explain) -> ExplainDto {
@@ -456,6 +482,20 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.explain(&self.doc, &p).map(explain_dto))
+            }
+        }
+    }
+
+    /// Which fields settled the shape of the one at `path`, and where this one
+    /// points if it holds an offset. JSON, in the same reply shape as the rest;
+    /// usually an empty list, since most fields are placed and sized outright.
+    pub fn origins(&mut self, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<Vec<OriginDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.origins(&self.doc, &p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
             }
         }
     }

@@ -158,6 +158,20 @@ export type SearchStep =
   | { readonly step: "more"; readonly resume: number }
   | { readonly step: "end" };
 
+/** What one other field decided about this one. `points` is the other way
+ *  round: this field holds an offset, and that is where it points. */
+export type Origin = {
+  readonly role: "length" | "count" | "type" | "position" | "points";
+  /** The field as the reader would name it: `len`, or `tensors[3].offset`. */
+  readonly label: string;
+  /** Where it is, so the reader can go there. Empty for a `points` entry. */
+  readonly path: number[];
+  /** What it says, in brief. Empty when it could not be read. */
+  readonly value: string;
+  /** For `points`: the bit this field's value points at. */
+  readonly target_bits: number | null;
+};
+
 /** What a type permits, beyond what this file's bytes happen to say. */
 export type TypeInfo = {
   readonly kind: "magic" | "enum" | "flags" | "float" | "plain";
@@ -533,6 +547,15 @@ export class Doc {
 
   endBatch(): void {
     this.editor.end_batch();
+  }
+
+  /**
+   * Which fields settled the shape of the one at `path`, and where this one
+   * points if it holds an offset. Usually empty: most fields are placed and
+   * sized by the template outright.
+   */
+  origins(path: readonly number[]): TemplateReply<Origin[]> {
+    return this.handleReply<Origin[]>(this.editor.origins(Uint32Array.from(path)));
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */

@@ -80,6 +80,8 @@ export class TypeTable {
   private rebuilding = false;
 
   onPick: (pick: FieldPick) => void = () => {};
+  /** Ctrl+click on a field holding an offset: go to where it points. */
+  onJump: (bitOffset: number) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -162,6 +164,13 @@ export class TypeTable {
       this.render();
       return;
     }
+    if (e.ctrlKey || e.metaKey) {
+      const to = this.pointsAt(pathOf(row.dataset["path"] ?? ""));
+      if (to !== null) {
+        this.onJump(to);
+        return;
+      }
+    }
     const startBit = Number(row.dataset["start"]);
     const endBit = Number(row.dataset["end"]);
     this.selected = k;
@@ -169,6 +178,14 @@ export class TypeTable {
     else this.editing = null;
     this.render();
     this.onPick({ path: pathOf(k), startBit, endBit });
+  }
+
+  /** The bit this field's value points at, for a field holding an offset. */
+  private pointsAt(path: readonly number[]): number | null {
+    const r = this.doc.origins(path);
+    if (r.status !== "ok") return null;
+    const to = r.node.find((o) => o.role === "points" && o.target_bits !== null);
+    return to?.target_bits ?? null;
   }
 
   private onKey(e: KeyboardEvent): void {

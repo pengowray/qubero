@@ -6,7 +6,7 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { formatOffset } from "./doc.js";
-import type { Doc, TemplateNode } from "./doc.js";
+import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
@@ -32,6 +32,8 @@ export class Inspector {
   private readonly detail: HTMLElement;
   private readonly fieldRow: HTMLElement;
   private readonly types: HTMLElement;
+  /** Which other fields settled this one's length, count, type or place. */
+  private readonly origins: HTMLElement;
   /** Path of the field the structure panel is showing, if any. */
   private at: readonly number[] | null = null;
   /** A field picked by name stays shown until the cursor moves off it. */
@@ -39,6 +41,8 @@ export class Inspector {
 
   /** Asked for when a breadcrumb is clicked, so the views can follow. */
   onPick: (path: readonly number[]) => void = () => {};
+  /** Asked for when the reader follows an offset, so the views can follow. */
+  onGoTo: (bitOffset: number) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -167,8 +171,19 @@ export class Inspector {
     this.types = document.createElement("div");
     this.types.className = "insp-type";
     this.types.hidden = true;
-    this.fieldRow.append(this.field, this.area, this.note, this.detail, this.types);
-    this.struct.append(this.crumbs, this.fieldRow);
+    this.origins = document.createElement("div");
+    this.origins.className = "insp-origins";
+    this.origins.hidden = true;
+    this.origins.addEventListener("click", (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      const to = t.dataset["bit"];
+      if (to !== undefined) return this.onGoTo(Number(to));
+      const p = t.dataset["path"];
+      if (p !== undefined) this.onPick(p === "" ? [] : p.split("/").map(Number));
+    });
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.note, this.origins, this.types);
+    this.struct.append(this.detail, this.crumbs, this.fieldRow);
 
     this.status = document.createElement("div");
     this.status.className = "insp-status";
@@ -271,7 +286,7 @@ export class Inspector {
       this.at = null;
       // The Fields table below says where to pick one; saying it twice is noise.
       this.crumbs.textContent = "No template selected.";
-      this.fieldRow.hidden = true;
+      this.hideField();
       this.status.textContent = "";
       return;
     }
@@ -282,7 +297,7 @@ export class Inspector {
         found.status === "pending" || found.status === "working"
           ? "Loading this part of the file…"
           : "No field at this offset.";
-      this.fieldRow.hidden = true;
+      this.hideField();
       return;
     }
     const path: readonly number[] = found.node;
@@ -291,13 +306,14 @@ export class Inspector {
       this.at = null;
       this.crumbs.textContent =
         node.status === "pending" || node.status === "working" ? "Loading this part of the file…" : node.message;
-      this.fieldRow.hidden = true;
+      this.hideField();
       return;
     }
     this.at = path;
     const n = node.node;
     this.crumbs.replaceChildren(...this.trail(path));
     this.fieldRow.hidden = false;
+    this.detail.hidden = false;
     const at = document.createElement("span");
     at.className = "addr";
     at.textContent = formatOffset(n.offset_bits);
@@ -307,7 +323,62 @@ export class Inspector {
     this.field.hidden = long;
     if (long) this.fillArea(n);
     else this.fillField(n);
+    this.fillOrigins(path);
     this.fillTypes(path, n);
+  }
+
+  /** Nothing to show about a field: no template, no field, or not read yet. */
+  private hideField(): void {
+    this.fieldRow.hidden = true;
+    this.detail.hidden = true;
+  }
+
+  /**
+   * Which other fields settled the shape of the one at the cursor, and where it
+   * points when it holds an offset.
+   *
+   * Every step of the path is asked, not only the field itself: 128 bytes of
+   * packed weights are 128 bytes because of the tensor record three levels up,
+   * and that record is what the reader wants to see. Each step that has an
+   * answer is a group under the field it is about.
+   */
+  private fillOrigins(path: readonly number[]): void {
+    const rows: Node[] = [];
+    const jumps: Node[] = [];
+    for (let i = 0; i <= path.length; i++) {
+      const at = path.slice(0, i);
+      const reply = this.doc.origins(at);
+      if (reply.status !== "ok") continue;
+      const from = reply.node.filter((o) => o.role !== "points");
+      // Only the field itself can point somewhere: an ancestor's pointer is
+      // not what the cursor is on.
+      if (i === path.length) {
+        for (const o of reply.node) {
+          if (o.role === "points" && o.target_bits !== null) jumps.push(pointsRow(o));
+        }
+      }
+      if (from.length === 0) continue;
+      if (i < path.length) {
+        const node = this.doc.templateNode(at);
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "insp-link insp-origin-group";
+        b.dataset["path"] = at.join("/");
+        b.textContent = node.status === "ok" ? node.node.name : "…";
+        rows.push(b);
+      }
+      for (const o of from) rows.push(originRow(o));
+    }
+    if (rows.length === 0 && jumps.length === 0) {
+      this.origins.hidden = true;
+      this.origins.replaceChildren();
+      return;
+    }
+    const all: Node[] = [];
+    if (rows.length > 0) all.push(subhead("Depends on"), ...rows);
+    if (jumps.length > 0) all.push(subhead("Points to"), ...jumps);
+    this.origins.replaceChildren(...all);
+    this.origins.hidden = false;
   }
 
   /** The section below the editor. See `insp-type`. */
@@ -427,6 +498,60 @@ export class Inspector {
     b.textContent = label;
     return b;
   }
+}
+
+/** A heading over one part of the panel, so the mode buttons above are not
+ *  mistaken for one. */
+function subhead(text: string): HTMLElement {
+  const h = document.createElement("div");
+  h.className = "insp-subhead";
+  h.textContent = text;
+  return h;
+}
+
+/** Where a field holding an offset points. */
+function pointsRow(o: Origin): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "insp-origin";
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "insp-link addr";
+  b.dataset["bit"] = String(o.target_bits);
+  b.textContent = formatOffset(o.target_bits ?? 0);
+  const what = document.createElement("span");
+  what.className = "insp-origin-val";
+  what.textContent = o.label;
+  row.append(b, what);
+  return row;
+}
+
+/** A count of four million reads as one. */
+function grouped(value: string): string {
+  return /^\d{5,}$/.test(value) ? BigInt(value).toLocaleString() : value;
+}
+
+/** What one field decided about the one at the cursor: `Length  len = 20`. */
+const ROLE_TEXT = { length: "Length", count: "Count", type: "Type", position: "Position", points: "" } as const;
+
+function originRow(o: Origin): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "insp-origin";
+  const role = document.createElement("span");
+  role.className = "insp-origin-role";
+  role.textContent = ROLE_TEXT[o.role];
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "insp-link";
+  b.dataset["path"] = o.path.join("/");
+  b.textContent = o.label;
+  row.append(role, b);
+  if (o.value !== "") {
+    const v = document.createElement("span");
+    v.className = "insp-origin-val";
+    v.textContent = `= ${grouped(o.value)}`;
+    row.append(v);
+  }
+  return row;
 }
 
 /** How much of a long field the panel reads; the core stops editing there too. */

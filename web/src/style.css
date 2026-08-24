@@ -666,13 +666,72 @@ input.invalid {
     max-height: 40%;
   }
 }
+/* The mode buttons are a control, not a heading over what follows, so they sit
+   in a bar of their own with a rule under it. */
 .insp-head {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  margin-bottom: 6px;
+  margin: -8px -10px 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
   font-weight: 600;
+}
+/* One part of the panel: the value, where its shape came from, what the type
+   permits. */
+.insp-subhead {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 10px 0 4px;
+}
+.insp-origins {
+  margin-top: 2px;
+}
+.insp-origin {
+  display: flex;
+  padding-left: 2px;
+  gap: 6px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 0;
+}
+/* The step of the path these entries are about, when it is not the field at
+   the cursor itself. */
+.insp-origin-group {
+  display: block;
+  font-family: var(--mono);
+  font-size: 12px;
+  margin: 4px 0 1px;
+}
+.insp-origin-role {
+  font-family: var(--sans);
+  color: var(--muted);
+  min-width: 4.5rem;
+}
+.insp-origin-val {
+  color: var(--muted);
+}
+/* A field named somewhere else in the panel, which the reader can go to. */
+.insp-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  min-height: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.insp-link.addr {
+  color: var(--addr);
 }
 .seg {
   display: inline-flex;
@@ -766,7 +825,7 @@ input.invalid {
   font-family: var(--mono);
   font-size: 12px;
   color: var(--muted);
-  margin-top: 4px;
+  margin-bottom: 2px;
 }
 .insp-table {
   width: 100%;
