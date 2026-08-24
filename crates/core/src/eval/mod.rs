@@ -136,6 +136,9 @@ struct Resolved {
     /// walk reached its terminating condition.
     repeat_ends: Vec<u64>,
     repeat_done: bool,
+    /// For `PointerList` with `to_next`: every child's start, sorted, worked
+    /// out once so each child can find the one after it without a walk.
+    pointer_starts: Option<Vec<u64>>,
     /// Children `0..seq_end` are resolved and sized, so child `seq_end` can be
     /// placed without walking back. Keeps sibling resolution iterative.
     seq_end: usize,
@@ -308,7 +311,16 @@ impl Evaluator {
         if offset > pr.limit {
             return fail("runs past the end of its container");
         }
-        let r = self.effective(doc, path, name, ty, offset, pr.limit)?;
+        // A pointer-list child with no size of its own runs to the next child
+        // above it: its limit is that child's start.
+        let mut limit = pr.limit;
+        if let Ty::PointerList { to_next: true, .. } = &pr.ty {
+            let starts = self.pointer_starts(doc, parent, &pr)?;
+            if let Some(next) = starts.get(starts.partition_point(|s| *s <= offset)) {
+                limit = limit.min(*next);
+            }
+        }
+        let r = self.effective(doc, path, name, ty, offset, limit)?;
         self.memo.insert(path.to_vec(), r);
         Ok(())
     }
@@ -317,10 +329,10 @@ impl Evaluator {
     /// the anchor, so a child can sit anywhere in the list's stretch, in any
     /// order. One that points outside it is an error for that child alone.
     fn pointer_offset<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved, idx: usize) -> R<u64> {
-        let Ty::PointerList { offsets, anchor, adjust, .. } = &lr.ty else {
+        let Ty::PointerList { offsets, field, anchor, adjust, .. } = &lr.ty else {
             return fail("not a pointer list");
         };
-        let (offsets, anchor, adjust) = (offsets.clone(), *anchor, adjust.clone());
+        let (offsets, field, anchor, adjust) = (offsets.clone(), field.clone(), *anchor, adjust.clone());
         let base = match anchor {
             Anchor::File => 0,
             // The nearest enclosing window, which is the page or the table the
@@ -330,14 +342,49 @@ impl Evaluator {
                 .find_map(|k| self.memo.get(&list[..k]).filter(|r| r.declared_size.is_some()))
                 .map(|r| r.offset)
                 .unwrap_or(0),
+            // The list's own start, aligned. `align` is bytes; offsets are bits.
+            Anchor::SelfAligned(align) => {
+                let a = u64::from(align) * 8;
+                if a == 0 { lr.offset } else { lr.offset.div_ceil(a) * a }
+            }
         };
-        let at = self.eval_expr(doc, list, &Expr::Elem { array: offsets, index: Box::new(Expr::Lit(idx as i128)) })?;
+        let at = self.eval_expr(
+            doc,
+            list,
+            &Expr::Elem {
+                array: offsets,
+                index: Box::new(Expr::Lit(idx as i128)),
+                field: field.into_iter().collect(),
+            },
+        )?;
         let adj = self.eval_expr(doc, list, &adjust)?;
         let bits = base as i128 + (at + adj) * 8;
         if bits < lr.offset as i128 || bits >= lr.limit as i128 {
             return fail(format!("offset {at} points outside {}", lr.name));
         }
         Ok(bits as u64)
+    }
+
+    /// Every child start of a pointer list, sorted, worked out once and kept.
+    /// A child whose offset does not parse is left out rather than taking the
+    /// list with it; a child whose bytes are not loaded yet is still an answer
+    /// the caller has to wait for.
+    fn pointer_starts<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved) -> R<Vec<u64>> {
+        if let Some(starts) = self.memo.get(list).and_then(|r| r.pointer_starts.clone()) {
+            return Ok(starts);
+        }
+        let n = self.child_count(doc, list)?;
+        let mut starts = Vec::with_capacity(n as usize);
+        for i in 0..n as usize {
+            match self.pointer_offset(doc, list, lr, i) {
+                Ok(off) => starts.push(off),
+                Err(e @ EvalError::Pending(_)) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        starts.sort_unstable();
+        self.memo.get_mut(list).expect("resolved").pointer_starts = Some(starts.clone());
+        Ok(starts)
     }
 
     /// Resolve and size children `0..idx` of `parent`, in order, without recursion.
@@ -410,6 +457,7 @@ impl Evaluator {
                         computed: None,
                         repeat_ends: Vec::new(),
                         repeat_done: false,
+                        pointer_starts: None,
                         seq_end: 0,
                     });
                 }
@@ -650,7 +698,7 @@ impl Evaluator {
                 }
                 found
             }
-            Expr::Elem { array, index } => {
+            Expr::Elem { array, index, field } => {
                 let i = self.eval_expr_at(doc, at, index, here)?;
                 if i < 0 {
                     return fail("negative index");
@@ -659,6 +707,17 @@ impl Evaluator {
                     return fail(format!("unknown field {array}"));
                 };
                 p.push(i as usize);
+                // Walk named fields into the element: `tensors[i].offset`.
+                for name in field {
+                    self.resolve(doc, &p)?;
+                    let Ty::Struct(s) = self.memo[&p].ty.base() else {
+                        return fail(format!("{array}[{i}] has no fields to look in"));
+                    };
+                    let Some(j) = s.fields.iter().position(|f| &f.name == name) else {
+                        return fail(format!("{array}[{i}] has no field named {name}"));
+                    };
+                    p.push(j);
+                }
                 match self.node(doc, &p)?.value.as_int() {
                     Some(v) => v,
                     None => return fail(format!("{array}[{i}] is not a number")),

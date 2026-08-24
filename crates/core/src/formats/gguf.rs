@@ -9,7 +9,7 @@
 //! models, and is told apart by reading the version as a wildly wrong number
 //! rather than by anything in the magic; nothing here reads one.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T};
+use crate::template::{Anchor, Endian::*, Expr as E, Template, Ty as T};
 
 /// What a metadata value is. The number is written in the file; the name is
 /// what the specification calls it.
@@ -154,11 +154,14 @@ pub fn gguf() -> Template {
             ("metadata_count", T::u64(Little)),
             ("metadata", T::array(T::Named("Metadata".into()), E::field("metadata_count"))),
             ("tensors", T::array(T::Named("Tensor".into()), E::field("tensor_count"))),
-            // The weights, and in front of them the padding that lines the
-            // first one up. How much padding depends on `general.alignment`,
-            // which is a metadata value rather than a field, so the two are one
-            // run of bytes here.
-            ("data", T::bytes(E::Remaining)),
+            // The weights: one child per tensor, placed by the offsets the
+            // tensor table holds and named by the records that hold them. A
+            // tensor's bytes run to the start of the next one, since the file
+            // stores no per-tensor size. Offsets count from here aligned to
+            // `general.alignment`, which is a metadata value rather than a
+            // field, so 32 is assumed; the padding before the first tensor
+            // reads as a gap.
+            ("data", T::pointer_list_records("tensors", "offset", Anchor::SelfAligned(32), E::lit(0), T::bytes(E::Remaining))),
         ],
     );
     Template::new("gguf", root)
@@ -268,6 +271,46 @@ mod tests {
         let d = Document::new(MemSource(file()));
         let mut ev = Evaluator::new(gguf());
         let data = ev.node(&d, &[6]).unwrap();
-        assert_eq!(data.value_bytes, 40);
+        assert_eq!(data.child_count, 1);
+    }
+
+    /// Two tensors: the data section has one child per tensor, placed at its
+    /// offset from the aligned start, named by its record, running to the next.
+    fn two_tensor_file() -> Vec<u8> {
+        let mut b = b"GGUF".to_vec();
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&2u64.to_le_bytes()); // tensors
+        b.extend_from_slice(&0u64.to_le_bytes()); // metadata entries
+        for (name, offset) in [("output.weight", 0u64), ("blk.0.attn_q.weight", 64)] {
+            b.extend_from_slice(&gstr(name));
+            b.extend_from_slice(&1u32.to_le_bytes());
+            b.extend_from_slice(&16u64.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes()); // f32
+            b.extend_from_slice(&offset.to_le_bytes());
+        }
+        let aligned = b.len().div_ceil(32) * 32;
+        b.resize(aligned + 64 + 16, 0);
+        b
+    }
+
+    #[test]
+    fn each_tensors_bytes_are_a_child_of_the_data_section() {
+        let bytes = two_tensor_file();
+        let d = Document::new(MemSource(bytes.clone()));
+        let mut ev = Evaluator::new(gguf());
+        let data = ev.node(&d, &[6]).unwrap();
+        assert_eq!(data.child_count, 2);
+
+        let first = ev.node(&d, &[6, 0]).unwrap();
+        let second = ev.node(&d, &[6, 1]).unwrap();
+        // Placed at the aligned start of the data section, in offset order.
+        assert_eq!(first.offset_bits % (32 * 8), 0);
+        assert_eq!(second.offset_bits, first.offset_bits + 64 * 8);
+        // The first runs to where the second starts; the last to the end.
+        assert_eq!(first.size_bits, 64 * 8);
+        assert_eq!(second.offset_bits + second.size_bits, bytes.len() as u64 * 8);
+        // Named by the records whose offsets placed them.
+        assert_eq!(first.name, "[0] output.weight");
+        assert_eq!(second.name, "[1] blk.0.attn_q.weight");
     }
 }

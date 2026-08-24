@@ -106,6 +106,13 @@ impl Evaluator {
     /// This is worked out here rather than when the node is resolved, because
     /// it means reading a sibling and resolving has to stay cheap.
     pub(super) fn label<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<String> {
+        // A pointer-list child borrows the name of the record its offset came
+        // from: tensor data called `[7] x_embedder.bias` says which weights
+        // these are, where `[7]` says nothing. A record with no name of its
+        // own contributes nothing, and the child keeps its index.
+        if let Some(name) = self.pointed_from_name(doc, path) {
+            return Ok(name);
+        }
         let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.clone()) };
         let Some(by) = s.named_by.clone() else { return Ok(r.name.clone()) };
         let Some(i) = s.fields.iter().position(|f| f.name == by) else { return Ok(r.name.clone()) };
@@ -127,6 +134,18 @@ impl Evaluator {
         let text = brief(&info.value);
         let text = text.trim_end();
         Ok(if text.is_empty() { r.name.clone() } else { format!("{} {text}", r.name) })
+    }
+
+    /// The name of the record whose offset placed this pointer-list child, when
+    /// that record says more than the child's own index does.
+    fn pointed_from_name<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> Option<String> {
+        let (&idx, parent) = path.split_last()?;
+        let Ty::PointerList { offsets, .. } = &self.memo.get(parent)?.ty else { return None };
+        let offsets = offsets.clone();
+        let mut p = self.find_field(parent, &offsets)?;
+        p.push(idx);
+        let name = self.node(doc, &p).ok()?.name;
+        (name != format!("[{idx}]")).then_some(name)
     }
 
     pub fn locate<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<usize>> {

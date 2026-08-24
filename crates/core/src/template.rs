@@ -30,8 +30,11 @@ pub enum Expr {
     Idx,
     /// The value of one element of an earlier array, by index. `Ref` names a
     /// field; this reaches inside one, which is what a list of pointers or a
-    /// list of column types needs.
-    Elem { array: String, index: Box<Expr> },
+    /// list of column types needs. When the elements are structures, `field`
+    /// walks named fields down to the number: `tensors[i].offset` is
+    /// `Elem { array: "tensors", field: ["offset"] }`. Empty when the elements
+    /// are the numbers themselves.
+    Elem { array: String, index: Box<Expr>, field: Vec<String> },
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     Peek(u32),
@@ -65,7 +68,16 @@ impl Expr {
     }
     /// Element `index` of the earlier array field `array`.
     pub fn elem(array: &str, index: Expr) -> Expr {
-        Expr::Elem { array: array.to_string(), index: Box::new(index) }
+        Expr::Elem { array: array.to_string(), index: Box::new(index), field: Vec::new() }
+    }
+    /// Field `field` of element `index` of the earlier array `array`, for an
+    /// array whose elements are structures rather than numbers.
+    pub fn elem_field(array: &str, index: Expr, field: &[&str]) -> Expr {
+        Expr::Elem {
+            array: array.to_string(),
+            index: Box::new(index),
+            field: field.iter().map(|s| s.to_string()).collect(),
+        }
     }
     /// The next `bits` bits without consuming them.
     pub fn peek(bits: u32) -> Expr {
@@ -203,6 +215,12 @@ pub enum Anchor {
     Window,
     /// The start of the file.
     File,
+    /// The list's own start, rounded up to a multiple of this many bytes.
+    /// GGUF's tensor data starts at the end of the tensor table aligned to
+    /// `general.alignment`, which is almost always 32; a file that sets it to
+    /// something else places its tensors quietly wrong here, since nothing
+    /// generic can read a metadata value by key.
+    SelfAligned(u32),
 }
 
 #[derive(Debug, Clone)]
@@ -245,7 +263,11 @@ pub enum Ty {
     /// need not fill the space. The list itself runs from where it is declared
     /// to the end of its container, which is the region those offsets point
     /// into; declare it last. Anything no child covers reads as a gap.
-    PointerList { offsets: String, anchor: Anchor, adjust: Expr, elem: Box<Ty> },
+    /// `field` reaches into `offsets` when its elements are structures: a GGUF
+    /// tensor table holds each offset inside a record, not as a bare number.
+    /// With `to_next`, a child runs to the start of the next child above it
+    /// (or the end of the list), for formats that store no per-child size.
+    PointerList { offsets: String, field: Option<String>, anchor: Anchor, adjust: Expr, elem: Box<Ty>, to_next: bool },
     /// SQLite's variable-length integer: seven bits per byte, most significant
     /// group first, up to nine bytes, where a ninth byte contributes all eight
     /// of its bits. `Vlq` stops at four bytes and never does that, so it
@@ -384,7 +406,19 @@ impl Ty {
     }
     /// Elements at the offsets held in an earlier array field.
     pub fn pointer_list(offsets: &str, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
-        Ty::PointerList { offsets: offsets.to_string(), anchor, adjust, elem: Box::new(elem) }
+        Ty::PointerList { offsets: offsets.to_string(), field: None, anchor, adjust, elem: Box::new(elem), to_next: false }
+    }
+    /// A pointer list whose offsets sit inside the records of `offsets`, in
+    /// field `field`, and whose children run to the next child's start.
+    pub fn pointer_list_records(offsets: &str, field: &str, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
+        Ty::PointerList {
+            offsets: offsets.to_string(),
+            field: Some(field.to_string()),
+            anchor,
+            adjust,
+            elem: Box::new(elem),
+            to_next: true,
+        }
     }
     pub fn sqlite_varint() -> Ty {
         Ty::SqliteVarint
