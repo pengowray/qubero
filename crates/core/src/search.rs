@@ -410,6 +410,17 @@ mod tests {
     }
 
     #[test]
+    fn a_unicode_class_says_it_is_not_built_in_rather_than_matching_wrongly() {
+        // The Unicode tables are not compiled in: they are most of what a
+        // regex engine weighs, and a hex editor searches bytes. `\w` and the
+        // like still work over ASCII.
+        assert!(Pattern::new(r"[a-z]+\d+").is_ok());
+        let ascii = Pattern::new(r"\w+").expect("word characters work");
+        let d = doc(b"..hello..");
+        assert_eq!(Search::forward(Needle::Regex(ascii)).step(&d, 0), Step::Found { at: 2, len: 5 });
+    }
+
+    #[test]
     fn a_broken_pattern_says_what_is_wrong_in_one_line() {
         let why = Pattern::new("a(b").unwrap_err();
         assert!(!why.is_empty());

@@ -5,6 +5,7 @@
 
 use qubero_core::eval::Explain;
 use qubero_core::{diescript, dosbasic};
+use qubero_core::search::{self, Needle, Search, Step};
 use qubero_core::{formats, magicrule, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -274,6 +275,36 @@ fn reply<T: Serialize>(r: Result<T, EvalError>) -> String {
     serde_json::to_string(&rep).unwrap_or_else(|e| format!("{{\"status\":\"error\",\"message\":{:?}}}", e.to_string()))
 }
 
+/// What one step of a search found, as the host reads it. `status` is the same
+/// tri-state everything else here answers with, so the caller's chunk-fetching
+/// loop is the one it already has.
+#[derive(Serialize)]
+#[serde(tag = "step")]
+enum StepDto {
+    #[serde(rename = "found")]
+    Found { at: f64, len: f64 },
+    #[serde(rename = "more")]
+    More { resume: f64 },
+    #[serde(rename = "end")]
+    End,
+}
+
+/// Build a needle from what the search bar holds. `kind` is "hex", "text" or
+/// "regex"; `fold` only means anything for text.
+fn needle(kind: &str, text: &str, fold: bool) -> Result<Needle, String> {
+    match kind {
+        "hex" => search::parse_hex(text).map(Needle::Bytes).ok_or_else(|| HEX_REFUSED.to_string()),
+        "regex" => search::Pattern::new(text).map(Needle::Regex),
+        _ => {
+            let bytes = text.as_bytes().to_vec();
+            Ok(if fold { Needle::Fold(bytes) } else { Needle::Bytes(bytes) })
+        }
+    }
+}
+
+/// Said when a hex needle is not pairs of hex digits.
+const HEX_REFUSED: &str = "Hex needs pairs of digits: 89 50 4e 47";
+
 #[wasm_bindgen]
 impl Editor {
     /// `len` is the original file length in bytes. Chunks of `chunk_size` bytes
@@ -479,6 +510,50 @@ impl Editor {
             }
             Err(e) => reply::<WriteDto>(Err(e)),
         }
+    }
+
+    // ----- searching -----
+
+    /// Whether the search bar holds something that can be searched for, and
+    /// what is wrong with it when not. Empty string means it is fine.
+    pub fn check_needle(&self, kind: &str, text: &str) -> String {
+        needle(kind, text, false).err().unwrap_or_default()
+    }
+
+    /// One step of a search, from byte `from`. The reply is the same tri-state
+    /// as the rest: a step, the chunks it wants, or what is wrong with it.
+    pub fn search_step(&mut self, kind: &str, text: &str, fold: bool, backward: bool, from: f64) -> String {
+        let n = match needle(kind, text, fold) {
+            Ok(n) => n,
+            Err(why) => return reply::<StepDto>(Err(EvalError::Failed(why))),
+        };
+        if n.is_empty() {
+            return reply(Ok(StepDto::End));
+        }
+        let s = if backward { Search::backward(n) } else { Search::forward(n) };
+        reply(match s.step(&self.doc, from as u64) {
+            Step::Found { at, len } => Ok(StepDto::Found { at: at as f64, len: len as f64 }),
+            Step::More { resume } => Ok(StepDto::More { resume: resume as f64 }),
+            Step::End => Ok(StepDto::End),
+            Step::Pending(m) => Err(EvalError::Pending(m)),
+        })
+    }
+
+    /// Put `with` where a match was found. The caller carries on from the end
+    /// of what was written: a replacement of a different length has moved
+    /// every byte behind it.
+    pub fn replace_at(&mut self, at: f64, len: f64, with: &[u8]) {
+        search::replace(&mut self.doc, at as u64, len as u64, with);
+        self.changed();
+    }
+
+    /// Fold the edits that follow into one undo step.
+    pub fn begin_batch(&mut self) {
+        self.doc.begin_batch();
+    }
+
+    pub fn end_batch(&mut self) {
+        self.doc.end_batch();
     }
 
     pub fn feed_chunk(&mut self, chunk: f64, data: &[u8]) {
