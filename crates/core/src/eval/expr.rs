@@ -49,29 +49,27 @@ impl Evaluator {
                 found
             }
             Expr::Elem { array, index, field } => {
-                let i = self.eval_expr_at(doc, at, index, here)?;
-                if i < 0 {
-                    return fail("negative index");
-                }
-                let Some(mut p) = self.find_field(at, array) else {
-                    return fail(format!("unknown field {array}"));
-                };
-                p.push(i as usize);
-                // Walk named fields into the element: `tensors[i].offset`.
-                for name in field {
-                    self.resolve(doc, &p)?;
-                    let Ty::Struct(s) = self.memo[&p].ty.base() else {
-                        return fail(format!("{array}[{i}] has no fields to look in"));
-                    };
-                    let Some(j) = s.fields.iter().position(|f| &f.name == name) else {
-                        return fail(format!("{array}[{i}] has no field named {name}"));
-                    };
-                    p.push(j);
-                }
+                let p = self.elem_path(doc, at, array, index, field, here)?;
                 match self.node(doc, &p)?.value.as_int() {
                     Some(v) => v,
-                    None => return fail(format!("{array}[{i}] is not a number")),
+                    None => return fail(format!("{array} holds no number there")),
                 }
+            }
+            Expr::Product { array, index, field } => {
+                let p = self.elem_path(doc, at, array, index, field, here)?;
+                let n = self.child_count(doc, &p)?;
+                let mut total: i128 = 1;
+                let mut child = p.clone();
+                for i in 0..n as usize {
+                    child.push(i);
+                    let v = self.node(doc, &child)?.value.as_int();
+                    child.pop();
+                    let Some(v) = v else { return fail(format!("{array} holds no number there")) };
+                    let Some(next) = total.checked_mul(v) else { return fail("shape too large to count") };
+                    total = next;
+                }
+                // Nothing to multiply describes nothing, not one of something.
+                if n == 0 { 0 } else { total }
             }
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
@@ -197,6 +195,39 @@ impl Evaluator {
     }
 
     /// The path of the field named `name`, found the way `lookup` finds it.
+    /// The path to `array[index]`, then down the named fields inside it:
+    /// `tensors[i].offset` is a number, `tensors[i].dims` is an array, and
+    /// getting to either is the same walk.
+    fn elem_path<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        array: &str,
+        index: &Expr,
+        field: &[String],
+        here: Option<(u64, u64)>,
+    ) -> R<Vec<usize>> {
+        let i = self.eval_expr_at(doc, at, index, here)?;
+        if i < 0 {
+            return fail("negative index");
+        }
+        let Some(mut p) = self.find_field(at, array) else {
+            return fail(format!("unknown field {array}"));
+        };
+        p.push(i as usize);
+        for name in field {
+            self.resolve(doc, &p)?;
+            let Ty::Struct(s) = self.memo[&p].ty.base() else {
+                return fail(format!("{array}[{i}] has no fields to look in"));
+            };
+            let Some(j) = s.fields.iter().position(|f| &f.name == name) else {
+                return fail(format!("{array}[{i}] has no field named {name}"));
+            };
+            p.push(j);
+        }
+        Ok(p)
+    }
+
     pub(super) fn find_field(&self, at: &[usize], name: &str) -> Option<Vec<usize>> {
         let mut cur = at.to_vec();
         while let Some(idx) = cur.pop() {

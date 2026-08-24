@@ -167,53 +167,59 @@ fn tensor() -> T {
 fn weights() -> T {
     let f16 = || T::F16(Little);
     let raw = |n: i128| T::bytes(E::lit(n));
-    // A run of plain numbers, and a run of blocks: both counted by dividing
-    // the room this tensor was given, since the file records where each
-    // tensor starts and never how long it is.
-    let run = |each: i128, ty: T| T::array(ty, E::Remaining.div(E::lit(each)));
-    let blocks = |size: i128, name: &str, fields: Vec<(&str, T)>| run(size, T::inline_structure(name, fields));
+    // How many numbers this tensor holds, which is what its shape says and
+    // not what the room before the next tensor says: a small tensor is
+    // followed by padding out to the next 32-byte boundary, and that padding
+    // is not weights.
+    let count = |per_block: i128| E::product("tensors", E::idx(), &["dims"]).div(E::lit(per_block));
+    // A run of plain numbers is one per weight; a run of blocks is one per
+    // however many weights that type packs together.
+    let run = |ty: T| T::array(ty, count(1));
+    let blocks = |per_block: i128, name: &str, fields: Vec<(&str, T)>| {
+        T::array(T::inline_structure(name, fields), count(per_block))
+    };
     // A block nothing outside ggml unpacks: the right size, and no claim
     // about what is inside it.
-    let opaque = |size: i128, name: &str| blocks(size, name, vec![("packed", raw(size))]);
+    let opaque = |per_block: i128, size: i128, name: &str| blocks(per_block, name, vec![("packed", raw(size))]);
     T::switch(
         E::elem_field("tensors", E::idx(), &["type"]),
         vec![
-            (0, run(4, T::F32(Little))),
-            (1, run(2, f16())),
-            (2, blocks(18, "Q4_0", vec![("d", f16()), ("qs", raw(16))])),
-            (3, blocks(20, "Q4_1", vec![("d", f16()), ("m", f16()), ("qs", raw(16))])),
-            (6, blocks(22, "Q5_0", vec![("d", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
-            (7, blocks(24, "Q5_1", vec![("d", f16()), ("m", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
-            (8, blocks(34, "Q8_0", vec![("d", f16()), ("qs", T::array(T::Int { bits: 8, endian: Little }, E::lit(32)))])),
-            (9, blocks(40, "Q8_1", vec![("d", f16()), ("s", f16()), ("qs", raw(36))])),
-            (10, blocks(84, "Q2_K", vec![("scales", raw(16)), ("qs", raw(64)), ("d", f16()), ("dmin", f16())])),
-            (11, blocks(110, "Q3_K", vec![("hmask", raw(32)), ("qs", raw(64)), ("scales", raw(12)), ("d", f16())])),
-            (12, blocks(144, "Q4_K", vec![("d", f16()), ("dmin", f16()), ("scales", raw(12)), ("qs", raw(128))])),
-            (13, blocks(176, "Q5_K", vec![("d", f16()), ("dmin", f16()), ("scales", raw(12)), ("qh", raw(32)), ("qs", raw(128))])),
-            (14, blocks(210, "Q6_K", vec![("ql", raw(128)), ("qh", raw(64)), ("scales", raw(16)), ("d", f16())])),
-            (15, blocks(292, "Q8_K", vec![("d", T::F32(Little)), ("qs", raw(256)), ("bsums", raw(32))])),
-            (16, opaque(66, "IQ2_XXS")),
-            (17, opaque(74, "IQ2_XS")),
-            (18, opaque(98, "IQ3_XXS")),
-            (19, opaque(50, "IQ1_S")),
-            (20, blocks(18, "IQ4_NL", vec![("d", f16()), ("qs", raw(16))])),
-            (21, opaque(110, "IQ3_S")),
-            (22, opaque(82, "IQ2_S")),
-            (23, blocks(136, "IQ4_XS", vec![("d", f16()), ("scales_h", T::u16(Little)), ("scales_l", raw(4)), ("qs", raw(128))])),
-            (24, run(1, T::Int { bits: 8, endian: Little })),
-            (25, run(2, T::Int { bits: 16, endian: Little })),
-            (26, run(4, T::i32(Little))),
-            (27, run(8, T::Int { bits: 64, endian: Little })),
-            (28, run(8, T::F64(Little))),
-            (29, opaque(56, "IQ1_M")),
+            (0, run(T::F32(Little))),
+            (1, run(f16())),
+            (2, blocks(32, "Q4_0", vec![("d", f16()), ("qs", raw(16))])),
+            (3, blocks(32, "Q4_1", vec![("d", f16()), ("m", f16()), ("qs", raw(16))])),
+            (6, blocks(32, "Q5_0", vec![("d", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
+            (7, blocks(32, "Q5_1", vec![("d", f16()), ("m", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
+            (8, blocks(32, "Q8_0", vec![("d", f16()), ("qs", T::array(T::Int { bits: 8, endian: Little }, E::lit(32)))])),
+            (9, blocks(32, "Q8_1", vec![("d", f16()), ("s", f16()), ("qs", raw(36))])),
+            (10, blocks(256, "Q2_K", vec![("scales", raw(16)), ("qs", raw(64)), ("d", f16()), ("dmin", f16())])),
+            (11, blocks(256, "Q3_K", vec![("hmask", raw(32)), ("qs", raw(64)), ("scales", raw(12)), ("d", f16())])),
+            (12, blocks(256, "Q4_K", vec![("d", f16()), ("dmin", f16()), ("scales", raw(12)), ("qs", raw(128))])),
+            (13, blocks(256, "Q5_K", vec![("d", f16()), ("dmin", f16()), ("scales", raw(12)), ("qh", raw(32)), ("qs", raw(128))])),
+            (14, blocks(256, "Q6_K", vec![("ql", raw(128)), ("qh", raw(64)), ("scales", raw(16)), ("d", f16())])),
+            (15, blocks(256, "Q8_K", vec![("d", T::F32(Little)), ("qs", raw(256)), ("bsums", raw(32))])),
+            (16, opaque(256, 66, "IQ2_XXS")),
+            (17, opaque(256, 74, "IQ2_XS")),
+            (18, opaque(256, 98, "IQ3_XXS")),
+            (19, opaque(256, 50, "IQ1_S")),
+            (20, blocks(32, "IQ4_NL", vec![("d", f16()), ("qs", raw(16))])),
+            (21, opaque(256, 110, "IQ3_S")),
+            (22, opaque(256, 82, "IQ2_S")),
+            (23, blocks(256, "IQ4_XS", vec![("d", f16()), ("scales_h", T::u16(Little)), ("scales_l", raw(4)), ("qs", raw(128))])),
+            (24, run(T::Int { bits: 8, endian: Little })),
+            (25, run(T::Int { bits: 16, endian: Little })),
+            (26, run(T::i32(Little))),
+            (27, run(T::Int { bits: 64, endian: Little })),
+            (28, run(T::F64(Little))),
+            (29, opaque(256, 56, "IQ1_M")),
             // bf16 is a float this reader has no type for: the top half of an
             // f32, which is not an f16.
-            (30, run(2, T::u16(Little))),
-            (34, opaque(54, "TQ1_0")),
-            (35, opaque(66, "TQ2_0")),
-            (39, blocks(17, "MXFP4", vec![("e", T::u8()), ("qs", raw(16))])),
-            (40, opaque(36, "NVFP4")),
-            (41, opaque(18, "Q1_0")),
+            (30, run(T::u16(Little))),
+            (34, opaque(256, 54, "TQ1_0")),
+            (35, opaque(256, 66, "TQ2_0")),
+            (39, blocks(32, "MXFP4", vec![("e", T::u8()), ("qs", raw(16))])),
+            (40, opaque(64, 36, "NVFP4")),
+            (41, opaque(128, 18, "Q1_0")),
         ],
         // A type added to ggml since this was written: where it is and how
         // much of it there is, and nothing invented about the rest.
@@ -364,6 +370,34 @@ mod tests {
         assert_eq!(ev.node(&d, &[6, 0, 3]).unwrap().size_bits, 32);
     }
 
+    #[test]
+    fn the_padding_after_a_small_tensor_is_not_part_of_it() {
+        // Two tensors of two floats each. The second is placed 32 bytes along,
+        // because that is where the next 32-byte boundary is, and the 24 bytes
+        // between them are padding rather than eight more weights.
+        let mut b = b"GGUF".to_vec();
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&2u64.to_le_bytes()); // tensors
+        b.extend_from_slice(&0u64.to_le_bytes()); // metadata entries
+        for (name, offset) in [("a.weight", 0u64), ("b.weight", 32)] {
+            b.extend_from_slice(&gstr(name));
+            b.extend_from_slice(&1u32.to_le_bytes());
+            b.extend_from_slice(&2u64.to_le_bytes()); // two numbers
+            b.extend_from_slice(&0u32.to_le_bytes()); // f32
+            b.extend_from_slice(&offset.to_le_bytes());
+        }
+        b.resize(b.len().div_ceil(32) * 32 + 40, 0);
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(gguf());
+        let first = ev.node(&d, &[6, 0]).unwrap();
+        assert_eq!((first.child_count, first.size_bits), (2, 8 * 8));
+        // The padding belongs to no field, and reads as a gap.
+        let after = first.offset_bits + first.size_bits;
+        let gap = ev.spans(&d, after, after + 24 * 8, 2).unwrap();
+        assert!(gap[0].gap);
+        assert_eq!(gap[0].size_bits, 24 * 8);
+    }
+
     /// One tensor of the named ggml type, holding `payload` as its weights.
     fn one_tensor_file(ty: u32, payload: &[u8]) -> Vec<u8> {
         let mut b = b"GGUF".to_vec();
@@ -424,7 +458,7 @@ mod tests {
             b.extend_from_slice(&offset.to_le_bytes());
         }
         let aligned = b.len().div_ceil(32) * 32;
-        b.resize(aligned + 64 + 16, 0);
+        b.resize(aligned + 64 + 64, 0);
         b
     }
 
@@ -441,7 +475,7 @@ mod tests {
         // Placed at the aligned start of the data section, in offset order.
         assert_eq!(first.offset_bits % (32 * 8), 0);
         assert_eq!(second.offset_bits, first.offset_bits + 64 * 8);
-        // The first runs to where the second starts; the last to the end.
+        // Sixteen floats each, which is what their shapes say.
         assert_eq!(first.size_bits, 64 * 8);
         assert_eq!(second.offset_bits + second.size_bits, bytes.len() as u64 * 8);
         // Named by the records whose offsets placed them.

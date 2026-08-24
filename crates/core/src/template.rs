@@ -35,6 +35,14 @@ pub enum Expr {
     /// `Elem { array: "tensors", field: ["offset"] }`. Empty when the elements
     /// are the numbers themselves.
     Elem { array: String, index: Box<Expr>, field: Vec<String> },
+    /// The numbers of one earlier array multiplied together: what a shape
+    /// describes. A GGUF tensor says it is 2560 by 5120 and never says it is
+    /// 13,107,200 numbers, and the room between one tensor and the next is not
+    /// the answer either, since a small tensor is followed by padding.
+    /// Reached the same way as `Elem`, but landing on an array rather than on
+    /// a number: `tensors[i].dims` is
+    /// `Product { array: "tensors", index: Idx, field: ["dims"] }`.
+    Product { array: String, index: Box<Expr>, field: Vec<String> },
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     Peek(u32),
@@ -83,6 +91,15 @@ impl Expr {
     /// array whose elements are structures rather than numbers.
     pub fn elem_field(array: &str, index: Expr, field: &[&str]) -> Expr {
         Expr::Elem {
+            array: array.to_string(),
+            index: Box::new(index),
+            field: field.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+    /// The numbers of the array at `field` inside `array[index]`, multiplied
+    /// together.
+    pub fn product(array: &str, index: Expr, field: &[&str]) -> Expr {
+        Expr::Product {
             array: array.to_string(),
             index: Box::new(index),
             field: field.iter().map(|s| s.to_string()).collect(),
