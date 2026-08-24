@@ -18,22 +18,12 @@ import {
   WRAPPED_BACK,
   WRAPPED_ON,
 } from "./strings.js";
+import { el } from "./dom.js";
 
 /** Milliseconds of one frame a search may take before yielding. */
 const SLICE = 8;
 
 export type Match = { readonly at: number; readonly len: number };
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> = {},
-  ...children: (Node | string)[]
-): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  Object.assign(e, props);
-  e.append(...children);
-  return e;
-}
 
 export class SearchBar {
   readonly el: HTMLElement;

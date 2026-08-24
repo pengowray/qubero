@@ -1,10 +1,12 @@
-import { Doc, formatBytes, formatOffset, OWN_SOURCE, prefetchMagic, type Identification, type ToolMatch } from "./doc.js";
+import { Doc, formatBytes, formatOffset, prefetchMagic } from "./doc.js";
 import { HexView, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingView } from "./listingview.js";
 import { SearchBar } from "./searchbar.js";
+import { el } from "./dom.js";
+import { fileType, fullTemplateLine } from "./filetype.js";
 import { TypeTable } from "./typetable.js";
 
 const appEl = document.getElementById("app");
@@ -29,94 +31,11 @@ const discardMsg = (open: string, next: string): string =>
  *  during a drag reads as overwriting that file on disk, which never happens. */
 const closesMsg = (doc: Doc): string => `Closes ${doc.name}${doc.modified ? " (unsaved edits)" : ""}`;
 
-const IDENTIFYING_MSG = "Identifying file type...";
-const IDENTIFY_FAILED_MSG = "Couldn't check the file type";
-const IDENTIFY_FAILED_TITLE = "The identification rules failed to download.";
-const UNKNOWN_TYPE_MSG = "Unknown file type";
-const INFO_LABEL = "File type details";
-const DIALOG_TITLE = "File type";
-const DIALOG_CLOSE = "Close";
-const IDENTIFIED_FROM = `Identified from the file's first bytes, using the rule database of the Unix "file" command.`;
-const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
 const SIGNATURE_LINE =
   "The Fields table shows only the format's signature, generated from this rule. Qubero has no full template for this format.";
 const SIGNATURE_NOTE = "Signature only.";
-const fullTemplateLine = (name: string): string => `The Fields table uses Qubero's full ${name} template.`;
-const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
-const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
 
-/**
- * The database writes its categories as slugs. Two of them are not words, and
- * one needs saying what it immunised against, so they are written out here.
- * A category not in this list is shown as the database wrote it: inventing a
- * label would claim to know something the rule did not say.
- */
-const CATEGORY: Record<string, string> = {
-  packer: "Packer",
-  cryptor: "Cryptor",
-  protector: "Protector",
-  compiler: "Compiler",
-  converter: "Converter",
-  installer: "Installer",
-  linker: "Linker",
-  archive: "Archive",
-  format: "File format",
-  data: "Data",
-  extender: "DOS extender",
-  sfx: "Self-extracting archive",
-  "self-displayer": "Self-displaying program",
-  immunizer: "Antivirus immunizer",
-};
 
-/**
- * What the bytes on screen are wrapped in comes first, then what built them,
- * then the rest. A packed file is showing compressed output rather than the
- * program, which changes how everything else on screen should be read.
- */
-const CATEGORY_ORDER = [
-  "cryptor",
-  "protector",
-  "packer",
-  "sfx",
-  "installer",
-  "compiler",
-  "linker",
-  "converter",
-  "extender",
-];
-
-/** The categories that change how to read the bytes, and how to say each. */
-const WRAPPER: Record<string, (m: ToolMatch) => string> = {
-  packer: (m) => `packed with ${nameAndVersion(m)}`,
-  protector: (m) => `protected with ${nameAndVersion(m)}`,
-  cryptor: (m) => `encrypted with ${nameAndVersion(m)}`,
-  sfx: (m) => `self-extracting (${nameAndVersion(m)})`,
-};
-
-const categoryLabel = (slug: string): string => CATEGORY[slug] ?? slug;
-
-/** `UPX v3.96`. The v matters: names in this database end in digits. */
-const nameAndVersion = (m: ToolMatch): string => (m.version === null ? m.name : `${m.name} v${m.version}`);
-
-/** `Packer: UPX v3.96 (1985)`, with the author's own words in the brackets. */
-const toolLine = (m: ToolMatch): string => {
-  const head = `${categoryLabel(m.category)}: ${nameAndVersion(m)}`;
-  return m.options === null ? head : `${head} (${m.options})`;
-};
-
-const sortTools = (found: readonly ToolMatch[]): ToolMatch[] => {
-  const rank = (m: ToolMatch): number => {
-    const i = CATEGORY_ORDER.indexOf(m.category);
-    return i === -1 ? CATEGORY_ORDER.length : i;
-  };
-  return [...found].sort((a, b) => rank(a) - rank(b));
-};
-
-/** What to append to the readout, for a match that changes how to read it. */
-const wrapperSuffix = (found: readonly ToolMatch[]): string => {
-  const m = sortTools(found).find((x) => WRAPPER[x.category] !== undefined);
-  return m === undefined ? "" : ` \u00b7 ${WRAPPER[m.category]?.(m) ?? ""}`;
-};
 /** The select value that stands for the generated template. Not a built-in
  *  name, so it can never collide with one. */
 const SIGNATURE_VALUE = "generated-signature";
@@ -134,18 +53,6 @@ function openFile(f: File, note?: string): void {
     if (note !== undefined) say(note);
   });
 }
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> & { className?: string } = {},
-  ...children: (Node | string)[]
-): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  Object.assign(e, props);
-  e.append(...children);
-  return e;
-}
-
 
 /** A section that can be folded down to its title bar, and remembers whether
  *  it was. */
@@ -245,6 +152,7 @@ function mount(doc: Doc): void {
     listing.clearSelection();
   };
 
+  const kind = fileType();
   const tmpl = el("select", { className: "tb-tmpl" });
   tmpl.setAttribute("aria-label", "Template");
   tmpl.append(el("option", { value: "", textContent: "No template" }));
@@ -280,7 +188,7 @@ function mount(doc: Doc): void {
     const waiting = templated
       ? null
       : setTimeout(() => {
-          kindLabel.textContent = IDENTIFYING_MSG;
+          kind.identifying();
         }, 300);
     try {
       const id = await doc.identify();
@@ -292,142 +200,43 @@ function mount(doc: Doc): void {
         // A file with a template is not unknown, whatever the rules make of
         // it, so only a file without one says so.
         if (!templated) {
-          kindLabel.textContent = UNKNOWN_TYPE_MSG;
-          showDetails(null, "");
-          void addToolMatches(null, name);
+          kind.unknown();
+          kind.details(null, "");
+          void kind.addTools(doc, null, name);
         }
         return;
       }
-      kindLabel.textContent = id.message;
-      // The toolbar copy is cut short, so the whole sentence stays reachable
-      // on hover as well as in the dialog.
-      kindLabel.title = id.message;
-      void addToolMatches(id, name);
+      kind.named(id.message);
+      void kind.addTools(doc, id, name);
       if (name !== null) {
-        showDetails(id, fullTemplateLine(name));
+        kind.details(id, fullTemplateLine(name));
         return;
       }
       // The rule that named the format also says where its signature is. That
       // is one field, but it is a field: clickable, highlighted, and true.
       const signature = await doc.signatureTemplate(id);
       if (signature === null) {
-        showDetails(id, "");
+        kind.details(id, "");
         return;
       }
       const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
       tmpl.append(option);
       tmpl.value = SIGNATURE_VALUE;
       table.setNote(SIGNATURE_NOTE);
-      showDetails(id, SIGNATURE_LINE);
+      kind.details(id, SIGNATURE_LINE);
       reapplySignature = async (): Promise<void> => {
         await doc.signatureTemplate(id);
         table.setNote(SIGNATURE_NOTE);
       };
     } catch (e) {
       console.error("identify", e);
-      kindLabel.textContent = IDENTIFY_FAILED_MSG;
-      kindLabel.title = IDENTIFY_FAILED_TITLE;
+      kind.failed();
     } finally {
       if (waiting !== null) clearTimeout(waiting);
     }
   });
 
-  /**
-   * Ask the signature rules what made this file, and fold the answer into what
-   * is already on screen. A file nothing else could name is named by this if it
-   * can be, since for a .COM there is nothing else to go on.
-   */
-  const addToolMatches = async (id: Identification | null, template: string | null): Promise<void> => {
-    try {
-      tools = await doc.detectTools(id !== null);
-    } catch (e) {
-      console.error("detectTools", e);
-      return;
-    }
-    const templateLine = template === null ? "" : fullTemplateLine(template);
-    showDetails(id, id === null && tools.length > 0 ? "" : templateLine);
-    if (tools.length === 0) return;
-    if (id === null) {
-      // Nothing else knew anything, so this is the answer rather than a note
-      // beside one.
-      const m = sortTools(tools)[0];
-      if (m !== undefined) {
-        const line = `Signature match: ${nameAndVersion(m)} (${m.category})`;
-        kindLabel.textContent = line;
-        kindLabel.title = line;
-      }
-      return;
-    }
-    const suffix = wrapperSuffix(tools);
-    if (suffix !== "") kindLabel.textContent = `${id.message}${suffix}`;
-  };
-
   const fileLabel = el("span", { className: "tb-file" });
-  // What the file is, for a file no template covers. Its own element rather
-  // than the message slot: a save message is an event and passes, this is a
-  // fact about the file and stays.
-  const kindLabel = el("span", { className: "tb-kind" });
-  // The details behind the readout. A button and a dialog rather than a
-  // tooltip: the rule's sentence is long, worth copying, and worth reading at
-  // leisure, none of which a title attribute allows.
-  const kindInfo = el("button", { type: "button", className: "tb-info", textContent: "i" });
-  kindInfo.setAttribute("aria-label", INFO_LABEL);
-  kindInfo.hidden = true;
-  const dlgBody = el("div", { className: "dlg-body" });
-  const dialog = el(
-    "dialog",
-    { className: "dlg" },
-    el("h2", { textContent: DIALOG_TITLE }),
-    dlgBody,
-    el("form", { method: "dialog", className: "dlg-close" }, el("button", { type: "submit", textContent: DIALOG_CLOSE })),
-  );
-  kindInfo.addEventListener("click", () => dialog.showModal());
-  // The dialog element covers only the middle of the screen, so a click that
-  // lands on it rather than on its contents is a click on the backdrop.
-  dialog.addEventListener("click", (e) => {
-    if (e.target === dialog) dialog.close();
-  });
-
-  /** Fill the dialog for one outcome, and show the button that opens it. */
-  // Filled in once the signature rules have answered, so reopening the
-  // dialog shows them without asking again.
-  let tools: ToolMatch[] | null = null;
-  const showDetails = (id: Identification | null, templateLine: string): void => {
-    const rows: HTMLElement[] = [];
-    const row = (label: string, value: string): void => {
-      rows.push(el("div", { className: "dlg-row" }, el("span", { className: "dlg-key", textContent: label }), value));
-    };
-    if (id === null) {
-      rows.push(el("p", { textContent: NO_MATCH_BODY }));
-    } else {
-      rows.push(el("p", { className: "dlg-sentence", textContent: id.message }));
-      if (id.mime !== "") row("Media type", id.mime);
-      if (id.ext.length > 0) row("Extensions", id.ext.join(", "));
-      if (id.source !== "") row("Rule file", id.source);
-      rows.push(el("p", { className: "dlg-muted", textContent: IDENTIFIED_FROM }));
-    }
-    // What made the file, when anything knows. Its own block after the file
-    // type's, so each muted credit line sits under the answers it covers.
-    // Nothing to add when the signature database found nothing: a line saying
-    // so is a line about the check rather than about the file.
-    if (tools !== null && tools.length > 0) {
-      for (const m of sortTools(tools)) {
-        rows.push(el("p", { className: "dlg-tool", textContent: toolLine(m) }));
-      }
-      // Each credit covers only the answers it found. An answer the editor
-      // read out of the file itself is not the database's to be credited
-      // with, and the database's rules are not this editor's.
-      if (tools.some((m) => m.source !== OWN_SOURCE)) {
-        rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
-      }
-      if (tools.some((m) => m.source === OWN_SOURCE)) {
-        rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
-      }
-    }
-    if (templateLine !== "") rows.push(el("p", { className: "dlg-muted", textContent: templateLine }));
-    dlgBody.replaceChildren(...rows);
-    kindInfo.hidden = false;
-  };
   const posLabel = el("span", { className: "tb-pos" });
   const undoBtn = el("button", { type: "button", textContent: "Undo", title: "Undo (Ctrl+Z)" });
   const redoBtn = el("button", { type: "button", textContent: "Redo", title: "Redo (Ctrl+Y)" });
@@ -557,8 +366,8 @@ function mount(doc: Doc): void {
     openBtn,
     saveBtn,
     fileLabel,
-    kindLabel,
-    kindInfo,
+    kind.label,
+    kind.info,
     saveMsg,
     el("span", { className: "tb-spacer" }),
     views,
@@ -634,7 +443,7 @@ function mount(doc: Doc): void {
       right,
     ),
     statusbar,
-    dialog,
+    kind.dialog,
   );
   setView(localStorage.getItem("qubero.view") === "listing" ? "listing" : "hex");
   document.addEventListener("keydown", (e) => {
