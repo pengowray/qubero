@@ -169,11 +169,9 @@ pub struct Evaluator {
     /// What each list has learned about itself, for the few nodes that are
     /// lists. Kept apart from `memo` so resolving a child stays cheap.
     lists: FxHashMap<Vec<usize>, ListState>,
-    /// Nodes recorded while a guarded walk is running, so the walk can drop
-    /// the ones it has moved past. Empty when no walk is running.
-    journal: Vec<Vec<usize>>,
-    /// How many guarded walks are running, since a list can hold a list.
-    guard_depth: u32,
+    /// What each guarded walk has added to the memo, so it can drop the nodes
+    /// it has moved past. One entry per walk, since a list can hold a list.
+    journals: Vec<walk::WalkJournal>,
 }
 
 impl Evaluator {
@@ -182,8 +180,7 @@ impl Evaluator {
             template,
             memo: FxHashMap::default(),
             lists: FxHashMap::default(),
-            journal: Vec::new(),
-            guard_depth: 0,
+            journals: Vec::new(),
         }
     }
 
@@ -201,8 +198,7 @@ impl Evaluator {
     pub fn invalidate(&mut self) {
         self.memo.clear();
         self.lists.clear();
-        self.journal.clear();
-        self.guard_depth = 0;
+        self.journals.clear();
     }
 
     /// What the list at `path` has learned about itself. A node that is not

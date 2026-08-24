@@ -495,3 +495,42 @@ fn a_fixed_stride_array_is_sized_without_touching_its_elements() {
     // An element in the middle is still one lookup.
     assert_eq!(ev.node(&d, &[1, 150_000]).unwrap().offset_bits, (4 + 300_000) * 8);
 }
+
+#[test]
+fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
+    // Strings of growing length, so every element sits at an offset only the
+    // walk can find, and one the test can work out for itself.
+    let n = 20_000u64;
+    let mut bytes = n.to_le_bytes().to_vec();
+    let mut starts = vec![8u64];
+    for i in 0..n {
+        let s = "x".repeat((i % 17) as usize + 1);
+        bytes.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(s.as_bytes());
+        starts.push(bytes.len() as u64);
+    }
+    let string = T::structure("String", vec![("len", T::u64(Little)), ("text", T::utf8(E::field("len")))]);
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::u64(Little)), ("items", T::array(string, E::field("n")))]),
+    );
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+
+    let items = ev.node(&d, &[1]).unwrap();
+    assert_eq!(items.child_count, n);
+    assert_eq!(items.offset_bits + items.size_bits, bytes.len() as u64 * 8);
+    // Twenty thousand elements, and what is left behind is the window the walk
+    // keeps rather than one node per element.
+    assert!(ev.memo_len() < 100, "the walk kept {} nodes", ev.memo_len());
+
+    // An element in the middle, reached long after the walk passed it, is
+    // where the file says it is and reads as what it holds.
+    for i in [15_000usize, 3, 19_999, 7_777] {
+        let e = ev.node(&d, &[1, i]).unwrap();
+        assert_eq!(e.offset_bits, starts[i] * 8, "element {i}");
+        let text = ev.node(&d, &[1, i, 1]).unwrap();
+        assert_eq!(text.value, Value::Str("x".repeat(i % 17 + 1)));
+    }
+    assert!(ev.memo_len() < 100, "reaching into it kept {} nodes", ev.memo_len());
+}

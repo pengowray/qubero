@@ -3,14 +3,16 @@
 //! Such a list can only be measured by walking it: element `n` starts where
 //! element `n - 1` ends. Remembering every element as it goes is what makes a
 //! short list cheap to browse, and what makes a long one impossible: a GGUF
-//! whose tokenizer holds two million strings leaves six million nodes behind,
+//! whose phonemizer holds a million rules leaves six million nodes behind,
 //! which is more memory than the file itself.
 //!
 //! So a long list is walked differently. Every thousandth element's offset is
-//! kept, the last few elements are kept because the one being placed may ask
-//! the one before it for a value, and everything else is dropped as the walk
-//! passes it. Reaching an element later starts from the nearest kept offset
-//! rather than from the beginning: bounded memory, and a bounded walk.
+//! kept, the last few elements are kept because the element being placed may
+//! ask the one before it for a value, and everything else is dropped as the
+//! walk passes it. Reaching an element later starts from the nearest kept
+//! offset rather than from the beginning: bounded memory, and a bounded walk.
+
+use std::collections::VecDeque;
 
 use super::*;
 
@@ -27,6 +29,15 @@ pub(super) const CHECKPOINT: usize = 1024;
 /// per element.
 pub(super) const KEEP: usize = 64;
 
+/// What one walk has added to the memo, oldest first, and how much of it each
+/// element accounted for. Dropping the element that has fallen out of the
+/// window behind the walk is then a matter of taking that many off the front.
+#[derive(Default)]
+pub(super) struct WalkJournal {
+    added: VecDeque<Vec<usize>>,
+    per_element: VecDeque<usize>,
+}
+
 impl Evaluator {
     /// Where child `idx` of a list of variable-size elements starts.
     pub(super) fn walk_to<S: Source>(&mut self, doc: &Document<S>, parent: &[usize], idx: usize) -> R<u64> {
@@ -39,17 +50,20 @@ impl Evaluator {
             prev.push(idx - 1);
             return Ok(self.memo[&prev].offset + self.size_of(doc, &prev)?);
         }
-        // Start from the nearest kept offset at or before the target and walk
-        // forward, keeping only the last few elements and every thousandth
-        // offset. `j` is the element that `at` is the start of.
-        let (mut j, mut at) = self.nearest_checkpoint(parent, idx);
+        // Start from the nearest known offset at or before the target and walk
+        // forward. `j` is the element that `at` is the start of.
+        let (mut j, mut at) = self.nearest_start(parent, idx);
         let mut p = parent.to_vec();
-        self.guard_depth += 1;
+        self.journals.push(WalkJournal::default());
         let walked = self.walk_from(doc, &pr, &mut p, &mut j, &mut at, idx);
-        self.guard_depth -= 1;
-        if self.guard_depth == 0 {
-            self.journal.clear();
-        }
+        // The walk is over, so the window it kept behind it is over too. The
+        // element before the target stays, since the one about to be placed may
+        // ask it for a value. Without this, reading a long list a screen at a
+        // time would leave a window behind at every screen.
+        let mut keep = parent.to_vec();
+        keep.push(idx.saturating_sub(1));
+        let journal = self.journals.pop().expect("pushed above");
+        self.drop_nodes(journal.added, &keep);
         walked
     }
 
@@ -65,7 +79,7 @@ impl Evaluator {
     ) -> R<u64> {
         let parent = p.clone();
         while *j < idx {
-            let mark = self.journal.len();
+            let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(*j);
             // The element may already be here, from the walk that sized the
             // list or from the caller looking at it.
@@ -85,15 +99,38 @@ impl Evaluator {
             if *j % CHECKPOINT == 0 {
                 self.checkpoint(&parent, *j, *at);
             }
-            // Drop what this step left behind, once it is far enough back that
-            // nothing will ask for it again.
-            if idx - *j > KEEP {
-                self.forget(mark);
-            } else {
-                self.journal.truncate(mark);
-            }
+            self.close_step(before);
         }
         Ok(*at)
+    }
+
+    /// Note what this step added, and drop the step that has fallen out of the
+    /// window behind the walk.
+    fn close_step(&mut self, before: usize) {
+        let dropped: Vec<Vec<usize>> = {
+            let Some(w) = self.journals.last_mut() else { return };
+            w.per_element.push_back(w.added.len().saturating_sub(before));
+            if w.per_element.len() <= KEEP {
+                return;
+            }
+            let oldest = w.per_element.pop_front().unwrap_or(0);
+            w.added.drain(..oldest).collect()
+        };
+        for path in dropped {
+            self.memo.remove(&path);
+            self.lists.remove(&path);
+        }
+    }
+
+    /// Drop these nodes, except `keep` and what is inside it.
+    fn drop_nodes(&mut self, added: VecDeque<Vec<usize>>, keep: &[usize]) {
+        for path in added {
+            if path.starts_with(keep) {
+                continue;
+            }
+            self.memo.remove(&path);
+            self.lists.remove(&path);
+        }
     }
 
     /// Resolve child `idx` of a list, knowing where it starts. The ordinary
@@ -127,9 +164,9 @@ impl Evaluator {
 
     /// The nearest known offset at or before element `idx`, and which element
     /// it is the start of: where the last walk stopped, if that was before
-    /// `idx`, else the nearest kept offset, else the list's own start.
-    /// Reading a list in order starts each step where the last one ended.
-    fn nearest_checkpoint(&self, parent: &[usize], idx: usize) -> (usize, u64) {
+    /// `idx`, else the nearest kept offset, else the list's own start. Reading
+    /// a list in order then starts each step where the last one ended.
+    fn nearest_start(&self, parent: &[usize], idx: usize) -> (usize, u64) {
         let state = self.lists.get(parent);
         let mut best = (0, self.memo[parent].offset);
         if let Some(&(j, at)) = state.and_then(|l| l.checkpoints.iter().rev().find(|(j, _)| *j <= idx)) {
@@ -150,18 +187,9 @@ impl Evaluator {
 
     /// Record a node, and note it as droppable while a guarded walk is running.
     pub(super) fn remember(&mut self, path: &[usize], r: Resolved) {
-        if self.guard_depth > 0 {
-            self.journal.push(path.to_vec());
+        if let Some(w) = self.journals.last_mut() {
+            w.added.push_back(path.to_vec());
         }
         self.memo.insert(path.to_vec(), r);
-    }
-
-    /// Drop everything recorded since `mark`.
-    fn forget(&mut self, mark: usize) {
-        let dropped: Vec<Vec<usize>> = self.journal.drain(mark..).collect();
-        for path in dropped {
-            self.memo.remove(&path);
-            self.lists.remove(&path);
-        }
     }
 }
