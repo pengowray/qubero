@@ -42,12 +42,11 @@ function trailParts(trail: readonly string[]): string[] {
 
 /** `0, 1, 4, 9 … 512 values`. The count alone tells a run of zeroes and a run
  *  of samples apart not at all, and the row is where the reader decides
- *  whether to open it. */
+ *  whether to open it. The sample never covers the whole run: a run is not
+ *  collapsed until it is longer than the sample. */
 function runText(s: Span): string {
   const count = `${s.count.toLocaleString()} values`;
-  if (s.sample.length === 0) return count;
-  const shown = s.sample.join(", ");
-  return s.sample.length < s.count ? `${shown} … ${count}` : `${shown} (${count})`;
+  return s.sample.length === 0 ? count : `${s.sample.join(", ")} … ${count}`;
 }
 
 function samePrefix(a: readonly string[], b: readonly string[], n: number): boolean {
