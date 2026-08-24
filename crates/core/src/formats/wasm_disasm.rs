@@ -175,7 +175,7 @@ impl Module {
     pub fn disassemble<S: Source>(&self, ev: &mut Evaluator, doc: &Document<S>, n: usize) -> R<String> {
         let path = match self.bodies.get(n) {
             Some(p) => p.clone(),
-            None => return Err(EvalError::Failed(format!("no function {n}: the code section has {} functions", self.bodies.len()))),
+            None => return Err(EvalError::Failed(format!("function index {n} out of range: the code section has {} functions", self.bodies.len()))),
         };
         let mut out = String::new();
         let _ = writeln!(out, "(func ${}", self.func_name((self.imported + n) as u32));
