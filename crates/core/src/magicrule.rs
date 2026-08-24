@@ -44,8 +44,10 @@ pub struct Rule {
 pub enum Kind {
     /// Bytes compared as they stand.
     Bytes,
-    /// An unsigned integer `width` bytes wide, in a stated byte order.
-    Uint { width: u32, endian: Endian },
+    /// An unsigned integer `width` bytes wide, in a stated byte order. `mask`
+    /// is the `&0xffffff00` a rule may narrow the comparison with, which leaves
+    /// only some of the bytes on disk known.
+    Uint { width: u32, endian: Endian, mask: Option<u64> },
     /// A type this module does not read: a search, a regex, a date, a
     /// subroutine definition or call, or a number in host byte order, which
     /// names no order a file could be said to have.
@@ -167,12 +169,20 @@ fn parse_number(t: &str) -> Option<u128> {
 }
 
 fn parse_kind(tok: &str) -> Kind {
-    // A mask (`belong&0x00ffffff`) tests part of a value, so the bytes on disk
-    // are not the bytes in the rule, and there is nothing a field could be
-    // checked against.
-    if tok.contains('&') || tok.contains('%') {
+    // `%` is a modulo test, which says nothing about any one byte.
+    if tok.contains('%') {
         return Kind::Other;
     }
+    // A mask (`belong&0xffffff00`) tests part of a value. The bytes the mask
+    // covers whole are still bytes the rule proves; the rest are not, and
+    // `signature_of` keeps only the run it can vouch for.
+    let (tok, mask) = match tok.split_once('&') {
+        None => (tok, None),
+        Some((base, m)) => match parse_number(m).and_then(|n| u64::try_from(n).ok()) {
+            Some(m) => (base, Some(m)),
+            None => return Kind::Other,
+        },
+    };
     let (name, flags) = tok.split_once('/').unwrap_or((tok, ""));
     // Of the string flags, only `b` and `t` leave the bytes alone: they say the
     // rule applies to a binary or to a text file, which is a fact about the
@@ -195,11 +205,12 @@ fn parse_kind(tok: &str) -> Kind {
     // second pass over the base name catches the unsigned spelling either way.
     let base = base.strip_prefix('u').unwrap_or(base);
     match (base, endian) {
-        ("string", None) => Kind::Bytes,
-        ("byte", _) => Kind::Uint { width: 1, endian: Endian::Big },
-        ("short", Some(e)) => Kind::Uint { width: 2, endian: e },
-        ("long", Some(e)) => Kind::Uint { width: 4, endian: e },
-        ("quad", Some(e)) => Kind::Uint { width: 8, endian: e },
+        // Bytes compared as they stand have nothing to mask.
+        ("string", None) if mask.is_none() => Kind::Bytes,
+        ("byte", _) => Kind::Uint { width: 1, endian: Endian::Big, mask },
+        ("short", Some(e)) => Kind::Uint { width: 2, endian: e, mask },
+        ("long", Some(e)) => Kind::Uint { width: 4, endian: e, mask },
+        ("quad", Some(e)) => Kind::Uint { width: 8, endian: e, mask },
         // A bare `short` or `long` is whatever order the machine running
         // `file` happens to use. A file has no such order, so there is nothing
         // to write down.
@@ -322,9 +333,12 @@ impl<'a> Tokens<'a> {
 /// The signature of the format `head` is in, according to `text`.
 ///
 /// Only level-0 rules are considered, and only the ones that pin fixed bytes to
-/// a fixed place. Exactly one has to match: a file matching none is a format
-/// whose rule this module cannot read, and a file matching several is a rule
-/// file this module has misread, which is not something to show anybody.
+/// a fixed place. A file matching none is a format whose rule this module
+/// cannot read. Several may match, but only when they describe the same bytes
+/// in differing detail, as a JPEG-LS file matches both the rule for its own
+/// four bytes and the rule for the three every JPEG starts with; the fuller
+/// one is the answer. Rules covering different ground mean this module has
+/// misread the file, which is not something to show anybody.
 pub fn match_signature(text: &str, head: &[u8]) -> Option<Signature> {
     let rules = parse(text);
     let mut found: Option<Signature> = None;
@@ -334,27 +348,74 @@ pub fn match_signature(text: &str, head: &[u8]) -> Option<Signature> {
         if end > head.len() || head[sig.offset as usize..end] != sig.bytes[..] {
             continue;
         }
-        if found.is_some() {
-            return None;
-        }
-        found = Some(sig);
+        found = match found {
+            None => Some(sig),
+            Some(prev) => Some(fuller(prev, sig)?),
+        };
     }
     found
 }
 
+/// Of two signatures the same file matched, the one that says more, when one
+/// covers everything the other does. None when they cover different bytes.
+fn fuller(a: Signature, b: Signature) -> Option<Signature> {
+    let (outer, inner) = if a.bytes.len() >= b.bytes.len() { (a, b) } else { (b, a) };
+    let from = usize::try_from(inner.offset.checked_sub(outer.offset)?).ok()?;
+    (from + inner.bytes.len() <= outer.bytes.len()).then_some(outer)
+}
+
+/// A number as it sits in the file: `width` bytes of it, in the rule's order.
+fn on_disk(n: u64, width: u32, endian: Endian) -> Option<Vec<u8>> {
+    let be = n.to_be_bytes();
+    let mut b = be[8usize.checked_sub(width as usize)?..].to_vec();
+    if endian == Endian::Little {
+        b.reverse();
+    }
+    Some(b)
+}
+
+/// The longest run of bytes a mask leaves fully known, as a start and a length.
+/// A byte the mask covers only in part says nothing certain about the byte on
+/// disk, so it ends the run rather than joining it.
+fn known_run(mask: &[u8]) -> Option<(usize, usize)> {
+    let mut best = (0usize, 0usize);
+    let mut i = 0;
+    while i < mask.len() {
+        if mask[i] != 0xff {
+            i += 1;
+            continue;
+        }
+        let from = i;
+        while i < mask.len() && mask[i] == 0xff {
+            i += 1;
+        }
+        if i - from > best.1 {
+            best = (from, i - from);
+        }
+    }
+    (best.1 > 0).then_some(best)
+}
+
 /// The bytes a rule requires, when it requires any.
 fn signature_of(rule: &Rule) -> Option<Signature> {
-    let offset = rule.offset?;
-    let bytes = match (&rule.kind, &rule.test) {
-        (Kind::Bytes, Test::Bytes(b)) => b.clone(),
-        (Kind::Uint { width, endian }, Test::Num(n)) => {
-            let be = n.to_be_bytes();
-            let start = 8usize.checked_sub(*width as usize)?;
-            let mut b = be[start..].to_vec();
-            if *endian == Endian::Little {
-                b.reverse();
+    let at = rule.offset?;
+    let (offset, bytes) = match (&rule.kind, &rule.test) {
+        (Kind::Bytes, Test::Bytes(b)) => (at, b.clone()),
+        (Kind::Uint { width, endian, mask }, Test::Num(n)) => {
+            let bytes = on_disk(*n, *width, *endian)?;
+            match mask {
+                None => (at, bytes),
+                Some(m) => {
+                    // A test asking for bits the mask throws away matches no
+                    // file at all, so the bytes it names prove nothing.
+                    let whole = if *width >= 8 { u64::MAX } else { (1u64 << (width * 8)) - 1 };
+                    if n & !m & whole != 0 {
+                        return None;
+                    }
+                    let (from, len) = known_run(&on_disk(*m, *width, *endian)?)?;
+                    (at + from as u64, bytes.get(from..from + len)?.to_vec())
+                }
             }
-            b
         }
         _ => return None,
     };
@@ -450,10 +511,14 @@ mod tests {
 
     #[test]
     fn integer_types_carry_their_byte_order() {
-        assert_eq!(parse_kind("beshort"), Kind::Uint { width: 2, endian: Endian::Big });
-        assert_eq!(parse_kind("ulelong"), Kind::Uint { width: 4, endian: Endian::Little });
-        assert_eq!(parse_kind("bequad"), Kind::Uint { width: 8, endian: Endian::Big });
-        assert_eq!(parse_kind("ubyte"), Kind::Uint { width: 1, endian: Endian::Big });
+        assert_eq!(parse_kind("beshort"), Kind::Uint { width: 2, endian: Endian::Big, mask: None });
+        assert_eq!(parse_kind("ulelong"), Kind::Uint { width: 4, endian: Endian::Little, mask: None });
+        assert_eq!(parse_kind("bequad"), Kind::Uint { width: 8, endian: Endian::Big, mask: None });
+        assert_eq!(parse_kind("ubyte"), Kind::Uint { width: 1, endian: Endian::Big, mask: None });
+        assert_eq!(
+            parse_kind("belong&0xffffff00"),
+            Kind::Uint { width: 4, endian: Endian::Big, mask: Some(0xffffff00) }
+        );
     }
 
     #[test]
@@ -465,7 +530,8 @@ mod tests {
 
     #[test]
     fn masked_and_flagged_types_are_not_plain_values() {
-        assert_eq!(parse_kind("belong&0x00ffffff"), Kind::Other);
+        assert_eq!(parse_kind("belong%0x10"), Kind::Other);
+        assert_eq!(parse_kind("belong&nonsense"), Kind::Other);
         assert_eq!(parse_kind("string/c"), Kind::Other);
         assert_eq!(parse_kind("string/fwt"), Kind::Other);
         assert_eq!(parse_kind("string/W"), Kind::Other);
@@ -535,9 +601,66 @@ mod tests {
     }
 
     #[test]
-    fn two_matching_rules_mean_the_file_was_misread() {
+    fn one_rule_inside_another_is_read_at_its_fullest() {
+        // What the jpeg file does: a rule for one format's own bytes, beside a
+        // rule for the bytes its whole family shares.
         let text = "0\tstring\tPK\\003\\004\tone\n0\tstring\tPK\\003\tanother\n";
-        assert!(match_signature(text, b"PK\x03\x04").is_none());
+        let sig = match_signature(text, b"PK\x03\x04").unwrap();
+        assert_eq!(sig.bytes, b"PK\x03\x04");
+    }
+
+    #[test]
+    fn two_rules_covering_different_bytes_mean_the_file_was_misread() {
+        let text = "0\tstring\tPK\tone\n4\tstring\tZZ\tanother\n";
+        assert!(match_signature(text, b"PK\x03\x04ZZ").is_none());
+    }
+
+    #[test]
+    fn a_masked_rule_keeps_the_bytes_the_mask_covers_whole() {
+        // The rule every JPEG matches: three bytes known, the fourth masked off.
+        let jpeg = "0\tbelong&0xffffff00\t0xffd8ff00\tJPEG image data\n";
+        let sig = match_signature(jpeg, &[0xff, 0xd8, 0xff, 0xe0]).unwrap();
+        assert_eq!(sig.offset, 0);
+        assert_eq!(sig.bytes, [0xff, 0xd8, 0xff]);
+    }
+
+    #[test]
+    fn a_jpeg_ls_file_is_read_by_its_own_rule_rather_than_the_familys() {
+        let text = "0\tbelong\t0xffd8fff7\tJPEG-LS\n0\tbelong&0xffffff00\t0xffd8ff00\tJPEG\n";
+        let sig = match_signature(text, &[0xff, 0xd8, 0xff, 0xf7]).unwrap();
+        assert_eq!(sig.bytes, [0xff, 0xd8, 0xff, 0xf7]);
+        let plain = match_signature(text, &[0xff, 0xd8, 0xff, 0xe0]).unwrap();
+        assert_eq!(plain.bytes, [0xff, 0xd8, 0xff]);
+    }
+
+    #[test]
+    fn a_mask_in_the_middle_of_a_value_keeps_only_its_longest_run() {
+        // ARC: two bytes known, then a byte the mask only half covers.
+        let arc = "0\tlelong&0x8080ffff\t0x0000081a\tARC archive data\n";
+        let sig = match_signature(arc, &[0x1a, 0x08, 0x00, 0x00]).unwrap();
+        assert_eq!(sig.offset, 0);
+        assert_eq!(sig.bytes, [0x1a, 0x08]);
+        // Apple Mechanic: the run the mask covers whole starts two bytes in.
+        let mech = "0\tbelong&0xFF00FFFF\t0x6400D000\tApple Mechanic font\n";
+        let sig = match_signature(mech, &[0x64, 0x11, 0xd0, 0x00]).unwrap();
+        assert_eq!(sig.offset, 2);
+        assert_eq!(sig.bytes, [0xd0, 0x00]);
+    }
+
+    #[test]
+    fn a_mask_leaving_no_whole_byte_pair_proves_too_little() {
+        // MPEG ADTS: fifteen bits, which is one whole byte and part of another.
+        let adts = "0\tbeshort&0xFFFE\t0xFFFA\tMPEG\n";
+        assert!(match_signature(adts, &[0xff, 0xfa]).is_none());
+        // Alternating bytes: no two known bytes in a row.
+        let alt = "0\tbelong&0x00ff00ff\t0x00080000\tsomething\n";
+        assert!(match_signature(alt, &[0, 8, 0, 0]).is_none());
+    }
+
+    #[test]
+    fn a_test_asking_for_bits_the_mask_throws_away_matches_nothing() {
+        let broken = "0\tbelong&0xffffff00\t0xffd8ff07\tbroken\n";
+        assert!(match_signature(broken, &[0xff, 0xd8, 0xff, 0x07]).is_none());
     }
 
     #[test]
