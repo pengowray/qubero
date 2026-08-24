@@ -824,49 +824,12 @@ impl Evaluator {
                 let stride = self.stride(doc, path, &r.ty)?.expect("checked");
                 Ok((r.limit - r.offset) / stride)
             }
+            // Counting a run means walking it, and a run of a million things
+            // walked without forgetting any of them is a million nodes. The
+            // walk keeps a window and its checkpoints instead; see `walk.rs`.
             Ty::Repeat { until, .. } => {
-                let state = self.list(path);
-                if state.repeat_done {
-                    return Ok(state.repeat_len as u64);
-                }
-                let mut p = path.to_vec();
-                loop {
-                    let (ends, done) = {
-                        let l = self.list(path);
-                        (l.repeat_len, l.repeat_done)
-                    };
-                    if done {
-                        return Ok(ends as u64);
-                    }
-                    let start = self.list(path).repeat_end.unwrap_or(r.offset);
-                    if start >= r.limit {
-                        self.list_mut(path).repeat_done = true;
-                        return Ok(ends as u64);
-                    }
-                    self.spend(start)?;
-                    p.push(ends);
-                    self.resolve(doc, &p)?;
-                    let size = self.size_of(doc, &p)?;
-                    let end = self.memo[&p].offset + size;
-                    if size == 0 {
-                        return fail("repeated element has zero size");
-                    }
-                    let stop = match until {
-                        Until::End => false,
-                        Until::FieldBytes { field, bytes } => {
-                            let want = bytes.clone();
-                            let got = self.child_raw_bytes(doc, &p, field)?;
-                            got == want
-                        }
-                    };
-                    p.pop();
-                    let m = self.list_mut(path);
-                    m.repeat_len += 1;
-                    m.repeat_end = Some(end);
-                    if stop {
-                        m.repeat_done = true;
-                    }
-                }
+                let until = until.clone();
+                self.count_repeat(doc, path, &r, &until)
             }
             _ => Ok(0),
         }

@@ -579,6 +579,32 @@ fn a_run_that_stops_on_what_it_reads_is_still_walked() {
 }
 
 #[test]
+fn counting_a_long_run_costs_the_same_however_long_it_is() {
+    // A run that ends where the file does, of elements no two of which are the
+    // same length. How many there are can only be found by walking, and the
+    // walk must not leave one node per element behind: this is the shape a
+    // file whose contents are a list of a billion things has.
+    let count = |n: usize| {
+        let mut bytes = Vec::new();
+        for i in 0..n {
+            let s = "x".repeat(i % 17 + 1);
+            bytes.extend_from_slice(&(s.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(s.as_bytes());
+        }
+        let string = T::structure("String", vec![("len", T::u64(Little)), ("text", T::utf8(E::field("len")))]);
+        let d = doc(&bytes);
+        let mut ev = Evaluator::new(Template::new("t", T::repeat(string, Until::End)));
+        assert_eq!(ev.node(&d, &[]).unwrap().child_count, n as u64);
+        ev.memo_len()
+    };
+    // Three times the elements, and what is left in memory is the same: the
+    // few thousand a short run is remembered by, and the window after them.
+    let (small, large) = (count(20_000), count(60_000));
+    assert!(large < 3 * small / 2, "counting kept {small} nodes for 20,000 and {large} for 60,000");
+    assert!(large < 20_000, "counting kept {large} nodes");
+}
+
+#[test]
 fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
     // Strings of growing length, so every element sits at an offset only the
     // walk can find, and one the test can work out for itself.

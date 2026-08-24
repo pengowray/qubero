@@ -67,6 +67,104 @@ impl Evaluator {
         walked
     }
 
+    /// How many elements a run holds, by walking it to its end.
+    ///
+    /// The walk is the same one that places an element, and leaves the same
+    /// behind: a checkpoint every thousand elements, the last few whole, and
+    /// nothing else. Counting a list is what the field tree does to draw one
+    /// row for it, so a file whose contents are a list of a billion things
+    /// must not become a billion nodes on the way to saying "a billion".
+    pub(super) fn count_repeat<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        r: &Resolved,
+        until: &Until,
+    ) -> R<u64> {
+        if self.list(path).repeat_done {
+            return Ok(self.list(path).repeat_len as u64);
+        }
+        // The journal is opened part way through, once the run turns out to be
+        // a long one, so a short run costs nothing to count: see `count_from`.
+        let depth = self.journals.len();
+        let out = self.count_from(doc, path, r, until);
+        if self.journals.len() > depth {
+            let journal = self.journals.pop().expect("opened during the count");
+            // The last element counted stays: the caller has just been told how
+            // many there are, and usually asks for one of them next.
+            let mut keep = path.to_vec();
+            keep.push(self.list(path).repeat_len.saturating_sub(1));
+            self.drop_nodes(journal.added, &keep);
+        }
+        out
+    }
+
+    /// The counting walk itself, one element per turn.
+    fn count_from<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        r: &Resolved,
+        until: &Until,
+    ) -> R<u64> {
+        let mut p = path.to_vec();
+        loop {
+            let (ends, done) = {
+                let l = self.list(path);
+                (l.repeat_len, l.repeat_done)
+            };
+            if done {
+                return Ok(ends as u64);
+            }
+            let start = self.list(path).repeat_end.unwrap_or(r.offset);
+            if start >= r.limit {
+                self.list_mut(path).repeat_done = true;
+                return Ok(ends as u64);
+            }
+            self.spend(start)?;
+            // A short run is remembered whole: most runs are short, and having
+            // one in memory is what makes reading it cheap. Once a run proves
+            // long, the walk starts keeping a journal and dropping what it has
+            // gone past; what it kept before that is a bounded few thousand.
+            if ends == GUARD_ABOVE {
+                self.journals.push(WalkJournal::default());
+            }
+            let before = self.journals.last().map_or(0, |w| w.added.len());
+            p.push(ends);
+            self.resolve(doc, &p)?;
+            let size = self.size_of(doc, &p)?;
+            let end = self.memo[p.as_slice()].offset + size;
+            if size == 0 {
+                return fail("repeated element has zero size");
+            }
+            let stop = match until {
+                Until::End => false,
+                Until::FieldBytes { field, bytes } => {
+                    let want = bytes.clone();
+                    let got = self.child_raw_bytes(doc, &p, field)?;
+                    got == want
+                }
+            };
+            p.pop();
+            let m = self.list_mut(path);
+            m.repeat_len += 1;
+            m.repeat_end = Some(end);
+            if stop {
+                m.repeat_done = true;
+            }
+            // Where the count has got to is where a later reader starts from,
+            // so the walk that counted a list is not walked again to read it.
+            let n = ends + 1;
+            self.list_mut(path).walk_at = Some((n, end));
+            if n % CHECKPOINT == 0 {
+                self.checkpoint(path, n, end);
+            }
+            if n > GUARD_ABOVE {
+                self.close_step(before);
+            }
+        }
+    }
+
     /// The walk itself, from element `j` at offset `at` up to element `idx`.
     fn walk_from<S: Source>(
         &mut self,
