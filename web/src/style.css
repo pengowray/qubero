@@ -971,3 +971,153 @@ input.invalid {
 .dlg-tool {
   font-family: var(--mono);
 }
+
+/* ---- listing view ---- */
+/* The file in order: one row per field, headings where the structures change.
+   A grid rather than flex, so the columns line up down the whole screen and a
+   long value cannot push the type out of sight. */
+.listing {
+  /* Narrower than this the columns would overlap, so the body scrolls
+     sideways instead. Every part that lays out a row shares the width, or the
+     rows would get a second scrollbar inside the first. */
+  --lv-min: 95ch;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 20px;
+  outline: none;
+  user-select: none;
+  touch-action: none;
+}
+.listing:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.lv-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* A narrow window scrolls the columns rather than cutting the type off the
+     right-hand edge, which is what the hex rows do too. */
+  overflow-x: auto;
+  padding: 0 8px;
+}
+.lv-header,
+.lv-row {
+  display: grid;
+  grid-template-columns: 10ch 35ch 16ch minmax(22ch, 1fr) 14ch;
+  gap: 0 2ch;
+  height: 20px;
+  white-space: pre;
+  /* Below this the columns scroll rather than overlap. `1fr` on its own would
+     let the value and the type collapse into each other. */
+  min-width: var(--lv-min);
+}
+.lv-header {
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.lv-rows {
+  flex: 1;
+  min-height: 0;
+  min-width: var(--lv-min);
+  overflow: hidden;
+}
+.lv-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.lv-addr,
+.lv-bytes,
+.lv-type {
+  color: var(--muted);
+}
+.lv-value {
+  color: var(--fg);
+}
+/* An instruction is one thing, so it reads across the two columns a field
+   would have split between a name and a value. */
+.lv-inline .lv-value {
+  grid-column: 3 / 5;
+}
+.lv-gap .lv-name {
+  font-style: italic;
+}
+/* Depth is shown by indenting the name, not the whole row: the offsets and
+   bytes stay in one column so they can be read down. */
+.lv-row .lv-name,
+.lv-inline .lv-value {
+  padding-left: calc(var(--depth, 0) * 1ch);
+}
+.lv-heading {
+  color: var(--fg);
+  font-weight: 600;
+}
+.lv-heading-text {
+  grid-column: 3 / 6;
+  padding-left: calc(var(--depth, 0) * 1ch);
+  border-bottom: 1px solid var(--line);
+}
+.lv-track {
+  width: 14px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  position: relative;
+  touch-action: none;
+}
+.lv-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  background: var(--muted);
+  border-radius: 6px;
+  opacity: 0.6;
+}
+.lv-status {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--muted);
+  font-family: var(--sans);
+}
+.tb-views {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tb-view {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 4px 10px;
+  min-height: 24px;
+  color: var(--muted);
+}
+.tb-view + .tb-view {
+  border-left: 1px solid var(--line);
+}
+.tb-view.is-on {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* `display: flex` on a view beats the browser's own rule for `hidden`, so the
+   hidden one has to be told again. */
+[hidden] {
+  display: none !important;
+}
+/* The same bytes as text, beside the hex, so a run that happens to be a name
+   or a magic number can be read without decoding it by eye. */
+.lv-ascii {
+  color: var(--muted);
+  opacity: 0.75;
+  font-style: normal;
+  margin-left: 2ch;
+}

@@ -124,6 +124,10 @@ export type Span = {
   readonly gap: boolean;
   /** Fields this entry stands for, when a run of numbers is shown as one. */
   readonly count: number;
+  /** A structure that reads on one row, already joined: an instruction rather
+   *  than its opcode and its immediate. Null for a field that reads as its own
+   *  value. */
+  readonly line: string | null;
 };
 
 /** What a type permits, beyond what this file's bytes happen to say. */

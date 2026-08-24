@@ -3,6 +3,7 @@ import { HexView, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
+import { ListingView } from "./listingview.js";
 import { TypeTable } from "./typetable.js";
 
 const appEl = document.getElementById("app");
@@ -174,7 +175,8 @@ function mount(doc: Doc): void {
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
-  // The three views share one position: the hex cursor. Picking a field moves
+  const listing = new ListingView(doc);
+  // The views share one position: the hex cursor. Picking a field moves
   // it; moving it picks the field it lands in. `picking` stops that going round.
   let picking = false;
   let followWhenLoaded: number | null = null;
@@ -198,6 +200,7 @@ function mount(doc: Doc): void {
       view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
     }
     table.reveal(at.node);
+    listing.setBit(bitOffset);
   };
 
   const goToField = (path: readonly number[]): void => {
@@ -216,10 +219,20 @@ function mount(doc: Doc): void {
     view.setBitCursor(startBit, { pane: "hex" });
     picking = false;
     inspector.setPath(path);
+    listing.reveal(path);
+  };
+  listing.onPick = ({ path, startBit, endBit }) => {
+    view.setHighlight({ startBit, endBit });
+    picking = true;
+    view.setBitCursor(startBit, { pane: "hex" });
+    picking = false;
+    inspector.setPath(path);
+    table.reveal(path);
   };
   inspector.onPick = (path) => {
     goToField(path);
     table.reveal(path);
+    listing.reveal(path);
   };
   view.onPickField = (path) => {
     goToField(path);
@@ -228,6 +241,7 @@ function mount(doc: Doc): void {
   view.onHighlightClear = () => {
     followedBit = null;
     table.clearSelection();
+    listing.clearSelection();
   };
 
   const tmpl = el("select", { className: "tb-tmpl" });
@@ -502,6 +516,33 @@ function mount(doc: Doc): void {
     view.setRightColumn(c);
   });
 
+  // Hex and Listing are two readings of the same file, so they share the
+  // cursor and swap in the same place rather than sitting side by side. The
+  // listing carries its own bytes, so showing both would say it twice.
+  const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
+  const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
+  const views = el("div", { className: "tb-views" }, hexBtn, listBtn);
+  views.setAttribute("role", "group");
+  views.setAttribute("aria-label", "How to read the file");
+  /** Controls that only mean anything over the hex rows. */
+  const hexOnly = [width, mode, column];
+  const setView = (which: "hex" | "listing"): void => {
+    const listingOn = which === "listing";
+    view.el.hidden = listingOn;
+    listing.el.hidden = !listingOn;
+    for (const c of hexOnly) c.hidden = listingOn;
+    hexBtn.setAttribute("aria-pressed", String(!listingOn));
+    listBtn.setAttribute("aria-pressed", String(listingOn));
+    hexBtn.classList.toggle("is-on", !listingOn);
+    listBtn.classList.toggle("is-on", listingOn);
+    localStorage.setItem("qubero.view", which);
+    if (listingOn) listing.relayout();
+    else view.relayout();
+    (listingOn ? listing.el : view.el).focus();
+  };
+  hexBtn.addEventListener("click", () => setView("hex"));
+  listBtn.addEventListener("click", () => setView("listing"));
+
   const openBtn = el("button", { type: "button", textContent: "Open" });
   openBtn.addEventListener("click", () => pick());
 
@@ -515,6 +556,7 @@ function mount(doc: Doc): void {
     kindInfo,
     saveMsg,
     el("span", { className: "tb-spacer" }),
+    views,
     goto,
     width,
     mode,
@@ -554,15 +596,19 @@ function mount(doc: Doc): void {
     if (followWhenLoaded !== null) followCursor(followWhenLoaded);
   });
 
-  const relayout = (): void => view.relayout();
+  const relayout = (): void => {
+    view.relayout();
+    listing.relayout();
+  };
   const bottom = panel("Structure", "bottom", table.el, relayout);
   const right = panel("At cursor", "right", inspector.el, relayout);
   app.replaceChildren(
     toolbar,
-    el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, bottom), right),
+    el("main", { className: "workspace" }, el("div", { className: "left" }, view.el, listing.el, bottom), right),
     statusbar,
     dialog,
   );
+  setView(localStorage.getItem("qubero.view") === "listing" ? "listing" : "hex");
   view.relayout();
   refresh();
   inspector.setOffset(0);
@@ -570,7 +616,7 @@ function mount(doc: Doc): void {
   // The next file dropped may be one no template covers. Fetch the rules while
   // nothing is waiting on them, so that file is named as soon as it opens.
   prefetchMagic();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table } });
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, listing } });
 }
 
 function pick(): void {

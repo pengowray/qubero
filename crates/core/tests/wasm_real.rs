@@ -17,6 +17,11 @@ fn disassembles_the_editors_own_binary() {
     let mut ev = Evaluator::new(wasm());
     let m = WasmModule::read(&mut ev, &d).unwrap();
     eprintln!("{} imports, {} defined functions", m.first_defined(), m.func_count());
+    let named: Vec<String> = (0..(m.first_defined() + m.func_count()) as u32)
+        .map(|i| m.func_name(i))
+        .filter(|n| !n.starts_with("func"))
+        .collect();
+    eprintln!("{} names that are not the index: {:?}", named.len(), &named[..named.len().min(8)]);
     assert!(m.func_count() > 0);
 
     let mut stopped = 0usize;
