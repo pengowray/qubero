@@ -75,6 +75,11 @@ impl Evaluator {
                     .collect();
                 Explain::Flags { name: def.name.clone(), raw, bits }
             }
+            // An eight-bit float is one byte, so there is no order to it.
+            Ty::F8 { e4m3 } => {
+                let raw = self.read(doc, &r, r.offset, 8)?;
+                Explain::Float { format: if *e4m3 { "e4m3" } else { "e5m2" }, width: 8, bits: raw[0] as u64 }
+            }
             Ty::F16(e) | Ty::BF16(e) | Ty::F32(e) | Ty::F64(e) => {
                 let (format, width): (&'static str, u32) = match r.ty {
                     Ty::F16(_) => ("binary16", 16),

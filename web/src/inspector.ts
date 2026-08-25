@@ -8,7 +8,7 @@
 import { formatOffset } from "./doc.js";
 import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { countText } from "./strings.js";
+import { childWord, countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
 
 /** Structure reads the template's field; the other two read raw bytes. */
@@ -406,8 +406,7 @@ export class Inspector {
     this.field.disabled = !n.editable;
     this.field.classList.remove("invalid");
     this.field.value = n.composite ? "" : n.edit_text;
-    const noun = n.type.endsWith("[]") || n.type.startsWith("offsets ") ? (n.unit ?? "item") : "field";
-    this.field.placeholder = n.composite ? countText(n.child_count, noun) : "";
+    this.field.placeholder = n.composite ? countText(n.child_count, childWord(n)) : "";
     this.field.setAttribute("aria-label", `${n.name}, ${n.type}`);
   }
 

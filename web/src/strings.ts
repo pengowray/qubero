@@ -18,7 +18,26 @@ export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from t
  *  for a run of quantised weights, `2,560 values` for a run of numbers, and
  *  `items` for a list whose format has no word of its own for them. */
 export function countText(n: number, noun: string): string {
-  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+  return `${n.toLocaleString()} ${n === 1 ? noun : plural(noun)}`;
+}
+
+/**
+ * What one child of a row stands for. The format names them when it has a word
+ * for them: blocks, tensors, entries. Otherwise a list holds items and a
+ * structure has fields, which is what the type name says: a list reads as
+ * `X[]`, or as `offsets → X` when its children sit where an earlier array
+ * of offsets says.
+ */
+export function childWord(n: { readonly unit?: string; readonly type: string }): string {
+  return n.unit ?? (n.type.endsWith("[]") || n.type.startsWith("offsets ") ? "item" : "field");
+}
+
+/** More than one of them. Nouns here are the words formats use for what they
+ *  hold, so this covers the endings those run to and no more. */
+function plural(noun: string): string {
+  if (/[^aeiou]y$/.test(noun)) return `${noun.slice(0, -1)}ies`;
+  if (/(s|x|z|ch|sh)$/.test(noun)) return `${noun}es`;
+  return `${noun}s`;
 }
 
 // ---- searching ----

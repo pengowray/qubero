@@ -188,6 +188,22 @@ mod tests {
     }
 
     #[test]
+    fn a_tensor_holding_nothing_at_the_very_end_is_still_placed() {
+        let header = concat!(
+            r#"{"a":{"dtype":"F16","shape":[2],"data_offsets":[0,4]},"#,
+            r#""scaled_fp8":{"dtype":"F8_E4M3","shape":[0],"data_offsets":[4,4]}}"#,
+        );
+        let mut b = (header.len() as u64).to_le_bytes().to_vec();
+        b.extend_from_slice(header.as_bytes());
+        b.extend_from_slice(&[0; 4]);
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(safetensors());
+        let empty = ev.node(&d, &[2, 1]).expect("placed");
+        assert_eq!((empty.child_count, empty.size_bits), (0, 0));
+        assert_eq!(empty.offset_bits, d.len_bits());
+    }
+
+    #[test]
     fn a_type_nobody_here_knows_still_takes_the_room_it_was_given() {
         let header = r#"{"x":{"dtype":"F4_E2M1","shape":[8],"data_offsets":[0,4]}}"#;
         let mut b = (header.len() as u64).to_le_bytes().to_vec();

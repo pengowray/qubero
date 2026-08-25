@@ -12,3 +12,4 @@ web/public/*.gguf
 web/public/*.db
 web/public/*.wav
 web/public/*.bin
+web/public/*.safetensors

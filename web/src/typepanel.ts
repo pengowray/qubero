@@ -37,11 +37,22 @@ function headingFor(info: TypeInfo): string {
  * What one binary float is made of. The three fields are fixed by the width,
  * and everything the panel says is worked out from them.
  */
-type FloatShape = { exp: number; sig: number; bias: number; name: string };
+type FloatShape = {
+  exp: number;
+  sig: number;
+  bias: number;
+  name: string;
+  /** True for a layout with no infinities, where the top exponent still holds
+   *  numbers and only an all-ones significand is not one. The eight-bit e4m3
+   *  is the only one here that works this way. */
+  finite?: boolean;
+};
 
 /** Keyed by the name of the layout rather than by its width: a brain float and
  *  a half float are both sixteen bits and divide them differently. */
 const FLOATS: Record<string, FloatShape> = {
+  e4m3: { exp: 4, sig: 3, bias: 7, name: "e4m3", finite: true },
+  e5m2: { exp: 5, sig: 2, bias: 15, name: "e5m2" },
   binary16: { exp: 5, sig: 10, bias: 15, name: "binary16" },
   bfloat16: { exp: 8, sig: 7, bias: 127, name: "bfloat16" },
   binary32: { exp: 8, sig: 23, bias: 127, name: "binary32" },
@@ -60,9 +71,12 @@ function shortest(x: number, format: string): string {
     if (format === "binary64") return v === x;
     if (format === "binary32") return Math.fround(v) === x;
     if (format === "bfloat16") return bf16ToNumber(numberToBf16(v)) === x;
+    // Every eight-bit float is a double exactly, so the shortest form is the
+    // shortest that comes back as the same number.
+    if (format === "e4m3" || format === "e5m2") return v === x;
     return f16ToNumber(numberToF16(v)) === x;
   };
-  const digits = format === "binary64" ? 17 : format === "binary32" ? 9 : format === "bfloat16" ? 4 : 5;
+  const digits = format === "binary64" || format === "e4m3" || format === "e5m2" ? 17 : format === "binary32" ? 9 : format === "bfloat16" ? 4 : 5;
   for (let p = 1; p < digits; p++) {
     const t = Number(x.toPrecision(p));
     if (same(String(t))) return String(t);
@@ -159,10 +173,16 @@ function floatBody(info: TypeInfo): DocumentFragment {
   };
 
   const top = stored === (1 << shape.exp) - 1;
-  if (top && frac === 0n) {
+  const allOnes = frac === (1n << BigInt(shape.sig)) - 1n;
+  if (top && shape.finite === true) {
+    // This layout spends its top exponent on numbers and keeps one pattern
+    // back: everything else there is read as an ordinary number below.
+    if (allOnes) {
+      return special("NaN", muted("exponent and significand all 1s"), muted("this layout has no infinities"));
+    }
+  } else if (top && frac === 0n) {
     return special(negative ? "-Infinity (exponent all 1s, significand 0)" : "Infinity (exponent all 1s, significand 0)");
-  }
-  if (top) {
+  } else if (top) {
     const quiet = sigDigits[0] === "1";
     return special(
       quiet ? "Quiet NaN" : "Signaling NaN",

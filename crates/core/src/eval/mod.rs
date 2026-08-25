@@ -400,7 +400,7 @@ impl Evaluator {
             read_as: reading.2,
             name: self.label(doc, path, &r)?,
             type_name: r.ty.display_name(),
-            unit: self.unit_of(&r.ty).map(str::to_string),
+            unit: self.unit_of(path, &r.ty).map(str::to_string),
             offset_bits: r.offset,
             size_bits: size,
             value,
@@ -503,7 +503,21 @@ impl Evaluator {
     /// holds items, which is what saying nothing here means. A list of a named
     /// type is looked up, since that is how a format that reaches its own types
     /// by name writes one.
-    fn unit_of<'a>(&'a self, ty: &'a Ty) -> Option<&'a str> {
+    fn unit_of<'a>(&'a self, path: &[usize], ty: &'a Ty) -> Option<&'a str> {
+        // JSON counts what it holds: an object holds entries, an array holds
+        // values. The whole text holds whichever of the two it turned out to
+        // be, which is known once it has been read.
+        if let Ty::Json(shape) = ty {
+            let shape = match shape {
+                crate::json::Shape::Doc => self.json.get(path)?.kind.shape(),
+                other => *other,
+            };
+            return match shape {
+                crate::json::Shape::Object => Some("entry"),
+                crate::json::Shape::Array => Some("value"),
+                _ => None,
+            };
+        }
         let mut elem = match ty {
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => elem.base(),
             _ => return None,
@@ -635,7 +649,10 @@ impl Evaluator {
         };
         let adj = self.eval_expr(doc, list, &adjust)?;
         let bits = base as i128 + (at + adj) * 8;
-        if bits < lr.offset as i128 || bits >= lr.limit as i128 {
+        // The end of the list is a place a child may start: an entry holding
+        // nothing sits there, and a safetensors file writes one. A child that
+        // starts there and reads anything fails when it reads.
+        if bits < lr.offset as i128 || bits > lr.limit as i128 {
             return fail(format!("offset {at} points outside {}", lr.name.text()));
         }
         Ok(Some(bits as u64))

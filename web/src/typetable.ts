@@ -4,7 +4,7 @@
 // the text as that field's type and writes only that field's bits.
 
 import { formatBytes, formatOffset } from "./doc.js";
-import { countText } from "./strings.js";
+import { childWord, countText } from "./strings.js";
 import type { Doc, TemplateNode } from "./doc.js";
 
 const PAGE = 200;
@@ -409,13 +409,8 @@ export class TypeTable {
       value.title = "Click to edit";
       value.append(...label(n));
     } else {
-      // A structure has named fields; a list has whatever the format calls
-      // its children, and items when it has no word for them. A list reads as
-      // `X[]`, or as `offsets → X` when its children sit where an earlier
-      // array of offsets says.
       if (n.composite) {
-        const list = n.type.endsWith("[]") || n.type.startsWith("offsets ");
-        value.textContent = countText(n.child_count, list ? (n.unit ?? "item") : "field");
+        value.textContent = countText(n.child_count, childWord(n));
       }
       else value.append(...label(n));
     }
@@ -482,8 +477,7 @@ export class TypeTable {
       const td = document.createElement("td");
       td.colSpan = 5;
       td.style.paddingLeft = `${(depth + 1) * 16 + 8}px`;
-      const list = n.type.endsWith("[]") || n.type.startsWith("offsets ");
-      td.textContent = `${countText(skipped, list ? (n.unit ?? "item") : "field")} hidden`;
+      td.textContent = `${countText(skipped, childWord(n))} hidden`;
       tr.append(td);
       frag.append(tr);
     }
