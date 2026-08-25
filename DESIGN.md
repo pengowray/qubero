@@ -892,7 +892,9 @@ stream keeps the same table compressed inside an object, which is a template
 that needs the object read and inflated first, and the `/Prev` chain that an
 incrementally saved file leaves behind is a walk backwards through every
 revision. Neither is here, so a file written that way reads its header and its
-end marker and says the table did not.
+end marker and says the table did not. Nor is a table written as several runs
+of object numbers: the entries of the first run are read, and the heading of
+the second is whatever the trailer after them turns out to hold.
 
 ## Roadmap (not yet built)
 

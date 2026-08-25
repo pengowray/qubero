@@ -36,7 +36,10 @@
 //! What is not here. A cross-reference *stream*, which is how PDF 1.5 and
 //! later may write the same table compressed inside an object, is not read;
 //! nor is the `/Prev` chain that an incrementally saved file leaves behind, so
-//! only the most recent table is followed. A free entry other than the first
+//! only the most recent table is followed. A table written as several runs of
+//! object numbers rather than one is read as far as the first run, since what
+//! comes after the entries is the trailer and nothing here looks for a second
+//! heading. A free entry other than the first
 //! holds the number of the next free object rather than an offset, and nothing
 //! here tells it apart from a real one, so an object placed by one is
 //! whatever happens to be at that offset. The first free entry is the head of
@@ -66,8 +69,15 @@ pub fn pdf() -> Template {
         T::structure(
             "PDF",
             vec![
-                // `%PDF-1.7`, and the newline that ends it.
-                ("version", T::text(StrLen::Terminated { end: b'\n', or_end: true }, Encoding::Ascii)),
+                // `%PDF-1.7`, and the one byte that ends the line. Which byte
+                // that is cannot be assumed: a file written on a Mac in 1996
+                // ends every line with a carriage return and may hold no line
+                // feed at all, and a header that ran to the first one would
+                // swallow the objects the table is about to place.
+                (
+                    "version",
+                    T::text(StrLen::Scan { skip: Vec::new(), ends: b"\r\n".to_vec(), comment: None }, Encoding::Ascii),
+                ),
                 // Where the last `startxref` is written, counted from the
                 // start of the file: the search runs from this field, and the
                 // header is what is in front of it.
@@ -83,14 +93,14 @@ pub fn pdf() -> Template {
                     T::at(E::field("xref_at").add(E::lit(4)).add(E::size_of("first_object")), number()),
                 ),
                 ("entries", T::at(table_head(), T::array(entry(), E::field("entry_count")))),
-                // `trailer` and the dictionary after it, which is everything
-                // between the end of the table and the word at the end.
+                // `trailer` and the dictionary after it, which runs from the
+                // end of the table to the next `startxref`. Not to the last
+                // one: a file that has been saved twice may keep its newest
+                // table in front of everything the older one wrote, and the
+                // trailer belongs to the table above it either way.
                 (
                     "trailer",
-                    T::at(
-                        after_table(),
-                        T::text(StrLen::Fixed(E::field("startxref_at").sub(after_table())), Encoding::Ascii),
-                    ),
+                    T::at(after_table(), T::text(StrLen::Fixed(E::to_bytes(b"startxref")), Encoding::Ascii)),
                 ),
                 ("startxref", T::at(E::field("startxref_at"), T::magic(b"startxref"))),
                 // Whatever the file ends with: `%%EOF` and the line ending, or
@@ -349,6 +359,11 @@ xref").expect("a table") + 1
 
     /// A file that has been saved twice holds two tables, and the one that
     /// counts is the one written last.
+    #[test]
+    fn a_pdf_is_known_by_the_word_it_starts_with() {
+        assert_eq!(crate::formats::sniff(b"%PDF-1.7\n1 0 obj\n"), Some("pdf"));
+    }
+
     #[test]
     fn the_last_table_is_the_one_followed() {
         let mut bytes = pdf_bytes("\n");
