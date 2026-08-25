@@ -3,6 +3,7 @@
 //! and which bits of a float are which.
 
 use super::*;
+use crate::formats::ggml_quant::{self, Quant, Weight};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -28,6 +29,25 @@ pub enum Explain {
     /// A float, by the name of its layout rather than only its width: two
     /// sixteen-bit floats are in use and they divide their bits differently.
     Float { format: &'static str, width: u32, bits: u64 },
+    /// A block of packed weights, taken apart: the block's shared scale, what
+    /// it pairs with the scale, and every weight the block stands for, in the
+    /// order the tensor reads them. Shown for the cursor anywhere in the block,
+    /// because the packing crosses the fields: a `q4_k` weight is four bits of
+    /// `qs` scaled by six bits of `scales` and two half floats at the front.
+    Quant {
+        /// The block layout, as ggml's own struct is named: `Q4_K`.
+        kind: &'static str,
+        /// How many bits one weight is worth.
+        bits: u32,
+        /// The block's shared scale, and what it pairs with, named as the file
+        /// names it: the `m` a `q4_1` adds, the `dmin` a K type takes away.
+        d: f64,
+        second: Option<(&'static str, f64)>,
+        weights: Vec<Weight>,
+        /// Which weight the cursor is inside, where it is on one of them
+        /// rather than on the block's scales.
+        at: Option<usize>,
+    },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
@@ -41,7 +61,9 @@ pub struct FlagBit {
 
 impl Evaluator {
     /// What the type at `path` permits. See [`Explain`].
-    pub fn explain<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Explain> {
+    /// `at_bits` is where the cursor is, which only a packed block uses: it
+    /// says which of the block's weights the reader is standing on.
+    pub fn explain<S: Source>(&mut self, doc: &Document<S>, path: &[usize], at_bits: Option<u64>) -> R<Explain> {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
         let r = self.memo.get(path).expect("resolved").clone();
@@ -90,11 +112,43 @@ impl Evaluator {
                 let raw = self.read(doc, &r, r.offset, u64::from(width))?;
                 Explain::Float { format, width, bits: crate::decode::read_uint(&raw, width, *e) as u64 }
             }
-            _ => Explain::Plain,
+            _ => return self.explain_packed(doc, path, at_bits),
         })
+    }
+
+    /// A packed block, from the cursor being on it or on one of its fields.
+    ///
+    /// Both are asked because the fields are where a reader lands: the cursor
+    /// is almost always inside `qs`, and a panel that only answered for the
+    /// block itself would be blank exactly when it is wanted.
+    fn explain_packed<S: Source>(&mut self, doc: &Document<S>, path: &[usize], at_bits: Option<u64>) -> R<Explain> {
+        for len in [path.len(), path.len().wrapping_sub(1)] {
+            if len > path.len() {
+                break;
+            }
+            let at = &path[..len];
+            self.resolve(doc, at)?;
+            let r = self.memo.get(at).expect("resolved").clone();
+            let Ty::Struct(def) = &r.ty else { continue };
+            let Some(packing) = def.packed.clone() else { continue };
+            let Some(kind) = ggml_quant::by_name(&packing) else { continue };
+            let bytes = self.read(doc, &r, r.offset, kind.block_bytes() as u64 * 8)?;
+            let Some(block) = ggml_quant::unpack(kind, &bytes) else { continue };
+            return Ok(quant_of(kind, block, r.offset, at_bits));
+        }
+        Ok(Explain::Plain)
     }
 
     fn value_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Value> {
         Ok(self.node(doc, path)?.value)
     }
+}
+
+/// One unpacked block as an answer, with the cursor matched to the weight whose
+/// bits it is inside.
+fn quant_of(kind: Quant, block: ggml_quant::Block, block_bits: u64, at_bits: Option<u64>) -> Explain {
+    let at = at_bits.and_then(|c| c.checked_sub(block_bits)).and_then(|rel| {
+        block.weights.iter().position(|w| u64::from(w.bit) <= rel && rel < u64::from(w.bit + w.width))
+    });
+    Explain::Quant { kind: kind.name(), bits: kind.bits(), d: block.d, second: block.second, weights: block.weights, at }
 }

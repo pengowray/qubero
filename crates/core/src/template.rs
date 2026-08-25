@@ -370,7 +370,7 @@ pub enum Ty {
     Named(Arc<str>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
@@ -396,6 +396,12 @@ pub struct StructDef {
     /// views honour it: `locate` still walks inside, so the cursor keeps its
     /// bit precision and the field tree still opens the structure up.
     pub inline: bool,
+    /// Names a packing whose contents only the format can take apart, where
+    /// the fields say where the packed bytes are but not what they hold. A
+    /// ggml `q4_k` block is 256 weights in 144 bytes, packed in an order no
+    /// template can describe; this is the hook the format's own unpacker is
+    /// found by.
+    pub packed: Option<Arc<str>>,
 }
 
 impl Ty {
@@ -472,6 +478,7 @@ impl Ty {
             contents: None,
             unit: None,
             inline: false,
+            packed: None,
         }))
     }
     /// A structure that one of its own fields names, and one field that is
@@ -480,14 +487,9 @@ impl Ty {
     pub fn structure_named(name: &str, named_by: &str, contents: &str, fields: Vec<(&str, Ty)>) -> Ty {
         let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
         match Ty::structure(name, fields) {
-            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
-                name: s.name.clone(),
-                fields: s.fields.clone(),
-                named_by: some(named_by),
-                contents: some(contents),
-                unit: s.unit.clone(),
-                inline: s.inline,
-            })),
+            Ty::Struct(s) => {
+                Ty::Struct(Arc::new(StructDef { named_by: some(named_by), contents: some(contents), ..(*s).clone() }))
+            }
             other => other,
         }
     }
@@ -495,14 +497,17 @@ impl Ty {
     /// `block`, so the row reads `97,280 blocks`. See [`StructDef::unit`].
     pub fn counted_as(self, unit: &str) -> Ty {
         match self {
-            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
-                name: s.name.clone(),
-                fields: s.fields.clone(),
-                named_by: s.named_by.clone(),
-                contents: s.contents.clone(),
-                unit: Some(unit.into()),
-                inline: s.inline,
-            })),
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { unit: Some(unit.into()), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// A structure whose contents are packed in a way only the format can take
+    /// apart, named so that the format's unpacker can be found again. See
+    /// [`StructDef::packed`].
+    pub fn packed_as(self, packing: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { packed: Some(packing.into()), ..(*s).clone() })),
             other => other,
         }
     }
@@ -511,14 +516,7 @@ impl Ty {
     /// field. See [`StructDef::inline`].
     pub fn inline_structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
         match Ty::structure(name, fields) {
-            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
-                name: s.name.clone(),
-                fields: s.fields.clone(),
-                named_by: s.named_by.clone(),
-                contents: s.contents.clone(),
-                unit: s.unit.clone(),
-                inline: true,
-            })),
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { inline: true, ..(*s).clone() })),
             other => other,
         }
     }

@@ -8,11 +8,13 @@
 //! The blocks are all one size, so the run is counted by division and a block
 //! in the middle of a tensor of a hundred thousand is one step away.
 //!
-//! The packed weights are left as bytes. Unpacking them would mean shifting
+//! The packed weights are left as bytes here. Unpacking them means shifting
 //! four-bit fields out of a byte and scaling each by a six-bit scale that is
-//! itself packed six to a byte, and no template says that; what is here says
+//! itself packed six to a byte, and no template says that: what is here says
 //! where every block and every scale is, which is what a file this size is
-//! usually opened to check.
+//! usually opened to check. The numbers themselves come from
+//! [`ggml_quant`](super::ggml_quant), which a block names by carrying the name
+//! of its packing.
 //!
 //! Sizes and layouts are those of ggml's own block structs. The IQ types and
 //! the ternary ones pack their weights in ways nothing outside ggml reads, so
@@ -74,8 +76,16 @@ pub fn weights(ty: E, weights_in: &dyn Fn() -> E) -> T {
     // A run of plain numbers is one per weight; a run of blocks is one per
     // however many weights that type packs together.
     let run = |ty: T| T::array(ty, count(1));
+    // A block whose weights this crate can take apart carries the name of its
+    // packing, so the value panel can show the numbers rather than the bytes.
+    // See [`super::ggml_quant`].
     let blocks = |per_block: i128, name: &str, fields: Vec<(&str, T)>| {
-        T::array(T::inline_structure(name, fields).counted_as("block"), count(per_block))
+        let one = T::inline_structure(name, fields).counted_as("block");
+        let one = match super::ggml_quant::by_name(name) {
+            Some(_) => one.packed_as(name),
+            None => one,
+        };
+        T::array(one, count(per_block))
     };
     // A block nothing outside ggml unpacks: the right size, and no claim
     // about what is inside it.
@@ -90,7 +100,7 @@ pub fn weights(ty: E, weights_in: &dyn Fn() -> E) -> T {
             (6, blocks(32, "Q5_0", vec![("d", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
             (7, blocks(32, "Q5_1", vec![("d", f16()), ("m", f16()), ("qh", T::u32(Little)), ("qs", raw(16))])),
             (8, blocks(32, "Q8_0", vec![("d", f16()), ("qs", T::array(T::Int { bits: 8, endian: Little }, E::lit(32)))])),
-            (9, blocks(32, "Q8_1", vec![("d", f16()), ("s", f16()), ("qs", raw(36))])),
+            (9, blocks(32, "Q8_1", vec![("d", f16()), ("s", f16()), ("qs", raw(32))])),
             (10, blocks(256, "Q2_K", vec![("scales", raw(16)), ("qs", raw(64)), ("d", f16()), ("dmin", f16())])),
             (11, blocks(256, "Q3_K", vec![("hmask", raw(32)), ("qs", raw(64)), ("scales", raw(12)), ("d", f16())])),
             (12, blocks(256, "Q4_K", vec![("d", f16()), ("dmin", f16()), ("scales", raw(12)), ("qs", raw(128))])),

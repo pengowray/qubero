@@ -291,7 +291,7 @@ mod tests {
         use crate::eval::Explain;
         let doc = Document::new(MemSource(sample()));
         let mut e = Evaluator::new(pe());
-        let Explain::Flags { name, raw, bits } = e.explain(&doc, &[1, 7]).expect("explain") else {
+        let Explain::Flags { name, raw, bits } = e.explain(&doc, &[1, 7], None).expect("explain") else {
             panic!("expected flags")
         };
         assert_eq!(name, "Characteristics");
@@ -308,7 +308,7 @@ mod tests {
         use crate::eval::Explain;
         let doc = Document::new(MemSource(sample()));
         let mut e = Evaluator::new(pe());
-        let Explain::Magic { expected, actual } = e.explain(&doc, &[1, 0]).expect("explain") else {
+        let Explain::Magic { expected, actual } = e.explain(&doc, &[1, 0], None).expect("explain") else {
             panic!("expected magic")
         };
         assert_eq!(expected, b"PE\0\0");
@@ -320,7 +320,7 @@ mod tests {
         use crate::eval::Explain;
         let doc = Document::new(MemSource(sample()));
         let mut e = Evaluator::new(pe());
-        let Explain::Enum { name, cases, current, .. } = e.explain(&doc, &[1, 1]).expect("explain") else {
+        let Explain::Enum { name, cases, current, .. } = e.explain(&doc, &[1, 1], None).expect("explain") else {
             panic!("expected enum")
         };
         assert_eq!(name, "Machine");

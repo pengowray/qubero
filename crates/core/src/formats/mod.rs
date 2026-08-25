@@ -3,6 +3,7 @@
 
 mod dos;
 mod ggml;
+pub mod ggml_quant;
 mod gguf;
 mod id3;
 mod midi;

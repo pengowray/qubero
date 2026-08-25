@@ -63,7 +63,7 @@ struct TextDto {
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -83,6 +83,27 @@ struct ExplainDto {
     format: String,
     width: f64,
     pattern: String,
+    /// Quant: the block's shared scale, and what it pairs with the scale, named
+    /// as the file names it. Empty name where the layout has no second number.
+    scale: f64,
+    second_name: String,
+    second: f64,
+    /// Quant: every weight the block stands for, in the order the tensor reads
+    /// them, and which one the cursor is inside (-1 for none).
+    weights: Vec<WeightDto>,
+    at: f64,
+}
+
+/// One weight of a packed block.
+#[derive(Serialize)]
+struct WeightDto {
+    /// The stored integer, after whatever bias the layout takes off it.
+    q: f64,
+    /// That integer through the block's scale: the number the model reads.
+    value: f64,
+    /// Where its bits are, counted from the start of the block.
+    bit: f64,
+    width: f64,
 }
 
 /// One field another field's shape came from.
@@ -138,6 +159,11 @@ fn explain_dto(e: Explain) -> ExplainDto {
         format: String::new(),
         width: 0.0,
         pattern: String::new(),
+        scale: 0.0,
+        second_name: String::new(),
+        second: 0.0,
+        weights: Vec::new(),
+        at: -1.0,
     };
     match e {
         Explain::Plain => {}
@@ -152,6 +178,26 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.hex = hex;
             dto.current = current as f64;
             dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
+        }
+        Explain::Quant { kind, bits, d, second, weights, at } => {
+            dto.kind = "quant";
+            dto.name = kind.to_string();
+            dto.width = f64::from(bits);
+            dto.scale = d;
+            if let Some((name, v)) = second {
+                dto.second_name = name.to_string();
+                dto.second = v;
+            }
+            dto.at = at.map_or(-1.0, |i| i as f64);
+            dto.weights = weights
+                .into_iter()
+                .map(|w| WeightDto {
+                    q: f64::from(w.q),
+                    value: w.value,
+                    bit: f64::from(w.bit),
+                    width: f64::from(w.width),
+                })
+                .collect();
         }
         Explain::Float { format, width, bits } => {
             dto.kind = "float";
@@ -477,13 +523,17 @@ impl Editor {
     /// What the type at `path` permits, beyond what its value shows: the other
     /// values an enum names, the bytes a magic field wanted, or what each bit
     /// of a flags field means. JSON, in the same reply shape as the rest.
-    pub fn type_info(&mut self, path: &[u32]) -> String {
+    ///
+    /// `at_bits` is where the cursor is. Only a block of packed weights uses
+    /// it, to say which weight the reader is standing on.
+    pub fn type_info(&mut self, path: &[u32], at_bits: f64) -> String {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        let at = (at_bits >= 0.0).then(|| at_bits as u64);
         match &mut self.eval {
             None => reply::<ExplainDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
-                reply(e.explain(&self.doc, &p).map(explain_dto))
+                reply(e.explain(&self.doc, &p, at).map(explain_dto))
             }
         }
     }
