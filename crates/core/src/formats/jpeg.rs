@@ -21,6 +21,12 @@
 //! rows than as one. What they are is written in the marker table, which is
 //! where a reader looks for it.
 //!
+//! The three bytes that pick this template are the start of image and the
+//! marker after it, which is why a JPEG-LS file lands here too: its frame
+//! marker is one this does not name, so the segment holding it reads as a
+//! length and its bytes and everything around it reads as usual. That is more
+//! than the signature rules would have said about it, and it is not wrong.
+//!
 //! Two things are named and not laid out. A thumbnail is a whole JPEG inside
 //! an `APP0`, and reading it would mean this template referring to itself
 //! across a field nothing bounds. And an EXIF block in an `APP1` is a TIFF
@@ -500,5 +506,35 @@ mod tests {
         // The bits run to the end of the file, since nothing ends them.
         assert_eq!(ev.node(&d, &[1, 4, 1, 2]).unwrap().value, Value::Bytes { len: 4, preview: vec![0xaa, 0xff, 0x00, 0xbb] });
         assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 5);
+    }
+
+    #[test]
+    fn a_progressive_image_has_a_scan_for_each_band_and_each_ends_itself() {
+        // Two scans, the second carrying a different band of coefficients.
+        // Nothing in the template counts them: each stops at the marker that
+        // starts the next, so a second one is a third and a tenth as well.
+        let mut v = vec![0xff, 0xd8];
+        v.extend_from_slice(&seg(0xffc2, &[8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        v.extend_from_slice(&seg(0xffda, &[1, 1, 0x00, 0, 0, 0]));
+        v.extend_from_slice(&[1, 2, 3]);
+        v.extend_from_slice(&seg(0xffda, &[1, 1, 0x00, 1, 63, 0]));
+        v.extend_from_slice(&[4, 5, 0xff, 0x00, 6]);
+        v.extend_from_slice(&[0xff, 0xd9]);
+
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(jpeg());
+        assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 4);
+        assert_eq!(
+            ev.node(&d, &[1, 0, 0]).unwrap().value,
+            Value::Enum { raw: 0xffc2, name: Some("sof2, progressive dct".into()), hex: true }
+        );
+        // The first scan carries the direct current alone, the second the rest.
+        assert_eq!(ev.node(&d, &[1, 1, 1, 1, 2]).unwrap().value, Value::UInt(0));
+        assert_eq!(ev.node(&d, &[1, 2, 1, 1, 3]).unwrap().value, Value::UInt(63));
+        assert_eq!(ev.node(&d, &[1, 1, 1, 2]).unwrap().value, Value::Bytes { len: 3, preview: vec![1, 2, 3] });
+        assert_eq!(
+            ev.node(&d, &[1, 2, 1, 2]).unwrap().value,
+            Value::Bytes { len: 5, preview: vec![4, 5, 0xff, 0x00, 6] }
+        );
     }
 }
