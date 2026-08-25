@@ -4,10 +4,12 @@
 mod aiff;
 mod au;
 mod bmp;
+mod cbor;
 mod dos;
 mod ggml;
 pub mod ggml_quant;
 mod gguf;
+mod git;
 mod gif;
 mod gzip;
 mod id3;
@@ -41,8 +43,10 @@ mod wasm_opcodes;
 pub use aiff::aiff;
 pub use au::au;
 pub use bmp::bmp;
+pub use cbor::cbor;
 pub use dos::dos;
 pub use gguf::gguf;
+pub use git::{git_index, git_pack_index};
 pub use gif::gif;
 pub use gzip::gzip;
 pub use id3::id3;
@@ -79,7 +83,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -115,6 +119,9 @@ pub fn builtin(name: &str) -> Option<Template> {
         "mca" => Some(mca()),
         "tap" => Some(tap()),
         "lha" => Some(lha()),
+        "cbor" => Some(cbor()),
+        "gitindex" => Some(git_index()),
+        "gitpackidx" => Some(git_pack_index()),
         _ => None,
     }
 }
@@ -143,9 +150,17 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("msdos")
     } else if head.starts_with(b"\x1f\x8b") {
         Some("gzip")
+    } else if head.starts_with(b"DIRC") {
+        Some("gitindex")
+    } else if head.starts_with(b"\xfftOc") {
+        Some("gitpackidx")
     } else if head.starts_with(b"IWAD") || head.starts_with(b"PWAD") {
         Some("wad")
     } else if head.starts_with(b"PACK") {
+        // Also the first four bytes of a git packfile, which is a different
+        // thing with no template here. A pack writes 2 as a big-endian
+        // version next; a Quake archive writes an offset that would have to
+        // be under twelve for the two to be confused.
         Some("pak")
     } else if head.starts_with(b"\x34\x12\xaa\x55") {
         Some("vpk")

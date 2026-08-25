@@ -12,7 +12,7 @@
 //! every entry either way is a few preload bytes, which is what let the engine
 //! start reading a file before opening the archive holding the rest of it.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
 pub fn vpk() -> Template {
     Template::new(
