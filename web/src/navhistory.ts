@@ -14,13 +14,14 @@ type Position = {
   readonly docId: number;
   /** Absolute bit offset of the cursor. */
   readonly bit: number;
-  /** How many bits were marked on arrival, where the jump was to a run of them
-   *  rather than to a place. */
-  readonly len?: number;
+  /** What was marked on arrival, where the jump was to a run of bits rather
+   *  than to a place. More than one run for a value the format does not keep in
+   *  one piece. */
+  readonly runs?: readonly { readonly startBit: number; readonly endBit: number }[];
 };
 
 let docId = 0;
-let go: ((bit: number, len?: number) => void) | null = null;
+let go: ((bit: number, runs?: Position["runs"]) => void) | null = null;
 
 function isPosition(s: unknown): s is Position {
   return typeof s === "object" && s !== null && "docId" in s && "bit" in s;
@@ -39,7 +40,7 @@ export function startFile(bit: number): void {
 
 /** Where the cursor goes when the reader goes back. Set once per file opened,
  *  so that only the views on screen are ever moved. */
-export function onGo(cb: (bit: number, len?: number) => void): void {
+export function onGo(cb: (bit: number, runs?: Position["runs"]) => void): void {
   go = cb;
 }
 
@@ -48,7 +49,7 @@ export function onGo(cb: (bit: number, len?: number) => void): void {
  * left is written into the current entry rather than assumed, because the
  * cursor has usually moved since the last jump.
  */
-export function recordJump(from: number, to: number, len?: number): void {
+export function recordJump(from: number, to: number, runs?: Position["runs"]): void {
   if (from === to) return;
   // Rewriting the entry being left would drop what was marked when the reader
   // arrived on it, so it is only rewritten when the cursor has moved since.
@@ -56,11 +57,11 @@ export function recordJump(from: number, to: number, len?: number): void {
   if (!isPosition(cur) || cur.docId !== docId || cur.bit !== from) {
     history.replaceState({ docId, bit: from } satisfies Position, "");
   }
-  const at: Position = len === undefined ? { docId, bit: to } : { docId, bit: to, len };
+  const at: Position = runs === undefined ? { docId, bit: to } : { docId, bit: to, runs };
   history.pushState(at, "");
 }
 
 window.addEventListener("popstate", (e) => {
   if (!isPosition(e.state) || e.state.docId !== docId) return;
-  go?.(e.state.bit, e.state.len);
+  go?.(e.state.bit, e.state.runs);
 });

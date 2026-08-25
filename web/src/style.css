@@ -439,14 +439,8 @@ input.invalid {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 /* Part of a byte: a bar under exactly the bits the field covers. */
+/* The bar itself is built in `markBits`, which needs a stop per run. */
 .hv-hlbits {
-  background-image: linear-gradient(
-    to right,
-    transparent var(--from),
-    var(--accent) var(--from),
-    var(--accent) var(--to),
-    transparent var(--to)
-  );
   background-size: 100% 2px;
   background-position: bottom left;
   background-repeat: no-repeat;
@@ -1464,4 +1458,9 @@ input.invalid {
 .insp-qrecipe-named {
   color: var(--muted);
   margin-top: 4px;
+}
+.insp-formula-field {
+  display: inline-block;
+  min-width: 3em;
+  color: var(--fg);
 }

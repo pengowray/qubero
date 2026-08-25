@@ -114,6 +114,25 @@ pub fn by_name(name: &str) -> Option<Quant> {
     })
 }
 
+/// One run of bits that makes up part of a packed weight.
+///
+/// A five-bit weight is not five bits in a row. Four of them are a nibble of
+/// `qs` and the fifth is one bit of `qh`, a long way off, and a reader looking
+/// at the nibble has no way to see where the fifth came from. This says where
+/// each part is and what it contributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Part {
+    /// The block's own field these bits are in, as the file names it: `qs`,
+    /// `qh`, `ql`, `hmask`.
+    pub field: &'static str,
+    /// Where they are, counted in bits from the start of the block.
+    pub bit: u32,
+    pub width: u32,
+    /// Where they sit in the packed value: 0 for the low part, 4 for the fifth
+    /// bit of a `q5_1`.
+    pub shift: u32,
+}
+
 /// One weight, as the file holds it and as the model reads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Weight {
@@ -124,13 +143,11 @@ pub struct Weight {
     /// The number the model reads: the stored integer through this block's
     /// scale and minimum.
     pub value: f64,
-    /// Where the stored integer's main bits are, counted in bits from the start
-    /// of the block, so that the cursor can be matched to a weight. A five- or
-    /// six-bit type keeps its top bits in a separate byte; this is the run that
-    /// holds the rest, which is where a reader lands.
-    pub bit: u32,
-    /// How wide that run is.
-    pub width: u32,
+    /// The run holding the low bits, which is the one a reader lands on.
+    pub bits: Part,
+    /// The rest of the packed value, for a type that keeps its top bits
+    /// somewhere else in the block.
+    pub high: Option<Part>,
 }
 
 /// A run of weights inside a block that share a scale of their own. Only the K
@@ -177,6 +194,12 @@ pub struct Block {
     /// from `i * group_weights`.
     pub groups: Vec<Group>,
     pub group_weights: u32,
+    /// Taken off the packed value to get the stored one: 8 for a `q4_0`, 32 for
+    /// a `q6_k`, and 0 for a type that reads its weights as they are.
+    pub bias: i32,
+    /// The packed value is read signed, which is what the eight-bit types do
+    /// instead of biasing.
+    pub signed: bool,
     pub weights: Vec<Weight>,
 }
 
@@ -193,17 +216,24 @@ fn f32le(b: &[u8], i: usize) -> f64 {
 /// The bit run of the low nibble of block byte `i`, counting bits from the top
 /// of each byte the way the rest of the editor does.
 fn lo_nibble(i: usize) -> (u32, u32) {
-    (i as u32 * 8 + 4, 4)
+    low_bits(i, 0, 4)
 }
 
 fn hi_nibble(i: usize) -> (u32, u32) {
-    (i as u32 * 8, 4)
+    low_bits(i, 4, 4)
 }
 
-/// The two-bit field at `shift` of block byte `i`. ggml counts these shifts
-/// from the bottom of the byte; the editor counts bits from the top.
-fn two_bits(i: usize, shift: u32) -> (u32, u32) {
-    (i as u32 * 8 + (6 - shift), 2)
+/// The `width` bits of block byte `i` whose lowest is `lsb` places up from the
+/// bottom of the byte. ggml counts bits from the bottom; the editor counts them
+/// from the top, so this is where the two meet.
+fn low_bits(i: usize, lsb: u32, width: u32) -> (u32, u32) {
+    (i as u32 * 8 + (8 - lsb - width), width)
+}
+
+/// Bit `k` of the little-endian `u32` at block byte `base`, which is how the
+/// five-bit types keep their fifth bits.
+fn u32_bit(base: usize, k: u32) -> (u32, u32) {
+    low_bits(base + (k / 8) as usize, k % 8, 1)
 }
 
 /// One block's weights, or `None` if `b` is shorter than the block.
@@ -219,74 +249,76 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
         Quant::Q4_0 => {
             let d = f16(b, 0);
             let qs = &b[2..18];
-            let mut w = vec![Weight { q: 0, value: 0.0, bit: 0, width: 4 }; 32];
+            let mut w = vec![blank(); 32];
             for j in 0..16 {
                 let (q0, q1) = ((qs[j] & 0x0F) as i32 - 8, (qs[j] >> 4) as i32 - 8);
-                w[j] = weight(q0, q0 as f64 * d, lo_nibble(2 + j));
-                w[j + 16] = weight(q1, q1 as f64 * d, hi_nibble(2 + j));
+                w[j] = weight(q0, q0 as f64 * d, part("qs", lo_nibble(2 + j), 0));
+                w[j + 16] = weight(q1, q1 as f64 * d, part("qs", hi_nibble(2 + j), 0));
             }
-            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, bias: 8, signed: false, weights: w }
         }
         Quant::Q4_1 => {
             let (d, m) = (f16(b, 0), f16(b, 2));
             let qs = &b[4..20];
-            let mut w = vec![Weight { q: 0, value: 0.0, bit: 0, width: 4 }; 32];
+            let mut w = vec![blank(); 32];
             for j in 0..16 {
                 let (q0, q1) = ((qs[j] & 0x0F) as i32, (qs[j] >> 4) as i32);
-                w[j] = weight(q0, q0 as f64 * d + m, lo_nibble(4 + j));
-                w[j + 16] = weight(q1, q1 as f64 * d + m, hi_nibble(4 + j));
+                w[j] = weight(q0, q0 as f64 * d + m, part("qs", lo_nibble(4 + j), 0));
+                w[j + 16] = weight(q1, q1 as f64 * d + m, part("qs", hi_nibble(4 + j), 0));
             }
-            Block { kind, d, second: Some(Offset { name: "m", value: m, subtract: false, per_group: false }), groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: Some(Offset { name: "m", value: m, subtract: false, per_group: false }), groups: Vec::new(), group_weights: 0, bias: 0, signed: false, weights: w }
         }
         Quant::Q5_0 => {
             let d = f16(b, 0);
             let qh = u32::from_le_bytes([b[2], b[3], b[4], b[5]]);
             let qs = &b[6..22];
-            let mut w = vec![Weight { q: 0, value: 0.0, bit: 0, width: 4 }; 32];
+            let mut w = vec![blank(); 32];
             for j in 0..16 {
                 let h0 = ((qh >> j) << 4) as u8 & 0x10;
                 let h1 = (qh >> (j + 12)) as u8 & 0x10;
                 let q0 = ((qs[j] & 0x0F) | h0) as i32 - 16;
                 let q1 = ((qs[j] >> 4) | h1) as i32 - 16;
-                w[j] = weight(q0, q0 as f64 * d, lo_nibble(6 + j));
-                w[j + 16] = weight(q1, q1 as f64 * d, hi_nibble(6 + j));
+                let k = j as u32;
+                w[j] = split(q0, q0 as f64 * d, part("qs", lo_nibble(6 + j), 0), part("qh", u32_bit(2, k), 4));
+                w[j + 16] = split(q1, q1 as f64 * d, part("qs", hi_nibble(6 + j), 0), part("qh", u32_bit(2, k + 16), 4));
             }
-            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, bias: 16, signed: false, weights: w }
         }
         Quant::Q5_1 => {
             let (d, m) = (f16(b, 0), f16(b, 2));
             let qh = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
             let qs = &b[8..24];
-            let mut w = vec![Weight { q: 0, value: 0.0, bit: 0, width: 4 }; 32];
+            let mut w = vec![blank(); 32];
             for j in 0..16 {
                 let h0 = ((qh >> j) << 4) as u8 & 0x10;
                 let h1 = (qh >> (j + 12)) as u8 & 0x10;
                 let q0 = ((qs[j] & 0x0F) | h0) as i32;
                 let q1 = ((qs[j] >> 4) | h1) as i32;
-                w[j] = weight(q0, q0 as f64 * d + m, lo_nibble(8 + j));
-                w[j + 16] = weight(q1, q1 as f64 * d + m, hi_nibble(8 + j));
+                let k = j as u32;
+                w[j] = split(q0, q0 as f64 * d + m, part("qs", lo_nibble(8 + j), 0), part("qh", u32_bit(4, k), 4));
+                w[j + 16] = split(q1, q1 as f64 * d + m, part("qs", hi_nibble(8 + j), 0), part("qh", u32_bit(4, k + 16), 4));
             }
-            Block { kind, d, second: Some(Offset { name: "m", value: m, subtract: false, per_group: false }), groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: Some(Offset { name: "m", value: m, subtract: false, per_group: false }), groups: Vec::new(), group_weights: 0, bias: 0, signed: false, weights: w }
         }
         Quant::Q8_0 => {
             let d = f16(b, 0);
             let w = (0..32)
                 .map(|j| {
                     let q = b[2 + j] as i8 as i32;
-                    weight(q, q as f64 * d, ((2 + j) as u32 * 8, 8))
+                    weight(q, q as f64 * d, part("qs", ((2 + j) as u32 * 8, 8), 0))
                 })
                 .collect();
-            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, bias: 0, signed: true, weights: w }
         }
         Quant::Q8_K => {
             let d = f32le(b, 0);
             let w = (0..256)
                 .map(|j| {
                     let q = b[4 + j] as i8 as i32;
-                    weight(q, q as f64 * d, ((4 + j) as u32 * 8, 8))
+                    weight(q, q as f64 * d, part("qs", ((4 + j) as u32 * 8, 8), 0))
                 })
                 .collect();
-            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, bias: 0, signed: true, weights: w }
         }
         Quant::Q2_K => {
             // scales[16], qs[64], d, dmin
@@ -307,7 +339,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                         for l in 0..16usize {
                             let at = half * 16 + l;
                             let qv = ((q[at] >> shift) & 3) as i32;
-                            w.push(weight(qv, dl * qv as f64 - ml, two_bits(qbase + at, shift)));
+                            w.push(weight(qv, dl * qv as f64 - ml, part("qs", low_bits(qbase + at, shift, 2), 0)));
                         }
                     }
                 }
@@ -316,7 +348,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 .iter()
                 .map(|&sc| Group { scale: i32::from(sc & 0xF), min: Some(i32::from(sc >> 4)) })
                 .collect();
-            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups, group_weights: 16, weights: w }
+            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups, group_weights: 16, bias: 0, signed: false, weights: w }
         }
         Quant::Q3_K => {
             // hmask[32], qs[64], scales[12], d
@@ -327,6 +359,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
             let mut w = Vec::with_capacity(256);
             let mut is = 0usize;
             let mut m: u8 = 1;
+            let mut mbit: u32 = 0;
             for n in [0usize, 128] {
                 let q = &qs[n / 4..];
                 let qbase = 32 + n / 4;
@@ -338,15 +371,23 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                         for l in 0..16usize {
                             let at = half * 16 + l;
                             let low = ((q[at] >> shift) & 3) as i32;
+                            // A mask bit set means nothing is taken off, so it
+                            // is the third bit of a value biased by four.
                             let qv = low - if hm[at] & m != 0 { 0 } else { 4 };
-                            w.push(weight(qv, dl * qv as f64, two_bits(qbase + at, shift)));
+                            w.push(split(
+                                qv,
+                                dl * qv as f64,
+                                part("qs", low_bits(qbase + at, shift, 2), 0),
+                                part("hmask", low_bits(at, mbit, 1), 2),
+                            ));
                         }
                     }
                     m <<= 1;
+                    mbit += 1;
                 }
             }
             let groups = scales.iter().map(|&sc| Group { scale: i32::from(sc) - 32, min: None }).collect();
-            Block { kind, d, second: None, groups, group_weights: 16, weights: w }
+            Block { kind, d, second: None, groups, group_weights: 16, bias: 4, signed: false, weights: w }
         }
         Quant::Q4_K => {
             // d, dmin, scales[12], qs[128]
@@ -363,14 +404,14 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 let (d2, off2) = (d * sc2 as f64, dmin * m2 as f64);
                 for l in 0..32usize {
                     let qv = (q[l] & 0xF) as i32;
-                    w.push(weight(qv, d1 * qv as f64 - off1, lo_nibble(qbase + l)));
+                    w.push(weight(qv, d1 * qv as f64 - off1, part("qs", lo_nibble(qbase + l), 0)));
                 }
                 for l in 0..32usize {
                     let qv = (q[l] >> 4) as i32;
-                    w.push(weight(qv, d2 * qv as f64 - off2, hi_nibble(qbase + l)));
+                    w.push(weight(qv, d2 * qv as f64 - off2, part("qs", hi_nibble(qbase + l), 0)));
                 }
             }
-            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups: k4_groups(scales), group_weights: 32, weights: w }
+            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups: k4_groups(scales), group_weights: 32, bias: 0, signed: false, weights: w }
         }
         Quant::Q5_K => {
             // d, dmin, scales[12], qh[32], qs[128]
@@ -389,14 +430,24 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 let (u1, u2) = (1u8 << (2 * g), 2u8 << (2 * g));
                 for l in 0..32usize {
                     let qv = (q[l] & 0xF) as i32 + if qh[l] & u1 != 0 { 16 } else { 0 };
-                    w.push(weight(qv, d1 * qv as f64 - off1, lo_nibble(qbase + l)));
+                    w.push(split(
+                        qv,
+                        d1 * qv as f64 - off1,
+                        part("qs", lo_nibble(qbase + l), 0),
+                        part("qh", low_bits(16 + l, 2 * g as u32, 1), 4),
+                    ));
                 }
                 for l in 0..32usize {
                     let qv = (q[l] >> 4) as i32 + if qh[l] & u2 != 0 { 16 } else { 0 };
-                    w.push(weight(qv, d2 * qv as f64 - off2, hi_nibble(qbase + l)));
+                    w.push(split(
+                        qv,
+                        d2 * qv as f64 - off2,
+                        part("qs", hi_nibble(qbase + l), 0),
+                        part("qh", low_bits(16 + l, 2 * g as u32 + 1, 1), 4),
+                    ));
                 }
             }
-            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups: k4_groups(scales), group_weights: 32, weights: w }
+            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups: k4_groups(scales), group_weights: 32, bias: 0, signed: false, weights: w }
         }
         Quant::Q6_K => {
             // ql[128], qh[64], scales[16] (signed), d
@@ -404,7 +455,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
             let ql = &b[0..128];
             let qh = &b[128..192];
             let sc = &b[192..208];
-            let mut w = vec![Weight { q: 0, value: 0.0, bit: 0, width: 4 }; 256];
+            let mut w = vec![blank(); 256];
             for n in 0..2usize {
                 let (qlb, a, c) = (64 * n, &ql[64 * n..], 128 * n);
                 for l in 0..32usize {
@@ -412,21 +463,23 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     let h = qh[32 * n + l];
                     // Four weights share one byte of `qh`, two high bits each,
                     // and they are 32 apart in the row.
+                    let hbyte = 128 + 32 * n + l;
                     let parts = [
-                        ((a[l] & 0xF) as i32 | ((h & 3) as i32) << 4, is, 0usize, lo_nibble(qlb + l)),
-                        ((a[l + 32] & 0xF) as i32 | (((h >> 2) & 3) as i32) << 4, is + 2, 32, lo_nibble(qlb + l + 32)),
-                        ((a[l] >> 4) as i32 | (((h >> 4) & 3) as i32) << 4, is + 4, 64, hi_nibble(qlb + l)),
-                        ((a[l + 32] >> 4) as i32 | (((h >> 6) & 3) as i32) << 4, is + 6, 96, hi_nibble(qlb + l + 32)),
+                        ((a[l] & 0xF) as i32 | ((h & 3) as i32) << 4, is, 0usize, lo_nibble(qlb + l), 0u32),
+                        ((a[l + 32] & 0xF) as i32 | (((h >> 2) & 3) as i32) << 4, is + 2, 32, lo_nibble(qlb + l + 32), 2),
+                        ((a[l] >> 4) as i32 | (((h >> 4) & 3) as i32) << 4, is + 4, 64, hi_nibble(qlb + l), 4),
+                        ((a[l + 32] >> 4) as i32 | (((h >> 6) & 3) as i32) << 4, is + 6, 96, hi_nibble(qlb + l + 32), 6),
                     ];
-                    for (raw, si, at, src) in parts {
+                    for (raw, si, at, src, hlsb) in parts {
                         let q = raw - 32;
                         let s = sc[8 * n + si] as i8 as f64;
-                        w[c + at + l] = weight(q, d * s * q as f64, src);
+                        w[c + at + l] =
+                            split(q, d * s * q as f64, part("ql", src, 0), part("qh", low_bits(hbyte, hlsb, 2), 4));
                     }
                 }
             }
             let groups = sc.iter().map(|&s| Group { scale: i32::from(s as i8), min: None }).collect();
-            Block { kind, d, second: None, groups, group_weights: 16, weights: w }
+            Block { kind, d, second: None, groups, group_weights: 16, bias: 32, signed: false, weights: w }
         }
     })
 }
@@ -442,8 +495,22 @@ fn k4_groups(scales: &[u8]) -> Vec<Group> {
         .collect()
 }
 
-fn weight(q: i32, value: f64, (bit, width): (u32, u32)) -> Weight {
-    Weight { q, value, bit, width }
+fn part(field: &'static str, (bit, width): (u32, u32), shift: u32) -> Part {
+    Part { field, bit, width, shift }
+}
+
+fn weight(q: i32, value: f64, bits: Part) -> Weight {
+    Weight { q, value, bits, high: None }
+}
+
+/// A weight whose bits are in two places at once.
+fn split(q: i32, value: f64, bits: Part, high: Part) -> Weight {
+    Weight { q, value, bits, high: Some(high) }
+}
+
+/// A placeholder for the arms that fill their weights out of order.
+fn blank() -> Weight {
+    Weight { q: 0, value: 0.0, bits: Part { field: "", bit: 0, width: 0, shift: 0 }, high: None }
 }
 
 /// ggml's `get_scale_min_k4`: the six-bit scale and six-bit minimum of group
@@ -501,8 +568,8 @@ mod tests {
         assert_eq!(block.weights[1].q, -8);
         // The low nibble is the bottom half of the byte, so its bits start
         // four in.
-        assert_eq!((block.weights[0].bit, block.weights[0].width), (2 * 8 + 4, 4));
-        assert_eq!(block.weights[16].bit, 2 * 8);
+        assert_eq!((block.weights[0].bits.bit, block.weights[0].bits.width), (2 * 8 + 4, 4));
+        assert_eq!(block.weights[16].bits.bit, 2 * 8);
     }
 
     #[test]
@@ -518,6 +585,22 @@ mod tests {
         assert_eq!(block.weights[16].q, 2 + 16);
         assert_eq!(block.weights[1].q, 0);
         assert_eq!(block.second.map(|o| (o.name, o.value, o.subtract)), Some(("m", 0.0, false)));
+        // The fifth bit is bit 0 of the u32 at block byte 4, which is the low
+        // bit of that byte and so the last of its eight.
+        let h = block.weights[0].high.expect("a fifth bit");
+        assert_eq!((h.field, h.bit, h.width, h.shift), ("qh", 4 * 8 + 7, 1, 4));
+        // Weight 16's is bit 16 of the same u32: two bytes along.
+        let h16 = block.weights[16].high.expect("a fifth bit");
+        assert_eq!(h16.bit, 6 * 8 + 7);
+        // And weight 13's, which is bit 13: byte 5, five places up from the
+        // bottom, so third from the top.
+        let mut b13 = vec![0u8; 24];
+        b13[0..2].copy_from_slice(&ONE);
+        b13[4..8].copy_from_slice(&(1u32 << 13).to_le_bytes());
+        b13[8 + 13] = 0x0B;
+        let block13 = unpack(Quant::Q5_1, &b13).unwrap();
+        assert_eq!(block13.weights[13].q, 0x0B + 16);
+        assert_eq!(block13.weights[13].high.unwrap().bit, 5 * 8 + 2);
     }
 
     #[test]
@@ -536,7 +619,7 @@ mod tests {
         // Weight 32 is the high nibble of the same byte, on group 0's second
         // scale, which is zero here.
         assert_eq!(block.weights[32].q, 0);
-        assert_eq!(block.weights[32].bit, 16 * 8);
+        assert_eq!(block.weights[32].bits.bit, 16 * 8);
     }
 
     #[test]
@@ -570,7 +653,7 @@ mod tests {
             let block = unpack(kind, &b).unwrap();
             let mut claimed = vec![0u8; kind.block_bytes() * 8];
             for w in &block.weights {
-                for bit in w.bit..w.bit + w.width {
+                for bit in w.bits.bit..w.bits.bit + w.bits.width {
                     claimed[bit as usize] += 1;
                 }
             }
@@ -654,7 +737,10 @@ mod tests {
             assert_eq!(block.weights.len(), kind.weights(), "{}", kind.name());
             // Every weight says where it came from, and inside the block.
             for w in &block.weights {
-                assert!(w.bit + w.width <= kind.block_bytes() as u32 * 8, "{}", kind.name());
+                assert!(w.bits.bit + w.bits.width <= kind.block_bytes() as u32 * 8, "{}", kind.name());
+                if let Some(h) = w.high {
+                    assert!(h.bit + h.width <= kind.block_bytes() as u32 * 8, "{}", kind.name());
+                }
             }
         }
     }

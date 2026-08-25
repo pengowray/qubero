@@ -12,6 +12,24 @@ export type Pane = "hex" | "ascii";
  *  each one is. */
 /** What sits to the right of the bytes: the text, the fields, or both. */
 export type RightColumn = "text" | "fields" | "both";
+/** A run of bits, `[startBit, endBit)`. A run of no bits is a place rather than
+ *  a stretch, which is what a field of no length has. */
+export type BitRange = { readonly startBit: number; readonly endBit: number };
+
+/** The part of one byte a run covers, as bit positions 0 to 8 counting from the
+ *  top of the byte. */
+type Run = { from: number; to: number };
+
+/** Whether the runs together cover every bit from `from` to `to`. */
+function covers(runs: readonly Run[], from: number, to: number): boolean {
+  let at = from;
+  for (const r of runs) {
+    if (r.from > at) return false;
+    at = Math.max(at, r.to);
+  }
+  return at >= to;
+}
+
 /** Hex shows two digits per byte; binary shows the eight bits. */
 export type ViewMode = "hex" | "binary";
 
@@ -83,8 +101,13 @@ export class HexView {
   private pane: Pane = "hex";
   private insertMode = false;
   private dragging: { startY: number; startRow: number } | null = null;
-  /** Bit range [startBit, endBit) to highlight, e.g. the selected field. */
-  private highlight: { startBit: number; endBit: number } | null = null;
+  /**
+   * The bit runs to highlight: usually one, the field the cursor is in, but a
+   * value the format does not keep in one piece takes more than one. A five-bit
+   * ggml weight is four bits of `qs` and one bit of `qh` sixteen bytes away,
+   * and marking only the four would be marking the wrong thing.
+   */
+  private highlight: readonly BitRange[] = [];
   private rightColumn: RightColumn = "text";
   /** Spans for the rows on screen, kept until the view or the file moves. */
   private spanCache: { key: string; spans: Span[]; more: boolean; error: string | null } | null = null;
@@ -254,8 +277,10 @@ export class HexView {
   /** Called when the user dismisses the field highlight with Escape. */
   onHighlightClear: () => void = () => {};
 
-  setHighlight(range: { startBit: number; endBit: number } | null): void {
-    this.highlight = range;
+  /** One run, several, or nothing. Runs may be in any order and need not
+   *  touch. */
+  setHighlight(range: BitRange | readonly BitRange[] | null): void {
+    this.highlight = range === null ? [] : Array.isArray(range) ? range : [range as BitRange];
     this.render();
   }
 
@@ -401,7 +426,7 @@ export class HexView {
         // Move first, then drop the highlight: the cursor event can pick a new
         // field, and Escape's job is to leave nothing highlighted.
         this.setCursor(this.cursor, { nibble: 0 });
-        if (this.highlight !== null) {
+        if (this.highlight.length > 0) {
           this.setHighlight(null);
           this.onHighlightClear();
         }
@@ -456,32 +481,66 @@ export class HexView {
 
   // ----- rendering -----
 
-  /** Which bits of byte `off` the highlight covers, as [from, to) within 0..8. */
-  private highlightBits(off: number): { from: number; to: number } | null {
-    const h = this.highlight;
-    if (h === null) return null;
-    const from = Math.max(h.startBit, off * 8) - off * 8;
-    const to = Math.min(h.endBit, off * 8 + 8) - off * 8;
-    return to > from ? { from, to } : null;
+  /**
+   * Which bits of byte `off` the highlight covers, as [from, to) runs within
+   * 0..8, in order and not touching. Empty where the byte is not covered.
+   *
+   * A run of no bits is kept rather than dropped: a field of no length still
+   * has a place, and marking the byte it sits in front of would say it covers
+   * that byte, which it does not.
+   */
+  private highlightBits(off: number): Run[] {
+    const out: Run[] = [];
+    for (const h of this.highlight) {
+      const from = Math.max(h.startBit, off * 8) - off * 8;
+      const to = Math.min(h.endBit, off * 8 + 8) - off * 8;
+      if (to < from || from > 8 || to < 0) continue;
+      // An empty run belongs to the byte it starts in, and to that byte only,
+      // so the one past the end of a previous byte is not counted twice.
+      if (to === from && (from === 8 || h.endBit !== h.startBit)) continue;
+      out.push({ from, to });
+    }
+    if (out.length < 2) return out;
+    out.sort((a, b) => a.from - b.from || a.to - b.to);
+    const merged: Run[] = [];
+    for (const r of out) {
+      const last = merged[merged.length - 1];
+      // Two empty runs at the same place are one mark, not two.
+      if (last !== undefined && r.from <= last.to) last.to = Math.max(last.to, r.to);
+      else merged.push(r);
+    }
+    return merged;
   }
 
-  /** Mark part of a byte in hex mode: a bar under the bits the field covers. */
-  private markBits(el: HTMLElement, from: number, to: number): void {
+  /** Mark part of a byte in hex mode: a bar under the bits the field covers,
+   *  one length of bar per run, or a tick where a run has no bits. */
+  private markBits(el: HTMLElement, runs: readonly Run[]): void {
     // The cell is 3ch wide: half a character of padding, two digits, half again.
     const pad = 100 / 6;
     const step = (100 - 2 * pad) / 8;
+    const stops: string[] = [];
+    let at = 0;
+    for (const r of runs) {
+      // A run of no bits still shows, as a mark a fraction of a bit wide, so
+      // that a field of no length is visible where it sits.
+      const from = pad + r.from * step;
+      const to = pad + Math.max(r.to, r.from + 0.15) * step;
+      stops.push(`transparent ${at}%`, `transparent ${from}%`, `var(--accent) ${from}%`, `var(--accent) ${to}%`);
+      at = to;
+    }
+    if (stops.length === 0) return;
+    stops.push(`transparent ${at}%`, "transparent 100%");
     el.classList.add("hv-hlbits");
-    el.style.setProperty("--from", `${pad + from * step}%`);
-    el.style.setProperty("--to", `${pad + to * step}%`);
+    el.style.backgroundImage = `linear-gradient(to right, ${stops.join(", ")})`;
   }
 
   /** The eight bits of one byte, split into spans only where that is needed. */
-  private fillBits(cell: HTMLElement, byte: number | null, off: number, hl: { from: number; to: number } | null): void {
+  private fillBits(cell: HTMLElement, byte: number | null, off: number, hl: readonly Run[]): void {
     const text = byte === null ? "········" : byte.toString(2).padStart(8, "0");
     if (byte === null) cell.classList.add("hv-pending");
     const onCursor = off === this.cursor;
-    const whole = hl !== null && hl.from === 0 && hl.to === 8;
-    if (!onCursor && (hl === null || whole)) {
+    const whole = covers(hl, 0, 8);
+    if (!onCursor && (hl.length === 0 || whole)) {
       cell.textContent = text;
       if (whole) cell.classList.add("hv-hl");
       return;
@@ -492,7 +551,7 @@ export class HexView {
       s.dataset["off"] = String(off);
       s.dataset["bit"] = String(k);
       s.dataset["pane"] = "hex";
-      if (hl !== null && k >= hl.from && k < hl.to) s.classList.add("hv-hl");
+      if (hl.some((r) => k >= r.from && k < r.to)) s.classList.add("hv-hl");
       if (onCursor && k === this.bit) {
         s.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
         if (this.insertMode) s.classList.add("hv-ins");
@@ -667,13 +726,17 @@ export class HexView {
           const s = spans[si];
           if (s !== undefined && !s.gap) h.classList.add("hv-tint", `hv-t${tintOf(s.path)}`);
         }
-        if (hl !== null) {
+        if (hl.length > 0) {
           // The text column cannot show part of a byte, so a partly covered
-          // byte is marked more faintly there than a fully covered one.
-          a.classList.add(hl.from === 0 && hl.to === 8 ? "hv-hl" : "hv-hl-weak");
+          // byte is marked more faintly there than a fully covered one, and a
+          // run of no bits is not marked there at all: one character standing
+          // for a whole byte cannot say "between two of these".
+          const whole = covers(hl, 0, 8);
+          const any = hl.some((r) => r.to > r.from);
+          if (any) a.classList.add(whole ? "hv-hl" : "hv-hl-weak");
           if (!binary && off < len) {
-            if (hl.from === 0 && hl.to === 8) h.classList.add("hv-hl");
-            else this.markBits(h, hl.from, hl.to);
+            if (whole) h.classList.add("hv-hl");
+            else this.markBits(h, hl);
           }
         }
         if (off === this.cursor) {

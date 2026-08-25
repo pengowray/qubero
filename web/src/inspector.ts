@@ -6,6 +6,7 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { formatOffset } from "./doc.js";
+import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { childWord, countText } from "./strings.js";
@@ -45,7 +46,7 @@ export class Inspector {
   /** Asked for when a breadcrumb is clicked, so the views can follow. */
   onPick: (path: readonly number[]) => void = () => {};
   /** Asked for when the reader follows an offset, so the views can follow. */
-  onGoTo: (bitOffset: number, lengthBits?: number) => void = () => {};
+  onGoTo: (bitOffset: number, ranges?: readonly BitRange[]) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -453,7 +454,7 @@ export class Inspector {
         path,
         n,
         (p, text) => this.applyValue(p, text),
-        (bit, len) => this.onGoTo(bit, len),
+        (bit, ranges) => this.onGoTo(bit, ranges),
         () => this.render(),
       ),
     );

@@ -5,12 +5,13 @@
 // this is where the numbers are.
 
 import { extraction } from "./bitextract.js";
-import type { QuantWeight, TypeInfo } from "./doc.js";
+import type { BitRange } from "./hexview.js";
+import type { QuantPart, QuantWeight, TypeInfo } from "./doc.js";
 import { countText } from "./strings.js";
 
 /** Asked for when a weight is clicked, so the views go to its bits and mark
- *  them. */
-export type GoTo = (bitOffset: number, lengthBits: number) => void;
+ *  them. A weight the layout keeps in two places gives two runs. */
+export type GoTo = (bitOffset: number, ranges: readonly BitRange[]) => void;
 
 /** Whether the grid shows the stored integers or what they scale to. Kept
  *  across renders, because it is a way of reading rather than a fact about the
@@ -103,6 +104,13 @@ function groupRow(info: TypeInfo): DocumentFragment {
   return frag;
 }
 
+/** Every run of bits the weight is made of, low part first, as places in the
+ *  file rather than in the block. */
+function runs(info: TypeInfo, w: QuantWeight): BitRange[] {
+  const parts = w.high === null ? [w.bits] : [w.bits, w.high];
+  return parts.map((p) => ({ startBit: info.block_bits + p.bit, endBit: info.block_bits + p.bit + p.width }));
+}
+
 /** A number inside a product, bracketed where its sign would otherwise run
  *  into the operator before it. */
 function term(x: number): string {
@@ -146,6 +154,43 @@ function recipe(info: TypeInfo, w: QuantWeight, index: number): DocumentFragment
     span("insp-qrecipe", `${worked} = ${num(w.value)}`),
   );
   return frag;
+}
+
+/**
+ * Where each run of the weight's bits is, and how to lift it out.
+ *
+ * A five-bit weight is four bits of `qs` and one bit of `qh` a dozen bytes
+ * away, and the nibble on its own does not show where the fifth came from. Each
+ * run is named by the field it is in, so the two lines can be matched to the
+ * fields listed above.
+ */
+function sources(info: TypeInfo, w: QuantWeight): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const parts = w.high === null ? [w.bits] : [w.bits, w.high];
+  // One run needs no naming: the field is the one the cursor is already in.
+  const named = parts.length > 1;
+  for (const p of parts) {
+    frag.append(extraction(info.block_bits + p.bit, p.width, named ? p.field : undefined));
+  }
+  return frag;
+}
+
+/**
+ * How the runs add up to the packed value, and what is taken off it to get the
+ * stored one. Only shown where there is something to say: a single unbiased run
+ * is its own answer.
+ */
+function packing(info: TypeInfo, w: QuantWeight): HTMLElement | null {
+  if (w.high === null && info.bias === 0 && !info.signed) return null;
+  let text = w.bits.field;
+  if (w.high !== null) text = `${w.high.field} << ${w.high.shift} | ${text}`;
+  // The bracket is only needed once there is more than one term to bind.
+  if (info.bias !== 0) text = w.high === null ? `${text} − ${info.bias}` : `(${text}) − ${info.bias}`;
+  if (info.signed) text = `${text} read signed`;
+  const e = document.createElement("div");
+  e.className = "insp-qrecipe-named";
+  e.textContent = `stored = ${text}`;
+  return e;
 }
 
 /** Stored, or what it scales to: the same weights read two ways. */
@@ -192,7 +237,7 @@ function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
     if (i === info.at) cell.classList.add("is-here");
     cell.textContent = showValues ? num(w.value) : String(w.q);
     cell.title = `#${i} · stored ${w.q} · scaled ${num(w.value)}`;
-    cell.addEventListener("click", () => goTo(info.block_bits + w.bit, w.width));
+    cell.addEventListener("click", () => goTo(info.block_bits + w.bits.bit, runs(info, w)));
     g.append(cell);
   });
   const remember = (): void => {
@@ -229,12 +274,12 @@ export function quantBody(info: TypeInfo, goTo: GoTo, redraw: () => void): Docum
   const frag = document.createDocumentFragment();
   const here = info.at >= 0 ? info.weights[info.at] : undefined;
   if (here !== undefined) {
-    // What it is, then why that number, then where its bits are. The bit
-    // extraction is only for a weight that keeps all of its bits in one run: a
-    // five- or six-bit type puts the top bits in a separate byte, and an
-    // expression that quietly left them out would be worse than none.
+    // What it is, then why that number, then how it is packed and where each
+    // run of its bits sits.
     frag.append(cursorRow(here, info.at), recipe(info, here, info.at));
-    if (here.width === info.width) frag.append(extraction(info.block_bits + here.bit, here.width));
+    const how = packing(info, here);
+    if (how !== null) frag.append(how);
+    frag.append(sources(info, here));
   }
   frag.append(scaleRow(info), groupRow(info));
   const head = document.createElement("div");

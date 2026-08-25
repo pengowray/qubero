@@ -101,6 +101,10 @@ struct ExplainDto {
     /// scale for all of them.
     groups: Vec<GroupDto>,
     group_weights: f64,
+    /// Quant: taken off the packed value to get the stored one, and whether
+    /// that value is read signed instead of biased.
+    bias: f64,
+    signed: bool,
     /// Quant: every weight the block stands for, in the order the tensor reads
     /// them, and which one the cursor is inside (-1 for none).
     weights: Vec<WeightDto>,
@@ -124,9 +128,22 @@ struct WeightDto {
     q: f64,
     /// That integer through the block's scale: the number the model reads.
     value: f64,
-    /// Where its bits are, counted from the start of the block.
+    /// The run holding its low bits, and the rest of the packed value where the
+    /// layout keeps that somewhere else in the block.
+    bits: PartDto,
+    high: Option<PartDto>,
+}
+
+/// One run of bits that makes up part of a packed weight.
+#[derive(Serialize)]
+struct PartDto {
+    /// The block field these bits are in, as the file names it.
+    field: String,
+    /// Where they are, counted in bits from the start of the block.
     bit: f64,
     width: f64,
+    /// Where they sit in the packed value: 0 for the low part.
+    shift: f64,
 }
 
 /// One field another field's shape came from.
@@ -169,6 +186,10 @@ fn origin_dto(o: Origin) -> OriginDto {
     }
 }
 
+fn part_dto(p: qubero_core::formats::ggml_quant::Part) -> PartDto {
+    PartDto { field: p.field.to_string(), bit: f64::from(p.bit), width: f64::from(p.width), shift: f64::from(p.shift) }
+}
+
 fn explain_dto(e: Explain) -> ExplainDto {
     let mut dto = ExplainDto {
         kind: "plain",
@@ -190,6 +211,8 @@ fn explain_dto(e: Explain) -> ExplainDto {
         block_bits: 0.0,
         groups: Vec::new(),
         group_weights: 0.0,
+        bias: 0.0,
+        signed: false,
         weights: Vec::new(),
         at: -1.0,
     };
@@ -207,7 +230,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.current = current as f64;
             dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
         }
-        Explain::Quant { kind, bits, d, second, block_bits, groups, group_weights, weights, at } => {
+        Explain::Quant { kind, bits, d, second, block_bits, groups, group_weights, bias, signed, weights, at } => {
             dto.kind = "quant";
             dto.name = kind.to_string();
             dto.width = f64::from(bits);
@@ -220,6 +243,8 @@ fn explain_dto(e: Explain) -> ExplainDto {
             }
             dto.block_bits = block_bits as f64;
             dto.group_weights = f64::from(group_weights);
+            dto.bias = f64::from(bias);
+            dto.signed = signed;
             dto.groups = groups
                 .into_iter()
                 .map(|g| GroupDto { scale: f64::from(g.scale), min: g.min.map(f64::from) })
@@ -230,8 +255,8 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 .map(|w| WeightDto {
                     q: f64::from(w.q),
                     value: w.value,
-                    bit: f64::from(w.bit),
-                    width: f64::from(w.width),
+                    bits: part_dto(w.bits),
+                    high: w.high.map(part_dto),
                 })
                 .collect();
         }

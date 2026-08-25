@@ -51,6 +51,10 @@ pub enum Explain {
         /// or sixteen bytes on, which read as bytes say nothing.
         groups: Vec<Group>,
         group_weights: u32,
+        /// Taken off the packed value to get the stored one, and whether that
+        /// value is read signed instead.
+        bias: i32,
+        signed: bool,
         weights: Vec<Weight>,
         /// Which weight the cursor is inside, where it is on one of them
         /// rather than on the block's scales.
@@ -155,8 +159,15 @@ impl Evaluator {
 /// One unpacked block as an answer, with the cursor matched to the weight whose
 /// bits it is inside.
 fn quant_of(kind: Quant, block: ggml_quant::Block, block_bits: u64, at_bits: Option<u64>) -> Explain {
+    // Either run of a split weight identifies it: the cursor is a bit, so the
+    // one bit of `qh` a five-bit weight keeps there belongs to it and nothing
+    // else.
+    let holds = |p: &ggml_quant::Part, rel: u64| u64::from(p.bit) <= rel && rel < u64::from(p.bit + p.width);
     let at = at_bits.and_then(|c| c.checked_sub(block_bits)).and_then(|rel| {
-        block.weights.iter().position(|w| u64::from(w.bit) <= rel && rel < u64::from(w.bit + w.width))
+        block
+            .weights
+            .iter()
+            .position(|w| holds(&w.bits, rel) || w.high.is_some_and(|h| holds(&h, rel)))
     });
     Explain::Quant {
         kind: kind.name(),
@@ -166,6 +177,8 @@ fn quant_of(kind: Quant, block: ggml_quant::Block, block_bits: u64, at_bits: Opt
         block_bits,
         groups: block.groups,
         group_weights: block.group_weights,
+        bias: block.bias,
+        signed: block.signed,
         weights: block.weights,
         at,
     }

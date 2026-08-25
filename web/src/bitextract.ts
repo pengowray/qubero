@@ -18,13 +18,23 @@ export function whereLine(bit: number, width: number): HTMLElement {
 }
 
 /** The place and the expression together, in that order: what is being read
- *  before how to read it. */
-export function extraction(bit: number, width: number): DocumentFragment {
+ *  before how to read it. `label` names the field the bits are in, for a value
+ *  made of runs from more than one. */
+export function extraction(bit: number, width: number, label?: string): DocumentFragment {
   const frag = document.createDocumentFragment();
   const code = document.createElement("code");
   code.className = "insp-formula-code";
   code.textContent = bitFormula(bit, width);
   code.title = BYTE_NOTE;
-  frag.append(whereLine(bit, width), code);
+  const where = whereLine(bit, width);
+  if (label !== undefined) where.prepend(labelOf(label));
+  frag.append(where, code);
   return frag;
+}
+
+function labelOf(text: string): HTMLElement {
+  const e = document.createElement("span");
+  e.className = "insp-formula-field";
+  e.textContent = text;
+  return e;
 }

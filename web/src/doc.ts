@@ -208,6 +208,10 @@ export type TypeInfo = {
    *  scale for all of them. */
   readonly groups: readonly QuantGroup[];
   readonly group_weights: number;
+  /** Quant: taken off the packed value to get the stored one, and whether that
+   *  value is read signed instead of biased. */
+  readonly bias: number;
+  readonly signed: boolean;
   /** Quant: every weight the block stands for, in the order the tensor reads
    *  them, and which one the cursor is inside (-1 for none). */
   readonly weights: readonly QuantWeight[];
@@ -229,9 +233,21 @@ export type QuantWeight = {
   readonly q: number;
   /** That integer through the block's scale: the number the model reads. */
   readonly value: number;
-  /** Where its bits are, counted from the start of the block. */
+  /** The run holding its low bits, and the rest of the packed value where the
+   *  layout keeps that somewhere else in the block. */
+  readonly bits: QuantPart;
+  readonly high: QuantPart | null;
+};
+
+/** One run of bits that makes up part of a packed weight. */
+export type QuantPart = {
+  /** The block field these bits are in, as the file names it: `qs`, `qh`. */
+  readonly field: string;
+  /** Where they are, counted in bits from the start of the block. */
   readonly bit: number;
   readonly width: number;
+  /** Where they sit in the packed value: 0 for the low part. */
+  readonly shift: number;
 };
 
 /** What one rule, or the editor itself, concluded about what produced a file. */

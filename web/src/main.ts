@@ -1,6 +1,6 @@
 import { Doc, formatBytes, formatOffset, prefetchMagic } from "./doc.js";
 import * as nav from "./navhistory.js";
-import { HexView, type RightColumn } from "./hexview.js";
+import { HexView, type BitRange, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
@@ -148,16 +148,16 @@ function mount(doc: Doc): void {
   // Landing on a run of bits marks them, so that a four-bit weight shows as
   // four bits and not as the byte it shares. The mark goes on after
   // `followCursor`, whose own mark is the whole field the cursor landed in.
-  const showBits = (bitOffset: number, lengthBits?: number): void => {
+  const showBits = (bitOffset: number, ranges?: readonly BitRange[]): void => {
     goToBit(bitOffset);
-    if (lengthBits !== undefined) view.setHighlight({ startBit: bitOffset, endBit: bitOffset + lengthBits });
+    if (ranges !== undefined && ranges.length > 0) view.setHighlight(ranges);
   };
   // The same move, with the place being left kept so that Back returns to it.
   // Going back calls `showBits` instead, which records nothing: retracing a
   // step is not a step of its own.
-  const jumpToBit = (bitOffset: number, lengthBits?: number): void => {
-    nav.recordJump(view.cursorState.bitOffset, bitOffset, lengthBits);
-    showBits(bitOffset, lengthBits);
+  const jumpToBit = (bitOffset: number, ranges?: readonly BitRange[]): void => {
+    nav.recordJump(view.cursorState.bitOffset, bitOffset, ranges);
+    showBits(bitOffset, ranges);
   };
   nav.startFile(view.cursorState.bitOffset);
   nav.onGo(showBits);
