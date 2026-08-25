@@ -50,7 +50,7 @@ pub fn qoi() -> Template {
 /// One chunk. The two bytes that mean a colour written out in full are looked
 /// for first, since both of them also carry the tag that means a run.
 fn chunk() -> T {
-    T::switch(E::peek(8), vec![(0xfe, rgb()), (0xff, rgba())], tagged())
+    T::switch(E::peek(8, Big), vec![(0xfe, rgb()), (0xff, rgba())], tagged())
 }
 
 /// A colour in full, with the alpha of the one before it.

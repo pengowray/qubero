@@ -544,7 +544,7 @@ fn a_record_can_be_switched_on_a_byte_further_along_than_any_field() {
         "Narrow",
         vec![("a", T::u8()), ("b", T::u8()), ("pad", T::u8()), ("kind", T::u8())],
     );
-    let rec = T::switch(E::peek_at(E::lit(3 * 8), 8), vec![(1, wide)], narrow);
+    let rec = T::switch(E::peek_at(E::lit(3 * 8), 8, Big), vec![(1, wide)], narrow);
     let t = Template::new("t", T::repeat(rec, Until::End));
     let d = doc(&[0x12, 0x34, 0, 1, 0x56, 0x78, 0, 2]);
     let mut ev = Evaluator::new(t);
@@ -561,6 +561,37 @@ fn a_record_can_be_switched_on_a_byte_further_along_than_any_field() {
 }
 
 #[test]
+fn a_peek_reads_the_way_round_it_is_told_to() {
+    // The same two bytes, looked at both ways: a peek says which way round it
+    // reads, the same as a field does, so a format that writes its numbers
+    // little-endian can be switched on one.
+    let layouts = |e| {
+        T::structure(
+            "Root",
+            vec![
+                ("kind", T::switch(E::peek(16, e), vec![(0x0102, T::u8())], T::u16(Big))),
+                ("rest", T::bytes(E::Remaining)),
+            ],
+        )
+    };
+    let d = doc(&[0x02, 0x01, 0xff, 0xff]);
+    // Little-endian, so those bytes read as 0x0102 and the case is taken.
+    let mut ev = Evaluator::new(Template::new("t", layouts(Little)));
+    assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 8);
+    // Big-endian, so they read as 0x0201 and it is not.
+    let mut ev = Evaluator::new(Template::new("t", layouts(Big)));
+    assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 16);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0x0201));
+
+    // Bits narrower than a byte are packed one way whatever a peek says,
+    // which is what a field of them does too.
+    let three = |e| Template::new("t", T::structure("Root", vec![("n", T::computed(E::peek(3, e)))]));
+    let d = doc(&[0b101_00000]);
+    assert_eq!(Evaluator::new(three(Big)).node(&d, &[0]).unwrap().value, Value::Int(0b101));
+    assert_eq!(Evaluator::new(three(Little)).node(&d, &[0]).unwrap().value, Value::Int(0b101));
+}
+
+#[test]
 fn a_backwards_peek_reads_the_end_of_what_holds_it() {
     // A file signed at the far end, and a body that stops before the
     // signature or runs to the end depending on whether one is there.
@@ -569,7 +600,7 @@ fn a_backwards_peek_reads_the_end_of_what_holds_it() {
         T::structure(
             "Root",
             vec![
-                ("signature", T::computed(E::peek_at(E::lit(-32), 32))),
+                ("signature", T::computed(E::peek_at(E::lit(-32), 32, Big))),
                 (
                     "body",
                     T::switch(
@@ -596,7 +627,7 @@ fn a_backwards_peek_reads_the_end_of_what_holds_it() {
 
     // Counting back further than the container reaches is an error, the same
     // as looking past the end of it.
-    let too_far = Template::new("t", T::structure("Root", vec![("s", T::computed(E::peek_at(E::lit(-64), 64)))]));
+    let too_far = Template::new("t", T::structure("Root", vec![("s", T::computed(E::peek_at(E::lit(-64), 64, Big)))]));
     let mut ev = Evaluator::new(too_far);
     assert!(ev.node(&doc(b"tiny"), &[0]).is_err());
 }

@@ -108,7 +108,7 @@ fn entry() -> T {
                     vec![(0, T::bytes(E::lit(0)))],
                     // Nineteen bytes on from here is offset 20 of the entry,
                     // which is the level byte in all three layouts.
-                    T::switch(E::peek_at(E::lit(19 * 8), 8), vec![(2, level2())], header()),
+                    T::switch(E::peek_at(E::lit(19 * 8), 8, Big), vec![(2, level2())], header()),
                 ),
             ),
         ],

@@ -18,9 +18,10 @@
 //! What the footer holds is two offsets, to an extension area of authorship
 //! and timestamps and to a chain of developer-defined records. Both sit
 //! between the pixels and the footer, so they are inside what is read here as
-//! the image. Reaching them needs an offset read from the middle of a peeked
-//! run rather than from a field, and the peek reads big-endian while those
-//! offsets are little-endian, so that is where this stops.
+//! the image. Placing them from the footer would name those bytes twice, once
+//! as image and once as what they are, and a byte named twice is worse than a
+//! byte named vaguely. Saying it properly means the image stopping where the
+//! first of the two begins, and that is where this stops instead.
 
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
@@ -72,7 +73,7 @@ pub fn tga() -> Template {
                     T::switch(
                         E::Remaining.div(E::lit(26)),
                         vec![(0, T::computed(E::lit(0)))],
-                        T::computed(E::peek_at(E::lit(-64), 64)),
+                        T::computed(E::peek_at(E::lit(-64), 64, Big)),
                     ),
                 ),
                 // The pixels, and anything the footer points at, which sits

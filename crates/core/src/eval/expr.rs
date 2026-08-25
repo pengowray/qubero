@@ -70,7 +70,7 @@ impl Evaluator {
             Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
             // Read where this field starts without taking the bits: what a
             // field that exists only when the byte says so has to ask.
-            Expr::Peek(bits) => {
+            Expr::Peek { bits, endian } => {
                 let Some((offset, limit)) = here else { return fail("nothing to look at") };
                 if offset + u64::from(*bits) > limit {
                     return fail("looks past the end of its container");
@@ -80,11 +80,11 @@ impl Evaluator {
                 if !missing.is_empty() {
                     return Err(EvalError::Pending(missing));
                 }
-                read_uint(&buf, *bits, crate::template::Endian::Big) as i128
+                read_uint(&buf, *bits, *endian) as i128
             }
             // The same, further on: what a record whose shape is settled by a
             // byte after the fields it settles has to ask.
-            Expr::PeekAt { skip, bits } => {
+            Expr::PeekAt { skip, bits, endian } => {
                 let Some((offset, limit)) = here else { return fail("nothing to look at") };
                 let skip = self.eval_expr_at(doc, at, &skip.clone(), here)?;
                 // Backwards means from the end of the container: what a format
@@ -106,7 +106,7 @@ impl Evaluator {
                 if !missing.is_empty() {
                     return Err(EvalError::Pending(missing));
                 }
-                read_uint(&buf, *bits, crate::template::Endian::Big) as i128
+                read_uint(&buf, *bits, *endian) as i128
             }
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,

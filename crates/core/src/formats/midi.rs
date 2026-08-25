@@ -174,7 +174,7 @@ fn event() -> T {
             (
                 "status",
                 T::switch(
-                    E::peek(8).div(E::lit(128)),
+                    E::peek(8, Big).div(E::lit(128)),
                     vec![(1, T::enumeration_hex("Status", T::u8(), &names))],
                     T::computed(E::lit(0)),
                 ),

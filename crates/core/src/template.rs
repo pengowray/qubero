@@ -55,7 +55,11 @@ pub enum Expr {
     ProductOf(Arc<str>),
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
-    Peek(u32),
+    ///
+    /// A peek says which way round it reads, the same as a field does. Bits
+    /// narrower than a byte are packed the one way whatever it says, which is
+    /// also what a field of them does.
+    Peek { bits: u32, endian: Endian },
     /// `bits` bits read `skip` bits further on, without consuming anything.
     /// `Peek` looks at the field's own first byte, which is no use when what
     /// decides the shape of a record is written after the fields it decides:
@@ -67,9 +71,9 @@ pub enum Expr {
     /// How far to look is itself an expression, and a negative distance counts
     /// back from the end of the container rather than forward from here. That
     /// is what reaches a signature written at the end of a file: a TGA 2.0 is
-    /// told from a TGA by the last eight bytes of one, which is
-    /// `peek_at(lit(-64), 64)` wherever in the file the asking is done.
-    PeekAt { skip: Box<Expr>, bits: u32 },
+    /// told from a TGA by the last eight bytes of one, wherever in the file the
+    /// asking is done.
+    PeekAt { skip: Box<Expr>, bits: u32, endian: Endian },
     /// The value of field `name` in the element before this one, in the nearest
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
@@ -133,13 +137,14 @@ impl Expr {
     pub fn product_of(name: &str) -> Expr {
         Expr::ProductOf(name.into())
     }
-    /// The next `bits` bits without consuming them.
-    pub fn peek(bits: u32) -> Expr {
-        Expr::Peek(bits)
+    /// The next `bits` bits without consuming them, read the given way round.
+    pub fn peek(bits: u32, endian: Endian) -> Expr {
+        Expr::Peek { bits, endian }
     }
-    /// `bits` bits, `skip` bits further on, without consuming them.
-    pub fn peek_at(skip: Expr, bits: u32) -> Expr {
-        Expr::PeekAt { skip: Box::new(skip), bits }
+    /// `bits` bits, `skip` bits further on, without consuming them. A negative
+    /// `skip` counts back from the end of the container.
+    pub fn peek_at(skip: Expr, bits: u32, endian: Endian) -> Expr {
+        Expr::PeekAt { skip: Box::new(skip), bits, endian }
     }
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {
