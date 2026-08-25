@@ -255,6 +255,18 @@ pub enum StrLen {
     /// This many bytes, of which the value is everything before the first `pad`
     /// byte. Writing a shorter value pads the rest, so the field keeps its size.
     Padded { size: Expr, pad: u8 },
+    /// Skips any leading bytes in `skip`, then runs to the first byte in
+    /// `ends`, which belongs to the field. What a format separating its
+    /// fields by whitespace needs, where `Terminated` can name only one byte
+    /// and cannot be told to step over the run before the value: a netpbm
+    /// header writes its numbers with a space, a tab or a newline between
+    /// them, and any run of those, in whatever mixture.
+    ///
+    /// The skipped bytes and the terminator are the format's business, not
+    /// the value's, so neither is part of what the field reads as. Writing one
+    /// would have to decide how much whitespace to put back, so these are
+    /// read-only, as terminated fields are.
+    Scan { skip: Vec<u8>, ends: Vec<u8> },
     /// Runs to the first `end` byte, which belongs to the field. A C string.
     /// With `or_end`, a field with no terminator in it runs to the end of its
     /// container instead of failing, which is what a last line without a
@@ -680,6 +692,7 @@ impl Ty {
                     StrLen::Terminated { end: 0, .. } if matches!(enc, Encoding::Utf8) => "cstr".into(),
                     StrLen::Terminated { end: 0, .. } => format!("{e} cstr"),
                     StrLen::Terminated { end, .. } => format!("{e} to 0x{end:02x}"),
+                    StrLen::Scan { .. } => format!("{e} token"),
                 }
             }
             Ty::Struct(s) => s.name.clone(),

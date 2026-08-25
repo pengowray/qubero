@@ -5,18 +5,19 @@
 //! the pixels as decimal numbers with spaces between them, and 4, 5 and 6
 //! write the same pixels as raw bytes. Between the magic and the pixels are a
 //! width, a height, and for the grey and colour ones a maximum value, each a
-//! run of digits, separated by any whitespace, with comment lines allowed
-//! among them.
+//! run of digits, separated by any whitespace in any amount.
 //!
-//! Any whitespace is what this IR cannot say. A field can run to one named
-//! byte, not to whichever of space, tab and newline comes first, and it cannot
-//! be told to skip a comment line and keep looking. So the header is read as
-//! the lines the writers of these files actually produce: one number, or one
-//! pair of numbers, per line. A file that puts its whole header on one line is
-//! still laid out honestly, since the first line then holds all of it, but the
-//! header lines after it will land on the pixels. Reading it properly needs a
-//! length a scan decides, and that is a gap in the IR rather than in the
-//! format.
+//! That is what a scanned field is for: step over the separators, read to the
+//! next one, and the field lands on the number wherever the writer put it.
+//! One line, three lines, tabs, two spaces between them: all read the same,
+//! and the pixels start exactly where the last separator ends.
+//!
+//! What is still not read is a comment. A `#` and everything to the end of
+//! that line may appear anywhere among the numbers, and stepping over a run
+//! that ends at a byte is not the same as stepping over one that starts at
+//! one. A file with a comment in its header reads its numbers wrong from that
+//! point on. Photoshop and GIMP both write one, so this is worth saying: it
+//! is the last gap this format leaves open.
 
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
@@ -30,6 +31,9 @@ const KIND: &[(i128, &str)] = &[
     (0x5036, "ppm, colour, binary"),
 ];
 
+/// Space, tab, carriage return, newline: what the format calls whitespace.
+const SPACE: &[u8] = b" \t\r\n";
+
 pub fn pnm() -> Template {
     Template::new(
         "pnm",
@@ -37,15 +41,13 @@ pub fn pnm() -> Template {
             "Netpbm",
             vec![
                 ("magic", T::enumeration("Kind", T::u16(Big), KIND)),
-                // A bitmap has no maximum value, so its header is one line
-                // shorter than the other four.
+                ("width", number()),
+                ("height", number()),
+                // A bitmap is one bit a pixel, so there is nothing to be the
+                // maximum of and the field is not written.
                 (
-                    "header",
-                    T::switch(
-                        E::field("magic"),
-                        vec![(0x5031, lines(E::lit(2))), (0x5034, lines(E::lit(2)))],
-                        lines(E::lit(3)),
-                    ),
+                    "max_value",
+                    T::switch(E::field("magic"), vec![(0x5031, nothing()), (0x5034, nothing())], number()),
                 ),
                 ("pixels", T::bytes(E::Remaining)),
             ],
@@ -53,11 +55,14 @@ pub fn pnm() -> Template {
     )
 }
 
-/// The header lines: the newline right after the magic counts as the end of
-/// the first of them, which is why a canonical file has one more line here
-/// than it has numbers.
-fn lines(count: E) -> T {
-    T::array(T::text(StrLen::Terminated { end: b'\n', or_end: true }, Encoding::Ascii), count).counted_as("line")
+/// One number of the header: the whitespace before it, the digits, and the one
+/// whitespace byte that ends it.
+fn number() -> T {
+    T::text(StrLen::Scan { skip: SPACE.to_vec(), ends: SPACE.to_vec() }, Encoding::Ascii)
+}
+
+fn nothing() -> T {
+    T::bytes(E::lit(0))
 }
 
 #[cfg(test)]
@@ -68,7 +73,7 @@ mod tests {
     use crate::source::MemSource;
 
     #[test]
-    fn a_binary_ppm_reads_its_kind_and_leaves_the_pixels_whole() {
+    fn a_binary_ppm_reads_its_numbers_and_leaves_the_pixels_whole() {
         let mut v = b"P6\n2 2\n255\n".to_vec();
         v.extend_from_slice(&[0xff; 12]);
         let d = Document::new(MemSource(v));
@@ -77,18 +82,38 @@ mod tests {
             ev.node(&d, &[0]).unwrap().value,
             Value::Enum { raw: 0x5036, name: Some("ppm, colour, binary".into()), hex: false }
         );
-        assert_eq!(ev.node(&d, &[1, 1]).unwrap().value, Value::Str("2 2".into()));
-        assert_eq!(ev.node(&d, &[1, 2]).unwrap().value, Value::Str("255".into()));
-        assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, 11 * 8);
-        assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 12 * 8);
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("2".into()));
+        assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("2".into()));
+        assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Str("255".into()));
+        assert_eq!(ev.node(&d, &[4]).unwrap().offset_bits, 11 * 8);
+        assert_eq!(ev.node(&d, &[4]).unwrap().size_bits, 12 * 8);
+        // The width field covers the newline before it as well as the space
+        // after it; only the digits are the value.
+        let width = ev.node(&d, &[1]).unwrap();
+        assert_eq!(width.offset_bits, 2 * 8);
+        assert_eq!(width.size_bits, 3 * 8);
+        assert_eq!(width.value_offset_bits, 3 * 8);
     }
 
     #[test]
-    fn a_bitmap_has_one_header_line_fewer() {
+    fn the_same_header_on_one_line_reads_the_same() {
+        let mut v = b"P6 2\t2  255 ".to_vec();
+        v.extend_from_slice(&[0xff; 12]);
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(pnm());
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("2".into()));
+        assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("2".into()));
+        assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Str("255".into()));
+        assert_eq!(ev.node(&d, &[4]).unwrap().size_bits, 12 * 8);
+    }
+
+    #[test]
+    fn a_bitmap_has_no_maximum_value() {
         let d = Document::new(MemSource(b"P4\n8 1\n\xff".to_vec()));
         let mut ev = Evaluator::new(pnm());
-        assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 2);
-        assert_eq!(ev.node(&d, &[1, 1]).unwrap().value, Value::Str("8 1".into()));
-        assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 8);
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("8".into()));
+        assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("1".into()));
+        assert_eq!(ev.node(&d, &[3]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[4]).unwrap().size_bits, 8);
     }
 }

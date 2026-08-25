@@ -833,6 +833,8 @@ impl Evaluator {
                         }
                         n as u64 * 8
                     }
+                    // Whitespace, then the value, then the byte that ends it.
+                    StrLen::Scan { skip, ends } => self.read_scan(doc, &r, skip, ends)?.1 * 8,
                     StrLen::Terminated { end, or_end } => {
                         let (settled, bom) = self.str_head(doc, &r, enc)?;
                         let term = text::unit_bytes(settled, *end);

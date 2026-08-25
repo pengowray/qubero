@@ -191,6 +191,9 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
                     }
                     Ok([bom.as_slice(), &body, &term].concat())
                 }
+                // Writing one would have to decide how much of the whitespace
+                // around it to put back, and the field would change size.
+                StrLen::Scan { .. } => Err("This field is read-only. Edit it in the hex view.".into()),
             }
         }
         Ty::Bytes(_) => {

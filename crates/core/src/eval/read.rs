@@ -37,8 +37,18 @@ impl Evaluator {
         let body = &bytes[bom as usize..];
         let unit = settled.unit();
         let rest = cap - bom;
+        // `skipped` is what sits before the value and is not part of it: the
+        // separators a scanned field stepped over, on top of any byte-order
+        // mark.
+        let mut skipped = 0u64;
         let (text_len, dirty) = match len {
             StrLen::Fixed(_) => (rest, false),
+            // The field is the separators, the value and the byte that ends
+            // it, and the sizing pass has already measured all three.
+            StrLen::Scan { skip, .. } => {
+                skipped = body.iter().take_while(|b| skip.contains(b)).count() as u64;
+                (rest.saturating_sub(skipped).saturating_sub(1), true)
+            }
             StrLen::Padded { pad, .. } => {
                 let term = text::unit_bytes(settled, *pad);
                 match find_unit(body, &term) {
@@ -61,7 +71,7 @@ impl Evaluator {
                 }
             }
         };
-        Ok(Some(StrSpan { start: bom, len: text_len, settled, dirty, note }))
+        Ok(Some(StrSpan { start: bom + skipped, len: text_len, settled, dirty, note }))
     }
 
     /// Where a field's value sits, whether the bytes fit the encoding, and how
@@ -131,6 +141,46 @@ impl Evaluator {
             at += n * 8;
         }
         fail(format!("no 0x{:02x} terminator within {} bytes", term[0], (stop - start) / 8))
+    }
+
+    /// A field that steps over a run of separators and then reads up to the
+    /// next one. Answers how much of it is the value and how long the whole
+    /// field is, the terminator included.
+    ///
+    /// A run of separators with nothing after it is a value of no bytes, which
+    /// is what a header with two spaces between its numbers writes and what
+    /// the field before it has already stepped over. Running out of container
+    /// without meeting a separator is an error, the same answer a terminated
+    /// field gives: the number is not finished, so there is no number.
+    pub(super) fn read_scan<S: Source>(&self, doc: &Document<S>, r: &Resolved, skip: &[u8], ends: &[u8]) -> R<(u64, u64)> {
+        const BLOCK: u64 = 256;
+        /// A field with no separator in it must fail rather than walk to the end.
+        const CAP: u64 = 64 * 1024;
+        let stop = r.limit.min(r.offset + CAP * 8);
+        let mut at = r.offset;
+        let (mut skipped, mut seen) = (0u64, 0u64);
+        let mut skipping = true;
+        while at < stop {
+            let n = BLOCK.min((stop - at) / 8);
+            if n == 0 {
+                break;
+            }
+            let block = self.read(doc, r, at, n * 8)?;
+            for (i, b) in block.iter().enumerate() {
+                if skipping && skip.contains(b) {
+                    skipped += 1;
+                    continue;
+                }
+                skipping = false;
+                if ends.contains(b) {
+                    let len = seen + i as u64 - skipped;
+                    return Ok((len, skipped + len + 1));
+                }
+            }
+            seen += n;
+            at += n * 8;
+        }
+        fail(format!("no separator within {} bytes", (stop - r.offset) / 8))
     }
 
     pub(super) fn read_leb<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(u128, u64)> {

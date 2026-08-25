@@ -403,6 +403,43 @@ fn pointed_at_items_read_in_offset_order() {
 }
 
 #[test]
+fn a_scanned_field_steps_over_its_separators_and_stops_at_the_next() {
+    use crate::template::{Encoding, StrLen};
+    let token = || {
+        T::text(StrLen::Scan { skip: b" \t\r\n".to_vec(), ends: b" \t\r\n".to_vec() }, Encoding::Ascii)
+    };
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("a", token()), ("b", token()), ("rest", T::bytes(E::Remaining))]),
+    );
+    let d = doc(b"  12\t\n 345\nxyz");
+    let mut ev = Evaluator::new(t.clone());
+
+    let a = ev.node(&d, &[0]).unwrap();
+    assert_eq!(a.value, Value::Str("12".into()));
+    // Two spaces, the digits, and the tab that ends them.
+    assert_eq!(a.offset_bits, 0);
+    assert_eq!(a.size_bits, 5 * 8);
+    // The value starts past the separators, not at the field.
+    assert_eq!(a.value_offset_bits, 2 * 8);
+    assert_eq!(a.value_bytes, 2);
+    // Whitespace before it is stepped over however much of it there is.
+    let b = ev.node(&d, &[1]).unwrap();
+    assert_eq!(b.value, Value::Str("345".into()));
+    assert_eq!(b.offset_bits, 5 * 8);
+    assert_eq!(b.size_bits, 6 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 3 * 8);
+    // Nothing to write back: how much whitespace to put where is the format's
+    // business, and the field would change size.
+    assert!(!a.editable);
+
+    // A field with no separator after it is not a value, the same answer a
+    // terminated field gives.
+    let mut ev = Evaluator::new(t);
+    assert!(ev.node(&doc(b"  12"), &[0]).is_err());
+}
+
+#[test]
 fn a_record_can_be_switched_on_a_byte_further_along_than_any_field() {
     // Two layouts of four bytes, told apart by the last of them, which comes
     // after the fields whose meaning it settles.
