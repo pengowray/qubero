@@ -315,6 +315,13 @@ pub enum Ty {
     BF16(Endian),
     F32(Endian),
     F64(Endian),
+    /// Eighty bits: a sign, fifteen of exponent and sixty-four of significand
+    /// with its leading one written out rather than assumed. The long double
+    /// of the 68881 and the x87, and what an AIFF writes its sample rate as.
+    /// Read into an f64, which keeps 53 of those 64 bits, so a value using all
+    /// of them rounds; the numbers formats actually store this way, sample
+    /// rates among them, are exact.
+    F80(Endian),
     /// An eight-bit float, which is how the weights of a quantised model are
     /// written now. `e4m3` spends four bits on the exponent and three on the
     /// fraction and reaches 448; it has no infinities, and only an exponent
@@ -706,6 +713,7 @@ impl Ty {
             Ty::F8 { e4m3: false } => "f8 e5m2".into(),
             Ty::F32(en) => format!("f32 {}", e(*en)),
             Ty::F64(en) => format!("f64 {}", e(*en)),
+            Ty::F80(en) => format!("f80 {}", e(*en)),
             Ty::Fixed { bits, frac, endian, signed } => {
                 format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
             }

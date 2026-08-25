@@ -25,7 +25,7 @@ pub const EDIT_LIMIT_BYTES: u64 = 4096;
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
@@ -99,6 +99,10 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
         Ty::F64(e) => {
             let x = parse_float(text)?;
             Ok(write_uint(x.to_bits() as u128, 64, *e))
+        }
+        Ty::F80(e) => {
+            let x = parse_float(text)?;
+            Ok(write_uint(f64_to_f80(x), 80, *e))
         }
         Ty::Leb128 { signed } => {
             let room = (size_bits / 8) as usize;
@@ -500,6 +504,31 @@ pub(crate) fn f64_to_bf16(x: f64) -> u16 {
     ((bits + 0x7fff + ((bits >> 16) & 1)) >> 16) as u16
 }
 
+/// Inverse of `decode::f80_to_f64`. Every f64 fits exactly: eighty bits have
+/// room for all eleven of its exponent bits and all fifty-two of its
+/// significand, and the leading one an f64 assumes is written out here.
+pub(crate) fn f64_to_f80(x: f64) -> u128 {
+    let bits = x.to_bits();
+    let sign = (bits >> 63) as u128;
+    let exp = ((bits >> 52) & 0x7ff) as i32;
+    let frac = bits & 0x000f_ffff_ffff_ffff;
+    let (exp, significand) = if exp == 0x7ff {
+        // Infinity and not-a-number, where the bit below the leading one is
+        // what tells them apart.
+        (0x7fff, if frac == 0 { 1u64 << 63 } else { 3u64 << 62 })
+    } else if exp == 0 && frac == 0 {
+        (0, 0)
+    } else if exp == 0 {
+        // A denormal f64 is an ordinary number at this width: shift its
+        // leading one up into place and take the exponent down to match.
+        let shift = frac.leading_zeros() - 11;
+        ((1 - 1023 + 16383 - shift as i32).max(0), frac << (shift + 11))
+    } else {
+        (exp - 1023 + 16383, (1u64 << 63) | (frac << 11))
+    };
+    sign << 79 | (exp as u128) << 64 | significand as u128
+}
+
 /// Inverse of `decode::f16_to_f64`.
 pub(crate) fn f64_to_f16(x: f64) -> u16 {
     if x.is_nan() {
@@ -593,6 +622,23 @@ mod tests {
         assert_eq!(encode(&Ty::F64(Endian::Little), "1.5", 64, &StrState::default()).unwrap(), vec![0, 0, 0, 0, 0, 0, 0xf8, 0x3f]);
         assert!(encode(&Ty::F64(Endian::Little), "nan", 64, &StrState::default()).is_ok());
         assert!(encode(&Ty::F32(Endian::Big), "one", 32, &StrState::default()).is_err());
+    }
+
+    #[test]
+    fn eighty_bit_floats_round_trip() {
+        use crate::decode::{be_int, f80_to_f64};
+        // Eighty bits hold every f64 exactly, so nothing here rounds.
+        for x in [0.0f64, 1.0, -2.5, 44100.0, 2f64.powi(1023), -2f64.powi(-1022), 2f64.powi(-1074)] {
+            assert_eq!(f80_to_f64(f64_to_f80(x)), x, "f80 {x}");
+        }
+        assert_eq!(f80_to_f64(f64_to_f80(f64::INFINITY)), f64::INFINITY);
+        assert!(f80_to_f64(f64_to_f80(f64::NAN)).is_nan());
+        // The bytes an AIFF writes for a sample rate: an exponent of 16398 and
+        // a significand whose leading one is written out rather than assumed.
+        let cd = [0x40u8, 0x0e, 0xac, 0x44, 0, 0, 0, 0, 0, 0];
+        assert_eq!(f80_to_f64(be_int(&cd) as u128), 44100.0);
+        assert_eq!(encode(&Ty::F80(Endian::Big), "44100", 80, &StrState::default()).unwrap(), cd);
+        assert!(encode(&Ty::F80(Endian::Big), "one", 80, &StrState::default()).is_err());
     }
 
     #[test]

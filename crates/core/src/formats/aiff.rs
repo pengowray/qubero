@@ -2,9 +2,9 @@
 //! became WAV, on the IFF frame the Amiga had already published.
 //!
 //! The sample rate is the reason this format is interesting: it is an 80-bit
-//! extended float, the 68881's native long double, which nothing else in
-//! common use writes and which no type here can read. It stays ten bytes, and
-//! that is a gap in the IR rather than in the format.
+//! extended float, the native long double of the 68881 the machine had, which
+//! nothing else in common use writes. The IR reads one now, so the field says
+//! 44100 rather than sitting there as ten bytes nobody can spend.
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T};
 
@@ -42,7 +42,7 @@ fn comm() -> T {
             ("sample_size", T::u16(Big)),
             // 80-bit extended: a sign, fifteen bits of exponent and a
             // sixty-four bit significand with its leading one written out.
-            ("sample_rate", T::bytes(E::lit(10))),
+            ("sample_rate", T::F80(Big)),
             ("compression", T::bytes(E::Remaining)),
         ],
     )
@@ -137,7 +137,10 @@ mod tests {
         assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 3);
         assert_eq!(ev.node(&d, &[3, 0, 2, 0]).unwrap().value, Value::UInt(2));
         assert_eq!(ev.node(&d, &[3, 0, 2, 1]).unwrap().value, Value::UInt(1000));
-        assert_eq!(ev.node(&d, &[3, 0, 2, 3]).unwrap().size_bits, 10 * 8);
+        let rate = ev.node(&d, &[3, 0, 2, 3]).unwrap();
+        assert_eq!(rate.size_bits, 10 * 8);
+        assert_eq!(rate.value, Value::Float(44100.0));
+        assert_eq!(rate.type_name, "f80 be");
         assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().value, Value::Str("Sample".into()));
         assert_eq!(ev.node(&d, &[3, 2, 2, 2]).unwrap().size_bits, 16 * 8);
     }

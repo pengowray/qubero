@@ -22,6 +22,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::Fixed { bits, .. } => *bits as u64,
         Ty::F32(_) => 32,
         Ty::F64(_) => 64,
+        Ty::F80(_) => 80,
         Ty::Magic(b) => b.len() as u64 * 8,
         Ty::Bytes(Expr::Lit(n)) => (*n).max(0) as u64 * 8,
         // Text is fixed-size only when its length does not depend on the bytes.
@@ -110,6 +111,32 @@ pub(crate) fn narrow_f32(x: f32) -> f64 {
 ///
 /// Every value either form can hold is a float exactly, so nothing is rounded
 /// here and nothing needs shortening afterwards.
+/// An eighty-bit extended float as the nearest f64.
+///
+/// Unlike every other float here, the significand carries its leading one
+/// rather than assuming it, so the value is the significand scaled by the
+/// exponent with nothing to put back. f64 holds 53 of those 64 bits: a value
+/// that uses all of them rounds, and the sample rates and round numbers these
+/// are written for do not.
+pub(crate) fn f80_to_f64(bits: u128) -> f64 {
+    let sign = if bits >> 79 & 1 == 1 { -1.0 } else { 1.0 };
+    let exp = ((bits >> 64) & 0x7fff) as i32;
+    let significand = (bits & u64::MAX as u128) as u64;
+    if exp == 0x7fff {
+        // The leading one is written out here, so what says infinity from not
+        // a number is the sixty-three bits below it.
+        return if significand << 1 == 0 { sign * f64::INFINITY } else { f64::NAN };
+    }
+    // Zero and the denormals need no case of their own: the scaling takes
+    // them to zero on its own.
+    //
+    // The two halves of the scaling are applied apart. Together they would be
+    // 2 to the power of the exponent less 16446, and for a small number that
+    // is past what an f64 can hold even though the answer is not: the
+    // significand brings it back up, but only if it is still there to.
+    sign * (significand as f64 * 2f64.powi(-63)) * 2f64.powi(exp - 16383)
+}
+
 pub(crate) fn f8_to_f64(b: u8, e4m3: bool) -> f64 {
     let (exp_bits, frac_bits) = if e4m3 { (4u32, 3u32) } else { (5u32, 2u32) };
     let bias = (1i32 << (exp_bits - 1)) - 1;
