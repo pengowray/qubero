@@ -462,9 +462,10 @@ fn a_field_can_read_its_contents_somewhere_else_and_still_cost_nothing() {
 #[test]
 fn a_scanned_field_steps_over_its_separators_and_stops_at_the_next() {
     use crate::template::{Encoding, StrLen};
-    let token = || {
-        T::text(StrLen::Scan { skip: b" \t\r\n".to_vec(), ends: b" \t\r\n".to_vec() }, Encoding::Ascii)
+    let token = |comment| {
+        T::text(StrLen::Scan { skip: b" \t\r\n".to_vec(), ends: b" \t\r\n".to_vec(), comment }, Encoding::Ascii)
     };
+    let token = || token(None);
     let t = Template::new(
         "t",
         T::structure("Root", vec![("a", token()), ("b", token()), ("rest", T::bytes(E::Remaining))]),
@@ -494,6 +495,44 @@ fn a_scanned_field_steps_over_its_separators_and_stops_at_the_next() {
     // terminated field gives.
     let mut ev = Evaluator::new(t);
     assert!(ev.node(&doc(b"  12"), &[0]).is_err());
+}
+
+#[test]
+fn a_scanned_field_steps_over_comments_among_its_separators() {
+    use crate::template::{Encoding, StrLen};
+    let token = || {
+        T::text(
+            StrLen::Scan { skip: b" \t\r\n".to_vec(), ends: b" \t\r\n".to_vec(), comment: Some((b'#', b'\n')) },
+            Encoding::Ascii,
+        )
+    };
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("a", token()), ("b", token()), ("rest", T::bytes(E::Remaining))]),
+    );
+
+    let d = doc(b" # a note\n 12 #another\n34 x");
+    let mut ev = Evaluator::new(t.clone());
+    let a = ev.node(&d, &[0]).unwrap();
+    assert_eq!(a.value, Value::Str("12".into()));
+    // The space, the comment and the space after it all belong to the field,
+    // and none of them to the value.
+    assert_eq!(a.offset_bits, 0);
+    assert_eq!(a.value_offset_bits, 11 * 8);
+    assert_eq!(a.size_bits, 14 * 8);
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("34".into()));
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 8);
+
+    // A comment longer than the 256 bytes a scan reads at a time: the state
+    // has to survive the join, or the field ends inside the comment.
+    let mut bytes = b"#".to_vec();
+    bytes.extend(std::iter::repeat_n(b'.', 600));
+    bytes.extend_from_slice(b"\n7 ok");
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let a = ev.node(&d, &[0]).unwrap();
+    assert_eq!(a.value, Value::Str("7".into()));
+    assert_eq!(a.value_offset_bits, 602 * 8);
 }
 
 #[test]

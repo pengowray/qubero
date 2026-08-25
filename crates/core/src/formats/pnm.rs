@@ -12,12 +12,11 @@
 //! One line, three lines, tabs, two spaces between them: all read the same,
 //! and the pixels start exactly where the last separator ends.
 //!
-//! What is still not read is a comment. A `#` and everything to the end of
-//! that line may appear anywhere among the numbers, and stepping over a run
-//! that ends at a byte is not the same as stepping over one that starts at
-//! one. A file with a comment in its header reads its numbers wrong from that
-//! point on. GIMP and other editors write one, so this is worth saying: it is
-//! the last gap this format leaves open.
+//! Comments are stepped over the same way. A `#` and everything to the end of
+//! that line counts as separator, so the `# CREATOR:` line GIMP writes costs
+//! the reader nothing. What is not read is a comment glued to a number with no
+//! whitespace in front of it, which the format allows and nothing writes: that
+//! `#` and the rest of the line read as part of the number before it.
 
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
@@ -55,10 +54,13 @@ pub fn pnm() -> Template {
     )
 }
 
-/// One number of the header: the whitespace before it, the digits, and the one
-/// whitespace byte that ends it.
+/// One number of the header: the whitespace and comments before it, the
+/// digits, and the one whitespace byte that ends it.
 fn number() -> T {
-    T::text(StrLen::Scan { skip: SPACE.to_vec(), ends: SPACE.to_vec() }, Encoding::Ascii)
+    T::text(
+        StrLen::Scan { skip: SPACE.to_vec(), ends: SPACE.to_vec(), comment: Some((b'#', b'\n')) },
+        Encoding::Ascii,
+    )
 }
 
 fn nothing() -> T {
@@ -105,6 +107,37 @@ mod tests {
         assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("2".into()));
         assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Str("255".into()));
         assert_eq!(ev.node(&d, &[4]).unwrap().size_bits, 12 * 8);
+    }
+
+    #[test]
+    fn a_comment_among_the_numbers_is_stepped_over_with_the_whitespace() {
+        // The header GIMP writes, comment line and all. The comment runs from
+        // byte 3 to byte 41, so the width starts at 42.
+        let mut v = b"P6\n# CREATOR: GIMP PNM Filter Version 1.1\n2 2\n255\n".to_vec();
+        v.extend_from_slice(&[0xff; 12]);
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(pnm());
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("2".into()));
+        assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("2".into()));
+        assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Str("255".into()));
+        assert_eq!(ev.node(&d, &[4]).unwrap().size_bits, 12 * 8);
+        // The comment belongs to the field that stepped over it, and the value
+        // starts after it rather than at the field.
+        let width = ev.node(&d, &[1]).unwrap();
+        assert_eq!(width.offset_bits, 2 * 8);
+        assert_eq!(width.value_offset_bits, 42 * 8);
+    }
+
+    #[test]
+    fn a_comment_between_two_numbers_is_stepped_over_too() {
+        let mut v = b"P5\n8 # width above, height below\n1\n255\n".to_vec();
+        v.push(0xff);
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(pnm());
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("8".into()));
+        assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("1".into()));
+        assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Str("255".into()));
+        assert_eq!(ev.node(&d, &[4]).unwrap().size_bits, 8);
     }
 
     #[test]

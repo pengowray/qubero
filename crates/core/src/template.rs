@@ -268,11 +268,17 @@ pub enum StrLen {
     /// header writes its numbers with a space, a tab or a newline between
     /// them, and any run of those, in whatever mixture.
     ///
+    /// With `comment`, a run from the first byte to the second is stepped over
+    /// too, wherever one appears among the separators. That is a comment in
+    /// every format that writes its numbers as text: `#` to the end of the
+    /// line in a netpbm file. Only in the run before the value, which is where
+    /// anything that writes them puts them.
+    ///
     /// The skipped bytes and the terminator are the format's business, not
     /// the value's, so neither is part of what the field reads as. Writing one
     /// would have to decide how much whitespace to put back, so these are
     /// read-only, as terminated fields are.
-    Scan { skip: Vec<u8>, ends: Vec<u8> },
+    Scan { skip: Vec<u8>, ends: Vec<u8>, comment: Option<(u8, u8)> },
     /// Runs to the first `end` byte, which belongs to the field. A C string.
     /// With `or_end`, a field with no terminator in it runs to the end of its
     /// container instead of failing, which is what a last line without a

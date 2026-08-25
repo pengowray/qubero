@@ -2,6 +2,36 @@
 
 use super::*;
 
+/// How far into a scanned field the value starts: any byte in `skip`, and a
+/// comment running from one byte to another when the format has them. Kept in
+/// one place because two callers need the same answer, one measuring the field
+/// and one saying where inside it the value sits, and an answer that differed
+/// between them would put the value in the wrong place.
+#[derive(Default, Clone, Copy)]
+pub(super) struct Skipping {
+    in_comment: bool,
+}
+
+impl Skipping {
+    /// Whether this byte is still part of the run before the value. The byte
+    /// that ends a comment belongs to it, and what follows may be more
+    /// separators, so this keeps its state between calls and across the blocks
+    /// a long field is read in.
+    fn steps_over(&mut self, b: u8, skip: &[u8], comment: Option<(u8, u8)>) -> bool {
+        if self.in_comment {
+            if comment.is_some_and(|(_, end)| b == end) {
+                self.in_comment = false;
+            }
+            return true;
+        }
+        if comment.is_some_and(|(start, _)| b == start) {
+            self.in_comment = true;
+            return true;
+        }
+        skip.contains(&b)
+    }
+}
+
 /// Index of `term` in `hay`, aligned to whole units of its length.
 pub(super) fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
     let unit = term.len();
@@ -45,8 +75,9 @@ impl Evaluator {
             StrLen::Fixed(_) => (rest, false),
             // The field is the separators, the value and the byte that ends
             // it, and the sizing pass has already measured all three.
-            StrLen::Scan { skip, .. } => {
-                skipped = body.iter().take_while(|b| skip.contains(b)).count() as u64;
+            StrLen::Scan { skip, comment, .. } => {
+                let mut over = Skipping::default();
+                skipped = body.iter().take_while(|b| over.steps_over(**b, skip, *comment)).count() as u64;
                 (rest.saturating_sub(skipped).saturating_sub(1), true)
             }
             StrLen::Padded { pad, .. } => {
@@ -152,7 +183,14 @@ impl Evaluator {
     /// the field before it has already stepped over. Running out of container
     /// without meeting a separator is an error, the same answer a terminated
     /// field gives: the number is not finished, so there is no number.
-    pub(super) fn read_scan<S: Source>(&self, doc: &Document<S>, r: &Resolved, skip: &[u8], ends: &[u8]) -> R<(u64, u64)> {
+    pub(super) fn read_scan<S: Source>(
+        &self,
+        doc: &Document<S>,
+        r: &Resolved,
+        skip: &[u8],
+        ends: &[u8],
+        comment: Option<(u8, u8)>,
+    ) -> R<(u64, u64)> {
         const BLOCK: u64 = 256;
         /// A field with no separator in it must fail rather than walk to the end.
         const CAP: u64 = 64 * 1024;
@@ -160,6 +198,7 @@ impl Evaluator {
         let mut at = r.offset;
         let (mut skipped, mut seen) = (0u64, 0u64);
         let mut skipping = true;
+        let mut over = Skipping::default();
         while at < stop {
             let n = BLOCK.min((stop - at) / 8);
             if n == 0 {
@@ -167,7 +206,7 @@ impl Evaluator {
             }
             let block = self.read(doc, r, at, n * 8)?;
             for (i, b) in block.iter().enumerate() {
-                if skipping && skip.contains(b) {
+                if skipping && over.steps_over(*b, skip, comment) {
                     skipped += 1;
                     continue;
                 }
