@@ -10,6 +10,11 @@
 //! before it places anything, and the image then runs to the footer or to the
 //! end of the file depending on what it saw.
 //!
+//! Eight bytes is what a peek holds at once, so it is eight of the eighteen
+//! that are checked. A file whose pixels happen to end with those same eight
+//! is read as having a footer it does not have, and says so: the eighteen-byte
+//! signature in it then fails to match, which is a row the reader can see.
+//!
 //! What the footer holds is two offsets, to an extension area of authorship
 //! and timestamps and to a chain of developer-defined records. Both sit
 //! between the pixels and the footer, so they are inside what is read here as
