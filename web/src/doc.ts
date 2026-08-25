@@ -196,6 +196,10 @@ export type TypeInfo = {
   readonly scale: number;
   readonly second_name: string;
   readonly second: number;
+  /** Quant: whether that second number is taken away rather than added, and
+   *  whether it is multiplied by the group's own minimum first. */
+  readonly second_subtract: boolean;
+  readonly second_per_group: boolean;
   /** Quant: where the block starts, so a weight's bits can be found from the
    *  offset it carries. */
   readonly block_bits: number;

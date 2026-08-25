@@ -145,6 +145,21 @@ pub struct Group {
     pub min: Option<i32>,
 }
 
+/// What a layout pairs with its scale, and how it applies it. Enough to write
+/// out how a stored integer becomes the number the model reads, rather than
+/// leaving that to be inferred from the name.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Offset {
+    /// The file's own name for it: `m`, `dmin`.
+    pub name: &'static str,
+    pub value: f64,
+    /// Taken away from the scaled weight rather than added to it.
+    pub subtract: bool,
+    /// Multiplied by the group's own minimum first, which is what a K type
+    /// does; without this it applies to every weight in the block alike.
+    pub per_group: bool,
+}
+
 /// One block's numbers: its shared scale, whatever it pairs with the scale, and
 /// the weights.
 #[derive(Debug, Clone, PartialEq)]
@@ -155,8 +170,8 @@ pub struct Block {
     /// themselves measured in.
     pub d: f64,
     /// What the type pairs with the scale, where it has one: the `m` a `q4_1`
-    /// adds, or the `dmin` a K type takes away. Named as the file names it.
-    pub second: Option<(&'static str, f64)>,
+    /// adds, or the `dmin` a K type takes away.
+    pub second: Option<Offset>,
     /// The per-group scales, in the order the groups run, or empty for a type
     /// that has one scale for the whole block. Group `i` covers the weights
     /// from `i * group_weights`.
@@ -221,7 +236,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 w[j] = weight(q0, q0 as f64 * d + m, lo_nibble(4 + j));
                 w[j + 16] = weight(q1, q1 as f64 * d + m, hi_nibble(4 + j));
             }
-            Block { kind, d, second: Some(("m", m)), groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: Some(Offset { name: "m", value: m, subtract: false, per_group: false }), groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q5_0 => {
             let d = f16(b, 0);
@@ -251,7 +266,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 w[j] = weight(q0, q0 as f64 * d + m, lo_nibble(8 + j));
                 w[j + 16] = weight(q1, q1 as f64 * d + m, hi_nibble(8 + j));
             }
-            Block { kind, d, second: Some(("m", m)), groups: Vec::new(), group_weights: 0, weights: w }
+            Block { kind, d, second: Some(Offset { name: "m", value: m, subtract: false, per_group: false }), groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q8_0 => {
             let d = f16(b, 0);
@@ -301,7 +316,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 .iter()
                 .map(|&sc| Group { scale: i32::from(sc & 0xF), min: Some(i32::from(sc >> 4)) })
                 .collect();
-            Block { kind, d, second: Some(("dmin", dmin)), groups, group_weights: 16, weights: w }
+            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups, group_weights: 16, weights: w }
         }
         Quant::Q3_K => {
             // hmask[32], qs[64], scales[12], d
@@ -355,7 +370,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     w.push(weight(qv, d2 * qv as f64 - off2, hi_nibble(qbase + l)));
                 }
             }
-            Block { kind, d, second: Some(("dmin", dmin)), groups: k4_groups(scales), group_weights: 32, weights: w }
+            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups: k4_groups(scales), group_weights: 32, weights: w }
         }
         Quant::Q5_K => {
             // d, dmin, scales[12], qh[32], qs[128]
@@ -381,7 +396,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     w.push(weight(qv, d2 * qv as f64 - off2, hi_nibble(qbase + l)));
                 }
             }
-            Block { kind, d, second: Some(("dmin", dmin)), groups: k4_groups(scales), group_weights: 32, weights: w }
+            Block { kind, d, second: Some(Offset { name: "dmin", value: dmin, subtract: true, per_group: true }), groups: k4_groups(scales), group_weights: 32, weights: w }
         }
         Quant::Q6_K => {
             // ql[128], qh[64], scales[16] (signed), d
@@ -502,7 +517,7 @@ mod tests {
         assert_eq!(block.weights[0].q, 1 + 16);
         assert_eq!(block.weights[16].q, 2 + 16);
         assert_eq!(block.weights[1].q, 0);
-        assert_eq!(block.second, Some(("m", 0.0)));
+        assert_eq!(block.second.map(|o| (o.name, o.value, o.subtract)), Some(("m", 0.0, false)));
     }
 
     #[test]

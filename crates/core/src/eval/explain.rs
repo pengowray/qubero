@@ -3,7 +3,7 @@
 //! and which bits of a float are which.
 
 use super::*;
-use crate::formats::ggml_quant::{self, Group, Quant, Weight};
+use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -39,10 +39,10 @@ pub enum Explain {
         kind: &'static str,
         /// How many bits one weight is worth.
         bits: u32,
-        /// The block's shared scale, and what it pairs with, named as the file
-        /// names it: the `m` a `q4_1` adds, the `dmin` a K type takes away.
+        /// The block's shared scale, and what it pairs with: the `m` a `q4_1`
+        /// adds, the `dmin` a K type takes away.
         d: f64,
-        second: Option<(&'static str, f64)>,
+        second: Option<Offset>,
         /// Where the block starts, so that a weight's bits can be found from
         /// the offset it carries.
         block_bits: u64,

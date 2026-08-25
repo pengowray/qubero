@@ -1453,3 +1453,15 @@ input.invalid {
 .insp-qgroup-min {
   color: var(--muted);
 }
+.insp-qrecipe-named,
+.insp-qrecipe {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.insp-qrecipe-named {
+  color: var(--muted);
+  margin-top: 4px;
+}

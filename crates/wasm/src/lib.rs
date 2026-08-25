@@ -88,6 +88,11 @@ struct ExplainDto {
     scale: f64,
     second_name: String,
     second: f64,
+    /// Quant: whether that second number is taken away rather than added, and
+    /// whether it is multiplied by the group's own minimum first. Together with
+    /// the group scales these say how a stored weight becomes a real one.
+    second_subtract: bool,
+    second_per_group: bool,
     /// Quant: where the block starts, so a weight's bits can be found from the
     /// offset it carries.
     block_bits: f64,
@@ -180,6 +185,8 @@ fn explain_dto(e: Explain) -> ExplainDto {
         scale: 0.0,
         second_name: String::new(),
         second: 0.0,
+        second_subtract: false,
+        second_per_group: false,
         block_bits: 0.0,
         groups: Vec::new(),
         group_weights: 0.0,
@@ -205,9 +212,11 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.name = kind.to_string();
             dto.width = f64::from(bits);
             dto.scale = d;
-            if let Some((name, v)) = second {
-                dto.second_name = name.to_string();
-                dto.second = v;
+            if let Some(o) = second {
+                dto.second_name = o.name.to_string();
+                dto.second = o.value;
+                dto.second_subtract = o.subtract;
+                dto.second_per_group = o.per_group;
             }
             dto.block_bits = block_bits as f64;
             dto.group_weights = f64::from(group_weights);

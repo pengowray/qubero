@@ -54,16 +54,8 @@ function scaleRow(info: TypeInfo): HTMLElement {
   return row;
 }
 
-/**
- * The weight the cursor is standing on, both ways round, and how to lift its
- * stored integer out of the file.
- *
- * The formula is only for a weight that keeps all of its bits in one run. A
- * five- or six-bit type puts the top bits in a separate byte, and a formula
- * that quietly left them out would be worse than none.
- */
-function cursorRow(w: QuantWeight, index: number, info: TypeInfo): DocumentFragment {
-  const frag = document.createDocumentFragment();
+/** The weight the cursor is standing on, both ways round. */
+function cursorRow(w: QuantWeight, index: number): HTMLElement {
   const row = document.createElement("div");
   row.className = "insp-qcursor";
   row.append(
@@ -71,9 +63,7 @@ function cursorRow(w: QuantWeight, index: number, info: TypeInfo): DocumentFragm
     span("insp-qcursor-note", `stored ${w.q}`),
     span("insp-qcursor-value", `scaled ${num(w.value)}`),
   );
-  frag.append(row);
-  if (w.width === info.width) frag.append(extraction(info.block_bits + w.bit, w.width));
-  return frag;
+  return row;
 }
 
 /**
@@ -110,6 +100,51 @@ function groupRow(info: TypeInfo): DocumentFragment {
     g.append(cell);
   });
   frag.append(head, g);
+  return frag;
+}
+
+/** A number inside a product, bracketed where its sign would otherwise run
+ *  into the operator before it. */
+function term(x: number): string {
+  const t = num(x);
+  return t.startsWith("-") ? `(${t})` : t;
+}
+
+/**
+ * How the stored integer at the cursor becomes the number the model reads,
+ * named first and then worked out.
+ *
+ * The two levels of scaling are the thing to see here: a K type multiplies the
+ * block's own scale by the group's, and takes away the block's minimum through
+ * the group's. Nothing else on the panel says how the numbers above it are
+ * connected.
+ */
+function recipe(info: TypeInfo, w: QuantWeight, index: number): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const group = info.groups.length > 0 ? info.groups[Math.floor(index / info.group_weights)] : undefined;
+  if (info.groups.length > 0 && group === undefined) return frag;
+  const names = ["d"];
+  const values = [info.scale];
+  if (group !== undefined) {
+    names.push("scale");
+    values.push(group.scale);
+  }
+  names.push("stored");
+  values.push(w.q);
+  let named = names.join(" × ");
+  let worked = values.map(term).join(" × ");
+  if (info.second_name !== "") {
+    const sign = info.second_subtract ? " − " : " + ";
+    const min = info.second_per_group ? group?.min ?? null : null;
+    named += sign + (min === null ? info.second_name : `${info.second_name} × min`);
+    // The whole of what is taken away goes in one bracket, so that a negative
+    // `dmin` reads as a number being subtracted rather than as two signs.
+    worked += sign + (min === null ? term(info.second) : `(${num(info.second)} × ${num(min)})`);
+  }
+  frag.append(
+    span("insp-qrecipe-named", named),
+    span("insp-qrecipe", `${worked} = ${num(w.value)}`),
+  );
   return frag;
 }
 
@@ -193,7 +228,14 @@ function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
 export function quantBody(info: TypeInfo, goTo: GoTo, redraw: () => void): DocumentFragment {
   const frag = document.createDocumentFragment();
   const here = info.at >= 0 ? info.weights[info.at] : undefined;
-  if (here !== undefined) frag.append(cursorRow(here, info.at, info));
+  if (here !== undefined) {
+    // What it is, then why that number, then where its bits are. The bit
+    // extraction is only for a weight that keeps all of its bits in one run: a
+    // five- or six-bit type puts the top bits in a separate byte, and an
+    // expression that quietly left them out would be worse than none.
+    frag.append(cursorRow(here, info.at), recipe(info, here, info.at));
+    if (here.width === info.width) frag.append(extraction(info.block_bits + here.bit, here.width));
+  }
   frag.append(scaleRow(info), groupRow(info));
   const head = document.createElement("div");
   head.className = "insp-qhead";
