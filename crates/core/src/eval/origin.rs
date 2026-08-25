@@ -87,7 +87,7 @@ impl Evaluator {
     /// its offsets from. The answer is where that list put the matching child,
     /// which is the same arithmetic the list already did.
     fn points_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<(String, u64)>> {
-        let Some((list, idx, name)) = self.pointer_use(path) else { return Ok(None) };
+        let Some((list, idx, name)) = self.pointer_use(doc, path) else { return Ok(None) };
         let mut child = list;
         child.push(idx);
         if self.resolve(doc, &child).is_err() {
@@ -99,14 +99,14 @@ impl Evaluator {
     /// The pointer list that reads this field as one of its offsets: where the
     /// list is, which of its children this field places, and what that child is
     /// called.
-    fn pointer_use(&self, path: &[usize]) -> Option<(Vec<usize>, usize, String)> {
+    fn pointer_use<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> Option<(Vec<usize>, usize, String)> {
         for k in 0..path.len().saturating_sub(1) {
             let (parent, arr, idx) = (&path[..k], path[k], path[k + 1]);
-            let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { continue };
-            let Some(array) = s.fields.get(arr) else { continue };
+            let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty).cloned() else { continue };
+            let Some(array) = s.fields.get(arr).cloned() else { continue };
             for (j, f) in s.fields.iter().enumerate() {
                 let Ty::PointerList { offsets, field, .. } = &f.ty else { continue };
-                if **offsets != *array.name || !self.names_field(path, k + 2, field.as_deref()) {
+                if **offsets != *array.name || !self.names_field(doc, path, k + 2, &field.clone()) {
                     continue;
                 }
                 let mut list = parent.to_vec();
@@ -119,17 +119,12 @@ impl Evaluator {
 
     /// Whether what is left of the path past `from` is the field a pointer list
     /// names, which is one named field of the element, or the element itself.
-    fn names_field(&self, path: &[usize], from: usize, field: Option<&str>) -> bool {
-        match field {
-            None => path.len() == from,
-            Some(want) => {
-                if path.len() != from + 1 {
-                    return false;
-                }
-                let Some(Ty::Struct(s)) = self.memo.get(&path[..from]).map(|r| &r.ty) else { return false };
-                s.fields.get(path[from]).is_some_and(|f| *f.name == *want)
-            }
+    fn names_field<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: usize, field: &[String]) -> bool {
+        if path.len() != from + field.len() {
+            return false;
         }
+        let mut p = path[..from].to_vec();
+        matches!(self.descend(doc, &mut p, field), Ok(true)) && p == path
     }
 
     /// The offset that placed a child of a pointer list.
@@ -141,12 +136,11 @@ impl Evaluator {
         let Some(mut p) = self.find_field(list, &offsets) else { return Ok(()) };
         p.push(idx);
         let mut label = format!("{offsets}[{idx}]");
-        if let Some(name) = &field {
-            self.resolve(doc, &p)?;
-            let Some(Ty::Struct(s)) = self.memo.get(&p).map(|r| &r.ty) else { return Ok(()) };
-            let Some(j) = s.fields.iter().position(|f| *f.name == **name) else { return Ok(()) };
-            p.push(j);
-            label = format!("{label}.{name}");
+        if !field.is_empty() {
+            if !self.descend(doc, &mut p, &field)? {
+                return Ok(());
+            }
+            label = format!("{label}.{}", field.join("."));
         }
         let o = self.origin(doc, Role::Position, label, p);
         out.push(o);
@@ -189,7 +183,7 @@ impl Evaluator {
                     self.from_expr(doc, path, &size, Role::Length, out)?;
                     ty = *inner;
                 }
-                Ty::Switch { on, .. } => {
+                Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.from_expr(doc, path, &on, Role::Type, out)?;
                     return Ok(());
                 }
@@ -255,10 +249,10 @@ impl Evaluator {
                 p.push(i as usize);
                 let mut label = format!("{array}[{i}]");
                 for name in field.iter() {
-                    self.resolve(doc, &p)?;
-                    let Some(Ty::Struct(s)) = self.memo.get(&p).map(|r| &r.ty) else { return Ok(()) };
-                    let Some(j) = s.fields.iter().position(|f| *f.name == **name) else { return Ok(()) };
-                    p.push(j);
+                    match self.child_index(doc, &p, name)? {
+                        Some(j) => p.push(j),
+                        None => return Ok(()),
+                    }
                     label = format!("{label}.{name}");
                 }
                 let mut o = self.origin(doc, role, label, p);

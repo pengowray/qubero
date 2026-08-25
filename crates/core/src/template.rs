@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::json;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endian {
     Little,
@@ -283,6 +285,12 @@ pub enum Ty {
     BF16(Endian),
     F32(Endian),
     F64(Endian),
+    /// An eight-bit float, which is how the weights of a quantised model are
+    /// written now. `e4m3` spends four bits on the exponent and three on the
+    /// fraction and reaches 448; it has no infinities, and only an exponent
+    /// and a fraction of all ones is not a number. The other, `e5m2`, spends
+    /// five and two, reaches 57344, and does have them.
+    F8 { e4m3: bool },
     /// A field of no bits whose value is worked out rather than read. What it
     /// takes to say "the same as the last one" without inventing a byte.
     Computed(Expr),
@@ -314,7 +322,19 @@ pub enum Ty {
     /// tensor table holds each offset inside a record, not as a bare number.
     /// With `to_next`, a child runs to the start of the next child above it
     /// (or the end of the list), for formats that store no per-child size.
-    PointerList { offsets: Arc<str>, field: Option<String>, anchor: Anchor, adjust: Expr, elem: Box<Ty>, to_next: bool },
+    /// With `skip_missing`, an entry of `offsets` with no such field points at
+    /// nothing rather than making the list unreadable: it keeps its place
+    /// among the children and covers no bytes. A safetensors header holds the
+    /// file's own metadata among the tensors, and no weights belong to it.
+    PointerList {
+        offsets: Arc<str>,
+        field: Arc<[String]>,
+        anchor: Anchor,
+        adjust: Expr,
+        elem: Box<Ty>,
+        to_next: bool,
+        skip_missing: bool,
+    },
     /// SQLite's variable-length integer: seven bits per byte, most significant
     /// group first, up to nine bytes, where a ninth byte contributes all eight
     /// of its bits. `Vlq` stops at four bytes and never does that, so it
@@ -331,6 +351,20 @@ pub enum Ty {
     Enum { inner: Box<Ty>, def: Arc<EnumDef> },
     /// An integer type whose bits have names.
     Flags { inner: Box<Ty>, def: Arc<FlagsDef> },
+    /// Text read as the JSON it holds, so that every value inside it is a
+    /// node of its own at the bytes it is written at. A safetensors file is a
+    /// JSON header and then the weights that header describes, and reading the
+    /// header as one long string would leave the file's whole structure inside
+    /// a single row.
+    ///
+    /// A template writes `Ty::json()`, which is the whole text; the shapes
+    /// below that are what the values found inside it are given.
+    Json(json::Shape),
+    /// Pick a type by the text of an earlier field, for a format that names
+    /// its types in words rather than in numbers: a safetensors tensor says
+    /// `"dtype": "F8_E4M3"`. `on` names the field, the way `Switch` does with
+    /// a number.
+    Match { on: Expr, cases: Arc<[(String, Ty)]>, default: Arc<Ty> },
     /// A type from the template's table, by name. This is what makes a format
     /// whose boxes contain boxes expressible: the type refers to itself.
     Named(Arc<str>),
@@ -384,6 +418,10 @@ impl Ty {
     pub fn fixed(bits: u32, frac: u32, endian: Endian) -> Ty {
         Ty::Fixed { bits, frac, endian, signed: false }
     }
+    /// An eight-bit float. See [`Ty::F8`].
+    pub fn f8(e4m3: bool) -> Ty {
+        Ty::F8 { e4m3 }
+    }
     pub fn leb_u() -> Ty {
         Ty::Leb128 { signed: false }
     }
@@ -410,6 +448,18 @@ impl Ty {
     }
     pub fn text(len: StrLen, enc: Encoding) -> Ty {
         Ty::Str { len, enc }
+    }
+    /// The text in this field, read as the JSON it holds.
+    pub fn json() -> Ty {
+        Ty::Json(json::Shape::Doc)
+    }
+    /// Pick a type by the text of the field `on` names.
+    pub fn matches(on: Expr, cases: Vec<(&str, Ty)>, default: Ty) -> Ty {
+        Ty::Match {
+            on,
+            cases: cases.into_iter().map(|(k, t)| (k.to_string(), t)).collect(),
+            default: Arc::new(default),
+        }
     }
     pub fn magic(b: &[u8]) -> Ty {
         Ty::Magic(b.to_vec())
@@ -480,18 +530,41 @@ impl Ty {
     }
     /// Elements at the offsets held in an earlier array field.
     pub fn pointer_list(offsets: &str, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
-        Ty::PointerList { offsets: offsets.into(), field: None, anchor, adjust, elem: Box::new(elem), to_next: false }
+        Ty::PointerList {
+            offsets: offsets.into(),
+            field: Arc::from(Vec::new()),
+            anchor,
+            adjust,
+            elem: Box::new(elem),
+            to_next: false,
+            skip_missing: false,
+        }
     }
     /// A pointer list whose offsets sit inside the records of `offsets`, in
     /// field `field`, and whose children run to the next child's start.
-    pub fn pointer_list_records(offsets: &str, field: &str, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
+    pub fn pointer_list_records(offsets: &str, field: &[&str], anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
         Ty::PointerList {
             offsets: offsets.into(),
-            field: Some(field.to_string()),
+            field: field.iter().map(|s| s.to_string()).collect(),
             anchor,
             adjust,
             elem: Box::new(elem),
             to_next: true,
+            skip_missing: false,
+        }
+    }
+    /// A pointer list whose children have a size of their own, and where an
+    /// entry that names no offset points at nothing. See
+    /// [`Ty::PointerList::skip_missing`].
+    pub fn pointer_list_sized(offsets: &str, field: &[&str], anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
+        Ty::PointerList {
+            offsets: offsets.into(),
+            field: field.iter().map(|s| s.to_string()).collect(),
+            anchor,
+            adjust,
+            elem: Box::new(elem),
+            to_next: false,
+            skip_missing: true,
         }
     }
     pub fn sqlite_varint() -> Ty {
@@ -556,6 +629,8 @@ impl Ty {
             Ty::Int { bits, endian } => format!("i{bits} {}", e(*endian)),
             Ty::F16(en) => format!("f16 {}", e(*en)),
             Ty::BF16(en) => format!("bf16 {}", e(*en)),
+            Ty::F8 { e4m3: true } => "f8 e4m3".into(),
+            Ty::F8 { e4m3: false } => "f8 e5m2".into(),
             Ty::F32(en) => format!("f32 {}", e(*en)),
             Ty::F64(en) => format!("f64 {}", e(*en)),
             Ty::Fixed { bits, frac, endian, signed } => {
@@ -587,6 +662,8 @@ impl Ty {
             Ty::PointerList { elem, .. } => format!("offsets \u{2192} {}", elem.display_name()),
             Ty::Sized { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
+            Ty::Match { .. } => "switch".into(),
+            Ty::Json(shape) => shape.name().to_string(),
             Ty::Enum { def, .. } => def.name.clone(),
             Ty::Flags { def, .. } => def.name.clone(),
             Ty::Named(n) => n.to_string(),

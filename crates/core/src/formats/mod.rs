@@ -10,6 +10,7 @@ mod mp4;
 mod pe;
 pub mod pe_tables;
 mod png;
+mod safetensors;
 mod sqlite;
 mod w4v;
 mod wav;
@@ -25,6 +26,7 @@ pub use midi::midi;
 pub use mp4::mp4;
 pub use pe::pe;
 pub use png::png;
+pub use safetensors::safetensors;
 pub use sqlite::sqlite;
 pub use w4v::w4v;
 pub use wav::wav;
@@ -32,10 +34,16 @@ pub use whisper::whisper;
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
-use crate::template::Template;
+use crate::template::{Template, Ty};
+
+/// A file that is JSON and nothing else. The values inside it are the
+/// structure, and every one of them says where in the file it is written.
+pub fn json() -> Template {
+    Template::new("json", Ty::json())
+}
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -52,6 +60,8 @@ pub fn builtin(name: &str) -> Option<Template> {
         "msdos" => Some(dos()),
         "gguf" => Some(gguf()),
         "whisper" => Some(whisper()),
+        "safetensors" => Some(safetensors()),
+        "json" => Some(json()),
         _ => None,
     }
 }
@@ -68,6 +78,8 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("gguf")
     } else if is_whisper(head) {
         Some("whisper")
+    } else if is_safetensors(head) {
+        Some("safetensors")
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
     } else if head.starts_with(b"MThd") {
@@ -78,6 +90,8 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("msdos")
     } else if head.starts_with(b"ID3") {
         Some("id3")
+    } else if head.starts_with(b"{\"") {
+        Some("json")
     } else if head.starts_with(b"RIFF") && head.len() >= 12 && &head[8..12] == b"WAVE" {
         // The only thing that marks a W4V is the format tag inside `fmt `, so
         // this needs a few more bytes than a magic number would.
@@ -103,6 +117,19 @@ fn is_whisper(head: &[u8]) -> bool {
         return false;
     }
     matches!(u32::from_le_bytes([head[0x28], head[0x29], head[0x2a], head[0x2b]]), 80 | 128)
+}
+
+/// Whether these leading bytes are a safetensors file.
+///
+/// The format has no magic number: it opens with the length of its JSON
+/// header, and then the header. So what is looked for is a length that could
+/// be one, followed by the two characters an object whose first key is a
+/// string starts with. A header is tens of kilobytes on the smallest real
+/// model and a few megabytes on the largest.
+fn is_safetensors(head: &[u8]) -> bool {
+    let Some(len) = head.get(..8) else { return false };
+    let len = u64::from_le_bytes(len.try_into().expect("eight bytes"));
+    (2..=64 << 20).contains(&len) && head.get(8..10) == Some(b"{\"".as_slice())
 }
 
 /// Whether these leading bytes are a DOS executable and nothing newer.
@@ -207,6 +234,17 @@ mod tests {
         assert_eq!(sniff(&v), Some("whisper"));
         // A language model of the same era, which this cannot read.
         v[0x28..0x2c].copy_from_slice(&11008u32.to_le_bytes());
+        assert_eq!(sniff(&v), None);
+    }
+
+    #[test]
+    fn a_safetensors_file_is_told_by_its_header_length_and_the_json_after_it() {
+        let mut v = 1024u64.to_le_bytes().to_vec();
+        v.extend_from_slice(br#"{"a.weight":{"dtype":"F16""#);
+        assert_eq!(sniff(&v), Some("safetensors"));
+        // A length no header could have, whatever follows it.
+        let mut v = u64::MAX.to_le_bytes().to_vec();
+        v.extend_from_slice(br#"{"a":1}"#);
         assert_eq!(sniff(&v), None);
     }
 

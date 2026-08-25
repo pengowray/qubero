@@ -18,6 +18,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
     Some(match ty {
         Ty::UInt { bits, .. } | Ty::Int { bits, .. } => *bits as u64,
         Ty::F16(_) | Ty::BF16(_) => 16,
+        Ty::F8 { .. } => 8,
         Ty::Fixed { bits, .. } => *bits as u64,
         Ty::F32(_) => 32,
         Ty::F64(_) => 64,
@@ -96,6 +97,41 @@ pub(crate) fn narrow_f16(h: u16) -> f64 {
 /// for an `f32` already; widening first is what spells out the rest.
 pub(crate) fn narrow_f32(x: f32) -> f64 {
     if x.is_finite() { format!("{x}").parse().unwrap_or(x as f64) } else { x as f64 }
+}
+
+/// What an eight-bit float is worth. `e4m3` has four bits of exponent and
+/// three of fraction, with the top exponent still holding numbers rather than
+/// infinities: only an exponent and a fraction of all ones is not a number.
+/// `e5m2` has five and two and works like every other IEEE float, infinities
+/// and all.
+///
+/// Every value either form can hold is a float exactly, so nothing is rounded
+/// here and nothing needs shortening afterwards.
+pub(crate) fn f8_to_f64(b: u8, e4m3: bool) -> f64 {
+    let (exp_bits, frac_bits) = if e4m3 { (4u32, 3u32) } else { (5u32, 2u32) };
+    let bias = (1i32 << (exp_bits - 1)) - 1;
+    let sign = if b & 0x80 != 0 { -1.0 } else { 1.0 };
+    let exp = ((b >> frac_bits) & ((1 << exp_bits) - 1) as u8) as i32;
+    let frac = (b & ((1 << frac_bits) - 1) as u8) as f64;
+    let top = (1 << exp_bits) - 1;
+    let scale = (1u32 << frac_bits) as f64;
+    if exp == top {
+        if e4m3 {
+            // The one value this form spends on not being a number.
+            if frac as u32 == (1 << frac_bits) - 1 {
+                return f64::NAN;
+            }
+        } else if frac == 0.0 {
+            return sign * f64::INFINITY;
+        } else {
+            return f64::NAN;
+        }
+    }
+    if exp == 0 {
+        // Subnormal: no leading one, and the exponent the smallest normal has.
+        return sign * (frac / scale) * 2f64.powi(1 - bias);
+    }
+    sign * (1.0 + frac / scale) * 2f64.powi(exp - bias)
 }
 
 /// A brain float is the first sixteen bits of a single-precision float, so

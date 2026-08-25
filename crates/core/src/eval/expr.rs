@@ -101,6 +101,30 @@ impl Evaluator {
         })
     }
 
+    /// The text of the field an expression names, for a switch keyed on words
+    /// rather than on numbers. Only an expression that names a field can be
+    /// read as text: `Ref` for one beside it, `Elem` for one inside a list.
+    pub(super) fn text_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<String> {
+        let p = match e {
+            Expr::Ref(name) => match self.find_field(at, name) {
+                Some(p) => p,
+                None => return fail(format!("unknown field {name}")),
+            },
+            Expr::Elem { array, index, field } => self.elem_path(doc, at, array, index, field, here)?,
+            _ => return fail("a switch on text has to name a field"),
+        };
+        match self.node(doc, &p)?.value {
+            Value::Str(s) => Ok(s),
+            other => fail(format!("{other:?} is not text")),
+        }
+    }
+
     /// Every number in the array at `path`, multiplied together: what a shape
     /// describes.
     fn multiply<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<i128> {
@@ -182,18 +206,40 @@ impl Evaluator {
         Ok(0)
     }
 
+    /// Which child of the node at `path` is called `name`: a field of a
+    /// structure, a key of a JSON object, or an index of a JSON array written
+    /// as a number. None when it has no such child.
+    pub(super) fn child_index<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<usize>> {
+        self.resolve(doc, path)?;
+        if matches!(self.memo[path].ty, Ty::Json(_)) {
+            return self.json_index(doc, path, name);
+        }
+        let Ty::Struct(s) = self.memo[path].ty.base() else { return Ok(None) };
+        Ok(s.fields.iter().position(|f| *f.name == *name))
+    }
+
+    /// Walk `field` down from the node at `path`, a name at a time. False when
+    /// one of the names is not there, leaving `path` as far as it got.
+    pub(super) fn descend<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>, field: &[String]) -> R<bool> {
+        for name in field {
+            match self.child_index(doc, path, name)? {
+                Some(j) => path.push(j),
+                None => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
     /// Follow `field` down from the node at `path`, through whatever the
     /// template resolved it to, and read the number at the end. None when this
     /// node has no such field, which is how a search over siblings passes over
     /// the ones that are something else.
     fn field_in<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>, field: &[String]) -> R<Option<i128>> {
-        for name in field {
-            if self.resolve(doc, path).is_err() {
-                return Ok(None);
-            }
-            let Ty::Struct(s) = self.memo[path.as_slice()].ty.base() else { return Ok(None) };
-            let Some(j) = s.fields.iter().position(|f| *f.name == **name) else { return Ok(None) };
-            path.push(j);
+        match self.descend(doc, path, field) {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(e) if e.interrupted() => return Err(e),
+            Err(_) => return Ok(None),
         }
         Ok(match self.node(doc, path) {
             Ok(info) => info.value.as_int(),
@@ -208,7 +254,7 @@ impl Evaluator {
     /// The path to `array[index]`, then down the named fields inside it:
     /// `tensors[i].offset` is a number, `tensors[i].dims` is an array, and
     /// getting to either is the same walk.
-    fn elem_path<S: Source>(
+    pub(super) fn elem_path<S: Source>(
         &mut self,
         doc: &Document<S>,
         at: &[usize],
@@ -225,15 +271,8 @@ impl Evaluator {
             return fail(format!("unknown field {array}"));
         };
         p.push(i as usize);
-        for name in field {
-            self.resolve(doc, &p)?;
-            let Ty::Struct(s) = self.memo[&p].ty.base() else {
-                return fail(format!("{array}[{i}] has no fields to look in"));
-            };
-            let Some(j) = s.fields.iter().position(|f| *f.name == **name) else {
-                return fail(format!("{array}[{i}] has no field named {name}"));
-            };
-            p.push(j);
+        if !self.descend(doc, &mut p, field)? {
+            return fail(format!("{array}[{i}] has no field named {}", field.join(".")));
         }
         Ok(p)
     }

@@ -33,16 +33,49 @@ pub enum Kind {
     Null,
 }
 
-impl Kind {
-    /// What to call this in a type column.
-    pub fn name(&self) -> &'static str {
+/// What kind of value a node holds, without the value itself. A parsed tree
+/// lives apart from the template, and this is what a node carries so its type
+/// column can say `object` where its neighbour says `number`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// The whole text, read as the one value it holds.
+    Doc,
+    Object,
+    Array,
+    Text,
+    Number,
+    Bool,
+    Null,
+}
+
+impl Shape {
+    /// Whether a node of this shape holds other values.
+    pub fn composite(self) -> bool {
+        matches!(self, Shape::Doc | Shape::Object | Shape::Array)
+    }
+
+    pub fn name(self) -> &'static str {
         match self {
-            Kind::Object(_) => "object",
-            Kind::Array(_) => "array",
-            Kind::Text(_) => "string",
-            Kind::Int(_) | Kind::Float(_) => "number",
-            Kind::Bool(_) => "bool",
-            Kind::Null => "null",
+            Shape::Doc => "json",
+            Shape::Object => "object",
+            Shape::Array => "array",
+            Shape::Text => "string",
+            Shape::Number => "number",
+            Shape::Bool => "bool",
+            Shape::Null => "null",
+        }
+    }
+}
+
+impl Kind {
+    pub fn shape(&self) -> Shape {
+        match self {
+            Kind::Object(_) => Shape::Object,
+            Kind::Array(_) => Shape::Array,
+            Kind::Text(_) => Shape::Text,
+            Kind::Int(_) | Kind::Float(_) => Shape::Number,
+            Kind::Bool(_) => Shape::Bool,
+            Kind::Null => Shape::Null,
         }
     }
 }

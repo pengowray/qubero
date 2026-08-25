@@ -8,7 +8,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::bits::bytes_for;
-use crate::decode::{be_int, fixed_bits, narrow_bf16, narrow_f16, narrow_f32, read_int, read_uint};
+use crate::decode::{be_int, f8_to_f64, fixed_bits, narrow_bf16, narrow_f16, narrow_f32, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::source::{Missing, Source};
@@ -16,6 +16,7 @@ use crate::template::{Anchor, Encoding, Expr, StrLen, Template, Ty, Until};
 use crate::text::{self, Settled};
 
 mod explain;
+mod jsontree;
 mod listing;
 mod origin;
 mod expr;
@@ -217,6 +218,10 @@ pub struct Evaluator {
     /// What each list has learned about itself, for the few nodes that are
     /// lists. Kept apart from `memo` so resolving a child stays cheap.
     lists: FxHashMap<Vec<usize>, ListState>,
+    /// The text of each `Ty::Json` field, parsed, kept beside the memo. Read
+    /// once however many values are asked for, and thrown away with the memo
+    /// entry it belongs to.
+    json: FxHashMap<Vec<usize>, std::sync::Arc<crate::json::Val>>,
     /// What each guarded walk has added to the memo, so it can drop the nodes
     /// it has moved past. One entry per walk, since a list can hold a list.
     journals: Vec<walk::WalkJournal>,
@@ -238,6 +243,7 @@ impl Evaluator {
             template,
             memo: FxHashMap::default(),
             lists: FxHashMap::default(),
+            json: FxHashMap::default(),
             journals: Vec::new(),
             left: None,
             slice: None,
@@ -321,6 +327,8 @@ impl Evaluator {
         // A node with no size worked out yet is dropped: nothing says where it
         // ends, so nothing says it ended before the edit.
         self.memo.retain(|_, r| r.size.is_some_and(|size| r.offset + size <= bit));
+        // The parsed text of a JSON field goes when the field itself does.
+        self.json.retain(|path, _| self.memo.contains_key(path));
         self.lists.retain(|path, l| {
             l.checkpoints.retain(|(_, at)| *at <= bit);
             if l.walk_at.is_some_and(|(_, at)| at > bit) {
@@ -350,6 +358,7 @@ impl Evaluator {
     pub fn invalidate(&mut self) {
         self.memo.clear();
         self.lists.clear();
+        self.json.clear();
         self.journals.clear();
         self.left = self.slice;
         self.reached_bits = 0;
@@ -373,6 +382,10 @@ impl Evaluator {
         let (value, child_count, composite) = match &r.ty {
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
             Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
+            Ty::Json(shape) if shape.composite() => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -521,6 +534,11 @@ impl Evaluator {
         let (parent, idx) = (&path[..path.len() - 1], path[path.len() - 1]);
         self.resolve(doc, parent)?;
         let pr = self.memo.get(parent).expect("parent resolved").clone();
+        // A value inside JSON is placed where its text is, which the parse
+        // already knows. Nothing below applies to it.
+        if matches!(pr.ty, Ty::Json(_)) {
+            return self.resolve_json_child(doc, path);
+        }
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
                 Some(f) => (Name::Field(f.name.clone()), f.ty.clone()),
@@ -534,7 +552,26 @@ impl Evaluator {
         // Offset: read from the pointer array, or after the previous sibling,
         // or at the parent's start.
         let offset = if matches!(pr.ty, Ty::PointerList { .. }) {
-            self.pointer_offset(doc, parent, &pr, idx)?
+            match self.pointer_offset(doc, parent, &pr, idx)? {
+                Some(at) => at,
+                // An entry that points at nothing, in a list that allows for
+                // one. It keeps its place among the children and covers no
+                // bytes: a safetensors header holds the file's own metadata
+                // among the tensors, and no weights belong to it.
+                None => {
+                    let r = Resolved {
+                        name,
+                        ty: Ty::Bytes(Expr::Lit(0)),
+                        offset: pr.offset,
+                        limit: pr.offset,
+                        declared_size: Some(0),
+                        size: Some(0),
+                        computed: None,
+                    };
+                    self.remember(path, r);
+                    return Ok(());
+                }
+            }
         } else if idx == 0 {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
@@ -567,11 +604,12 @@ impl Evaluator {
     /// Where child `idx` of a pointer list starts. The offsets are bytes from
     /// the anchor, so a child can sit anywhere in the list's stretch, in any
     /// order. One that points outside it is an error for that child alone.
-    fn pointer_offset<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved, idx: usize) -> R<u64> {
-        let Ty::PointerList { offsets, field, anchor, adjust, .. } = &lr.ty else {
+    fn pointer_offset<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved, idx: usize) -> R<Option<u64>> {
+        let Ty::PointerList { offsets, field, anchor, adjust, skip_missing, .. } = &lr.ty else {
             return fail("not a pointer list");
         };
         let (offsets, field, anchor, adjust) = (offsets.clone(), field.clone(), *anchor, adjust.clone());
+        let skip_missing = *skip_missing;
         let base = match anchor {
             Anchor::File => 0,
             // The nearest enclosing window, which is the page or the table the
@@ -587,21 +625,20 @@ impl Evaluator {
                 if a == 0 { lr.offset } else { lr.offset.div_ceil(a) * a }
             }
         };
-        let at = self.eval_expr(
-            doc,
-            list,
-            &Expr::Elem {
-                array: offsets,
-                index: Box::new(Expr::Lit(idx as i128)),
-                field: field.into_iter().collect(),
-            },
-        )?;
+        let e = Expr::Elem { array: offsets, index: Box::new(Expr::Lit(idx as i128)), field };
+        let at = match self.eval_expr(doc, list, &e) {
+            Ok(at) => at,
+            // Nothing to read there. In a list that allows for it that is an
+            // entry pointing at nothing rather than a broken file.
+            Err(err) if skip_missing && !err.interrupted() => return Ok(None),
+            Err(err) => return Err(err),
+        };
         let adj = self.eval_expr(doc, list, &adjust)?;
         let bits = base as i128 + (at + adj) * 8;
         if bits < lr.offset as i128 || bits >= lr.limit as i128 {
             return fail(format!("offset {at} points outside {}", lr.name.text()));
         }
-        Ok(bits as u64)
+        Ok(Some(bits as u64))
     }
 
     /// Every child start of a pointer list, sorted, worked out once and kept.
@@ -616,7 +653,8 @@ impl Evaluator {
         let mut starts = Vec::with_capacity(n as usize);
         for i in 0..n as usize {
             match self.pointer_offset(doc, list, lr, i) {
-                Ok(off) => starts.push((off, i)),
+                Ok(Some(off)) => starts.push((off, i)),
+                Ok(None) => {}
                 Err(e) if e.interrupted() => return Err(e),
                 Err(_) => {}
             }
@@ -685,6 +723,13 @@ impl Evaluator {
                     let v = self.eval_expr_at(doc, path, &on, Some((offset, limit)))?;
                     // Only the case this file takes is cloned; the others
                     // stay shared.
+                    ty = match cases.iter().find(|(k, _)| *k == v) {
+                        Some((_, t)) => t.clone(),
+                        None => (*default).clone(),
+                    };
+                }
+                Ty::Match { on, cases, default } => {
+                    let v = self.text_at(doc, path, &on, Some((offset, limit)))?;
                     ty = match cases.iter().find(|(k, _)| *k == v) {
                         Some((_, t)) => t.clone(),
                         None => (*default).clone(),
@@ -800,6 +845,10 @@ impl Evaluator {
                     Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,
                     _ => return fail("enum over a type with no fixed size"),
                 },
+                // A JSON field is as long as the text it was given: what the
+                // values inside it come to is what the parse says, and any
+                // room left over is padding the format put there.
+                Ty::Json(_) => r.limit - r.offset,
                 // A pointer list holds the stretch its offsets point into,
                 // which runs to the end of its container.
                 Ty::PointerList { .. } => r.limit - r.offset,
@@ -882,6 +931,7 @@ impl Evaluator {
                 let until = until.clone();
                 self.count_repeat(doc, path, &r, &until)
             }
+            Ty::Json(shape) if shape.composite() => self.json_child_count(doc, path),
             _ => Ok(0),
         }
     }
