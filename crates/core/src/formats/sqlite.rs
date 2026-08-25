@@ -174,9 +174,9 @@ fn payload(page_type: i128, usable: E, rec: T) -> T {
     // The spilled size that keeps the overflow pages full, and the smallest
     // one that is allowed when it does not fit either.
     let k = || min().add(past().sub(past().div(four()).mul(four())));
-    let local = T::switch(k().div(max().add(E::lit(1))), vec![(0, T::bytes(k()))], T::bytes(min()));
+    let on_page = T::switch(k().div(max().add(E::lit(1))), vec![(0, T::bytes(k()))], T::bytes(min()));
     let spilled =
-        T::inline_structure("Spilled", vec![("local", local), ("overflow_page", T::u32(Big))]);
+        T::inline_structure("Spilled", vec![("on_page", on_page), ("overflow_page", T::u32(Big))]);
     T::switch(p().div(max().add(E::lit(1))), vec![(0, T::sized(p(), rec))], spilled)
 }
 
@@ -601,9 +601,9 @@ mod tests {
         let d = Document::new(MemSource(b));
         let mut ev = Evaluator::new(sqlite());
         let spilled = [PAGES, 0, CELLS, 0, 2];
-        let local = ev.node(&d, &[spilled.as_slice(), &[0]].concat()).unwrap();
-        assert_eq!(local.name, "local");
-        assert!(matches!(local.value, Value::Bytes { len, .. } if len == 92));
+        let on_page = ev.node(&d, &[spilled.as_slice(), &[0]].concat()).unwrap();
+        assert_eq!(on_page.name, "on_page");
+        assert!(matches!(on_page.value, Value::Bytes { len, .. } if len == 92));
         let next = ev.node(&d, &[spilled.as_slice(), &[1]].concat()).unwrap();
         assert_eq!(next.name, "overflow_page");
         assert_eq!(next.value, Value::UInt(7));
