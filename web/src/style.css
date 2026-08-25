@@ -33,6 +33,9 @@ html,
 body {
   margin: 0;
   height: 100%;
+  /* Nothing here scrolls the page itself, so a drag that runs past the end of a
+     panel must not bounce the page or pull it down to refresh. */
+  overscroll-behavior: none;
   background: var(--bg);
   color: var(--fg);
   font: 14px/1.4 var(--sans);

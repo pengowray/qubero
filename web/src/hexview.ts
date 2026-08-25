@@ -64,6 +64,13 @@ const COPY_LIMIT_BYTES = 256 * 1024;
 /** How long a message stays up before it goes away on its own. */
 const NOTICE_MS = 5000;
 
+/** What is left of a throw's speed after a millisecond: about half of it every
+ *  350ms, so a hard flick covers tens of rows and a gentle one a handful. */
+const GLIDE_DECAY = 0.998;
+/** Rows per millisecond below which a throw is over. One row every four
+ *  seconds is not scrolling. */
+const GLIDE_STOP = 0.004;
+
 const COPY_TOO_BIG = (bytes: number): string =>
   `Selection too large to copy: ${Math.round(bytes / 1024).toLocaleString()} KB, limit ${COPY_LIMIT_BYTES / 1024} KB.`;
 const COPY_PENDING = "Selection is still loading. Try again in a moment.";
@@ -119,7 +126,13 @@ export class HexView {
   private mode: ViewMode = "hex";
   private pane: Pane = "hex";
   private insertMode = false;
-  private dragging: { startY: number; startRow: number } | null = null;
+  /**
+   * A touch drag that is scrolling. Enough of the recent movement is kept to
+   * throw the view when the finger lifts.
+   */
+  private dragging: { startY: number; startRow: number; lastY: number; lastT: number; velocity: number } | null = null;
+  /** The frame request of a throw still slowing down, if one is running. */
+  private glide: number | null = null;
   /**
    * A mouse drag that is selecting rather than scrolling. The pane is fixed at
    * the button press: a drag that wandered from the bytes into the text column
@@ -191,6 +204,11 @@ export class HexView {
 
     new ResizeObserver(() => this.relayout()).observe(this.rowsEl);
     this.el.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
+    // The view scrolls itself, so no touch here is ever a page gesture. Saying
+    // so with `touch-action` alone is not enough: a drag down means scroll up,
+    // and the browser reads a drag down from the top of the page as pull to
+    // refresh, which throws the file away mid-scan.
+    this.el.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
     this.el.addEventListener("keydown", (e) => this.onKey(e));
     this.el.addEventListener("relayout", () => this.relayout());
     this.rowsEl.addEventListener("pointerdown", (e) => this.onPointerDown(e));
@@ -408,14 +426,16 @@ export class HexView {
 
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
+    this.stopGlide();
     const rows = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY : e.deltaY / this.rowHeight;
     this.scrollTo(this.topRow + (rows > 0 ? Math.max(1, Math.round(rows)) : Math.min(-1, Math.round(rows))));
   }
 
   private onPointerDown(e: PointerEvent): void {
     this.el.focus();
+    this.stopGlide();
     if (e.pointerType === "touch") {
-      this.dragging = { startY: e.clientY, startRow: this.topRow };
+      this.dragging = { startY: e.clientY, startRow: this.topRow, lastY: e.clientY, lastT: e.timeStamp, velocity: 0 };
       this.rowsEl.setPointerCapture(e.pointerId);
       return;
     }
@@ -446,8 +466,16 @@ export class HexView {
       return;
     }
     if (!this.dragging) return;
-    const dy = this.dragging.startY - e.clientY;
-    this.scrollTo(this.dragging.startRow + dy / this.rowHeight);
+    const dt = e.timeStamp - this.dragging.lastT;
+    if (dt > 0) {
+      // Smoothed, because the last sample before a finger lifts is often a
+      // stumble, and on its own it would decide the whole throw.
+      const v = (this.dragging.lastY - e.clientY) / this.rowHeight / dt;
+      this.dragging.velocity = this.dragging.velocity === 0 ? v : this.dragging.velocity * 0.7 + v * 0.3;
+      this.dragging.lastY = e.clientY;
+      this.dragging.lastT = e.timeStamp;
+    }
+    this.scrollTo(this.dragging.startRow + (this.dragging.startY - e.clientY) / this.rowHeight);
   }
 
   private onPointerUp(e: PointerEvent): void {
@@ -458,9 +486,36 @@ export class HexView {
       return;
     }
     if (!this.dragging) return;
-    const moved = Math.abs(this.dragging.startY - e.clientY) > 6;
+    const { startY, startRow, lastT, velocity } = this.dragging;
     this.dragging = null;
-    if (!moved) this.clickCell(e.target);
+    if (Math.abs(startY - e.clientY) <= 6) return void this.clickCell(e.target);
+    // A finger that came to rest before lifting was placing the view, not
+    // throwing it, however fast it was moving a moment earlier.
+    if (e.type === "pointerup" && e.timeStamp - lastT < 80 && Math.abs(velocity) > GLIDE_STOP)
+      this.startGlide(startRow + (startY - e.clientY) / this.rowHeight, velocity);
+  }
+
+  /** Keep scrolling after the finger lifts, slowing to a stop. A file is long
+   *  and a screen is short, and without a throw every screenful costs a drag. */
+  private startGlide(pos: number, velocity: number): void {
+    let last = -1;
+    const step = (now: number): void => {
+      // A frame the browser skipped still happened; a frame it took its time
+      // over should not fling the view a page further, hence the ceiling.
+      const dt = last < 0 ? 16 : Math.min(now - last, 64);
+      last = now;
+      pos += velocity * dt;
+      velocity *= Math.pow(GLIDE_DECAY, dt);
+      const stopped = pos < 0 || pos > this.maxTopRow || Math.abs(velocity) < GLIDE_STOP;
+      this.scrollTo(pos);
+      this.glide = stopped ? null : requestAnimationFrame(step);
+    };
+    this.glide = requestAnimationFrame(step);
+  }
+
+  private stopGlide(): void {
+    if (this.glide !== null) cancelAnimationFrame(this.glide);
+    this.glide = null;
   }
 
   private clickCell(target: EventTarget | null): void {
@@ -571,6 +626,7 @@ export class HexView {
   }
 
   private onTrackDown(e: PointerEvent): void {
+    this.stopGlide();
     this.track.setPointerCapture(e.pointerId);
     this.onTrackMove(e);
   }
@@ -588,6 +644,7 @@ export class HexView {
   // ----- editing -----
 
   private onKey(e: KeyboardEvent): void {
+    this.stopGlide();
     const bpr = this.bytesPerRow;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) return void (e.preventDefault(), this.doc.undo());
