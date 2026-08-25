@@ -592,6 +592,65 @@ fn a_peek_reads_the_way_round_it_is_told_to() {
 }
 
 #[test]
+fn an_offset_can_count_from_the_copy_it_is_written_inside() {
+    // A layout that names a table by where it is, written once and read both
+    // as a file of its own and as a copy of that file inside something else.
+    let format = || {
+        T::structure(
+            "Format",
+            vec![
+                ("where", T::u8()),
+                ("table", T::at_in_window(E::field("where"), T::u16(Big))),
+                ("body", T::bytes(E::Remaining)),
+            ],
+        )
+    };
+
+    // On its own, with no window anywhere, the offset counts from the start
+    // of the file, which is where the format begins.
+    let d = doc(&[3, 0, 0, 0xaa, 0xbb]);
+    let mut ev = Evaluator::new(Template::new("t", format()));
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 0);
+    let table = ev.node(&d, &[1, 0]).unwrap();
+    assert_eq!(table.offset_bits, 3 * 8);
+    assert_eq!(table.value, Value::UInt(0xaabb));
+
+    // The same bytes with two in front of them, inside a window of their own.
+    // The offset still means three from where the format starts, which is now
+    // three from the window rather than three from the file.
+    let embedded = Template::new(
+        "t",
+        T::structure(
+            "Outer",
+            vec![("skip", T::bytes(E::lit(2))), ("inner", T::sized(E::Remaining, format()))],
+        ),
+    );
+    let d = doc(&[9, 9, 3, 0, 0, 0xaa, 0xbb]);
+    let mut ev = Evaluator::new(embedded);
+    let table = ev.node(&d, &[1, 1, 0]).unwrap();
+    assert_eq!(table.offset_bits, 5 * 8);
+    assert_eq!(table.value, Value::UInt(0xaabb));
+
+    // An offset counted from the file rather than the window ignores the
+    // window, which is what a format that means the file wants.
+    let from_file = Template::new(
+        "t",
+        T::structure(
+            "Outer",
+            vec![
+                ("skip", T::bytes(E::lit(2))),
+                (
+                    "inner",
+                    T::sized(E::Remaining, T::structure("Format", vec![("table", T::at(E::lit(3), T::u16(Big)))])),
+                ),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(from_file);
+    assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().offset_bits, 3 * 8);
+}
+
+#[test]
 fn a_stream_with_no_length_runs_to_the_next_marker() {
     // What a JPEG scan needs: bits with no count anywhere, ending at the next
     // 0xff that is not followed by one of the bytes that make it data.

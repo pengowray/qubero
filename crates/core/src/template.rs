@@ -424,9 +424,9 @@ pub enum Ty {
     /// of its bits. `Vlq` stops at four bytes and never does that, so it
     /// cannot stand in.
     SqliteVarint,
-    /// A field of no bits whose contents are read somewhere else in the file:
-    /// `inner`, placed at `at` bytes from the start of the file, with nothing
-    /// of it where the field itself is declared.
+    /// A field of no bits whose contents are read somewhere else: `inner`,
+    /// placed at `at` bytes from `anchor`, with nothing of it where the field
+    /// itself is declared.
     ///
     /// This is what a header pointing at a table needs. A `PointerList` places
     /// children at offsets read from an earlier field, so the offsets have to
@@ -435,6 +435,15 @@ pub enum Ty {
     /// directory here, at no cost in bytes, puts the offsets in hand while the
     /// cursor is still at the front, and the list of lumps can then be
     /// declared over the region they sit in.
+    ///
+    /// `anchor` is what the offset is counted from, the same three choices a
+    /// `PointerList` has. A WAD counts from the start of the file and means
+    /// it. A TIFF counts from the start of the TIFF, which is the same place
+    /// until the TIFF is inside something else: the EXIF block of a JPEG is a
+    /// whole TIFF file written into a segment partway through, and every
+    /// offset in it counts from where that copy begins. `Anchor::Window` is
+    /// the nearest `Sized` around the field, and falls back to the start of
+    /// the file when there is none, so the one layout serves both.
     ///
     /// The field advances nothing, so what follows it is placed as if it were
     /// not there. Its one child is the only thing that covers bytes.
@@ -445,7 +454,7 @@ pub enum Ty {
     /// is read and shown but not landed on. In a format that keeps its table
     /// inside itself, which is every format that does this, something else
     /// already covers the stretch and the question does not come up.
-    At { at: Expr, inner: Box<Ty> },
+    At { anchor: Anchor, at: Expr, inner: Box<Ty> },
     /// Occupies exactly `size` bytes; `inner` is parsed within that window.
     Sized { size: Expr, inner: Box<Ty> },
     /// Pick a type by the value of `on`; falls back to `default`. The cases
@@ -690,7 +699,13 @@ impl Ty {
     /// `inner`, read at `at` bytes from the start of the file, in a field that
     /// takes up no room where it is declared. See [`Ty::At`].
     pub fn at(at: Expr, inner: Ty) -> Ty {
-        Ty::At { at, inner: Box::new(inner) }
+        Ty::At { anchor: Anchor::File, at, inner: Box::new(inner) }
+    }
+    /// The same, counted from the nearest `Sized` around the field rather than
+    /// from the start of the file. What a format keeps working through when a
+    /// copy of it is embedded in something else.
+    pub fn at_in_window(at: Expr, inner: Ty) -> Ty {
+        Ty::At { anchor: Anchor::Window, at, inner: Box::new(inner) }
     }
     pub fn sized(size: Expr, inner: Ty) -> Ty {
         Ty::Sized { size, inner: Box::new(inner) }

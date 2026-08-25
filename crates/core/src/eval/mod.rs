@@ -592,15 +592,16 @@ impl Evaluator {
                     return Ok(());
                 }
             }
-        } else if let Ty::At { at, .. } = &pr.ty {
-            // Bytes from the start of the file, which is how a header names
-            // the place it keeps a table.
-            let at = at.clone();
+        } else if let Ty::At { anchor, at, .. } = &pr.ty {
+            // Bytes from the anchor, which is how a header names the place it
+            // keeps a table: from the start of the file, or from the start of
+            // the copy of the format this one is written inside.
+            let (anchor, at) = (*anchor, at.clone());
             let n = self.eval_expr(doc, parent, &at)?;
             if n < 0 {
                 return fail("negative offset");
             }
-            n as u64 * 8
+            self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8
         } else if idx == 0 {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
@@ -630,6 +631,30 @@ impl Evaluator {
         Ok(())
     }
 
+    /// What an offset is counted from, in bits. Shared by the two types that
+    /// place something away from where it is declared: a pointer list and an
+    /// `At`. `own` is the start of the field doing the pointing, which only
+    /// the aligned anchor uses.
+    fn anchor_base(&self, path: &[usize], own: u64, anchor: Anchor) -> u64 {
+        match anchor {
+            Anchor::File => 0,
+            // The nearest window around it, which is the page or the table or
+            // the embedded copy the offsets are counted inside. The field's
+            // own path is not searched: a list that is itself a window counts
+            // from the one outside it, not from itself.
+            Anchor::Window => (0..path.len())
+                .rev()
+                .find_map(|k| self.memo.get(&path[..k]).filter(|r| r.declared_size.is_some()))
+                .map(|r| r.offset)
+                .unwrap_or(0),
+            // Its own start, aligned. `align` is bytes; offsets are bits.
+            Anchor::SelfAligned(align) => {
+                let a = u64::from(align) * 8;
+                if a == 0 { own } else { own.div_ceil(a) * a }
+            }
+        }
+    }
+
     /// Where child `idx` of a pointer list starts. The offsets are bytes from
     /// the anchor, so a child can sit anywhere in the list's stretch, in any
     /// order. One that points outside it is an error for that child alone.
@@ -639,21 +664,7 @@ impl Evaluator {
         };
         let (offsets, field, anchor, adjust) = (offsets.clone(), field.clone(), *anchor, adjust.clone());
         let (skip_missing, skip_zero) = (*skip_missing, *skip_zero);
-        let base = match anchor {
-            Anchor::File => 0,
-            // The nearest enclosing window, which is the page or the table the
-            // offsets are counted inside.
-            Anchor::Window => (0..list.len())
-                .rev()
-                .find_map(|k| self.memo.get(&list[..k]).filter(|r| r.declared_size.is_some()))
-                .map(|r| r.offset)
-                .unwrap_or(0),
-            // The list's own start, aligned. `align` is bytes; offsets are bits.
-            Anchor::SelfAligned(align) => {
-                let a = u64::from(align) * 8;
-                if a == 0 { lr.offset } else { lr.offset.div_ceil(a) * a }
-            }
-        };
+        let base = self.anchor_base(list, lr.offset, anchor);
         let e = Expr::Elem { array: offsets, index: Box::new(Expr::Lit(idx as i128)), field };
         let at = match self.eval_expr(doc, list, &e) {
             Ok(at) => at,
