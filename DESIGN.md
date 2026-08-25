@@ -441,6 +441,18 @@ format does not describe is the kind of thing worth noticing, not hiding.
 Writing a flags field writes the number underneath, because typing a name would
 mean deciding whether it replaced the other bits or joined them.
 
+Some formats name a few values and then stop naming and start counting. A
+SQLite serial type names ten of them, and from twelve up every even number is a
+blob and every odd one is text, with how far up the number is saying how long
+the value is. Listing those one at a time is not possible and reading them as
+unknown is not true, so an enum carries runs beside its cases: a first value,
+how far apart the values of the run are, and a name written with `{n}` where the
+count goes. Two runs at a step of two is how one range holds both. The number
+underneath is untouched, so a switch still sees it, and the panel says what the
+value is called rather than that nobody named it. Nothing reverses: writing by
+name still only finds the values named one at a time, because "text, 2 bytes"
+is a description of the bytes elsewhere rather than a value to choose.
+
 ### Search
 A search is a series of bounded steps rather than one scan. The file may be
 larger than memory and its bytes arrive a chunk at a time, so a call that ran
