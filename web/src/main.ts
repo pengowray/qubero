@@ -32,6 +32,7 @@ const discardMsg = (open: string, next: string): string =>
 /** Says what letting go costs: the open file closes. Not "replaces", which
  *  during a drag reads as overwriting that file on disk, which never happens. */
 const closesMsg = (doc: Doc): string => `Closes ${doc.name}${doc.modified ? " (unsaved edits)" : ""}`;
+const selectedBytes = (n: number): string => (n === 1 ? "1 byte" : `${n.toLocaleString()} bytes`);
 
 const SIGNATURE_LINE =
   "The Fields table shows only the format's signature, generated from this rule. Qubero has no full template for this format.";
@@ -431,8 +432,16 @@ function mount(doc: Doc): void {
     // reading `· Hex` under a listing says the wrong thing about both.
     const pane = c.pane === "ascii" ? "Text" : c.mode === "binary" ? "Binary" : "Hex";
     const editing = `  ·  ${c.insertMode ? "Insert" : "Overwrite"}  ·  ${pane}`;
-    posLabel.replaceChildren("Offset ", at, ` ${decimal}${listingShowing ? "" : editing}`);
+    // How much is selected, where there is a selection to say it about. Whole
+    // bytes are counted in bytes; a run that does not fill them is counted in
+    // bits, since "3 bytes" for 28 bits would be wrong in both directions.
+    const sel = listingShowing ? null : view.selectionRange;
+    const bits = sel === null ? 0 : sel.endBit - sel.startBit;
+    const selected =
+      bits === 0 ? "" : `  ·  ${bits % 8 === 0 ? selectedBytes(bits / 8) : `${bits.toLocaleString()} bits`} selected`;
+    posLabel.replaceChildren("Offset ", at, ` ${decimal}${listingShowing ? "" : editing}${selected}`);
   };
+  view.onSelectionChange = () => refresh();
   view.onCursorChange = (c) => {
     inspector.setOffset(c.bitOffset);
     if (!picking) {

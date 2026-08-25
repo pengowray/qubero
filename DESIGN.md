@@ -245,11 +245,14 @@ bytes or more, and mostly printable. A one-byte count of 65 beside an `A`
 invites reading a number as a letter.
 
 ### The overview
-The listing opens with the file described before its rows: its size, what the
-identification made of it, a map of the whole file, the top-level regions, and
-a sentence for anything that stands out. The aim is that what a reader would
-find by paging through the whole file (the last half being zeros, a compressed
-middle) is on screen before they page anywhere.
+A sidebar down the left of both the hex grid and the listing, describing the
+file before either of them is read: its size, what the identification made of
+it, a map of the whole file, the top-level regions, and a sentence for
+anything that stands out. The aim is that what a reader would find by paging
+through the whole file (the last half being zeros, a compressed middle) is on
+screen before they page anywhere. It belongs to neither view because "what is
+in this file" is the same question from both, and it starts folded away
+because filling it in reads the whole file.
 
 The map divides the file into equal buckets, each a power of two of bytes so a
 cell stands for a round number, and classifies each bucket's bytes: all zero,
@@ -262,10 +265,26 @@ Because the map answers from the bytes alone, it is the one part of the app
 that says something about a file no template covers.
 
 An edit throws the scan away and the next step starts it over; one pass over
-the file is what the feature costs, so it only runs while the listing is
-showing and the section is unfolded. The stepping loop does as many steps as a
-frame allows rather than one per timeout, because a background tab's chained
-timeouts are throttled to a crawl.
+the file is what the feature costs, so it only runs while the sidebar is
+unfolded. The stepping loop does as many steps as a frame allows rather than
+one per timeout, because a background tab's chained timeouts are throttled to
+a crawl.
+
+A bucket is judged as a whole, so a cell says nothing about what is inside it:
+the first cell of a model file reads as high entropy although it is the header
+and its strings, because the weights that follow fill most of it. Picking a
+cell scans that block on its own, at a resolution the block's own size allows,
+and reports the block's entropy against the most a block that long could
+reach, how many byte values appear, and the commonest of them. That pair is
+the honest form: 7.9 out of 8 means dense, 7.9 out of 7.9 means only that
+there are few bytes here.
+
+The block view can also measure only the bytes no field describes, which is
+where the byte classes still have something to say about a file a template
+already covers. The stretches come from `spans`, whose gaps are exact, and
+that is affordable over one block where it would not be over a whole file;
+picking one measures it on its own rather than quoting the block's numbers for
+it.
 
 The region list is the template's top-level children, with runs of three or
 more plain fields folded into one row so a header's bookkeeping does not
@@ -273,7 +292,8 @@ outnumber the parts with any size to them; structures keep their rows however
 small. Hovering a region shows where it sits on the map; picking one moves the
 cursor the way picking a row does. Next, per the roadmap: carrying each
 format's own units upward (pages, tensors, tables, functions) so the regions
-read in the document's terms rather than the template's.
+read in the document's terms rather than the template's, and coverage at
+whole-file resolution so the map itself can show what no field describes.
 
 ### The field column
 The hex view's right-hand column shows either the bytes as text or, with a
@@ -322,6 +342,31 @@ cursor addresses one of them, `0`/`1` overwrites or inserts a bit, and Delete an
 Backspace remove one. Bytes are split into per-bit spans only where the cursor or
 a partial highlight needs it. Selecting binary drops the row width to 8 bytes,
 since eight digits per byte is wide.
+
+### Selecting bytes, and which caret says what
+A selection is an anchor and a focus, both absolute bits, so it composes with
+everything else here that counts in bits. Dragging, shift-clicking and the
+shifted movement keys all move the focus; a plain click clears it. Both ends
+move as a drag crosses its anchor, so the byte pressed on and the byte under
+the pointer are both always in, which is what a hex editor does and not what a
+text editor does. Drawing is clipped per visible byte, so selecting a whole
+file costs what one row costs.
+
+The selection is deliberately not the field highlight. That one is
+accent-coloured and comes from the template; this one is a neutral wash and
+comes from the reader, and a byte that is both keeps the field's underline
+over the wash. The pane the cursor is in draws it strongly and the other draws
+it weakly, so both say what is selected and only one claims the focus.
+
+Shift+Home and shift+End used to mean the start and end of the file. They now
+extend within the row, because shift means extend everywhere else, and the
+file ends moved to Ctrl+Home and Ctrl+End.
+
+Insert mode draws a two-pixel bar on the leading edge of the cursor cell
+instead of the overwrite block, in both panes and in binary mode. Which of the
+two modes a keystroke is about to do is worth seeing without reading the
+status bar, and a block over a byte is the usual way of saying it will be
+replaced.
 
 ### Saving
 `save.rs` turns the piece list into runs. The host composes a `Blob` from lazy slices

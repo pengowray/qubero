@@ -56,6 +56,25 @@ const CHIP_CHAR = 6.7;
 /** Padding, border and gap around a chip's text. */
 const CHIP_CHROME = 20;
 
+/** How many bytes one copy may carry. A selection can be the whole file, and
+ *  the bytes have to be fetched and turned into a string before the clipboard
+ *  sees them, so past some size the honest answer is no. */
+const COPY_LIMIT_BYTES = 256 * 1024;
+
+/** How long a message stays up before it goes away on its own. */
+const NOTICE_MS = 5000;
+
+const COPY_TOO_BIG = (bytes: number): string =>
+  `Selection too large to copy: ${Math.round(bytes / 1024).toLocaleString()} KB, limit ${COPY_LIMIT_BYTES / 1024} KB.`;
+const COPY_PENDING = "Selection is still loading. Try again in a moment.";
+const COPY_FAILED = "Couldn't copy to the clipboard.";
+const COPY_DONE = (bytes: number, asText: boolean): string =>
+  `Copied ${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"} as ${asText ? "text" : "hex"}.`;
+
+/** What a cursor move does to the selection. An anchor extends from that bit,
+ *  which is the one thing a plain "keep" cannot say. */
+type Select = "keep" | "clear" | { readonly anchor: number };
+
 /** What a chip says after the name. A run of numbers says how many; raw bytes
  *  say how many, since the bytes themselves are already on the left. */
 function chipDetail(s: Span): string {
@@ -102,6 +121,22 @@ export class HexView {
   private insertMode = false;
   private dragging: { startY: number; startRow: number } | null = null;
   /**
+   * A mouse drag that is selecting rather than scrolling. The pane is fixed at
+   * the button press: a drag that wandered from the bytes into the text column
+   * would be selecting two different things at once.
+   */
+  private selDrag: { pane: Pane; anchor: number; unit: number; x: number; y: number; raf: number | null } | null = null;
+  /**
+   * The two ends of the selection, in absolute bits. A null anchor means
+   * nothing is selected, and so does an anchor equal to the focus.
+   *
+   * Bits rather than bytes because everything else here is bits: a selection
+   * dragged in hex or text snaps to whole bytes, one dragged over binary bits
+   * does not, and both are the same value.
+   */
+  private selAnchor: number | null = null;
+  private selFocus = 0;
+  /**
    * The bit runs to highlight: usually one, the field the cursor is in, but a
    * value the format does not keep in one piece takes more than one. A five-bit
    * ggml weight is four bits of `qs` and one bit of `qh` sixteen bytes away,
@@ -117,6 +152,13 @@ export class HexView {
   onCursorChange: (c: CursorState) => void = () => {};
   /** A field picked in the annotation column. */
   onPickField: (path: readonly number[]) => void = () => {};
+  /** The selection after it changed, or null when there is none. */
+  onSelectionChange: (r: BitRange | null) => void = () => {};
+
+  /** Where a one-off message goes. The grid has no status bar of its own, and
+   *  a copy that did not happen has to say so where the user is looking. */
+  private readonly notice: HTMLElement;
+  private noticeTimer = 0;
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("div");
@@ -140,7 +182,12 @@ export class HexView {
     this.thumb.className = "hv-thumb";
     this.track.append(this.thumb);
 
-    this.el.append(body, this.track);
+    this.notice = document.createElement("div");
+    this.notice.className = "hv-notice";
+    this.notice.setAttribute("aria-live", "polite");
+    this.notice.hidden = true;
+
+    this.el.append(body, this.track, this.notice);
 
     new ResizeObserver(() => this.relayout()).observe(this.rowsEl);
     this.el.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
@@ -251,27 +298,79 @@ export class HexView {
     this.onCursorChange(this.cursorState);
   }
 
+  /** The selected bits, or null when nothing is selected. Byte-aligned unless
+   *  the selection was made over the bits in binary mode. */
+  get selectionRange(): BitRange | null {
+    if (this.selAnchor === null || this.selAnchor === this.selFocus) return null;
+    return {
+      startBit: Math.min(this.selAnchor, this.selFocus),
+      endBit: Math.max(this.selAnchor, this.selFocus),
+    };
+  }
+
+  /** Drop the selection and leave the cursor where it is. */
+  clearSelection(): void {
+    if (this.selAnchor === null) return;
+    this.setSelection(null, 0);
+    this.render();
+  }
+
+  /** The one place selection state is written, so the callback fires once per
+   *  real change rather than once per key handler that touched it. */
+  private setSelection(anchor: number | null, focus: number): void {
+    const was = this.selectionRange;
+    // Clamped here rather than at each caller: a drag into the blank cells
+    // right of the last byte, or into a row below the end of a short file,
+    // lands past the end, and the core panics on a delete that runs past it.
+    const cap = (b: number): number => Math.max(0, Math.min(this.doc.lengthBits, b));
+    this.selAnchor = anchor === null ? null : cap(anchor);
+    this.selFocus = cap(focus);
+    const now = this.selectionRange;
+    if (was?.startBit !== now?.startBit || was?.endBit !== now?.endBit) this.onSelectionChange(now);
+  }
+
+  /** Called with the cursor already moved, so an anchor extends to where it
+   *  now is. */
+  private applySelect(s: Select | undefined): void {
+    if (s === "keep") return;
+    if (s === undefined || s === "clear") return void this.setSelection(null, 0);
+    this.setSelection(s.anchor, this.cursorState.bitOffset);
+  }
+
   /** Move the cursor to an absolute bit. Bit 0 is the top bit of byte 0. */
-  setBitCursor(bitOffset: number, opts: { pane?: Pane } = {}): void {
+  setBitCursor(bitOffset: number, opts: { pane?: Pane; select?: Select } = {}): void {
     if (opts.pane) this.pane = opts.pane;
     const at = Math.max(0, Math.min(this.doc.lengthBits, Math.floor(bitOffset)));
     this.cursor = Math.floor(at / 8);
     this.bit = at % 8;
     this.nibble = 0;
+    this.applySelect(opts.select);
     this.scrollCursorIntoView();
     this.render();
     this.onCursorChange(this.cursorState);
   }
 
-  setCursor(offset: number, opts: { pane?: Pane; nibble?: 0 | 1; bit?: number } = {}): void {
+  setCursor(offset: number, opts: { pane?: Pane; nibble?: 0 | 1; bit?: number; select?: Select } = {}): void {
     const max = this.doc.lengthBytes; // one past the end is a valid insert position
     this.cursor = Math.max(0, Math.min(max, Math.floor(offset)));
     this.nibble = opts.nibble ?? 0;
     this.bit = Math.max(0, Math.min(7, opts.bit ?? 0));
     if (opts.pane) this.pane = opts.pane;
+    this.applySelect(opts.select);
     this.scrollCursorIntoView();
     this.render();
     this.onCursorChange(this.cursorState);
+  }
+
+  /** A message about something the user just asked for, which goes away on its
+   *  own. */
+  private say(text: string): void {
+    this.notice.textContent = text;
+    this.notice.hidden = false;
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice.hidden = true;
+    }, NOTICE_MS);
   }
 
   /** Called when the user dismisses the field highlight with Escape. */
@@ -309,16 +408,44 @@ export class HexView {
       this.rowsEl.setPointerCapture(e.pointerId);
       return;
     }
-    this.clickCell(e.target);
+    if (e.button !== 0) return;
+    const hit = this.hitAt(e.clientX, e.clientY);
+    if (hit === null) return;
+    e.preventDefault();
+    if (e.shiftKey) {
+      // Shift+click extends the selection there is, or starts one from where
+      // the cursor already is.
+      const anchor = this.selAnchor ?? this.cursorState.bitOffset;
+      this.setSelection(anchor, hit.bit >= anchor ? hit.bit + hit.unit : hit.bit);
+      this.setCursor(Math.floor(hit.bit / 8), { pane: hit.pane, bit: hit.bit % 8, select: "keep" });
+      return;
+    }
+    // No drag follows most presses, and a press that stays put is a click,
+    // which clears the selection. That is what `setCursor` does by default.
+    this.setCursor(Math.floor(hit.bit / 8), { pane: hit.pane, bit: hit.bit % 8 });
+    this.selDrag = { pane: hit.pane, anchor: hit.bit, unit: hit.unit, x: e.clientX, y: e.clientY, raf: null };
+    this.rowsEl.setPointerCapture(e.pointerId);
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.selDrag !== null) {
+      this.selDrag.x = e.clientX;
+      this.selDrag.y = e.clientY;
+      this.dragExtend();
+      return;
+    }
     if (!this.dragging) return;
     const dy = this.dragging.startY - e.clientY;
     this.scrollTo(this.dragging.startRow + dy / this.rowHeight);
   }
 
   private onPointerUp(e: PointerEvent): void {
+    if (this.selDrag !== null) {
+      this.stopAutoScroll();
+      this.selDrag = null;
+      if (this.rowsEl.hasPointerCapture(e.pointerId)) this.rowsEl.releasePointerCapture(e.pointerId);
+      return;
+    }
     if (!this.dragging) return;
     const moved = Math.abs(this.dragging.startY - e.clientY) > 6;
     this.dragging = null;
@@ -332,6 +459,104 @@ export class HexView {
     if (off === undefined || (pane !== "hex" && pane !== "ascii")) return;
     const bit = target.dataset["bit"];
     this.setCursor(Number(off), { pane, bit: bit === undefined ? 0 : Number(bit) });
+  }
+
+  /**
+   * The bit the pointer is over and how much of the file the cell under it
+   * stands for.
+   *
+   * Read from the element at the point rather than from the event's target,
+   * because a captured drag reports the capturing element for every move. A
+   * given `pane` also pins the x into that column, which is both what keeps a
+   * drag in the column it started in and what stops it falling into the
+   * address gutter or the field chips.
+   */
+  private hitAt(x: number, y: number, pane?: Pane): { pane: Pane; bit: number; unit: number } | null {
+    let cx = x;
+    if (pane !== undefined) {
+      const which = pane === "ascii" ? ".hv-ascii" : this.mode === "binary" ? ".hv-bits" : ".hv-hex";
+      const col = this.rowEls[0]?.querySelector(which);
+      if (col instanceof HTMLElement) {
+        const r = col.getBoundingClientRect();
+        cx = Math.min(r.right - 1, Math.max(r.left + 1, x));
+      }
+    }
+    const at = document.elementFromPoint(cx, y);
+    if (!(at instanceof HTMLElement)) return null;
+    // The field column is part of a row but is not part of the file: pressing a
+    // chip picks that field, and moving the cursor to the row first would undo
+    // what the press was for.
+    if (at.closest(".hv-note") !== null) return null;
+    const cell = at.closest<HTMLElement>("[data-off]");
+    if (cell !== null) {
+      const p = cell.dataset["pane"];
+      const off = Number(cell.dataset["off"]);
+      const bit = cell.dataset["bit"];
+      if ((p !== "hex" && p !== "ascii") || !Number.isFinite(off)) return null;
+      if (bit === undefined) return { pane: pane ?? p, bit: off * 8, unit: 8 };
+      return { pane: pane ?? p, bit: off * 8 + Number(bit), unit: 1 };
+    }
+    // Rows past the end of the file have no cells in them, so the row itself is
+    // all there is to go on.
+    const row = at.closest<HTMLElement>(".hv-row");
+    if (row === null) return null;
+    const idx = this.rowEls.indexOf(row);
+    if (idx < 0) return null;
+    const off = Math.min(this.doc.lengthBytes, (this.topRow + idx) * this.bytesPerRow);
+    return { pane: pane ?? this.pane, bit: off * 8, unit: 8 };
+  }
+
+  /**
+   * Carry the selection to wherever the pointer is, scrolling first when it has
+   * left the grid.
+   *
+   * The two have to happen together: the view is virtually scrolled, so the
+   * rows under a pointer held past the edge change as it moves, and a scroll
+   * that did not re-read the position would stop extending.
+   *
+   * Both ends move so that the byte pressed on and the byte under the pointer
+   * are always both in, which is what a hex editor's drag means and what a
+   * text editor's caret-between-characters model does not give.
+   */
+  private dragExtend(): void {
+    const d = this.selDrag;
+    if (d === null) return;
+    const r = this.rowsEl.getBoundingClientRect();
+    const before = this.topRow;
+    const above = d.y < r.top;
+    const below = d.y > r.bottom;
+    if (above || below) {
+      const over = above ? r.top - d.y : d.y - r.bottom;
+      const rows = Math.min(8, 1 + Math.floor(over / 24));
+      this.topRow = Math.max(0, Math.min(this.maxTopRow, this.topRow + (above ? -rows : rows)));
+      if (d.raf === null) {
+        d.raf = requestAnimationFrame(() => {
+          if (this.selDrag === null) return;
+          this.selDrag.raf = null;
+          this.dragExtend();
+        });
+      }
+    } else {
+      this.stopAutoScroll();
+    }
+    const y = Math.min(r.bottom - 1, Math.max(r.top + 1, d.y));
+    const hit = this.hitAt(d.x, y, d.pane);
+    const anchor = hit === null ? 0 : hit.bit >= d.anchor ? d.anchor : d.anchor + d.unit;
+    const focus = hit === null ? 0 : hit.bit >= d.anchor ? hit.bit + hit.unit : hit.bit;
+    if (hit === null || (this.selAnchor === anchor && this.selFocus === focus)) {
+      if (this.topRow !== before) this.render();
+      return;
+    }
+    this.setSelection(anchor, focus);
+    this.setCursor(Math.floor(hit.bit / 8), { pane: d.pane, bit: hit.bit % 8, select: "keep" });
+  }
+
+  private stopAutoScroll(): void {
+    const d = this.selDrag;
+    if (d !== null && d.raf !== null) {
+      cancelAnimationFrame(d.raf);
+      d.raf = null;
+    }
   }
 
   private onTrackDown(e: PointerEvent): void {
@@ -357,42 +582,73 @@ export class HexView {
     if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) return void (e.preventDefault(), this.doc.undo());
     if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey)))
       return void (e.preventDefault(), this.doc.redo());
+
+    // Shift turns every move into an extension. The anchor is where the cursor
+    // was when the first shifted key was pressed, so extending and then
+    // shrinking again ends with nothing selected.
+    const sel: Select = e.shiftKey ? { anchor: this.selAnchor ?? this.cursorState.bitOffset } : "clear";
+
+    if (mod && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      // The cursor stays where it is. Jumping to the end of a four gigabyte
+      // file to say that all of it is selected loses the reader's place.
+      this.setSelection(0, this.doc.lengthBits);
+      this.render();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      void this.copySelection();
+      return;
+    }
+    if (mod && (e.key === "Home" || e.key === "End")) {
+      // Ctrl+Home and Ctrl+End are the ends of the file. Plain Home and End
+      // used to mean that with shift held, which took shift away from the one
+      // thing it means everywhere else, so the file ends moved onto Ctrl.
+      e.preventDefault();
+      return this.setCursor(e.key === "Home" ? 0 : this.doc.lengthBytes, { select: sel });
+    }
     if (mod) return;
 
     const bitMode = this.mode === "binary" && this.pane === "hex";
+    if ((e.key === "Delete" || e.key === "Backspace") && this.selectionRange !== null) {
+      e.preventDefault();
+      this.deleteSelection();
+      return;
+    }
     switch (e.key) {
       case "ArrowLeft":
         e.preventDefault();
-        if (bitMode) return this.setBitCursor(this.cursorState.bitOffset - 1);
-        if (this.pane === "hex" && this.nibble === 1) return this.setCursor(this.cursor, { nibble: 0 });
-        return this.setCursor(this.cursor - 1);
+        if (bitMode) return this.setBitCursor(this.cursorState.bitOffset - 1, { select: sel });
+        if (this.pane === "hex" && this.nibble === 1) return this.setCursor(this.cursor, { nibble: 0, select: sel });
+        return this.setCursor(this.cursor - 1, { select: sel });
       case "ArrowRight":
         e.preventDefault();
-        if (bitMode) return this.setBitCursor(this.cursorState.bitOffset + 1);
-        return this.setCursor(this.cursor + 1);
+        if (bitMode) return this.setBitCursor(this.cursorState.bitOffset + 1, { select: sel });
+        return this.setCursor(this.cursor + 1, { select: sel });
       case "ArrowUp":
         e.preventDefault();
-        return this.setCursor(this.cursor - bpr);
+        return this.setCursor(this.cursor - bpr, { select: sel });
       case "ArrowDown":
         e.preventDefault();
-        return this.setCursor(this.cursor + bpr);
+        return this.setCursor(this.cursor + bpr, { select: sel });
       case "PageUp":
         e.preventDefault();
         this.topRow = Math.max(0, this.topRow - this.visibleRows);
-        return this.setCursor(this.cursor - this.visibleRows * bpr);
+        return this.setCursor(this.cursor - this.visibleRows * bpr, { select: sel });
       case "PageDown":
         e.preventDefault();
         this.topRow = Math.min(this.maxTopRow, this.topRow + this.visibleRows);
-        return this.setCursor(this.cursor + this.visibleRows * bpr);
+        return this.setCursor(this.cursor + this.visibleRows * bpr, { select: sel });
       case "Home":
         e.preventDefault();
-        return this.setCursor(e.shiftKey ? 0 : this.cursor - (this.cursor % bpr));
+        return this.setCursor(this.cursor - (this.cursor % bpr), { select: sel });
       case "End":
         e.preventDefault();
-        return this.setCursor(e.shiftKey ? this.doc.lengthBytes : this.cursor - (this.cursor % bpr) + bpr - 1);
+        return this.setCursor(this.cursor - (this.cursor % bpr) + bpr - 1, { select: sel });
       case "Tab":
         e.preventDefault();
-        return this.setCursor(this.cursor, { pane: this.pane === "hex" ? "ascii" : "hex" });
+        return this.setCursor(this.cursor, { pane: this.pane === "hex" ? "ascii" : "hex", select: "keep" });
       case "Insert":
         e.preventDefault();
         this.insertMode = !this.insertMode;
@@ -423,6 +679,12 @@ export class HexView {
         }
         return;
       case "Escape":
+        // One thing per press, the newest first: the selection the user just
+        // made, then the field the cursor is in.
+        if (this.selectionRange !== null) {
+          this.clearSelection();
+          return;
+        }
         // Move first, then drop the highlight: the cursor event can pick a new
         // field, and Escape's job is to leave nothing highlighted.
         this.setCursor(this.cursor, { nibble: 0 });
@@ -435,16 +697,50 @@ export class HexView {
 
     if (e.key.length !== 1 || e.altKey) return;
     e.preventDefault();
-    if (bitMode) this.typeBit(e.key);
-    else if (this.pane === "hex") this.typeHex(e.key);
-    else this.typeAscii(e.key);
+    // Whether the key is one this pane takes is settled before anything is
+    // deleted: a stray letter in the bytes column must not take a selection
+    // with it.
+    const usable = bitMode
+      ? e.key === "0" || e.key === "1"
+      : this.pane === "hex"
+        ? !Number.isNaN(parseInt(e.key, 16))
+        : e.key.charCodeAt(0) <= 0xff;
+    if (!usable) return;
+    // Typing over a selection replaces it, and the delete and the first digit
+    // are one thing the user did, so they undo together.
+    const replacing = this.selectionRange !== null;
+    if (replacing) {
+      this.doc.beginBatch();
+      this.deleteSelection();
+    }
+    if (bitMode) this.typeBit(e.key, replacing);
+    else if (this.pane === "hex") this.typeHex(e.key, replacing);
+    else this.typeAscii(e.key, replacing);
+    if (replacing) this.doc.endBatch();
   }
 
-  private typeBit(ch: string): void {
+  /**
+   * Remove the selected bits as one undo step and leave the cursor where they
+   * were. A byte-aligned run is one byte-level delete, since the piece table
+   * splits pieces rather than moving bytes.
+   */
+  private deleteSelection(): boolean {
+    const sel = this.selectionRange;
+    if (sel === null) return false;
+    const bits = sel.endBit - sel.startBit;
+    if (sel.startBit % 8 === 0 && bits % 8 === 0) this.doc.delete(sel.startBit / 8, bits / 8);
+    else this.doc.deleteBits(sel.startBit, bits);
+    this.setBitCursor(sel.startBit);
+    return true;
+  }
+
+  /** `insert` is what typing over a selection wants whatever the mode: the
+   *  bytes that would be overwritten are the ones after the deleted range. */
+  private typeBit(ch: string, insert = false): void {
     if (ch !== "0" && ch !== "1") return;
     const at = this.cursorState.bitOffset;
     const data = Uint8Array.of(ch === "1" ? 0x80 : 0);
-    if (this.insertMode || at >= this.doc.lengthBits) this.doc.insertBits(at, data, 1);
+    if (insert || this.insertMode || at >= this.doc.lengthBits) this.doc.insertBits(at, data, 1);
     else this.doc.overwriteBits(at, data, 1);
     this.setBitCursor(at + 1);
   }
@@ -453,12 +749,12 @@ export class HexView {
     return this.doc.read(this.cursor, 1).bytes[0] ?? 0;
   }
 
-  private typeHex(ch: string): void {
+  private typeHex(ch: string, insert = false): void {
     const v = parseInt(ch, 16);
     if (Number.isNaN(v)) return;
     const atEnd = this.cursor >= this.doc.lengthBytes;
     if (this.nibble === 0) {
-      if (this.insertMode || atEnd) {
+      if (insert || this.insertMode || atEnd) {
         this.doc.insert(this.cursor, Uint8Array.of(v << 4));
       } else {
         this.doc.overwrite(this.cursor, Uint8Array.of((v << 4) | (this.currentByte() & 0x0f)));
@@ -470,13 +766,42 @@ export class HexView {
     }
   }
 
-  private typeAscii(ch: string): void {
+  private typeAscii(ch: string, insert = false): void {
     const code = ch.charCodeAt(0);
     if (code > 0xff) return;
     const atEnd = this.cursor >= this.doc.lengthBytes;
-    if (this.insertMode || atEnd) this.doc.insert(this.cursor, Uint8Array.of(code));
+    if (insert || this.insertMode || atEnd) this.doc.insert(this.cursor, Uint8Array.of(code));
     else this.doc.overwrite(this.cursor, Uint8Array.of(code));
     this.setCursor(this.cursor + 1);
+  }
+
+  /**
+   * Put the selection on the clipboard: hex pairs from the bytes column, the
+   * text as it is shown from the text column. Hex pairs are what the search
+   * bar's hex box takes, so a copy from here pastes straight into a search.
+   *
+   * The size is checked before the bytes are asked for. Fetching a gigabyte in
+   * order to refuse it afterwards is the wait this limit exists to prevent.
+   */
+  private async copySelection(): Promise<void> {
+    const sel = this.selectionRange;
+    if (sel === null) return;
+    const start = Math.floor(sel.startBit / 8);
+    const n = Math.ceil(sel.endBit / 8) - start;
+    if (n > COPY_LIMIT_BYTES) return this.say(COPY_TOO_BIG(n));
+    await this.doc.ensureRange(start, n);
+    const { bytes, complete } = this.doc.read(start, n);
+    if (!complete) return this.say(COPY_PENDING);
+    const asText = this.pane === "ascii";
+    // The text column's own reading, byte for byte, so what is copied is what
+    // is on screen rather than a decode it never showed.
+    const text = asText ? Array.from(bytes, asciiGlyph).join("") : Array.from(bytes, (b) => HEX[b] ?? "").join(" ");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      return this.say(COPY_FAILED);
+    }
+    this.say(COPY_DONE(n, asText));
   }
 
   // ----- rendering -----
@@ -534,13 +859,31 @@ export class HexView {
     el.style.backgroundImage = `linear-gradient(to right, ${stops.join(", ")})`;
   }
 
+  /**
+   * The part of byte `off` the selection covers, as one [from, to) run within
+   * 0..8, or null.
+   *
+   * Asked per byte on screen, so a selection of a whole four gigabyte file
+   * costs what a selection of one row costs.
+   */
+  private selectionBits(sel: BitRange, off: number): Run | null {
+    const from = Math.max(sel.startBit, off * 8) - off * 8;
+    const to = Math.min(sel.endBit, off * 8 + 8) - off * 8;
+    return to > from && from < 8 && to > 0 ? { from, to } : null;
+  }
+
   /** The eight bits of one byte, split into spans only where that is needed. */
-  private fillBits(cell: HTMLElement, byte: number | null, off: number, hl: readonly Run[]): void {
+  private fillBits(cell: HTMLElement, byte: number | null, off: number, hl: readonly Run[], sel: Run | null): void {
     const text = byte === null ? "········" : byte.toString(2).padStart(8, "0");
     if (byte === null) cell.classList.add("hv-pending");
     const onCursor = off === this.cursor;
     const whole = covers(hl, 0, 8);
-    if (!onCursor && (hl.length === 0 || whole)) {
+    const selClass = this.pane === "hex" ? "hv-sel" : "hv-sel-weak";
+    const selWhole = sel !== null && sel.from <= 0 && sel.to >= 8;
+    // A whole selected byte is marked on the cell rather than on its bits, so
+    // the space between two bytes is inside the selection and not a hole in it.
+    if (selWhole) cell.classList.add(selClass);
+    if (!onCursor && (hl.length === 0 || whole) && (sel === null || selWhole)) {
       cell.textContent = text;
       if (whole) cell.classList.add("hv-hl");
       return;
@@ -552,6 +895,7 @@ export class HexView {
       s.dataset["bit"] = String(k);
       s.dataset["pane"] = "hex";
       if (hl.some((r) => k >= r.from && k < r.to)) s.classList.add("hv-hl");
+      if (sel !== null && !selWhole && k >= sel.from && k < sel.to) s.classList.add(selClass);
       if (onCursor && k === this.bit) {
         s.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
         if (this.insertMode) s.classList.add("hv-ins");
@@ -630,6 +974,7 @@ export class HexView {
     const fields = this.rightColumn !== "text";
     const showText = this.rightColumn !== "fields";
     const templated = this.doc.template !== null;
+    const selection = this.selectionRange;
 
     // Which span covers each byte on screen, and which start on each row.
     let spans: Span[] = [];
@@ -702,12 +1047,13 @@ export class HexView {
         h.dataset["pane"] = "hex";
         a.dataset["pane"] = "ascii";
         const hl = this.highlightBits(off);
+        const sb = selection === null ? null : this.selectionBits(selection, off);
         if (off < len) {
           const b = bytes[off - start] ?? 0;
           a.textContent = complete ? asciiGlyph(b) : " ";
           if (complete && !(b >= 0x20 && b < 0x7f)) a.classList.add("hv-np");
           if (binary) {
-            this.fillBits(h, complete ? b : null, off, hl);
+            this.fillBits(h, complete ? b : null, off, hl, sb);
           } else {
             h.textContent = complete ? HEX[b] ?? "" : "··";
             if (!complete) h.classList.add("hv-pending");
@@ -739,13 +1085,24 @@ export class HexView {
             else this.markBits(h, hl);
           }
         }
+        if (sb !== null) {
+          // A byte only partly selected is marked weakly in both columns: two
+          // hex digits and one text character each stand for the whole byte,
+          // and a full mark would say the whole byte is in.
+          const whole = sb.from <= 0 && sb.to >= 8;
+          if (!binary && off < len) h.classList.add(whole && this.pane === "hex" ? "hv-sel" : "hv-sel-weak");
+          a.classList.add(whole && this.pane === "ascii" ? "hv-sel" : "hv-sel-weak");
+        }
         if (off === this.cursor) {
-          if (!binary) {
+          // In binary the bits carry the cursor, except past the end of the
+          // file where there are no bits to carry it.
+          if (!binary || off >= len) {
             h.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
-            if (this.pane === "hex" && this.nibble === 1) h.classList.add("hv-nib1");
+            if (!binary && this.pane === "hex" && this.nibble === 1) h.classList.add("hv-nib1");
             if (this.insertMode) h.classList.add("hv-ins");
           }
           a.classList.add("hv-cur", this.pane === "ascii" ? "hv-focus" : "hv-dim");
+          if (this.insertMode) a.classList.add("hv-ins");
         }
         cells.append(h);
         asc.append(a);
