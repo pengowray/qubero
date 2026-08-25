@@ -139,8 +139,10 @@ impl Evaluator {
             let Some(next) = total.checked_mul(v) else { return fail("shape too large to count") };
             total = next;
         }
-        // Nothing to multiply describes nothing, not one of something.
-        Ok(if n == 0 { 0 } else { total })
+        // An empty shape is one weight, not none: a tensor of no dimensions
+        // holds a single number. A shape of `[0]` is a different thing and
+        // does come to nothing, which the multiplying already says.
+        Ok(total)
     }
 
     /// Field `name` of the element before this one, in the nearest enclosing

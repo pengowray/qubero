@@ -22,7 +22,9 @@ use crate::template::{Anchor, Endian::*, Expr as E, Template, Ty as T};
 /// header's own two offsets make room for, which is still the right size and
 /// the right place.
 fn weights() -> T {
-    let count = || E::product("header", E::idx(), &["shape"]).or(E::lit(1));
+    // A shape of `[]` multiplies to one, which is a tensor holding a single
+    // number; a shape of `[0]` multiplies to none, which files do write.
+    let count = || E::product("header", E::idx(), &["shape"]);
     let int = |bits: u32| T::Int { bits, endian: Little };
     let uint = |bits: u32| T::UInt { bits, endian: Little };
     let of = |ty: T| T::array(ty, count());
