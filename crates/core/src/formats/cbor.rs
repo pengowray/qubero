@@ -121,7 +121,7 @@ fn body() -> T {
             (4, counted(|n| T::array(T::Named("Item".into()), n).counted_as("item"))),
             (5, counted(|n| T::array(pair(), n).counted_as("pair"))),
             // A tag is a name for the one item after it.
-            (6, T::structure("Tagged", vec![("tag", T::enumeration("Tag", T::computed(tag_number()), TAG)), ("item", T::Named("Item".into()))])),
+            (6, T::structure("Tagged", vec![("tag", tag_number()), ("item", T::Named("Item".into()))])),
         ],
         // Unsigned, negative and simple values are all said by the first byte
         // and the argument after it, so there is nothing more to read.
@@ -132,12 +132,21 @@ fn body() -> T {
 /// The tag number, which is the argument when one was written and the five
 /// bits when it was not. Named, since the numbers are a registry.
 ///
-/// This one does take "the first that is not zero", so tag 0 written the long
-/// way, as 0xd8 0x00, reads as tag 24. Encoders write the short form, and the
-/// alternative is another five-case switch for a number that is shown rather
-/// than used to measure anything.
-fn tag_number() -> E {
-    E::field("argument").or(ai())
+/// Which of the two it is comes from the five bits, the same way a length
+/// does, rather than from "the first of them that is not zero": tag 0 written
+/// the long way, as 0xd8 0x00, is a real thing and that test cannot see it.
+fn tag_number() -> T {
+    let named = |e: E| T::enumeration("Tag", T::computed(e), TAG);
+    T::switch(
+        ai(),
+        vec![
+            (24, named(E::field("argument"))),
+            (25, named(E::field("argument"))),
+            (26, named(E::field("argument"))),
+            (27, named(E::field("argument"))),
+        ],
+        named(ai()),
+    )
 }
 
 fn pair() -> T {
@@ -182,6 +191,34 @@ mod tests {
         assert_eq!(ev.node(&d, &[3, 0, 1, 3]).unwrap().child_count, 2);
         assert_eq!(ev.node(&d, &[3, 0, 1, 3, 1, 0]).unwrap().value, Value::Enum { raw: 2, name: None, hex: true });
         assert_eq!(ev.node(&d, &[3, 1, 1, 3]).unwrap().value, Value::Str("hi".into()));
+    }
+
+    #[test]
+    fn a_tag_reads_the_same_number_written_either_way() {
+        // Tag 1, epoch seconds, in the five bits: 0xc1, then the number.
+        let d = Document::new(MemSource(vec![0xc1, 0x1a, 0x65, 0x4c, 0x1a, 0x00]));
+        let mut ev = Evaluator::new(cbor());
+        let tag = ev.node(&d, &[3, 0]).unwrap();
+        assert_eq!(tag.value, Value::Enum { raw: 1, name: Some("epoch seconds".into()), hex: false });
+        assert_eq!(tag.size_bits, 0);
+
+        // Tag 0 written the long way, as an argument byte that happens to be
+        // zero. The five bits say to look there, so it is not read as 24.
+        let d = Document::new(MemSource(vec![0xd8, 0x00, 0x61, b'x']));
+        let mut ev = Evaluator::new(cbor());
+        assert_eq!(
+            ev.node(&d, &[3, 0]).unwrap().value,
+            Value::Enum { raw: 0, name: Some("date-time string".into()), hex: false }
+        );
+        assert_eq!(ev.node(&d, &[3, 1, 3]).unwrap().value, Value::Str("x".into()));
+
+        // And tag 24 in the five bits is still tag 24.
+        let d = Document::new(MemSource(vec![0xd8, 0x18, 0x40]));
+        let mut ev = Evaluator::new(cbor());
+        assert_eq!(
+            ev.node(&d, &[3, 0]).unwrap().value,
+            Value::Enum { raw: 24, name: Some("encoded cbor".into()), hex: false }
+        );
     }
 
     #[test]
