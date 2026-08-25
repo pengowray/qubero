@@ -1,6 +1,7 @@
 //! A smoke test over a real whisper.cpp model. None is in the repository, so
 //! this skips unless someone has one to hand: any `*.bin` opening with the ggml
-//! magic, in `web/public` or in the directory `QUBERO_SAMPLES` names.
+//! magic, in `web/public` or under a directory `QUBERO_SAMPLES` names (several,
+//! separated by `;`).
 
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
@@ -11,7 +12,7 @@ use qubero_core::source::MemSource;
 fn reads_a_real_model_end_to_end() {
     let mut dirs = vec![concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public").to_string()];
     if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
-        dirs.push(extra);
+        dirs.extend(extra.split(';').filter(|s| !s.is_empty()).map(str::to_string));
     }
     let mut found = 0;
     for dir in &dirs {
