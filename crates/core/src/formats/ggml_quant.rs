@@ -21,6 +21,8 @@ use crate::decode::f16_to_f64;
 /// ternary ones are left out: their weights come from lookup tables that only
 /// ggml has, so a block of one of those is the right size and opaque inside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// ggml's own names for these, which is what the file and the field tree say.
+#[allow(non_camel_case_types)]
 pub enum Quant {
     Q4_0,
     Q4_1,

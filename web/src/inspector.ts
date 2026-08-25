@@ -439,13 +439,22 @@ export class Inspector {
 
   /** The section below the editor. See `insp-type`. */
   private fillTypes(path: readonly number[], n: TemplateNode): void {
-    const reply = this.doc.typeInfo(path);
+    const reply = this.doc.typeInfo(path, this.offset);
     if (reply.status !== "ok" || reply.node.kind === "plain") {
       this.types.hidden = true;
       this.types.replaceChildren();
       return;
     }
-    this.types.replaceChildren(typePanel(reply.node, path, n, (p, text) => this.applyValue(p, text)));
+    this.types.replaceChildren(
+      typePanel(
+        reply.node,
+        path,
+        n,
+        (p, text) => this.applyValue(p, text),
+        (bit) => this.onGoTo(bit),
+        () => this.render(),
+      ),
+    );
     this.types.hidden = false;
   }
 

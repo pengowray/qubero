@@ -6,6 +6,7 @@
 
 import type { TemplateNode, TypeInfo } from "./doc.js";
 import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.js";
+import { quantBody, type GoTo } from "./quantpanel.js";
 
 /** Write a value the reader picked here rather than typed. */
 export type Apply = (path: readonly number[], text: string) => void;
@@ -30,7 +31,15 @@ function headingFor(info: TypeInfo): string {
   if (info.kind === "magic") return "Expected bytes";
   if (info.kind === "flags") return "Flags";
   if (info.kind === "float") return "Bit layout";
+  if (info.kind === "quant") return "Weights";
   return `Defined values (${info.cases.length})`;
+}
+
+/** The format's own name for what the heading is about, where it has one. */
+function headingNote(info: TypeInfo): string {
+  if (info.kind === "float") return FLOATS[info.format]?.name ?? "";
+  if (info.kind === "quant") return info.name;
+  return "";
 }
 
 /**
@@ -389,10 +398,13 @@ export function typePanel(
   path: readonly number[],
   n: TemplateNode,
   apply: Apply,
+  goTo: GoTo,
+  redraw: () => void,
 ): DocumentFragment {
   const frag = document.createDocumentFragment();
-  frag.append(heading(headingFor(info), info.kind === "float" ? (FLOATS[info.width]?.name ?? "") : ""));
-  if (info.kind === "float") frag.append(floatBody(info));
+  frag.append(heading(headingFor(info), headingNote(info)));
+  if (info.kind === "quant") frag.append(quantBody(info, goTo, redraw));
+  else if (info.kind === "float") frag.append(floatBody(info));
   else if (info.kind === "magic") frag.append(magicBody(info));
   else if (info.kind === "enum") frag.append(enumBody(info, path, apply));
   else frag.append(flagsBody(info, path, n, apply));

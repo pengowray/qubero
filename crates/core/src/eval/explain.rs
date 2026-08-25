@@ -43,6 +43,9 @@ pub enum Explain {
         /// names it: the `m` a `q4_1` adds, the `dmin` a K type takes away.
         d: f64,
         second: Option<(&'static str, f64)>,
+        /// Where the block starts, so that a weight's bits can be found from
+        /// the offset it carries.
+        block_bits: u64,
         weights: Vec<Weight>,
         /// Which weight the cursor is inside, where it is on one of them
         /// rather than on the block's scales.
@@ -150,5 +153,13 @@ fn quant_of(kind: Quant, block: ggml_quant::Block, block_bits: u64, at_bits: Opt
     let at = at_bits.and_then(|c| c.checked_sub(block_bits)).and_then(|rel| {
         block.weights.iter().position(|w| u64::from(w.bit) <= rel && rel < u64::from(w.bit + w.width))
     });
-    Explain::Quant { kind: kind.name(), bits: kind.bits(), d: block.d, second: block.second, weights: block.weights, at }
+    Explain::Quant {
+        kind: kind.name(),
+        bits: kind.bits(),
+        d: block.d,
+        second: block.second,
+        block_bits,
+        weights: block.weights,
+        at,
+    }
 }

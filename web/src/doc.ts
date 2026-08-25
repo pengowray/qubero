@@ -174,7 +174,7 @@ export type Origin = {
 
 /** What a type permits, beyond what this file's bytes happen to say. */
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -188,8 +188,32 @@ export type TypeInfo = {
   readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];
   /** Float: which layout it is, how wide, and its bits in value order in hex. */
   readonly format: string;
+  /** Float: how many bits wide. Quant: how many bits one weight is worth. */
   readonly width: number;
   readonly pattern: string;
+  /** Quant: the block's shared scale, and what it pairs with it, named as the
+   *  file names it. `second_name` is empty where the layout has no second. */
+  readonly scale: number;
+  readonly second_name: string;
+  readonly second: number;
+  /** Quant: where the block starts, so a weight's bits can be found from the
+   *  offset it carries. */
+  readonly block_bits: number;
+  /** Quant: every weight the block stands for, in the order the tensor reads
+   *  them, and which one the cursor is inside (-1 for none). */
+  readonly weights: readonly QuantWeight[];
+  readonly at: number;
+};
+
+/** One weight of a block of packed weights. */
+export type QuantWeight = {
+  /** The stored integer, after whatever bias the layout takes off it. */
+  readonly q: number;
+  /** That integer through the block's scale: the number the model reads. */
+  readonly value: number;
+  /** Where its bits are, counted from the start of the block. */
+  readonly bit: number;
+  readonly width: number;
 };
 
 /** What one rule, or the editor itself, concluded about what produced a file. */
@@ -559,8 +583,10 @@ export class Doc {
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */
-  typeInfo(path: readonly number[]): TemplateReply<TypeInfo> {
-    return this.handleReply<TypeInfo>(this.editor.type_info(Uint32Array.from(path)));
+  /** `atBits` is where the cursor is; only a block of packed weights uses it,
+   *  to say which weight the reader is standing on. */
+  typeInfo(path: readonly number[], atBits = -1): TemplateReply<TypeInfo> {
+    return this.handleReply<TypeInfo>(this.editor.type_info(Uint32Array.from(path), atBits));
   }
 
   /**

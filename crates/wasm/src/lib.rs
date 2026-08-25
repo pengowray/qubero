@@ -88,6 +88,9 @@ struct ExplainDto {
     scale: f64,
     second_name: String,
     second: f64,
+    /// Quant: where the block starts, so a weight's bits can be found from the
+    /// offset it carries.
+    block_bits: f64,
     /// Quant: every weight the block stands for, in the order the tensor reads
     /// them, and which one the cursor is inside (-1 for none).
     weights: Vec<WeightDto>,
@@ -162,6 +165,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
         scale: 0.0,
         second_name: String::new(),
         second: 0.0,
+        block_bits: 0.0,
         weights: Vec::new(),
         at: -1.0,
     };
@@ -179,7 +183,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.current = current as f64;
             dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
         }
-        Explain::Quant { kind, bits, d, second, weights, at } => {
+        Explain::Quant { kind, bits, d, second, block_bits, weights, at } => {
             dto.kind = "quant";
             dto.name = kind.to_string();
             dto.width = f64::from(bits);
@@ -188,6 +192,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 dto.second_name = name.to_string();
                 dto.second = v;
             }
+            dto.block_bits = block_bits as f64;
             dto.at = at.map_or(-1.0, |i| i as f64);
             dto.weights = weights
                 .into_iter()

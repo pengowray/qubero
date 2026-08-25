@@ -1347,3 +1347,76 @@ input.invalid {
 .tt-unread {
   color: var(--muted);
 }
+
+/* A block of packed weights, taken apart. See `quantpanel.ts`. */
+.insp-qcursor {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-family: var(--mono);
+  margin-bottom: 4px;
+}
+.insp-qcursor-index {
+  color: var(--muted);
+}
+.insp-qcursor-value {
+  font-size: 15px;
+}
+.insp-qcursor-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+.insp-qscales {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.insp-qscale-name {
+  color: var(--muted);
+}
+.insp-qhead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px 0 4px;
+}
+.insp-qcount {
+  font-size: 11px;
+  color: var(--muted);
+}
+.insp-qgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.6em, 1fr));
+  gap: 1px;
+  max-height: 20em;
+  overflow-y: auto;
+}
+.insp-qgrid.is-wide {
+  grid-template-columns: repeat(auto-fill, minmax(5.2em, 1fr));
+}
+.insp-qcell {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding: 1px 3px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insp-qcell:hover {
+  background: var(--panel);
+}
+.insp-qcell.is-here {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
