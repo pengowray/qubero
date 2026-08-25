@@ -16,8 +16,8 @@
 //! that line may appear anywhere among the numbers, and stepping over a run
 //! that ends at a byte is not the same as stepping over one that starts at
 //! one. A file with a comment in its header reads its numbers wrong from that
-//! point on. Photoshop and GIMP both write one, so this is worth saying: it
-//! is the last gap this format leaves open.
+//! point on. GIMP and other editors write one, so this is worth saying: it is
+//! the last gap this format leaves open.
 
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 

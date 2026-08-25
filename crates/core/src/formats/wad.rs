@@ -17,7 +17,10 @@
 //!
 //! A lump of size zero is a marker rather than a resource: `F_START`,
 //! `S_END` and the names like them exist only to bracket the lumps between
-//! them, which is how a level knows where its own graphics are.
+//! them, which is how a level knows where its own graphics are. What a marker
+//! writes for its offset was never agreed on: some builders write where the
+//! next lump starts, others write zero. A zero could never be a lump, since
+//! the header is there, so it is read as pointing at nothing.
 
 use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
@@ -38,7 +41,10 @@ pub fn wad() -> Template {
                 // its own entry names. The directory sits in that stretch too
                 // and belongs to no lump; it is read by the field above, which
                 // is declared first and so is the one the cursor lands in.
-                ("lumps", T::pointer_list_sized("directory", &["offset"], Anchor::File, E::lit(0), lump())),
+                (
+                    "lumps",
+                    T::pointer_list_sized("directory", &["offset"], Anchor::File, E::lit(0), lump()).skipping_zero(),
+                ),
             ],
         ),
     )
@@ -79,7 +85,9 @@ mod tests {
         let mut data = Vec::new();
         let mut dir = Vec::new();
         for (body, name) in lumps {
-            dir.extend_from_slice(&((12 + data.len()) as i32).to_le_bytes());
+            // The marker writes zero for its offset, as some builders do.
+            let at = if body.is_empty() { 0 } else { (12 + data.len()) as i32 };
+            dir.extend_from_slice(&at.to_le_bytes());
             dir.extend_from_slice(&(body.len() as i32).to_le_bytes());
             dir.extend_from_slice(name);
             data.extend_from_slice(body);
@@ -121,8 +129,10 @@ mod tests {
         let first = ev.node(&d, &[4, 0]).unwrap();
         assert_eq!(first.offset_bits, 12 * 8);
         assert_eq!(first.size_bits, 6 * 8);
-        // A marker covers no bytes, and the lump after it is not moved by it.
+        // A marker whose offset is zero points at nothing rather than at the
+        // header, and the lump after it is not moved by it.
         assert_eq!(ev.node(&d, &[4, 1]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[3, 0, 1, 0]).unwrap().value, Value::Int(0));
         assert_eq!(ev.node(&d, &[4, 2]).unwrap().offset_bits, 18 * 8);
         assert_eq!(ev.node(&d, &[4, 2]).unwrap().size_bits, 3 * 8);
     }
