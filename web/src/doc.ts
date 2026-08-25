@@ -199,10 +199,24 @@ export type TypeInfo = {
   /** Quant: where the block starts, so a weight's bits can be found from the
    *  offset it carries. */
   readonly block_bits: number;
+  /** Quant: the scale the block keeps for each run of weights, where it keeps
+   *  them, and how many weights one run covers. Empty for a block with one
+   *  scale for all of them. */
+  readonly groups: readonly QuantGroup[];
+  readonly group_weights: number;
   /** Quant: every weight the block stands for, in the order the tensor reads
    *  them, and which one the cursor is inside (-1 for none). */
   readonly weights: readonly QuantWeight[];
   readonly at: number;
+};
+
+/** One run of weights inside a block that share a scale of their own. */
+export type QuantGroup = {
+  /** The scale as stored, after whatever bias the type takes off it. */
+  readonly scale: number;
+  /** The minimum taken off every weight in the run, or null where the type has
+   *  none. */
+  readonly min: number | null;
 };
 
 /** One weight of a block of packed weights. */

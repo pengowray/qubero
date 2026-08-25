@@ -1425,3 +1425,31 @@ input.invalid {
   font-size: 11px;
   color: var(--muted);
 }
+.insp-qsubhead {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.insp-qgroups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.6em, 1fr));
+  gap: 1px;
+}
+.insp-qgroup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 3px;
+  border-radius: 2px;
+}
+.insp-qgroup.is-here {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.insp-qgroup-min {
+  color: var(--muted);
+}

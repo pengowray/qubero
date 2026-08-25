@@ -6,6 +6,7 @@
 
 import { extraction } from "./bitextract.js";
 import type { QuantWeight, TypeInfo } from "./doc.js";
+import { countText } from "./strings.js";
 
 /** Asked for when a weight is clicked, so the views go to its bits and mark
  *  them. */
@@ -72,6 +73,40 @@ function cursorRow(w: QuantWeight, index: number, info: TypeInfo): DocumentFragm
   );
   frag.append(row);
   if (w.width === info.width) frag.append(extraction(info.block_bits + w.bit, w.width));
+  return frag;
+}
+
+/**
+ * The scale each run of weights keeps for itself. A K type spends twelve or
+ * sixteen bytes on these, six bits apiece and split across bytes, so the field
+ * they live in reads as nothing but hex until they are taken apart. The block's
+ * own `d` is what they are measured in: a weight is `d * scale * stored`, less
+ * `dmin * min` where the type has one.
+ */
+function groupRow(info: TypeInfo): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  if (info.groups.length === 0) return frag;
+  const per = info.group_weights;
+  const head = document.createElement("div");
+  head.className = "insp-qhead";
+  head.append(
+    span("insp-qsubhead", "Group scales"),
+    span("insp-qcount", `${countText(info.groups.length, "group")} of ${per}`),
+  );
+  const g = document.createElement("div");
+  g.className = "insp-qgroups";
+  const at = info.at >= 0 ? Math.floor(info.at / per) : -1;
+  info.groups.forEach((group, i) => {
+    const cell = document.createElement("span");
+    cell.className = "insp-qgroup";
+    if (i === at) cell.classList.add("is-here");
+    cell.append(span("insp-qgroup-scale", String(group.scale)));
+    if (group.min !== null) cell.append(span("insp-qgroup-min", String(group.min)));
+    const covers = `weights ${i * per} to ${(i + 1) * per - 1}`;
+    cell.title = group.min === null ? `${covers} · scale ${group.scale}` : `${covers} · scale ${group.scale} · min ${group.min}`;
+    g.append(cell);
+  });
+  frag.append(head, g);
   return frag;
 }
 
@@ -156,7 +191,7 @@ export function quantBody(info: TypeInfo, goTo: GoTo, redraw: () => void): Docum
   const frag = document.createDocumentFragment();
   const here = info.at >= 0 ? info.weights[info.at] : undefined;
   if (here !== undefined) frag.append(cursorRow(here, info.at, info));
-  frag.append(scaleRow(info));
+  frag.append(scaleRow(info), groupRow(info));
   const head = document.createElement("div");
   head.className = "insp-qhead";
   head.append(span("insp-qcount", `${info.weights.length} weights, ${info.width} bits each`), toggle(redraw));

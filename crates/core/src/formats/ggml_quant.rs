@@ -133,6 +133,18 @@ pub struct Weight {
     pub width: u32,
 }
 
+/// A run of weights inside a block that share a scale of their own. Only the K
+/// types have these: they spend twelve or sixteen bytes on six-bit scales, one
+/// per sixteen or thirty-two weights, and the block's own `d` is what those are
+/// measured in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Group {
+    /// The scale as stored, after whatever bias the type takes off it.
+    pub scale: i32,
+    /// The minimum taken off every weight in the group, where the type has one.
+    pub min: Option<i32>,
+}
+
 /// One block's numbers: its shared scale, whatever it pairs with the scale, and
 /// the weights.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,6 +157,11 @@ pub struct Block {
     /// What the type pairs with the scale, where it has one: the `m` a `q4_1`
     /// adds, or the `dmin` a K type takes away. Named as the file names it.
     pub second: Option<(&'static str, f64)>,
+    /// The per-group scales, in the order the groups run, or empty for a type
+    /// that has one scale for the whole block. Group `i` covers the weights
+    /// from `i * group_weights`.
+    pub groups: Vec<Group>,
+    pub group_weights: u32,
     pub weights: Vec<Weight>,
 }
 
@@ -193,7 +210,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 w[j] = weight(q0, q0 as f64 * d, lo_nibble(2 + j));
                 w[j + 16] = weight(q1, q1 as f64 * d, hi_nibble(2 + j));
             }
-            Block { kind, d, second: None, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q4_1 => {
             let (d, m) = (f16(b, 0), f16(b, 2));
@@ -204,7 +221,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 w[j] = weight(q0, q0 as f64 * d + m, lo_nibble(4 + j));
                 w[j + 16] = weight(q1, q1 as f64 * d + m, hi_nibble(4 + j));
             }
-            Block { kind, d, second: Some(("m", m)), weights: w }
+            Block { kind, d, second: Some(("m", m)), groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q5_0 => {
             let d = f16(b, 0);
@@ -219,7 +236,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 w[j] = weight(q0, q0 as f64 * d, lo_nibble(6 + j));
                 w[j + 16] = weight(q1, q1 as f64 * d, hi_nibble(6 + j));
             }
-            Block { kind, d, second: None, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q5_1 => {
             let (d, m) = (f16(b, 0), f16(b, 2));
@@ -234,7 +251,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                 w[j] = weight(q0, q0 as f64 * d + m, lo_nibble(8 + j));
                 w[j + 16] = weight(q1, q1 as f64 * d + m, hi_nibble(8 + j));
             }
-            Block { kind, d, second: Some(("m", m)), weights: w }
+            Block { kind, d, second: Some(("m", m)), groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q8_0 => {
             let d = f16(b, 0);
@@ -244,7 +261,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     weight(q, q as f64 * d, ((2 + j) as u32 * 8, 8))
                 })
                 .collect();
-            Block { kind, d, second: None, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q8_K => {
             let d = f32le(b, 0);
@@ -254,7 +271,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     weight(q, q as f64 * d, ((4 + j) as u32 * 8, 8))
                 })
                 .collect();
-            Block { kind, d, second: None, weights: w }
+            Block { kind, d, second: None, groups: Vec::new(), group_weights: 0, weights: w }
         }
         Quant::Q2_K => {
             // scales[16], qs[64], d, dmin
@@ -280,7 +297,11 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     }
                 }
             }
-            Block { kind, d, second: Some(("dmin", dmin)), weights: w }
+            let groups = scales
+                .iter()
+                .map(|&sc| Group { scale: i32::from(sc & 0xF), min: Some(i32::from(sc >> 4)) })
+                .collect();
+            Block { kind, d, second: Some(("dmin", dmin)), groups, group_weights: 16, weights: w }
         }
         Quant::Q3_K => {
             // hmask[32], qs[64], scales[12], d
@@ -309,7 +330,8 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     m <<= 1;
                 }
             }
-            Block { kind, d, second: None, weights: w }
+            let groups = scales.iter().map(|&sc| Group { scale: i32::from(sc) - 32, min: None }).collect();
+            Block { kind, d, second: None, groups, group_weights: 16, weights: w }
         }
         Quant::Q4_K => {
             // d, dmin, scales[12], qs[128]
@@ -333,7 +355,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     w.push(weight(qv, d2 * qv as f64 - off2, hi_nibble(qbase + l)));
                 }
             }
-            Block { kind, d, second: Some(("dmin", dmin)), weights: w }
+            Block { kind, d, second: Some(("dmin", dmin)), groups: k4_groups(scales), group_weights: 32, weights: w }
         }
         Quant::Q5_K => {
             // d, dmin, scales[12], qh[32], qs[128]
@@ -359,7 +381,7 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     w.push(weight(qv, d2 * qv as f64 - off2, hi_nibble(qbase + l)));
                 }
             }
-            Block { kind, d, second: Some(("dmin", dmin)), weights: w }
+            Block { kind, d, second: Some(("dmin", dmin)), groups: k4_groups(scales), group_weights: 32, weights: w }
         }
         Quant::Q6_K => {
             // ql[128], qh[64], scales[16] (signed), d
@@ -388,9 +410,21 @@ pub fn unpack(kind: Quant, b: &[u8]) -> Option<Block> {
                     }
                 }
             }
-            Block { kind, d, second: None, weights: w }
+            let groups = sc.iter().map(|&s| Group { scale: i32::from(s as i8), min: None }).collect();
+            Block { kind, d, second: None, groups, group_weights: 16, weights: w }
         }
     })
+}
+
+/// The eight scales and eight minimums a `q4_k` or `q5_k` packs into twelve
+/// bytes, in the order the groups run.
+fn k4_groups(scales: &[u8]) -> Vec<Group> {
+    (0..8)
+        .map(|j| {
+            let (sc, m) = scale_min_k4(j, scales);
+            Group { scale: i32::from(sc), min: Some(i32::from(m)) }
+        })
+        .collect()
 }
 
 fn weight(q: i32, value: f64, (bit, width): (u32, u32)) -> Weight {
@@ -537,6 +571,45 @@ mod tests {
             };
             assert_eq!(last + 1 - first, kind.weights() * per as usize, "{}", kind.name());
         }
+    }
+
+    /// Every group covers the same number of weights, and they run in the same
+    /// order the weights do, so group `i` is the scale of the weights starting
+    /// at `i * group_weights`.
+    #[test]
+    fn the_groups_of_a_k_block_cover_its_weights() {
+        for kind in ALL {
+            let block = unpack(kind, &vec![0x5Au8; kind.block_bytes()]).unwrap();
+            if block.groups.is_empty() {
+                assert_eq!(block.group_weights, 0, "{}", kind.name());
+                assert!(!kind.name().ends_with("_K") || kind == Quant::Q8_K, "{} should group", kind.name());
+                continue;
+            }
+            assert_eq!(block.groups.len() * block.group_weights as usize, kind.weights(), "{}", kind.name());
+        }
+    }
+
+    /// A `q4_k` group past the fourth takes four bits of its scale from one
+    /// byte and two from another, which is the part of `get_scale_min_k4` most
+    /// worth pinning down.
+    #[test]
+    fn a_split_q4_k_group_reads_both_halves() {
+        let mut b = vec![0u8; 144];
+        b[0..2].copy_from_slice(&ONE);
+        b[2..4].copy_from_slice(&ONE);
+        // scales[] starts at byte 4. Group 5: scale is the low nibble of
+        // scales[9] with the top two bits of scales[1] above it; the minimum is
+        // the high nibble of scales[9] with the top two bits of scales[5].
+        b[4 + 9] = 0xA3;
+        b[4 + 1] = 0b0100_0000;
+        b[4 + 5] = 0b1000_0000;
+        let block = unpack(Quant::Q4_K, &b).unwrap();
+        let g = block.groups[5];
+        assert_eq!(g.scale, 0x03 | (0b01 << 4));
+        assert_eq!(g.min, Some(0x0A | (0b10 << 4)));
+        // The first four groups sit whole in one byte each.
+        assert_eq!(block.groups[1].scale, 0);
+        assert_eq!(block.groups[1].min, Some(0));
     }
 
     #[test]

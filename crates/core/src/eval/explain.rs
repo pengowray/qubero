@@ -3,7 +3,7 @@
 //! and which bits of a float are which.
 
 use super::*;
-use crate::formats::ggml_quant::{self, Quant, Weight};
+use crate::formats::ggml_quant::{self, Group, Quant, Weight};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -46,6 +46,11 @@ pub enum Explain {
         /// Where the block starts, so that a weight's bits can be found from
         /// the offset it carries.
         block_bits: u64,
+        /// The scales the block keeps per group of weights, where it has them,
+        /// and how many weights one group covers. What a K type spends twelve
+        /// or sixteen bytes on, which read as bytes say nothing.
+        groups: Vec<Group>,
+        group_weights: u32,
         weights: Vec<Weight>,
         /// Which weight the cursor is inside, where it is on one of them
         /// rather than on the block's scales.
@@ -159,6 +164,8 @@ fn quant_of(kind: Quant, block: ggml_quant::Block, block_bits: u64, at_bits: Opt
         d: block.d,
         second: block.second,
         block_bits,
+        groups: block.groups,
+        group_weights: block.group_weights,
         weights: block.weights,
         at,
     }

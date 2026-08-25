@@ -91,10 +91,25 @@ struct ExplainDto {
     /// Quant: where the block starts, so a weight's bits can be found from the
     /// offset it carries.
     block_bits: f64,
+    /// Quant: the scale the block keeps for each run of weights, where it keeps
+    /// them, and how many weights one run covers. Empty for a block with one
+    /// scale for all of them.
+    groups: Vec<GroupDto>,
+    group_weights: f64,
     /// Quant: every weight the block stands for, in the order the tensor reads
     /// them, and which one the cursor is inside (-1 for none).
     weights: Vec<WeightDto>,
     at: f64,
+}
+
+/// One run of weights inside a block that share a scale of their own.
+#[derive(Serialize)]
+struct GroupDto {
+    /// The scale as stored, after whatever bias the type takes off it.
+    scale: f64,
+    /// The minimum taken off every weight in the run, or null where the type
+    /// has none.
+    min: Option<f64>,
 }
 
 /// One weight of a packed block.
@@ -166,6 +181,8 @@ fn explain_dto(e: Explain) -> ExplainDto {
         second_name: String::new(),
         second: 0.0,
         block_bits: 0.0,
+        groups: Vec::new(),
+        group_weights: 0.0,
         weights: Vec::new(),
         at: -1.0,
     };
@@ -183,7 +200,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.current = current as f64;
             dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
         }
-        Explain::Quant { kind, bits, d, second, block_bits, weights, at } => {
+        Explain::Quant { kind, bits, d, second, block_bits, groups, group_weights, weights, at } => {
             dto.kind = "quant";
             dto.name = kind.to_string();
             dto.width = f64::from(bits);
@@ -193,6 +210,11 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 dto.second = v;
             }
             dto.block_bits = block_bits as f64;
+            dto.group_weights = f64::from(group_weights);
+            dto.groups = groups
+                .into_iter()
+                .map(|g| GroupDto { scale: f64::from(g.scale), min: g.min.map(f64::from) })
+                .collect();
             dto.at = at.map_or(-1.0, |i| i as f64);
             dto.weights = weights
                 .into_iter()
