@@ -577,7 +577,7 @@ it is: position decides, so `Switch` on `Expr::idx()` gives entry three the
 type name `exception`.
 
 Sniffing it needs more than a magic number. A DOS executable and a Windows one
-both start `MZ`; only a `PE  ` at the offset held at 0x3c separates them, so
+both start `MZ`; only a `PE\0\0` at the offset held at 0x3c separates them, so
 `sniff` is given 1 KiB rather than 64 bytes. A file whose header sits past that
 is left unclaimed, since reading a Windows program as a DOS one would describe
 the stub that exists to say it needs Windows.

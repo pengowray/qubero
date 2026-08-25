@@ -249,7 +249,7 @@ mod tests {
         section.extend_from_slice(&[3, b'e', b'n', b'v', 1, b'f', 0, 3]);
         section.extend_from_slice(&[3, b'e', b'n', b'v', 1, b'g', 3, 0x7f, 1]);
 
-        let mut b = b" asm".to_vec();
+        let mut b = b"\0asm".to_vec();
         b.extend_from_slice(&1u32.to_le_bytes());
         b.push(2); // import section
         b.push(section.len() as u8);
@@ -278,7 +278,7 @@ mod tests {
         let mut section = vec![1u8];
         section.push(body.len() as u8);
         section.extend_from_slice(body);
-        let mut b = b" asm".to_vec();
+        let mut b = b"\0asm".to_vec();
         b.extend_from_slice(&1u32.to_le_bytes());
         b.push(10);
         b.push(section.len() as u8);
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn a_section_is_named_by_its_id() {
-        let mut b = b" asm".to_vec();
+        let mut b = b"\0asm".to_vec();
         b.extend_from_slice(&1u32.to_le_bytes());
         let body = [1u8, 0x60, 0, 0];
         b.push(1);

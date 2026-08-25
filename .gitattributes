@@ -1,0 +1,5 @@
+# Every text file in this repo is LF, whatever the machine editing it does.
+* text=auto eol=lf
+
+# The sample files are the point: not one byte of them is ours to normalise.
+web/public/samples/** -text
