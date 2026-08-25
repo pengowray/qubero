@@ -69,6 +69,8 @@ button.primary {
 }
 input.invalid {
   border-color: var(--warn);
+  outline: 2px solid var(--warn);
+  outline-offset: 1px;
 }
 
 /* ---- welcome ---- */
