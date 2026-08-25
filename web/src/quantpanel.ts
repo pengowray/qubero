@@ -4,17 +4,23 @@
 // is not the order they are read in. The hex view can only show the bytes, so
 // this is where the numbers are.
 
-import { bitFormula } from "./doc.js";
+import { extraction } from "./bitextract.js";
 import type { QuantWeight, TypeInfo } from "./doc.js";
-import { BYTE_NOTE } from "./strings.js";
 
-/** Asked for when a weight is clicked, so the views go to its bits. */
-export type GoTo = (bitOffset: number) => void;
+/** Asked for when a weight is clicked, so the views go to its bits and mark
+ *  them. */
+export type GoTo = (bitOffset: number, lengthBits: number) => void;
 
 /** Whether the grid shows the stored integers or what they scale to. Kept
  *  across renders, because it is a way of reading rather than a fact about the
  *  block under the cursor. */
 let showValues = false;
+
+/** Where the grid had got to, and which block it was showing. The panel is
+ *  rebuilt on every cursor move, more than once for some of them, so this is
+ *  kept here rather than read back off a grid that may already have been
+ *  replaced. */
+let scrolled = { block: -1, top: 0 };
 
 function span(cls: string, text: string): HTMLElement {
   const e = document.createElement("span");
@@ -65,13 +71,7 @@ function cursorRow(w: QuantWeight, index: number, info: TypeInfo): DocumentFragm
     span("insp-qcursor-value", `scaled ${num(w.value)}`),
   );
   frag.append(row);
-  if (w.width === info.width) {
-    const code = document.createElement("code");
-    code.className = "insp-formula-code";
-    code.textContent = bitFormula(info.block_bits + w.bit, w.width);
-    code.title = BYTE_NOTE;
-    frag.append(code);
-  }
+  if (w.width === info.width) frag.append(extraction(info.block_bits + w.bit, w.width));
   return frag;
 }
 
@@ -106,6 +106,10 @@ function toggle(onPick: () => void): HTMLElement {
  * one goes to the bits it came from.
  */
 function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
+  // A grid that started at the top on every rebuild would take the weight just
+  // clicked off the screen. Another block starts at the top, since nothing has
+  // been read there yet.
+  const wasAt = scrolled.block === info.block_bits ? scrolled.top : 0;
   const g = document.createElement("div");
   g.className = showValues ? "insp-qgrid is-wide" : "insp-qgrid";
   info.weights.forEach((w, i) => {
@@ -115,8 +119,30 @@ function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
     if (i === info.at) cell.classList.add("is-here");
     cell.textContent = showValues ? num(w.value) : String(w.q);
     cell.title = `#${i} · stored ${w.q} · scaled ${num(w.value)}`;
-    cell.addEventListener("click", () => goTo(info.block_bits + w.bit));
+    cell.addEventListener("click", () => goTo(info.block_bits + w.bit, w.width));
     g.append(cell);
+  });
+  const remember = (): void => {
+    if (g.isConnected) scrolled = { block: info.block_bits, top: g.scrollTop };
+  };
+  g.addEventListener("scroll", remember);
+  // The panel is built and put in place within one task, so by the time this
+  // runs the grid is in the document and can be measured. A grid built for a
+  // render that was replaced before it got there is left alone: setting the
+  // scroll of a detached element would only record a zero.
+  queueMicrotask(() => {
+    if (!g.isConnected) return;
+    g.scrollTop = wasAt;
+    const cell = g.querySelector(".insp-qcell.is-here");
+    if (cell instanceof HTMLElement) {
+      // Just far enough to bring the weight under the cursor into view, so a
+      // grid the reader has already put where they want it stays there.
+      const c = cell.getBoundingClientRect();
+      const r = g.getBoundingClientRect();
+      if (c.top < r.top) g.scrollTop += c.top - r.top;
+      else if (c.bottom > r.bottom) g.scrollTop += c.bottom - r.bottom;
+    }
+    remember();
   });
   return g;
 }

@@ -5,11 +5,12 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { bitFormula, formatOffset } from "./doc.js";
+import { formatOffset } from "./doc.js";
 import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { BYTE_NOTE, childWord, countText } from "./strings.js";
+import { childWord, countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
+import { extraction } from "./bitextract.js";
 
 /** Structure reads the template's field; the other two read raw bytes. */
 type Mode = "structure" | "le" | "be";
@@ -44,7 +45,7 @@ export class Inspector {
   /** Asked for when a breadcrumb is clicked, so the views can follow. */
   onPick: (path: readonly number[]) => void = () => {};
   /** Asked for when the reader follows an offset, so the views can follow. */
-  onGoTo: (bitOffset: number) => void = () => {};
+  onGoTo: (bitOffset: number, lengthBits?: number) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -369,11 +370,7 @@ export class Inspector {
       return;
     }
     const width = perByte || wide ? 8 : widthBits;
-    const code = document.createElement("code");
-    code.className = "insp-formula-code";
-    code.textContent = bitFormula(bitOffset, width);
-    code.title = BYTE_NOTE;
-    const parts: Node[] = [subhead("Bit extraction"), code];
+    const parts: Node[] = [subhead("Bit extraction"), extraction(bitOffset, width)];
     // Where the reading runs on past one byte, the expression is for the first
     // of them and the rest follow it. Where it is a whole field, its value is
     // already in the editor above and needs no second telling.
@@ -456,7 +453,7 @@ export class Inspector {
         path,
         n,
         (p, text) => this.applyValue(p, text),
-        (bit) => this.onGoTo(bit),
+        (bit, len) => this.onGoTo(bit, len),
         () => this.render(),
       ),
     );

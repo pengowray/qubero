@@ -359,6 +359,16 @@ export function bitFormula(bitOffset: number, width: number): string {
   return terms.join(" | ");
 }
 
+/**
+ * How much of the file something covers, written the way an address is: whole
+ * bytes, then whatever bits are left over. `12`, or `0+4b` for a nibble.
+ */
+export function formatLength(bits: number): string {
+  const bytes = Math.floor(bits / 8);
+  const rem = bits % 8;
+  return rem === 0 ? String(bytes) : `${bytes}+${rem}b`;
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];

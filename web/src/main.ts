@@ -145,15 +145,22 @@ function mount(doc: Doc): void {
     inspector.setOffset(bitOffset);
     followCursor(bitOffset);
   };
-  // The same move, with the place being left kept so that Back returns to it.
-  // Going back calls `goToBit` instead, which records nothing: retracing a step
-  // is not a step of its own.
-  const jumpToBit = (bitOffset: number): void => {
-    nav.recordJump(view.cursorState.bitOffset, bitOffset);
+  // Landing on a run of bits marks them, so that a four-bit weight shows as
+  // four bits and not as the byte it shares. The mark goes on after
+  // `followCursor`, whose own mark is the whole field the cursor landed in.
+  const showBits = (bitOffset: number, lengthBits?: number): void => {
     goToBit(bitOffset);
+    if (lengthBits !== undefined) view.setHighlight({ startBit: bitOffset, endBit: bitOffset + lengthBits });
+  };
+  // The same move, with the place being left kept so that Back returns to it.
+  // Going back calls `showBits` instead, which records nothing: retracing a
+  // step is not a step of its own.
+  const jumpToBit = (bitOffset: number, lengthBits?: number): void => {
+    nav.recordJump(view.cursorState.bitOffset, bitOffset, lengthBits);
+    showBits(bitOffset, lengthBits);
   };
   nav.startFile(view.cursorState.bitOffset);
-  nav.onGo(goToBit);
+  nav.onGo(showBits);
   table.onJump = jumpToBit;
   inspector.onGoTo = jumpToBit;
   inspector.onPick = (path) => {
