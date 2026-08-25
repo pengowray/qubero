@@ -448,6 +448,36 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_claiming_more_than_the_file_holds_is_an_error_for_that_entry_alone() {
+        // Two entries, the first saying its text is two hundred letters long
+        // when there are eight. The second is written correctly.
+        let mut v = b"MM".to_vec();
+        v.extend_from_slice(&42u16.to_be_bytes());
+        v.extend_from_slice(&8u32.to_be_bytes());
+        v.extend_from_slice(&2u16.to_be_bytes());
+        for (tag, kind, count, at) in [(305u16, 2u16, 200u32, 38u32), (306, 2, 8, 38)] {
+            v.extend_from_slice(&tag.to_be_bytes());
+            v.extend_from_slice(&kind.to_be_bytes());
+            v.extend_from_slice(&count.to_be_bytes());
+            v.extend_from_slice(&at.to_be_bytes());
+        }
+        v.extend_from_slice(&0u32.to_be_bytes());
+        v.extend_from_slice(b"qubero\0\0");
+
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(tiff());
+        // The tag and the type of the broken entry still read: what it says
+        // about itself is readable even where what it points at is not.
+        assert_eq!(
+            ev.node(&d, &[1, 2, 0, 1, 0, 0]).unwrap().value,
+            Value::Enum { raw: 305, name: Some("software".into()), hex: false }
+        );
+        assert!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 1, 0]).is_err());
+        // And the entry beside it is unharmed.
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1, 1, 4, 1, 0]).unwrap().value, Value::Str("qubero".into()));
+    }
+
+    #[test]
     fn a_byte_order_the_format_does_not_have_is_left_alone() {
         let mut v = b"XX".to_vec();
         v.extend_from_slice(&[0; 20]);
