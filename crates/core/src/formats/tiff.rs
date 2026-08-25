@@ -14,19 +14,31 @@
 //! What follows the header is a directory: a count, that many twelve-byte
 //! entries, and the offset of the next directory. The entries are what makes
 //! this format what it is. Each is a tag, a type, a count, and four bytes that
-//! are the value itself when it fits in four bytes and where to find it when
-//! it does not. That last part is not read here: which of the two it is
-//! depends on the type and the count multiplied together, and a field that is
-//! a number or a pointer depending on arithmetic is past what the IR can say.
+//! are the value itself when it fits in four and where to find it when it
+//! does not. Nothing in the entry says which of the two those bytes are: it is
+//! the size of the type times the count, worked out rather than read. So that
+//! is what the template does, in a field of no bits called `room`, and the
+//! switch below it is on whether the answer is over four.
 //!
-//! Nor is the chain of directories followed past the first. Each says where
+//! A value that does not fit is read where the entry says it is, which is an
+//! offset from the start of the TIFF. That is the same as the start of the
+//! file right up until it is not: an EXIF block is a whole TIFF written into a
+//! JPEG segment, and every offset in one counts from its own `II` or `MM`
+//! partway through. The whole format sits in a window of its own and its
+//! offsets are anchored to that window, so the one layout is both a file and a
+//! copy of a file inside something else. `tiff_file` is what a JPEG borrows.
+//!
+//! The chain of directories is not followed past the first. Each says where
 //! the next one is, as an offset into the file with nothing bounding it, so a
 //! file whose directory points back at itself is a ring. Every other type here
 //! that refers to itself is bounded by something containing it and must
 //! therefore end; this one is not, and hunting the cursor around a ring
 //! forever is worse than reading one directory and saying where the next is.
+//! The two tags that point at a directory of their own, the EXIF and GPS
+//! sub-directories, are numbers here for the same reason: they are the same
+//! ring in a different shape.
 
-use crate::template::{Endian, Endian::*, Expr as E, Template, Ty as T};
+use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 /// The tags worth naming. There are hundreds more, and a number with no name
 /// is still shown; these are the ones a file in the wild actually carries.
@@ -177,6 +189,11 @@ fn ifd(e: Endian) -> T {
 
 /// One entry: what it is, what kind of thing it holds, how many, and then four
 /// bytes that are either the thing itself or where to find it.
+///
+/// Which of the two those four bytes are is not written down anywhere. It is
+/// the size of the type times the count: four bytes or fewer and the value is
+/// there, more and they are an offset to it. So the size is worked out first,
+/// in a field of no bits, and the switch below is on whether it fits.
 fn entry(e: Endian) -> T {
     T::structure_named(
         "Entry",
@@ -186,12 +203,114 @@ fn entry(e: Endian) -> T {
             ("tag", T::enumeration("Tag", T::u16(e), TAG)),
             ("type", T::enumeration("FieldType", T::u16(e), FIELD_TYPE)),
             ("count", T::u32(e)),
-            // Four bytes wide whatever it holds. A value needing more room
-            // than that is somewhere else and this is where.
-            ("value_or_offset", T::u32(e)),
+            ("room", room()),
+            // Dividing by five is how "four or fewer" is asked, since the
+            // switch takes one number rather than a comparison.
+            ("value", T::switch(E::field("room").div(E::lit(5)), vec![(0, here(e))], elsewhere(e))),
         ],
     )
     .counted_as("entry")
+}
+
+/// How many bytes the values of this entry need: the size of one of them times
+/// how many there are. A type nobody here knows comes to nothing, which sends
+/// it down the branch that reads the four bytes and says no more than that.
+fn room() -> T {
+    let cases = SIZE.iter().map(|(t, w)| (*t, T::computed(E::lit(*w).mul(E::field("count"))))).collect();
+    T::switch(E::field("type"), cases, T::computed(E::lit(0)))
+}
+
+/// What one value of each type takes up. `FIELD_TYPE` names them; this is what
+/// they cost.
+const SIZE: &[(i128, i128)] = &[
+    (1, 1),
+    (2, 1),
+    (3, 2),
+    (4, 4),
+    (5, 8),
+    (6, 1),
+    (7, 1),
+    (8, 2),
+    (9, 4),
+    (10, 8),
+    (11, 4),
+    (12, 8),
+    (13, 4),
+    (16, 8),
+    (17, 8),
+    (18, 8),
+];
+
+/// The values, in the four bytes of the entry itself, written from the first
+/// of them and padded out to four whichever way round the file is.
+fn here(e: Endian) -> T {
+    T::sized(
+        E::lit(4),
+        T::inline_structure("Here", vec![("values", values(e)), ("padding", T::bytes(E::Remaining))]),
+    )
+}
+
+/// The values, somewhere else in the file, with the entry saying where. The
+/// offset counts from the start of the TIFF, which is why it is anchored to
+/// the window rather than to the file: in an EXIF block those are not the
+/// same place.
+fn elsewhere(e: Endian) -> T {
+    T::inline_structure(
+        "Elsewhere",
+        vec![
+            ("offset", T::u32(e)),
+            ("values", T::at_in_window(E::field("offset"), values(e))),
+        ],
+    )
+}
+
+/// However many values of whatever type this entry holds, wherever they are.
+/// Text and undefined bytes are a run rather than a list of one-byte things,
+/// which is what they are; everything else is one value when the count says
+/// one and a list when it says more.
+fn values(e: Endian) -> T {
+    let mut cases = vec![
+        (2, T::text(StrLen::Padded { size: E::field("count"), pad: 0 }, Encoding::Ascii)),
+        (7, T::bytes(E::field("count"))),
+    ];
+    for (t, _) in SIZE {
+        if let Some(one) = one(e, *t) {
+            cases.push((
+                *t,
+                T::switch(E::field("count"), vec![(1, one.clone())], T::array(one, E::field("count"))),
+            ));
+        }
+    }
+    // A type this does not know, in the room it turned out to need, which for
+    // an unknown type is the four bytes of the entry and nothing more.
+    T::switch(E::field("type"), cases, T::bytes(E::Remaining))
+}
+
+/// One value of a type, or nothing for the two that are read as a run.
+fn one(e: Endian, t: i128) -> Option<T> {
+    Some(match t {
+        1 => T::u8(),
+        3 => T::u16(e),
+        4 | 13 => T::u32(e),
+        5 => ratio(e, false),
+        6 => T::Int { bits: 8, endian: e },
+        8 => T::Int { bits: 16, endian: e },
+        9 => T::i32(e),
+        10 => ratio(e, true),
+        11 => T::F32(e),
+        12 => T::F64(e),
+        16 | 18 => T::u64(e),
+        17 => T::Int { bits: 64, endian: e },
+        _ => return None,
+    })
+}
+
+/// A rational: two numbers rather than one. A resolution of 300 dots an inch
+/// is written 300 over 1, and an exposure of a two-hundredth of a second is
+/// written 1 over 200, which is the reason the format has the type at all.
+fn ratio(e: Endian, signed: bool) -> T {
+    let n = || if signed { T::i32(e) } else { T::u32(e) };
+    T::inline_structure("Rational", vec![("numerator", n()), ("denominator", n())])
 }
 
 #[cfg(test)]
@@ -218,7 +337,15 @@ mod tests {
             v.extend_from_slice(&u16b(tag));
             v.extend_from_slice(&u16b(kind));
             v.extend_from_slice(&u32b(count));
-            v.extend_from_slice(&u32b(value));
+            // A value that fits is written from the first of the four bytes
+            // and padded out, whichever way round the file is. Writing a
+            // short as a long would put it in the wrong two bytes.
+            if kind == 3 {
+                v.extend_from_slice(&u16b(value as u16));
+                v.extend_from_slice(&[0, 0]);
+            } else {
+                v.extend_from_slice(&u32b(value));
+            }
         }
         v.extend_from_slice(&u32b(0)); // no directory after this one
         v
@@ -253,12 +380,16 @@ mod tests {
                 ev.node(&d, &[1, 2, 0, 1, 0, 1]).unwrap().value,
                 Value::Enum { raw: 3, name: Some("short".into()), hex: false }
             );
-            assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 3]).unwrap().value, Value::UInt(640), "{little}");
+            // A short with a count of one fits in the four bytes, so it is
+            // read there and the two bytes left over are padding.
+            assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 3]).unwrap().value, Value::Int(2), "room");
+            assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 0]).unwrap().value, Value::UInt(640), "{little}");
+            assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 1]).unwrap().size_bits, 16);
             assert_eq!(
                 ev.node(&d, &[1, 2, 0, 1, 1, 0]).unwrap().value,
                 Value::Enum { raw: 273, name: Some("strip offsets".into()), hex: false }
             );
-            assert_eq!(ev.node(&d, &[1, 2, 0, 1, 1, 3]).unwrap().value, Value::UInt(8));
+            assert_eq!(ev.node(&d, &[1, 2, 0, 1, 1, 4, 0]).unwrap().value, Value::UInt(8));
             assert_eq!(ev.node(&d, &[1, 2, 0, 2]).unwrap().value, Value::UInt(0));
         }
     }
@@ -276,6 +407,44 @@ mod tests {
         // the two bytes there, and its type the two after them.
         assert_eq!(ev.locate(&d, 18 * 8).unwrap(), vec![1, 2, 0, 1, 0, 0]);
         assert_eq!(ev.locate(&d, 20 * 8).unwrap(), vec![1, 2, 0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn a_value_too_big_for_its_entry_is_read_where_the_entry_says_it_is() {
+        // Two entries whose values do not fit: a resolution, which is two
+        // numbers, and a name, which is longer than four letters.
+        let mut v = b"MM".to_vec();
+        v.extend_from_slice(&42u16.to_be_bytes());
+        v.extend_from_slice(&8u32.to_be_bytes());
+        v.extend_from_slice(&2u16.to_be_bytes());
+        for (tag, kind, count, at) in [(282u16, 5u16, 1u32, 38u32), (305, 2, 8, 46)] {
+            v.extend_from_slice(&tag.to_be_bytes());
+            v.extend_from_slice(&kind.to_be_bytes());
+            v.extend_from_slice(&count.to_be_bytes());
+            v.extend_from_slice(&at.to_be_bytes());
+        }
+        v.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(v.len(), 38);
+        v.extend_from_slice(&300u32.to_be_bytes()); // three hundred
+        v.extend_from_slice(&1u32.to_be_bytes()); // over one
+        v.extend_from_slice(b"qubero\0\0");
+
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(tiff());
+        // Eight bytes needed and four to hold them, so the four are an offset.
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 3]).unwrap().value, Value::Int(8));
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 0]).unwrap().value, Value::UInt(38));
+        let ratio = ev.node(&d, &[1, 2, 0, 1, 0, 4, 1, 0]).unwrap();
+        assert_eq!(ratio.type_name, "Rational");
+        assert_eq!(ratio.offset_bits, 38 * 8);
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 1, 0, 0]).unwrap().value, Value::UInt(300));
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 1, 0, 1]).unwrap().value, Value::UInt(1));
+
+        // Text keeps the room the count gives it and reads as what is written
+        // before the padding, which is how the format stores a name.
+        let name = ev.node(&d, &[1, 2, 0, 1, 1, 4, 1, 0]).unwrap();
+        assert_eq!(name.value, Value::Str("qubero".into()));
+        assert_eq!(name.size_bits, 8 * 8);
     }
 
     #[test]

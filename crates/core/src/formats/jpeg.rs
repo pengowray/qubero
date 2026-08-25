@@ -555,9 +555,15 @@ mod tests {
             ev.node(&d, &[exif, &[1, 2, 0, 1, 0, 0][..]].concat()).unwrap().value,
             Value::Enum { raw: 271, name: Some("make".into()), hex: false }
         );
-        // The string it points at is past what an entry can hold, so the entry
-        // says where it is; reading it is a step this stops short of.
-        assert_eq!(ev.node(&d, &[exif, &[1, 2, 0, 1, 0, 3][..]].concat()).unwrap().value, Value::UInt(26));
+        // Six bytes of text is past what an entry can hold, so the entry says
+        // where they are and they are read there. Twenty-six from the TIFF is
+        // thirty-eight from the file, and the string is at neither of those
+        // places by accident.
+        assert_eq!(ev.node(&d, &[exif, &[1, 2, 0, 1, 0, 3][..]].concat()).unwrap().value, Value::Int(6));
+        assert_eq!(ev.node(&d, &[exif, &[1, 2, 0, 1, 0, 4, 0][..]].concat()).unwrap().value, Value::UInt(26));
+        let make = ev.node(&d, &[exif, &[1, 2, 0, 1, 0, 4, 1, 0][..]].concat()).unwrap();
+        assert_eq!(make.offset_bits, 38 * 8);
+        assert_eq!(make.value, Value::Str("Nikon".into()));
     }
 
     #[test]

@@ -722,6 +722,28 @@ Licences travel with the code, so `tools/notices.mjs` regenerates
 dependencies. It lists only the licence arm actually taken, since reproducing
 the GPL under a crate taken under BSD terms would claim otherwise.
 
+### A format written inside another one
+The EXIF block of a JPEG is a whole TIFF file, header and directory and all,
+written into a segment partway through. Reading it twice, once as TIFF and
+once as EXIF, would be two descriptions of one format that could disagree.
+
+What stopped the one description serving both was that `Ty::At` counted from
+the start of the file, and an embedded TIFF counts from its own first byte.
+So `At` carries an anchor now, the same three choices `PointerList` already
+had. `Anchor::Window` is the nearest `Sized` around the field and falls back
+to the start of the file when there is none, so the TIFF sits in a window of
+its own and the one layout is a file when it is a file and a copy inside
+something else when it is not. `tiff_file` is a type rather than a template,
+and the JPEG names it.
+
+The same anchor settled the other half of a TIFF entry. Four bytes hold the
+value when it fits and where to find it when it does not, and nothing in the
+entry says which: it is the size of the type times the count. That is a field
+of no bits, and the switch is on whether the answer is over four. A value that
+does not fit is read at its offset from the window, so a camera's make and
+model and exposure are strings and fractions rather than three numbers that
+happen to be small.
+
 ### A stream that says nowhere how long it is
 JPEG is a list of segments, and all but one kind of them carry a length. The
 one that does not is the whole point of the format: after the marker that
