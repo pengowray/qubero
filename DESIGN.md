@@ -722,6 +722,35 @@ Licences travel with the code, so `tools/notices.mjs` regenerates
 dependencies. It lists only the licence arm actually taken, since reproducing
 the GPL under a crate taken under BSD terms would claim otherwise.
 
+### A stream that says nowhere how long it is
+JPEG is a list of segments, and all but one kind of them carry a length. The
+one that does not is the whole point of the format: after the marker that
+starts a scan, the compressed bits run until the next marker, and nothing
+anywhere says how far that is.
+
+Reading it needs one addition, and it is a distance rather than a type.
+`Expr::ToMarker { lead, unless }` is how far it is from here to the next
+`lead` byte that is not followed by one of `unless`, so the scan is
+`T::bytes(E::to_marker(0xff, ESCAPES))` and everything else about it is
+ordinary. A distance composes where a type would not: it can be subtracted
+from, windowed, switched on.
+
+`unless` is there because the terminator and the escape are the same byte. An
+0xff that is data is written with a zero after it, and the eight restart
+markers belong inside a scan rather than ending one, so only the byte after
+the 0xff tells a marker from the stream it sits in.
+
+Two answers had to be decided rather than discovered. A container with no such
+byte in it measures to its end, because a file cut off mid-scan is exactly the
+file worth looking at and refusing to place the bytes would hide what went
+wrong. And a lone `lead` as the last byte of a container is not a marker,
+because nothing has said what it is.
+
+The other addition is smaller. `Expr::SumOf(name)` adds up the numbers of an
+earlier array, which `ProductOf` already did the other way. A Huffman segment
+writes how many codes there are of each of sixteen lengths and then that many
+symbols, and never writes the total.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
@@ -740,8 +769,10 @@ LSB-first order on the field type, which is a real addition to the IR rather tha
 a display option.
 
 MP4: sample tables past `stsd` are bytes. An SPS or PPS is exp-golomb coded,
-which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 Annex B stream (start codes rather
-than lengths) needs a "scan until these bytes" primitive that does not exist.
+which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 Annex B stream is closer than it was: `Expr::ToMarker` measures to
+the next occurrence of one byte that is not followed by one of a set, which
+is what a JPEG scan needs. A start code is three bytes rather than one, and
+a multi-byte lead is the addition still missing.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 
