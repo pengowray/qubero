@@ -403,6 +403,50 @@ fn pointed_at_items_read_in_offset_order() {
 }
 
 #[test]
+fn an_offset_of_zero_points_at_nothing_when_the_list_says_so() {
+    let item = T::structure("Item", vec![("len", T::u8()), ("text", T::utf8(E::field("len")))]);
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("count", T::u8()),
+                ("ptrs", T::array(T::u16(Big), E::field("count"))),
+                ("items", T::pointer_list("ptrs", Anchor::Window, E::lit(0), item).skipping_zero()),
+            ],
+        ),
+    );
+    // Three entries, of which the middle one is zero: a table with room for
+    // more than the file holds.
+    let d = doc(&[3, 0, 8, 0, 0, 0, 11, 0xff, 2, b'o', b'k', 3, b'b', b'e', b'e']);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[2]).unwrap().child_count, 3);
+    assert_eq!(ev.node(&d, &[2, 0, 1]).unwrap().value, Value::Str("ok".into()));
+    // The zero keeps its place and covers nothing, rather than reading the
+    // header the offsets are counted from.
+    let none = ev.node(&d, &[2, 1]).unwrap();
+    assert_eq!(none.size_bits, 0);
+    assert_eq!(ev.node(&d, &[2, 2, 1]).unwrap().value, Value::Str("bee".into()));
+
+    // Without it, that same zero is an offset outside the list, which is what
+    // it would be if the format did not mean anything by it.
+    let item = T::structure("Item", vec![("len", T::u8()), ("text", T::utf8(E::field("len")))]);
+    let plain = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("count", T::u8()),
+                ("ptrs", T::array(T::u16(Big), E::field("count"))),
+                ("items", T::pointer_list("ptrs", Anchor::Window, E::lit(0), item)),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(plain);
+    assert!(ev.node(&d, &[2, 1]).is_err());
+}
+
+#[test]
 fn space_between_pointed_at_items_is_a_gap_of_its_own() {
     let d = doc(POINTED);
     let mut ev = Evaluator::new(pointer_template());

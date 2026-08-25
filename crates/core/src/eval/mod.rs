@@ -622,11 +622,11 @@ impl Evaluator {
     /// the anchor, so a child can sit anywhere in the list's stretch, in any
     /// order. One that points outside it is an error for that child alone.
     fn pointer_offset<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved, idx: usize) -> R<Option<u64>> {
-        let Ty::PointerList { offsets, field, anchor, adjust, skip_missing, .. } = &lr.ty else {
+        let Ty::PointerList { offsets, field, anchor, adjust, skip_missing, skip_zero, .. } = &lr.ty else {
             return fail("not a pointer list");
         };
         let (offsets, field, anchor, adjust) = (offsets.clone(), field.clone(), *anchor, adjust.clone());
-        let skip_missing = *skip_missing;
+        let (skip_missing, skip_zero) = (*skip_missing, *skip_zero);
         let base = match anchor {
             Anchor::File => 0,
             // The nearest enclosing window, which is the page or the table the
@@ -650,6 +650,11 @@ impl Evaluator {
             Err(err) if skip_missing && !err.interrupted() => return Ok(None),
             Err(err) => return Err(err),
         };
+        // Zero before anything is added to it: what the table holds is what
+        // says the entry points at nothing, not where the arithmetic lands.
+        if skip_zero && at == 0 {
+            return Ok(None);
+        }
         let adj = self.eval_expr(doc, list, &adjust)?;
         let bits = base as i128 + (at + adj) * 8;
         // The end of the list is a place a child may start: an entry holding

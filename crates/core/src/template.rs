@@ -322,6 +322,10 @@ pub enum Ty {
     /// tensor table holds each offset inside a record, not as a bare number.
     /// With `to_next`, a child runs to the start of the next child above it
     /// (or the end of the list), for formats that store no per-child size.
+    /// With `skip_zero`, an offset of zero points at nothing too, which is
+    /// what a format writes in a fixed-size table of pointers for the entries
+    /// it has nothing for: a Minecraft region keeps room for 1024 chunks and
+    /// writes zero for every one the world has not reached yet.
     /// With `skip_missing`, an entry of `offsets` with no such field points at
     /// nothing rather than making the list unreadable: it keeps its place
     /// among the children and covers no bytes. A safetensors header holds the
@@ -334,6 +338,7 @@ pub enum Ty {
         elem: Box<Ty>,
         to_next: bool,
         skip_missing: bool,
+        skip_zero: bool,
     },
     /// SQLite's variable-length integer: seven bits per byte, most significant
     /// group first, up to nine bytes, where a ninth byte contributes all eight
@@ -536,6 +541,7 @@ impl Ty {
             elem: Box::new(elem),
             to_next: false,
             skip_missing: false,
+            skip_zero: false,
         }
     }
     /// A pointer list whose offsets sit inside the records of `offsets`, in
@@ -549,6 +555,7 @@ impl Ty {
             elem: Box::new(elem),
             to_next: true,
             skip_missing: false,
+            skip_zero: false,
         }
     }
     /// A pointer list whose children have a size of their own, and where an
@@ -563,6 +570,17 @@ impl Ty {
             elem: Box::new(elem),
             to_next: false,
             skip_missing: true,
+            skip_zero: false,
+        }
+    }
+    /// A pointer list where an offset of zero points at nothing rather than at
+    /// the anchor. See [`Ty::PointerList::skip_zero`].
+    pub fn skipping_zero(self) -> Ty {
+        match self {
+            Ty::PointerList { offsets, field, anchor, adjust, elem, to_next, skip_missing, .. } => {
+                Ty::PointerList { offsets, field, anchor, adjust, elem, to_next, skip_missing, skip_zero: true }
+            }
+            other => other,
         }
     }
     pub fn sqlite_varint() -> Ty {

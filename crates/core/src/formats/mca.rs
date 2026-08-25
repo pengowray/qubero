@@ -8,11 +8,12 @@
 //! computed field holding the offset itself, and the list points with that.
 //! It costs no bytes and it is what makes the chunks land where they are.
 //!
-//! An entry of all zeroes means the chunk has never been generated. It points
-//! at the start of the file, which is the location table, so those entries
-//! read as a chunk sitting on top of the header. The IR has no way to say
-//! "this entry points at nothing", and that is worth knowing rather than
-//! hiding.
+//! An entry of all zeroes means the chunk has never been generated, and most
+//! of the 1024 in a real region are. A pointer list can be told that a zero
+//! offset points at nothing, so those entries keep their place in the list
+//! and cover no bytes. Without that, a zero is an offset pointing before the
+//! list that holds it, which is an error, and one ungenerated chunk would
+//! make the region unreadable.
 
 use crate::template::{Anchor, Endian::*, Expr as E, Template, Ty as T};
 
@@ -29,7 +30,7 @@ pub fn mca() -> Template {
                 ("locations", T::array(location(), E::lit(1024))),
                 // Seconds since 1970, for the last time each chunk was saved.
                 ("timestamps", T::array(T::u32(Big), E::lit(1024))),
-                ("chunks", T::pointer_list_sized("locations", &["at"], Anchor::File, E::lit(0), chunk())),
+                ("chunks", T::pointer_list_sized("locations", &["at"], Anchor::File, E::lit(0), chunk()).skipping_zero()),
             ],
         ),
     )
@@ -104,5 +105,18 @@ mod tests {
         assert_eq!(ev.node(&d, &[2, 0, 1]).unwrap().value, Value::Enum { raw: 2, name: Some("zlib".into()), hex: false });
         assert_eq!(ev.node(&d, &[2, 0, 2]).unwrap().size_bits, 8 * 8);
         assert_eq!(ev.node(&d, &[2, 1]).unwrap().offset_bits, 12288 * 8);
+    }
+
+    #[test]
+    fn a_chunk_the_world_never_reached_covers_no_bytes() {
+        let d = Document::new(MemSource(region()));
+        let mut ev = Evaluator::new(mca());
+        // Every entry keeps its place in the list, generated or not.
+        assert_eq!(ev.node(&d, &[2]).unwrap().child_count, 1024);
+        // The third one is all zeroes, and it lands on nothing rather than on
+        // the location table at the front of the file.
+        let ungenerated = ev.node(&d, &[2, 2]).unwrap();
+        assert_eq!(ungenerated.size_bits, 0);
+        assert_eq!(ungenerated.offset_bits, ev.node(&d, &[2]).unwrap().offset_bits);
     }
 }
