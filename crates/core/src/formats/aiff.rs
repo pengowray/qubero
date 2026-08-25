@@ -141,6 +141,12 @@ mod tests {
         assert_eq!(rate.size_bits, 10 * 8);
         assert_eq!(rate.value, Value::Float(44100.0));
         assert_eq!(rate.type_name, "f80 be");
+        // Eighty bits is the first float width here that is not a power of
+        // two, so writing one is worth proving rather than assuming.
+        assert!(rate.editable);
+        let w = ev.prepare_write(&d, &[3, 0, 2, 3], "48000").unwrap();
+        assert_eq!(w.n_bits, 80);
+        assert_eq!(w.data, vec![0x40, 0x0e, 0xbb, 0x80, 0, 0, 0, 0, 0, 0]);
         assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().value, Value::Str("Sample".into()));
         assert_eq!(ev.node(&d, &[3, 2, 2, 2]).unwrap().size_bits, 16 * 8);
     }

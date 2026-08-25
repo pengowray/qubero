@@ -7,6 +7,10 @@ use super::*;
 /// one place because two callers need the same answer, one measuring the field
 /// and one saying where inside it the value sits, and an answer that differed
 /// between them would put the value in the wrong place.
+///
+/// The one place they can still differ is a comment longer than the 4096 bytes
+/// an editable field is read up to: the measuring reads on, the placing stops,
+/// and the value lands short. Nothing writes a comment that long.
 #[derive(Default, Clone, Copy)]
 pub(super) struct Skipping {
     in_comment: bool,
