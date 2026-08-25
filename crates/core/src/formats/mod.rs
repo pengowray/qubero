@@ -32,6 +32,7 @@ mod safetensors;
 mod sqlite;
 mod tap;
 mod tga;
+mod tiff;
 mod vpk;
 mod w4v;
 mod wad;
@@ -68,6 +69,7 @@ pub use safetensors::safetensors;
 pub use sqlite::sqlite;
 pub use tap::tap;
 pub use tga::tga;
+pub use tiff::tiff;
 pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
@@ -85,7 +87,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -125,6 +127,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "gitindex" => Some(git_index()),
         "gitpackidx" => Some(git_pack_index()),
         "qoi" => Some(qoi()),
+        "tiff" => Some(tiff()),
         _ => None,
     }
 }
@@ -156,6 +159,8 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"NES\x1a", "nes"),
     (b"GIF8", "gif"),
     (b"qoif", "qoi"),
+    (b"II*\x00", "tiff"),
+    (b"MM\x00*", "tiff"),
     (b".snd", "au"),
     (b"ID3", "id3"),
     (b"{\"", "json"),
@@ -402,6 +407,10 @@ mod tests {
         assert_eq!(sniff(b"SQLite format 3\0"), Some("sqlite"));
         assert_eq!(sniff(b"qoif\0\0\x01\0\0\0\x01\0\x04\0"), Some("qoi"));
         assert_eq!(sniff(b"GIF89a"), Some("gif"));
+        // Both ways round, and the 42 after the letters is written the way
+        // the letters just said it would be.
+        assert_eq!(sniff(b"II*\x00\x08\x00\x00\x00"), Some("tiff"));
+        assert_eq!(sniff(b"MM\x00*\x00\x00\x00\x08"), Some("tiff"));
     }
 
     #[test]
