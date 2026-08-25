@@ -244,6 +244,37 @@ The bytes are shown as text as well, but only where they read as text: three
 bytes or more, and mostly printable. A one-byte count of 65 beside an `A`
 invites reading a number as a letter.
 
+### The overview
+The listing opens with the file described before its rows: its size, what the
+identification made of it, a map of the whole file, the top-level regions, and
+a sentence for anything that stands out. The aim is that what a reader would
+find by paging through the whole file (the last half being zeros, a compressed
+middle) is on screen before they page anywhere.
+
+The map divides the file into equal buckets, each a power of two of bytes so a
+cell stands for a round number, and classifies each bucket's bytes: all zero,
+one repeated byte, mostly printable, ordinary data, or high entropy. The scan
+behind it lives in `core/src/overview.rs` and runs the way a search does, a
+bounded window per step answering with the chunks it needs, because it reads
+the whole file and the file may not be here yet. The classes cross to the UI
+as one digit per bucket; runs, percentages and sentences are worked out there.
+Because the map answers from the bytes alone, it is the one part of the app
+that says something about a file no template covers.
+
+An edit throws the scan away and the next step starts it over; one pass over
+the file is what the feature costs, so it only runs while the listing is
+showing and the section is unfolded. The stepping loop does as many steps as a
+frame allows rather than one per timeout, because a background tab's chained
+timeouts are throttled to a crawl.
+
+The region list is the template's top-level children, with runs of three or
+more plain fields folded into one row so a header's bookkeeping does not
+outnumber the parts with any size to them; structures keep their rows however
+small. Hovering a region shows where it sits on the map; picking one moves the
+cursor the way picking a row does. Next, per the roadmap: carrying each
+format's own units upward (pages, tensors, tables, functions) so the regions
+read in the document's terms rather than the template's.
+
 ### The field column
 The hex view's right-hand column shows either the bytes as text or, with a
 template, what each byte is: every field tinted where it sits, and its name and
