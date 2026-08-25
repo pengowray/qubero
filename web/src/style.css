@@ -719,12 +719,70 @@ input.invalid {
   padding-bottom: 8px;
   margin-bottom: 4px;
 }
-/* Numbers that can run to hundreds of digits: they wrap rather than widening
-   the panel or being cut off, since a value read only in part is worse than
-   one that takes four lines. */
+/* Numbers here run to hundreds of digits. Each keeps to one line and is cut
+   short, so the panel stays a list of readings rather than a wall; Copy takes
+   the whole of one, and the tooltip shows it. */
+.insp-seltable {
+  table-layout: fixed;
+}
+/* Wider than the readings at the cursor, whose labels are all short: a row
+   here is called "Unsigned LE" and wrapping the label is the one thing that
+   would put a reading back onto two lines. */
+.insp-seltable th {
+  width: 7.5em;
+  white-space: nowrap;
+}
 .insp-seltable td {
   font-family: var(--mono);
-  overflow-wrap: anywhere;
+}
+.insp-valrow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.insp-val {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insp-val-edit {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: inherit;
+  padding: 0 4px;
+  min-height: 20px;
+  background: var(--bg);
+}
+/* Over the tail of the number rather than beside it, so the number does not
+   get shorter when the pointer arrives. */
+.insp-acts {
+  position: absolute;
+  right: 0;
+  display: flex;
+  gap: 2px;
+  background: var(--panel);
+  opacity: 0;
+}
+.insp-valrow:hover .insp-acts,
+.insp-acts:focus-within {
+  opacity: 1;
+}
+.insp-act {
+  font: inherit;
+  font-size: 11px;
+  min-height: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.insp-selstatus {
+  color: var(--muted);
+  min-height: 1.3em;
+  margin-top: 2px;
 }
 .insp-subhead {
   font-size: 11px;

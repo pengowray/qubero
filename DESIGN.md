@@ -381,6 +381,21 @@ together is exactly what a reader needs a number for. Nothing in the interface
 makes a selection of more than one run yet: the hex grid has one anchor and
 one focus. The reading is where that gap will close.
 
+Each reading keeps to one line and is cut short rather than wrapped, since a
+sixteen-byte selection is thirty-nine digits and five readings of it would
+otherwise fill the panel. Under the pointer, or under the keyboard, two buttons
+appear over the tail of the number: Copy takes the whole of it, which is the
+answer to a number too long to read, and Edit opens it for typing. They sit
+over the number rather than beside it so that it does not get shorter when the
+pointer arrives.
+
+Every reading is two-way. Typing a number into one writes it back over the
+selected bits: signed accepts a negative and stores two's complement, hex takes
+digits with or without `0x`, and the reversed readings write the bytes the
+other way round. A value that does not fit says what the range is instead of
+being clamped or truncated. Writing is one undo step even where the selection
+is several runs, because the runs are one value.
+
 Past 1,024 bytes the number rows are simply absent, leaving the length. Nobody
 selects a thousand bytes meaning to read them as one integer, so there is
 nothing to explain, and the same limit is what stops selecting half a file from

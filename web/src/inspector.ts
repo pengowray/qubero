@@ -43,6 +43,14 @@ export class Inspector {
    *  one run of bits. Empty when nothing is selected. */
   private selection: readonly BitRange[] = [];
   private readonly selectionEl: HTMLElement;
+  private readonly selWhere: HTMLElement;
+  private readonly selTable: HTMLElement;
+  private readonly selLength: HTMLElement;
+  private readonly selStatus: HTMLElement;
+  private readonly selRows = new Map<SelKind, SelRow>();
+  /** Which reading of the selection is open for typing into. Only one is, so
+   *  the rest go on showing what the file says while it is being changed. */
+  private editing: SelKind | null = null;
   /** Path of the field the structure panel is showing, if any. */
   private at: readonly number[] | null = null;
   /** A field picked by name stays shown until the cursor moves off it. */
@@ -211,6 +219,22 @@ export class Inspector {
     this.selectionEl = document.createElement("div");
     this.selectionEl.className = "insp-selection";
     this.selectionEl.hidden = true;
+    this.selWhere = document.createElement("div");
+    this.selWhere.className = "insp-detail";
+    this.selTable = document.createElement("table");
+    this.selTable.className = "insp-table insp-seltable";
+    this.selLength = document.createElement("td");
+    const lengthRow = document.createElement("tr");
+    const lengthHead = document.createElement("th");
+    lengthHead.scope = "row";
+    lengthHead.textContent = SEL_LENGTH;
+    lengthRow.append(lengthHead, this.selLength);
+    this.selTable.append(lengthRow);
+    for (const row of SEL_ROWS) this.buildSelRow(row.kind, row.label);
+    this.selStatus = document.createElement("div");
+    this.selStatus.className = "insp-selstatus";
+    this.selStatus.setAttribute("role", "status");
+    this.selectionEl.append(subhead(SEL_TITLE), this.selWhere, this.selTable, this.selStatus);
 
     // The address sits above every tab: the field reading and the two raw
     // readings all start at the same place, and that place is the first thing
@@ -287,53 +311,148 @@ export class Inspector {
     this.status.textContent = "";
   }
 
+  /**
+   * One reading of the selection: the number on a single line, cut short
+   * rather than wrapped, with a way to take it whole and a way to change it.
+   * Both only appear under the pointer or the keyboard, because five rows of
+   * buttons would bury the numbers they belong to.
+   */
+  private buildSelRow(kind: SelKind, label: string): void {
+    const tr = document.createElement("tr");
+    tr.hidden = true;
+    const th = document.createElement("th");
+    th.scope = "row";
+    th.textContent = label;
+    const td = document.createElement("td");
+    const wrap = document.createElement("div");
+    wrap.className = "insp-valrow";
+    const text = document.createElement("span");
+    text.className = "insp-val";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.spellcheck = false;
+    input.autocomplete = "off";
+    input.className = "insp-val-edit";
+    input.hidden = true;
+    input.setAttribute("aria-label", label);
+    const acts = document.createElement("div");
+    acts.className = "insp-acts";
+    const copy = actionButton(COPY, copyLabel(label));
+    const edit = actionButton(EDIT, editLabel(label));
+    acts.append(copy, edit);
+    wrap.append(text, input, acts);
+    td.append(wrap);
+    tr.append(th, td);
+    this.selTable.append(tr);
+
+    copy.addEventListener("click", () => void this.copyValue(text.textContent ?? ""));
+    edit.addEventListener("click", () => this.startEdit(kind));
+    // Double-clicking the number is the other way in, for readers who reach
+    // for that before they notice the button.
+    text.addEventListener("dblclick", () => this.startEdit(kind));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.commitSel(kind);
+      if (e.key === "Escape") this.cancelEdit();
+    });
+    input.addEventListener("blur", () => {
+      if (this.editing === kind) this.commitSel(kind);
+    });
+    input.addEventListener("input", () => {
+      input.classList.remove("invalid");
+      this.selStatus.textContent = "";
+    });
+    this.selRows.set(kind, { tr, text, input, edit });
+  }
+
+  private startEdit(kind: SelKind): void {
+    const row = this.selRows.get(kind);
+    if (row === undefined || row.tr.hidden) return;
+    this.editing = kind;
+    this.selStatus.textContent = "";
+    this.renderSelection();
+    row.input.focus();
+    row.input.select();
+  }
+
+  private cancelEdit(): void {
+    this.editing = null;
+    this.selStatus.textContent = "";
+    this.renderSelection();
+  }
+
+  /** Write the typed number back over the selected bits. */
+  private commitSel(kind: SelKind): void {
+    const row = this.selRows.get(kind);
+    const ranges = this.selection;
+    if (row === undefined || ranges.length === 0) return;
+    const bits = ranges.reduce((n, r) => n + (r.endBit - r.startBit), 0);
+    const parsed = parseSel(kind, row.input.value, bits);
+    if (!parsed.ok) {
+      row.input.classList.add("invalid");
+      this.selStatus.textContent = parsed.why;
+      return;
+    }
+    // The whole selection is one value, so writing it is one undo step even
+    // where it is spread over several runs.
+    this.editing = null;
+    this.doc.beginBatch();
+    writeRanges(this.doc, ranges, parsed.value, reversed(kind));
+    this.doc.endBatch();
+    this.selStatus.textContent = "";
+  }
+
+  private async copyValue(text: string): Promise<void> {
+    if (text === "") return;
+    try {
+      await navigator.clipboard.writeText(text);
+      this.selStatus.textContent = COPIED;
+    } catch {
+      this.selStatus.textContent = COPY_FAILED;
+    }
+  }
+
   /** The selection as a number, when there is one and it is short enough to
    *  be one. */
   private renderSelection(): void {
     const ranges = this.selection;
     this.selectionEl.hidden = ranges.length === 0;
-    if (ranges.length === 0) return;
+    if (ranges.length === 0) {
+      this.editing = null;
+      return;
+    }
     const bits = ranges.reduce((n, r) => n + (r.endBit - r.startBit), 0);
-    const rows: [string, string][] = [[SEL_LENGTH, lengthText(bits)]];
+    this.selWhere.textContent = ranges
+      .map((r) => `${formatOffset(r.startBit)} to ${formatOffset(r.endBit)}`)
+      .join(", ");
+    this.selLength.textContent = lengthText(bits);
     // Past the limit the number rows are simply absent. Nothing selects a
     // thousand bytes meaning to read them as one integer, so there is nothing
     // to explain.
-    if (bits <= SELECTION_LIMIT_BITS) {
-      const v = readBits(this.doc, ranges);
-      if (v === null) {
-        rows.push([SEL_VALUE, LOADING]);
-      } else {
-        rows.push([SEL_UNSIGNED, v.toString()]);
-        rows.push([SEL_SIGNED, signed(v, bits).toString()]);
-        rows.push([SEL_HEX, `0x${v.toString(16).padStart(Math.ceil(bits / 4), "0")}`]);
-        // Reversing bytes only means anything when the selection is made of
-        // whole bytes lying together, which is the only case a format would
-        // have stored the other way round.
-        const one = ranges[0];
-        const whole =
-          ranges.length === 1 && one !== undefined && one.startBit % 8 === 0 && bits % 8 === 0 && bits > 8;
-        if (whole && one !== undefined) {
-          const le = readBits(this.doc, [one], true);
-          if (le !== null) {
-            rows.push([SEL_UNSIGNED_LE, le.toString()]);
-            rows.push([SEL_SIGNED_LE, signed(le, bits).toString()]);
-          }
-        }
-      }
+    const v = bits <= SELECTION_LIMIT_BITS ? readBits(this.doc, ranges) : null;
+    const loading = bits <= SELECTION_LIMIT_BITS && v === null;
+    this.selStatus.textContent = loading ? LOADING : this.selStatus.textContent;
+    // Reversing bytes only means anything when the selection is made of whole
+    // bytes lying together, which is the only case a format would have stored
+    // the other way round.
+    const one = ranges[0];
+    const whole = ranges.length === 1 && one !== undefined && one.startBit % 8 === 0 && bits % 8 === 0 && bits > 8;
+    const le = whole && one !== undefined && v !== null ? readBits(this.doc, [one], true) : null;
+    for (const [kind, row] of this.selRows) {
+      const raw = reversed(kind) ? le : v;
+      const show = raw !== null && (!reversed(kind) || whole);
+      row.tr.hidden = !show;
+      if (!show) continue;
+      const value = formatSel(kind, raw, bits);
+      row.text.textContent = value;
+      row.text.title = value;
+      const open = this.editing === kind;
+      row.text.hidden = open;
+      row.input.hidden = !open;
+      row.edit.hidden = open;
+      // Only overwrite the box while it is not being typed into.
+      if (open && document.activeElement !== row.input) row.input.value = value;
+      if (!open) row.input.classList.remove("invalid");
     }
-    const table = document.createElement("table");
-    table.className = "insp-table insp-seltable";
-    for (const [label, value] of rows) {
-      const tr = document.createElement("tr");
-      const th = document.createElement("th");
-      th.scope = "row";
-      th.textContent = label;
-      const td = document.createElement("td");
-      td.textContent = value;
-      tr.append(th, td);
-      table.append(tr);
-    }
-    this.selectionEl.replaceChildren(subhead(SEL_TITLE), whereText(ranges), table);
   }
 
   render(): void {
@@ -648,13 +767,116 @@ const SELECTION_LIMIT_BITS = SELECTION_LIMIT_BYTES * 8;
 
 const SEL_TITLE = "Selection";
 const SEL_LENGTH = "Length";
-const SEL_VALUE = "Value";
-const SEL_UNSIGNED = "Unsigned";
-const SEL_SIGNED = "Signed";
-const SEL_HEX = "Hex";
-const SEL_UNSIGNED_LE = "Unsigned LE";
-const SEL_SIGNED_LE = "Signed LE";
 const LOADING = "Loading…";
+const COPY = "Copy";
+const EDIT = "Edit";
+const COPIED = "Copied.";
+const COPY_FAILED = "Couldn't copy to the clipboard.";
+const copyLabel = (row: string): string => `Copy the ${row.toLowerCase()} value`;
+const editLabel = (row: string): string => `Edit the ${row.toLowerCase()} value`;
+
+/** Which readings of the selection are offered, in the order they are shown.
+ *  The two reversed ones are only for a selection of whole bytes lying
+ *  together. */
+type SelKind = "unsigned" | "signed" | "hex" | "unsignedLe" | "signedLe";
+const SEL_ROWS: readonly { readonly kind: SelKind; readonly label: string }[] = [
+  { kind: "unsigned", label: "Unsigned" },
+  { kind: "signed", label: "Signed" },
+  { kind: "hex", label: "Hex" },
+  { kind: "unsignedLe", label: "Unsigned LE" },
+  { kind: "signedLe", label: "Signed LE" },
+];
+
+/** The parts of one reading's row that anything outside it touches. */
+type SelRow = {
+  readonly tr: HTMLElement;
+  readonly text: HTMLElement;
+  readonly input: HTMLInputElement;
+  readonly edit: HTMLButtonElement;
+};
+
+function reversed(kind: SelKind): boolean {
+  return kind === "unsignedLe" || kind === "signedLe";
+}
+
+/** A small button that stays out of the way until it is wanted. */
+function actionButton(text: string, label: string): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "insp-act";
+  b.textContent = text;
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  return b;
+}
+
+/** One reading of the bits, as text. `raw` is already byte-reversed for the
+ *  readings that are. */
+function formatSel(kind: SelKind, raw: bigint, bits: number): string {
+  if (kind === "hex") return `0x${raw.toString(16).padStart(Math.ceil(bits / 4), "0")}`;
+  if (kind === "signed" || kind === "signedLe") return signed(raw, bits).toString();
+  return raw.toString();
+}
+
+/** Typed text back to the bits it stands for, or why it is not any. */
+function parseSel(kind: SelKind, text: string, bits: number): { ok: true; value: bigint } | { ok: false; why: string } {
+  const t = text.trim();
+  const width = 1n << BigInt(bits);
+  if (kind === "hex") {
+    const digits = t.replace(/^0x/i, "").replace(/\s+/g, "");
+    if (!/^[0-9a-f]+$/i.test(digits)) return { ok: false, why: NOT_HEX };
+    const v = BigInt(`0x${digits}`);
+    return v < width ? { ok: true, value: v } : { ok: false, why: tooBigHex(bits) };
+  }
+  const signedKind = kind === "signed" || kind === "signedLe";
+  if (!new RegExp(signedKind ? "^[+-]?\\d+$" : "^\\+?\\d+$").test(t)) return { ok: false, why: NOT_A_NUMBER };
+  const v = BigInt(t);
+  if (signedKind) {
+    const half = 1n << BigInt(bits - 1);
+    if (v < -half || v >= half) return { ok: false, why: outOfRange(bits, (-half).toString(), (half - 1n).toString()) };
+    // Two's complement is the bit pattern; a negative number is the one that
+    // wraps to it.
+    return { ok: true, value: v < 0n ? v + width : v };
+  }
+  if (v >= width) return { ok: false, why: outOfRange(bits, "0", (width - 1n).toString()) };
+  return { ok: true, value: v };
+}
+
+const NOT_A_NUMBER = "Not a whole number.";
+const NOT_HEX = "Not hexadecimal.";
+const outOfRange = (bits: number, low: string, high: string): string =>
+  `Out of range for ${lengthText(bits)}: ${low} to ${high}.`;
+const tooBigHex = (bits: number): string => `More than ${lengthText(bits)}: at most ${Math.ceil(bits / 4)} hex digits.`;
+
+/**
+ * Write one number back over the runs it was read from, filling them from the
+ * last backwards so each run keeps the bits that were its own.
+ */
+function writeRanges(doc: Doc, ranges: readonly BitRange[], value: bigint, reverseBytes: boolean): void {
+  let rest = value;
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const r = ranges[i];
+    if (r === undefined) continue;
+    const len = r.endBit - r.startBit;
+    const chunk = rest & ((1n << BigInt(len)) - 1n);
+    rest >>= BigInt(len);
+    const bytes = bitsToBytes(chunk, len);
+    doc.overwriteBits(r.startBit, reverseBytes ? bytes.reverse() : bytes, len);
+  }
+}
+
+/** A number as the bits of a field: packed from the top, so a run that does
+ *  not fill its last byte leaves the padding at the bottom of it. */
+function bitsToBytes(v: bigint, bits: number): Uint8Array {
+  const n = Math.ceil(bits / 8);
+  let x = v << BigInt(n * 8 - bits);
+  const out = new Uint8Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  return out;
+}
 
 /** `24 bytes`, or `3 bytes 4 bits` where the run does not fill whole bytes. */
 function lengthText(bits: number): string {
@@ -664,15 +886,6 @@ function lengthText(bits: number): string {
   if (bytes > 0) parts.push(`${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"}`);
   if (rest > 0 || bytes === 0) parts.push(`${rest} ${rest === 1 ? "bit" : "bits"}`);
   return parts.join(" ");
-}
-
-/** Where the selected bits are: one run reads as a span, and several read as
- *  a list, since that is the whole of what makes them one value. */
-function whereText(ranges: readonly BitRange[]): HTMLElement {
-  const el = document.createElement("div");
-  el.className = "insp-detail";
-  el.textContent = ranges.map((r) => `${formatOffset(r.startBit)} to ${formatOffset(r.endBit)}`).join(", ");
-  return el;
 }
 
 /**
