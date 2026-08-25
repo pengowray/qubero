@@ -157,6 +157,50 @@ impl Evaluator {
                 total as i128
             }
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
+            // Walk for a word rather than for a byte. Blocks overlap by all
+            // but one byte of the needle, so a word written across the seam
+            // between two of them is still found.
+            Expr::Find { needle, last } => {
+                let Some((offset, limit)) = here else { return fail("nothing to search") };
+                if limit < offset {
+                    return fail("nothing to search");
+                }
+                if needle.is_empty() {
+                    return fail("nothing to look for");
+                }
+                const BLOCK: u64 = 4096;
+                let total = (limit - offset) / 8;
+                let n = needle.len() as u64;
+                let step = BLOCK.max(n);
+                let mut buf = Vec::new();
+                let mut at_byte = 0u64;
+                let mut found: Option<u64> = None;
+                while at_byte + n <= total {
+                    let want = step.min(total - at_byte);
+                    buf.resize(want as usize, 0);
+                    let missing = doc.read_bits(offset + at_byte * 8, want * 8, &mut buf);
+                    if !missing.is_empty() {
+                        return Err(EvalError::Pending(missing));
+                    }
+                    let mut from = 0usize;
+                    while let Some(i) = buf[from..].windows(needle.len()).position(|w| w == needle.as_slice()) {
+                        let hit = at_byte + (from + i) as u64;
+                        if !*last {
+                            return Ok(hit as i128);
+                        }
+                        found = Some(hit);
+                        from += i + 1;
+                    }
+                    if want < step {
+                        break;
+                    }
+                    at_byte += step - (n - 1);
+                }
+                // Not written again: the run measures to the end of its
+                // container, as a stream with no marker after it does. A file
+                // cut off before the word it promised is still worth showing.
+                found.unwrap_or(total) as i128
+            }
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {
                 0 => self.eval_expr_at(doc, at, b, here)?,

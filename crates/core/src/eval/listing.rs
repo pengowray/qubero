@@ -96,6 +96,7 @@ pub(super) fn plain(ty: &Ty) -> bool {
         | Ty::SqliteVarint
         | Ty::F8 { .. }
         | Ty::Magic(_)
+        | Ty::TextInt { .. }
         | Ty::Bytes(_) => true,
         // A number or a piece of text inside JSON is a value like any other;
         // an object or an array holds them.

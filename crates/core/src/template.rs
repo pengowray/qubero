@@ -96,6 +96,20 @@ pub enum Expr {
     /// its end rather than failing: the bytes are still there to look at, and
     /// refusing to place them would hide the very thing that went wrong.
     ToMarker { lead: u8, unless: Vec<u8> },
+    /// How far it is from here to where `needle` is written next, in bytes, or
+    /// to the end of the container when it is not written again. With `last`,
+    /// to the last place it is written rather than the first.
+    ///
+    /// `ToMarker` measures to a single byte, which is what a stream ending at
+    /// a marker needs. A format that writes its structure in words needs more
+    /// than one byte to look for: a PDF object ends at `endobj`, and the
+    /// pointer to the table that places every one of them is written after the
+    /// word `startxref`, at the end of a file that may have several of them
+    /// and means the last.
+    ///
+    /// The distance stops before the needle, so the word belongs to whatever
+    /// is declared next rather than to the run before it.
+    Find { needle: Vec<u8>, last: bool },
     /// The value of field `name` in the element before this one, in the nearest
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
@@ -176,6 +190,15 @@ impl Expr {
     /// `unless`, or to the end of the container if there is none.
     pub fn to_marker(lead: u8, unless: &[u8]) -> Expr {
         Expr::ToMarker { lead, unless: unless.to_vec() }
+    }
+    /// The bytes from here to the next place `needle` is written, or to the
+    /// end of the container when there is none.
+    pub fn to_bytes(needle: &[u8]) -> Expr {
+        Expr::Find { needle: needle.to_vec(), last: false }
+    }
+    /// The same, to the last place it is written rather than the first.
+    pub fn to_last_bytes(needle: &[u8]) -> Expr {
+        Expr::Find { needle: needle.to_vec(), last: true }
     }
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {
@@ -422,6 +445,20 @@ pub enum Ty {
     Bytes(Expr),
     /// Text. `StrLen` says how far it runs, `enc` says what the bytes mean.
     Str { len: StrLen, enc: Encoding },
+    /// A number written as digits: the text is the value. `StrLen` says how
+    /// far it runs, the same as text does, and `radix` says what the digits
+    /// are worth.
+    ///
+    /// Reading it as text and letting an expression have the bytes would not
+    /// do. A field used as a number is its bytes as one, so `408` would come
+    /// out as 0x343038, which is 3,355,192 and points nowhere near the table
+    /// a PDF asked for. The parse has to happen where the field is read, so
+    /// that what a pointer list is handed is the number the file wrote.
+    ///
+    /// Leading zeros are how a format keeps such a field a fixed width, so
+    /// they are read and not complained about. A run of digits with anything
+    /// else in it is an error, since a number half read is worse than none.
+    TextInt { len: StrLen, radix: u32 },
     Struct(Arc<StructDef>),
     Array { elem: Box<Ty>, count: Expr },
     Repeat { elem: Box<Ty>, until: Until },
@@ -603,6 +640,10 @@ impl Ty {
     }
     pub fn text(len: StrLen, enc: Encoding) -> Ty {
         Ty::Str { len, enc }
+    }
+    /// A number written as decimal digits. See [`Ty::TextInt`].
+    pub fn decimal(len: StrLen) -> Ty {
+        Ty::TextInt { len, radix: 10 }
     }
     /// The text in this field, read as the JSON it holds.
     pub fn json() -> Ty {
@@ -836,6 +877,8 @@ impl Ty {
                     StrLen::Scan { .. } => format!("{e} token"),
                 }
             }
+            Ty::TextInt { radix: 10, .. } => "decimal".into(),
+            Ty::TextInt { radix, .. } => format!("base-{radix} digits"),
             Ty::Struct(s) => s.name.clone(),
             Ty::Array { elem, .. } => format!("{}[]", elem.display_name()),
             Ty::Repeat { elem, .. } => format!("{}[]", elem.display_name()),

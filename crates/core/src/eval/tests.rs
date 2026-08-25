@@ -1354,3 +1354,89 @@ fn a_signature_reads_as_the_string_it_is() {
         r#""\x89PNh\r\n\x1a\n" does not match"#
     );
 }
+
+#[test]
+fn digits_read_as_the_number_they_spell() {
+    use crate::template::{Encoding, StrLen};
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("width", T::decimal(StrLen::Fixed(E::lit(3)))),
+                ("count", T::decimal(StrLen::Scan { skip: b" ".to_vec(), ends: b" ".to_vec(), comment: None })),
+                // The proof that it is a number and not its bytes: as bytes
+                // the same field is 0x3132, which is 12,594 and past the end.
+                ("body", T::bytes(E::field("count"))),
+            ],
+        ),
+    );
+    let d = doc(b"007  12 abcdefghijkl");
+    let mut ev = Evaluator::new(t);
+    let width = ev.node(&d, &[0]).unwrap();
+    assert_eq!(width.value, Value::Int(7));
+    assert_eq!(width.size_bits, 3 * 8);
+    let count = ev.node(&d, &[1]).unwrap();
+    assert_eq!(count.value, Value::Int(12));
+    // Two spaces, the digits, and the space that ends them; the value is only
+    // the digits, as it is for text.
+    assert_eq!(count.size_bits, 5 * 8);
+    assert_eq!(count.value_offset_bits, 5 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 12 * 8);
+    // Read only: writing one would have to decide how wide to pad it.
+    assert!(!count.editable);
+}
+
+#[test]
+fn digits_that_are_not_digits_are_an_error_rather_than_a_number() {
+    use crate::template::StrLen;
+    let t = Template::new("t", T::structure("Root", vec![("n", T::decimal(StrLen::Fixed(E::lit(3))))]));
+    let mut ev = Evaluator::new(t);
+    assert!(ev.node(&doc(b"1x2"), &[0]).is_err());
+}
+
+#[test]
+fn a_run_can_be_measured_to_a_word_rather_than_to_a_byte() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("body", T::bytes(E::to_bytes(b"end"))),
+                ("end", T::magic(b"end")),
+                ("rest", T::bytes(E::Remaining)),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(t.clone());
+    let d = doc(b"ee en enend!");
+    // Not the `e` of `ee`, nor the `en` of `enen`: the whole word or nothing.
+    assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 8 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 8);
+
+    // A word that never comes measures to the end of the container, so a file
+    // cut off in the middle still shows what it has.
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&doc(b"eeeee"), &[0]).unwrap().size_bits, 5 * 8);
+}
+
+#[test]
+fn the_last_of_a_word_is_found_wherever_it_is() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![("head", T::computed(E::to_last_bytes(b"go"))), ("all", T::bytes(E::Remaining))],
+        ),
+    );
+    let mut ev = Evaluator::new(t.clone());
+    assert_eq!(ev.node(&doc(b"go..go..go.."), &[0]).unwrap().value, Value::Int(8));
+
+    // Across the seam between two blocks, where half the word is read in one
+    // and half in the next.
+    let mut bytes = vec![b'.'; 4095];
+    bytes.extend_from_slice(b"go");
+    bytes.extend_from_slice(&[b'.'; 10]);
+    let mut ev2 = Evaluator::new(t);
+    assert_eq!(ev2.node(&doc(&bytes), &[0]).unwrap().value, Value::Int(4095));
+}

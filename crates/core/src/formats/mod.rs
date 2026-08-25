@@ -23,6 +23,7 @@ mod mp4;
 mod nes;
 mod pak;
 mod pcx;
+mod pdf;
 mod pe;
 pub mod pe_tables;
 mod pi1;
@@ -63,6 +64,7 @@ pub use nes::nes;
 pub use pe::pe;
 pub use pak::pak;
 pub use pcx::pcx;
+pub use pdf::pdf;
 pub use pi1::pi1;
 pub use pnm::pnm;
 pub use qoi::qoi;
@@ -89,7 +91,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -131,6 +133,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "qoi" => Some(qoi()),
         "tiff" => Some(tiff()),
         "jpeg" => Some(jpeg()),
+        "pdf" => Some(pdf()),
         _ => None,
     }
 }
@@ -168,6 +171,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"II*\x00", "tiff"),
     (b"MM\x00*", "tiff"),
     (b".snd", "au"),
+    (b"%PDF-", "pdf"),
     (b"ID3", "id3"),
     (b"{\"", "json"),
 ];

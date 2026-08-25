@@ -906,7 +906,7 @@ impl Evaluator {
                     }
                     n as u64 * 8
                 }
-                Ty::Str { len, enc } => match len {
+                Ty::Str { len, .. } | Ty::TextInt { len, .. } => match len {
                     StrLen::Fixed(e) | StrLen::Padded { size: e, .. } => {
                         let n = self.eval_expr(doc, path, e)?;
                         if n < 0 {
@@ -917,7 +917,13 @@ impl Evaluator {
                     // Whitespace, then the value, then the byte that ends it.
                     StrLen::Scan { skip, ends, comment } => self.read_scan(doc, &r, skip, ends, *comment)?.1 * 8,
                     StrLen::Terminated { end, or_end } => {
-                        let (settled, bom) = self.str_head(doc, &r, enc)?;
+                        // Digits are ASCII, and ASCII is a byte a character,
+                        // so the terminator is one byte either way.
+                        let enc = match &r.ty {
+                            Ty::Str { enc, .. } => enc.clone(),
+                            _ => Encoding::Ascii,
+                        };
+                        let (settled, bom) = self.str_head(doc, &r, &enc)?;
                         let term = text::unit_bytes(settled, *end);
                         match self.read_terminated(doc, &r, &term, bom) {
                             Ok((_, n)) => n * 8,

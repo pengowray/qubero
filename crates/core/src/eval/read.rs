@@ -62,7 +62,14 @@ impl Evaluator {
     /// padding or terminator ends it. Everything is measured in whole code
     /// units, so UTF-16LE text does not stop at the first zero byte of "H".
     pub(super) fn str_span<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64) -> R<Option<StrSpan>> {
-        let Ty::Str { len, enc } = &r.ty else { return Ok(None) };
+        // Digits are text as far as measuring goes: what a scanned field
+        // stepped over is not part of the number either.
+        let (len, enc) = match &r.ty {
+            Ty::Str { len, enc } => (len, enc.clone()),
+            Ty::TextInt { len, .. } => (len, Encoding::Ascii),
+            _ => return Ok(None),
+        };
+        let enc = &enc;
         let n = size / 8;
         let cap = n.min(crate::encode::EDIT_LIMIT_BYTES);
         let bytes = if cap == 0 { Vec::new() } else { self.read(doc, r, r.offset, cap * 8)? };
@@ -340,6 +347,18 @@ impl Evaluator {
                     text.push('\u{2026}');
                 }
                 Value::Str(text)
+            }
+            Ty::TextInt { radix, .. } => {
+                let span = self.str_span(doc, r, size)?.expect("digits");
+                // A number nobody could read is not a number: 64 digits is
+                // past anything an i128 holds, so what is past that is only
+                // ever an error either way.
+                let bytes = self.read(doc, r, r.offset + span.start * 8, span.len.min(64) * 8)?;
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                match i128::from_str_radix(&text, *radix) {
+                    Ok(v) => Value::Int(v),
+                    Err(_) => return fail(format!("{text:?} is not a number")),
+                }
             }
             Ty::Enum { inner, def } => {
                 let raw = match self.primitive_value(doc, at, r, inner, size)? {
