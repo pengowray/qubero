@@ -441,7 +441,10 @@ function mount(doc: Doc): void {
       bits === 0 ? "" : `  ·  ${bits % 8 === 0 ? selectedBytes(bits / 8) : `${bits.toLocaleString()} bits`} selected`;
     posLabel.replaceChildren("Offset ", at, ` ${decimal}${listingShowing ? "" : editing}${selected}`);
   };
-  view.onSelectionChange = () => refresh();
+  view.onSelectionChange = (r) => {
+    refresh();
+    inspector.setSelection(r === null ? [] : [r]);
+  };
   view.onCursorChange = (c) => {
     inspector.setOffset(c.bitOffset);
     if (!picking) {
@@ -493,7 +496,13 @@ function mount(doc: Doc): void {
     table.reveal(path);
     listing.reveal(path);
   };
-  overview.onJump = (bit) => jumpToBit(bit);
+  // A cell of the map stands for a stretch of the file, so picking one marks
+  // that stretch: the panel at the cursor then reads it as a number, which is
+  // most of what picking a few bytes out of a map is for.
+  overview.onJump = (startBit, endBit) => {
+    jumpToBit(startBit);
+    view.selectRange(startBit, endBit);
+  };
   const bottom = panel("Structure", "bottom", table.el, relayout);
   const right = panel("At cursor", "right", inspector.el, relayout);
   app.replaceChildren(

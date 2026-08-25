@@ -203,6 +203,9 @@ export class OverviewPanel {
   private focusState: FocusState | null = null;
   /** The block being looked at, in bytes, or null when none is. */
   private block: { from: number; to: number } | null = null;
+  /** Which cell of the block map was last picked, so it stays marked while the
+   *  rest of the scan fills in around it. */
+  private picked: number | null = null;
   private mode: FocusMode = "all";
   /** Another step is already queued, so a burst of notifies runs one. */
   private stepQueued = false;
@@ -218,8 +221,10 @@ export class OverviewPanel {
 
   /** A region row was chosen; same contract as picking a listing row. */
   onPick: (pick: FieldPick) => void = () => {};
-  /** The map was clicked at this bit offset. */
-  onJump: (bit: number) => void = () => {};
+  /** A cell or a listed stretch was picked: go there, and mark the bytes it
+   *  stands for. A cell is a stretch of the file, not a place in it, so
+   *  picking one selects it rather than only moving the cursor to its front. */
+  onJump: (startBit: number, endBit: number) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("aside");
@@ -315,6 +320,7 @@ export class OverviewPanel {
     this.focusCanvas.addEventListener("pointerleave", () => {
       this.focusReadout.textContent = BLANK;
     });
+    this.focusCanvas.addEventListener("click", (e) => this.onFocusClick(e));
 
     // The cells wrap to the sidebar's width, so a narrower window is a
     // different map rather than the same one clipped.
@@ -621,14 +627,30 @@ export class OverviewPanel {
     const i = this.bucketAt(this.canvas, s?.classes.length ?? 0, e);
     if (s === null || i === null) return;
     const from = i * s.bucket_bytes;
-    this.setBlock(from, Math.min(this.doc.lengthBytes, from + s.bucket_bytes));
-    this.onJump(from * 8);
+    const to = Math.min(this.doc.lengthBytes, from + s.bucket_bytes);
+    this.setBlock(from, to);
+    this.onJump(from * 8, to * 8);
+  }
+
+  /** A cell of the block map is a stretch of the block, and picking one marks
+   *  those bytes rather than opening a block inside the block: at this
+   *  resolution the cell is already the thing to look at. */
+  private onFocusClick(e: MouseEvent): void {
+    const f = this.focusState;
+    const i = this.bucketAt(this.focusCanvas, f?.classes.length ?? 0, e);
+    if (f === null || i === null) return;
+    const from = f.start + i * f.bucket_bytes;
+    const to = Math.min(f.end, from + f.bucket_bytes);
+    this.picked = i;
+    this.drawMap(this.focusCanvas, f.classes, { from: i, to: i + 1 });
+    this.onJump(from * 8, to * 8);
   }
 
   /** Look at one stretch of the file on its own. */
   private setBlock(from: number, to: number): void {
     this.block = to > from ? { from, to } : null;
     this.focusState = null;
+    this.picked = null;
     this.highlightRange(null, 0);
     this.renderFocus();
     this.pump();
@@ -664,7 +686,8 @@ export class OverviewPanel {
       this.focusGaps,
     );
     const f = this.focusState;
-    if (f !== null) this.drawMap(this.focusCanvas, f.classes, null);
+    const cell = this.picked;
+    if (f !== null) this.drawMap(this.focusCanvas, f.classes, cell === null ? null : { from: cell, to: cell + 1 });
     this.drawFocusStats(f);
     this.drawGaps(block);
   }
@@ -744,7 +767,7 @@ export class OverviewPanel {
       // in it: the numbers above are the whole block's, fields and all.
       row.addEventListener("click", () => {
         this.setBlock(g.from, g.to);
-        this.onJump(g.from * 8);
+        this.onJump(g.from * 8, g.to * 8);
       });
       return row;
     });

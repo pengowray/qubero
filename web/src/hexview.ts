@@ -308,6 +308,17 @@ export class HexView {
     };
   }
 
+  /**
+   * Select a run of bits and put the cursor at its start, for the views that
+   * pick out a stretch of the file rather than a place in it. An empty run
+   * clears the selection, so one call covers both.
+   */
+  selectRange(startBit: number, endBit: number): void {
+    this.setBitCursor(startBit, { select: "keep" });
+    this.setSelection(endBit > startBit ? startBit : null, endBit);
+    this.render();
+  }
+
   /** Drop the selection and leave the cursor where it is. */
   clearSelection(): void {
     if (this.selAnchor === null) return;
