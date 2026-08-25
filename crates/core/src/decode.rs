@@ -34,6 +34,9 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => fixed_bits(inner)?,
         // A computed field is a value and no bits.
         Ty::Computed(_) => 0,
+        // A field pointing somewhere else is a place and no bits, so a
+        // structure holding one is still as fixed as the rest of it.
+        Ty::At { .. } => 0,
         // A named type could be anything, including itself.
         Ty::Named(_) => return None,
         _ => return None,

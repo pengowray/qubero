@@ -397,12 +397,29 @@ impl Evaluator {
         // Children of a pointer list are in the order their offsets are in,
         // not the order they sit in, so every one has to be looked at, and one
         // that does not parse is passed over rather than taking the page with it.
-        let scattered = matches!(r.ty, Ty::PointerList { .. });
+        // A structure holding a field that points elsewhere has children that
+        // are not in the order they sit in, the same as a pointer list, so
+        // every one has to be looked at rather than stopping at the first that
+        // starts past the bit.
+        let scattered = matches!(r.ty, Ty::PointerList { .. }) || self.has_pointing_field(&r.ty);
         let mut p = path.to_vec();
         for i in 0..n as usize {
             p.push(i);
             let placed = match self.resolve(doc, &p) {
-                Ok(()) => self.size_of(doc, &p).map(|size| (self.memo[&p].offset, size)),
+                Ok(()) => match self.memo[&p].ty {
+                    // The field covers nothing where it is declared; what it
+                    // points at is what the cursor can be inside of.
+                    Ty::At { .. } => {
+                        p.push(0);
+                        let inner = match self.resolve(doc, &p) {
+                            Ok(()) => self.size_of(doc, &p).map(|size| (self.memo[&p].offset, size)),
+                            Err(e) => Err(e),
+                        };
+                        p.pop();
+                        inner
+                    }
+                    _ => self.size_of(doc, &p).map(|size| (self.memo[&p].offset, size)),
+                },
                 Err(e) => Err(e),
             };
             p.pop();
@@ -419,6 +436,12 @@ impl Evaluator {
             }
         }
         Ok(None)
+    }
+
+    /// Whether a structure has a field whose contents are somewhere else in
+    /// the file, which is what stops its children from being in order.
+    fn has_pointing_field(&self, ty: &Ty) -> bool {
+        matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| matches!(f.ty, Ty::At { .. })))
     }
 
     /// The first child of a pointer list that starts after `bit`. What is

@@ -403,6 +403,63 @@ fn pointed_at_items_read_in_offset_order() {
 }
 
 #[test]
+fn a_field_can_read_its_contents_somewhere_else_and_still_cost_nothing() {
+    // A header naming a table at the end, and a run of bytes in between that
+    // is placed as if the table field were not there.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("table_at", T::u8()),
+                ("table", T::at(E::field("table_at"), T::array(T::u16(Big), E::lit(2)))),
+                ("body", T::bytes(E::lit(3))),
+            ],
+        ),
+    );
+    let d = doc(&[4, 0xaa, 0xbb, 0xcc, 0, 1, 0, 2]);
+    let mut ev = Evaluator::new(t);
+
+    // The field is at the cursor and covers nothing.
+    let table = ev.node(&d, &[1]).unwrap();
+    assert_eq!(table.offset_bits, 8);
+    assert_eq!(table.size_bits, 0);
+    assert_eq!(table.child_count, 1);
+    // What it points at is at the far offset.
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().offset_bits, 4 * 8);
+    assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().value, Value::UInt(2));
+    // And the field after it is placed as if it were not there.
+    let body = ev.node(&d, &[2]).unwrap();
+    assert_eq!(body.offset_bits, 8);
+    assert_eq!(body.size_bits, 3 * 8);
+
+    // Naming it in an expression means the table, not the nothing standing in
+    // its place: two elements, and the second of them.
+    let t2 = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("table_at", T::u8()),
+                ("table", T::at(E::field("table_at"), T::array(T::u16(Big), E::lit(2)))),
+                ("n", T::computed(E::field("table"))),
+                ("second", T::computed(E::elem("table", E::lit(1)))),
+            ],
+        ),
+    );
+    let mut ev2 = Evaluator::new(t2);
+    assert_eq!(ev2.node(&d, &[2]).unwrap().value, Value::Int(2));
+    assert_eq!(ev2.node(&d, &[3]).unwrap().value, Value::Int(2));
+
+    // What the cursor can reach is still what the structure covers, and a
+    // structure is as long as its last field ends. Nothing here reaches byte
+    // 4, so the table is read but not landed on. A format doing this for real
+    // has something covering the stretch, and then it is found: see the WAD
+    // template, whose list of lumps runs to the end of the file.
+    assert!(ev2.locate(&d, 6 * 8).is_err());
+}
+
+#[test]
 fn a_scanned_field_steps_over_its_separators_and_stops_at_the_next() {
     use crate::template::{Encoding, StrLen};
     let token = || {

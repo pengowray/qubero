@@ -384,7 +384,7 @@ impl Evaluator {
         let r = self.memo.get(path).expect("resolved").clone();
         let (value, child_count, composite) = match &r.ty {
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } => {
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::At { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -564,6 +564,9 @@ impl Evaluator {
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
                 (Name::Index(idx), (**elem).clone())
             }
+            // The one thing it points at keeps the field's own name: a row
+            // saying `directory` twice says nothing the once did not.
+            Ty::At { inner, .. } => (pr.name.clone(), (**inner).clone()),
             _ => return fail("not a composite"),
         };
         // Offset: read from the pointer array, or after the previous sibling,
@@ -589,6 +592,15 @@ impl Evaluator {
                     return Ok(());
                 }
             }
+        } else if let Ty::At { at, .. } = &pr.ty {
+            // Bytes from the start of the file, which is how a header names
+            // the place it keeps a table.
+            let at = at.clone();
+            let n = self.eval_expr(doc, parent, &at)?;
+            if n < 0 {
+                return fail("negative offset");
+            }
+            n as u64 * 8
         } else if idx == 0 {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
@@ -928,6 +940,8 @@ impl Evaluator {
         let r = self.memo[path].clone();
         match &r.ty {
             Ty::Struct(s) => Ok(s.fields.len() as u64),
+            // What it points at, and nothing else.
+            Ty::At { .. } => Ok(1),
             Ty::Array { count, .. } => {
                 let n = self.eval_expr(doc, path, count)?;
                 if n < 0 {

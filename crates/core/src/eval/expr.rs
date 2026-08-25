@@ -301,6 +301,12 @@ impl Evaluator {
                 if let Some(j) = s.fields.iter().take(idx).position(|f| *f.name == *name) {
                     let mut p = cur.clone();
                     p.push(j);
+                    // A field whose contents are elsewhere is its contents:
+                    // naming it means the table it points at, not the nothing
+                    // that stands in its place.
+                    if matches!(s.fields[j].ty, Ty::At { .. }) {
+                        p.push(0);
+                    }
                     return Some(p);
                 }
             }
@@ -317,8 +323,13 @@ impl Evaluator {
             let parent = cur.clone();
             if let Ty::Struct(s) = &self.memo[&parent].ty {
                 if let Some(j) = s.fields[..idx].iter().position(|f| *f.name == *name) {
+                    let pointing = matches!(s.fields[j].ty, Ty::At { .. });
                     let mut p = parent;
                     p.push(j);
+                    // As in `find_field`: what it points at is what it is.
+                    if pointing {
+                        p.push(0);
+                    }
                     let info = self.node(doc, &p)?;
                     // A field with no numeric reading can still be measured.
                     return Ok((info.value.as_int(), (info.size_bits / 8) as i128));
