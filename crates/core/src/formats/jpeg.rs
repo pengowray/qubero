@@ -27,16 +27,20 @@
 //! length and its bytes and everything around it reads as usual. That is more
 //! than the signature rules would have said about it, and it is not wrong.
 //!
-//! Two things are named and not laid out. A thumbnail is a whole JPEG inside
-//! an `APP0`, and reading it would mean this template referring to itself
-//! across a field nothing bounds. And an EXIF block in an `APP1` is a TIFF
-//! file, which is already a template here: it cannot be used, because the
-//! offsets inside one count from the start of the embedded `II` or `MM`
-//! rather than from the start of the file, and `At` places what it points at
-//! from the start of the file. An `At` anchored to somewhere else is a real
-//! addition to the IR rather than a use of it, so the block is named as EXIF
-//! and its bytes are left whole.
+//! The EXIF block in an `APP1` is a whole TIFF file written into a segment,
+//! and it is read as one: the same `tiff_file` the TIFF template is, with
+//! nothing said twice. What that took was letting an offset count from the
+//! copy of a format rather than from the file, since the offsets inside an
+//! embedded TIFF count from its own `II` or `MM` partway through the JPEG.
+//! The TIFF sits in a window of its own and its offsets are anchored to that
+//! window, which is the start of the file when it is a file and the start of
+//! the segment when it is not.
+//!
+//! One thing is named and not laid out. A thumbnail is a whole JPEG inside an
+//! `APP0`, and reading it would mean this template referring to itself across
+//! a field nothing bounds.
 
+use super::tiff::tiff_file;
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// Every marker worth naming, by the whole two bytes rather than the second
@@ -310,7 +314,7 @@ fn app1() -> T {
                             "Exif",
                             T::inline_structure(
                                 "Exif",
-                                vec![("pad", T::magic(&[0])), ("tiff", T::bytes(E::Remaining))],
+                                vec![("pad", T::magic(&[0])), ("tiff", tiff_file())],
                             ),
                         ),
                         ("http://ns.adobe.com/xap/1.0/", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
@@ -506,6 +510,54 @@ mod tests {
         // The bits run to the end of the file, since nothing ends them.
         assert_eq!(ev.node(&d, &[1, 4, 1, 2]).unwrap().value, Value::Bytes { len: 4, preview: vec![0xaa, 0xff, 0x00, 0xbb] });
         assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 5);
+    }
+
+    #[test]
+    fn an_exif_block_is_read_as_the_tiff_file_it_is() {
+        // `Exif`, a NUL, a pad byte, and then a whole little-endian TIFF whose
+        // offsets count from its own first byte rather than from the file.
+        let mut tiff = b"II".to_vec();
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes()); // the directory, eight in
+        tiff.extend_from_slice(&1u16.to_le_bytes()); // one entry
+        tiff.extend_from_slice(&271u16.to_le_bytes()); // make
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // ascii
+        tiff.extend_from_slice(&6u32.to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes()); // too long to sit here
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // no directory after this
+        tiff.extend_from_slice(b"Nikon\0");
+        assert_eq!(tiff.len(), 32);
+
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(&tiff);
+        let mut v = vec![0xff, 0xd8];
+        v.extend_from_slice(&seg(0xffe1, &app1));
+        v.extend_from_slice(&[0xff, 0xd9]);
+
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(jpeg());
+        // segment, body, contents, App1, data, Exif, tiff, TIFF.
+        let exif = &[1usize, 0, 1, 1, 1, 1];
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0]).unwrap().value, Value::Str("Exif".into()));
+        assert_eq!(
+            ev.node(&d, &[exif, &[0][..]].concat()).unwrap().value,
+            Value::Enum { raw: 0x4949, name: Some("intel, little-endian".into()), hex: false }
+        );
+
+        // The TIFF starts twelve bytes in: two of start-of-image, two of
+        // marker, two of length, and six of `Exif` and its padding. Its
+        // directory says eight, and eight from the TIFF is twenty from the
+        // file. That difference is the whole point.
+        let ifd = ev.node(&d, &[exif, &[1, 2, 0][..]].concat()).unwrap();
+        assert_eq!(ifd.type_name, "Ifd");
+        assert_eq!(ifd.offset_bits, 20 * 8);
+        assert_eq!(
+            ev.node(&d, &[exif, &[1, 2, 0, 1, 0, 0][..]].concat()).unwrap().value,
+            Value::Enum { raw: 271, name: Some("make".into()), hex: false }
+        );
+        // The string it points at is past what an entry can hold, so the entry
+        // says where it is; reading it is a step this stops short of.
+        assert_eq!(ev.node(&d, &[exif, &[1, 2, 0, 1, 0, 3][..]].concat()).unwrap().value, Value::UInt(26));
     }
 
     #[test]

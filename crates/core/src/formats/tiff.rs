@@ -108,8 +108,16 @@ const FIELD_TYPE: &[(i128, &str)] = &[
 ];
 
 pub fn tiff() -> Template {
-    Template::new(
-        "tiff",
+    Template::new("tiff", tiff_file())
+}
+
+/// The whole of a TIFF, in a window of its own so that every offset inside it
+/// counts from where it begins. On its own that is the start of the file and
+/// the window changes nothing; written into an EXIF block partway through a
+/// JPEG it is the only thing that makes the offsets mean anything.
+pub fn tiff_file() -> T {
+    T::sized(
+        E::Remaining,
         T::structure(
             "TIFF",
             vec![
@@ -145,7 +153,7 @@ fn file(e: Endian) -> T {
             ("ifd_offset", T::u32(e)),
             // The directory, wherever the header says it is. It costs no bytes
             // here, so the image below still starts where it starts.
-            ("ifd", T::at(E::field("ifd_offset"), ifd(e))),
+            ("ifd", T::at_in_window(E::field("ifd_offset"), ifd(e))),
             // The strips, the tiles, any directory after the first, and the
             // values too big to sit inside an entry. Every one of them is
             // pointed at by an entry above rather than laid out in order.
