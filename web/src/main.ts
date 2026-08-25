@@ -235,6 +235,7 @@ function mount(doc: Doc): void {
         return;
       }
       kind.named(id.message);
+      listing.overview.setIdentity(id.message);
       void kind.addTools(doc, id, name);
       if (name !== null) {
         kind.details(id, fullTemplateLine(name));

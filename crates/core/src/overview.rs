@@ -185,13 +185,16 @@ impl Scan {
         // The most a bucket this size can reach: 8 bits per byte, or fewer
         // distinct values than that allows when the bucket is small.
         let ceiling = (total as f64).log2().min(8.0);
+        // A tiny bucket cannot support the finer judgements: one byte is not
+        // "a repeated byte", and a handful of distinct bytes is not evidence
+        // of compression. Small buckets fall back to data.
         let class = if zeros == total {
             Class::Zero
         } else if text * 100 >= total * TEXT_PERCENT {
             Class::Text
-        } else if distinct == 1 {
+        } else if distinct == 1 && total >= 4 {
             Class::Fill
-        } else if bits(&self.hist, total) >= RANDOM_SHARE * ceiling {
+        } else if total >= 64 && bits(&self.hist, total) >= RANDOM_SHARE * ceiling {
             Class::Random
         } else {
             Class::Data
@@ -259,15 +262,15 @@ mod tests {
 
     #[test]
     fn each_kind_of_bucket_is_told_apart() {
-        // Four buckets of 16: zeroes, a fill, text, and bytes using the whole
+        // Four buckets of 64: zeroes, a fill, text, and bytes using the whole
         // range, which is what compressed data reads as.
-        let mut bytes = vec![0u8; 16];
-        bytes.extend(std::iter::repeat_n(0xffu8, 16));
-        bytes.extend(b"a readable line\n");
-        bytes.extend((0..16u8).map(|i| i.wrapping_mul(37).wrapping_add(11)));
+        let mut bytes = vec![0u8; 64];
+        bytes.extend(std::iter::repeat_n(0xffu8, 64));
+        bytes.extend(b"a readable line\n".repeat(4));
+        bytes.extend((0..64u8).map(|i| i.wrapping_mul(37).wrapping_add(11)));
         let d = doc(&bytes);
-        let mut s = Scan::new(64);
-        s.bucket_bytes = 16;
+        let mut s = Scan::new(256);
+        s.bucket_bytes = 64;
         while s.step(&d) == ScanStep::More {}
         assert_eq!(
             s.classes(),
@@ -329,6 +332,7 @@ mod tests {
         let d = Document::new(store);
         while s.step(&d) == ScanStep::More {}
         assert!(s.done());
-        assert!(s.classes().iter().all(|&c| c == Class::Fill as u8));
+        // One-byte buckets are too small to call "a repeated byte".
+        assert!(s.classes().iter().all(|&c| c == Class::Data as u8));
     }
 }

@@ -140,6 +140,22 @@ export type Span = {
   readonly sample: string[];
 };
 
+/** What the byte-class scan behind the overview has found so far. */
+export type OverviewState = {
+  /** True once every bucket is classified; until then ask again. */
+  readonly done: boolean;
+  /** Bytes one bucket stands for. A power of two, and 1 for a small file. */
+  readonly bucket_bytes: number;
+  readonly total_buckets: number;
+  /** One digit per finished bucket, in file order: 0 zeros, 1 one repeated
+   *  byte, 2 text, 3 data, 4 high entropy. */
+  readonly classes: string;
+  readonly zero_bytes: number;
+  readonly text_bytes: number;
+  /** How far the scan has read, in bytes. */
+  readonly read_bytes: number;
+};
+
 /** How the text in the search bar is read. */
 export type NeedleKind = "hex" | "text" | "regex";
 
@@ -614,6 +630,16 @@ export class Doc {
    */
   spans(fromBit: number, toBit: number, max: number): TemplateReply<Span[]> {
     return this.handleReply<Span[]>(this.editor.spans(fromBit, toBit, max));
+  }
+
+  /**
+   * One step of the byte-class scan behind the overview. The node carries
+   * everything found so far, so a partial map can be drawn while the rest is
+   * read; `done` says when to stop asking. An edit throws the scan away, and
+   * the next step starts it over.
+   */
+  overviewStep(): TemplateReply<OverviewState> {
+    return this.handleReply<OverviewState>(this.editor.overview_step());
   }
 
   /** What is wrong with what the search bar holds, or "" when nothing is.
