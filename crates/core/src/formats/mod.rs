@@ -1,18 +1,25 @@
 //! Built-in templates. These double as the test-bed for the IR: anything a
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
+mod au;
+mod bmp;
 mod dos;
 mod ggml;
 pub mod ggml_quant;
 mod gguf;
+mod gzip;
 mod id3;
 mod midi;
 mod mp4;
+mod nes;
+mod pcx;
 mod pe;
 pub mod pe_tables;
+mod pi1;
 mod png;
 mod safetensors;
 mod sqlite;
+mod tga;
 mod w4v;
 mod wav;
 mod whisper;
@@ -20,15 +27,22 @@ mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
 
+pub use au::au;
+pub use bmp::bmp;
 pub use dos::dos;
 pub use gguf::gguf;
+pub use gzip::gzip;
 pub use id3::id3;
 pub use midi::midi;
 pub use mp4::mp4;
+pub use nes::nes;
 pub use pe::pe;
+pub use pcx::pcx;
+pub use pi1::pi1;
 pub use png::png;
 pub use safetensors::safetensors;
 pub use sqlite::sqlite;
+pub use tga::tga;
 pub use w4v::w4v;
 pub use wav::wav;
 pub use whisper::whisper;
@@ -44,7 +58,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -63,6 +77,13 @@ pub fn builtin(name: &str) -> Option<Template> {
         "whisper" => Some(whisper()),
         "safetensors" => Some(safetensors()),
         "json" => Some(json()),
+        "bmp" => Some(bmp()),
+        "pcx" => Some(pcx()),
+        "tga" => Some(tga()),
+        "au" => Some(au()),
+        "pi1" => Some(pi1()),
+        "nes" => Some(nes()),
+        "gzip" => Some(gzip()),
         _ => None,
     }
 }
@@ -89,6 +110,16 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("pe")
     } else if is_dos(head) {
         Some("msdos")
+    } else if head.starts_with(b"\x1f\x8b") {
+        Some("gzip")
+    } else if head.starts_with(b"NES\x1a") {
+        Some("nes")
+    } else if is_bmp(head) {
+        Some("bmp")
+    } else if head.starts_with(b".snd") {
+        Some("au")
+    } else if is_pcx(head) {
+        Some("pcx")
     } else if head.starts_with(b"ID3") {
         Some("id3")
     } else if head.starts_with(b"{\"") {
@@ -104,6 +135,27 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Whether these leading bytes are a Windows bitmap.
+///
+/// `BM` on its own is two letters a text file could open with, so this also
+/// wants the DIB header after it to be one of the sizes the five versions of
+/// that header have.
+fn is_bmp(head: &[u8]) -> bool {
+    let Some(b) = head.get(14..18) else { return false };
+    head.starts_with(b"BM")
+        && matches!(u32::from_le_bytes([b[0], b[1], b[2], b[3]]), 12 | 40 | 52 | 56 | 64 | 108 | 124)
+}
+
+/// Whether these leading bytes are a PCX.
+///
+/// The first byte is 0x0A and nothing else, but one byte is not enough on its
+/// own, so the version and the encoding after it have to be values the format
+/// defines too. Version 1 was never used and 0x0A is a newline, so a text file
+/// starting with a blank line is turned away by the encoding byte.
+fn is_pcx(head: &[u8]) -> bool {
+    head.first() == Some(&0x0a) && matches!(head.get(1), Some(0 | 2 | 3 | 4 | 5)) && head.get(2) == Some(&1)
 }
 
 /// Whether these leading bytes are a whisper.cpp model.
