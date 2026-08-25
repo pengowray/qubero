@@ -15,6 +15,7 @@ mod gzip;
 mod id3;
 mod iff;
 mod ilbm;
+mod jpeg;
 mod lha;
 mod mca;
 mod midi;
@@ -53,6 +54,7 @@ pub use gif::gif;
 pub use gzip::gzip;
 pub use id3::id3;
 pub use ilbm::ilbm;
+pub use jpeg::jpeg;
 pub use lha::lha;
 pub use mca::mca;
 pub use midi::midi;
@@ -87,7 +89,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -128,6 +130,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "gitpackidx" => Some(git_pack_index()),
         "qoi" => Some(qoi()),
         "tiff" => Some(tiff()),
+        "jpeg" => Some(jpeg()),
         _ => None,
     }
 }
@@ -159,6 +162,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"NES\x1a", "nes"),
     (b"GIF8", "gif"),
     (b"qoif", "qoi"),
+    // Three bytes rather than two: the marker after the start-of-image is
+    // the first segment, and every JPEG has one.
+    (b"\xff\xd8\xff", "jpeg"),
     (b"II*\x00", "tiff"),
     (b"MM\x00*", "tiff"),
     (b".snd", "au"),
@@ -427,6 +433,11 @@ mod tests {
     fn one_magic_number_covering_several_formats_is_settled_by_what_follows() {
         assert_eq!(sniff(b"FORM\0\0\0\x10AIFF"), Some("aiff"));
         assert_eq!(sniff(b"FORM\0\0\0\x10ILBM"), Some("ilbm"));
+        // A JPEG opens with the start of image and then the first marker,
+        // which is three bytes; the two on their own are not enough.
+        assert_eq!(sniff(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"), Some("jpeg"));
+        assert_eq!(sniff(b"\xff\xd8\xff\xdb\x00\x43\x00"), Some("jpeg"));
+        assert_eq!(sniff(b"\xff\xd8hello"), None);
         // An IFF file holding something with no template here is left alone
         // rather than read as one of the two that do.
         assert_eq!(sniff(b"FORM\0\0\0\x108SVX"), None);

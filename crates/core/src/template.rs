@@ -53,6 +53,11 @@ pub enum Expr {
     /// writes a tensor's shape: the record holds `ne` itself rather than a
     /// table of records to look in.
     ProductOf(Arc<str>),
+    /// The numbers of an earlier array field, added up. `ProductOf` is what a
+    /// shape needs; this is what a table of counts needs. A JPEG Huffman
+    /// segment writes how many codes there are of each of the sixteen
+    /// lengths, and then that many symbols, without ever writing the total.
+    SumOf(Arc<str>),
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     ///
@@ -153,6 +158,10 @@ impl Expr {
     /// The numbers of the earlier array field `name`, multiplied together.
     pub fn product_of(name: &str) -> Expr {
         Expr::ProductOf(name.into())
+    }
+    /// The numbers of the earlier array field `name`, added up.
+    pub fn sum_of(name: &str) -> Expr {
+        Expr::SumOf(name.into())
     }
     /// The next `bits` bits without consuming them, read the given way round.
     pub fn peek(bits: u32, endian: Endian) -> Expr {

@@ -63,6 +63,10 @@ impl Evaluator {
                 let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
                 self.multiply(doc, &p, name)?
             }
+            Expr::SumOf(name) => {
+                let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
+                self.add_up(doc, &p, name)?
+            }
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
                 (None, _) => return fail(format!("{name} is not a number")),
@@ -212,6 +216,23 @@ impl Evaluator {
         // An empty shape is one weight, not none: a tensor of no dimensions
         // holds a single number. A shape of `[0]` is a different thing and
         // does come to nothing, which the multiplying already says.
+        Ok(total)
+    }
+
+    /// The numbers of a list, added up. An empty list comes to nothing, which
+    /// is the right answer and not the same as the empty product being one.
+    fn add_up<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<i128> {
+        let n = self.child_count(doc, path)?;
+        let mut total: i128 = 0;
+        let mut child = path.to_vec();
+        for i in 0..n as usize {
+            child.push(i);
+            let v = self.node(doc, &child)?.value.as_int();
+            child.pop();
+            let Some(v) = v else { return fail(format!("{what} holds no number there")) };
+            let Some(next) = total.checked_add(v) else { return fail("too many to count") };
+            total = next;
+        }
         Ok(total)
     }
 
