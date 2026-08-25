@@ -852,6 +852,21 @@ input.invalid {
   min-height: 26px;
   background: var(--bg);
 }
+.insp-formula {
+  margin-top: 6px;
+}
+.insp-formula-code {
+  display: block;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 3px 0;
+}
+.insp-formula-note {
+  font-size: 11px;
+  color: var(--muted);
+}
 .insp-status {
   color: var(--warn);
   min-height: 1.4em;

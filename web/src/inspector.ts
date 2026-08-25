@@ -30,6 +30,8 @@ export class Inspector {
   private readonly area: HTMLTextAreaElement;
   private readonly note: HTMLElement;
   private readonly detail: HTMLElement;
+  /** Shift-and-mask for a value that does not start on a byte boundary. */
+  private readonly formula: HTMLElement;
   private readonly fieldRow: HTMLElement;
   private readonly types: HTMLElement;
   /** Which other fields settled this one's length, count, type or place. */
@@ -183,13 +185,23 @@ export class Inspector {
       if (p !== undefined) this.onPick(p === "" ? [] : p.split("/").map(Number));
     });
     this.fieldRow.append(subhead("Value"), this.field, this.area, this.note, this.origins, this.types);
-    this.struct.append(this.detail, this.crumbs, this.fieldRow);
+    this.struct.append(this.crumbs, this.fieldRow);
+
+    // How to lift an unaligned run of bits out of the bytes around it. Only
+    // shown when the cursor is not on a byte boundary, where reading the value
+    // out of a file takes more than an index.
+    this.formula = document.createElement("div");
+    this.formula.className = "insp-formula";
+    this.formula.hidden = true;
 
     this.status = document.createElement("div");
     this.status.className = "insp-status";
     this.status.setAttribute("role", "status");
 
-    this.el.append(head, this.struct, table, this.status);
+    // The address sits above every tab: the field reading and the two raw
+    // readings all start at the same place, and that place is the first thing
+    // to check.
+    this.el.append(head, this.detail, this.struct, table, this.formula, this.status);
     doc.onChange(() => this.render());
   }
 
@@ -259,6 +271,15 @@ export class Inspector {
     this.table.hidden = structure;
     if (structure) return this.renderStructure();
 
+    // The raw readings all start at the cursor, so the address is the cursor's
+    // own and the width the formula explains is one byte of the run.
+    this.detail.hidden = false;
+    const here = document.createElement("span");
+    here.className = "addr";
+    here.textContent = formatOffset(this.offset);
+    this.detail.replaceChildren(here);
+    this.showFormula(this.offset, 8, true);
+
     const { bytes, complete } = this.doc.readBits(this.offset, 64);
     const avail = Math.max(0, Math.floor((this.doc.lengthBits - this.offset) / 8));
     const view = new DataView(bytes.buffer);
@@ -318,6 +339,7 @@ export class Inspector {
     at.className = "addr";
     at.textContent = formatOffset(n.offset_bits);
     this.detail.replaceChildren(at, ` · ${n.type} · ${sizeText(n.size_bits)}`);
+    this.showFormula(n.offset_bits, n.size_bits, false);
     const long = !n.composite && (n.kind === "bytes" || n.kind === "str");
     this.area.hidden = !long;
     this.field.hidden = long;
@@ -327,10 +349,44 @@ export class Inspector {
     this.fillTypes(path, n);
   }
 
+  /**
+   * The shift-and-mask that lifts the value at the cursor out of the bytes it
+   * straddles. Shown for a value that does not start and end on a byte
+   * boundary, where "the byte at this address" is not the whole answer.
+   *
+   * `perByte` is for the raw readings, which run for as many bytes as the type
+   * takes: one byte is worked, and the rest follow it.
+   */
+  private showFormula(bitOffset: number, widthBits: number, perByte: boolean): void {
+    const unaligned = bitOffset % 8 !== 0;
+    const partial = widthBits % 8 !== 0;
+    // Wider than a machine word: a term per byte would run off the panel, and
+    // the per-byte shift says the same thing in one line.
+    const wide = widthBits > 64;
+    if (widthBits === 0 || (!unaligned && !partial) || (wide && !unaligned)) {
+      this.formula.hidden = true;
+      this.formula.replaceChildren();
+      return;
+    }
+    const width = perByte || wide ? 8 : widthBits;
+    const code = document.createElement("code");
+    code.className = "insp-formula-code";
+    code.textContent = bitFormula(bitOffset, width);
+    const note = document.createElement("div");
+    note.className = "insp-formula-note";
+    note.textContent =
+      perByte || wide
+        ? "One byte of the run. Each byte after it shifts the same way."
+        : `Gives the ${countText(widthBits, "bit")} as a plain number.`;
+    this.formula.replaceChildren(subhead("Bits to value"), code, note);
+    this.formula.hidden = false;
+  }
+
   /** Nothing to show about a field: no template, no field, or not read yet. */
   private hideField(): void {
     this.fieldRow.hidden = true;
     this.detail.hidden = true;
+    this.formula.hidden = true;
   }
 
   /**
@@ -570,4 +626,31 @@ function sizeText(bits: number): string {
     return b === 1 ? "1 byte" : `${b.toLocaleString()} bytes`;
   }
   return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
+}
+
+/**
+ * The shift-and-mask that reads `width` bits starting at `bitOffset` and leaves
+ * them right-aligned in a plain number.
+ *
+ * Bits are counted the way the rest of the editor counts them: bit 0 of a byte
+ * is its top bit, so a field three bits into a byte starts under the mask
+ * `0x1f`. The first term is masked because the bits above it belong to whatever
+ * came before; the last is shifted down by whatever the field leaves behind in
+ * its final byte. `b[n]` is the byte at address `n`.
+ */
+export function bitFormula(bitOffset: number, width: number): string {
+  const first = Math.floor(bitOffset / 8);
+  const skip = bitOffset % 8;
+  const bytes = Math.ceil((skip + width) / 8);
+  const trailing = bytes * 8 - (skip + width);
+  const terms: string[] = [];
+  for (let i = 0; i < bytes; i++) {
+    const shift = 8 * (bytes - 1 - i) - trailing;
+    let term = `b[0x${(first + i).toString(16)}]`;
+    if (i === 0 && skip !== 0) term = `(${term} & 0x${(0xff >> skip).toString(16).padStart(2, "0")})`;
+    if (shift > 0) term = `${term} << ${shift}`;
+    else if (shift < 0) term = `${term} >> ${-shift}`;
+    terms.push(term);
+  }
+  return terms.join(" | ");
 }
