@@ -596,7 +596,7 @@ impl Evaluator {
             // Bytes from the anchor, which is how a header names the place it
             // keeps a table: from the start of the file, or from the start of
             // the copy of the format this one is written inside.
-            let (anchor, at, what) = (*anchor, at.clone(), inner.display_name());
+            let (anchor, at, what) = (*anchor, at.clone(), self.settled_name(inner));
             let n = self.eval_expr(doc, parent, &at)?;
             if n < 0 {
                 return fail("negative offset");
@@ -654,6 +654,23 @@ impl Evaluator {
     /// offsets ends, but not soon enough to be worth waiting for. The limit is
     /// far past any real nesting, which in practice is a JPEG holding a TIFF
     /// holding a sub-directory and stops at three.
+    /// What a type is called once a name has been looked up. A ring is
+    /// recognised by what is at the far end of the pointer, and the pointer
+    /// says `tiff.Ifd` while the node already open there remembers the
+    /// structure that name stands for. Comparing the two as written would
+    /// have the guard quietly never fire on the one shape that needs it.
+    fn settled_name(&self, ty: &Ty) -> String {
+        let mut ty = ty;
+        for _ in 0..64 {
+            let Ty::Named(n) = ty else { break };
+            match self.template.types.get(&**n) {
+                Some(t) => ty = t,
+                None => break,
+            }
+        }
+        ty.display_name()
+    }
+
     fn no_ring(&self, parent: &[usize], to: u64, what: &str) -> R<()> {
         const DEEPEST: usize = 1024;
         let mut jumps = 0;

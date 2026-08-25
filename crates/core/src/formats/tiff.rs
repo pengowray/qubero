@@ -26,19 +26,29 @@
 //! JPEG segment, and every offset in one counts from its own `II` or `MM`
 //! partway through. The whole format sits in a window of its own and its
 //! offsets are anchored to that window, so the one layout is both a file and a
-//! copy of a file inside something else. `tiff_file` is what a JPEG borrows.
+//! copy of a file inside something else. `tiff_part` is what a JPEG borrows:
+//! the type, and the directory types it refers to by name, which have to
+//! travel with it because a directory holds directories.
+//!
+//! Three tags do not hold a value at all. `exif ifd` is where the camera wrote
+//! everything it knew, `gps ifd` is where the photograph was taken, and
+//! `sub ifd` is another image entirely. All three hold the place a directory
+//! begins, and all three are followed. What the first two point at is read
+//! against another set of tag names: the numbers in a camera's directory mean
+//! nothing like the numbers in the file's own, and reading a latitude as a
+//! subfile type would be worse than not reading it at all.
 //!
 //! The chain of directories is not followed past the first. Each says where
 //! the next one is, as an offset into the file with nothing bounding it, so a
 //! file whose directory points back at itself is a ring. Every other type here
 //! that refers to itself is bounded by something containing it and must
-//! therefore end; this one is not, and hunting the cursor around a ring
-//! forever is worse than reading one directory and saying where the next is.
-//! The two tags that point at a directory of their own, the EXIF and GPS
-//! sub-directories, are numbers here for the same reason: they are the same
-//! ring in a different shape.
+//! therefore end; this one is not. The tags above can ring in the same way,
+//! and the cycle guard is what makes following them safe: a pointer landing on
+//! a directory of the same kind already open is refused. `sub ifd` holding a
+//! list rather than one directory is left as the numbers it is; a raw file
+//! with several images in it says so that way.
 
-use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Encoding, Endian, Endian::*, Expr as E, Part, StrLen, Template, Ty as T};
 
 /// The tags worth naming. There are hundreds more, and a number with no name
 /// is still shown; these are the ones a file in the wild actually carries.
@@ -98,6 +108,115 @@ const TAG: &[(i128, &str)] = &[
     (34853, "gps ifd"),
 ];
 
+/// The tags of the directory `exif ifd` points at: what the camera knew when
+/// it took the photograph. A different set of numbers from the one above, and
+/// the same numbers would mean something else there.
+const EXIF_TAG: &[(i128, &str)] = &[
+    (33434, "exposure time"),
+    (33437, "f number"),
+    (34850, "exposure program"),
+    (34852, "spectral sensitivity"),
+    (34855, "iso speed"),
+    (34864, "sensitivity type"),
+    (34866, "recommended exposure index"),
+    (36864, "exif version"),
+    (36867, "date taken"),
+    (36868, "date digitised"),
+    (36880, "offset from utc"),
+    (36881, "offset from utc, taken"),
+    (36882, "offset from utc, digitised"),
+    (37377, "shutter speed"),
+    (37378, "aperture"),
+    (37379, "brightness"),
+    (37380, "exposure bias"),
+    (37381, "widest aperture"),
+    (37382, "subject distance"),
+    (37383, "metering mode"),
+    (37384, "light source"),
+    (37385, "flash"),
+    (37386, "focal length"),
+    (37396, "subject area"),
+    // Whatever the manufacturer wanted to keep, in a format of their own that
+    // nobody else agreed to. Read as the bytes it is.
+    (37500, "maker note"),
+    (37510, "comment"),
+    (37520, "subsecond"),
+    (37521, "subsecond, taken"),
+    (37522, "subsecond, digitised"),
+    (40960, "flashpix version"),
+    (40961, "colour space"),
+    (40962, "width"),
+    (40963, "height"),
+    (40964, "related sound file"),
+    (40965, "interoperability ifd"),
+    (41486, "focal plane x resolution"),
+    (41487, "focal plane y resolution"),
+    (41488, "focal plane resolution unit"),
+    (41492, "subject position"),
+    (41493, "exposure index"),
+    (41495, "sensing method"),
+    (41728, "file source"),
+    (41729, "scene type"),
+    (41730, "colour filter pattern"),
+    (41985, "custom rendered"),
+    (41986, "exposure mode"),
+    (41987, "white balance"),
+    (41988, "digital zoom"),
+    (41989, "focal length in 35mm"),
+    (41990, "scene capture type"),
+    (41991, "gain control"),
+    (41992, "contrast"),
+    (41993, "saturation"),
+    (41994, "sharpness"),
+    (41996, "subject distance range"),
+    (42016, "image id"),
+    (42032, "camera owner"),
+    (42033, "body serial number"),
+    (42034, "lens specification"),
+    (42035, "lens make"),
+    (42036, "lens model"),
+    (42037, "lens serial number"),
+];
+
+/// The tags of the directory `gps ifd` points at: where the photograph was
+/// taken, and when, by the satellites rather than by the camera's clock. The
+/// format calls every one of them "gps something"; inside a GPS directory
+/// that is not worth repeating on every row.
+const GPS_TAG: &[(i128, &str)] = &[
+    (0, "version id"),
+    (1, "latitude ref"),
+    (2, "latitude"),
+    (3, "longitude ref"),
+    (4, "longitude"),
+    (5, "altitude ref"),
+    (6, "altitude"),
+    (7, "time"),
+    (8, "satellites"),
+    (9, "status"),
+    (10, "measure mode"),
+    (11, "precision"),
+    (12, "speed ref"),
+    (13, "speed"),
+    (14, "track ref"),
+    (15, "track"),
+    (16, "direction ref"),
+    (17, "direction"),
+    (18, "map datum"),
+    (19, "destination latitude ref"),
+    (20, "destination latitude"),
+    (21, "destination longitude ref"),
+    (22, "destination longitude"),
+    (23, "destination bearing ref"),
+    (24, "destination bearing"),
+    (25, "destination distance ref"),
+    (26, "destination distance"),
+    (27, "processing method"),
+    (28, "area information"),
+    (29, "date"),
+    (30, "differential"),
+    (31, "horizontal error"),
+];
+
 /// What one value of an entry is. The count says how many of them there are,
 /// so the room an entry describes is this times that.
 const FIELD_TYPE: &[(i128, &str)] = &[
@@ -120,7 +239,21 @@ const FIELD_TYPE: &[(i128, &str)] = &[
 ];
 
 pub fn tiff() -> Template {
-    Template::new("tiff", tiff_file())
+    let part = tiff_part();
+    Template::new("tiff", part.root.clone()).with_part(&part)
+}
+
+/// The whole of a TIFF and the names it refers to, for a format that carries
+/// one inside it. A directory holds entries that point at directories, so the
+/// vocabulary has to travel with the type.
+pub fn tiff_part() -> Part {
+    let mut part = Part::new(tiff_file());
+    for e in [Little, Big] {
+        for space in SPACES {
+            part = part.with_type(space.named(e), ifd(e, *space));
+        }
+    }
+    part
 }
 
 /// The whole of a TIFF, in a window of its own so that every offset inside it
@@ -165,7 +298,7 @@ fn file(e: Endian) -> T {
             ("ifd_offset", T::u32(e)),
             // The directory, wherever the header says it is. It costs no bytes
             // here, so the image below still starts where it starts.
-            ("ifd", T::at_in_window(E::field("ifd_offset"), ifd(e))),
+            ("ifd", T::at_in_window(E::field("ifd_offset"), T::Named(ifd_name(e).into()))),
             // The strips, the tiles, any directory after the first, and the
             // values too big to sit inside an entry. Every one of them is
             // pointed at by an entry above rather than laid out in order.
@@ -174,13 +307,62 @@ fn file(e: Endian) -> T {
     )
 }
 
+/// Which set of names an entry's tag is read against. A directory is a
+/// directory whichever one it is, but the numbers in it mean different things:
+/// tag 1 is `subfile type` in a TIFF directory and `latitude ref` in a GPS
+/// one, and reading a photograph's latitude as a subfile type would be worse
+/// than not reading it at all.
+#[derive(Clone, Copy, PartialEq)]
+enum Space {
+    Tiff,
+    Exif,
+    Gps,
+}
+
+impl Space {
+    fn tags(self) -> &'static [(i128, &'static str)] {
+        match self {
+            Space::Tiff => TAG,
+            Space::Exif => EXIF_TAG,
+            Space::Gps => GPS_TAG,
+        }
+    }
+    /// What a reader sees the directory called.
+    fn shown(self) -> &'static str {
+        match self {
+            Space::Tiff => "Ifd",
+            Space::Exif => "ExifIfd",
+            Space::Gps => "GpsIfd",
+        }
+    }
+    /// What it is called in the type table. A directory that holds directories
+    /// has to name the one it is written like, and the whole layout is a
+    /// function of the byte order, so each space is in the table twice.
+    fn named(self, e: Endian) -> &'static str {
+        match (self, e) {
+            (Space::Tiff, Little) => "tiff.Ifd.le",
+            (Space::Tiff, Big) => "tiff.Ifd.be",
+            (Space::Exif, Little) => "tiff.ExifIfd.le",
+            (Space::Exif, Big) => "tiff.ExifIfd.be",
+            (Space::Gps, Little) => "tiff.GpsIfd.le",
+            (Space::Gps, Big) => "tiff.GpsIfd.be",
+        }
+    }
+}
+
+const SPACES: &[Space] = &[Space::Tiff, Space::Exif, Space::Gps];
+
+fn ifd_name(e: Endian) -> &'static str {
+    Space::Tiff.named(e)
+}
+
 /// One directory: how many entries, the entries, and where the next one is.
-fn ifd(e: Endian) -> T {
+fn ifd(e: Endian, space: Space) -> T {
     T::structure(
-        "Ifd",
+        space.shown(),
         vec![
             ("count", T::u16(e)),
-            ("entries", T::array(entry(e), E::field("count"))),
+            ("entries", T::array(entry(e, space), E::field("count"))),
             // Zero when this is the last one, which is almost always.
             ("next_ifd_offset", T::u32(e)),
         ],
@@ -194,22 +376,64 @@ fn ifd(e: Endian) -> T {
 /// the size of the type times the count: four bytes or fewer and the value is
 /// there, more and they are an offset to it. So the size is worked out first,
 /// in a field of no bits, and the switch below is on whether it fits.
-fn entry(e: Endian) -> T {
+fn entry(e: Endian, space: Space) -> T {
     T::structure_named(
         "Entry",
         "tag",
         "",
         vec![
-            ("tag", T::enumeration("Tag", T::u16(e), TAG)),
+            ("tag", T::enumeration("Tag", T::u16(e), space.tags())),
             ("type", T::enumeration("FieldType", T::u16(e), FIELD_TYPE)),
             ("count", T::u32(e)),
             ("room", room()),
             // Dividing by five is how "four or fewer" is asked, since the
             // switch takes one number rather than a comparison.
-            ("value", T::switch(E::field("room").div(E::lit(5)), vec![(0, here(e))], elsewhere(e))),
+            ("value", sub_ifd(e, space, T::switch(E::field("room").div(E::lit(5)), vec![(0, here(e))], elsewhere(e)))),
         ],
     )
     .counted_as("entry")
+}
+
+/// The tags whose four bytes are not a value but the place another directory
+/// begins. A camera writes almost nothing about the photograph in the
+/// directory the file points at: the exposure, the lens and the time are in
+/// the one that `exif ifd` points at, and where the photograph was taken is in
+/// the one after that.
+/// Only a TIFF directory holds these. Inside the two they point at, the same
+/// numbers mean something else entirely.
+const SUB_IFD: &[(i128, Space)] = &[
+    // Whole other images: the preview inside a raw file, and the pages of a
+    // multi-resolution one.
+    (330, Space::Tiff),
+    (34665, Space::Exif),
+    (34853, Space::Gps),
+];
+
+/// An entry that points at a directory reads it, rather than showing the
+/// offset and stopping. Only when it points at one: `sub ifd` may hold a list
+/// of them, and a list is written elsewhere and is left as the numbers it is.
+///
+/// This sits at the entry rather than inside the four bytes of the value,
+/// because those four bytes are a window of their own and an offset counted
+/// from inside it would land four bytes into nowhere.
+fn sub_ifd(e: Endian, space: Space, otherwise: T) -> T {
+    if space != Space::Tiff {
+        return otherwise;
+    }
+    let cases = SUB_IFD
+        .iter()
+        .map(|(tag, to)| {
+            let one = T::inline_structure(
+                "SubIfd",
+                vec![
+                    ("offset", T::u32(e)),
+                    ("directory", T::at_in_window(E::field("offset"), T::Named(to.named(e).into()))),
+                ],
+            );
+            (*tag, T::switch(E::field("count"), vec![(1, one)], otherwise.clone()))
+        })
+        .collect();
+    T::switch(E::field("tag"), cases, otherwise)
 }
 
 /// How many bytes the values of this entry need: the size of one of them times
@@ -349,6 +573,83 @@ mod tests {
         }
         v.extend_from_slice(&u32b(0)); // no directory after this one
         v
+    }
+
+    /// A file whose one entry is `exif ifd`, pointing at a directory with one
+    /// entry of its own. `exif_at` is where that second directory begins, so a
+    /// test can send it somewhere it should not go.
+    fn with_sub_ifd(tag: u16, exif_at: u32) -> Vec<u8> {
+        let u16b = |v: u16| v.to_le_bytes().to_vec();
+        let u32b = |v: u32| v.to_le_bytes().to_vec();
+        let entry = |tag: u16, kind: u16, count: u32, value: u32| {
+            let mut v = u16b(tag);
+            v.extend_from_slice(&u16b(kind));
+            v.extend_from_slice(&u32b(count));
+            v.extend_from_slice(&u32b(value));
+            v
+        };
+        let mut v = b"II".to_vec();
+        v.extend_from_slice(&u16b(42));
+        v.extend_from_slice(&u32b(8));
+        // The first directory, at byte 8, ending at byte 26.
+        v.extend_from_slice(&u16b(1));
+        v.extend_from_slice(&entry(tag, 4, 1, exif_at));
+        v.extend_from_slice(&u32b(0));
+        assert_eq!(v.len(), 26);
+        // The one it points at: the focal length, as a rational just past the
+        // end of it, because eight bytes do not fit in four.
+        v.extend_from_slice(&u16b(1));
+        v.extend_from_slice(&entry(37386, 5, 1, 44));
+        v.extend_from_slice(&u32b(0));
+        assert_eq!(v.len(), 44);
+        v.extend_from_slice(&u32b(50));
+        v.extend_from_slice(&u32b(1));
+        v
+    }
+
+    #[test]
+    fn a_tag_that_points_at_a_directory_is_read_as_the_directory_it_points_at() {
+        let d = Document::new(MemSource(with_sub_ifd(34665, 26)));
+        let mut ev = Evaluator::new(tiff());
+        let entry = [1, 2, 0, 1, 0];
+        let at = |tail: &[usize]| [entry.as_slice(), tail].concat();
+        assert_eq!(
+            ev.node(&d, &at(&[0])).unwrap().value,
+            Value::Enum { raw: 34665, name: Some("exif ifd".into()), hex: false }
+        );
+        // The four bytes are the offset, and the directory they point at costs
+        // nothing where it is named, so the entry is still twelve bytes.
+        assert_eq!(ev.node(&d, &at(&[4, 0])).unwrap().value, Value::UInt(26));
+        let sub = ev.node(&d, &at(&[4, 1])).unwrap();
+        assert_eq!(sub.size_bits, 0);
+        let ifd = ev.node(&d, &at(&[4, 1, 0])).unwrap();
+        assert_eq!(ifd.type_name, "ExifIfd");
+        assert_eq!(ifd.offset_bits, 26 * 8);
+        // Read against the camera's names rather than the file's: 37386 is a
+        // tag nobody has in a TIFF directory.
+        assert_eq!(
+            ev.node(&d, &at(&[4, 1, 0, 1, 0, 0])).unwrap().value,
+            Value::Enum { raw: 37386, name: Some("focal length".into()), hex: false }
+        );
+        // Eight bytes do not fit in four, so the value is elsewhere again:
+        // an offset, and the pair of numbers it points at.
+        let num = ev.node(&d, &at(&[4, 1, 0, 1, 0, 4, 1, 0, 0])).unwrap();
+        assert_eq!(num.name, "numerator");
+        assert_eq!(num.value, Value::UInt(50));
+    }
+
+    #[test]
+    fn a_directory_that_points_back_at_the_one_holding_it_is_refused() {
+        // A `sub ifd` entry saying the directory it points at is the one
+        // holding it. Following that would read the same directory for ever.
+        // The two the camera writes cannot do this: what they point at is read
+        // against another set of names, and nothing in those points back.
+        let d = Document::new(MemSource(with_sub_ifd(330, 8)));
+        let mut ev = Evaluator::new(tiff());
+        assert!(ev.node(&d, &[1, 2, 0, 1, 0, 4, 1, 0]).is_err());
+        // The rest of the file still reads, and so does the cursor.
+        assert_eq!(ev.node(&d, &[1, 2, 0, 0]).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.locate(&d, 8 * 8).unwrap(), vec![1, 2, 0, 0]);
     }
 
     #[test]

@@ -32,4 +32,4 @@ pub use piece::PieceTable;
 pub use save::{Run, RunKind};
 pub use search::{Needle, Search, Step};
 pub use source::{ChunkStore, MemSource, Missing, Source};
-pub use template::{Encoding, Endian, Expr, StrLen, Template, Ty, Until};
+pub use template::{Encoding, Endian, Expr, Part, StrLen, Template, Ty, Until};

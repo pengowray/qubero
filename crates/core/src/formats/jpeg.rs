@@ -28,8 +28,10 @@
 //! than the signature rules would have said about it, and it is not wrong.
 //!
 //! The EXIF block in an `APP1` is a whole TIFF file written into a segment,
-//! and it is read as one: the same `tiff_file` the TIFF template is, with
-//! nothing said twice. What that took was letting an offset count from the
+//! and it is read as one: the same `tiff_part` the TIFF template is, with
+//! nothing said twice. A part is the type and the names that type refers to,
+//! handed over together, so a borrower cannot take the description and leave
+//! the vocabulary behind. What that took was letting an offset count from the
 //! copy of a format rather than from the file, since the offsets inside an
 //! embedded TIFF count from its own `II` or `MM` partway through the JPEG.
 //! The TIFF sits in a window of its own and its offsets are anchored to that
@@ -40,7 +42,7 @@
 //! `APP0`, and reading it would mean this template referring to itself across
 //! a field nothing bounds.
 
-use super::tiff::tiff_file;
+use super::tiff::tiff_part;
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// Every marker worth naming, by the whole two bytes rather than the second
@@ -117,6 +119,10 @@ const FRAME: &[i128] = &[
 const ESCAPES: &[u8] = &[0x00, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7];
 
 pub fn jpeg() -> Template {
+    // The EXIF block is a TIFF file, so a JPEG borrows the TIFF description
+    // whole. It comes with the names it refers to, since a directory that
+    // holds directories is written as a type that refers to itself.
+    let exif = tiff_part();
     Template::new(
         "jpeg",
         T::structure(
@@ -125,7 +131,10 @@ pub fn jpeg() -> Template {
                 ("soi", T::magic(&[0xff, 0xd8])),
                 (
                     "segments",
-                    T::repeat(segment(), Until::FieldBytes { field: "marker".into(), bytes: vec![0xff, 0xd9] }),
+                    T::repeat(
+                        segment(&exif.root),
+                        Until::FieldBytes { field: "marker".into(), bytes: vec![0xff, 0xd9] },
+                    ),
                 ),
                 // Real files carry all sorts after the end marker: a second
                 // copy of the image, a thumbnail, the tail of whatever the
@@ -135,10 +144,11 @@ pub fn jpeg() -> Template {
             ],
         ),
     )
+    .with_part(&exif)
 }
 
 /// One segment: which marker, and then whatever that marker means.
-fn segment() -> T {
+fn segment(exif: &T) -> T {
     let mut cases: Vec<(i128, T)> = STANDALONE.iter().map(|m| (*m, nothing())).collect();
     cases.extend(FRAME.iter().map(|m| (*m, sized(frame()))));
     cases.push((0xffc4, sized(T::repeat(huffman_table(), Until::End))));
@@ -146,7 +156,7 @@ fn segment() -> T {
     cases.push((0xffdd, sized(T::inline_structure("Dri", vec![("restart_interval", T::u16(Big))]))));
     cases.push((0xffdc, sized(T::inline_structure("Dnl", vec![("lines", T::u16(Big))]))));
     cases.push((0xffe0, sized(app0())));
-    cases.push((0xffe1, sized(app1())));
+    cases.push((0xffe1, sized(app1(exif))));
     cases.push((0xfffe, sized(T::text(StrLen::Fixed(E::Remaining), Encoding::Latin1))));
     cases.push((0xffda, scan()));
 
@@ -298,9 +308,10 @@ fn jfif() -> T {
 }
 
 /// `APP1`, which is where a camera writes what it knew when it took the
-/// picture. `Exif` is a TIFF file, offsets and all; see the module doc for why
-/// it is not read as one here.
-fn app1() -> T {
+/// picture. `Exif` is a TIFF file, offsets and all, and is read as one: the
+/// offsets inside it count from where the TIFF begins rather than from the
+/// start of the JPEG, which is what a window is for.
+fn app1(exif: &T) -> T {
     T::inline_structure(
         "App1",
         vec![
@@ -314,7 +325,7 @@ fn app1() -> T {
                             "Exif",
                             T::inline_structure(
                                 "Exif",
-                                vec![("pad", T::magic(&[0])), ("tiff", tiff_file())],
+                                vec![("pad", T::magic(&[0])), ("tiff", exif.clone())],
                             ),
                         ),
                         ("http://ns.adobe.com/xap/1.0/", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
@@ -510,6 +521,50 @@ mod tests {
         // The bits run to the end of the file, since nothing ends them.
         assert_eq!(ev.node(&d, &[1, 4, 1, 2]).unwrap().value, Value::Bytes { len: 4, preview: vec![0xaa, 0xff, 0x00, 0xbb] });
         assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 5);
+    }
+
+    #[test]
+    fn the_camera_settings_inside_an_exif_block_are_read_from_where_the_tiff_starts() {
+        // The same shape as a photograph out of a camera: a JPEG holding a
+        // TIFF holding a directory that points at the camera's own. Every
+        // offset in it counts from the TIFF, which begins twelve bytes into
+        // the file, so a directory that says 26 is at 38.
+        let mut tiff = b"II".to_vec();
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&34665u16.to_le_bytes()); // exif ifd
+        tiff.extend_from_slice(&4u16.to_le_bytes()); // long
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(tiff.len(), 26);
+        tiff.extend_from_slice(&1u16.to_le_bytes()); // the camera's directory
+        tiff.extend_from_slice(&34855u16.to_le_bytes()); // iso speed
+        tiff.extend_from_slice(&3u16.to_le_bytes()); // short
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&400u16.to_le_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut app1 = b"Exif  ".to_vec();
+        app1.extend_from_slice(&tiff);
+        let mut v = vec![0xff, 0xd8];
+        v.extend_from_slice(&seg(0xffe1, &app1));
+        v.extend_from_slice(&[0xff, 0xd9]);
+
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(jpeg());
+        let entry = [1usize, 0, 1, 1, 1, 1, 1, 2, 0, 1, 0];
+        let at = |tail: &[usize]| [entry.as_slice(), tail].concat();
+        let sub = ev.node(&d, &at(&[4, 1, 0])).unwrap();
+        assert_eq!(sub.type_name, "ExifIfd");
+        assert_eq!(sub.offset_bits, (12 + 26) * 8);
+        assert_eq!(
+            ev.node(&d, &at(&[4, 1, 0, 1, 0, 0])).unwrap().value,
+            Value::Enum { raw: 34855, name: Some("iso speed".into()), hex: false }
+        );
+        assert_eq!(ev.node(&d, &at(&[4, 1, 0, 1, 0, 4, 0])).unwrap().value, Value::UInt(400));
     }
 
     #[test]

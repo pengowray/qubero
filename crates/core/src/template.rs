@@ -871,4 +871,40 @@ impl Template {
         self.types.insert(name.to_string(), ty);
         self
     }
+    /// Take in a borrowed format's vocabulary. `part.root` is the type that
+    /// reads it; this is everything that type refers to by name.
+    pub fn with_part(mut self, part: &Part) -> Template {
+        for (name, ty) in &part.types {
+            self.types.insert(name.clone(), ty.clone());
+        }
+        self
+    }
+}
+
+/// A format that reads on its own and also inside another one: the type that
+/// reads it, and the named types that type refers to.
+///
+/// A type that refers to itself is the whole reason this exists. Named types
+/// live on the template, so a bare `Ty` handed to a borrower cannot carry the
+/// names it needs, and a directory whose entries point at directories is
+/// nothing but names. Handing over both together is what stops a borrower
+/// placing the type and leaving the vocabulary behind.
+///
+/// Names are prefixed with the format they belong to, `tiff.Ifd`, because the
+/// table they land in is shared: two borrowed formats should not fall out over
+/// a word as ordinary as `Header`.
+#[derive(Debug, Clone)]
+pub struct Part {
+    pub root: Ty,
+    pub types: Vec<(String, Ty)>,
+}
+
+impl Part {
+    pub fn new(root: Ty) -> Part {
+        Part { root, types: Vec::new() }
+    }
+    pub fn with_type(mut self, name: &str, ty: Ty) -> Part {
+        self.types.push((name.to_string(), ty));
+        self
+    }
 }

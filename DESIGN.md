@@ -757,8 +757,19 @@ So `At` carries an anchor now, the same three choices `PointerList` already
 had. `Anchor::Window` is the nearest `Sized` around the field and falls back
 to the start of the file when there is none, so the TIFF sits in a window of
 its own and the one layout is a file when it is a file and a copy inside
-something else when it is not. `tiff_file` is a type rather than a template,
-and the JPEG names it.
+something else when it is not.
+
+Borrowing the description needed one more thing. Named types live on the
+`Template`, so a bare `Ty` handed to a borrower cannot carry the names it
+refers to, and a directory whose entries point at directories is nothing but
+names. A `Part` is the type and its vocabulary together: `tiff_part()` hands
+over both, `Template::with_part` takes them in, and there is no way to place
+the description and leave the names behind. Names are prefixed by the format
+they came from, `tiff.Ifd.le`, because the table they land in is shared. A
+scoped lookup would have been the tidier answer and is the wrong one: three
+places in the evaluator resolve a name, two of them without a path to scope
+by, and forgetting to scope a fourth would fail quietly, where forgetting to
+register fails loudly.
 
 An offset that names a place can name a place already open, and that is a
 ring. Every other way of placing a child moves forward, so a type referring to
@@ -769,7 +780,18 @@ ancestors whether any of them is the same type in the same place, which is what
 makes two nodes one node, and refuses the step that would close the loop. Only
 ancestors: two entries pointing at the same string are two entries pointing at
 the same string. A count of the pointers above comes with it, so a chain that
-is not a ring but is a million long is stopped as well.
+is not a ring but is a million long is stopped as well. What a type is called
+is settled before comparing: the pointer says `tiff.Ifd.le` and the node
+already open there remembers the structure that name stands for, and comparing
+the two as written would have the guard quietly never fire on the one shape it
+was built for.
+
+That guard is what makes the three pointing tags safe to follow. `exif ifd`,
+`gps ifd` and `sub ifd` hold the place another directory begins rather than a
+value, and what the first two point at is read against another set of tag
+names: tag 1 is `subfile type` in a TIFF directory and `latitude ref` in a GPS
+one. Splitting the tag spaces also bounds the recursion, since nothing in the
+camera's names points back.
 
 The same anchor settled the other half of a TIFF entry. Four bytes hold the
 value when it fits and where to find it when it does not, and nothing in the
