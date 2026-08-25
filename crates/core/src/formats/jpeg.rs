@@ -547,7 +547,7 @@ mod tests {
         tiff.extend_from_slice(&[0, 0]);
         tiff.extend_from_slice(&0u32.to_le_bytes());
 
-        let mut app1 = b"Exif  ".to_vec();
+        let mut app1 = b"Exif\0\0".to_vec();
         app1.extend_from_slice(&tiff);
         let mut v = vec![0xff, 0xd8];
         v.extend_from_slice(&seg(0xffe1, &app1));
