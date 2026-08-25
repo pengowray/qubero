@@ -592,6 +592,47 @@ fn a_peek_reads_the_way_round_it_is_told_to() {
 }
 
 #[test]
+fn a_stream_with_no_length_runs_to_the_next_marker() {
+    // What a JPEG scan needs: bits with no count anywhere, ending at the next
+    // 0xff that is not followed by one of the bytes that make it data.
+    let t = || {
+        Template::new(
+            "t",
+            T::structure(
+                "Root",
+                vec![
+                    ("stream", T::bytes(E::to_marker(0xff, &[0x00, 0xd0, 0xd1]))),
+                    ("rest", T::bytes(E::Remaining)),
+                ],
+            ),
+        )
+    };
+    let len = |bytes: &[u8]| Evaluator::new(t()).node(&doc(bytes), &[0]).unwrap().size_bits / 8;
+
+    // Stops before the marker, so the marker belongs to what comes next.
+    assert_eq!(len(&[1, 2, 3, 0xff, 0xda, 9]), 3);
+    // An 0xff written as data is escaped by the byte after it, and so are the
+    // restart markers, so neither ends the stream.
+    assert_eq!(len(&[1, 0xff, 0x00, 2, 0xff, 0xd0, 3, 0xff, 0xd9]), 7);
+    // A marker at the very front measures nothing at all.
+    assert_eq!(len(&[0xff, 0xd9, 1, 2]), 0);
+    // No marker anywhere: a file cut off mid-stream still places its bytes.
+    assert_eq!(len(&[1, 2, 3, 4]), 4);
+    // A lead byte with nothing after it is not a marker: nothing has said so.
+    assert_eq!(len(&[1, 2, 0xff]), 3);
+
+    // The blocks the search reads in are 4096 bytes, and a marker split
+    // across that boundary is still one marker.
+    let mut v = vec![7u8; 4095];
+    v.extend_from_slice(&[0xff, 0xd9, 0, 0]);
+    assert_eq!(len(&v), 4095);
+    // The same split, but escaped, so the search carries on past the join.
+    let mut v = vec![7u8; 4095];
+    v.extend_from_slice(&[0xff, 0x00, 7, 0xff, 0xd9]);
+    assert_eq!(len(&v), 4098);
+}
+
+#[test]
 fn a_backwards_peek_reads_the_end_of_what_holds_it() {
     // A file signed at the far end, and a body that stops before the
     // signature or runs to the end depending on whether one is there.

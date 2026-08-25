@@ -74,6 +74,23 @@ pub enum Expr {
     /// told from a TGA by the last eight bytes of one, wherever in the file the
     /// asking is done.
     PeekAt { skip: Box<Expr>, bits: u32, endian: Endian },
+    /// How far it is from here to the next `lead` byte that is not followed by
+    /// one of `unless`, in bytes, or to the end of the container when there is
+    /// no such byte.
+    ///
+    /// This is what a stream of compressed data with no length on it needs.
+    /// A JPEG writes its entropy-coded bits with no count anywhere: they run
+    /// until the next marker, and a marker is 0xff and a byte that is not
+    /// zero. Zero is how the encoder writes an 0xff that is data rather than a
+    /// marker, so the escape and the terminator are the same byte and only the
+    /// one after it tells them apart. `unless` is that set.
+    ///
+    /// The distance stops before the `lead` byte, so the marker belongs to
+    /// whatever is declared next rather than to the stream. A container that
+    /// ends without one, which is a file cut off in the middle, measures to
+    /// its end rather than failing: the bytes are still there to look at, and
+    /// refusing to place them would hide the very thing that went wrong.
+    ToMarker { lead: u8, unless: Vec<u8> },
     /// The value of field `name` in the element before this one, in the nearest
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
@@ -145,6 +162,11 @@ impl Expr {
     /// `skip` counts back from the end of the container.
     pub fn peek_at(skip: Expr, bits: u32, endian: Endian) -> Expr {
         Expr::PeekAt { skip: Box::new(skip), bits, endian }
+    }
+    /// The bytes from here to the next `lead` byte not followed by one of
+    /// `unless`, or to the end of the container if there is none.
+    pub fn to_marker(lead: u8, unless: &[u8]) -> Expr {
+        Expr::ToMarker { lead, unless: unless.to_vec() }
     }
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {

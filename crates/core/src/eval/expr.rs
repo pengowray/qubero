@@ -108,6 +108,50 @@ impl Evaluator {
                 }
                 read_uint(&buf, *bits, *endian) as i128
             }
+            // Walk forward for the byte that ends an unmeasured stream. Read a
+            // block at a time, and carry the last byte of one block into the
+            // next: a lead byte at the end of a block is told apart from a
+            // marker only by the byte after it, which is in the block after.
+            Expr::ToMarker { lead, unless } => {
+                let Some((offset, limit)) = here else { return fail("nothing to measure") };
+                if limit < offset {
+                    return fail("nothing to measure");
+                }
+                const BLOCK: u64 = 4096;
+                let total = (limit - offset) / 8;
+                let mut buf = vec![0u8; BLOCK as usize];
+                let mut at_byte = 0u64;
+                // Set when the previous block ended on a lead byte, so the
+                // first byte of this one decides what that byte was.
+                let mut pending = false;
+                while at_byte < total {
+                    let n = BLOCK.min(total - at_byte);
+                    buf.resize(n as usize, 0);
+                    let missing = doc.read_bits(offset + at_byte * 8, n * 8, &mut buf);
+                    if !missing.is_empty() {
+                        return Err(EvalError::Pending(missing));
+                    }
+                    if pending && !unless.contains(&buf[0]) {
+                        return Ok((at_byte - 1) as i128);
+                    }
+                    pending = false;
+                    for (i, b) in buf.iter().enumerate() {
+                        if *b != *lead {
+                            continue;
+                        }
+                        match buf.get(i + 1) {
+                            Some(next) if !unless.contains(next) => return Ok((at_byte + i as u64) as i128),
+                            Some(_) => {}
+                            // The last byte of this block, and of the file if
+                            // this is the last block. A lead byte with nothing
+                            // after it is not a marker: nothing has said so.
+                            None => pending = true,
+                        }
+                    }
+                    at_byte += n;
+                }
+                total as i128
+            }
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {
