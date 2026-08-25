@@ -8,7 +8,7 @@
 import { bitFormula, formatOffset } from "./doc.js";
 import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { childWord, countText } from "./strings.js";
+import { BYTE_NOTE, childWord, countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
 
 /** Structure reads the template's field; the other two read raw bytes. */
@@ -372,13 +372,18 @@ export class Inspector {
     const code = document.createElement("code");
     code.className = "insp-formula-code";
     code.textContent = bitFormula(bitOffset, width);
-    const note = document.createElement("div");
-    note.className = "insp-formula-note";
-    note.textContent =
-      perByte || wide
-        ? "One byte of the run. Each byte after it shifts the same way."
-        : `Gives the ${countText(widthBits, "bit")} as a plain number.`;
-    this.formula.replaceChildren(subhead("Bits to value"), code, note);
+    code.title = BYTE_NOTE;
+    const parts: Node[] = [subhead("Bit extraction"), code];
+    // Where the reading runs on past one byte, the expression is for the first
+    // of them and the rest follow it. Where it is a whole field, its value is
+    // already in the editor above and needs no second telling.
+    if (perByte || wide) {
+      const note = document.createElement("div");
+      note.className = "insp-formula-note";
+      note.textContent = "The first byte at the cursor. Step both indexes up for each byte after it.";
+      parts.push(note);
+    }
+    this.formula.replaceChildren(...parts);
     this.formula.hidden = false;
   }
 

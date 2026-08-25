@@ -1359,12 +1359,12 @@ input.invalid {
 .insp-qcursor-index {
   color: var(--muted);
 }
-.insp-qcursor-value {
-  font-size: 15px;
-}
 .insp-qcursor-note {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 12px;
+}
+.insp-qcursor-value {
+  font-size: 12px;
+  font-weight: 600;
 }
 .insp-qscales {
   display: flex;

@@ -6,6 +6,7 @@
 
 import { bitFormula } from "./doc.js";
 import type { QuantWeight, TypeInfo } from "./doc.js";
+import { BYTE_NOTE } from "./strings.js";
 
 /** Asked for when a weight is clicked, so the views go to its bits. */
 export type GoTo = (bitOffset: number) => void;
@@ -60,14 +61,15 @@ function cursorRow(w: QuantWeight, index: number, info: TypeInfo): DocumentFragm
   row.className = "insp-qcursor";
   row.append(
     span("insp-qcursor-index", `#${index}`),
-    span("insp-qcursor-value", num(w.value)),
     span("insp-qcursor-note", `stored ${w.q}`),
+    span("insp-qcursor-value", `scaled ${num(w.value)}`),
   );
   frag.append(row);
   if (w.width === info.width) {
     const code = document.createElement("code");
     code.className = "insp-formula-code";
     code.textContent = bitFormula(info.block_bits + w.bit, w.width);
+    code.title = BYTE_NOTE;
     frag.append(code);
   }
   return frag;
@@ -112,7 +114,7 @@ function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
     cell.className = "insp-qcell";
     if (i === info.at) cell.classList.add("is-here");
     cell.textContent = showValues ? num(w.value) : String(w.q);
-    cell.title = `#${i} · stored ${w.q} · ${num(w.value)}`;
+    cell.title = `#${i} · stored ${w.q} · scaled ${num(w.value)}`;
     cell.addEventListener("click", () => goTo(info.block_bits + w.bit));
     g.append(cell);
   });

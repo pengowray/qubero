@@ -40,6 +40,11 @@ function plural(noun: string): string {
   return `${noun}s`;
 }
 
+/** What `b[n]` means in a shift-and-mask expression. Worth saying, because the
+ *  same panel writes `0x131+4b` for an address four bits into a byte, and one
+ *  `b` there is bits and the other is bytes. */
+export const BYTE_NOTE = "b[n] is the byte at address n";
+
 // ---- searching ----
 
 export const SEARCH_LABELS = {
