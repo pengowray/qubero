@@ -60,7 +60,10 @@ pub enum ScanStep {
 /// paid for the parts it read.
 #[derive(Debug, Clone)]
 pub struct Scan {
-    len: u64,
+    /// The stretch this scan covers: the whole file for the map, one block of
+    /// it when a reader has picked a block to look at closely.
+    start: u64,
+    end: u64,
     bucket_bytes: u64,
     /// One class per finished bucket, in file order.
     classes: Vec<u8>,
@@ -71,6 +74,9 @@ pub struct Scan {
     hist: [u32; 256],
     /// How many of the current bucket's bytes are counted so far.
     filled: u64,
+    /// Byte counts over everything read so far, which is what says whether a
+    /// stretch really is as dense as its buckets each looked.
+    total: [u64; 256],
     zero_bytes: u64,
     text_bytes: u64,
 }
@@ -93,23 +99,44 @@ const TEXT_PERCENT: u64 = 85;
 const RANDOM_SHARE: f64 = 0.91;
 
 impl Scan {
+    /// A scan of a whole file of `len` bytes.
     pub fn new(len: u64) -> Scan {
+        Scan::range(0, len, TARGET_BUCKETS)
+    }
+
+    /// A scan of `start..end` divided into at most `target` buckets. One block
+    /// of the map looked at closely is this over that block's bytes, with a
+    /// higher target, so a run too short to colour a whole-file cell has cells
+    /// of its own here.
+    pub fn range(start: u64, end: u64, target: u64) -> Scan {
+        let len = end.saturating_sub(start);
         // The smallest power-of-two bucket that keeps the count under the
         // target, so a cell stands for 1 byte, 2, 4 … and never 3000.
         let mut bucket_bytes = 1u64;
-        while len.div_ceil(bucket_bytes) > TARGET_BUCKETS {
+        while len.div_ceil(bucket_bytes) > target.max(1) {
             bucket_bytes *= 2;
         }
         Scan {
-            len,
+            start,
+            end: start.max(end),
             bucket_bytes,
             classes: Vec::new(),
-            next: 0,
+            next: start,
             hist: [0; 256],
             filled: 0,
+            total: [0; 256],
             zero_bytes: 0,
             text_bytes: 0,
         }
+    }
+
+    /// The stretch of the file this scan covers.
+    pub fn start(&self) -> u64 {
+        self.start
+    }
+
+    pub fn end(&self) -> u64 {
+        self.end
     }
 
     pub fn bucket_bytes(&self) -> u64 {
@@ -117,7 +144,37 @@ impl Scan {
     }
 
     pub fn total_buckets(&self) -> u64 {
-        self.len.div_ceil(self.bucket_bytes)
+        (self.end - self.start).div_ceil(self.bucket_bytes)
+    }
+
+    /// How many of each byte value the scan has read.
+    pub fn histogram(&self) -> &[u64; 256] {
+        &self.total
+    }
+
+    /// Entropy over everything read so far, in bits per byte, and the most a
+    /// stretch this long could reach. A block whose buckets all read as dense
+    /// is worth checking against these: the buckets are judged one at a time
+    /// and a short run of zeroes inside a long one does not change any of them.
+    pub fn entropy(&self) -> (f64, f64) {
+        let total: u64 = self.total.iter().sum();
+        if total == 0 {
+            return (0.0, 0.0);
+        }
+        let mut e = 0.0f64;
+        for &n in &self.total {
+            if n == 0 {
+                continue;
+            }
+            let p = n as f64 / total as f64;
+            e -= p * p.log2();
+        }
+        (e, (total as f64).log2().min(8.0))
+    }
+
+    /// How many byte values appear at all.
+    pub fn distinct(&self) -> u64 {
+        self.total.iter().filter(|&&n| n > 0).count() as u64
     }
 
     /// Classes of the buckets finished so far, in file order.
@@ -126,7 +183,7 @@ impl Scan {
     }
 
     pub fn done(&self) -> bool {
-        self.next >= self.len
+        self.next >= self.end
     }
 
     /// Bytes that are zero, over the part of the file read so far.
@@ -141,7 +198,7 @@ impl Scan {
 
     /// How far the scan has read, in bytes.
     pub fn read_bytes(&self) -> u64 {
-        self.next
+        self.next - self.start
     }
 
     /// Read one window and classify the buckets it completes.
@@ -149,7 +206,7 @@ impl Scan {
         if self.done() {
             return ScanStep::Done;
         }
-        let stop = (self.next + WINDOW).min(self.len);
+        let stop = (self.next + WINDOW).min(self.end);
         let mut buf = vec![0u8; (stop - self.next) as usize];
         let missing = doc.read_bytes(self.next, &mut buf);
         if !missing.is_empty() {
@@ -157,6 +214,7 @@ impl Scan {
         }
         for &b in &buf {
             self.hist[b as usize] += 1;
+            self.total[b as usize] += 1;
             self.filled += 1;
             if self.filled == self.bucket_bytes {
                 self.close_bucket();
@@ -258,6 +316,41 @@ mod tests {
         let s = Scan::new(TARGET_BUCKETS * 3);
         assert_eq!(s.bucket_bytes(), 4);
         assert_eq!(s.total_buckets(), TARGET_BUCKETS * 3 / 4);
+    }
+
+    #[test]
+    fn a_scan_of_one_block_reads_only_that_block() {
+        // The case the whole-file map cannot show: zeroes at the front of a
+        // block whose every bucket read as dense.
+        let mut bytes = vec![0u8; 256];
+        bytes.extend((0..768u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8));
+        let d = doc(&bytes);
+        let mut s = Scan::range(0, 1024, 64);
+        while s.step(&d) == ScanStep::More {}
+        assert_eq!(s.bucket_bytes(), 16);
+        assert_eq!(s.total_buckets(), 64);
+        assert_eq!(s.classes()[..16].iter().filter(|&&c| c == Class::Zero as u8).count(), 16);
+        assert!(s.zero_bytes() >= 256);
+        // Reading only the second half starts there and answers only for it.
+        let mut half = Scan::range(512, 1024, 64);
+        while half.step(&d) == ScanStep::More {}
+        assert!(half.classes().iter().all(|&c| c != Class::Zero as u8), "the zeroes are all behind it");
+        assert_eq!(half.read_bytes(), 512);
+    }
+
+    #[test]
+    fn a_block_reports_the_spread_of_its_bytes_as_well_as_its_buckets() {
+        let mut bytes = vec![0u8; 512];
+        bytes.extend(std::iter::repeat_n(0xffu8, 512));
+        let d = doc(&bytes);
+        let mut s = Scan::range(0, 1024, 64);
+        while s.step(&d) == ScanStep::More {}
+        assert_eq!(s.distinct(), 2, "two values, however the buckets were judged");
+        let (bits, ceiling) = s.entropy();
+        assert!((bits - 1.0).abs() < 1e-9, "an even split of two values is one bit: {bits}");
+        assert_eq!(ceiling, 8.0);
+        assert_eq!(s.histogram()[0], 512);
+        assert_eq!(s.histogram()[0xff], 512);
     }
 
     #[test]

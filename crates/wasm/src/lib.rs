@@ -25,6 +25,9 @@ pub struct Editor {
     /// away on any edit: the classes describe bytes that may no longer be
     /// there.
     scan: Option<overview::Scan>,
+    /// The same over the one block a reader has picked out, at whatever
+    /// resolution that block's own size allows.
+    focus: Option<overview::Scan>,
 }
 
 #[derive(Serialize)]
@@ -69,6 +72,43 @@ struct OverviewDto {
     text_bytes: f64,
     read_bytes: f64,
 }
+
+/// The same for one block, with what the whole block's bytes turned out to be
+/// rather than what each of its buckets did.
+#[derive(Serialize)]
+struct FocusDto {
+    done: bool,
+    /// The block, in bytes.
+    start: f64,
+    end: f64,
+    bucket_bytes: f64,
+    total_buckets: f64,
+    classes: String,
+    zero_bytes: f64,
+    text_bytes: f64,
+    read_bytes: f64,
+    /// Entropy over the block's bytes, and the most a block this long could
+    /// reach. The pair is the honest reading: 7.9 out of 8 means dense, 7.9
+    /// out of 7.9 means only that there are not many bytes here.
+    entropy: f64,
+    entropy_max: f64,
+    /// How many byte values appear at all.
+    distinct: f64,
+    /// The values that appear most, commonest first.
+    common: Vec<CommonByteDto>,
+}
+
+/// One byte value and how much of a block it accounts for.
+#[derive(Serialize)]
+struct CommonByteDto {
+    value: f64,
+    count: f64,
+}
+
+/// How many of a block's commonest byte values are worth naming. Enough to
+/// show a block is mostly two or three values; past that the count is the
+/// answer, not the list.
+const COMMON_BYTES: usize = 5;
 
 #[derive(Serialize)]
 struct TextDto {
@@ -394,9 +434,9 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
         Value::Unread { .. } => ("unread", "\u{2026}".into(), String::new(), true),
         Value::Str(s) => ("str", s.clone(), s.clone(), true),
         Value::Magic { ok, bytes } => {
-            // The bytes as C would write a string, which is how a signature is
-            // meant to be read: a PNG's says both that the file starts with a
-            // byte no text file has and that the word in it is PNG.
+            // The bytes as a string literal, which is how a signature is meant
+            // to be read: a PNG's says both that the file starts with a byte
+            // no text file has and that the word in it is PNG.
             let text = qubero_core::text::c_string(bytes);
             let s = if *ok { text } else { format!("{text} does not match") };
             ("magic", s.clone(), s, *ok)
@@ -527,7 +567,7 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store), eval: None, disasm: None, template: String::new(), scan: None }
+        Editor { doc: Document::new(store), eval: None, disasm: None, template: String::new(), scan: None, focus: None }
     }
 
     fn changed(&mut self) {
@@ -536,6 +576,7 @@ impl Editor {
         }
         self.disasm = None;
         self.scan = None;
+        self.focus = None;
     }
 
     /// An edit that replaced bits in place at `bit`. What the template made of
@@ -546,14 +587,24 @@ impl Editor {
         }
         self.disasm = None;
         self.scan = None;
+        self.focus = None;
     }
 
     /// One step of the byte-class scan behind the overview: at most a window
     /// of the file read and classified. The reply is the usual tri-state, with
     /// `node` carrying everything found so far, so the host can draw a partial
     /// map while the rest is read. `done` on the node says when to stop asking.
-    pub fn overview_step(&mut self) -> String {
-        let scan = self.scan.get_or_insert_with(|| overview::Scan::new(self.doc.len_bytes()));
+    pub fn overview_step(&mut self, buckets: u32) -> String {
+        let len = self.doc.len_bytes();
+        let want = overview::Scan::range(0, len, u64::from(buckets));
+        // A scan already covering the same bytes at the same resolution
+        // carries on; anything else starts over, since its classes describe a
+        // different division of a different file.
+        let same = matches!(&self.scan, Some(s) if s.end() == len && s.bucket_bytes() == want.bucket_bytes());
+        if !same {
+            self.scan = Some(want);
+        }
+        let scan = self.scan.as_mut().expect("just built");
         match scan.step(&self.doc) {
             overview::ScanStep::Pending(m) => reply::<OverviewDto>(Err(EvalError::Pending(m))),
             step => reply(Ok(OverviewDto {
@@ -565,6 +616,52 @@ impl Editor {
                 text_bytes: scan.text_bytes() as f64,
                 read_bytes: scan.read_bytes() as f64,
             })),
+        }
+    }
+
+    /// One step of the scan over a single block, at whatever resolution that
+    /// block's own size allows. Asking about a different block starts a new
+    /// one; asking about the same block carries the current one on.
+    ///
+    /// This is what answers the question the whole-file map cannot: every
+    /// bucket of a block can read as dense while the first part of it is
+    /// zeroes, because a bucket is judged as a whole.
+    pub fn overview_focus_step(&mut self, from: f64, to: f64, buckets: u32) -> String {
+        let (from, to) = (from as u64, to as u64);
+        let fresh = !matches!(&self.focus, Some(f) if f.start() == from && f.end() == to);
+        if fresh {
+            self.focus = Some(overview::Scan::range(from, to, u64::from(buckets)));
+        }
+        let scan = self.focus.as_mut().expect("just built");
+        match scan.step(&self.doc) {
+            overview::ScanStep::Pending(m) => reply::<FocusDto>(Err(EvalError::Pending(m))),
+            step => {
+                let (entropy, entropy_max) = scan.entropy();
+                let hist = scan.histogram();
+                let mut common: Vec<CommonByteDto> = hist
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, n)| **n > 0)
+                    .map(|(v, n)| CommonByteDto { value: v as f64, count: *n as f64 })
+                    .collect();
+                common.sort_by(|a, b| b.count.total_cmp(&a.count));
+                common.truncate(COMMON_BYTES);
+                reply(Ok(FocusDto {
+                    done: step == overview::ScanStep::Done,
+                    start: scan.start() as f64,
+                    end: scan.end() as f64,
+                    bucket_bytes: scan.bucket_bytes() as f64,
+                    total_buckets: scan.total_buckets() as f64,
+                    classes: scan.classes().iter().map(|&c| char::from(b'0' + c)).collect(),
+                    zero_bytes: scan.zero_bytes() as f64,
+                    text_bytes: scan.text_bytes() as f64,
+                    read_bytes: scan.read_bytes() as f64,
+                    entropy,
+                    entropy_max,
+                    distinct: scan.distinct() as f64,
+                    common,
+                }))
+            }
         }
     }
 
