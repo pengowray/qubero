@@ -505,7 +505,7 @@ fn a_record_can_be_switched_on_a_byte_further_along_than_any_field() {
         "Narrow",
         vec![("a", T::u8()), ("b", T::u8()), ("pad", T::u8()), ("kind", T::u8())],
     );
-    let rec = T::switch(E::peek_at(3 * 8, 8), vec![(1, wide)], narrow);
+    let rec = T::switch(E::peek_at(E::lit(3 * 8), 8), vec![(1, wide)], narrow);
     let t = Template::new("t", T::repeat(rec, Until::End));
     let d = doc(&[0x12, 0x34, 0, 1, 0x56, 0x78, 0, 2]);
     let mut ev = Evaluator::new(t);
@@ -519,6 +519,47 @@ fn a_record_can_be_switched_on_a_byte_further_along_than_any_field() {
     let short = doc(&[0x12, 0x34]);
     let mut ev = Evaluator::new(ev.template().clone());
     assert!(ev.node(&short, &[0]).is_err());
+}
+
+#[test]
+fn a_backwards_peek_reads_the_end_of_what_holds_it() {
+    // A file signed at the far end, and a body that stops before the
+    // signature or runs to the end depending on whether one is there.
+    let signed = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("signature", T::computed(E::peek_at(E::lit(-32), 32))),
+                (
+                    "body",
+                    T::switch(
+                        E::field("signature"),
+                        vec![(0x454e4421, T::bytes(E::Remaining.sub(E::lit(4))))],
+                        T::bytes(E::Remaining),
+                    ),
+                ),
+                ("end", T::bytes(E::Remaining)),
+            ],
+        ),
+    );
+    let d = doc(b"payloadEND!");
+    let mut ev = Evaluator::new(signed.clone());
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Int(0x454e4421));
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 7 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 4 * 8);
+
+    // The same template on a file with no signature: the body takes it all.
+    let d = doc(b"payload");
+    let mut ev = Evaluator::new(signed);
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 7 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 0);
+
+    // Counting back further than the container reaches is an error, the same
+    // as looking past the end of it.
+    let too_far = Template::new("t", T::structure("Root", vec![("s", T::computed(E::peek_at(E::lit(-64), 64)))]));
+    let mut ev = Evaluator::new(too_far);
+    assert!(ev.node(&doc(b"tiny"), &[0]).is_err());
 }
 
 #[test]

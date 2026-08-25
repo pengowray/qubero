@@ -63,7 +63,13 @@ pub enum Expr {
     /// bytes before it were written in. Looking past the end of the container
     /// is an error, the same as `Peek`, so a record too short to hold the
     /// byte says so rather than guessing at it.
-    PeekAt { skip: u32, bits: u32 },
+    ///
+    /// How far to look is itself an expression, and a negative distance counts
+    /// back from the end of the container rather than forward from here. That
+    /// is what reaches a signature written at the end of a file: a TGA 2.0 is
+    /// told from a TGA by the last eight bytes of one, which is
+    /// `peek_at(lit(-64), 64)` wherever in the file the asking is done.
+    PeekAt { skip: Box<Expr>, bits: u32 },
     /// The value of field `name` in the element before this one, in the nearest
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
@@ -132,8 +138,8 @@ impl Expr {
         Expr::Peek(bits)
     }
     /// `bits` bits, `skip` bits further on, without consuming them.
-    pub fn peek_at(skip: u32, bits: u32) -> Expr {
-        Expr::PeekAt { skip, bits }
+    pub fn peek_at(skip: Expr, bits: u32) -> Expr {
+        Expr::PeekAt { skip: Box::new(skip), bits }
     }
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {

@@ -86,7 +86,18 @@ impl Evaluator {
             // byte after the fields it settles has to ask.
             Expr::PeekAt { skip, bits } => {
                 let Some((offset, limit)) = here else { return fail("nothing to look at") };
-                let from = offset + u64::from(*skip);
+                let skip = self.eval_expr_at(doc, at, &skip.clone(), here)?;
+                // Backwards means from the end of the container: what a format
+                // that signs itself at the far end of the file needs, without
+                // the asking field having to know where it is.
+                let from = if skip < 0 {
+                    match limit.checked_sub(skip.unsigned_abs() as u64) {
+                        Some(from) if from >= offset => from,
+                        _ => return fail("looks back past where it is"),
+                    }
+                } else {
+                    offset + skip as u64
+                };
                 if from + u64::from(*bits) > limit {
                     return fail("looks past the end of its container");
                 }
