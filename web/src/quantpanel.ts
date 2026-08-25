@@ -4,6 +4,7 @@
 // is not the order they are read in. The hex view can only show the bytes, so
 // this is where the numbers are.
 
+import { bitFormula } from "./doc.js";
 import type { QuantWeight, TypeInfo } from "./doc.js";
 
 /** Asked for when a weight is clicked, so the views go to its bits. */
@@ -45,8 +46,16 @@ function scaleRow(info: TypeInfo): HTMLElement {
   return row;
 }
 
-/** The weight the cursor is standing on, both ways round. */
-function cursorRow(w: QuantWeight, index: number): HTMLElement {
+/**
+ * The weight the cursor is standing on, both ways round, and how to lift its
+ * stored integer out of the file.
+ *
+ * The formula is only for a weight that keeps all of its bits in one run. A
+ * five- or six-bit type puts the top bits in a separate byte, and a formula
+ * that quietly left them out would be worse than none.
+ */
+function cursorRow(w: QuantWeight, index: number, info: TypeInfo): DocumentFragment {
+  const frag = document.createDocumentFragment();
   const row = document.createElement("div");
   row.className = "insp-qcursor";
   row.append(
@@ -54,7 +63,14 @@ function cursorRow(w: QuantWeight, index: number): HTMLElement {
     span("insp-qcursor-value", num(w.value)),
     span("insp-qcursor-note", `stored ${w.q}`),
   );
-  return row;
+  frag.append(row);
+  if (w.width === info.width) {
+    const code = document.createElement("code");
+    code.className = "insp-formula-code";
+    code.textContent = bitFormula(info.block_bits + w.bit, w.width);
+    frag.append(code);
+  }
+  return frag;
 }
 
 /** Stored, or what it scales to: the same weights read two ways. */
@@ -111,7 +127,7 @@ function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
 export function quantBody(info: TypeInfo, goTo: GoTo, redraw: () => void): DocumentFragment {
   const frag = document.createDocumentFragment();
   const here = info.at >= 0 ? info.weights[info.at] : undefined;
-  if (here !== undefined) frag.append(cursorRow(here, info.at));
+  if (here !== undefined) frag.append(cursorRow(here, info.at, info));
   frag.append(scaleRow(info));
   const head = document.createElement("div");
   head.className = "insp-qhead";

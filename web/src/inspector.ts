@@ -5,7 +5,7 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { formatOffset } from "./doc.js";
+import { bitFormula, formatOffset } from "./doc.js";
 import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { childWord, countText } from "./strings.js";
@@ -635,31 +635,4 @@ function sizeText(bits: number): string {
     return b === 1 ? "1 byte" : `${b.toLocaleString()} bytes`;
   }
   return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
-}
-
-/**
- * The shift-and-mask that reads `width` bits starting at `bitOffset` and leaves
- * them right-aligned in a plain number.
- *
- * Bits are counted the way the rest of the editor counts them: bit 0 of a byte
- * is its top bit, so a field three bits into a byte starts under the mask
- * `0x1f`. The first term is masked because the bits above it belong to whatever
- * came before; the last is shifted down by whatever the field leaves behind in
- * its final byte. `b[n]` is the byte at address `n`.
- */
-export function bitFormula(bitOffset: number, width: number): string {
-  const first = Math.floor(bitOffset / 8);
-  const skip = bitOffset % 8;
-  const bytes = Math.ceil((skip + width) / 8);
-  const trailing = bytes * 8 - (skip + width);
-  const terms: string[] = [];
-  for (let i = 0; i < bytes; i++) {
-    const shift = 8 * (bytes - 1 - i) - trailing;
-    let term = `b[0x${(first + i).toString(16)}]`;
-    if (i === 0 && skip !== 0) term = `(${term} & 0x${(0xff >> skip).toString(16).padStart(2, "0")})`;
-    if (shift > 0) term = `${term} << ${shift}`;
-    else if (shift < 0) term = `${term} >> ${-shift}`;
-    terms.push(term);
-  }
-  return terms.join(" | ");
 }
