@@ -381,8 +381,9 @@ together is exactly what a reader needs a number for. Nothing in the interface
 makes a selection of more than one run yet: the hex grid has one anchor and
 one focus. The reading is where that gap will close.
 
-Past 1,024 bytes the panel says the selection is too long instead of computing
-a number nobody asked for, which is also what stops selecting half a file from
+Past 1,024 bytes the number rows are simply absent, leaving the length. Nobody
+selects a thousand bytes meaning to read them as one integer, so there is
+nothing to explain, and the same limit is what stops selecting half a file from
 locking the page up.
 
 Insert mode draws a two-pixel bar on the leading edge of the cursor cell

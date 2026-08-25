@@ -295,9 +295,10 @@ export class Inspector {
     if (ranges.length === 0) return;
     const bits = ranges.reduce((n, r) => n + (r.endBit - r.startBit), 0);
     const rows: [string, string][] = [[SEL_LENGTH, lengthText(bits)]];
-    if (bits > SELECTION_LIMIT_BITS) {
-      rows.push([SEL_VALUE, tooLongText()]);
-    } else {
+    // Past the limit the number rows are simply absent. Nothing selects a
+    // thousand bytes meaning to read them as one integer, so there is nothing
+    // to explain.
+    if (bits <= SELECTION_LIMIT_BITS) {
       const v = readBits(this.doc, ranges);
       if (v === null) {
         rows.push([SEL_VALUE, LOADING]);
@@ -654,7 +655,6 @@ const SEL_HEX = "Hex";
 const SEL_UNSIGNED_LE = "Unsigned LE";
 const SEL_SIGNED_LE = "Signed LE";
 const LOADING = "Loading…";
-const tooLongText = (): string => `Over ${SELECTION_LIMIT_BYTES.toLocaleString()} bytes, so not read as a number`;
 
 /** `24 bytes`, or `3 bytes 4 bits` where the run does not fill whole bytes. */
 function lengthText(bits: number): string {
