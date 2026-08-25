@@ -714,6 +714,18 @@ input.invalid {
 }
 /* One part of the panel: the value, where its shape came from, what the type
    permits. */
+.insp-selection {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+/* Numbers that can run to hundreds of digits: they wrap rather than widening
+   the panel or being cut off, since a value read only in part is worse than
+   one that takes four lines. */
+.insp-seltable td {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
 .insp-subhead {
   font-size: 11px;
   font-weight: 600;

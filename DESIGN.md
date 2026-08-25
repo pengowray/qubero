@@ -270,6 +270,11 @@ unfolded. The stepping loop does as many steps as a frame allows rather than
 one per timeout, because a background tab's chained timeouts are throttled to
 a crawl.
 
+A cell of either map is a stretch of the file rather than a place in it, so
+picking one selects those bytes as well as moving the cursor to their front.
+The panel at the cursor then reads the selection as a number, which is most of
+what picking a few bytes out of a map is for.
+
 A bucket is judged as a whole, so a cell says nothing about what is inside it:
 the first cell of a model file reads as high entropy although it is the header
 and its strings, because the weights that follow fill most of it. Picking a
@@ -361,6 +366,24 @@ it weakly, so both say what is selected and only one claims the focus.
 Shift+Home and shift+End used to mean the start and end of the file. They now
 extend within the row, because shift means extend everywhere else, and the
 file ends moved to Ctrl+Home and Ctrl+End.
+
+The panel at the cursor reads whatever is selected as one number: unsigned,
+signed as two's complement over its own width, and hex, with the bytes also
+reversed where the selection is whole bytes lying together and a format could
+have stored it the other way round. It is a `bigint`, so a sixteen-byte
+selection reads exactly rather than through a float. Bits are taken in file
+order, MSB first inside each byte, which makes a selection that does not fill
+whole bytes read as a number too: four bits of a header are four bits.
+
+The reading takes a list of runs rather than one, because a value a format
+does not keep in one piece is several runs of bits, and putting those back
+together is exactly what a reader needs a number for. Nothing in the interface
+makes a selection of more than one run yet: the hex grid has one anchor and
+one focus. The reading is where that gap will close.
+
+Past 1,024 bytes the panel says the selection is too long instead of computing
+a number nobody asked for, which is also what stops selecting half a file from
+locking the page up.
 
 Insert mode draws a two-pixel bar on the leading edge of the cursor cell
 instead of the overwrite block, in both panes and in binary mode. Which of the

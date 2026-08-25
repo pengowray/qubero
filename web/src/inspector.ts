@@ -38,6 +38,11 @@ export class Inspector {
   private readonly types: HTMLElement;
   /** Which other fields settled this one's length, count, type or place. */
   private readonly origins: HTMLElement;
+  /** What the hex view has selected, in file order. More than one run is
+   *  allowed because a value a format does not keep in one piece is more than
+   *  one run of bits. Empty when nothing is selected. */
+  private selection: readonly BitRange[] = [];
+  private readonly selectionEl: HTMLElement;
   /** Path of the field the structure panel is showing, if any. */
   private at: readonly number[] | null = null;
   /** A field picked by name stays shown until the cursor moves off it. */
@@ -200,10 +205,17 @@ export class Inspector {
     this.status.className = "insp-status";
     this.status.setAttribute("role", "status");
 
+    // What is selected, above the readings at the cursor and outside the three
+    // tabs, because a selection is its own question and the answer to it does
+    // not depend on which reading is showing.
+    this.selectionEl = document.createElement("div");
+    this.selectionEl.className = "insp-selection";
+    this.selectionEl.hidden = true;
+
     // The address sits above every tab: the field reading and the two raw
     // readings all start at the same place, and that place is the first thing
     // to check.
-    this.el.append(head, this.detail, this.struct, table, this.formula, this.status);
+    this.el.append(head, this.selectionEl, this.detail, this.struct, table, this.formula, this.status);
     doc.onChange(() => this.render());
   }
 
@@ -212,6 +224,14 @@ export class Inspector {
     this.offset = bitOffset;
     this.pinned = null;
     this.render();
+  }
+
+  /** What the hex view has selected. Several runs read as one number, in the
+   *  order they are given, which is how a value split across a block is put
+   *  back together. */
+  setSelection(ranges: readonly BitRange[]): void {
+    this.selection = ranges.filter((r) => r.endBit > r.startBit);
+    this.renderSelection();
   }
 
   /** Pick which reading is shown. Used once at startup for a file with no
@@ -267,7 +287,56 @@ export class Inspector {
     this.status.textContent = "";
   }
 
+  /** The selection as a number, when there is one and it is short enough to
+   *  be one. */
+  private renderSelection(): void {
+    const ranges = this.selection;
+    this.selectionEl.hidden = ranges.length === 0;
+    if (ranges.length === 0) return;
+    const bits = ranges.reduce((n, r) => n + (r.endBit - r.startBit), 0);
+    const rows: [string, string][] = [[SEL_LENGTH, lengthText(bits)]];
+    if (bits > SELECTION_LIMIT_BITS) {
+      rows.push([SEL_VALUE, tooLongText()]);
+    } else {
+      const v = readBits(this.doc, ranges);
+      if (v === null) {
+        rows.push([SEL_VALUE, LOADING]);
+      } else {
+        rows.push([SEL_UNSIGNED, v.toString()]);
+        rows.push([SEL_SIGNED, signed(v, bits).toString()]);
+        rows.push([SEL_HEX, `0x${v.toString(16).padStart(Math.ceil(bits / 4), "0")}`]);
+        // Reversing bytes only means anything when the selection is made of
+        // whole bytes lying together, which is the only case a format would
+        // have stored the other way round.
+        const one = ranges[0];
+        const whole =
+          ranges.length === 1 && one !== undefined && one.startBit % 8 === 0 && bits % 8 === 0 && bits > 8;
+        if (whole && one !== undefined) {
+          const le = readBits(this.doc, [one], true);
+          if (le !== null) {
+            rows.push([SEL_UNSIGNED_LE, le.toString()]);
+            rows.push([SEL_SIGNED_LE, signed(le, bits).toString()]);
+          }
+        }
+      }
+    }
+    const table = document.createElement("table");
+    table.className = "insp-table insp-seltable";
+    for (const [label, value] of rows) {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th");
+      th.scope = "row";
+      th.textContent = label;
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(th, td);
+      table.append(tr);
+    }
+    this.selectionEl.replaceChildren(subhead(SEL_TITLE), whereText(ranges), table);
+  }
+
   render(): void {
+    this.renderSelection();
     const structure = this.mode === "structure";
     this.struct.hidden = !structure;
     this.table.hidden = structure;
@@ -569,6 +638,74 @@ export class Inspector {
 
 /** A heading over one part of the panel, so the mode buttons above are not
  *  mistaken for one. */
+/** How much of a selection is read as a number. A thousand bytes is already
+ *  well past anything a format stores as one, and the whole point of a limit
+ *  is that selecting half a file does not lock the page up computing a number
+ *  nobody wanted. */
+const SELECTION_LIMIT_BYTES = 1024;
+const SELECTION_LIMIT_BITS = SELECTION_LIMIT_BYTES * 8;
+
+const SEL_TITLE = "Selection";
+const SEL_LENGTH = "Length";
+const SEL_VALUE = "Value";
+const SEL_UNSIGNED = "Unsigned";
+const SEL_SIGNED = "Signed";
+const SEL_HEX = "Hex";
+const SEL_UNSIGNED_LE = "Unsigned LE";
+const SEL_SIGNED_LE = "Signed LE";
+const LOADING = "Loading…";
+const tooLongText = (): string => `Over ${SELECTION_LIMIT_BYTES.toLocaleString()} bytes, so not read as a number`;
+
+/** `24 bytes`, or `3 bytes 4 bits` where the run does not fill whole bytes. */
+function lengthText(bits: number): string {
+  const bytes = Math.floor(bits / 8);
+  const rest = bits % 8;
+  const parts: string[] = [];
+  if (bytes > 0) parts.push(`${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"}`);
+  if (rest > 0 || bytes === 0) parts.push(`${rest} ${rest === 1 ? "bit" : "bits"}`);
+  return parts.join(" ");
+}
+
+/** Where the selected bits are: one run reads as a span, and several read as
+ *  a list, since that is the whole of what makes them one value. */
+function whereText(ranges: readonly BitRange[]): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "insp-detail";
+  el.textContent = ranges.map((r) => `${formatOffset(r.startBit)} to ${formatOffset(r.endBit)}`).join(", ");
+  return el;
+}
+
+/**
+ * The selected bits as one number, in the order they are given and MSB first
+ * inside each byte, which is how the rest of the editor counts bits. Null
+ * while any of the bytes are still on their way.
+ *
+ * `reverseBytes` reads a single whole-byte run the other way round, for a
+ * format that stored it little-endian.
+ */
+function readBits(doc: Doc, ranges: readonly BitRange[], reverseBytes = false): bigint | null {
+  let out = 0n;
+  for (const r of ranges) {
+    const bits = r.endBit - r.startBit;
+    const { bytes, complete } = doc.readBits(r.startBit, bits);
+    if (!complete) return null;
+    const ordered = reverseBytes ? Array.from(bytes).reverse() : bytes;
+    let chunk = 0n;
+    for (const b of ordered) chunk = (chunk << 8n) | BigInt(b);
+    // `readBits` packs from the top, so a run that does not fill its last byte
+    // leaves padding at the bottom of it.
+    chunk >>= BigInt(bytes.length * 8 - bits);
+    out = (out << BigInt(bits)) | chunk;
+  }
+  return out;
+}
+
+/** The same bits read as two's complement over their own width. */
+function signed(v: bigint, bits: number): bigint {
+  const top = 1n << BigInt(bits - 1);
+  return (v & top) === 0n ? v : v - (1n << BigInt(bits));
+}
+
 function subhead(text: string): HTMLElement {
   const h = document.createElement("div");
   h.className = "insp-subhead";
