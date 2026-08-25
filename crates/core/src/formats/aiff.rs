@@ -79,17 +79,15 @@ fn markers() -> T {
             ("position", T::u32(Big)),
             ("name_length", T::u8()),
             ("name", T::utf8(E::field("name_length"))),
-            // A pstring is padded to an even total, and the length byte counts.
+            // A pstring is padded to an even total, and the length byte
+            // counts towards it: one pad byte when the name is even, none
+            // when it is odd. There is no modulo, so it is written out.
             (
                 "pad",
-                T::bytes(
-                    E::field("name_length")
-                        .add(E::lit(1))
-                        .div(E::lit(2))
-                        .mul(E::lit(2))
-                        .sub(E::field("name_length"))
-                        .sub(E::lit(1)),
-                ),
+                T::bytes({
+                    let used = E::field("name_length").add(E::lit(1));
+                    used.clone().sub(used.div(E::lit(2)).mul(E::lit(2)))
+                }),
             ),
         ],
     )
@@ -142,6 +140,36 @@ mod tests {
         assert_eq!(ev.node(&d, &[3, 0, 2, 3]).unwrap().size_bits, 10 * 8);
         assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().value, Value::Str("Sample".into()));
         assert_eq!(ev.node(&d, &[3, 2, 2, 2]).unwrap().size_bits, 16 * 8);
+    }
+
+    #[test]
+    fn a_marker_name_is_padded_to_an_even_total_with_its_length_byte() {
+        // Two markers: one four-letter name, which needs a pad byte, and one
+        // five-letter name, which does not.
+        let mut body = 2u16.to_be_bytes().to_vec();
+        for (id, at, name) in [(1u16, 0u32, "loop"), (2, 44100, "start")] {
+            body.extend_from_slice(&id.to_be_bytes());
+            body.extend_from_slice(&at.to_be_bytes());
+            body.push(name.len() as u8);
+            body.extend_from_slice(name.as_bytes());
+            if name.len() % 2 == 0 {
+                body.push(0);
+            }
+        }
+        let chunks = chunk(b"MARK", &body);
+        let mut v = b"FORM".to_vec();
+        v.extend_from_slice(&((4 + chunks.len()) as u32).to_be_bytes());
+        v.extend_from_slice(b"AIFF");
+        v.extend_from_slice(&chunks);
+
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(aiff());
+        assert_eq!(ev.node(&d, &[3, 0, 2, 1]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[3, 0, 2, 1, 0, 3]).unwrap().value, Value::Str("loop".into()));
+        assert_eq!(ev.node(&d, &[3, 0, 2, 1, 0, 4]).unwrap().size_bits, 8);
+        assert_eq!(ev.node(&d, &[3, 0, 2, 1, 1, 3]).unwrap().value, Value::Str("start".into()));
+        assert_eq!(ev.node(&d, &[3, 0, 2, 1, 1, 4]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[3, 0, 2, 1, 1, 1]).unwrap().value, Value::UInt(44100));
     }
 
     #[test]

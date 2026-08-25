@@ -131,6 +131,11 @@ fn body() -> T {
 
 /// The tag number, which is the argument when one was written and the five
 /// bits when it was not. Named, since the numbers are a registry.
+///
+/// This one does take "the first that is not zero", so tag 0 written the long
+/// way, as 0xd8 0x00, reads as tag 24. Encoders write the short form, and the
+/// alternative is another five-case switch for a number that is shown rather
+/// than used to measure anything.
 fn tag_number() -> E {
     E::field("argument").or(ai())
 }
