@@ -82,6 +82,21 @@ impl Evaluator {
                 }
                 read_uint(&buf, *bits, crate::template::Endian::Big) as i128
             }
+            // The same, further on: what a record whose shape is settled by a
+            // byte after the fields it settles has to ask.
+            Expr::PeekAt { skip, bits } => {
+                let Some((offset, limit)) = here else { return fail("nothing to look at") };
+                let from = offset + u64::from(*skip);
+                if from + u64::from(*bits) > limit {
+                    return fail("looks past the end of its container");
+                }
+                let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
+                let missing = doc.read_bits(from, u64::from(*bits), &mut buf);
+                if !missing.is_empty() {
+                    return Err(EvalError::Pending(missing));
+                }
+                read_uint(&buf, *bits, crate::template::Endian::Big) as i128
+            }
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {

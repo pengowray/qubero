@@ -403,6 +403,31 @@ fn pointed_at_items_read_in_offset_order() {
 }
 
 #[test]
+fn a_record_can_be_switched_on_a_byte_further_along_than_any_field() {
+    // Two layouts of four bytes, told apart by the last of them, which comes
+    // after the fields whose meaning it settles.
+    let wide = T::structure("Wide", vec![("n", T::u16(Big)), ("pad", T::u8()), ("kind", T::u8())]);
+    let narrow = T::structure(
+        "Narrow",
+        vec![("a", T::u8()), ("b", T::u8()), ("pad", T::u8()), ("kind", T::u8())],
+    );
+    let rec = T::switch(E::peek_at(3 * 8, 8), vec![(1, wide)], narrow);
+    let t = Template::new("t", T::repeat(rec, Until::End));
+    let d = doc(&[0x12, 0x34, 0, 1, 0x56, 0x78, 0, 2]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().type_name, "Wide");
+    assert_eq!(ev.node(&d, &[0, 0]).unwrap().value, Value::UInt(0x1234));
+    assert_eq!(ev.node(&d, &[1]).unwrap().type_name, "Narrow");
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().value, Value::UInt(0x56));
+
+    // Looking past the end of the container is an error, not a guess: the
+    // same answer a peek at the field's own start gives.
+    let short = doc(&[0x12, 0x34]);
+    let mut ev = Evaluator::new(ev.template().clone());
+    assert!(ev.node(&short, &[0]).is_err());
+}
+
+#[test]
 fn an_offset_of_zero_points_at_nothing_when_the_list_says_so() {
     let item = T::structure("Item", vec![("len", T::u8()), ("text", T::utf8(E::field("len")))]);
     let t = Template::new(

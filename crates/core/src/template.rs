@@ -56,6 +56,14 @@ pub enum Expr {
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     Peek(u32),
+    /// `bits` bits read `skip` bits further on, without consuming anything.
+    /// `Peek` looks at the field's own first byte, which is no use when what
+    /// decides the shape of a record is written after the fields it decides:
+    /// an LHA header says at offset 20 which of three layouts the twenty
+    /// bytes before it were written in. Looking past the end of the container
+    /// is an error, the same as `Peek`, so a record too short to hold the
+    /// byte says so rather than guessing at it.
+    PeekAt { skip: u32, bits: u32 },
     /// The value of field `name` in the element before this one, in the nearest
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
@@ -122,6 +130,10 @@ impl Expr {
     /// The next `bits` bits without consuming them.
     pub fn peek(bits: u32) -> Expr {
         Expr::Peek(bits)
+    }
+    /// `bits` bits, `skip` bits further on, without consuming them.
+    pub fn peek_at(skip: u32, bits: u32) -> Expr {
+        Expr::PeekAt { skip, bits }
     }
     /// Field `name` of the previous element of the enclosing list.
     pub fn prev(name: &str) -> Expr {
