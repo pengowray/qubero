@@ -17,6 +17,7 @@ pub mod eval;
 pub mod formats;
 pub mod json;
 pub mod magicrule;
+pub mod overview;
 pub mod piece;
 pub mod save;
 pub mod search;
