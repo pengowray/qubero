@@ -11,3 +11,4 @@ web/public/diesig/
 web/public/*.gguf
 web/public/*.db
 web/public/*.wav
+web/public/*.bin

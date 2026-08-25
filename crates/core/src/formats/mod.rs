@@ -2,6 +2,7 @@
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
 mod dos;
+mod ggml;
 mod gguf;
 mod id3;
 mod midi;
@@ -12,6 +13,7 @@ mod png;
 mod sqlite;
 mod w4v;
 mod wav;
+mod whisper;
 mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
@@ -26,13 +28,14 @@ pub use png::png;
 pub use sqlite::sqlite;
 pub use w4v::w4v;
 pub use wav::wav;
+pub use whisper::whisper;
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
 use crate::template::Template;
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -48,6 +51,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "pe" => Some(pe()),
         "msdos" => Some(dos()),
         "gguf" => Some(gguf()),
+        "whisper" => Some(whisper()),
         _ => None,
     }
 }
@@ -62,6 +66,10 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("wasm")
     } else if head.starts_with(b"GGUF") {
         Some("gguf")
+    } else if head.starts_with(b"lmgg") {
+        // `ggml` as a 32-bit number, which is what a whisper.cpp model opens
+        // with.
+        Some("whisper")
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
     } else if head.starts_with(b"MThd") {

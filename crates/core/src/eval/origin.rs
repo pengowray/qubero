@@ -235,6 +235,13 @@ impl Evaluator {
                     out.push(o);
                 }
             }
+            Expr::ProductOf(name) => {
+                if let Some(p) = self.find_field(at, name) {
+                    let mut o = self.origin(doc, role, name.to_string(), p);
+                    o.value = self.eval_expr(doc, at, e)?.to_string();
+                    out.push(o);
+                }
+            }
             Expr::Elem { array, index, field } | Expr::Product { array, index, field } => {
                 // A shape is an array, and its own value is a count of numbers
                 // rather than a number. What it decided is the numbers

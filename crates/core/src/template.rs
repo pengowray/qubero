@@ -45,6 +45,12 @@ pub enum Expr {
     /// a number: `tensors[i].dims` is
     /// `Product { array: "tensors", index: Idx, field: ["dims"] }`.
     Product { array: Arc<str>, index: Box<Expr>, field: Arc<[String]> },
+    /// The numbers of an earlier array field, multiplied together. `Product`
+    /// reaches into one element of a list of records; this one names an array
+    /// that is a sibling of the field asking, which is how an older ggml file
+    /// writes a tensor's shape: the record holds `ne` itself rather than a
+    /// table of records to look in.
+    ProductOf(Arc<str>),
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     Peek(u32),
@@ -106,6 +112,10 @@ impl Expr {
             index: Box::new(index),
             field: field.iter().map(|s| s.to_string()).collect(),
         }
+    }
+    /// The numbers of the earlier array field `name`, multiplied together.
+    pub fn product_of(name: &str) -> Expr {
+        Expr::ProductOf(name.into())
     }
     /// The next `bits` bits without consuming them.
     pub fn peek(bits: u32) -> Expr {

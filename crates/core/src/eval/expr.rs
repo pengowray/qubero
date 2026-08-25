@@ -57,19 +57,11 @@ impl Evaluator {
             }
             Expr::Product { array, index, field } => {
                 let p = self.elem_path(doc, at, array, index, field, here)?;
-                let n = self.child_count(doc, &p)?;
-                let mut total: i128 = 1;
-                let mut child = p.clone();
-                for i in 0..n as usize {
-                    child.push(i);
-                    let v = self.node(doc, &child)?.value.as_int();
-                    child.pop();
-                    let Some(v) = v else { return fail(format!("{array} holds no number there")) };
-                    let Some(next) = total.checked_mul(v) else { return fail("shape too large to count") };
-                    total = next;
-                }
-                // Nothing to multiply describes nothing, not one of something.
-                if n == 0 { 0 } else { total }
+                self.multiply(doc, &p, array)?
+            }
+            Expr::ProductOf(name) => {
+                let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
+                self.multiply(doc, &p, name)?
             }
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
@@ -107,6 +99,24 @@ impl Evaluator {
                 self.eval_expr_at(doc, at, a, here)? / d
             }
         })
+    }
+
+    /// Every number in the array at `path`, multiplied together: what a shape
+    /// describes.
+    fn multiply<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<i128> {
+        let n = self.child_count(doc, path)?;
+        let mut total: i128 = 1;
+        let mut child = path.to_vec();
+        for i in 0..n as usize {
+            child.push(i);
+            let v = self.node(doc, &child)?.value.as_int();
+            child.pop();
+            let Some(v) = v else { return fail(format!("{what} holds no number there")) };
+            let Some(next) = total.checked_mul(v) else { return fail("shape too large to count") };
+            total = next;
+        }
+        // Nothing to multiply describes nothing, not one of something.
+        Ok(if n == 0 { 0 } else { total })
     }
 
     /// Field `name` of the element before this one, in the nearest enclosing
