@@ -235,12 +235,12 @@ mod tests {
         let doc = Document::new(MemSource(sample()));
         let mut e = Evaluator::new(pe());
         // dos.magic, then the pointer that says where the PE header starts.
-        assert!(matches!(value(&mut e, &doc, &[0, 0]), Value::Magic { ok: true }));
+        assert!(matches!(value(&mut e, &doc, &[0, 0]), Value::Magic { ok: true, .. }));
         assert_eq!(value(&mut e, &doc, &[0, 18]).as_int(), Some(0x80));
         // pe.signature sits exactly there, which is the whole point of it.
         let sig = e.node(&doc, &[1, 0]).expect("signature");
         assert_eq!(sig.offset_bits, 0x80 * 8);
-        assert!(matches!(sig.value, Value::Magic { ok: true }));
+        assert!(matches!(sig.value, Value::Magic { ok: true, .. }));
     }
 
     #[test]

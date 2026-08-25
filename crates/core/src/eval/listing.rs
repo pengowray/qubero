@@ -66,7 +66,13 @@ pub(super) fn brief(v: &Value) -> String {
         Value::Unread { .. } => "\u{2026}".to_string(),
         // Nothing to say when the bytes are what the format asked for. The
         // mismatch is the only half worth a reader's attention.
-        Value::Magic { ok } => (if *ok { "" } else { "does not match" }).to_string(),
+        // The signature as C would write it, so a reader sees the name in it
+        // and the bytes that are not a name at once. Bytes the format did
+        // not ask for are worth saying so about.
+        Value::Magic { ok, bytes } => {
+            let text = crate::text::c_string(bytes);
+            if *ok { text } else { format!("{text} does not match") }
+        }
         Value::Composite { .. } => String::new(),
     }
 }

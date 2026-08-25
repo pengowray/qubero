@@ -62,7 +62,10 @@ pub enum Value {
     Float(f64),
     Bytes { len: u64, preview: Vec<u8> },
     Str(String),
-    Magic { ok: bool },
+    /// The bytes a format fixes, and whether the file has them. The bytes
+    /// are kept so the value can be read rather than only judged: a
+    /// signature is a name as often as it is a number.
+    Magic { ok: bool, bytes: Vec<u8> },
     Composite { count: u64 },
     /// A named integer. `name` is None when the file holds a value the enum
     /// does not list. `hex` is how the number should be shown.

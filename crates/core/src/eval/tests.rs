@@ -884,3 +884,19 @@ fn the_chunk_read_longest_ago_is_the_one_that_goes() {
     assert!(!store.has(1), "the one nothing has looked at since it arrived goes");
     assert!(store.has(2));
 }
+
+#[test]
+fn a_signature_reads_as_the_string_it_is() {
+    let t = Template::new("t", T::structure("Root", vec![("magic", T::magic(b"\x89PNG\r\n\x1a\n"))]));
+    let mut ev = Evaluator::new(t);
+    let d = doc(b"\x89PNG\r\n\x1a\n");
+    assert_eq!(listing::brief(&ev.node(&d, &[0]).unwrap().value), r#""\x89PNG\r\n\x1a\n""#);
+
+    // The bytes that are there, and that they are not the bytes asked for.
+    let wrong = doc(b"\x89PNh\r\n\x1a\n");
+    let mut ev = Evaluator::new(Template::new("t", T::structure("Root", vec![("magic", T::magic(b"\x89PNG\r\n\x1a\n"))])));
+    assert_eq!(
+        listing::brief(&ev.node(&wrong, &[0]).unwrap().value),
+        r#""\x89PNh\r\n\x1a\n" does not match"#
+    );
+}

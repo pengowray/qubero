@@ -179,6 +179,46 @@ pub fn encode_settled(settled: Settled, text: &str) -> Result<Vec<u8>, char> {
     }
 }
 
+/// Bytes written the way C writes a string: the printable ones as they are,
+/// the rest as escapes. A PNG's signature reads `"\x89PNG\r\n\x1a\n"`, which
+/// says both that it starts with a byte no text file has and that the rest of
+/// it is the word PNG.
+///
+/// The escapes are the ones C defines, and are kept unambiguous the way C
+/// needs: `\x89` swallows every hex digit after it, so a byte that would be
+/// read into the escape before it is written in octal instead, which is
+/// always three digits and stops there.
+pub fn c_string(bytes: &[u8]) -> String {
+    let hex = |b: u8| b.is_ascii_hexdigit();
+    let octal = |b: u8| b.is_ascii_digit() && b < b'8';
+    let mut out = String::with_capacity(bytes.len() + 2);
+    out.push('"');
+    for (i, &b) in bytes.iter().enumerate() {
+        let next = bytes.get(i + 1).copied();
+        match b {
+            b'"' => out.push_str(r#"\""#),
+            b'\\' => out.push_str(r"\\"),
+            0x20..=0x7e => out.push(b as char),
+            0x07 => out.push_str(r"\a"),
+            0x08 => out.push_str(r"\b"),
+            0x09 => out.push_str(r"\t"),
+            0x0a => out.push_str(r"\n"),
+            0x0b => out.push_str(r"\v"),
+            0x0c => out.push_str(r"\f"),
+            0x0d => out.push_str(r"\r"),
+            0 if !next.is_some_and(octal) => out.push_str(r"\0"),
+            _ if next.is_some_and(hex) => {
+                let _ = std::fmt::Write::write_fmt(&mut out, format_args!(r"\{b:03o}"));
+            }
+            _ => {
+                let _ = std::fmt::Write::write_fmt(&mut out, format_args!(r"\x{b:02x}"));
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// The bytes a pad or terminator takes in this encoding: one byte, or a whole
 /// code unit for UTF-16.
 pub fn unit_bytes(settled: Settled, byte: u8) -> Vec<u8> {
@@ -192,6 +232,19 @@ pub fn unit_bytes(settled: Settled, byte: u8) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bytes_read_as_c_writes_them() {
+        assert_eq!(c_string(b"GGUF"), r#""GGUF""#);
+        assert_eq!(c_string(b"\x89PNG\r\n\x1a\n"), r#""\x89PNG\r\n\x1a\n""#);
+        assert_eq!(c_string(b"\0asm"), r#""\0asm""#);
+        assert_eq!(c_string(b"say \"hi\"\\"), r#""say \"hi\"\\""#);
+        // A byte C would read into the escape before it goes in octal, which
+        // ends after three digits: `\x1f` then `e` would be one escape.
+        assert_eq!(c_string(&[0x1f, b'e']), r#""\037e""#);
+        assert_eq!(c_string(&[0, b'7']), r#""\0007""#);
+        assert_eq!(c_string(&[0, b'x']), r#""\0x""#);
+    }
 
     #[test]
     fn cp437_landmarks_and_round_trip() {
