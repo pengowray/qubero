@@ -347,7 +347,7 @@ impl Evaluator {
                     Value::Int(v) => v,
                     _ => return fail("an enum must sit on an integer"),
                 };
-                Value::Enum { raw, name: def.label(raw).map(str::to_string), hex: def.hex }
+                Value::Enum { raw, name: def.name_of(raw), hex: def.hex }
             }
             Ty::Flags { inner, def } => {
                 let raw = match self.primitive_value(doc, at, r, inner, size)? {

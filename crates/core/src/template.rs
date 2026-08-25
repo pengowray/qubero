@@ -238,14 +238,48 @@ impl FlagsDef {
 pub struct EnumDef {
     pub name: String,
     pub cases: Vec<(i128, String)>,
+    /// Names for whole runs of values, where a format stops naming them one at
+    /// a time and starts counting. Tried after `cases`, in order.
+    pub spans: Vec<EnumSpan>,
     /// Show the number in hex. True for sets people read in hex, such as wasm
     /// opcodes and value types.
     pub hex: bool,
 }
 
+/// A run of values that mean the same thing and differ only by a number: every
+/// even value from 12 up is a SQLite blob, and how far up it is says how many
+/// bytes long. `label` is written with `{n}` where that number goes.
+#[derive(Debug)]
+pub struct EnumSpan {
+    pub from: i128,
+    /// How far apart the values of the run are. One for a solid run, two for
+    /// every other value, which is how a format fits two runs in one range.
+    pub step: i128,
+    pub label: String,
+}
+
+impl EnumSpan {
+    /// How far into the run `v` is, or nothing if it is not in it.
+    pub fn count(&self, v: i128) -> Option<i128> {
+        if v < self.from || self.step <= 0 { return None; }
+        let d = v - self.from;
+        (d % self.step == 0).then_some(d / self.step)
+    }
+    pub fn label(&self, v: i128) -> Option<String> {
+        self.count(v).map(|n| self.label.replace("{n}", &n.to_string()))
+    }
+}
+
 impl EnumDef {
     pub fn label(&self, v: i128) -> Option<&str> {
         self.cases.iter().find(|(k, _)| *k == v).map(|(_, n)| n.as_str())
+    }
+    /// The name a value goes by, whether it is one of the named ones or one of
+    /// a counted run.
+    pub fn name_of(&self, v: i128) -> Option<String> {
+        self.label(v)
+            .map(str::to_string)
+            .or_else(|| self.spans.iter().find_map(|s| s.label(v)))
     }
     pub fn value_of(&self, name: &str) -> Option<i128> {
         self.cases.iter().find(|(_, n)| n.eq_ignore_ascii_case(name)).map(|(k, _)| *k)
@@ -714,18 +748,27 @@ impl Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
     pub fn enumeration(name: &str, inner: Ty, cases: &[(i128, &str)]) -> Ty {
-        Ty::enum_with(name, inner, cases, false)
+        Ty::enum_with(name, inner, cases, &[], false)
     }
     /// An enum whose numbers are shown in hex.
     pub fn enumeration_hex(name: &str, inner: Ty, cases: &[(i128, &str)]) -> Ty {
-        Ty::enum_with(name, inner, cases, true)
+        Ty::enum_with(name, inner, cases, &[], true)
     }
-    fn enum_with(name: &str, inner: Ty, cases: &[(i128, &str)], hex: bool) -> Ty {
+    /// An enum that names some values outright and counts the rest: `spans` is
+    /// read as (first value, how far apart, name with `{n}` for the count).
+    pub fn enum_ranged(name: &str, inner: Ty, cases: &[(i128, &str)], spans: &[(i128, i128, &str)]) -> Ty {
+        Ty::enum_with(name, inner, cases, spans, false)
+    }
+    fn enum_with(name: &str, inner: Ty, cases: &[(i128, &str)], spans: &[(i128, i128, &str)], hex: bool) -> Ty {
         Ty::Enum {
             inner: Box::new(inner),
             def: Arc::new(EnumDef {
                 name: name.to_string(),
                 cases: cases.iter().map(|(v, n)| (*v, n.to_string())).collect(),
+                spans: spans
+                    .iter()
+                    .map(|(from, step, label)| EnumSpan { from: *from, step: *step, label: label.to_string() })
+                    .collect(),
                 hex,
             }),
         }

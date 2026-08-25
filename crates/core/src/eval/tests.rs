@@ -305,6 +305,35 @@ fn an_enum_is_written_by_name() {
 }
 
 #[test]
+fn a_value_past_the_named_ones_is_named_by_the_run_it_falls_in() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "R",
+            vec![(
+                "kind",
+                T::enum_ranged("Kind", T::u8(), &[(0, "nothing")], &[(12, 2, "blob, {n} bytes"), (13, 2, "text, {n} bytes")]),
+            )],
+        ),
+    );
+    let named = |b: u8| {
+        let mut ev = Evaluator::new(t.clone());
+        match ev.node(&doc(&[b]), &[0]).unwrap().value {
+            Value::Enum { name, .. } => name,
+            other => panic!("not an enum: {other:?}"),
+        }
+    };
+    assert_eq!(named(0), Some("nothing".into()));
+    assert_eq!(named(12), Some("blob, 0 bytes".into()));
+    assert_eq!(named(13), Some("text, 0 bytes".into()));
+    assert_eq!(named(17), Some("text, 2 bytes".into()));
+    assert_eq!(named(30), Some("blob, 9 bytes".into()));
+    // Below where the runs start and above where the names stop: still a
+    // value, still shown, and nobody pretends to know what it is called.
+    assert_eq!(named(7), None);
+}
+
+#[test]
 fn remaining_measures_to_the_end_of_the_container() {
     use crate::template::{Encoding, StrLen};
     let t = Template::new(

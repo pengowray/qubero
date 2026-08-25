@@ -285,7 +285,12 @@ function enumBody(info: TypeInfo, path: readonly number[], apply: Apply): Docume
   if (!known) {
     const line = document.createElement("p");
     line.className = "insp-type-note";
-    line.textContent = `${showNumber(info.current, info.hex)} is not a defined value.`;
+    // A value can be named without being listed: past the values a format
+    // names one by one, it starts counting, and the count is the name.
+    line.textContent =
+      info.named === ""
+        ? `${showNumber(info.current, info.hex)} is not a defined value.`
+        : `${showNumber(info.current, info.hex)} is ${info.named}.`;
     frag.append(line);
   }
   const list = document.createElement("div");

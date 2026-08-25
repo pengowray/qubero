@@ -19,7 +19,10 @@ pub enum Explain {
     Magic { expected: Vec<u8>, actual: Vec<u8> },
     /// Every value the enum names, and the one the file holds. `current` is not
     /// always among them: a file is free to hold a value nobody named.
-    Enum { name: String, hex: bool, cases: Vec<(i128, String)>, current: i128 },
+    /// `named` is what the value goes by, which is not always in `cases`: a
+    /// format that stops naming values and starts counting them names it by
+    /// the run it falls in instead.
+    Enum { name: String, hex: bool, cases: Vec<(i128, String)>, current: i128, named: Option<String> },
     /// Every bit of the field, from bit 0 up, whether it is set and what it is
     /// called. A bit with no name is still a bit, and is still listed.
     Flags { name: String, raw: u128, bits: Vec<FlagBit> },
@@ -93,6 +96,7 @@ impl Evaluator {
                     hex: def.hex,
                     cases: def.cases.clone(),
                     current,
+                    named: def.name_of(current),
                 }
             }
             Ty::Flags { def, .. } => {

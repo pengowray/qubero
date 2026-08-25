@@ -213,6 +213,9 @@ export type TypeInfo = {
   /** Enum: every value it names, and the one in the file. */
   readonly cases: readonly { readonly value: number; readonly name: string }[];
   readonly current: number;
+  /** Enum: what the value in the file is called, where the name comes from a
+   *  counted run of values rather than from `cases`. Empty when it has none. */
+  readonly named: string;
   readonly hex: boolean;
   /** Flags: one entry per bit of the field, from bit 0 up. */
   readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];

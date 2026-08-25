@@ -130,6 +130,9 @@ struct ExplainDto {
     /// Enum: every value it names, and the one in the file.
     cases: Vec<CaseDto>,
     current: f64,
+    /// Enum: what the value in the file is called, where that name comes from a
+    /// counted run rather than from `cases`. Empty when it has no name.
+    named: String,
     /// Enum: whether its numbers are read in hex.
     hex: bool,
     /// Flags: one entry per bit of the field, from bit 0 up.
@@ -254,6 +257,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
         expected: Vec::new(),
         actual: Vec::new(),
         cases: Vec::new(),
+        named: String::new(),
         current: 0.0,
         hex: false,
         bits: Vec::new(),
@@ -280,12 +284,13 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.expected = expected;
             dto.actual = actual;
         }
-        Explain::Enum { name, hex, cases, current } => {
+        Explain::Enum { name, hex, cases, current, named } => {
             dto.kind = "enum";
             dto.name = name;
             dto.hex = hex;
             dto.current = current as f64;
             dto.cases = cases.into_iter().map(|(value, name)| CaseDto { value: value as f64, name }).collect();
+            dto.named = named.unwrap_or_default();
         }
         Explain::Quant { kind, bits, d, second, block_bits, groups, group_weights, bias, signed, weights, at } => {
             dto.kind = "quant";

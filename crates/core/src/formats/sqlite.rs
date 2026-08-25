@@ -45,7 +45,15 @@ const SERIAL_TYPE: &[(i128, &str)] = &[
     // one of serial type 9 holds 1, in no bytes at all.
     (8, "zero"),
     (9, "one"),
+    // Reserved, and no file should hold one. Named so that a file that does
+    // says so rather than reading as a blob of minus one bytes.
+    (10, "reserved"),
+    (11, "reserved"),
 ];
+
+/// The two runs the named values give out to. Every even number from 12 up is
+/// a blob and every odd one from 13 up is text, and how far up says how long.
+const SERIAL_RUN: &[(i128, i128, &str)] = &[(12, 2, "blob, {n} bytes"), (13, 2, "text, {n} bytes")];
 
 /// What a column holds, by its serial type. The types from 12 up are lengths
 /// rather than names: even is a blob, odd is text, and both count from the
@@ -85,6 +93,10 @@ fn column(serial: impl Fn() -> E) -> T {
             (7, T::F64(Big)),
             (8, T::bytes(E::lit(0))),
             (9, T::bytes(E::lit(0))),
+            // Reserved: no bytes rather than a length worked out from a number
+            // that was never a length.
+            (10, T::bytes(E::lit(0))),
+            (11, T::bytes(E::lit(0))),
         ],
         long_form,
     )
@@ -124,7 +136,7 @@ fn header_fields(columns: Vec<(&str, T)>) -> Vec<(&str, T)> {
             "types",
             T::sized(
                 E::field("header_size").sub(E::size_of("header_size")),
-                T::repeat(T::enumeration("SerialType", T::sqlite_varint(), SERIAL_TYPE), Until::End),
+                T::repeat(T::enum_ranged("SerialType", T::sqlite_varint(), SERIAL_TYPE, SERIAL_RUN), Until::End),
             ),
         ),
     ];
@@ -412,6 +424,16 @@ mod tests {
         assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 2]).unwrap().value, Value::Str("hi".into()));
         assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 1]).unwrap().value, Value::Int(-3));
         assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
+    }
+
+    #[test]
+    fn a_serial_type_past_the_named_ones_is_named_by_what_it_counts() {
+        let d = Document::new(MemSource(db()));
+        let mut ev = Evaluator::new(sqlite());
+        // The third column is the two letters of "hi", so its serial type is
+        // 13 plus twice the length, and the length is the whole of its name.
+        let ty = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 1, 2]).unwrap();
+        assert_eq!(ty.value, Value::Enum { raw: 17, name: Some("text, 2 bytes".into()), hex: false });
     }
 
     #[test]
