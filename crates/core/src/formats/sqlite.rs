@@ -7,11 +7,14 @@
 //! Page 1 is the schema table, so its rows read as the five columns SQLite
 //! keeps there rather than as a numbered list.
 //!
-//! Where this stops: a payload too big for its page spills onto an overflow
-//! page, and telling a spilled one apart takes a comparison the IR cannot make,
-//! so a row that spills reads as an error where its record should be. A
-//! freelist page, an overflow page and a pointer map all read as bytes: what
-//! they are is decided by what points at them, not by anything in the page.
+//! Only a b-tree page has a type byte. Every other page in the file starts
+//! with something else, so the byte is peeked rather than read and the page
+//! that is not a b-tree keeps all of its bytes.
+//!
+//! Where this stops: a payload too big for its page reads as the bytes that
+//! stayed and the number of the page the rest went to, and stops there. The
+//! rest is on a chain of pages elsewhere in the file, and a record cut across
+//! a page break is not something a field placed at an offset can read.
 
 use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
@@ -144,11 +147,42 @@ fn header_fields(columns: Vec<(&str, T)>) -> Vec<(&str, T)> {
     fields
 }
 
-/// The four shapes a cell takes, one per kind of page. A payload is parsed in
-/// a window of its own declared size, so a spilled one errors there and
-/// nowhere else.
-fn cell(page_type: i128, rec: T) -> T {
-    let payload = || T::sized(E::field("payload_size"), rec.clone());
+/// How much of a payload stays on the page it was written on, and what
+/// follows it when the rest does not. A payload that fits is parsed in a
+/// window of its own declared size; one that does not reads as the bytes that
+/// are here and the number of the page the rest went to. It is not parsed:
+/// the record header itself can be cut in half by the page break, and the
+/// bytes it continues into are somewhere else in the file.
+///
+/// The arithmetic is SQLite's own, written the long way round. There is no
+/// remainder operator, so a modulo is the quotient multiplied back out and
+/// taken away, the same trick the column parity uses. There is no comparison
+/// either, so "P fits in X" is asked as "P divided by X plus one is nothing".
+fn payload(page_type: i128, usable: E, rec: T) -> T {
+    let u = || usable.clone();
+    let four = || u().sub(E::lit(4));
+    let p = || E::field("payload_size");
+    // A table leaf leaves room for the page header and the cell around it; an
+    // index page keeps a quarter of the page for itself so that a search does
+    // not have to follow a chain at every step.
+    let max = || match page_type {
+        13 => u().sub(E::lit(35)),
+        _ => u().sub(E::lit(12)).mul(E::lit(64)).div(E::lit(255)).sub(E::lit(23)),
+    };
+    let min = || u().sub(E::lit(12)).mul(E::lit(32)).div(E::lit(255)).sub(E::lit(23));
+    let past = || p().sub(min());
+    // The spilled size that keeps the overflow pages full, and the smallest
+    // one that is allowed when it does not fit either.
+    let k = || min().add(past().sub(past().div(four()).mul(four())));
+    let local = T::switch(k().div(max().add(E::lit(1))), vec![(0, T::bytes(k()))], T::bytes(min()));
+    let spilled =
+        T::inline_structure("Spilled", vec![("local", local), ("overflow_page", T::u32(Big))]);
+    T::switch(p().div(max().add(E::lit(1))), vec![(0, T::sized(p(), rec))], spilled)
+}
+
+/// The four shapes a cell takes, one per kind of page.
+fn cell(page_type: i128, usable: E, rec: T) -> T {
+    let payload = || payload(page_type, usable.clone(), rec.clone());
     let fields = match page_type {
         5 => vec![("left_child_page", T::u32(Big)), ("rowid", T::sqlite_varint())],
         13 => vec![
@@ -166,8 +200,9 @@ fn cell(page_type: i128, rec: T) -> T {
     T::structure("Cell", fields)
 }
 
-fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, rec: T) -> T {
+fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, usable: E, rec: T) -> T {
     let mut fields = vec![
+        ("page_type", T::enumeration("PageType", T::u8(), PAGE_TYPE)),
         ("first_freeblock", T::u16(Big)),
         ("cell_count", T::u16(Big)),
         ("cell_content_start", T::u16(Big)),
@@ -179,40 +214,69 @@ fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, rec: T) ->
     fields.push(("cell_pointers", T::array(T::u16(Big), E::field("cell_count"))));
     // The cells fill the rest of the page, at the offsets just read, in no
     // particular order. What none of them covers is free space.
-    fields.push(("cells", T::pointer_list("cell_pointers", Anchor::Window, adjust, cell(page_type, rec))));
+    fields.push((
+        "cells",
+        T::pointer_list("cell_pointers", Anchor::Window, adjust, cell(page_type, usable, rec)),
+    ));
     T::structure(name, fields)
+}
+
+/// A page that is not a b-tree, which is a page whose first byte was never a
+/// type. It is an overflow page, a freelist page or a pointer map, and the
+/// page says which of those it is nowhere: what points at it decides.
+///
+/// The header can still settle it in the common case. A file with an empty
+/// freelist and no auto-vacuum has no freelist pages and no pointer maps, so
+/// every page left over is the continuation of a payload too big for its own
+/// page, and reads as the next page in that chain and the bytes it carries.
+/// Anywhere else the honest answer is the bytes.
+fn other_page() -> T {
+    T::switch(
+        E::field("freelist_page_count").add(E::field("vacuum_root_page")),
+        vec![(
+            0,
+            T::structure(
+                "Overflow",
+                vec![("next_page", T::u32(Big)), ("content", T::bytes(E::Remaining))],
+            ),
+        )],
+        T::bytes(E::Remaining),
+    )
 }
 
 /// `adjust` shifts every cell offset, and is what page 1 needs: its offsets
 /// count from the start of the file, 100 bytes before the page itself.
-fn page(adjust: E, rec: T) -> T {
-    let body = |name, interior, ty| btree_body(name, interior, ty, adjust.clone(), rec.clone());
-    T::structure(
-        "Page",
+///
+/// The type byte is peeked rather than read, because only a b-tree page has
+/// one. Reading it first and switching on it afterwards would have every other
+/// page in the file open with a field the format never wrote, and show the
+/// byte a page number happens to start with as a page type nobody defined.
+fn page(adjust: E, usable: E, rec: T) -> T {
+    let body =
+        |name, interior, ty| btree_body(name, interior, ty, adjust.clone(), usable.clone(), rec.clone());
+    T::switch(
+        E::peek(8, Big),
         vec![
-            ("page_type", T::enumeration("PageType", T::u8(), PAGE_TYPE)),
-            (
-                "body",
-                T::switch(
-                    E::field("page_type"),
-                    vec![
-                        (2, body("IndexInterior", true, 2)),
-                        (5, body("TableInterior", true, 5)),
-                        (10, body("IndexLeaf", false, 10)),
-                        (13, body("TableLeaf", false, 13)),
-                    ],
-                    T::bytes(E::Remaining),
-                ),
-            ),
+            (2, body("IndexInterior", true, 2)),
+            (5, body("TableInterior", true, 5)),
+            (10, body("IndexLeaf", false, 10)),
+            (13, body("TableLeaf", false, 13)),
         ],
+        other_page(),
     )
 }
 
 pub fn sqlite() -> Template {
     // A page size of 1 means 65536: the field is two bytes and cannot hold it.
     // There is no conditional expression, so a switch says it instead.
-    let first = |size: E| T::sized(size.sub(E::lit(100)), page(E::lit(-100), schema_record()));
-    let rest = |size: E| T::repeat(T::sized(size, page(E::lit(0), record())), Until::End);
+    // What of a page a payload may use: the page less whatever the header
+    // holds back at the end of every one of them.
+    let usable = |size: &E| size.clone().sub(E::field("reserved_space"));
+    let first = |size: E| {
+        T::sized(size.clone().sub(E::lit(100)), page(E::lit(-100), usable(&size), schema_record()))
+    };
+    let rest =
+        |size: E| T::repeat(T::sized(size.clone(), page(E::lit(0), usable(&size), record())), Until::End);
     Template::new(
         "sqlite",
         T::structure(
@@ -270,12 +334,11 @@ mod tests {
     const TEXT_ENCODING: usize = 16;
     const PAGE1: usize = 23;
     const PAGES: usize = 24;
-    // Field indices inside a b-tree page: the header is one struct in, and the
-    // cells are the last field of it.
-    const BODY: usize = 1;
-    const CELL_COUNT: usize = 1;
-    const POINTERS: usize = 4;
-    const CELLS: usize = 5;
+    // Field indices inside a b-tree leaf page. A page is its own struct: the
+    // type byte is peeked to choose which one, and read again inside it.
+    const CELL_COUNT: usize = 2;
+    const POINTERS: usize = 5;
+    const CELLS: usize = 6;
 
     /// One row: no id (the row id stands in for it), a small number, and some
     /// text. The header names one serial type per column and counts itself.
@@ -378,8 +441,8 @@ mod tests {
         let kind = ev.node(&d, &[PAGE1, 0]).unwrap();
         assert_eq!(kind.offset_bits, 100 * 8);
         assert_eq!(kind.value, Value::Enum { raw: 13, name: Some("table leaf".into()), hex: false });
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, CELL_COUNT]).unwrap().value, Value::UInt(1));
-        assert_eq!(ev.node(&d, &[PAGE1, BODY, POINTERS]).unwrap().child_count, 1);
+        assert_eq!(ev.node(&d, &[PAGE1, CELL_COUNT]).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &[PAGE1, POINTERS]).unwrap().child_count, 1);
         // One more page, starting at a page boundary.
         assert_eq!(ev.node(&d, &[PAGES]).unwrap().child_count, 1);
         assert_eq!(ev.node(&d, &[PAGES, 0, 0]).unwrap().offset_bits, PAGE as u64 * 8);
@@ -389,7 +452,7 @@ mod tests {
     fn the_schema_row_reads_as_the_five_columns_sqlite_keeps_there() {
         let d = Document::new(MemSource(db()));
         let mut ev = Evaluator::new(sqlite());
-        let row = [PAGE1, BODY, CELLS, 0, 2];
+        let row = [PAGE1, CELLS, 0, 2];
         let col = |i: usize| [row.as_slice(), &[i]].concat();
         assert_eq!(ev.node(&d, &col(2)).unwrap().value, Value::Str("table".into()));
         assert_eq!(ev.node(&d, &col(3)).unwrap().name, "name");
@@ -402,28 +465,28 @@ mod tests {
     fn a_row_reads_as_its_columns() {
         let d = Document::new(MemSource(db()));
         let mut ev = Evaluator::new(sqlite());
-        let cells = ev.node(&d, &[PAGES, 0, BODY, CELLS]).unwrap();
+        let cells = ev.node(&d, &[PAGES, 0, CELLS]).unwrap();
         assert_eq!(cells.child_count, 2);
         // The second row sits before the first one in the file, and reading it
         // means following its offset rather than walking forward.
-        let second = ev.node(&d, &[PAGES, 0, BODY, CELLS, 1]).unwrap();
-        let first = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0]).unwrap();
+        let second = ev.node(&d, &[PAGES, 0, CELLS, 1]).unwrap();
+        let first = ev.node(&d, &[PAGES, 0, CELLS, 0]).unwrap();
         assert!(second.offset_bits < first.offset_bits);
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 1]).unwrap().value, Value::Int(2)); // row id
-        let types = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 1]).unwrap();
+        assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 1, 1]).unwrap().value, Value::Int(2)); // row id
+        let types = ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 1]).unwrap();
         assert_eq!(types.child_count, 3);
         assert_eq!(
-            ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 1, 0]).unwrap().value,
+            ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 1, 0]).unwrap().value,
             Value::Enum { raw: 0, name: Some("null".into()), hex: false }
         );
-        let columns = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2]).unwrap();
+        let columns = ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 2]).unwrap();
         assert_eq!(columns.child_count, 3);
         // A column with no bytes, a number, and text, each typed by the header.
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 0]).unwrap().size_bits, 0);
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 1]).unwrap().value, Value::Int(42));
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 2]).unwrap().value, Value::Str("hi".into()));
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 1]).unwrap().value, Value::Int(-3));
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
+        assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 2, 0]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 2, 1]).unwrap().value, Value::Int(42));
+        assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 2, 2]).unwrap().value, Value::Str("hi".into()));
+        assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 1, 2, 2, 1]).unwrap().value, Value::Int(-3));
+        assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
     }
 
     #[test]
@@ -432,7 +495,7 @@ mod tests {
         let mut ev = Evaluator::new(sqlite());
         // The third column is the two letters of "hi", so its serial type is
         // 13 plus twice the length, and the length is the whole of its name.
-        let ty = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 1, 2]).unwrap();
+        let ty = ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 1, 2]).unwrap();
         assert_eq!(ty.value, Value::Enum { raw: 17, name: Some("text, 2 bytes".into()), hex: false });
     }
 
@@ -440,15 +503,15 @@ mod tests {
     fn the_cursor_lands_in_the_row_it_is_standing_in() {
         let d = Document::new(MemSource(db()));
         let mut ev = Evaluator::new(sqlite());
-        let text = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 2]).unwrap();
-        assert_eq!(ev.locate(&d, text.offset_bits).unwrap(), vec![PAGES, 0, BODY, CELLS, 0, 2, 2, 2]);
+        let text = ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 2, 2]).unwrap();
+        assert_eq!(ev.locate(&d, text.offset_bits).unwrap(), vec![PAGES, 0, CELLS, 0, 2, 2, 2]);
         // Free space between the pointer array and the first row belongs to no
         // field, and stops where that row starts.
         let from = (PAGE + 20) as u64 * 8;
         let free = ev.spans(&d, from, 2 * PAGE as u64 * 8, 4).unwrap();
         assert!(free[0].gap);
         assert_eq!(free[0].offset_bits, from);
-        let first_cell = ev.node(&d, &[PAGES, 0, BODY, CELLS, 1]).unwrap();
+        let first_cell = ev.node(&d, &[PAGES, 0, CELLS, 1]).unwrap();
         assert_eq!(free[0].offset_bits + free[0].size_bits, first_cell.offset_bits);
         assert!(!free[1].gap);
     }
@@ -465,7 +528,7 @@ mod tests {
         cells[59] = 2; // text encoding: utf16le
         let d = Document::new(MemSource(cells));
         let mut ev = Evaluator::new(sqlite());
-        let col = ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2, 2, 2]).unwrap();
+        let col = ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 2, 2]).unwrap();
         assert_eq!(col.value, Value::Str("hi".into()));
         assert_eq!(col.type_name, "utf16le[]");
     }
@@ -491,25 +554,63 @@ mod tests {
         let mut ev = Evaluator::new(sqlite());
         let kind = ev.node(&d, &[PAGES, 0, 0]).unwrap();
         assert_eq!(kind.value, Value::Enum { raw: 5, name: Some("table interior".into()), hex: false });
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, 4]).unwrap().value, Value::UInt(9)); // rightmost
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, 6, 0, 0]).unwrap().value, Value::UInt(4)); // left child
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, 6, 0, 1]).unwrap().value, Value::Int(30)); // row id
+        assert_eq!(ev.node(&d, &[PAGES, 0, 5]).unwrap().value, Value::UInt(9)); // rightmost
+        assert_eq!(ev.node(&d, &[PAGES, 0, 7, 0, 0]).unwrap().value, Value::UInt(4)); // left child
+        assert_eq!(ev.node(&d, &[PAGES, 0, 7, 0, 1]).unwrap().value, Value::Int(30)); // row id
     }
 
     #[test]
-    fn a_page_that_is_not_a_btree_reads_as_bytes() {
+    fn a_page_that_is_not_a_btree_keeps_the_byte_a_type_would_have_taken() {
         let mut b = db();
-        b[PAGE] = 0; // a freelist trunk page: the type byte means nothing here
-
+        // Not a b-tree page, and its first byte is the top of a page number
+        // rather than a type. A file with a freelist cannot say which kind of
+        // page it is, so all of it reads as bytes, first byte included.
+        b[PAGE] = 0;
+        b[39] = 1; // one page on the freelist
         let d = Document::new(MemSource(b));
         let mut ev = Evaluator::new(sqlite());
-        let body = ev.node(&d, &[PAGES, 0, 1]).unwrap();
-        assert_eq!(body.type_name, "bytes[]");
-        assert!(matches!(body.value, Value::Bytes { len, .. } if len == PAGE as u64 - 1));
+        let page = ev.node(&d, &[PAGES, 0]).unwrap();
+        assert_eq!(page.type_name, "bytes[]");
+        assert!(matches!(page.value, Value::Bytes { len, .. } if len == PAGE as u64));
     }
 
     #[test]
-    fn a_payload_too_big_for_its_page_is_an_error_for_that_row_alone() {
+    fn a_leftover_page_in_a_file_with_no_freelist_is_an_overflow_page() {
+        let mut b = db();
+        b[PAGE] = 0;
+        // Nothing on the freelist and no auto-vacuum, so there is nothing else
+        // this page could be: it holds the rest of a payload, and the number
+        // of the page holding the rest of that.
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(sqlite());
+        assert_eq!(ev.node(&d, &[PAGES, 0]).unwrap().type_name, "Overflow");
+        assert_eq!(ev.node(&d, &[PAGES, 0, 0]).unwrap().name, "next_page");
+    }
+
+    #[test]
+    fn a_payload_that_does_not_fit_reads_what_stayed_and_where_the_rest_went() {
+        // A payload of 600 bytes on a page of 512. SQLite keeps 39 bytes at
+        // least and as many as 477, and the size that fills the overflow pages
+        // exactly is 92, so 92 bytes stay and a page number follows them.
+        let mut cell = vec![0x84, 0x58, 1]; // payload size 600, row id 1
+        cell.extend(std::iter::repeat(b'A').take(92));
+        cell.extend_from_slice(&7u32.to_be_bytes());
+        let mut b = header(PAGE);
+        b.extend_from_slice(&leaf_page(&[], PAGE - 100, 100));
+        b.extend_from_slice(&leaf_page(&[cell], PAGE, 0));
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(sqlite());
+        let spilled = [PAGES, 0, CELLS, 0, 2];
+        let local = ev.node(&d, &[spilled.as_slice(), &[0]].concat()).unwrap();
+        assert_eq!(local.name, "local");
+        assert!(matches!(local.value, Value::Bytes { len, .. } if len == 92));
+        let next = ev.node(&d, &[spilled.as_slice(), &[1]].concat()).unwrap();
+        assert_eq!(next.name, "overflow_page");
+        assert_eq!(next.value, Value::UInt(7));
+    }
+
+    #[test]
+    fn a_payload_that_runs_past_its_page_is_an_error_for_that_row_alone() {
         let mut b = db();
         // The first row claims a payload longer than the page can hold. It is
         // the last cell in the file, since the cells fill a page from the back.
@@ -517,7 +618,7 @@ mod tests {
         b[at] = 250;
         let d = Document::new(MemSource(b));
         let mut ev = Evaluator::new(sqlite());
-        assert!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 0, 2]).is_err());
-        assert_eq!(ev.node(&d, &[PAGES, 0, BODY, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
+        assert!(ev.node(&d, &[PAGES, 0, CELLS, 0, 2]).is_err());
+        assert_eq!(ev.node(&d, &[PAGES, 0, CELLS, 1, 2, 2, 2]).unwrap().value, Value::Str("there".into()));
     }
 }

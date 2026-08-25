@@ -74,16 +74,28 @@ fields are flat in the root struct so the page size is in scope where the pages
 are sized, a page size of 1 (which means 65536, since the field is two bytes) is
 a `Switch` because there is no conditional expression, and the run of pages ends
 at the end of the file rather than trusting the header's page count, which
-legacy files leave stale. A page whose first byte is not a b-tree type reads as
-bytes, which is what a freelist, overflow or pointer-map page is.
+legacy files leave stale. Only a b-tree page has a type byte, so the byte is
+peeked rather than read: a page that is not one keeps all of its bytes, and the
+byte a page number happens to start with is not shown as a type nobody defined.
+What that page is, the page never says. The header can still settle it in the
+usual case: with an empty freelist and no auto-vacuum there are no freelist
+pages and no pointer maps, so what is left is the continuation of a payload and
+reads as the next page in that chain and the bytes it carries. With either of
+those in play the honest answer is the bytes.
 
 The cells are what the format cost the IR, and they are in the list below:
 `PointerList` places them, `SqliteVarint` measures them, and `Expr::Elem` with
-`Expr::Idx` types their columns. Two things a database does are still out of
-reach. A payload too big for its page spills onto an overflow page, and how much
-stays behind is a formula with a comparison in it, which expressions cannot say;
-such a cell reads as an error rather than as the wrong bytes, and a comparison
-or a min/max in `Expr` is what would fix it. And page numbers, in an interior
+`Expr::Idx` types their columns. A payload too big for its page spills onto an overflow
+page, and how much stays behind is SQLite's own formula, with a modulo and two
+comparisons in it. Neither is an operator here and neither needs to be: a
+modulo is the quotient multiplied back out and taken away, and "P fits in X" is
+"P divided by X plus one is nothing", which a `Switch` asks in one case. So the
+cell reads the bytes that stayed and the number of the page the rest went to.
+It stops there. The record itself is not parsed across the break, because the
+header saying what the columns are can be cut in half by it, and the bytes it
+continues into are on another page entirely.
+
+One thing a database does is still out of reach: page numbers, in an interior
 cell or at the end of a spilled one, are read as numbers and not followed: a
 b-tree that pointed at its own pages would stop being a tree, and the template
 would describe a graph rather than a file.
