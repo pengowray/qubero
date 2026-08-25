@@ -649,6 +649,16 @@ wanted. Deliberately not built: `encode::editable` refuses to write a magic
 field at all, and one narrow exception to that is a decision worth taking on
 purpose rather than in passing.
 
+Show the IR of the connections between fields, rather than only computing with
+it. Where one field's meaning depends on others, the relationship should be
+readable: the `Expr` tree behind a length or a count written out the way the
+quantised-weights panel writes `d * scale * stored - dmin * min` with the
+numbers substituted. The pieces exist (`Expr` trees, `Evaluator::origins` and
+its "Depends on" section), and the rule that follows from it is that the core
+should describe a relationship in a small struct the UI renders, rather than the
+UI inferring one from a field's name. `ggml_quant::Offset` is the first of
+those.
+
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.
 Bit-level cursor mode in the UI. Column/width presets. Worker-side core so the main
 thread never blocks on reads.
