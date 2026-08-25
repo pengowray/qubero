@@ -1,14 +1,18 @@
 //! Built-in templates. These double as the test-bed for the IR: anything a
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
+mod aiff;
 mod au;
 mod bmp;
 mod dos;
 mod ggml;
 pub mod ggml_quant;
 mod gguf;
+mod gif;
 mod gzip;
 mod id3;
+mod iff;
+mod ilbm;
 mod midi;
 mod mp4;
 mod nes;
@@ -16,6 +20,7 @@ mod pcx;
 mod pe;
 pub mod pe_tables;
 mod pi1;
+mod pnm;
 mod png;
 mod safetensors;
 mod sqlite;
@@ -27,18 +32,22 @@ mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
 
+pub use aiff::aiff;
 pub use au::au;
 pub use bmp::bmp;
 pub use dos::dos;
 pub use gguf::gguf;
+pub use gif::gif;
 pub use gzip::gzip;
 pub use id3::id3;
+pub use ilbm::ilbm;
 pub use midi::midi;
 pub use mp4::mp4;
 pub use nes::nes;
 pub use pe::pe;
 pub use pcx::pcx;
 pub use pi1::pi1;
+pub use pnm::pnm;
 pub use png::png;
 pub use safetensors::safetensors;
 pub use sqlite::sqlite;
@@ -58,7 +67,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -84,6 +93,10 @@ pub fn builtin(name: &str) -> Option<Template> {
         "pi1" => Some(pi1()),
         "nes" => Some(nes()),
         "gzip" => Some(gzip()),
+        "gif" => Some(gif()),
+        "aiff" => Some(aiff()),
+        "ilbm" => Some(ilbm()),
+        "pnm" => Some(pnm()),
         _ => None,
     }
 }
@@ -116,6 +129,14 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("nes")
     } else if is_bmp(head) {
         Some("bmp")
+    } else if head.starts_with(b"GIF8") {
+        Some("gif")
+    } else if head.starts_with(b"FORM") && head.len() >= 12 && matches!(&head[8..12], b"AIFF" | b"AIFC") {
+        Some("aiff")
+    } else if head.starts_with(b"FORM") && head.len() >= 12 && matches!(&head[8..12], b"ILBM" | b"PBM ") {
+        Some("ilbm")
+    } else if is_pnm(head) {
+        Some("pnm")
     } else if head.starts_with(b".snd") {
         Some("au")
     } else if is_pcx(head) {
@@ -156,6 +177,17 @@ fn is_bmp(head: &[u8]) -> bool {
 /// starting with a blank line is turned away by the encoding byte.
 fn is_pcx(head: &[u8]) -> bool {
     head.first() == Some(&0x0a) && matches!(head.get(1), Some(0 | 2 | 3 | 4 | 5)) && head.get(2) == Some(&1)
+}
+
+/// Whether these leading bytes are a netpbm file.
+///
+/// P and a digit from 1 to 6, and then whitespace. Two characters alone would
+/// claim any text file that happened to start with them, so the byte after the
+/// digit has to be one that could separate the magic from the width.
+fn is_pnm(head: &[u8]) -> bool {
+    head.first() == Some(&b'P')
+        && matches!(head.get(1), Some(b'1'..=b'6'))
+        && matches!(head.get(2), Some(b' ' | b'\t' | b'\n' | b'\r'))
 }
 
 /// Whether these leading bytes are a whisper.cpp model.
