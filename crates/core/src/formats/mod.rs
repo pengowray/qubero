@@ -13,9 +13,12 @@ mod gzip;
 mod id3;
 mod iff;
 mod ilbm;
+mod lha;
+mod mca;
 mod midi;
 mod mp4;
 mod nes;
+mod pak;
 mod pcx;
 mod pe;
 pub mod pe_tables;
@@ -24,8 +27,11 @@ mod pnm;
 mod png;
 mod safetensors;
 mod sqlite;
+mod tap;
 mod tga;
+mod vpk;
 mod w4v;
+mod wad;
 mod wav;
 mod whisper;
 mod wasm;
@@ -41,18 +47,24 @@ pub use gif::gif;
 pub use gzip::gzip;
 pub use id3::id3;
 pub use ilbm::ilbm;
+pub use lha::lha;
+pub use mca::mca;
 pub use midi::midi;
 pub use mp4::mp4;
 pub use nes::nes;
 pub use pe::pe;
+pub use pak::pak;
 pub use pcx::pcx;
 pub use pi1::pi1;
 pub use pnm::pnm;
 pub use png::png;
 pub use safetensors::safetensors;
 pub use sqlite::sqlite;
+pub use tap::tap;
 pub use tga::tga;
+pub use vpk::vpk;
 pub use w4v::w4v;
+pub use wad::wad;
 pub use wav::wav;
 pub use whisper::whisper;
 pub use wasm::wasm;
@@ -67,7 +79,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -97,6 +109,12 @@ pub fn builtin(name: &str) -> Option<Template> {
         "aiff" => Some(aiff()),
         "ilbm" => Some(ilbm()),
         "pnm" => Some(pnm()),
+        "wad" => Some(wad()),
+        "pak" => Some(pak()),
+        "vpk" => Some(vpk()),
+        "mca" => Some(mca()),
+        "tap" => Some(tap()),
+        "lha" => Some(lha()),
         _ => None,
     }
 }
@@ -125,6 +143,14 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("msdos")
     } else if head.starts_with(b"\x1f\x8b") {
         Some("gzip")
+    } else if head.starts_with(b"IWAD") || head.starts_with(b"PWAD") {
+        Some("wad")
+    } else if head.starts_with(b"PACK") {
+        Some("pak")
+    } else if head.starts_with(b"\x34\x12\xaa\x55") {
+        Some("vpk")
+    } else if is_lha(head) {
+        Some("lha")
     } else if head.starts_with(b"NES\x1a") {
         Some("nes")
     } else if is_bmp(head) {
@@ -177,6 +203,16 @@ fn is_bmp(head: &[u8]) -> bool {
 /// starting with a blank line is turned away by the encoding byte.
 fn is_pcx(head: &[u8]) -> bool {
     head.first() == Some(&0x0a) && matches!(head.get(1), Some(0 | 2 | 3 | 4 | 5)) && head.get(2) == Some(&1)
+}
+
+/// Whether these leading bytes are an LHA archive.
+///
+/// Nothing marks the front of the file: the first two bytes are a header size
+/// and a checksum, which can be anything. What is fixed is the method at
+/// offset 2, five characters of `-lh`, a digit or letter, and `-`. That is the
+/// signature every tool that identifies these files uses.
+fn is_lha(head: &[u8]) -> bool {
+    matches!(head.get(2..7), Some([b'-', b'l', b'h' | b'z', _, b'-']))
 }
 
 /// Whether these leading bytes are a netpbm file.
