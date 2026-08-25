@@ -830,6 +830,70 @@ earlier array, which `ProductOf` already did the other way. A Huffman segment
 writes how many codes there are of each of sixteen lengths and then that many
 symbols, and never writes the total.
 
+### A file that writes its numbers as digits
+PDF is the first format here that is mostly text. The header is a line, the
+cross-reference table is lines, the trailer is a dictionary typed out in full,
+and the offset that finds the table is written as decimal digits under the
+word `startxref`. Reading it needed two things the IR could not say, and both
+of them are about words and digits rather than about PDF.
+
+The first is `Ty::TextInt`. A text field used in an expression is its bytes as
+a number, which is what lets a switch key on `IHDR`; on `408` it gives
+0x343038, a number three million past the end of a four hundred byte file. A
+pointer list handed that places its children nowhere. The parse has to happen
+where the field is read, so the type reads like text, measures like text, and
+values like an integer. It takes the same `StrLen` as text does, so a run of
+digits can be a fixed width, or scanned with the white space around it stepped
+over, and leading zeros are read rather than complained about since padding a
+number to ten columns is how the format keeps its table lined up.
+
+The second is `Expr::Find { needle, last }`, which is `ToMarker` for a word
+instead of a byte. Where the pointer at the end of a PDF is cannot be worked
+out by counting: the offset under `startxref` is as wide as it is, and the
+end marker after it is followed by whichever of three line endings the writer
+preferred, so the word itself has to be looked for. `last` is there because a
+file that has been saved twice keeps both its tables and means the second, and
+because the same search run forwards is what ends an object: `endobj` closes
+one, and nothing says how long the body was.
+
+What the two together buy is the shape the format is actually in. A field of
+no bits reads the offset under the word, another reads the table where that
+offset points, and the objects are a pointer list over its entries, exactly as
+a WAD's lumps are a pointer list over its directory. Every byte of the tail is
+named by a field that costs nothing where it is declared, so the objects can
+still be the list that covers the whole body.
+
+The numbers on the line between `xref` and the entries are read one at a time
+rather than as a line, and that is what `SizeOf` is for: a decimal is as wide
+as it was written, so where the count starts is only known once the number
+before it has been read. It is also why the fields are flat rather than nested
+in a structure of their own, since a name reaches fields beside it and fields
+around it but not fields inside something else.
+
+One thing the table says had to be looked ahead for. An entry's last column
+says whether the object is there, and it is written after the two numbers whose
+meaning it settles: a free entry's ten digits are the number of the next free
+object, not an offset, and reading them as one is how a reader ends up parsing
+whatever sits twelve bytes into the file. The entry is picked by a peek at that
+column, and the free case gives its offset as a computed zero, which the list
+already reads as pointing at nothing.
+
+The peek is the one place a run of entries starting late is felt. The spec
+fixes an entry at twenty bytes and the line above it at whatever the writer
+liked, and a scanned field takes one byte of that line ending, so the entries
+can begin a byte or two after the arithmetic says. They step over what is left
+and read the same; a fixed look-ahead does not. So it looks at all three
+places the letter could be, by subtracting it from each and multiplying: a
+product is zero when any of its parts is, and nothing else that far into an
+entry is a letter.
+
+What is left out is the part of PDF that stopped being text. A cross-reference
+stream keeps the same table compressed inside an object, which is a template
+that needs the object read and inflated first, and the `/Prev` chain that an
+incrementally saved file leaves behind is a walk backwards through every
+revision. Neither is here, so a file written that way reads its header and its
+end marker and says the table did not.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
