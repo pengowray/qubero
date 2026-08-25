@@ -592,6 +592,57 @@ fn a_peek_reads_the_way_round_it_is_told_to() {
 }
 
 #[test]
+fn a_pointer_back_at_something_already_open_is_refused_rather_than_followed() {
+    // A directory that says where the next one is, and a file where the next
+    // one is itself. Without a guard this is not slow, it is endless: asking
+    // what covers a byte would go round the ring forever.
+    let dir = T::structure(
+        "Dir",
+        vec![("next", T::u8()), ("chain", T::at(E::field("next"), T::Named("Dir".into())))],
+    );
+    let t = || Template::new("t", T::Named("Dir".into())).with_type("Dir", dir.clone());
+
+    // Byte 0 says the next directory is at 0, which is this one.
+    let d = doc(&[0, 0, 0, 0]);
+    let mut ev = Evaluator::new(t());
+    assert!(ev.node(&d, &[1, 0]).is_err());
+    // What it says about itself still reads; only the step back is refused.
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0));
+
+    // And the cursor, which is what the ring would have trapped: asking what
+    // covers a byte answers instead of going round.
+    assert_eq!(ev.locate(&d, 0).unwrap(), vec![0]);
+
+    // A ring of two is caught the same way, on the step that closes it.
+    let d = doc(&[2, 0, 0, 0]);
+    let mut ev = Evaluator::new(t());
+    assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().value, Value::UInt(0));
+    assert!(ev.node(&d, &[1, 0, 1, 0]).is_err());
+
+    // A chain that goes somewhere new each time is not a ring and is read to
+    // the end of it.
+    let d = doc(&[1, 2, 3, 0]);
+    let mut ev = Evaluator::new(t());
+    assert_eq!(ev.node(&d, &[1, 0, 1, 0, 1, 0]).unwrap().offset_bits, 3 * 8);
+    // Two pointers landing on the same place from different lines are two
+    // pointers, not a ring: neither is above the other.
+    let together = Template::new(
+        "t",
+        T::structure(
+            "Two",
+            vec![
+                ("a", T::at(E::lit(3), T::u8())),
+                ("b", T::at(E::lit(3), T::u8())),
+                ("rest", T::bytes(E::Remaining)),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(together);
+    assert_eq!(ev.node(&d, &[0, 0]).unwrap().offset_bits, 3 * 8);
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().offset_bits, 3 * 8);
+}
+
+#[test]
 fn an_offset_can_count_from_the_copy_it_is_written_inside() {
     // A layout that names a table by where it is, written once and read both
     // as a file of its own and as a copy of that file inside something else.

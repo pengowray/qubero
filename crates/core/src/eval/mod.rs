@@ -592,16 +592,18 @@ impl Evaluator {
                     return Ok(());
                 }
             }
-        } else if let Ty::At { anchor, at, .. } = &pr.ty {
+        } else if let Ty::At { anchor, at, inner } = &pr.ty {
             // Bytes from the anchor, which is how a header names the place it
             // keeps a table: from the start of the file, or from the start of
             // the copy of the format this one is written inside.
-            let (anchor, at) = (*anchor, at.clone());
+            let (anchor, at, what) = (*anchor, at.clone(), inner.display_name());
             let n = self.eval_expr(doc, parent, &at)?;
             if n < 0 {
                 return fail("negative offset");
             }
-            self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8
+            let to = self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8;
+            self.no_ring(parent, to, &what)?;
+            to
         } else if idx == 0 {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
@@ -628,6 +630,45 @@ impl Evaluator {
         }
         let r = self.effective(doc, path, name, ty, offset, limit)?;
         self.remember(path, r);
+        Ok(())
+    }
+
+    /// Refuse an offset that points back at something already open above it.
+    ///
+    /// Every other way of placing a child moves forward, so a type that refers
+    /// to itself is bounded by whatever contains it and must end. An `At` is
+    /// the one that does not: it names a place, and a file is free to name a
+    /// place that is already being read. A directory whose entry points at
+    /// that directory is a ring, and following one is not slow but endless,
+    /// since the cursor asking what covers a byte would go round it forever.
+    ///
+    /// A ring has to come back to something it has already opened, and what
+    /// makes two nodes the same node is being the same type in the same
+    /// place. So the line of ancestors is asked whether any of them is that,
+    /// and one that is means the pointer closes a ring. Only ancestors: two
+    /// entries pointing at the same string are not a ring, they are two
+    /// entries pointing at the same string, and that is allowed and common.
+    ///
+    /// The count of pointers above is kept as well, for the file that is not a
+    /// ring but is trying to be difficult: a chain of a million distinct
+    /// offsets ends, but not soon enough to be worth waiting for. The limit is
+    /// far past any real nesting, which in practice is a JPEG holding a TIFF
+    /// holding a sub-directory and stops at three.
+    fn no_ring(&self, parent: &[usize], to: u64, what: &str) -> R<()> {
+        const DEEPEST: usize = 1024;
+        let mut jumps = 0;
+        for k in (0..=parent.len()).rev() {
+            let Some(r) = self.memo.get(&parent[..k]) else { continue };
+            if matches!(r.ty, Ty::At { .. }) {
+                jumps += 1;
+            }
+            if r.offset == to && r.ty.display_name() == what {
+                return fail("points back at something already being read");
+            }
+        }
+        if jumps >= DEEPEST {
+            return fail(format!("pointers nested more than {DEEPEST} deep"));
+        }
         Ok(())
     }
 

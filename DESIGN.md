@@ -736,6 +736,17 @@ its own and the one layout is a file when it is a file and a copy inside
 something else when it is not. `tiff_file` is a type rather than a template,
 and the JPEG names it.
 
+An offset that names a place can name a place already open, and that is a
+ring. Every other way of placing a child moves forward, so a type referring to
+itself is bounded by whatever contains it and must end; an `At` is the one that
+is not, and a ring is not slow but endless, since the cursor asking what covers
+a byte would go round it forever. Placing an `At` child now asks the line of
+ancestors whether any of them is the same type in the same place, which is what
+makes two nodes one node, and refuses the step that would close the loop. Only
+ancestors: two entries pointing at the same string are two entries pointing at
+the same string. A count of the pointers above comes with it, so a chain that
+is not a ring but is a million long is stopped as well.
+
 The same anchor settled the other half of a TIFF entry. Four bytes hold the
 value when it fits and where to find it when it does not, and nothing in the
 entry says which: it is the size of the type times the count. That is a field
