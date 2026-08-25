@@ -210,6 +210,14 @@ mod tests {
     }
 
     #[test]
+    fn the_lists_say_what_they_hold() {
+        let d = Document::new(MemSource(file()));
+        let mut ev = Evaluator::new(whisper());
+        assert_eq!(ev.node(&d, &[16]).unwrap().unit.as_deref(), Some("tensor"));
+        assert_eq!(ev.node(&d, &[15, 1]).unwrap().unit.as_deref(), Some("token"));
+    }
+
+    #[test]
     fn the_tensors_run_to_the_end_of_the_file() {
         let d = Document::new(MemSource(file()));
         let mut ev = Evaluator::new(whisper());

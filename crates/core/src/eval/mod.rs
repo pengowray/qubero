@@ -387,7 +387,7 @@ impl Evaluator {
             read_as: reading.2,
             name: self.label(doc, path, &r)?,
             type_name: r.ty.display_name(),
-            unit: unit_of(&r.ty).map(str::to_string),
+            unit: self.unit_of(&r.ty).map(str::to_string),
             offset_bits: r.offset,
             size_bits: size,
             value,
@@ -484,6 +484,28 @@ impl Evaluator {
     }
 
     // ----- resolution -----
+
+    /// What one child of this list is called. A run of numbers holds values; a
+    /// run of anything the format has a word for holds those; everything else
+    /// holds items, which is what saying nothing here means. A list of a named
+    /// type is looked up, since that is how a format that reaches its own types
+    /// by name writes one.
+    fn unit_of<'a>(&'a self, ty: &'a Ty) -> Option<&'a str> {
+        let mut elem = match ty {
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => elem.base(),
+            _ => return None,
+        };
+        for _ in 0..8 {
+            let Ty::Named(n) = elem else { break };
+            elem = self.template.types.get(&**n)?.base();
+        }
+        if let Ty::Struct(s) = elem {
+            if let Some(unit) = &s.unit {
+                return Some(unit);
+            }
+        }
+        listing::plain(elem).then_some("value")
+    }
 
     fn resolve<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<()> {
         if self.memo.contains_key(path) {
@@ -883,21 +905,6 @@ impl Evaluator {
 
 }
 
-/// What one child of this list is called. A run of numbers holds values; a run
-/// of anything the format has a word for holds those; everything else holds
-/// items, which is what saying nothing here means.
-fn unit_of(ty: &Ty) -> Option<&str> {
-    let elem = match ty {
-        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => elem.base(),
-        _ => return None,
-    };
-    if let Ty::Struct(s) = elem {
-        if let Some(unit) = &s.unit {
-            return Some(unit);
-        }
-    }
-    listing::plain(elem).then_some("value")
-}
 
 /// Whether an expression asks nothing about the element it sits in, so that
 /// every element of a list gets the same answer. A page size named in a file's
