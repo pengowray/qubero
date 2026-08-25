@@ -1,4 +1,5 @@
 import { Doc, formatBytes, formatOffset, prefetchMagic } from "./doc.js";
+import * as nav from "./navhistory.js";
 import { HexView, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
@@ -144,9 +145,20 @@ function mount(doc: Doc): void {
     inspector.setOffset(bitOffset);
     followCursor(bitOffset);
   };
-  table.onJump = goToBit;
-  inspector.onGoTo = goToBit;
+  // The same move, with the place being left kept so that Back returns to it.
+  // Going back calls `goToBit` instead, which records nothing: retracing a step
+  // is not a step of its own.
+  const jumpToBit = (bitOffset: number): void => {
+    nav.recordJump(view.cursorState.bitOffset, bitOffset);
+    goToBit(bitOffset);
+  };
+  nav.startFile(view.cursorState.bitOffset);
+  nav.onGo(goToBit);
+  table.onJump = jumpToBit;
+  inspector.onGoTo = jumpToBit;
   inspector.onPick = (path) => {
+    const n = doc.templateNode(path);
+    if (n.status === "ok") nav.recordJump(view.cursorState.bitOffset, n.node.offset_bits);
     goToField(path);
     table.reveal(path);
     listing.reveal(path);
@@ -282,7 +294,9 @@ function mount(doc: Doc): void {
     const t = goto.value.trim().replace(/^0x/i, "");
     if (!/^[0-9a-f]+$/i.test(t)) return goto.classList.add("invalid");
     goto.classList.remove("invalid");
-    view.setCursor(parseInt(t, 16), { pane: "hex" });
+    const to = parseInt(t, 16);
+    nav.recordJump(view.cursorState.bitOffset, to * 8);
+    view.setCursor(to, { pane: "hex" });
     view.el.focus();
   });
   goto.addEventListener("input", () => goto.classList.remove("invalid"));
