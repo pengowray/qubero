@@ -575,12 +575,14 @@ export class Doc {
     const r: RawReply<T> = JSON.parse(json);
     if (r.status === "pending") {
       for (const c of r.chunks) this.fetchChunk(c);
-      // One chunk missing means something is being read through from front to
-      // back, so the chunks after it are what comes next: worth reading in one
-      // go. Many at once means fields scattered across the file wanting a byte
-      // each, and reading around those would evict what they asked for.
-      if (r.chunks.length === 1 && r.chunks[0] !== undefined) {
-        this.fetchRun(r.chunks[0] + 1, READ_AHEAD);
+      // A contiguous run of missing chunks means something is being read
+      // through from front to back, so the chunks after it are what comes
+      // next: worth reading in one go. Scattered ones mean fields across the
+      // file wanting a byte each, and reading around those would evict what
+      // they asked for.
+      const first = r.chunks[0];
+      if (first !== undefined && r.chunks.every((c, i) => c === first + i)) {
+        this.fetchRun(first + r.chunks.length, READ_AHEAD);
       }
       return { status: "pending", reachedBytes: r.reached_bytes };
     }
