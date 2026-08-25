@@ -713,6 +713,15 @@ is simply disabled until then, because the reasons live in the write path.
 `does not match` without saying what was expected. The expected bytes are in
 the template and could be carried with the value.
 
+A signature is written as C would write a string (`text::c_string`), which puts
+two bases in one line: Matroska reads `"\032E\xdf\xa3"`, and `\032` is the same
+byte the gutter calls `0x1a`. C is the reason, since `\x` there swallows every
+hex digit that follows and `\x1aE` would be one number. Rust and Python stop
+after two digits and have no such problem. Which rules to write for should be a
+setting, with C the default because a string that is wrong in C is wrong
+silently. The same setting is where a plain `1a 45 df a3` belongs, for readers
+who want no escapes at all.
+
 Save shows no progress while rewriting bit-shifted stretches. The type table has no
 keyboard navigation between rows, so a value cell is reached by clicking or tabbing.
 Text fields in the type table are displayed through `from_utf8_lossy`, so invalid

@@ -184,13 +184,21 @@ pub fn encode_settled(settled: Settled, text: &str) -> Result<Vec<u8>, char> {
 /// says both that it starts with a byte no text file has and that the rest of
 /// it is the word PNG.
 ///
-/// Every escape is `\xNN`, exactly two hex digits, as Rust and Python read
-/// them. C is the exception: there `\x` runs on for as many hex digits as
-/// follow, so `\x1aE` is one number rather than a byte and a letter. Writing
-/// that one byte in octal would satisfy C and cost every reader here a base:
-/// the rest of the editor is hex, and `\032` beside `0x1a` in the gutter does
-/// not read as the same byte.
+/// The escapes are the ones C defines, and are kept unambiguous the way C
+/// needs: `\x89` swallows every hex digit after it, so a byte that would be
+/// read into the escape before it is written in octal instead, which is
+/// always three digits and stops there.
+///
+/// That costs a signature two bases at once: Matroska reads `"\032E\xdf\xa3"`,
+/// where `\032` and the `0x1a` in the gutter are the same byte written two
+/// ways. Rust and Python stop `\x` after two digits and would write `\x1a`
+/// there, and which language's rules to follow is worth offering as a setting
+/// rather than deciding here. Until it is one, C's rules stand: a string that
+/// is wrong in C is wrong without saying so, and this is the safe direction to
+/// be wrong in.
 pub fn c_string(bytes: &[u8]) -> String {
+    let hex = |b: u8| b.is_ascii_hexdigit();
+    let octal = |b: u8| b.is_ascii_digit() && b < b'8';
     let mut out = String::with_capacity(bytes.len() + 2);
     out.push('"');
     for (i, &b) in bytes.iter().enumerate() {
@@ -206,9 +214,10 @@ pub fn c_string(bytes: &[u8]) -> String {
             0x0b => out.push_str(r"\v"),
             0x0c => out.push_str(r"\f"),
             0x0d => out.push_str(r"\r"),
-            // `\0` is the shorter zero, but only where no digit follows it:
-            // `\07` reads as one octal escape in C and as two characters here.
-            0 if !next.is_some_and(|n| n.is_ascii_digit()) => out.push_str(r"\0"),
+            0 if !next.is_some_and(octal) => out.push_str(r"\0"),
+            _ if next.is_some_and(hex) => {
+                let _ = std::fmt::Write::write_fmt(&mut out, format_args!(r"\{b:03o}"));
+            }
             _ => {
                 let _ = std::fmt::Write::write_fmt(&mut out, format_args!(r"\x{b:02x}"));
             }
@@ -238,12 +247,10 @@ mod tests {
         assert_eq!(c_string(b"\x89PNG\r\n\x1a\n"), r#""\x89PNG\r\n\x1a\n""#);
         assert_eq!(c_string(b"\0asm"), r#""\0asm""#);
         assert_eq!(c_string(b"say \"hi\"\\"), r#""say \"hi\"\\""#);
-        // A byte followed by a hex digit still reads as that byte: `\xNN` is
-        // two digits and stops, which is what Rust and Python do and what the
-        // hex gutter beside it says.
-        assert_eq!(c_string(&[0x1f, b'e']), r#""\x1fe""#);
-        assert_eq!(c_string(&[0x1a, b'E', 0xdf, 0xa3]), r#""\x1aE\xdf\xa3""#);
-        assert_eq!(c_string(&[0, b'7']), r#""\x007""#);
+        // A byte C would read into the escape before it goes in octal, which
+        // ends after three digits: `\x1f` then `e` would be one escape.
+        assert_eq!(c_string(&[0x1f, b'e']), r#""\037e""#);
+        assert_eq!(c_string(&[0, b'7']), r#""\0007""#);
         assert_eq!(c_string(&[0, b'x']), r#""\0x""#);
     }
 

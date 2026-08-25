@@ -434,9 +434,9 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
         Value::Unread { .. } => ("unread", "\u{2026}".into(), String::new(), true),
         Value::Str(s) => ("str", s.clone(), s.clone(), true),
         Value::Magic { ok, bytes } => {
-            // The bytes as a string literal, which is how a signature is meant
-            // to be read: a PNG's says both that the file starts with a byte
-            // no text file has and that the word in it is PNG.
+            // The bytes as C would write a string, which is how a signature is
+            // meant to be read: a PNG's says both that the file starts with a
+            // byte no text file has and that the word in it is PNG.
             let text = qubero_core::text::c_string(bytes);
             let s = if *ok { text } else { format!("{text} does not match") };
             ("magic", s.clone(), s, *ok)
