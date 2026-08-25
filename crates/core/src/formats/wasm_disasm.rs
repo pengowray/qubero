@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn a_simd_instruction_reads_its_immediate() {
-        let mut b = b" asm".to_vec();
+        let mut b = b"\0asm".to_vec();
         b.extend_from_slice(&1u32.to_le_bytes());
         section(3, &[1, 0], &mut b);
         // f64.const 3.5, v128.const with its sixteen bytes, then v128.load with
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn an_atomic_instruction_reads_its_immediate() {
-        let mut b = b" asm".to_vec();
+        let mut b = b"\0asm".to_vec();
         b.extend_from_slice(&1u32.to_le_bytes());
         section(3, &[1, 0], &mut b);
         // i32.atomic.load offset=16 (aligned 4, which it must be), then
