@@ -8,7 +8,6 @@
 
 import { formatOffset } from "./doc.js";
 import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
-import { OverviewPanel } from "./overviewpanel.js";
 import type { Doc, Span } from "./doc.js";
 
 /** Rows fetched beyond the ones on screen, so a wheel notch has somewhere to
@@ -104,8 +103,6 @@ function fieldBytes(doc: Doc, s: Span): { hex: string; text: string } {
 
 export class ListingView {
   readonly el: HTMLElement;
-  /** The file described before its rows: size, byte map, regions. */
-  readonly overview: OverviewPanel;
   private readonly header: HTMLElement;
   private readonly rowsEl: HTMLElement;
   private readonly track: HTMLElement;
@@ -139,22 +136,9 @@ export class ListingView {
     this.rowsEl.className = "lv-rows";
     this.status = document.createElement("p");
     this.status.className = "lv-status";
-    this.overview = new OverviewPanel(doc);
-    // A click on the map scrolls the rows there; picking a region row moves
-    // the cursor everywhere, the same as picking a row below it.
-    this.overview.onJump = (bit) => {
-      this.topBit = bit;
-      this.render();
-    };
-    this.overview.onPick = (pick) => {
-      // The rows below follow along: a row picked among them is already on
-      // screen, but a region picked up here usually is not.
-      this.reveal(pick.path);
-      this.onPick(pick);
-    };
     const body = document.createElement("div");
     body.className = "lv-body";
-    body.append(this.overview.el, this.header, this.rowsEl, this.status);
+    body.append(this.header, this.rowsEl, this.status);
 
     this.track = document.createElement("div");
     this.track.className = "lv-track";
@@ -176,9 +160,6 @@ export class ListingView {
   }
 
   relayout(): void {
-    // The scan pauses while nobody can see the map; showing the view again is
-    // what starts it, or starts it over after an edit.
-    this.overview.pump();
     if (this.pendingBit !== null && !this.el.hidden) {
       const bit = this.pendingBit;
       this.pendingBit = null;

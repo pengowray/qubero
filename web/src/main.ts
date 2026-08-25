@@ -5,6 +5,7 @@ import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingView } from "./listingview.js";
+import { OverviewPanel } from "./overviewpanel.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, fullTemplateLine } from "./filetype.js";
@@ -84,6 +85,7 @@ function mount(doc: Doc): void {
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
   const listing = new ListingView(doc);
+  const overview = new OverviewPanel(doc);
   const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
   // it; moving it picks the field it lands in. `picking` stops that going round.
@@ -225,6 +227,7 @@ function mount(doc: Doc): void {
       // write "identifying" over a name already on screen.
       if (waiting !== null) clearTimeout(waiting);
       if (id === null) {
+        overview.setIdentity("");
         // A file with a template is not unknown, whatever the rules make of
         // it, so only a file without one says so.
         if (!templated) {
@@ -235,7 +238,7 @@ function mount(doc: Doc): void {
         return;
       }
       kind.named(id.message);
-      listing.overview.setIdentity(id.message);
+      overview.setIdentity(id.message);
       void kind.addTools(doc, id, name);
       if (name !== null) {
         kind.details(id, fullTemplateLine(name));
@@ -468,7 +471,20 @@ function mount(doc: Doc): void {
   const relayout = (): void => {
     view.relayout();
     listing.relayout();
+    overview.pump();
   };
+  // Picking a region moves the cursor everywhere, the same as picking a row in
+  // the listing, and brings the listing to it: a region is usually off screen.
+  overview.onPick = ({ path, startBit, endBit }) => {
+    view.setHighlight({ startBit, endBit });
+    picking = true;
+    view.setBitCursor(startBit, { pane: "hex" });
+    picking = false;
+    inspector.setPath(path);
+    table.reveal(path);
+    listing.reveal(path);
+  };
+  overview.onJump = (bit) => jumpToBit(bit);
   const bottom = panel("Structure", "bottom", table.el, relayout);
   const right = panel("At cursor", "right", inspector.el, relayout);
   app.replaceChildren(
@@ -476,6 +492,7 @@ function mount(doc: Doc): void {
     el(
       "main",
       { className: "workspace" },
+      overview.el,
       el("div", { className: "left" }, search.el, view.el, listing.el, bottom),
       right,
     ),
@@ -500,7 +517,7 @@ function mount(doc: Doc): void {
   // The next file dropped may be one no template covers. Fetch the rules while
   // nothing is waiting on them, so that file is named as soon as it opens.
   prefetchMagic();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, listing } });
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, listing, overview } });
 }
 
 function pick(): void {

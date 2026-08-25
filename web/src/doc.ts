@@ -156,6 +156,20 @@ export type OverviewState = {
   readonly read_bytes: number;
 };
 
+/** The same scan over one block, with what the block's bytes turned out to be
+ *  as a whole rather than what each of its buckets did. */
+export type FocusState = OverviewState & {
+  /** The block, in bytes. */
+  readonly start: number;
+  readonly end: number;
+  /** Entropy over the block, and the most a block this long could reach. */
+  readonly entropy: number;
+  readonly entropy_max: number;
+  readonly distinct: number;
+  /** The values that appear most, commonest first. */
+  readonly common: readonly { readonly value: number; readonly count: number }[];
+};
+
 /** How the text in the search bar is read. */
 export type NeedleKind = "hex" | "text" | "regex";
 
@@ -640,8 +654,16 @@ export class Doc {
    * read; `done` says when to stop asking. An edit throws the scan away, and
    * the next step starts it over.
    */
-  overviewStep(): TemplateReply<OverviewState> {
-    return this.handleReply<OverviewState>(this.editor.overview_step());
+  overviewStep(buckets: number): TemplateReply<OverviewState> {
+    return this.handleReply<OverviewState>(this.editor.overview_step(buckets));
+  }
+
+  /**
+   * One step of the scan over a single block of the file, divided into up to
+   * `buckets` of its own. Asking about a different block starts a new scan.
+   */
+  overviewFocusStep(from: number, to: number, buckets: number): TemplateReply<FocusState> {
+    return this.handleReply<FocusState>(this.editor.overview_focus_step(from, to, buckets));
   }
 
   /** What is wrong with what the search bar holds, or "" when nothing is.
