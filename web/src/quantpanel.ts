@@ -89,9 +89,12 @@ function groupRow(info: TypeInfo): DocumentFragment {
   const per = info.group_weights;
   const head = document.createElement("div");
   head.className = "insp-qhead";
+  // Where the type has a minimum, every cell carries two numbers, and a
+  // heading saying only "scales" would have the reader take both for scales.
+  const mins = info.groups[0]?.min !== null;
   head.append(
-    span("insp-qsubhead", "Group scales"),
-    span("insp-qcount", `${countText(info.groups.length, "group")} of ${per}`),
+    span("insp-qsubhead", mins ? "Scales and mins" : "Scales"),
+    span("insp-qcount", `${countText(info.groups.length, "group")} of ${countText(per, "weight")}`),
   );
   const g = document.createElement("div");
   g.className = "insp-qgroups";
