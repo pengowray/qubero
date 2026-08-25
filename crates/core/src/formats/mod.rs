@@ -66,9 +66,7 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
         Some("wasm")
     } else if head.starts_with(b"GGUF") {
         Some("gguf")
-    } else if head.starts_with(b"lmgg") {
-        // `ggml` as a 32-bit number, which is what a whisper.cpp model opens
-        // with.
+    } else if is_whisper(head) {
         Some("whisper")
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
@@ -91,6 +89,20 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Whether these leading bytes are a whisper.cpp model.
+///
+/// `lmgg` is `ggml` written as a 32-bit number, and every model file ggml wrote
+/// before GGUF opens with it, including the llama.cpp ones of the same era.
+/// What tells a whisper model apart is `n_mels` at 0x28: an audio model has 80
+/// mel bands, or 128 for large-v3, and a language model has something else
+/// there entirely.
+fn is_whisper(head: &[u8]) -> bool {
+    if !head.starts_with(b"lmgg") || head.len() < 0x2c {
+        return false;
+    }
+    matches!(u32::from_le_bytes([head[0x28], head[0x29], head[0x2a], head[0x2b]]), 80 | 128)
 }
 
 /// Whether these leading bytes are a DOS executable and nothing newer.
@@ -184,6 +196,17 @@ mod tests {
         let mut v = mz(0x80, 0x100, false);
         // Windows 3.x, which is neither a PE nor a DOS program.
         v[0x80..0x82].copy_from_slice(b"NE");
+        assert_eq!(sniff(&v), None);
+    }
+
+    #[test]
+    fn a_whisper_model_is_told_from_the_other_ggml_files_by_its_mel_bands() {
+        let mut v = b"lmgg".to_vec();
+        v.resize(0x2c, 0);
+        v[0x28..0x2c].copy_from_slice(&80u32.to_le_bytes());
+        assert_eq!(sniff(&v), Some("whisper"));
+        // A language model of the same era, which this cannot read.
+        v[0x28..0x2c].copy_from_slice(&11008u32.to_le_bytes());
         assert_eq!(sniff(&v), None);
     }
 

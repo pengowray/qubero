@@ -1,6 +1,6 @@
-//! A smoke test over a real whisper.cpp model. It is not in the repository, so
-//! this skips unless someone has dropped one in: any `*.bin` under `web/public`
-//! that opens with the ggml magic.
+//! A smoke test over a real whisper.cpp model. None is in the repository, so
+//! this skips unless someone has one to hand: any `*.bin` opening with the ggml
+//! magic, in `web/public` or in the directory `QUBERO_SAMPLES` names.
 
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
@@ -9,26 +9,28 @@ use qubero_core::source::MemSource;
 
 #[test]
 fn reads_a_real_model_end_to_end() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public");
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        eprintln!("skipped: no {dir}");
-        return;
-    };
+    let mut dirs = vec![concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public").to_string()];
+    if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
+        dirs.push(extra);
+    }
     let mut found = 0;
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.extension().is_none_or(|x| x != "bin") {
-            continue;
+    for dir in &dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "bin") {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            if !bytes.starts_with(b"lmgg") {
+                continue;
+            }
+            found += 1;
+            check(&path.display().to_string(), bytes);
         }
-        let Ok(bytes) = std::fs::read(&path) else { continue };
-        if !bytes.starts_with(b"lmgg") {
-            continue;
-        }
-        found += 1;
-        check(&path.display().to_string(), bytes);
     }
     if found == 0 {
-        eprintln!("skipped: no ggml model in {dir}");
+        eprintln!("skipped: no ggml model in {dirs:?}. Put one there, or set QUBERO_SAMPLES.");
     }
 }
 
