@@ -6,7 +6,7 @@
 use qubero_core::eval::{Explain, Origin};
 use qubero_core::{diescript, dosbasic};
 use qubero_core::search::{self, Needle, Search, Step};
-use qubero_core::{formats, magicrule, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
+use qubero_core::{formats, magicrule, overview, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -21,6 +21,10 @@ pub struct Editor {
     /// The template in use, which decides whether a listing row goes through
     /// the disassembler.
     template: String,
+    /// The byte-class scan behind the overview, run a step at a time. Thrown
+    /// away on any edit: the classes describe bytes that may no longer be
+    /// there.
+    scan: Option<overview::Scan>,
 }
 
 #[derive(Serialize)]
@@ -51,6 +55,19 @@ struct NodeDto {
     value_offset_bits: f64,
     /// How the encoding was settled, or that the bytes do not fit it.
     read_as: Option<String>,
+}
+
+/// What the byte-class scan has found so far. `classes` is one digit per
+/// bucket in file order, the digit being `overview::Class`.
+#[derive(Serialize)]
+struct OverviewDto {
+    done: bool,
+    bucket_bytes: f64,
+    total_buckets: f64,
+    classes: String,
+    zero_bytes: f64,
+    text_bytes: f64,
+    read_bytes: f64,
 }
 
 #[derive(Serialize)]
@@ -510,7 +527,7 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store), eval: None, disasm: None, template: String::new() }
+        Editor { doc: Document::new(store), eval: None, disasm: None, template: String::new(), scan: None }
     }
 
     fn changed(&mut self) {
@@ -518,6 +535,7 @@ impl Editor {
             e.invalidate();
         }
         self.disasm = None;
+        self.scan = None;
     }
 
     /// An edit that replaced bits in place at `bit`. What the template made of
@@ -527,6 +545,27 @@ impl Editor {
             e.invalidate_from(bit);
         }
         self.disasm = None;
+        self.scan = None;
+    }
+
+    /// One step of the byte-class scan behind the overview: at most a window
+    /// of the file read and classified. The reply is the usual tri-state, with
+    /// `node` carrying everything found so far, so the host can draw a partial
+    /// map while the rest is read. `done` on the node says when to stop asking.
+    pub fn overview_step(&mut self) -> String {
+        let scan = self.scan.get_or_insert_with(|| overview::Scan::new(self.doc.len_bytes()));
+        match scan.step(&self.doc) {
+            overview::ScanStep::Pending(m) => reply::<OverviewDto>(Err(EvalError::Pending(m))),
+            step => reply(Ok(OverviewDto {
+                done: step == overview::ScanStep::Done,
+                bucket_bytes: scan.bucket_bytes() as f64,
+                total_buckets: scan.total_buckets() as f64,
+                classes: scan.classes().iter().map(|&c| char::from(b'0' + c)).collect(),
+                zero_bytes: scan.zero_bytes() as f64,
+                text_bytes: scan.text_bytes() as f64,
+                read_bytes: scan.read_bytes() as f64,
+            })),
+        }
     }
 
     // ----- templates -----
