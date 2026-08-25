@@ -1,0 +1,72 @@
+# Builds the editor and publishes it to GitHub Pages at hex.pengowray.com.
+#
+# The page is static, but most of what it serves is generated: two wasm modules,
+# the file(1) rule text, and the Detect It Easy signatures. None of that is in
+# the repository, so every step below has to run before the site is worth
+# uploading.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and let a newer push wait rather than lose.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      # The prebuilt binary; `cargo install wasm-pack` would build it here.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+
+      # The editor, the rule database, and the rule text the page fetches.
+      - run: npm run wasm
+        working-directory: web
+      # The signatures that name which tool produced an executable. This one is
+      # not in package.json because it fetches a pinned commit over the network.
+      - run: node tools/die.mjs
+
+      - run: npm run build
+        working-directory: web
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
