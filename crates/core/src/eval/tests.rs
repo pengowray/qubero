@@ -1357,7 +1357,7 @@ fn a_signature_reads_as_the_string_it_is() {
 
 #[test]
 fn digits_read_as_the_number_they_spell() {
-    use crate::template::{Encoding, StrLen};
+    use crate::template::StrLen;
     let t = Template::new(
         "t",
         T::structure(

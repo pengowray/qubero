@@ -112,67 +112,28 @@ impl Evaluator {
                 }
                 read_uint(&buf, *bits, *endian) as i128
             }
-            // Walk forward for the byte that ends an unmeasured stream. Read a
-            // block at a time, and carry the last byte of one block into the
-            // next: a lead byte at the end of a block is told apart from a
-            // marker only by the byte after it, which is in the block after.
+            // Walk forward for the byte that ends an unmeasured stream. A lead
+            // byte is told apart from a marker by the byte after it, so blocks
+            // overlap by one: a lead byte at the end of one block is the first
+            // byte of the next, where its successor has arrived.
             Expr::ToMarker { lead, unless } => {
                 let Some((offset, limit)) = here else { return fail("nothing to measure") };
                 if limit < offset {
                     return fail("nothing to measure");
                 }
-                const BLOCK: u64 = 4096;
                 let total = (limit - offset) / 8;
-                let mut buf = vec![0u8; BLOCK as usize];
-                let mut at_byte = 0u64;
-                // Set when the previous block ended on a lead byte, so the
-                // first byte of this one decides what that byte was.
-                let mut pending = false;
-                while at_byte < total {
-                    let n = BLOCK.min(total - at_byte);
-                    buf.resize(n as usize, 0);
-                    let missing = doc.read_bits(offset + at_byte * 8, n * 8, &mut buf);
-                    if !missing.is_empty() {
-                        return Err(EvalError::Pending(missing));
-                    }
-                    if pending && !unless.contains(&buf[0]) {
-                        return Ok((at_byte - 1) as i128);
-                    }
-                    pending = false;
-                    for (i, b) in buf.iter().enumerate() {
-                        if *b != *lead {
-                            continue;
-                        }
-                        match buf.get(i + 1) {
-                            Some(next) if !unless.contains(next) => return Ok((at_byte + i as u64) as i128),
-                            Some(_) => {}
-                            // The last byte of this block, and of the file if
-                            // this is the last block. A lead byte with nothing
-                            // after it is not a marker: nothing has said so.
-                            None => pending = true,
-                        }
-                    }
-                    at_byte += n;
-                }
-                total as i128
+                let (lead, unless) = (*lead, unless.clone());
+                let hit = scan_blocks(doc, offset, total, 1, Dir::Forward, |b| {
+                    (0..b.len()).find(|&i| b[i] == lead && b.get(i + 1).is_some_and(|n| !unless.contains(n)))
+                })?;
+                // A lead byte with nothing after it is not a marker: nothing
+                // has said so, so the run measures to the end.
+                hit.unwrap_or(total) as i128
             }
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
             // Walk for a word rather than for a byte. Blocks overlap by all
             // but one byte of the needle, so a word written across the seam
             // between two of them is still found.
-            //
-            // Which end the walk starts from is most of the cost of it. The
-            // first occurrence is found by reading forward and stopping at it,
-            // and the last one by reading backward and stopping at it: a word
-            // near the end of the file is a block's work either way round,
-            // where reading forward to be sure nothing came after it is the
-            // whole file's. For a reader that holds a window rather than the
-            // file that is the difference between opening and not opening. A
-            // PDF's pointer to its table is written forty bytes from the end
-            // of the file; looking for it forwards means fetching every chunk
-            // of a three hundred megabyte file to reach it, dropping the ones
-            // fetched first to make room, and starting over from the front the
-            // next time it is asked, which never finishes.
             Expr::Find { needle, last } => {
                 let Some((offset, limit)) = here else { return fail("nothing to search") };
                 if limit < offset {
@@ -181,53 +142,13 @@ impl Evaluator {
                 if needle.is_empty() {
                     return fail("nothing to look for");
                 }
-                const BLOCK: u64 = 4096;
                 let total = (limit - offset) / 8;
-                let n = needle.len() as u64;
-                let step = BLOCK.max(n);
-                let mut buf = Vec::new();
-                let mut hit: Option<u64> = None;
-                if *last {
-                    // Backward: the window's far end walks down the file, and
-                    // each block keeps all but one byte of the needle from the
-                    // block below, so a word across the seam is still whole.
-                    let mut end = total;
-                    while end >= n {
-                        let want = step.min(end);
-                        let from = end - want;
-                        buf.resize(want as usize, 0);
-                        let missing = doc.read_bits(offset + from * 8, want * 8, &mut buf);
-                        if !missing.is_empty() {
-                            return Err(EvalError::Pending(missing));
-                        }
-                        if let Some(i) = buf.windows(needle.len()).rposition(|w| w == needle.as_slice()) {
-                            hit = Some(from + i as u64);
-                            break;
-                        }
-                        if from == 0 {
-                            break;
-                        }
-                        end = from + (n - 1);
-                    }
-                } else {
-                    let mut at_byte = 0u64;
-                    while at_byte + n <= total {
-                        let want = step.min(total - at_byte);
-                        buf.resize(want as usize, 0);
-                        let missing = doc.read_bits(offset + at_byte * 8, want * 8, &mut buf);
-                        if !missing.is_empty() {
-                            return Err(EvalError::Pending(missing));
-                        }
-                        if let Some(i) = buf.windows(needle.len()).position(|w| w == needle.as_slice()) {
-                            hit = Some(at_byte + i as u64);
-                            break;
-                        }
-                        if want < step {
-                            break;
-                        }
-                        at_byte += step - (n - 1);
-                    }
-                }
+                let n = needle.len();
+                let dir = if *last { Dir::Backward } else { Dir::Forward };
+                let hit = scan_blocks(doc, offset, total, n as u64 - 1, dir, |b| match dir {
+                    Dir::Backward => b.windows(n).rposition(|w| w == needle.as_slice()),
+                    Dir::Forward => b.windows(n).position(|w| w == needle.as_slice()),
+                })?;
                 // Not written again: the run measures to the end of its
                 // container, as a stream with no marker after it does. A file
                 // cut off before the word it promised is still worth showing.
@@ -493,4 +414,85 @@ impl Evaluator {
         }
         fail(format!("unknown field {name}"))
     }
+}
+
+/// Which end of a container a block walk starts from.
+///
+/// This is most of what a search costs. Reading forward and stopping at the
+/// first hit is what finding the first of something means; reading backward and
+/// stopping at the first hit is what finding the last of something means, and
+/// reading forward to the end to be sure nothing came after is not. For a
+/// reader holding a window rather than a whole file that is the difference
+/// between opening a file and not opening it: a PDF's pointer to its table is
+/// written forty bytes from the end, and looking for it forwards means fetching
+/// every chunk of a three hundred megabyte file to reach it, dropping the ones
+/// fetched first to make room, and starting over from the front the next time
+/// it is asked, which never finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Dir {
+    Forward,
+    Backward,
+}
+
+/// Read a container a block at a time and hand each block to `look`, which says
+/// where in that block it found what it was after. The answer is counted from
+/// `offset`; `None` means the container held no such thing.
+///
+/// Consecutive blocks overlap by `overlap` bytes, so something written across
+/// the seam between two of them is whole in one of the two. A search for a word
+/// overlaps by all but one byte of it; one that decides a byte by the byte
+/// after it overlaps by one.
+///
+/// Reading stops at the first block whose bytes have not been loaded, and the
+/// caller fetches them and asks again. Which end the walk starts from decides
+/// whether that ever ends: see [`Dir`].
+fn scan_blocks<S: Source>(
+    doc: &Document<S>,
+    offset: u64,
+    total: u64,
+    overlap: u64,
+    dir: Dir,
+    mut look: impl FnMut(&[u8]) -> Option<usize>,
+) -> R<Option<u64>> {
+    const BLOCK: u64 = 4096;
+    // A block has to be longer than the overlap, or the walk never moves on.
+    let step = BLOCK.max(overlap + 1);
+    let mut buf = Vec::new();
+    let read = |from: u64, want: u64, buf: &mut Vec<u8>| -> R<()> {
+        buf.resize(want as usize, 0);
+        let missing = doc.read_bits(offset + from * 8, want * 8, buf);
+        if missing.is_empty() { Ok(()) } else { Err(EvalError::Pending(missing)) }
+    };
+    match dir {
+        Dir::Forward => {
+            let mut at = 0u64;
+            while at + overlap < total {
+                let want = step.min(total - at);
+                read(at, want, &mut buf)?;
+                if let Some(i) = look(&buf) {
+                    return Ok(Some(at + i as u64));
+                }
+                if want < step {
+                    break;
+                }
+                at += step - overlap;
+            }
+        }
+        Dir::Backward => {
+            let mut end = total;
+            while end > overlap {
+                let want = step.min(end);
+                let from = end - want;
+                read(from, want, &mut buf)?;
+                if let Some(i) = look(&buf) {
+                    return Ok(Some(from + i as u64));
+                }
+                if from == 0 {
+                    break;
+                }
+                end = from + overlap;
+            }
+        }
+    }
+    Ok(None)
 }
