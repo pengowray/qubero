@@ -714,10 +714,14 @@ mod tests {
         use crate::eval::Explain;
         use crate::formats::pdf_xref::{Kind, Row};
 
+        // The three kinds the spec defines, and one it does not: a type of 7
+        // is legal and means the null object, and a panel that showed the
+        // wrong number for it would be lying about the bytes.
         let bytes = pdf_bytes_with_stream_of(&[
             (0, 0, 3, 0xffff),
             (1, 1, 0x2c, 0),
             (2, 2, 9, 5),
+            (3, 7, 1234, 8),
         ]);
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(pdf());
@@ -726,18 +730,24 @@ mod tests {
         // lands on the second and would see nothing if only the first
         // answered.
         for path in [&[6, 0][..], &[6, 0, 5][..]] {
-            let Explain::XrefRows { widths, rows, total, free, in_file, in_stream, problem, .. } =
+            let Explain::XrefRows { widths, rows, total, free, in_file, in_stream, unknown, problem, .. } =
                 ev.explain(&d, path, None).unwrap()
             else {
                 panic!("no rows explained at {path:?}");
             };
             assert_eq!(problem, None, "{path:?}");
             assert_eq!(widths, [1, 2, 2], "{path:?}");
-            assert_eq!(total, 3, "{path:?}");
-            assert_eq!((free, in_file, in_stream), (1, 1, 1), "{path:?}");
+            assert_eq!(total, 4, "{path:?}");
+            // An undefined type is its own count rather than one of the
+            // others, so the four still add up to the total.
+            assert_eq!((free, in_file, in_stream, unknown), (1, 1, 1, 1), "{path:?}");
+            assert_eq!(free + in_file + in_stream + unknown, total, "{path:?}");
             assert_eq!(rows[0], Row { object: 0, kind: Kind::Free, second: 3, third: 0xffff, at: 0 });
             assert_eq!(rows[1], Row { object: 1, kind: Kind::InFile, second: 0x2c, third: 0, at: 5 });
             assert_eq!(rows[2], Row { object: 2, kind: Kind::InStream, second: 9, third: 5, at: 10 });
+            assert_eq!(rows[3], Row { object: 3, kind: Kind::Other(7), second: 1234, third: 8, at: 15 });
+            // The type is kept, not read back off one of the row's numbers.
+            assert_eq!(rows[3].kind.raw(), 7, "{path:?}");
         }
     }
 

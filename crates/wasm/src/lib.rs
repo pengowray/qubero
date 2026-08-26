@@ -125,6 +125,10 @@ struct TextDto {
 struct XrefRowDto {
     object: f64,
     kind: &'static str,
+    /// The type number the row held: 0, 1, 2, or whatever a row of a type
+    /// nobody has defined wrote. Without it a panel showing an unknown row has
+    /// only `kind`, which for all of them is the same word.
+    type_raw: f64,
     offset: f64,
     second: f64,
     third: f64,
@@ -182,6 +186,7 @@ struct ExplainDto {
     xref_free: f64,
     xref_in_file: f64,
     xref_in_stream: f64,
+    xref_unknown: f64,
     /// Xref: the rows, and how many there are altogether. A table with more
     /// than `xref_rows` holds says so with `xref_total`.
     xref_rows: Vec<XrefRowDto>,
@@ -309,6 +314,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
         xref_free: 0.0,
         xref_in_file: 0.0,
         xref_in_stream: 0.0,
+        xref_unknown: 0.0,
         xref_rows: Vec::new(),
         xref_total: 0.0,
         problem: String::new(),
@@ -372,6 +378,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
             free,
             in_file,
             in_stream,
+            unknown,
             rows,
             total,
             problem,
@@ -385,6 +392,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
             dto.xref_free = free as f64;
             dto.xref_in_file = in_file as f64;
             dto.xref_in_stream = in_stream as f64;
+            dto.xref_unknown = unknown as f64;
             dto.xref_total = total as f64;
             dto.problem = problem.unwrap_or_default();
             dto.xref_rows = rows
@@ -392,6 +400,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 .map(|r| XrefRowDto {
                     object: r.object as f64,
                     kind: r.kind.as_str(),
+                    type_raw: r.kind.raw() as f64,
                     offset: if r.kind == Kind::InFile { r.second as f64 } else { -1.0 },
                     second: r.second as f64,
                     third: r.third as f64,

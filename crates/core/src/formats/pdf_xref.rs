@@ -78,6 +78,17 @@ impl Kind {
         }
     }
 
+    /// The number the row actually held, which for a type nobody has defined
+    /// is the only thing there is to say about it.
+    pub fn raw(self) -> u64 {
+        match self {
+            Kind::Free => 0,
+            Kind::InFile => 1,
+            Kind::InStream => 2,
+            Kind::Other(n) => n,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Free => "free",

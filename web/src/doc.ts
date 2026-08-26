@@ -208,6 +208,9 @@ export type Origin = {
 export type XrefRow = {
   readonly object: number;
   readonly kind: string;
+  /** The type number the row held: 0, 1, 2, or whatever an undefined type
+   *  wrote. `kind` is the same word for every undefined one. */
+  readonly type_raw: number;
   readonly offset: number;
   readonly second: number;
   readonly third: number;
@@ -272,6 +275,7 @@ export type TypeInfo = {
   readonly xref_free: number;
   readonly xref_in_file: number;
   readonly xref_in_stream: number;
+  readonly xref_unknown: number;
   /** Xref: the rows, and how many there are altogether. */
   readonly xref_rows: readonly XrefRow[];
   readonly xref_total: number;

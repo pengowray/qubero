@@ -78,10 +78,13 @@ pub enum Explain {
         packed_bytes: u64,
         decoded_bytes: u64,
         /// How many rows there are of each kind, over the whole table rather
-        /// than over the ones listed.
+        /// than over the ones listed. `unknown` counts rows whose type the
+        /// spec does not define, which are kept apart so the four add up to
+        /// the total rather than quietly landing in one of the other three.
         free: usize,
         in_file: usize,
         in_stream: usize,
+        unknown: usize,
         /// The rows themselves, up to [`XREF_ROWS_SHOWN`] of them, and how
         /// many there are altogether. A table with more says so rather than
         /// looking complete.
@@ -225,12 +228,13 @@ impl Evaluator {
                 decoded_bytes: 0,
                 trailing_bytes: 0,
             });
-            let mut counts = (0usize, 0usize, 0usize);
+            let mut counts = (0usize, 0usize, 0usize, 0usize);
             for row in &t.rows {
                 match row.kind {
                     pdf_xref::Kind::Free => counts.0 += 1,
                     pdf_xref::Kind::InFile => counts.1 += 1,
-                    _ => counts.2 += 1,
+                    pdf_xref::Kind::InStream => counts.2 += 1,
+                    pdf_xref::Kind::Other(_) => counts.3 += 1,
                 }
             }
             Explain::XrefRows {
@@ -241,6 +245,7 @@ impl Evaluator {
                 free: counts.0,
                 in_file: counts.1,
                 in_stream: counts.2,
+                unknown: counts.3,
                 total: t.rows.len(),
                 rows: t.rows.into_iter().take(XREF_ROWS_SHOWN).collect(),
                 problem,

@@ -41,6 +41,7 @@ function tally(info: TypeInfo): string {
     parts.push(`${n(info.xref_in_stream)} in ${one ? "an object stream" : "object streams"}`);
   }
   if (info.xref_free > 0) parts.push(`${n(info.xref_free)} free`);
+  if (info.xref_unknown > 0) parts.push(`${n(info.xref_unknown)} of unknown type`);
   const rows = countText(info.xref_total, "row");
   return parts.length === 0 ? rows : `${rows}: ${parts.join(", ")}`;
 }
@@ -52,14 +53,17 @@ function where(r: XrefRow): string {
   if (r.kind === "in file") return r.offset.toLocaleString();
   if (r.kind === "in an object stream") return `In object stream ${r.second.toLocaleString()}, index ${r.third}`;
   if (r.kind === "free") return "Free";
-  return `Unknown type ${r.second}`;
+  return `Unknown type ${r.type_raw}`;
 }
 
 /** The generation, where it is not the zero almost every row carries. A file
  *  that has replaced an object writes a number here, and so does the head of
  *  the free list, so it is worth showing exactly when it is unusual. */
 function generation(r: XrefRow): string {
-  if (r.kind === "in an object stream" || r.third === 0) return "";
+  // Only the two kinds the spec gives the field a meaning for. A row of a type
+  // nobody defined has three numbers and no names for any of them.
+  if (r.kind !== "in file" && r.kind !== "free") return "";
+  if (r.third === 0) return "";
   return `generation ${r.third.toLocaleString()}`;
 }
 
