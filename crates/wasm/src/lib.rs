@@ -808,8 +808,10 @@ impl Editor {
     }
 
     /// Name of the built-in template matching these leading bytes, or "".
-    pub fn sniff_template(&self, head: &[u8]) -> String {
-        formats::sniff(head).unwrap_or("").to_string()
+    /// `file_len` is the length of the whole file, which a format whose
+    /// header is a table of offsets weighs its pointers against.
+    pub fn sniff_template(&self, head: &[u8], file_len: f64) -> String {
+        formats::sniff(head, file_len as u64).unwrap_or("").to_string()
     }
 
     /// Select a built-in template by name; "" clears it. Returns false if unknown.

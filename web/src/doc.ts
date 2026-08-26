@@ -604,13 +604,15 @@ export class Doc {
   /** Built-in template name matching the file's first bytes, or null. */
   async sniffTemplate(): Promise<string | null> {
     // Enough for a magic number, for the format tag inside a WAVE's first
-    // chunk (the only thing that tells a W4V from a WAV), and for the PE
-    // header a Windows executable puts at an offset of its own choosing,
-    // which is usually 0x80 to 0x100 but is fixed nowhere.
-    const n = Math.min(1024, this.lengthBytes);
+    // chunk (the only thing that tells a W4V from a WAV), for the PE header
+    // a Windows executable puts at an offset of its own choosing, usually
+    // 0x80 to 0x100 but fixed nowhere, and for an Anvil region's two
+    // tables, which are 8 KiB and whose entries only say anything all
+    // together.
+    const n = Math.min(8192, this.lengthBytes);
     if (n === 0) return null;
     await this.ensureRange(0, n);
-    const name = this.editor.sniff_template(this.read(0, n).bytes);
+    const name = this.editor.sniff_template(this.read(0, n).bytes, this.lengthBytes);
     return name === "" ? null : name;
   }
 

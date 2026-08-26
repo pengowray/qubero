@@ -46,7 +46,7 @@ fn every_segment_reads_and_together_they_cover_the_file() {
             continue;
         };
         checked += 1;
-        assert_eq!(sniff(&bytes[..64]), Some("jpeg"), "{path}");
+        assert_eq!(sniff(&bytes[..64], bytes.len() as u64), Some("jpeg"), "{path}");
 
         let len = bytes.len() as u64;
         let d = Document::new(MemSource(bytes));

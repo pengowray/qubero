@@ -1608,6 +1608,6 @@ mod tests {
     /// nothing in it says what the file holds.
     #[test]
     fn the_signature_claims_the_file() {
-        assert_eq!(super::super::sniff(b"\x89HDF\r\n\x1a\n\0\0"), Some("hdf5"));
+        assert_eq!(super::super::sniff(b"\x89HDF\r\n\x1a\n\0\0", 4096), Some("hdf5"));
     }
 }

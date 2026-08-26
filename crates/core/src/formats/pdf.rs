@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn a_pdf_is_known_by_the_word_it_starts_with() {
-        assert_eq!(crate::formats::sniff(b"%PDF-1.7\n1 0 obj\n"), Some("pdf"));
+        assert_eq!(crate::formats::sniff(b"%PDF-1.7\n1 0 obj\n", 4096), Some("pdf"));
     }
 
     /// A file that has been saved twice holds two tables, and the one that

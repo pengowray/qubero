@@ -184,7 +184,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"{\"", "json"),
 ];
 
-/// Pick a built-in template from the first bytes of a file.
+/// Pick a built-in template from the first bytes of a file. `len` is the
+/// length of the whole file, which a format whose header is a table of
+/// offsets needs in order to weigh what the table points at: the head alone
+/// cannot say whether the offsets reach past the end.
 ///
 /// The careful tests go first and the table of signatures second. That is the
 /// wrong way round from how it reads, and it is deliberate: a prefix of two or
@@ -192,8 +195,10 @@ const MAGIC: &[(&[u8], &str)] = &[
 /// weighs them, so the tests get first refusal. `{"` is a JSON file and it is
 /// also the size and checksum an LHA archive could open with, and only one of
 /// the two knows enough to say so.
-pub fn sniff(head: &[u8]) -> Option<&'static str> {
-    if is_whisper(head) {
+pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
+    if is_mca(head, len) {
+        Some("mca")
+    } else if is_whisper(head) {
         Some("whisper")
     } else if is_safetensors(head) {
         Some("safetensors")
@@ -302,6 +307,62 @@ fn is_safetensors(head: &[u8]) -> bool {
     (2..=64 << 20).contains(&len) && head.get(8..10) == Some(b"{\"".as_slice())
 }
 
+/// Whether these leading bytes are a Minecraft Anvil region.
+///
+/// The format has no magic number: the file opens with its two tables, 1024
+/// entries of four bytes each, and then the chunks the first table points at.
+/// Nothing about one entry distinguishes it from noise, so the file is told by
+/// the shape of all of them at once. Most entries of a real region are all
+/// zeroes, the chunks never having been generated, and every one that is not
+/// points past both tables, stays inside the file, and carries a length of at
+/// least one sector. A single entry against that is a table of something
+/// else, so it turns the file away rather than being averaged out.
+///
+/// The second table backs the first: entries there are seconds since 1970,
+/// and a chunk a world has saved has a stamp between 2010, the years the game
+/// is from, and 2100. The counts are weighed apart, one entry to the two
+/// tables or more, because a world is saved a chunk at a time and stamps
+/// outlive their entries and entries their stamps.
+///
+/// The head must hold both tables whole: an 8 KiB read is the smallest that
+/// says anything about this format, and a shorter one is no evidence at all.
+/// The length of the file is the other witness, since the pointers are only
+/// worth weighing against the size they address.
+fn is_mca(head: &[u8], len: u64) -> bool {
+    if head.len() < 8192 || len < 12288 || len % 4096 != 0 {
+        return false;
+    }
+    let mut present = 0;
+    for i in 0..1024 {
+        let at = i * 4;
+        let sector = u32::from_be_bytes([0, head[at], head[at + 1], head[at + 2]]);
+        let sectors = u32::from(head[at + 3]);
+        if sector | sectors == 0 {
+            continue;
+        }
+        let within = sector >= 2 && (u64::from(sector) + u64::from(sectors)) * 4096 <= len;
+        if !within {
+            return false;
+        }
+        present += 1;
+    }
+    if present == 0 {
+        return false;
+    }
+    let mut dated = 0;
+    for i in 0..1024 {
+        let at = 4096 + i * 4;
+        let stamp = u32::from_be_bytes([head[at], head[at + 1], head[at + 2], head[at + 3]]);
+        // Seconds since 1970 between the start of 2010 and the start of 2100.
+        if (1262304000..4102444800).contains(&stamp) {
+            dated += 1;
+        } else if stamp != 0 {
+            return false;
+        }
+    }
+    dated > 0 && dated * 2 >= present
+}
+
 /// Whether these leading bytes are a DOS executable and nothing newer.
 ///
 /// Everything in the `MZ` family opens the same way, and what says whether a
@@ -365,7 +426,7 @@ mod tests {
 
     #[test]
     fn a_windows_executable_is_a_pe() {
-        assert_eq!(sniff(&mz(0x80, 0x100, true)), Some("pe"));
+        assert_eq!(sniff(&mz(0x80, 0x100, true), 0x100), Some("pe"));
     }
 
     #[test]
@@ -374,18 +435,18 @@ mod tests {
         let mut v = vec![0u8; 0x100];
         v[0..2].copy_from_slice(b"MZ");
         v[0x18..0x1a].copy_from_slice(&0x1eu16.to_le_bytes());
-        assert_eq!(sniff(&v), Some("msdos"));
+        assert_eq!(sniff(&v, v.len() as u64), Some("msdos"));
         // Room left for one, and nothing in it.
-        assert_eq!(sniff(&mz(0x80, 0x100, false)), Some("msdos"));
+        assert_eq!(sniff(&mz(0x80, 0x100, false), 0x100), Some("msdos"));
     }
 
     #[test]
     fn a_header_past_what_was_read_is_not_claimed() {
         // It may be a Windows executable, and reading it as a DOS one would
         // describe the stub that exists to say the program needs Windows.
-        assert_eq!(sniff(&mz(0x400, 0x100, false)), None);
+        assert_eq!(sniff(&mz(0x400, 0x100, false), 0x100), None);
         // Even a short read of a real PE: better unclaimed than wrong.
-        assert_eq!(sniff(&mz(0x80, 0x40, false)), None);
+        assert_eq!(sniff(&mz(0x80, 0x40, false), 0x40), None);
     }
 
     #[test]
@@ -393,7 +454,7 @@ mod tests {
         let mut v = mz(0x80, 0x100, false);
         // Windows 3.x, which is neither a PE nor a DOS program.
         v[0x80..0x82].copy_from_slice(b"NE");
-        assert_eq!(sniff(&v), None);
+        assert_eq!(sniff(&v, v.len() as u64), None);
     }
 
     #[test]
@@ -401,34 +462,80 @@ mod tests {
         let mut v = b"lmgg".to_vec();
         v.resize(0x2c, 0);
         v[0x28..0x2c].copy_from_slice(&80u32.to_le_bytes());
-        assert_eq!(sniff(&v), Some("whisper"));
+        assert_eq!(sniff(&v, v.len() as u64), Some("whisper"));
         // A language model of the same era, which this cannot read.
         v[0x28..0x2c].copy_from_slice(&11008u32.to_le_bytes());
-        assert_eq!(sniff(&v), None);
+        assert_eq!(sniff(&v, v.len() as u64), None);
     }
 
     #[test]
     fn a_safetensors_file_is_told_by_its_header_length_and_the_json_after_it() {
         let mut v = 1024u64.to_le_bytes().to_vec();
         v.extend_from_slice(br#"{"a.weight":{"dtype":"F16""#);
-        assert_eq!(sniff(&v), Some("safetensors"));
+        assert_eq!(sniff(&v, v.len() as u64), Some("safetensors"));
         // A length no header could have, whatever follows it.
         let mut v = u64::MAX.to_le_bytes().to_vec();
         v.extend_from_slice(br#"{"a":1}"#);
-        assert_eq!(sniff(&v), None);
+        assert_eq!(sniff(&v, v.len() as u64), None);
+    }
+
+    /// The front of a region: `present` chunks in consecutive sectors after
+    /// the two tables, a saved stamp apiece, and every other entry zero, as
+    /// most of the 1024 in a real region are.
+    fn region(present: usize) -> Vec<u8> {
+        let mut v = vec![0u8; 8192];
+        for i in 0..present {
+            let at = i * 4;
+            let sector = 2u32 + i as u32;
+            v[at..at + 3].copy_from_slice(&sector.to_be_bytes()[1..]);
+            v[at + 3] = 1;
+            v[4096 + at..4096 + at + 4].copy_from_slice(&1_700_000_000u32.to_be_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn an_anvil_region_is_told_by_the_shape_of_its_tables() {
+        assert_eq!(sniff(&region(182), (2 + 182) * 4096), Some("mca"));
+        // Two chunks in the smallest region the tables allow.
+        assert_eq!(sniff(&region(2), 4 * 4096), Some("mca"));
+    }
+
+    #[test]
+    fn a_region_table_with_a_pointer_past_the_end_is_not_one() {
+        let mut v = region(182);
+        let at = 5 * 4;
+        v[at..at + 3].copy_from_slice(&9_000u32.to_be_bytes()[1..]);
+        assert_eq!(sniff(&v, (2 + 182) * 4096), None);
+        // As are stamps that are seconds from no year a world was saved in.
+        let mut v = region(182);
+        let at = 4096 + 5 * 4;
+        v[at..at + 4].copy_from_slice(&31_536_000u32.to_be_bytes());
+        assert_eq!(sniff(&v, (2 + 182) * 4096), None);
+    }
+
+    #[test]
+    fn tables_that_say_too_little_say_nothing() {
+        let len = (2 + 182) * 4096;
+        // Nothing but zeroes is not a region, whatever its length.
+        assert_eq!(sniff(&region(0), 4 * 4096), None);
+        // Less than both tables arriving is no evidence at all.
+        assert_eq!(sniff(&region(182)[..8191], len), None);
+        // A length that is not a count of sectors is not a region either.
+        assert_eq!(sniff(&region(182), len + 1), None);
     }
 
     #[test]
     fn the_other_formats_still_answer() {
-        assert_eq!(sniff(b"\x89PNG\r\n\x1a\n"), Some("png"));
-        assert_eq!(sniff(b"\0asm\x01\0\0\0"), Some("wasm"));
-        assert_eq!(sniff(b"SQLite format 3\0"), Some("sqlite"));
-        assert_eq!(sniff(b"qoif\0\0\x01\0\0\0\x01\0\x04\0"), Some("qoi"));
-        assert_eq!(sniff(b"GIF89a"), Some("gif"));
+        assert_eq!(sniff(b"\x89PNG\r\n\x1a\n", 4096), Some("png"));
+        assert_eq!(sniff(b"\0asm\x01\0\0\0", 4096), Some("wasm"));
+        assert_eq!(sniff(b"SQLite format 3\0", 4096), Some("sqlite"));
+        assert_eq!(sniff(b"qoif\0\0\x01\0\0\0\x01\0\x04\0", 4096), Some("qoi"));
+        assert_eq!(sniff(b"GIF89a", 4096), Some("gif"));
         // Both ways round, and the 42 after the letters is written the way
         // the letters just said it would be.
-        assert_eq!(sniff(b"II*\x00\x08\x00\x00\x00"), Some("tiff"));
-        assert_eq!(sniff(b"MM\x00*\x00\x00\x00\x08"), Some("tiff"));
+        assert_eq!(sniff(b"II*\x00\x08\x00\x00\x00", 4096), Some("tiff"));
+        assert_eq!(sniff(b"MM\x00*\x00\x00\x00\x08", 4096), Some("tiff"));
     }
 
     #[test]
@@ -436,22 +543,22 @@ mod tests {
         // An LHA archive whose header size and checksum happen to be the two
         // characters a JSON file opens with. The method at offset 2 is what
         // settles it, and the table of prefixes never gets asked.
-        assert_eq!(sniff(b"{\"-lh5-\0\0\0\0"), Some("lha"));
+        assert_eq!(sniff(b"{\"-lh5-\0\0\0\0", 4096), Some("lha"));
         // And an ordinary JSON file is still JSON.
-        assert_eq!(sniff(b"{\"name\": 1}"), Some("json"));
+        assert_eq!(sniff(b"{\"name\": 1}", 4096), Some("json"));
     }
 
     #[test]
     fn one_magic_number_covering_several_formats_is_settled_by_what_follows() {
-        assert_eq!(sniff(b"FORM\0\0\0\x10AIFF"), Some("aiff"));
-        assert_eq!(sniff(b"FORM\0\0\0\x10ILBM"), Some("ilbm"));
+        assert_eq!(sniff(b"FORM\0\0\0\x10AIFF", 4096), Some("aiff"));
+        assert_eq!(sniff(b"FORM\0\0\0\x10ILBM", 4096), Some("ilbm"));
         // A JPEG opens with the start of image and then the first marker,
         // which is three bytes; the two on their own are not enough.
-        assert_eq!(sniff(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"), Some("jpeg"));
-        assert_eq!(sniff(b"\xff\xd8\xff\xdb\x00\x43\x00"), Some("jpeg"));
-        assert_eq!(sniff(b"\xff\xd8hello"), None);
+        assert_eq!(sniff(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00", 4096), Some("jpeg"));
+        assert_eq!(sniff(b"\xff\xd8\xff\xdb\x00\x43\x00", 4096), Some("jpeg"));
+        assert_eq!(sniff(b"\xff\xd8hello", 4096), None);
         // An IFF file holding something with no template here is left alone
         // rather than read as one of the two that do.
-        assert_eq!(sniff(b"FORM\0\0\0\x108SVX"), None);
+        assert_eq!(sniff(b"FORM\0\0\0\x108SVX", 4096), None);
     }
 }
