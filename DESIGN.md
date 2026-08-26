@@ -141,8 +141,17 @@ attributes, links, symbol tables and continuations), version 1 b-trees for both
 groups and chunks, local heaps, symbol table nodes and global heap collections.
 What is not: fractal heaps and version 2 b-trees, which is where a file written
 with the newest library keeps its links; data layout messages of version 4 and
-later; and the contents of a filtered chunk, which are deflated and belong with
-the other packed contents rather than in a field.
+later.
+
+A filtered chunk is the one thing in such a file whose contents are not in the
+file: what is written there is the output of a pipeline of filters, so the
+template leaves it as bytes and `hdf5_chunk.rs` says what it holds, the way
+`pdf_objstm` and `ggml_quant` already do for packed contents. It undoes deflate
+and shuffle, takes a checksum off, and stops at a filter it does not know,
+naming it. Every step is reported with what went in and what came out, since a
+chunk that arrived at 129 bytes and left at 400 has said something about
+itself. The panel then reads the first elements with the datatype beside the
+chunk, so what a reader sees is the numbers rather than the compression.
 
 A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
