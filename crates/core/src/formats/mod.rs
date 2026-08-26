@@ -24,6 +24,7 @@ mod nes;
 mod pak;
 mod pcx;
 mod pdf;
+pub mod pdf_xref;
 mod pe;
 pub mod pe_tables;
 mod pi1;

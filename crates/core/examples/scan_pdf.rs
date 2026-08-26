@@ -5,7 +5,7 @@ use std::fs;
 
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
-use qubero_core::formats::pdf;
+use qubero_core::formats::{pdf, pdf_xref};
 use qubero_core::source::MemSource;
 
 /// The value of a field, or why it could not be read.
@@ -36,8 +36,38 @@ fn main() {
     if let Ok(s) = ev.node(&d, &[6, 0]) {
         if s.size_bits > 0 {
             println!("  cross-reference stream at {}, {} bytes", s.offset_bits / 8, s.size_bits / 8);
-            println!("    dictionary {}", show(&mut ev, &d, &[6, 0, 3]));
-            println!("    rows       {} bytes, packed and not unpacked here", ev.node(&d, &[6, 0, 5]).map_or(0, |r| r.size_bits / 8));
+            let dict = match ev.node(&d, &[6, 0, 3]).map(|n| n.value) {
+                Ok(Value::Str(t)) => t,
+                _ => String::new(),
+            };
+            println!("    dictionary {dict:?}");
+            let rows = ev.node(&d, &[6, 0, 5]).expect("the packed rows");
+            let mut bytes = vec![0u8; (rows.size_bits / 8) as usize];
+            d.read_bytes(rows.offset_bits / 8, &mut bytes);
+            match qubero_core::formats::pdf_xref::decode(&dict, &bytes) {
+                Err(p) => println!("    rows       {} bytes: {}", bytes.len(), p.as_str()),
+                Ok(t) => {
+                    println!(
+                        "    rows       {} packed bytes, {} decoded, /W {:?}, predictor {:?}",
+                        bytes.len(),
+                        t.decoded_bytes,
+                        t.widths,
+                        t.predictor
+                    );
+                    let (free, in_file, in_stream) = t.rows.iter().fold((0, 0, 0), |(f, o, s), r| match r.kind {
+                        pdf_xref::Kind::Free => (f + 1, o, s),
+                        pdf_xref::Kind::InFile => (f, o + 1, s),
+                        _ => (f, o, s + 1),
+                    });
+                    println!("    {} rows: {free} free, {in_file} in the file, {in_stream} in object streams", t.rows.len());
+                    for r in t.rows.iter().take(4).chain(t.rows.iter().rev().take(1)) {
+                        let (a, b) = r.kind.field_names();
+                        println!("      object {:>6}  {:<20} {a} {}, {b} {}", r.object, r.kind.as_str(), r.second, r.third);
+                    }
+                    let past = t.rows.iter().filter(|r| r.kind == pdf_xref::Kind::InFile && r.second >= d.len_bytes()).count();
+                    println!("    {past} of the offsets are past the end of the file");
+                }
+            }
         }
     }
 
