@@ -144,11 +144,31 @@ pub fn pdf() -> Template {
 /// after its two numbers and a heading, being two numbers and nothing else,
 /// cannot.
 fn line() -> T {
-    T::switch(letter_somewhere(), vec![(0, entry())], heading())
+    T::switch(too_short_for_an_entry().or(letter_somewhere()), vec![(0, entry())], heading())
+}
+
+/// Zero while twenty bytes of table are left, and something else once fewer
+/// than that are.
+///
+/// A look-ahead that reads past the end of the table is an error, and it takes
+/// the table, the trailer and every object with it. There is a table that ends
+/// that way and it is not a broken one: a hybrid-reference file writes its real
+/// table as a stream inside an object and leaves a `0 0` here, an empty
+/// subsection, so that a reader too old to know about streams finds something
+/// where it looks. The heading is then the only line, and there are no twenty
+/// bytes behind it to look into.
+///
+/// A line too short to be an entry is a heading whatever its bytes say, so the
+/// answer is known without looking and `Or` is what stops the looking: it takes
+/// the second of the two only when the first is zero. Twenty divided by what is
+/// left is that test, since a division rounds towards nothing.
+fn too_short_for_an_entry() -> E {
+    E::lit(20).div(E::Remaining.add(E::lit(1)))
 }
 
 /// Zero when one of the three bytes an entry's letter could be written at is
-/// `n` or `f`.
+/// `n` or `f`. Only asked where there are twenty bytes to ask about; see
+/// [`too_short_for_an_entry`].
 ///
 /// The letter belongs seventeen bytes in, and would be looked for there and
 /// nowhere else if every table were laid out the way the spec says. A line can
@@ -481,5 +501,30 @@ mod tests {
         let mut ev = Evaluator::new(pdf());
         assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128));
         assert_eq!(ev.node(&d, &[4, 0, 0, 1]).unwrap().value, Value::Int(1));
+    }
+    /// A table with an empty subsection and no entries at all, which is what a
+    /// hybrid-reference file writes: the real table is a stream inside an
+    /// object, and this one is here so that a reader too old to know about
+    /// that finds something where it looks. The heading is the only line, and
+    /// there are no twenty bytes behind it to look ahead into.
+    #[test]
+    fn a_table_with_an_empty_subsection_still_reads() {
+        let mut v = b"%PDF-1.5\n1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec();
+        let table = v.len();
+        v.extend_from_slice(b"xref\n0 0\ntrailer\n<< /Size 1 /XRefStm 17 >>\n");
+        v.extend_from_slice(format!("startxref\n{table}\n%%EOF").as_bytes());
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(pdf());
+        assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128));
+        let lines = ev.node(&d, &[4, 0]).unwrap();
+        assert_eq!(lines.child_count, 1);
+        assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Subsection");
+        assert_eq!(ev.node(&d, &[4, 0, 0, 1]).unwrap().value, Value::Int(0));
+        assert_eq!(
+            ev.node(&d, &[5, 0]).unwrap().value,
+            Value::Str("trailer\n<< /Size 1 /XRefStm 17 >>\n".into())
+        );
+        assert_eq!(ev.node(&d, &[8]).unwrap().child_count, 1);
+        assert_eq!(ev.node(&d, &[8, 0]).unwrap().size_bits, 0);
     }
 }
