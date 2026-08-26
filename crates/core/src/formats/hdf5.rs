@@ -1469,7 +1469,12 @@ fn chunk_entry() -> T {
                             T::switch(
                                 E::sibling(&["body", "filter_count"]),
                                 vec![(0, elements(Described::Beside, E::field("chunk_size")))],
-                                T::bytes(E::field("chunk_size")),
+                                // Marked so the panel can find the reader that
+                                // undoes the pipeline; the bytes themselves
+                                // stay whole, because they are what is in the
+                                // file and the elements are not.
+                                T::structure("FilteredChunk", vec![("bytes", T::bytes(E::field("chunk_size")))])
+                                    .packed_as(super::hdf5_chunk::PACKING),
                             ),
                         ),
                     )],

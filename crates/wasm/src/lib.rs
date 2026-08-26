@@ -146,10 +146,20 @@ struct ObjStmObjectDto {
     cut: bool,
 }
 
+/// One filter undone on the way back to a chunk's elements.
+#[derive(Serialize)]
+struct ChunkStepDto {
+    filter: String,
+    in_bytes: f64,
+    out_bytes: f64,
+    /// Set when this chunk's own mask said the filter was not applied to it.
+    skipped: bool,
+}
+
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "chunk" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -217,6 +227,17 @@ struct ExplainDto {
     /// more than `objstm_objects` holds says so with `objstm_total`.
     objstm_objects: Vec<ObjStmObjectDto>,
     objstm_total: f64,
+    /// Chunk: how many bytes the chunk is in the file, and how many its
+    /// elements came to once the filters were undone.
+    chunk_packed: f64,
+    chunk_decoded: f64,
+    /// Chunk: each filter, in the order it was undone.
+    chunk_steps: Vec<ChunkStepDto>,
+    /// Chunk: what one element is called, the first few elements, and how many
+    /// there are altogether.
+    chunk_element_type: String,
+    chunk_values: Vec<String>,
+    chunk_total: f64,
     /// Quant: the scale the block keeps for each run of weights, where it keeps
     /// them, and how many weights one run covers. Empty for a block with one
     /// scale for all of them.
@@ -346,6 +367,12 @@ fn explain_dto(e: Explain) -> ExplainDto {
         objstm_extends: -1.0,
         objstm_objects: Vec::new(),
         objstm_total: 0.0,
+        chunk_packed: 0.0,
+        chunk_decoded: 0.0,
+        chunk_steps: Vec::new(),
+        chunk_element_type: String::new(),
+        chunk_values: Vec::new(),
+        chunk_total: 0.0,
         problem: String::new(),
         groups: Vec::new(),
         group_weights: 0.0,
@@ -450,6 +477,24 @@ fn explain_dto(e: Explain) -> ExplainDto {
                     len: o.len as f64,
                     text: o.text,
                     cut: o.cut,
+                })
+                .collect();
+        }
+        Explain::Hdf5Chunk { packed_bytes, decoded_bytes, steps, values, total, element_type, problem } => {
+            dto.kind = "chunk";
+            dto.chunk_packed = packed_bytes as f64;
+            dto.chunk_decoded = decoded_bytes as f64;
+            dto.chunk_total = total as f64;
+            dto.chunk_element_type = element_type;
+            dto.chunk_values = values;
+            dto.problem = problem.unwrap_or_default();
+            dto.chunk_steps = steps
+                .into_iter()
+                .map(|s| ChunkStepDto {
+                    filter: s.filter,
+                    in_bytes: s.in_bytes as f64,
+                    out_bytes: s.out_bytes as f64,
+                    skipped: s.skipped,
                 })
                 .collect();
         }

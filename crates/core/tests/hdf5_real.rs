@@ -14,7 +14,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, Explain, Value};
 use qubero_core::formats::hdf5;
 use qubero_core::source::{Missing, Source};
 
@@ -118,6 +118,26 @@ fn walk(
         .node(doc, path)
         .unwrap_or_else(|e| panic!("{}: {path:?} does not read: {e:?}", file.display()));
     *seen += 1;
+    // A chunk that went through a filter is the one thing in the file whose
+    // contents are not in the file. Undoing it is the reader's job rather than
+    // a field's, so this asks for that reading wherever it meets one.
+    if node.type_name == "FilteredChunk" {
+        match ev.explain(doc, path, None) {
+            Ok(Explain::Hdf5Chunk { packed_bytes, decoded_bytes, steps, values, element_type, problem, .. }) => {
+                assert!(problem.is_none(), "{}: {path:?}: {problem:?}", file.display());
+                assert!(decoded_bytes >= packed_bytes, "{}: a filtered chunk that got smaller", file.display());
+                assert!(!steps.is_empty(), "{}: a filtered chunk with no filters undone", file.display());
+                if names.len() < 24 {
+                    names.push(format!(
+                        "[chunk {packed_bytes}->{decoded_bytes} {element_type} {}]",
+                        values.first().cloned().unwrap_or_default()
+                    ));
+                }
+            }
+            Ok(other) => panic!("{}: a filtered chunk explained as {other:?}", file.display()),
+            Err(e) => panic!("{}: a filtered chunk does not read: {e:?}", file.display()),
+        }
+    }
     if let (Value::Str(s), true) = (&node.value, node.name == "name") {
         if !s.is_empty() && names.len() < 24 {
             names.push(s.clone());

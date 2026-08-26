@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{pdf_objstm, pdf_xref};
+use crate::formats::{hdf5_chunk, pdf_objstm, pdf_xref};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -114,6 +114,29 @@ pub enum Explain {
         /// Why there are no objects, where there are none.
         problem: Option<String>,
     },
+    /// A chunk of a dataset, taken back through the filters it was written
+    /// through. Shown for the cursor anywhere in the chunk, because what is
+    /// under the cursor is the last filter's output and the elements are not
+    /// in the file at all.
+    Hdf5Chunk {
+        /// How many bytes the chunk is in the file, and how many the elements
+        /// came to once every filter that could be undone was.
+        packed_bytes: u64,
+        decoded_bytes: u64,
+        /// Each filter, in the order it was undone, with what went in and what
+        /// came out.
+        steps: Vec<hdf5_chunk::Step>,
+        /// The first elements, as the datatype beside the chunk reads them.
+        values: Vec<String>,
+        /// How many elements the decoded bytes hold, of which `values` shows
+        /// the first few.
+        total: u64,
+        /// What one element is called, so the panel can say `f32` rather than
+        /// only show numbers.
+        element_type: String,
+        /// Why the walk stopped early, where it did.
+        problem: Option<String>,
+    },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
@@ -134,6 +157,11 @@ const OBJSTM_PACKED_LIMIT: u64 = 4 << 20;
 /// A table runs to one row an object, and a panel is not the place to read a
 /// hundred thousand of them.
 pub const XREF_ROWS_SHOWN: usize = 512;
+
+/// How many of a chunk's elements the panel shows. A chunk holds tens of
+/// thousands; a row of them says what kind of numbers these are, which is what
+/// the panel is for, and the rest are in the file for the reading.
+pub const HDF5_VALUES_SHOWN: usize = 32;
 
 /// The largest packed run this will decompress for a panel that is redrawn
 /// every time the cursor moves. Four megabytes of compressed table is a file
@@ -226,12 +254,185 @@ impl Evaluator {
             if &*packing == pdf_objstm::PACKING {
                 return self.explain_objstm(doc, at, &r);
             }
+            if &*packing == hdf5_chunk::PACKING {
+                return self.explain_hdf5_chunk(doc, at, &r);
+            }
             let Some(kind) = ggml_quant::by_name(&packing) else { continue };
             let bytes = self.read(doc, &r, r.offset, kind.block_bytes() as u64 * 8)?;
             let Some(block) = ggml_quant::unpack(kind, &bytes) else { continue };
             return Ok(quant_of(kind, block, r.offset, at_bits));
         }
         Ok(Explain::Plain)
+    }
+
+    /// A chunk of a dataset, undone.
+    ///
+    /// Everything needed to undo it is written elsewhere in the object header:
+    /// the filter pipeline message says which filters and in what order, the
+    /// datatype message says how wide one element is, and the chunk's own
+    /// b-tree entry says which filters were skipped for this chunk. All three
+    /// are found the way the template finds them, by looking back through the
+    /// messages this chunk hangs under.
+    fn explain_hdf5_chunk<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved) -> R<Explain> {
+        let packed_bits = self.size_of(doc, at)?;
+        let packed_bytes = packed_bits / 8;
+        let filters = self.hdf5_filters(doc, at)?;
+        let element_size = self.hdf5_datatype_part(doc, at, "size")?.unwrap_or(0).max(0) as usize;
+        let mask = self
+            .find_field(at, "filter_mask")
+            .and_then(|p| self.node(doc, &p).ok())
+            .and_then(|n| n.value.as_int())
+            .unwrap_or(0)
+            .max(0) as u32;
+
+        let empty = |problem: Option<String>| Explain::Hdf5Chunk {
+            packed_bytes,
+            decoded_bytes: 0,
+            steps: Vec::new(),
+            values: Vec::new(),
+            total: 0,
+            element_type: String::new(),
+            problem,
+        };
+        if packed_bytes as usize > hdf5_chunk::PACKED_LIMIT {
+            let mb = hdf5_chunk::PACKED_LIMIT / (1 << 20);
+            return Ok(empty(Some(format!("Not unpacked: the chunk is over this viewer's {mb} MB limit."))));
+        }
+        let bytes = self.read(doc, r, r.offset, packed_bits)?;
+        let chunk = hdf5_chunk::decode(&bytes, &filters, mask, element_size);
+        let (element_type, values, total) = self.hdf5_values(doc, at, &chunk.bytes, element_size)?;
+        Ok(Explain::Hdf5Chunk {
+            packed_bytes,
+            decoded_bytes: chunk.bytes.len() as u64,
+            steps: chunk.steps,
+            values,
+            total,
+            element_type,
+            problem: chunk.problem,
+        })
+    }
+
+    /// The filters this chunk's dataset was written through, in the order the
+    /// pipeline message lists them, which is the order they were applied.
+    fn hdf5_filters<S: Source>(&mut self, doc: &Document<S>, at: &[usize]) -> R<Vec<hdf5_chunk::Filter>> {
+        let Some(list) = self.hdf5_message_part(doc, at, &["body", "filters"])? else {
+            return Ok(Vec::new());
+        };
+        let n = self.child_count(doc, &list)?;
+        let mut filters = Vec::new();
+        for i in 0..n {
+            let mut p = list.clone();
+            p.push(i as usize);
+            let id = self.field_under(doc, &p, "filter_id")?.unwrap_or(-1);
+            if id < 0 {
+                continue;
+            }
+            let mut client_data = Vec::new();
+            if let Some(mut data) = self.child_index(doc, &p, "client_data")?.map(|j| {
+                let mut q = p.clone();
+                q.push(j);
+                q
+            }) {
+                let count = self.child_count(doc, &data)?;
+                for k in 0..count {
+                    data.push(k as usize);
+                    if let Some(v) = self.node(doc, &data)?.value.as_int() {
+                        client_data.push(v.clamp(0, i128::from(u32::MAX)) as u32);
+                    }
+                    data.pop();
+                }
+            }
+            filters.push(hdf5_chunk::Filter { id: id.clamp(0, i128::from(u16::MAX)) as u16, client_data });
+        }
+        Ok(filters)
+    }
+
+    /// One field of the datatype message that describes this chunk's elements.
+    fn hdf5_datatype_part<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<Option<i128>> {
+        let Some(p) = self.hdf5_message_part(doc, at, &["body", name])? else { return Ok(None) };
+        Ok(self.node(doc, &p)?.value.as_int())
+    }
+
+    /// The path to `field` inside the nearest earlier message of the list this
+    /// chunk hangs under. Same search `Expr::Sibling` does, and for the same
+    /// reason: what a chunk is made of is written in the messages beside the
+    /// one that placed it.
+    fn hdf5_message_part<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        field: &[&str],
+    ) -> R<Option<Vec<usize>>> {
+        let field: Vec<String> = field.iter().map(|s| s.to_string()).collect();
+        let mut cur = at.to_vec();
+        while let Some(idx) = cur.pop() {
+            let listy = matches!(
+                self.memo.get(&cur).map(|r| &r.ty),
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
+            );
+            if !listy {
+                continue;
+            }
+            for earlier in (0..idx).rev() {
+                let mut p = cur.clone();
+                p.push(earlier);
+                if self.descend(doc, &mut p, &field)? {
+                    return Ok(Some(p));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// A numeric field of a structure, by name.
+    fn field_under<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<Option<i128>> {
+        let Some(j) = self.child_index(doc, at, name)? else { return Ok(None) };
+        let mut p = at.to_vec();
+        p.push(j);
+        Ok(self.node(doc, &p)?.value.as_int())
+    }
+
+    /// The decoded bytes read as the dataset's elements, so the panel can show
+    /// numbers rather than the bytes they are packed into.
+    fn hdf5_values<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        bytes: &[u8],
+        size: usize,
+    ) -> R<(String, Vec<String>, u64)> {
+        let class = self.hdf5_datatype_part(doc, at, "class")?.unwrap_or(-1);
+        let bits = self.hdf5_datatype_part(doc, at, "bit_field")?.unwrap_or(0);
+        let (big, signed) = (bits & 1 == 1, bits & 8 == 8);
+        if size == 0 || bytes.is_empty() {
+            return Ok((String::new(), Vec::new(), 0));
+        }
+        let endian = if big { crate::template::Endian::Big } else { crate::template::Endian::Little };
+        let width = size as u32 * 8;
+        let name = match (class, size, signed) {
+            (0, _, true) => format!("i{width}"),
+            (0, _, false) => format!("u{width}"),
+            (1, 2, _) => "f16".to_string(),
+            (1, 4, _) => "f32".to_string(),
+            (1, 8, _) => "f64".to_string(),
+            (3, _, _) => format!("{size}-byte text"),
+            _ => format!("{size}-byte element"),
+        };
+        let total = (bytes.len() / size) as u64;
+        let values = bytes
+            .chunks_exact(size)
+            .take(HDF5_VALUES_SHOWN)
+            .map(|b| match (class, size) {
+                (0, _) if signed => crate::decode::read_int(b, width, endian).to_string(),
+                (0, _) => crate::decode::read_uint(b, width, endian).to_string(),
+                (1, 2) => crate::decode::narrow_f16(crate::decode::read_uint(b, 16, endian) as u16).to_string(),
+                (1, 4) => crate::decode::narrow_f32(f32::from_bits(crate::decode::read_uint(b, 32, endian) as u32)).to_string(),
+                (1, 8) => f64::from_bits(crate::decode::read_uint(b, 64, endian) as u64).to_string(),
+                (3, _) => String::from_utf8_lossy(b).trim_end_matches('\0').to_string(),
+                _ => b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(""),
+            })
+            .collect();
+        Ok((name, values, total))
     }
 
     /// A cross-reference stream taken apart. The dictionary beside the packed

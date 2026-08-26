@@ -8,6 +8,7 @@ import type { TemplateNode, TypeInfo } from "./doc.js";
 import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.js";
 import { quantBody, type GoTo } from "./quantpanel.js";
 import { xrefBody, xrefNote } from "./xrefpanel.js";
+import { chunkBody, chunkNote } from "./chunkpanel.js";
 import { objstmBody, objstmNote } from "./objstmpanel.js";
 
 /** Write a value the reader picked here rather than typed. */
@@ -36,6 +37,7 @@ function headingFor(info: TypeInfo): string {
   if (info.kind === "quant") return "Weights";
   if (info.kind === "xref") return "Cross-reference rows";
   if (info.kind === "objstm") return "Objects in this stream";
+  if (info.kind === "chunk") return "Inside this chunk";
   return `Defined values (${info.cases.length})`;
 }
 
@@ -45,6 +47,7 @@ function headingNote(info: TypeInfo): string {
   if (info.kind === "quant") return info.name;
   if (info.kind === "xref") return xrefNote(info);
   if (info.kind === "objstm") return objstmNote(info);
+  if (info.kind === "chunk") return chunkNote(info);
   return "";
 }
 
@@ -417,6 +420,7 @@ export function typePanel(
   if (info.kind === "quant") frag.append(quantBody(info, goTo, redraw));
   else if (info.kind === "xref") frag.append(xrefBody(info, goTo));
   else if (info.kind === "objstm") frag.append(objstmBody(info));
+  else if (info.kind === "chunk") frag.append(chunkBody(info));
   else if (info.kind === "float") frag.append(floatBody(info));
   else if (info.kind === "magic") frag.append(magicBody(info));
   else if (info.kind === "enum") frag.append(enumBody(info, path, apply));

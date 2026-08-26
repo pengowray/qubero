@@ -216,6 +216,15 @@ export type ObjStmObject = {
   readonly cut: boolean;
 };
 
+/** One filter undone on the way back to a chunk's elements. */
+export type ChunkStep = {
+  readonly filter: string;
+  readonly in_bytes: number;
+  readonly out_bytes: number;
+  /** True when this chunk's own mask said the filter was not applied to it. */
+  readonly skipped: boolean;
+};
+
 export type XrefRow = {
   readonly object: number;
   readonly kind: string;
@@ -228,7 +237,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "chunk" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -303,6 +312,17 @@ export type TypeInfo = {
   /** ObjStm: the objects, and how many there are altogether. */
   readonly objstm_objects: readonly ObjStmObject[];
   readonly objstm_total: number;
+  /** Chunk: how many bytes it is in the file, and how many its elements came
+   *  to once the filters were undone. */
+  readonly chunk_packed: number;
+  readonly chunk_decoded: number;
+  /** Chunk: each filter, in the order it was undone. */
+  readonly chunk_steps: readonly ChunkStep[];
+  /** Chunk: what one element is called, the first few of them, and how many
+   *  there are altogether. */
+  readonly chunk_element_type: string;
+  readonly chunk_values: readonly string[];
+  readonly chunk_total: number;
 };
 
 /** One run of weights inside a block that share a scale of their own. */

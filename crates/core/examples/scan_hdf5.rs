@@ -115,6 +115,28 @@ fn main() {
     });
     let mut ev = Evaluator::new(hdf5());
     println!("{path}: {len} bytes");
+    // With a third argument, what the views would say about the byte at that
+    // offset: which field covers it, and what a screenful of spans from there
+    // reads as. That is the question the hex grid asks, and the answer for a
+    // format whose bytes are all reached through pointers is not obvious.
+    if let Some(at) = std::env::args().nth(3).map(|s| s.parse::<u64>().expect("offset")) {
+        match ev.locate(&doc, at * 8) {
+            Ok(p) => {
+                let n = ev.node(&doc, &p).expect("node");
+                println!("locate({at}) -> {p:?} {} : {} @{}", n.name, n.type_name, n.offset_bits / 8);
+            }
+            Err(e) => println!("locate({at}) -> {e:?}"),
+        }
+        match ev.spans(&doc, at * 8, at * 8 + 16 * 8, 8) {
+            Ok(spans) => {
+                for s in spans {
+                    println!("  span {:?}", s);
+                }
+            }
+            Err(e) => println!("spans -> {e:?}"),
+        }
+        return;
+    }
     let start = Instant::now();
     dump(&mut ev, &doc, &[], 0, limit);
     println!(
