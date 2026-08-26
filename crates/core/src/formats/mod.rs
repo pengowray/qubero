@@ -12,6 +12,7 @@ mod gguf;
 mod git;
 mod gif;
 mod gzip;
+mod hdf5;
 mod id3;
 mod iff;
 mod ilbm;
@@ -55,6 +56,7 @@ pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
 pub use gif::gif;
 pub use gzip::gzip;
+pub use hdf5::hdf5;
 pub use id3::id3;
 pub use ilbm::ilbm;
 pub use jpeg::jpeg;
@@ -93,7 +95,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -136,6 +138,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "tiff" => Some(tiff()),
         "jpeg" => Some(jpeg()),
         "pdf" => Some(pdf()),
+        "hdf5" => Some(hdf5()),
         _ => None,
     }
 }
@@ -174,6 +177,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"MM\x00*", "tiff"),
     (b".snd", "au"),
     (b"%PDF-", "pdf"),
+    // An `.h5ad` single-cell dataset, a Keras model, a NASA product: all of
+    // them are this container and nothing in the first bytes says which.
+    (b"\x89HDF\r\n\x1a\n", "hdf5"),
     (b"ID3", "id3"),
     (b"{\"", "json"),
 ];

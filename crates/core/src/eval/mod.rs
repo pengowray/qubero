@@ -570,6 +570,11 @@ impl Evaluator {
             Ty::At { inner, .. } => (pr.name.clone(), (**inner).clone()),
             _ => return fail("not a composite"),
         };
+        // A field that reads its contents from somewhere else in the file is
+        // not bounded by the structure it was declared in: an object header
+        // message is sixteen bytes long and the heap it names is half a
+        // kilobyte further on. What such a child is bounded by is the file.
+        let mut escapes = None;
         // Offset: read from the pointer array, or after the previous sibling,
         // or at the parent's start.
         let offset = if matches!(pr.ty, Ty::PointerList { .. }) {
@@ -604,6 +609,9 @@ impl Evaluator {
             }
             let to = self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8;
             self.no_ring(parent, to, &what)?;
+            if anchor == Anchor::File {
+                escapes = Some(doc.len_bits());
+            }
             to
         } else if idx == 0 {
             pr.offset
@@ -617,12 +625,12 @@ impl Evaluator {
             // is not prevented here; `children()` clamps, direct callers must too.
             self.walk_to(doc, parent, idx)?
         };
-        if offset > pr.limit {
+        let mut limit = escapes.unwrap_or(pr.limit);
+        if offset > limit {
             return fail("runs past the end of its container");
         }
         // A pointer-list child with no size of its own runs to the next child
         // above it: its limit is that child's start.
-        let mut limit = pr.limit;
         if let Ty::PointerList { to_next: true, .. } = &pr.ty {
             let starts = self.pointer_starts(doc, parent, &pr)?;
             if let Some((next, _)) = starts.get(starts.partition_point(|(s, _)| *s <= offset)) {

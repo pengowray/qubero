@@ -58,7 +58,7 @@ re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker t
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
 Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3, WAV,
-W4V, MIDI, SQLite, PE, MS-DOS), one file per format plus `wasm_opcodes.rs` for the
+W4V, MIDI, SQLite, PE, MS-DOS, PDF, HDF5), one file per format plus `wasm_opcodes.rs` for the
 instruction table. WAV carries the metadata chunks bat recorders write: GUANO (`guan`) as
 UTF-8 lines,
 and `wamd` as a stream of tagged items whose tag numbers were read out of files
@@ -99,6 +99,33 @@ One thing a database does is still out of reach: page numbers, in an interior
 cell or at the end of a spilled one, are read as numbers and not followed: a
 b-tree that pointed at its own pages would stop being a tree, and the template
 would describe a graph rather than a file.
+
+HDF5 is the first format read here that is a graph rather than a run of bytes.
+Nothing in it follows anything: the superblock holds the address of the root
+group's object header, that header holds a message naming a b-tree and a local
+heap, the tree's leaves name symbol table nodes, and each entry in one names
+the address of another object header. Every step is `At`, so the field tree the
+app shows is the file's own group hierarchy, walked one click at a time because
+evaluation is lazy by path. SQLite deliberately stops short of this and says
+so; HDF5 leaves no choice, since an address is all a header holds. The cycle a
+pair of hard links could make is caught by the ring check `At` already had.
+
+Two things had to give. A field placed elsewhere is no longer bounded by the
+structure it was declared in: an object header message is sixteen bytes long
+and the heap it names is half a kilobyte further on, so an `At` counted from
+the start of the file is bounded by the file. And a group's b-tree is placed
+*under* its local heap rather than beside it, because a name in that tree is a
+byte offset into the heap's data segment, and an expression sees the fields of
+the structures it sits inside.
+
+What is read: superblock versions 0 and 1, object headers of version 1 and 2,
+the messages a dataset is made of (dataspace, datatype, layout, filters,
+attributes, links, symbol tables and continuations), version 1 b-trees for both
+groups and chunks, local heaps and symbol table nodes. What is not: fractal
+heaps and version 2 b-trees, which is where a file written with the newest
+library keeps its links; data layout messages of version 4 and later; and the
+contents of a chunk, which are deflated and belong with the other packed
+contents rather than in a field.
 
 A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
