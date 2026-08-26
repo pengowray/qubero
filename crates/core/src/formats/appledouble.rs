@@ -53,7 +53,7 @@ fn body(name: &'static str, magic: &'static [u8]) -> T {
         name,
         vec![
             ("magic", T::magic(magic)),
-            ("version", T::enumeration_hex("Version", T::u32(Big), &[(0x00020000, "2")])),
+            ("version", T::enumeration_hex("Version", T::u32(Big), &[(0x00010000, "1"), (0x00020000, "2")])),
             ("filler", T::text(StrLen::Padded { size: E::lit(16), pad: 0x20 }, Encoding::Ascii)),
             ("count", T::u16(Big)),
             ("entries", T::array(entry(), E::field("count"))),
@@ -79,11 +79,23 @@ fn entry() -> T {
 /// entry names rather than by any bytes of its own. An entry of no length
 /// is left as nothing: the resource fork a zip made on a Mac carries is
 /// usually this, an id and an offset at the end of the file with nothing
-/// under it, and reading a header out of it would run off the end.
+/// under it, and reading a header out of it would run off the end. A
+/// Finder info entry of exactly thirty-two bytes is the older shape, with
+/// no pad and no attributes after it, so it stops there for the same
+/// reason.
 fn part() -> T {
     T::switch(
         E::elem_field("entries", E::idx(), &["length"]),
-        vec![(0, T::bytes(E::lit(0)))],
+        vec![
+            (0, T::bytes(E::lit(0))),
+            (
+                32,
+                T::sized(
+                    E::lit(32),
+                    T::switch(E::elem_field("entries", E::idx(), &["id"]), vec![(9, info())], T::bytes(E::Remaining)),
+                ),
+            ),
+        ],
         T::sized(
             E::elem_field("entries", E::idx(), &["length"]),
             T::switch(
@@ -239,7 +251,7 @@ fn resource_map() -> T {
             ("attributes", T::u16(Big)),
             ("types_at", T::u16(Big)),
             ("names_at", T::u16(Big)),
-            ("type_count_less_one", T::Int { bits: 16, endian: Big }),
+            ("type_count_minus_one", T::Int { bits: 16, endian: Big }),
             ("rest", T::bytes(E::Remaining)),
         ],
     )
@@ -309,6 +321,55 @@ mod tests {
         v.extend_from_slice(&30u16.to_be_bytes());
         v.extend_from_slice(&(-1i16).to_be_bytes());
         v
+    }
+
+    /// AppleSingle is the same header under a different magic, and the
+    /// sniffer must not take one for the other.
+    #[test]
+    fn applesingle_is_told_apart_and_read() {
+        let mut v = Vec::new();
+        be(&mut v, 0x00051600);
+        be(&mut v, 0x00020000);
+        v.extend_from_slice(b"Mac OS X        ");
+        v.extend_from_slice(&1u16.to_be_bytes());
+        be(&mut v, 1);
+        be(&mut v, 38);
+        be(&mut v, 5);
+        v.extend_from_slice(b"hello");
+
+        assert_eq!(crate::formats::sniff(&v, v.len() as u64), Some("applesingle"));
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(applesingle());
+        assert_eq!(
+            ev.node(&d, &[4, 0, 0]).unwrap().value,
+            Value::Enum { raw: 1, name: Some("data".into()), hex: false }
+        );
+        let data = ev.node(&d, &[5, 0]).unwrap();
+        assert_eq!(data.offset_bits, 38 * 8);
+        assert_eq!(data.size_bits, 5 * 8);
+    }
+
+    /// A Finder info entry that stops at thirty-two bytes, which is what a
+    /// writer that is not macOS leaves: no pad, no attributes after it.
+    #[test]
+    fn a_bare_finder_info_entry_stops_where_it_ends() {
+        let mut v = Vec::new();
+        be(&mut v, 0x00051607);
+        be(&mut v, 0x00020000);
+        v.extend_from_slice(b"                ");
+        v.extend_from_slice(&1u16.to_be_bytes());
+        be(&mut v, 9);
+        be(&mut v, 38);
+        be(&mut v, 32);
+        v.extend_from_slice(b"TEXTttxt");
+        v.resize(38 + 32, 0);
+
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(appledouble());
+        let part = ev.node(&d, &[5, 0]).unwrap();
+        assert_eq!(part.size_bits, 32 * 8);
+        let Value::Str(kind) = &ev.node(&d, &[5, 0, 0]).unwrap().value else { panic!("not text") };
+        assert_eq!(kind, "TEXT");
     }
 
     #[test]
