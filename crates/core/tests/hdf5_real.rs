@@ -123,7 +123,17 @@ fn walk(
             names.push(s.clone());
         }
     }
-    for i in 0..node.child_count as usize {
+    // A dataset of ten million numbers would fill the budget on its own and
+    // leave the rest of the file unread, so a long list is sampled at both
+    // ends and in the middle. The last element is the one worth having: a
+    // stride read wrongly ends somewhere other than where the run does.
+    let n = node.child_count as usize;
+    let sample: Vec<usize> = if n <= 64 {
+        (0..n).collect()
+    } else {
+        (0..8).chain([n / 2]).chain(n - 8..n).collect()
+    };
+    for i in sample {
         let mut p = path.to_vec();
         p.push(i);
         walk(ev, doc, &p, seen, names, file);

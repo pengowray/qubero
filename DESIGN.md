@@ -118,6 +118,14 @@ the start of the file is bounded by the file. And a group's b-tree is placed
 byte offset into the heap's data segment, and an expression sees the fields of
 the structures it sits inside.
 
+A dataset's bytes read as its elements. What an element is lives in the
+datatype message and where the bytes are lives in the layout message, so the
+one asks the other with `Expr::Sibling`, exactly as a WAVE `data` chunk asks
+`fmt ` for its sample width. The width is then kept in a field of no bytes,
+since a list only gets a stride when its element size is an expression that
+cannot vary per element, and a column of ten million strings measured one at a
+time is not a column anyone can scroll.
+
 What is read: superblock versions 0 and 1, object headers of version 1 and 2,
 the messages a dataset is made of (dataspace, datatype, layout, filters,
 attributes, links, symbol tables and continuations), version 1 b-trees for both

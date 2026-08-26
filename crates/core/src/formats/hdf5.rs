@@ -60,17 +60,46 @@
 //! indexed by a version 2 b-tree, which is a different machine from the one
 //! here and the next thing to build.
 //!
-//! Chunked dataset contents are placed, chunk by chunk, at the addresses the
-//! chunk b-tree gives, and left as bytes: they are usually deflated, and what
-//! a filter pipeline says has to be undone before they are anything else.
-//! That is the same arrangement `pdf_objstm` and `ggml_quant` have for packed
-//! contents, and unpacking them belongs there rather than in a field.
+//! ## The elements
 //!
-//! A variable-length string is a length, an address and an index into a global
-//! heap collection, and the collection is reached from the data rather than
-//! from any header, so nothing places one. The triple is shown as what it is.
+//! A dataset's bytes are placed where its layout message says: one run for a
+//! contiguous dataset, one per chunk for a chunked one, in the header itself
+//! for a compact one. They read as the dataset's elements, and what an element
+//! is comes from the datatype message beside the layout one: integers of any
+//! width and either sign, floats, fixed-width strings, and the note a
+//! variable-length element leaves. A datatype this does not take apart, a
+//! compound row among them, is one element of the right size and its own
+//! bytes.
+//!
+//! Nothing in a layout message says what its elements are, and nothing in a
+//! datatype message says where they are, so the two have to see each other.
+//! They are separate messages in one list, which is what `Expr::Sibling`
+//! reaches across: the same thing a WAVE `data` chunk does to learn its sample
+//! width from the `fmt ` chunk before it. The width is then written into a
+//! field of no bytes, because a list is walked element by element unless its
+//! elements are all the same size, and "the same size" has to name a field
+//! rather than ask a message two levels away.
+//!
+//! A chunk that went through a filter is the exception: what is written there
+//! is the pipeline's output, usually deflated, so it keeps its bytes. Undoing
+//! that belongs where `pdf_objstm` and `ggml_quant` do the same job, not in a
+//! field.
+//!
+//! A variable-length element is a length, the address of a global heap
+//! collection and an index into it. The collection is reached from the data
+//! rather than from any header, and an object inside one is found by walking
+//! the collection rather than by arithmetic, so nothing places either. The
+//! three numbers are shown as what they are, which is where the string is.
+//!
+//! An attribute's value keeps its bytes for now. Its datatype is inside the
+//! attribute rather than beside it, and an expression reads the fields of the
+//! structures it sits in, not the fields inside a structure beside it.
 
-use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{
+    Encoding,
+    Endian::{Big, Little},
+    Expr as E, StrLen, Template, Ty as T, Until,
+};
 
 /// The address a file writes for "there is nothing here": all ones, in
 /// however many bytes an address takes.
@@ -530,7 +559,26 @@ fn datatype() -> T {
                     ],
                 ),
             ),
-            ("class_bits", T::bytes(E::lit(3))),
+            // Three bytes whose meaning is the class's own. The first of them
+            // carries what a reader of the data needs, so it is read as flags
+            // rather than kept whole: whether the bytes are big-endian, and,
+            // for an integer, whether they are signed.
+            (
+                "bit_field",
+                T::switch(
+                    E::field("class"),
+                    vec![
+                        (0, T::flags("IntegerBits", T::u8(), &[(0, "big-endian"), (3, "signed")])),
+                        (1, T::flags("FloatBits", T::u8(), &[(0, "big-endian")])),
+                        (
+                            3,
+                            T::flags("StringBits", T::u8(), &[(0, "null-terminated"), (1, "null-padded"), (4, "utf-8")]),
+                        ),
+                    ],
+                    T::u8(),
+                ),
+            ),
+            ("bit_field_rest", T::u16(Little)),
             ("size", T::u32(Little).counted_as("bytes per element")),
             (
                 "properties",
@@ -568,6 +616,132 @@ fn datatype() -> T {
                 ),
             ),
         ],
+    )
+}
+
+/// How wide one element is, from the datatype message beside this one. Zero
+/// when there is none in reach, which reads as one byte rather than dividing
+/// by nothing.
+fn element_size() -> E {
+    E::sibling(&["body", "size"]).or(E::lit(1))
+}
+
+/// A field of no bytes holding the width of one element, so that everything
+/// below can name it rather than ask the datatype message again.
+///
+/// This is not tidiness. A list is walked element by element unless its
+/// elements are all the same size, and "the same size" has to be an expression
+/// that cannot vary from one element to the next: naming a field is such an
+/// expression and asking a message two levels away is not. Without this a
+/// column of ten million strings would be measured by reading all ten million.
+fn element_size_field() -> (&'static str, T) {
+    ("element_size", T::computed(element_size()))
+}
+
+/// What one element of a dataset is, read from the datatype message that sits
+/// before the layout one among the object's messages. A datatype this does not
+/// take apart leaves its elements as their own bytes, which is still one row
+/// per element and still the right size.
+fn element_type() -> T {
+    // Class, byte order, width and sign in one number, so a single switch can
+    // ask about all four: there is no bitwise operator here, and four nested
+    // switches would say the same thing at four times the length.
+    let bits = E::sibling(&["body", "bit_field"]);
+    let big_endian = bits.clone().sub(bits.clone().div(E::lit(2)).mul(E::lit(2)));
+    let signed = bits.clone().div(E::lit(8)).sub(bits.div(E::lit(16)).mul(E::lit(2)));
+    let key = E::sibling(&["body", "class"])
+        .mul(E::lit(1000))
+        .add(big_endian.mul(E::lit(500)))
+        .add(E::sibling(&["body", "size"]).mul(E::lit(2)))
+        .add(signed);
+    let numeric = vec![
+        (2, T::u8()),
+        (3, T::Int { bits: 8, endian: Little }),
+        (4, T::u16(Little)),
+        (5, T::Int { bits: 16, endian: Little }),
+        (8, T::u32(Little)),
+        (9, T::i32(Little)),
+        (16, T::u64(Little)),
+        (17, T::Int { bits: 64, endian: Little }),
+        (502, T::UInt { bits: 8, endian: Big }),
+        (503, T::Int { bits: 8, endian: Big }),
+        (504, T::u16(Big)),
+        (505, T::Int { bits: 16, endian: Big }),
+        (508, T::u32(Big)),
+        (509, T::i32(Big)),
+        (516, T::u64(Big)),
+        (517, T::Int { bits: 64, endian: Big }),
+        (1004, T::F16(Little)),
+        (1008, T::F32(Little)),
+        (1016, T::F64(Little)),
+        (1504, T::F16(Big)),
+        (1508, T::F32(Big)),
+        (1516, T::F64(Big)),
+    ];
+    let width = E::field("element_size");
+    // The switch is outside the arrays rather than inside one: an array of a
+    // type chosen per element has no stride, and a stride is what lets the
+    // cursor land in the middle of thirteen million numbers without reading
+    // the ones before it.
+    let count = E::field("run_bytes").div(width.clone());
+    let of = |t: T| T::array(t, count.clone()).counted_as("elements");
+    let numeric: Vec<(i128, T)> = numeric.into_iter().map(|(k, t)| (k, of(t))).collect();
+    let opaque = of(T::sized(width.clone(), T::bytes(width.clone())));
+    T::switch(
+        E::sibling(&["body", "class"]),
+        vec![
+            (0, T::switch(key.clone(), numeric.clone(), opaque.clone())),
+            (1, T::switch(key, numeric, opaque.clone())),
+            // A string of a fixed width, which is what a column of names is.
+            // Sized as well as padded, so the run has a stride.
+            (
+                3,
+                of(T::sized(
+                    width.clone(),
+                    T::text(StrLen::Padded { size: width.clone(), pad: 0 }, Encoding::Utf8),
+                )),
+            ),
+            // A variable-length element is not the thing but a note saying
+            // where the thing is: how long it is, which global heap
+            // collection holds it, and which object in that collection it is.
+            // The collection is reached from here and from nowhere else, and
+            // an object inside one is found by walking it rather than by
+            // arithmetic, so this stops at the note. Sixteen bytes is the
+            // shape a file with eight-byte addresses writes; anything else is
+            // left as its bytes.
+            (
+                9,
+                T::switch(
+                    width.clone(),
+                    vec![(16, of(T::sized(width.clone(), vlen_reference())))],
+                    opaque.clone(),
+                ),
+            ),
+        ],
+        opaque,
+    )
+}
+
+/// The note a variable-length element leaves in place of its contents.
+fn vlen_reference() -> T {
+    T::inline_structure(
+        "GlobalHeapId",
+        vec![
+            ("length", T::u32(Little).counted_as("bytes")),
+            ("collection_address", addr()),
+            ("object_index", T::u32(Little)),
+        ],
+    )
+}
+
+/// A run of `bytes` bytes read as the dataset's elements. The two fields of no
+/// bytes in front of them are how far the elements can see: an expression
+/// reads the fields of the structures it sits in, and both of these are
+/// answers from somewhere else in the object header.
+fn elements(bytes: E) -> T {
+    T::inline_structure(
+        "Data",
+        vec![element_size_field(), ("run_bytes", T::computed(bytes)), ("elements", element_type())],
     )
 }
 
@@ -791,7 +965,7 @@ fn layout_v1() -> T {
                             0,
                             T::inline_structure(
                                 "Compact",
-                                vec![("size", T::u32(Little)), ("data", T::bytes(E::field("size")))],
+                                vec![("size", T::u32(Little)), ("data", elements(E::field("size")))],
                             ),
                         ),
                         (2, at_address("address", T::Named("Node".into()))),
@@ -821,7 +995,7 @@ fn layout_v3() -> T {
                             0,
                             T::inline_structure(
                                 "Compact",
-                                vec![("size", T::u16(Little)), ("data", T::bytes(E::field("size")))],
+                                vec![("size", T::u16(Little)), ("data", elements(E::field("size")))],
                             ),
                         ),
                         (
@@ -831,7 +1005,7 @@ fn layout_v3() -> T {
                                 vec![
                                     ("address", addr()),
                                     ("size", length()),
-                                    ("data", at_address("address", T::bytes(E::field("size")))),
+                                    ("data", at_address("address", elements(E::field("size")))),
                                 ],
                             ),
                         ),
@@ -1183,7 +1357,23 @@ fn chunk_entry() -> T {
                 "child",
                 T::switch(
                     E::field("node_level"),
-                    vec![(0, at_address("child_address", T::bytes(E::field("chunk_size"))))],
+                    // At the bottom of the tree the child is the chunk itself.
+                    // Its bytes are elements only when nothing was done to
+                    // them on the way out: a filter pipeline among the
+                    // messages before this one means what is here is that
+                    // pipeline's output, and undoing it is not something a
+                    // field can do.
+                    vec![(
+                        0,
+                        at_address(
+                            "child_address",
+                            T::switch(
+                                E::sibling(&["body", "filter_count"]),
+                                vec![(0, elements(E::field("chunk_size")))],
+                                T::bytes(E::field("chunk_size")),
+                            ),
+                        ),
+                    )],
                     at_address("child_address", T::Named("Node".into())),
                 ),
             ),
@@ -1230,6 +1420,7 @@ mod tests {
     const HEAP_DATA: u64 = 216;
     const SNOD: u64 = 232;
     const ALPHA_HEADER: u64 = 280;
+    const DATA: u64 = 376;
 
     /// The path from the file down to the one link the group holds. Every step
     /// of it but the last two is a pointer being followed: the root entry's
@@ -1319,13 +1510,39 @@ mod tests {
         put(&mut f, SNOD + 6, &1u16.to_le_bytes());
         put(&mut f, SNOD + 8, &8u64.to_le_bytes());
         put(&mut f, SNOD + 16, &addr_bytes(ALPHA_HEADER));
-        // What the link points at: a header with one message of nothing.
+        // What the link points at: a dataset of two signed 32-bit numbers,
+        // written in one run. Three messages say so, and the one that says
+        // where the numbers are says nothing about what they are: the layout
+        // message reads the datatype message beside it, which is the whole
+        // point of the test below.
         put(&mut f, ALPHA_HEADER, &[1, 0]);
-        put(&mut f, ALPHA_HEADER + 2, &1u16.to_le_bytes());
+        put(&mut f, ALPHA_HEADER + 2, &3u16.to_le_bytes());
         put(&mut f, ALPHA_HEADER + 4, &1u32.to_le_bytes());
-        put(&mut f, ALPHA_HEADER + 8, &8u32.to_le_bytes());
-        put(&mut f, ALPHA_HEADER + 18, &0u16.to_le_bytes());
-        f.resize(304, 0);
+        put(&mut f, ALPHA_HEADER + 8, &80u32.to_le_bytes());
+        // A dataspace of one dimension, two long.
+        let m = ALPHA_HEADER + 16;
+        put(&mut f, m, &1u16.to_le_bytes());
+        put(&mut f, m + 2, &16u16.to_le_bytes());
+        put(&mut f, m + 8, &[1, 1, 0, 0]);
+        put(&mut f, m + 16, &2u64.to_le_bytes());
+        // Fixed-point, signed, four bytes.
+        let m = m + 24;
+        put(&mut f, m, &3u16.to_le_bytes());
+        put(&mut f, m + 2, &16u16.to_le_bytes());
+        put(&mut f, m + 8, &[0x10, 0x08, 0, 0]);
+        put(&mut f, m + 12, &4u32.to_le_bytes());
+        put(&mut f, m + 16, &0u16.to_le_bytes());
+        put(&mut f, m + 18, &32u16.to_le_bytes());
+        // Laid out in one run, at the end of the file.
+        let m = m + 24;
+        put(&mut f, m, &8u16.to_le_bytes());
+        put(&mut f, m + 2, &24u16.to_le_bytes());
+        put(&mut f, m + 8, &[3, 1]);
+        put(&mut f, m + 10, &addr_bytes(DATA));
+        put(&mut f, m + 18, &8u64.to_le_bytes());
+        put(&mut f, DATA, &(-7i32).to_le_bytes());
+        put(&mut f, DATA + 4, &1000i32.to_le_bytes());
+        f.resize(DATA as usize + 8, 0);
         f
     }
 
@@ -1354,6 +1571,24 @@ mod tests {
         let mut ev = Evaluator::new(hdf5());
         let node = ev.node(&doc, &object).expect("object header");
         assert_eq!(node.offset_bits / 8, ALPHA_HEADER);
+    }
+
+    /// The layout message says where a dataset's bytes are and never what they
+    /// are: that is in the datatype message beside it, which is why the run is
+    /// read as signed 32-bit numbers rather than as bytes.
+    #[test]
+    fn a_dataset_reads_as_the_elements_its_datatype_declares() {
+        let f = one_link_file();
+        // The layout message of the object the link points at, down to the
+        // first of the numbers it places.
+        let mut first = LINK.to_vec();
+        first.extend_from_slice(&[6, 0, 6, 2, 4, 1, 1, 2, 0, 2, 0]);
+        let (_, value) = read(&f, &first);
+        assert_eq!(value.as_int(), Some(-7));
+        let mut second = first.clone();
+        second.pop();
+        second.push(1);
+        assert_eq!(read(&f, &second).1.as_int(), Some(1000));
     }
 
     /// A pointer that says "nothing here" is not followed. Every optional part
