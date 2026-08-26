@@ -896,8 +896,9 @@ fn heap_direct_block() -> T {
 /// read as links, wrongly, and a reader can tell by the names.
 fn heap_link() -> T {
     let free = |what: &str| T::structure(what, vec![("free", T::bytes(E::Remaining))]);
-    // Version, flags, a one-byte name length, a byte of name and an address.
-    const SHORTEST_LINK: i128 = 12;
+    // The shortest a link can be: a version, flags with nothing optional set,
+    // a one-byte length, a name of no characters, and an address.
+    const SHORTEST_LINK: i128 = 11;
     T::switch(
         E::peek(8, Little),
         vec![(0, free("HeapFreeSpace"))],

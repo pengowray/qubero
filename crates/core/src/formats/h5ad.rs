@@ -238,6 +238,11 @@ fn walk<S: Source>(
         return Ok(());
     }
     links.sort_by(|a, b| a.0.cmp(&b.0));
+    // A group written both ways at once, or a heap block whose free space
+    // still holds a link that was moved, can name the same thing twice. The
+    // first of them is the answer: they are sorted by name, so the two sit
+    // together and the later one adds nothing.
+    links.dedup_by(|a, b| a.0 == b.0);
     for (link_name, header) in links {
         if out.total >= LIMIT * 4 {
             return Ok(());
