@@ -57,10 +57,7 @@ pub fn pnm() -> Template {
 /// One number of the header: the whitespace and comments before it, the
 /// digits, and the one whitespace byte that ends it.
 fn number() -> T {
-    T::text(
-        StrLen::Scan { skip: SPACE.to_vec(), ends: SPACE.to_vec(), comment: Some((b'#', b'\n')) },
-        Encoding::Ascii,
-    )
+    T::text(StrLen::token_past_comments(SPACE, SPACE, (b'#', b'\n')), Encoding::Ascii)
 }
 
 fn nothing() -> T {

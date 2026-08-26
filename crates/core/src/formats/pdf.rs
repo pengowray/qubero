@@ -55,7 +55,7 @@ const SPACE: &[u8] = b" \t\r\n\x0c\0";
 /// Both numbers are digits, so neither is a fixed width and each is found by
 /// asking how long the one before it turned out to be.
 fn table_head() -> E {
-    E::field("xref_at").add(E::lit(4)).add(E::size_of("first_object")).add(E::size_of("entry_count"))
+    E::field("xref_offset").add(E::lit(4)).add(E::size_of("first_object")).add(E::size_of("entry_count"))
 }
 
 /// Where the trailer dictionary begins: the end of the table.
@@ -76,21 +76,21 @@ pub fn pdf() -> Template {
                 // swallow the objects the table is about to place.
                 (
                     "version",
-                    T::text(StrLen::Scan { skip: Vec::new(), ends: b"\r\n".to_vec(), comment: None }, Encoding::Ascii),
+                    T::text(StrLen::token(b"", b"\r\n"), Encoding::Ascii),
                 ),
                 // Where the last `startxref` is written, counted from the
                 // start of the file: the search runs from this field, and the
                 // header is what is in front of it.
                 ("startxref_at", T::computed(E::to_last_bytes(b"startxref").add(E::size_of("version")))),
                 // The offset that word points at, which is where the table is.
-                ("xref_at", T::at(E::field("startxref_at").add(E::lit(9)), number())),
+                ("xref_offset", T::at(E::field("startxref_at").add(E::lit(9)), number())),
                 // From here down, every field is read where the table is and
                 // takes up no room where it is declared.
-                ("xref", T::at(E::field("xref_at"), T::magic(b"xref"))),
-                ("first_object", T::at(E::field("xref_at").add(E::lit(4)), number())),
+                ("xref", T::at(E::field("xref_offset"), T::magic(b"xref"))),
+                ("first_object", T::at(E::field("xref_offset").add(E::lit(4)), number())),
                 (
                     "entry_count",
-                    T::at(E::field("xref_at").add(E::lit(4)).add(E::size_of("first_object")), number()),
+                    T::at(E::field("xref_offset").add(E::lit(4)).add(E::size_of("first_object")), number()),
                 ),
                 ("entries", T::at(table_head(), T::array(entry(), E::field("entry_count")))),
                 // `trailer` and the dictionary after it, which runs from the
@@ -108,7 +108,7 @@ pub fn pdf() -> Template {
                 (
                     "eof",
                     T::at(
-                        E::field("startxref_at").add(E::lit(9)).add(E::size_of("xref_at")),
+                        E::field("startxref_at").add(E::lit(9)).add(E::size_of("xref_offset")),
                         T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii),
                     ),
                 ),
@@ -167,7 +167,7 @@ fn used_entry() -> T {
     T::inline_structure(
         "Entry",
         vec![
-            ("offset", T::decimal(StrLen::Scan { skip: SPACE.to_vec(), ends: b" ".to_vec(), comment: None })),
+            ("offset", T::decimal(StrLen::token(SPACE, b" "))),
             ("generation", generation()),
             ("kind", kind()),
             ("eol", T::bytes(E::lit(2))),
@@ -184,7 +184,7 @@ fn free_entry() -> T {
         "Free",
         vec![
             ("offset", T::computed(E::lit(0))),
-            ("next_free", T::decimal(StrLen::Scan { skip: SPACE.to_vec(), ends: b" ".to_vec(), comment: None })),
+            ("next_free", T::decimal(StrLen::token(SPACE, b" "))),
             ("generation", generation()),
             ("kind", kind()),
             ("eol", T::bytes(E::lit(2))),
@@ -196,7 +196,7 @@ fn free_entry() -> T {
 /// How many times the object at this number has been replaced. A free entry
 /// carries the number the next object to take its place will have.
 fn generation() -> T {
-    T::decimal(StrLen::Scan { skip: b" ".to_vec(), ends: b" ".to_vec(), comment: None })
+    T::decimal(StrLen::token(b" ", b" "))
 }
 
 fn kind() -> T {
@@ -218,7 +218,7 @@ fn object() -> T {
             ("number", number()),
             ("generation", number()),
             // `obj`.
-            ("keyword", T::text(StrLen::Scan { skip: SPACE.to_vec(), ends: SPACE.to_vec(), comment: None }, Encoding::Ascii)),
+            ("keyword", T::text(StrLen::token(SPACE, SPACE), Encoding::Ascii)),
             ("body", T::bytes(E::to_bytes(b"endobj"))),
             ("endobj", T::magic(b"endobj")),
         ],
@@ -229,7 +229,7 @@ fn object() -> T {
 /// A number written as digits, with the white space in front of it and the one
 /// byte that ends it.
 fn number() -> T {
-    T::decimal(StrLen::Scan { skip: SPACE.to_vec(), ends: SPACE.to_vec(), comment: None })
+    T::decimal(StrLen::token(SPACE, SPACE))
 }
 
 #[cfg(test)]

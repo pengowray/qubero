@@ -380,6 +380,20 @@ pub enum StrLen {
     Terminated { end: u8, or_end: bool },
 }
 
+impl StrLen {
+    /// A token: any run of `skip` before it is stepped over, and the first
+    /// `ends` byte after it belongs to the field. What every format that
+    /// writes its values with white space between them needs.
+    pub fn token(skip: &[u8], ends: &[u8]) -> StrLen {
+        StrLen::Scan { skip: skip.to_vec(), ends: ends.to_vec(), comment: None }
+    }
+    /// The same, where a run from the first byte of `comment` to the second
+    /// counts as separator too.
+    pub fn token_past_comments(skip: &[u8], ends: &[u8], comment: (u8, u8)) -> StrLen {
+        StrLen::Scan { skip: skip.to_vec(), ends: ends.to_vec(), comment: Some(comment) }
+    }
+}
+
 /// Where the offsets in a `PointerList` count from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
