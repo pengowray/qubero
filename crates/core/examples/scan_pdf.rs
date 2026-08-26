@@ -29,19 +29,36 @@ fn main() {
     println!("  startxref at {}", show(&mut ev, &d, &[1]));
     println!("  table at     {}", show(&mut ev, &d, &[2, 0]));
     println!("  xref         {}", show(&mut ev, &d, &[3, 0]));
-    println!("  first object {}", show(&mut ev, &d, &[4, 0]));
-    println!("  entries      {}", show(&mut ev, &d, &[5, 0]));
-    println!("  trailer      {}", show(&mut ev, &d, &[7, 0]));
-    println!("  eof          {}", show(&mut ev, &d, &[9, 0]));
+    println!("  trailer      {}", show(&mut ev, &d, &[5, 0]));
+    println!("  eof          {}", show(&mut ev, &d, &[7, 0]));
 
-    let Ok(objects) = ev.node(&d, &[10]) else {
+    // The runs the table is written in, which is one for a file saved once.
+    match ev.node(&d, &[4, 0]) {
+        Ok(lines) => {
+            println!("  {} lines in the table", lines.child_count);
+            for i in 0..lines.child_count as usize {
+                let Ok(l) = ev.node(&d, &[4, 0, i]) else { continue };
+                if l.type_name != "Run" {
+                    continue;
+                }
+                println!(
+                    "    run from object {} for {} entries",
+                    show(&mut ev, &d, &[4, 0, i, 0]),
+                    show(&mut ev, &d, &[4, 0, i, 1]),
+                );
+            }
+        }
+        Err(e) => println!("  the table did not read: {e:?}"),
+    }
+
+    let Ok(objects) = ev.node(&d, &[8]) else {
         println!("  no objects: the table did not read");
         return;
     };
     println!("  {} objects", objects.child_count);
     let mut covered = 0u64;
     for i in 0..objects.child_count as usize {
-        let o = match ev.node(&d, &[10, i]) {
+        let o = match ev.node(&d, &[8, i]) {
             Ok(o) => o,
             Err(e) => {
                 println!("    [{i}] did not read: {e:?}");
@@ -60,9 +77,9 @@ fn main() {
                 "    [{i}] at {:>9}  {:>8} bytes  {} {} {}",
                 o.offset_bits / 8,
                 o.size_bits / 8,
-                show(&mut ev, &d, &[10, i, 0]),
-                show(&mut ev, &d, &[10, i, 1]),
-                show(&mut ev, &d, &[10, i, 2]),
+                show(&mut ev, &d, &[8, i, 0]),
+                show(&mut ev, &d, &[8, i, 1]),
+                show(&mut ev, &d, &[8, i, 2]),
             );
         }
     }
