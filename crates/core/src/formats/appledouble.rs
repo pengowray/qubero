@@ -54,7 +54,9 @@ fn body(name: &'static str, magic: &'static [u8]) -> T {
         vec![
             ("magic", T::magic(magic)),
             ("version", T::enumeration_hex("Version", T::u32(Big), &[(0x00010000, "1"), (0x00020000, "2")])),
-            ("filler", T::text(StrLen::Padded { size: E::lit(16), pad: 0x20 }, Encoding::Ascii)),
+            // All sixteen bytes, spaces and all: a padded field stops at the
+            // first pad byte, which would cut "Mac OS X        " to "Mac".
+            ("filler", T::text(StrLen::Fixed(E::lit(16)), Encoding::Ascii)),
             ("count", T::u16(Big)),
             ("entries", T::array(entry(), E::field("count"))),
             ("parts", T::pointer_list_sized("entries", &["offset"], Anchor::File, E::lit(0), part()).skipping_zero()),
@@ -378,6 +380,7 @@ mod tests {
         assert_eq!(crate::formats::sniff(&v, v.len() as u64), Some("appledouble"));
         let d = Document::new(MemSource(v));
         let mut ev = Evaluator::new(appledouble());
+        assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("Mac OS X        ".into()));
         assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::UInt(2));
         assert_eq!(
             ev.node(&d, &[4, 0, 0]).unwrap().value,
