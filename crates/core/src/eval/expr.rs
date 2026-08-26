@@ -160,6 +160,19 @@ impl Evaluator {
             // Walk for a word rather than for a byte. Blocks overlap by all
             // but one byte of the needle, so a word written across the seam
             // between two of them is still found.
+            //
+            // Which end the walk starts from is most of the cost of it. The
+            // first occurrence is found by reading forward and stopping at it,
+            // and the last one by reading backward and stopping at it: a word
+            // near the end of the file is a block's work either way round,
+            // where reading forward to be sure nothing came after it is the
+            // whole file's. For a reader that holds a window rather than the
+            // file that is the difference between opening and not opening. A
+            // PDF's pointer to its table is written forty bytes from the end
+            // of the file; looking for it forwards means fetching every chunk
+            // of a three hundred megabyte file to reach it, dropping the ones
+            // fetched first to make room, and starting over from the front the
+            // next time it is asked, which never finishes.
             Expr::Find { needle, last } => {
                 let Some((offset, limit)) = here else { return fail("nothing to search") };
                 if limit < offset {
@@ -173,33 +186,52 @@ impl Evaluator {
                 let n = needle.len() as u64;
                 let step = BLOCK.max(n);
                 let mut buf = Vec::new();
-                let mut at_byte = 0u64;
-                let mut found: Option<u64> = None;
-                while at_byte + n <= total {
-                    let want = step.min(total - at_byte);
-                    buf.resize(want as usize, 0);
-                    let missing = doc.read_bits(offset + at_byte * 8, want * 8, &mut buf);
-                    if !missing.is_empty() {
-                        return Err(EvalError::Pending(missing));
-                    }
-                    let mut from = 0usize;
-                    while let Some(i) = buf[from..].windows(needle.len()).position(|w| w == needle.as_slice()) {
-                        let hit = at_byte + (from + i) as u64;
-                        if !*last {
-                            return Ok(hit as i128);
+                let mut hit: Option<u64> = None;
+                if *last {
+                    // Backward: the window's far end walks down the file, and
+                    // each block keeps all but one byte of the needle from the
+                    // block below, so a word across the seam is still whole.
+                    let mut end = total;
+                    while end >= n {
+                        let want = step.min(end);
+                        let from = end - want;
+                        buf.resize(want as usize, 0);
+                        let missing = doc.read_bits(offset + from * 8, want * 8, &mut buf);
+                        if !missing.is_empty() {
+                            return Err(EvalError::Pending(missing));
                         }
-                        found = Some(hit);
-                        from += i + 1;
+                        if let Some(i) = buf.windows(needle.len()).rposition(|w| w == needle.as_slice()) {
+                            hit = Some(from + i as u64);
+                            break;
+                        }
+                        if from == 0 {
+                            break;
+                        }
+                        end = from + (n - 1);
                     }
-                    if want < step {
-                        break;
+                } else {
+                    let mut at_byte = 0u64;
+                    while at_byte + n <= total {
+                        let want = step.min(total - at_byte);
+                        buf.resize(want as usize, 0);
+                        let missing = doc.read_bits(offset + at_byte * 8, want * 8, &mut buf);
+                        if !missing.is_empty() {
+                            return Err(EvalError::Pending(missing));
+                        }
+                        if let Some(i) = buf.windows(needle.len()).position(|w| w == needle.as_slice()) {
+                            hit = Some(at_byte + i as u64);
+                            break;
+                        }
+                        if want < step {
+                            break;
+                        }
+                        at_byte += step - (n - 1);
                     }
-                    at_byte += step - (n - 1);
                 }
                 // Not written again: the run measures to the end of its
                 // container, as a stream with no marker after it does. A file
                 // cut off before the word it promised is still worth showing.
-                found.unwrap_or(total) as i128
+                hit.unwrap_or(total) as i128
             }
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {

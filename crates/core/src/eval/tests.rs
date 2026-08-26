@@ -1439,4 +1439,65 @@ fn the_last_of_a_word_is_found_wherever_it_is() {
     bytes.extend_from_slice(&[b'.'; 10]);
     let mut ev2 = Evaluator::new(t);
     assert_eq!(ev2.node(&doc(&bytes), &[0]).unwrap().value, Value::Int(4095));
+
+    // Backward too, where the seam falls a block up from the end of the file
+    // rather than a block down from the front of it.
+    let mut bytes = vec![b'.'; 4196];
+    bytes[0..2].copy_from_slice(b"go");
+    bytes[99..101].copy_from_slice(b"go");
+    let mut ev3 = Evaluator::new(Template::new(
+        "t",
+        T::structure("Root", vec![("head", T::computed(E::to_last_bytes(b"go")))]),
+    ));
+    assert_eq!(ev3.node(&doc(&bytes), &[0]).unwrap().value, Value::Int(99));
+}
+
+/// The last of a word is read from the end of the file, not found by reading
+/// the whole of it.
+///
+/// A reader that holds a window rather than the file cannot do the second.
+/// Every block it has not got stops the walk and is fetched, the walk starts
+/// again from where it started, and the blocks it read first have been dropped
+/// to make room for the ones it read last: the front of the file is fetched
+/// again, evicts the back, and the walk gets no further than it did before. It
+/// is not slow, it does not finish. Which is what a PDF asks for, since the
+/// pointer to its table is written at the end and looked for by this.
+///
+/// Room here is four blocks of a forty-block file, so a walk from the front
+/// would run out of it after a tenth of the way.
+#[test]
+fn the_last_of_a_word_is_read_from_the_end_of_a_file_that_arrives_in_pieces() {
+    use crate::source::ChunkStore;
+    const CHUNK: u64 = 4096;
+    const CHUNKS: u64 = 40;
+    let mut bytes = vec![b'.'; (CHUNK * CHUNKS) as usize];
+    let at = bytes.len() - 20;
+    bytes[at..at + 9].copy_from_slice(b"startxref");
+
+    let mut d = Document::new(ChunkStore::new(bytes.len() as u64, CHUNK, 4));
+    let mut ev = Evaluator::new(Template::new(
+        "t",
+        T::structure("Root", vec![("head", T::computed(E::to_last_bytes(b"startxref")))]),
+    ));
+
+    // The host's loop: what it was asked for is fetched, and the question is
+    // asked again.
+    let mut fetched = 0;
+    let value = loop {
+        match ev.node(&d, &[0]) {
+            Ok(n) => break n.value,
+            Err(EvalError::Pending(missing)) => {
+                for m in missing {
+                    let from = (m.chunk * CHUNK) as usize;
+                    let to = (from + CHUNK as usize).min(bytes.len());
+                    d.source_mut().insert(m.chunk, bytes[from..to].to_vec().into_boxed_slice());
+                    fetched += 1;
+                    assert!(fetched < 200, "asking for blocks that keep being dropped again");
+                }
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    assert_eq!(value, Value::Int(at as i128));
+    assert!(fetched <= 4, "the end of the file is all that is read: {fetched} blocks fetched");
 }
