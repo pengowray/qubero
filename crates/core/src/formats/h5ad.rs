@@ -338,7 +338,7 @@ fn element_name<S: Source>(ev: &mut Evaluator, doc: &Document<S>, body: &[usize]
         (1, 4) => "f32".into(),
         (1, 8) => "f64".into(),
         (3, n) => format!("{n}-byte text"),
-        (6, n) => format!("{n}-byte record"),
+        (6, n) => format!("{n}-byte compound"),
         (8, _) => "enumerated".into(),
         (9, _) => "variable-length".into(),
         (_, 0) => String::new(),

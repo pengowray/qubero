@@ -24,8 +24,8 @@ function storageText(object: ContentObject): string {
   if (object.storage === "chunked") {
     return `chunks of ${object.chunk_dims.map((d) => d.toLocaleString()).join(" × ")}`;
   }
-  if (object.storage === "contiguous") return `${formatBytes(object.bytes)} in one run`;
-  if (object.storage === "compact") return `${formatBytes(object.bytes)} in the header`;
+  if (object.storage === "contiguous") return `${formatBytes(object.bytes)} contiguous`;
+  if (object.storage === "compact") return `${formatBytes(object.bytes)} in the object header`;
   return "";
 }
 
@@ -556,7 +556,15 @@ export class OverviewPanel {
     if (anndata) {
       const note = document.createElement("p");
       note.className = "ov-note";
-      note.textContent = `AnnData: ${rows.toLocaleString()} observations × ${columns.toLocaleString()} variables`;
+      // What the file says about itself and what its shape gives away are two
+      // different claims, and only one of them is the file's own word. The
+      // counts are left out where nothing said what they are.
+      const said = reply.node.encoding === "anndata" ? "AnnData" : "Looks like AnnData";
+      const counts =
+        rows > 0 && columns > 0
+          ? `: ${rows.toLocaleString()} observations × ${columns.toLocaleString()} variables`
+          : "";
+      note.textContent = said + counts;
       out.push(note);
     }
     for (const object of objects.slice(0, CONTENTS_ROWS)) out.push(this.contentRow(object));
@@ -579,8 +587,11 @@ export class OverviewPanel {
     name.textContent = object.name;
     const about = document.createElement("span");
     about.className = "ov-region-size";
+    // The root has no shape and no bytes of its own, and an empty line beside
+    // rows that have both reads as "nothing known" rather than "this is the
+    // container everything else hangs under".
     about.textContent = [
-      object.encoding,
+      object.name === "/" && object.encoding === "" ? "root group" : object.encoding,
       object.shape.map((d) => d.toLocaleString()).join(" × "),
       object.element,
       storageText(object),
@@ -588,7 +599,7 @@ export class OverviewPanel {
     ]
       .filter((part) => part !== "")
       .join(" · ");
-    row.title = `${object.name}  ·  ${formatOffset(object.address * 8)}`;
+    row.title = `${object.name} · header at ${formatOffset(object.address * 8)}`;
     row.append(name, about);
     row.addEventListener("click", () =>
       this.onPick({ path: object.path, startBit: object.address * 8, endBit: object.address * 8 + 8 }),
