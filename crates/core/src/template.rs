@@ -565,11 +565,12 @@ pub enum Ty {
     /// not there. Its one child is the only thing that covers bytes.
     ///
     /// A structure is still as long as its last field ends, and what this
-    /// points at may be past that. The cursor can only land in what the
-    /// structure covers, so a table sitting beyond the end of everything else
-    /// is read and shown but not landed on. In a format that keeps its table
-    /// inside itself, which is every format that does this, something else
-    /// already covers the stretch and the question does not come up.
+    /// points at may be past that. The cursor lands in it anyway: every
+    /// stretch an `At` puts somewhere is indexed as it is walked, and `locate`
+    /// asks that index for a bit outside what the root covers. Without it an
+    /// HDF5 file would answer for its first ninety-six bytes and for nothing
+    /// else, since every object in one is reached by address. See
+    /// `eval::placed`.
     At { anchor: Anchor, at: Expr, inner: Box<Ty> },
     /// Occupies exactly `size` bytes; `inner` is parsed within that window.
     Sized { size: Expr, inner: Box<Ty> },

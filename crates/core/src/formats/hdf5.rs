@@ -244,7 +244,7 @@ fn link_cache(named: bool) -> T {
         ));
     }
     fields.push(("unused", T::bytes(E::lit(12))));
-    T::inline_structure("LinkCache", fields)
+    T::structure("LinkCache", fields)
 }
 
 /// An entry in a symbol table: a name, an address, and a cache of what is
@@ -756,7 +756,7 @@ fn element_type(by: Described) -> T {
 /// are of no fixed size and the fifteenth is wherever the fourteen before it
 /// ended.
 fn vlen_reference() -> T {
-    T::inline_structure(
+    T::structure(
         "GlobalHeapId",
         vec![
             ("length", T::u32(Little).counted_as("bytes")),
@@ -835,7 +835,7 @@ fn heap_object() -> T {
 /// reads the fields of the structures it sits in, and both of these are
 /// answers from somewhere else in the object header.
 fn elements(by: Described, bytes: E) -> T {
-    T::inline_structure(
+    T::structure(
         "Data",
         vec![element_size_field(by), ("run_bytes", T::computed(bytes)), ("elements", element_type(by))],
     )
@@ -958,7 +958,7 @@ fn link() -> T {
                         ),
                     ],
                     // A hard link, which is an address, and the object at it.
-                    T::inline_structure(
+                    T::structure(
                         "HardLink",
                         vec![
                             ("object_header_address", addr()),
@@ -1043,7 +1043,7 @@ fn data_layout() -> T {
 /// Versions 1 and 2, which write the dimensions before the class and always in
 /// four bytes.
 fn layout_v1() -> T {
-    T::inline_structure(
+    T::structure(
         "Layout",
         vec![
             ("dimensionality", T::u8()),
@@ -1059,7 +1059,7 @@ fn layout_v1() -> T {
                     vec![
                         (
                             0,
-                            T::inline_structure(
+                            T::structure(
                                 "Compact",
                                 vec![("size", T::u32(Little)), ("data", elements(Described::Beside, E::field("size")))],
                             ),
@@ -1078,7 +1078,7 @@ fn layout_class() -> T {
 }
 
 fn layout_v3() -> T {
-    T::inline_structure(
+    T::structure(
         "Layout",
         vec![
             ("layout_class", layout_class()),
@@ -1089,14 +1089,14 @@ fn layout_v3() -> T {
                     vec![
                         (
                             0,
-                            T::inline_structure(
+                            T::structure(
                                 "Compact",
                                 vec![("size", T::u16(Little)), ("data", elements(Described::Beside, E::field("size")))],
                             ),
                         ),
                         (
                             1,
-                            T::inline_structure(
+                            T::structure(
                                 "Contiguous",
                                 vec![
                                     ("address", addr()),
@@ -1107,7 +1107,7 @@ fn layout_v3() -> T {
                         ),
                         (
                             2,
-                            T::inline_structure(
+                            T::structure(
                                 "Chunked",
                                 vec![
                                     // One more than the dataset has: the last
@@ -1411,7 +1411,7 @@ fn btree() -> T {
             // range rather than opening a child.
             (
                 "last_key",
-                T::switch(E::field("node_type"), vec![(1, chunk_key())], T::inline_structure("Key", vec![("name_offset", length())])),
+                T::switch(E::field("node_type"), vec![(1, chunk_key())], T::structure("Key", vec![("name_offset", length())])),
             ),
         ],
     )
@@ -1486,7 +1486,7 @@ fn chunk_entry() -> T {
 }
 
 fn chunk_key() -> T {
-    T::inline_structure(
+    T::structure(
         "Key",
         vec![
             ("chunk_size", T::u32(Little)),
@@ -1675,6 +1675,48 @@ mod tests {
         let mut ev = Evaluator::new(hdf5());
         let node = ev.node(&doc, &object).expect("object header");
         assert_eq!(node.offset_bits / 8, ALPHA_HEADER);
+    }
+
+    /// The cursor reaches what an address placed. Everything in one of these
+    /// files but the superblock is placed that way, so a hex view that could
+    /// only land in what the root structure covers would say nothing about the
+    /// whole file.
+    #[test]
+    fn the_cursor_lands_in_what_an_address_placed() {
+        let f = one_link_file();
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+
+        // The first of the two numbers the dataset holds.
+        let at = ev.locate(&doc, DATA * 8).expect("locate");
+        let node = ev.node(&doc, &at).expect("node");
+        assert_eq!(node.value.as_int(), Some(-7));
+        // The object header the root group's entry points at, which is 184
+        // bytes past where the structure holding that entry ends.
+        let at = ev.locate(&doc, ALPHA_HEADER * 8).expect("locate");
+        assert_eq!(ev.node(&doc, &at).expect("node").name, "version");
+        // A name in the heap's data segment, which is placed inside another
+        // placed stretch: the narrower one is the answer.
+        let at = ev.locate(&doc, (HEAP_DATA + 8) * 8).expect("locate");
+        assert!(matches!(ev.node(&doc, &at).expect("node").value, Value::Str(ref s) if s == "alpha"));
+
+        // The spans a view asks for run over the placed stretches as well as
+        // over what the root covers.
+        let spans = ev.spans(&doc, DATA * 8, DATA * 8 + 64, 8).expect("spans");
+        assert!(spans.first().is_some_and(|s| s.offset_bits == DATA * 8 && !s.gap), "the dataset is not a span");
+        let spans = ev.spans(&doc, BTREE * 8, BTREE * 8 + 64, 8).expect("spans");
+        assert!(spans.first().is_some_and(|s| s.offset_bits == BTREE * 8), "the tree is not a span");
+
+        // A byte nothing covers is a gap rather than an error: bytes tacked
+        // on after everything the file places are named by nobody, and saying
+        // so is the answer.
+        let mut padded = one_link_file();
+        padded.resize(400, 0);
+        let doc = Document::new(MemSource(padded));
+        let mut ev = Evaluator::new(hdf5());
+        assert!(ev.locate(&doc, 396 * 8).expect("locate").is_empty());
+        let tail = ev.spans(&doc, 396 * 8, 400 * 8, 8).expect("spans");
+        assert!(tail.first().is_some_and(|s| s.gap), "the tail is not a gap");
     }
 
     /// The layout message says where a dataset's bytes are and never what they

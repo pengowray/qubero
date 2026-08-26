@@ -120,6 +120,23 @@ fn main() {
     // reads as. That is the question the hex grid asks, and the answer for a
     // format whose bytes are all reached through pointers is not obvious.
     if let Some(at) = std::env::args().nth(3).map(|s| s.parse::<u64>().expect("offset")) {
+        // The index of placed stretches is built a go at a time, so a large
+        // file answers "nothing covers this yet" until the walk reaches it.
+        // Asking again is what the app does when the cursor moves.
+        let probe = Instant::now();
+        for go in 1..=40 {
+            match ev.locate(&doc, at * 8) {
+                Ok(p) if !p.is_empty() => {
+                    println!("  found after {go} goes, {:?}", probe.elapsed());
+                    break;
+                }
+                Ok(_) => println!("  go {go}: nothing covers it yet ({:?})", probe.elapsed()),
+                Err(e) => {
+                    println!("  go {go}: {e:?}");
+                    break;
+                }
+            }
+        }
         match ev.locate(&doc, at * 8) {
             Ok(p) => {
                 let n = ev.node(&doc, &p).expect("node");
@@ -135,6 +152,13 @@ fn main() {
             }
             Err(e) => println!("spans -> {e:?}"),
         }
+        println!("  locate took {:?}", probe.elapsed());
+        println!(
+            "  {} reads, {} bytes read, {} memo entries",
+            doc.source().reads.borrow(),
+            doc.source().bytes.borrow(),
+            ev.memo_len()
+        );
         return;
     }
     let start = Instant::now();

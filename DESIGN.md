@@ -265,6 +265,25 @@ hex view; picking a field in the table or in the inspector's trail moves the
 cursor to its first bit. `web/src/main.ts` owns that loop and holds a `picking`
 flag so it does not chase its own tail.
 
+A field that reads its contents somewhere else used to break that agreement.
+`At` costs no bytes where it is declared, so a structure ends where its last
+real field ends and what the pointer named sits outside it: the cursor could
+not land there. For a WAD that never showed, since the lumps cover the stretch
+the directory sits in. For HDF5 it is the whole file: the root structure ends
+ninety-six bytes in and everything else is reached by address, so the hex view
+had nothing to say about a hundred megabytes the field tree could describe in
+full. `crates/core/src/eval/placed.rs` indexes every stretch an `At` placed and
+the field that placed it; `locate` asks that index for a bit outside the root
+and carries on from there, and a bit covered by nothing is a gap rather than an
+error. The walk is pruned by the template (a type holding no `At` is skipped
+whole), judged by what a list's first element turns out to be rather than by
+what its type could be, deduplicated by stretch, and resumable: it keeps its own
+stack, does a bounded number of nodes per go and charges them against the same
+allowance every other walk uses, so a five-gigabyte file is indexed across
+several questions instead of freezing the first one. Until the walk reaches a
+stretch, the bytes there read as a gap, which is what they read as before any of
+this existed.
+
 The inspector reads from the cursor's bit, not its byte, so its integer and float
 rows show what an unaligned read would give. Its first mode ("Field") shows what
 the template says is there instead: the trail of enclosing structures, the value

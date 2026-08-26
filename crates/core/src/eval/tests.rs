@@ -480,12 +480,11 @@ fn a_field_can_read_its_contents_somewhere_else_and_still_cost_nothing() {
     assert_eq!(ev2.node(&d, &[2]).unwrap().value, Value::Int(2));
     assert_eq!(ev2.node(&d, &[3]).unwrap().value, Value::Int(2));
 
-    // What the cursor can reach is still what the structure covers, and a
-    // structure is as long as its last field ends. Nothing here reaches byte
-    // 4, so the table is read but not landed on. A format doing this for real
-    // has something covering the stretch, and then it is found: see the WAD
-    // template, whose list of lumps runs to the end of the file.
-    assert!(ev2.locate(&d, 6 * 8).is_err());
+    // The cursor reaches it. A structure is still as long as its last field
+    // ends, and the table is past that, but where a placed field put its
+    // contents is indexed, so a byte inside the table is the table: see
+    // `placed.rs`, and the HDF5 template, which is nothing but this.
+    assert_eq!(ev2.locate(&d, 6 * 8).unwrap(), vec![1, 0, 1]);
 }
 
 #[test]
@@ -1042,7 +1041,9 @@ fn a_file_cut_off_mid_block_keeps_the_blocks_it_has() {
     let mut ev = Evaluator::new(t);
     let all = ev.node(&d, &[1]).unwrap();
     assert_eq!((all.child_count, all.size_bits), (3, 3 * 16 * 8));
-    assert!(ev.locate(&d, (2 + 16 * 3 + 1) as u64 * 8).is_err());
+    // The half block at the end belongs to no field, which is a gap: the root
+    // and nothing under it, rather than an error.
+    assert!(ev.locate(&d, (2 + 16 * 3 + 1) as u64 * 8).unwrap().is_empty());
 }
 
 #[test]

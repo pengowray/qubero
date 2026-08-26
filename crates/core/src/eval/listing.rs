@@ -162,13 +162,27 @@ impl Evaluator {
         (name != format!("[{idx}]")).then_some(name)
     }
 
+    /// The deepest field covering `bit`.
+    ///
+    /// A bit the root's own extent covers is found by walking down from it. A
+    /// bit outside it may still be covered by a field that reads its contents
+    /// somewhere else, which is how every object in an HDF5 file is placed, so
+    /// the index of those stretches is asked next and the walk carries on from
+    /// whichever placed the bit. A bit nothing covers is the root, which is
+    /// what a gap has always been.
     pub fn locate<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<usize>> {
         let mut path: Vec<usize> = Vec::new();
         self.resolve(doc, &path)?;
         let size = self.size_of(doc, &path)?;
         let root = self.memo[&path].clone();
+        if bit >= doc.len_bits() {
+            return fail("past the end of the file");
+        }
         if bit < root.offset || bit >= root.offset + size {
-            return fail("outside the template");
+            match self.placement_at(doc, bit)? {
+                Some(p) => path = p,
+                None => return Ok(Vec::new()),
+            }
         }
         loop {
             let n = self.child_count(doc, &path)?;
@@ -212,7 +226,11 @@ impl Evaluator {
         self.resolve(doc, &[])?;
         let root_size = self.size_of(doc, &[])?;
         let root_offset = self.memo[&Vec::new()].offset;
-        let end = to.min(root_offset + root_size);
+        // As far as the file goes rather than as far as the root's own fields
+        // go: what a placed field covers is past the second and inside the
+        // first, and it is most of an HDF5 file.
+        let _ = root_size;
+        let end = to.min(doc.len_bits());
         let mut at = from.max(root_offset);
         let mut out: Vec<Span> = Vec::new();
         while at < end && out.len() < max {
@@ -222,6 +240,19 @@ impl Evaluator {
             let inline = matches!(self.memo[&path].ty.base(), Ty::Struct(s) if s.inline);
             let info = self.node(doc, &path)?;
             let mut span = self.span_of(doc, &path, &info)?;
+            // A bit no field covers at all, which in a format whose objects
+            // are all placed by address is the space between two of them. It
+            // runs to wherever the next placed stretch begins.
+            if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
+                let ends = self.placement_after(doc, at)?.unwrap_or(doc.len_bits()).max(at + 8);
+                span.gap = true;
+                span.offset_bits = at;
+                span.size_bits = ends - at;
+                span.count = 0;
+                at = ends;
+                out.push(span);
+                continue;
+            }
             if inline {
                 let mut parts = Vec::new();
                 self.one_line(doc, &path, &mut parts)?;
