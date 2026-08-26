@@ -55,10 +55,25 @@
 //! A signature may also sit at 512, 1024 or any later power of two, with a
 //! user block in front of it. Only a file that starts with one is claimed.
 //!
-//! Version 2 and 3 superblocks are read to their root object header address,
-//! and stop there. A file written that way keeps its links in a fractal heap
-//! indexed by a version 2 b-tree, which is a different machine from the one
-//! here and the next thing to build.
+//! A group with more links than fit as messages keeps them in a fractal heap:
+//! a header, a table of blocks whose rows double in size, and the links
+//! written one after another inside those blocks. That is read, and the names
+//! come out. Where the links stop inside a block is not written anywhere, so
+//! a run of zeros or a stretch too short to hold a link ends the run; a block
+//! whose free space holds an older link reads that link again, wrongly, and
+//! the name says so.
+//!
+//! The version 2 b-tree that indexes those links by name is read as far as its
+//! root node, and its records are left as bytes: a record is a hash and a heap
+//! id, which is an offset into the heap rather than an address in the file, and
+//! the links themselves are already read from the blocks. A tree deeper than
+//! its root keeps how many records each child holds inside those same records,
+//! so the children are not followed.
+//!
+//! What is still not read: huge and tiny heap objects, the free-space managers,
+//! and a heap grown past the largest direct block size, whose later rows hold
+//! indirect blocks rather than direct ones. Telling those apart takes a base
+//! two logarithm, which the expressions here do not have.
 //!
 //! ## The elements
 //!
@@ -118,6 +133,11 @@ pub fn hdf5() -> Template {
         .with_type("Datatype", datatype())
         .with_type("Dataspace", dataspace())
         .with_type("GlobalHeap", global_heap())
+        .with_type("FractalHeap", fractal_heap())
+        .with_type("HeapDirectBlock", heap_direct_block())
+        .with_type("HeapIndirectBlock", heap_indirect_block())
+        .with_type("BTree2", btree2())
+        .with_type("BTree2Node", btree2_node())
 }
 
 fn root() -> T {
@@ -767,6 +787,290 @@ fn vlen_reference() -> T {
     )
 }
 
+/// The heap a group keeps its links in once there are too many of them to
+/// write as messages. "Fractal" is the doubling: each row of blocks is twice
+/// the size of the row before it, so a heap that grows keeps its bookkeeping
+/// the same shape rather than rewriting itself.
+fn fractal_heap() -> T {
+    T::structure(
+        "FractalHeap",
+        vec![
+            ("signature", T::magic(b"FRHP")),
+            ("version", T::u8()),
+            ("heap_id_length", T::u16(Little).counted_as("bytes")),
+            ("io_filter_length", T::u16(Little).counted_as("bytes")),
+            (
+                "flags",
+                T::flags("HeapFlags", T::u8(), &[(0, "huge ids are wrapped"), (1, "direct blocks are checksummed")]),
+            ),
+            ("max_managed_object_size", T::u32(Little).counted_as("bytes")),
+            ("next_huge_object_id", length()),
+            ("huge_object_btree_address", addr()),
+            ("managed_free_space", length().counted_as("bytes")),
+            ("free_space_manager_address", addr()),
+            ("managed_space", length().counted_as("bytes")),
+            ("allocated_managed_space", length().counted_as("bytes")),
+            ("direct_block_iterator_offset", length()),
+            ("managed_object_count", length().counted_as("objects")),
+            ("huge_object_size", length().counted_as("bytes")),
+            ("huge_object_count", length().counted_as("objects")),
+            ("tiny_object_size", length().counted_as("bytes")),
+            ("tiny_object_count", length().counted_as("objects")),
+            // How many blocks a row holds, and how big the first row's blocks
+            // are. Every row after it doubles.
+            ("table_width", T::u16(Little).counted_as("blocks per row")),
+            ("starting_block_size", length().counted_as("bytes")),
+            ("max_direct_block_size", length().counted_as("bytes")),
+            ("max_heap_size", T::u16(Little).counted_as("bits")),
+            ("starting_rows", T::u16(Little).counted_as("rows")),
+            ("root_block_address", addr()),
+            ("current_rows", T::u16(Little).counted_as("rows")),
+            // A heap whose blocks went through filters says here what it did
+            // to the root one.
+            (
+                "filtered_root",
+                T::switch(
+                    E::field("io_filter_length"),
+                    vec![(0, T::bytes(E::lit(0)))],
+                    T::inline_structure(
+                        "FilteredRoot",
+                        vec![
+                            ("size", length().counted_as("bytes")),
+                            ("filter_mask", T::u32(Little)),
+                            ("filter_info", T::bytes(E::field("io_filter_length"))),
+                        ],
+                    ),
+                ),
+            ),
+            ("checksum", T::u32(Little)),
+            // No rows means the root block holds the objects themselves;
+            // otherwise it is the table that says where those blocks are.
+            (
+                "root_block",
+                T::switch(
+                    E::field("current_rows"),
+                    vec![(
+                        0,
+                        at_address(
+                            "root_block_address",
+                            T::sized(E::field("starting_block_size"), T::Named("HeapDirectBlock".into())),
+                        ),
+                    )],
+                    at_address("root_block_address", T::Named("HeapIndirectBlock".into())),
+                ),
+            ),
+        ],
+    )
+}
+
+/// A block holding the objects themselves. What is in one is not said
+/// anywhere in the block: a heap object has no header, and where each one ends
+/// is known only from the id that names it. For a group's heap the objects are
+/// links, written exactly as a link message is, so they are read one after
+/// another until the free space at the end of the block, which is zeros where
+/// a link's version would be.
+fn heap_direct_block() -> T {
+    T::structure(
+        "HeapDirectBlock",
+        vec![
+            ("signature", T::magic(b"FHDB")),
+            ("version", T::u8()),
+            ("heap_header_address", addr()),
+            // As many bytes as the heap said its offsets take, rounded up.
+            ("block_offset", T::bytes(E::field("max_heap_size").add(E::lit(7)).div(E::lit(8)))),
+            ("checksum", when(bit("flags", 1), T::u32(Little))),
+            ("links", T::repeat(heap_link(), Until::End).counted_as("links")),
+        ],
+    )
+}
+
+/// One object in a fractal heap's block, which for a group's heap is a link.
+///
+/// Where the links stop is the hard part: nothing in the block says how many
+/// there are, and the space after them belongs to a free-space manager this
+/// does not read. Two things end the run honestly. A link's version is never
+/// zero, so a run of zeros is free space and is shown as that. And a stretch
+/// too short to hold the shortest possible link is free space too, whatever is
+/// in it. What is left over is a block whose free space holds something that
+/// is neither: bytes a link was written into and later moved out of. Those are
+/// read as links, wrongly, and a reader can tell by the names.
+fn heap_link() -> T {
+    let free = |what: &str| T::structure(what, vec![("free", T::bytes(E::Remaining))]);
+    // Version, flags, a one-byte name length, a byte of name and an address.
+    const SHORTEST_LINK: i128 = 12;
+    T::switch(
+        E::peek(8, Little),
+        vec![(0, free("HeapFreeSpace"))],
+        T::switch(E::Remaining.less_than(E::lit(SHORTEST_LINK)), vec![(1, free("HeapTail"))], link()),
+    )
+}
+
+/// The table of where a heap's blocks are: `table_width` of them per row, each
+/// row twice the size of the one before.
+///
+/// A row past the largest direct block size holds indirect blocks rather than
+/// direct ones, and telling the two apart takes a base-two logarithm, which is
+/// not something an expression here can do. So every entry is read as a direct
+/// block; a heap large enough to have grown past that size is read as far as
+/// its first rows and no further.
+fn heap_indirect_block() -> T {
+    T::structure(
+        "HeapIndirectBlock",
+        vec![
+            ("signature", T::magic(b"FHIB")),
+            ("version", T::u8()),
+            ("heap_header_address", addr()),
+            ("block_offset", T::bytes(E::field("max_heap_size").add(E::lit(7)).div(E::lit(8)))),
+            (
+                "children",
+                T::array(heap_child(), E::field("table_width").mul(E::field("current_rows")))
+                    .counted_as("blocks"),
+            ),
+            ("checksum", T::u32(Little)),
+        ],
+    )
+}
+
+/// One entry of that table: where a block is, and the block.
+fn heap_child() -> T {
+    T::structure(
+        "HeapBlock",
+        vec![
+            ("address", addr()),
+            ("row", T::computed(E::Idx.div(E::field("table_width")))),
+            ("block_size", row_block_size()),
+            ("block", at_address("address", T::sized(E::field("block_size"), T::Named("HeapDirectBlock".into())))),
+        ],
+    )
+}
+
+/// How big the blocks of one row are, in a field of no bytes.
+///
+/// The first two rows are the starting size and every row after that doubles.
+/// A doubling is a power of two and there is no power here, so the fourteen
+/// rows a heap could plausibly have are written out; a row past them is read
+/// as the starting size, which is wrong, and is a heap of eight thousand
+/// times the starting block that nothing has yet built.
+///
+/// Sizing them matters because a direct block says nothing about how long it
+/// is. Without this the links inside one would be read on past the block's end
+/// and into whatever the bytes after it happen to be.
+fn row_block_size() -> T {
+    let starting = E::field("starting_block_size");
+    let cases: Vec<(i128, T)> = (0..14u32)
+        .map(|row| {
+            let times = if row < 2 { 1i128 } else { 1i128 << (row - 1) };
+            (i128::from(row), T::computed(starting.clone().mul(E::lit(times))))
+        })
+        .collect();
+    T::switch(E::field("row"), cases, T::computed(starting))
+}
+
+/// A version 2 b-tree: what a group written by a newer library uses to find a
+/// link by the hash of its name, and what a chunked dataset written by one
+/// uses to find a chunk.
+///
+/// The records are left as their bytes. What a record means is settled by the
+/// tree's type, and the one that matters here holds a hash and a heap id,
+/// which is a length and an offset into the heap above rather than an address
+/// in the file. The links themselves are read from the heap's blocks, so
+/// nothing is lost by leaving the index alone.
+fn btree2() -> T {
+    T::structure(
+        "BTree2",
+        vec![
+            ("signature", T::magic(b"BTHD")),
+            ("version", T::u8()),
+            (
+                "type",
+                T::enumeration(
+                    "BTree2Type",
+                    T::u8(),
+                    &[
+                        (0, "testing"),
+                        (1, "huge objects, indirectly accessed"),
+                        (2, "huge objects, filtered and indirectly accessed"),
+                        (3, "huge objects, directly accessed"),
+                        (4, "huge objects, filtered and directly accessed"),
+                        (5, "link names"),
+                        (6, "link creation order"),
+                        (7, "shared object header messages"),
+                        (8, "attribute names"),
+                        (9, "attribute creation order"),
+                        (10, "chunks, unfiltered"),
+                        (11, "chunks, filtered"),
+                    ],
+                ),
+            ),
+            ("node_size", T::u32(Little).counted_as("bytes")),
+            ("record_size", T::u16(Little).counted_as("bytes")),
+            ("depth", T::u16(Little)),
+            ("split_percent", T::u8()),
+            ("merge_percent", T::u8()),
+            ("root_node_address", addr()),
+            ("root_record_count", T::u16(Little).counted_as("records")),
+            ("record_count", length().counted_as("records")),
+            ("checksum", T::u32(Little)),
+            (
+                "root_node",
+                at_address("root_node_address", T::sized(E::field("node_size"), T::Named("BTree2Node".into()))),
+            ),
+        ],
+    )
+}
+
+/// A node of such a tree, of whichever of the two kinds the signature says.
+/// Only the root is placed: how many records a child holds is written in the
+/// entry that points at it, and the entries are part of the record layout this
+/// leaves alone.
+fn btree2_node() -> T {
+    T::switch(
+        E::peek(32, Big),
+        vec![
+            (u32::from_be_bytes(*b"BTLF") as i128, btree2_leaf()),
+            (u32::from_be_bytes(*b"BTIN") as i128, btree2_internal()),
+        ],
+        T::structure("UnknownBTree2Node", vec![("signature", T::utf8(E::lit(4)))]),
+    )
+}
+
+fn btree2_leaf() -> T {
+    T::structure(
+        "BTree2Leaf",
+        vec![
+            ("signature", T::magic(b"BTLF")),
+            ("version", T::u8()),
+            ("type", T::u8()),
+            (
+                "records",
+                T::array(T::bytes(E::field("record_size")), E::field("root_record_count")).counted_as("records"),
+            ),
+            ("checksum", T::u32(Little)),
+        ],
+    )
+}
+
+fn btree2_internal() -> T {
+    T::structure(
+        "BTree2Internal",
+        vec![
+            ("signature", T::magic(b"BTIN")),
+            ("version", T::u8()),
+            ("type", T::u8()),
+            (
+                "records",
+                T::array(T::bytes(E::field("record_size")), E::field("root_record_count")).counted_as("records"),
+            ),
+            // What follows is one entry per child: an address, how many
+            // records are under it, and how many are under it in all. The
+            // widths of the last two are worked out from the tree's depth and
+            // node size, which is arithmetic this cannot do, so the entries
+            // keep their bytes.
+            ("children", T::bytes(E::Remaining)),
+        ],
+    )
+}
+
 /// A global heap collection: everything that had no fixed size, written
 /// together in one block that several datasets share.
 fn global_heap() -> T {
@@ -978,11 +1282,14 @@ fn link_info() -> T {
             ("version", T::u8()),
             ("flags", T::flags("LinkInfoFlags", T::u8(), &[(0, "creation order tracked"), (1, "creation order indexed")])),
             ("max_creation_index", when(bit("flags", 0), T::u64(Little))),
-            // Where a new-style group keeps its links: a fractal heap, which
-            // nothing here reads, and the b-trees that index it.
+            // Where a group with more than a handful of links keeps them: a
+            // fractal heap holding the links themselves, and a version 2
+            // b-tree indexing them by the hash of their names.
             ("fractal_heap_address", addr()),
             ("name_index_btree_address", addr()),
             ("creation_order_index_address", when(bit("flags", 1), addr())),
+            ("heap", at_address("fractal_heap_address", T::Named("FractalHeap".into()))),
+            ("name_index", at_address("name_index_btree_address", T::Named("BTree2".into()))),
         ],
     )
 }

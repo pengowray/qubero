@@ -215,6 +215,12 @@ fn walk<S: Source>(
                     links.push(link);
                 }
             }
+            // A group with more links than fit as messages keeps them in a
+            // fractal heap instead, and they are links all the same.
+            0x02 => {
+                object.group = true;
+                links.extend(heap_links(ev, doc, &body)?);
+            }
             _ => {}
         }
     }
@@ -531,6 +537,62 @@ fn nodes<S: Source>(
         let Some(child) = inside(ev, doc, &child)? else { continue };
         match nodes(ev, doc, &child, out, depth + 1) {
             Ok(()) => {}
+            Err(e) if e.interrupted() => return Err(e),
+            Err(_) => continue,
+        }
+    }
+    Ok(())
+}
+
+/// The links in a group's fractal heap: every one in the root block, or in
+/// each of the blocks the root block's table points at.
+fn heap_links<S: Source>(
+    ev: &mut Evaluator,
+    doc: &Document<S>,
+    body: &[usize],
+) -> R<Vec<(String, Vec<usize>)>> {
+    let mut out = Vec::new();
+    let Some(heap) = ev.child_named(doc, body, "heap")? else { return Ok(out) };
+    let Some(heap) = inside(ev, doc, &heap)? else { return Ok(out) };
+    let Some(root) = ev.child_named(doc, &heap, "root_block")? else { return Ok(out) };
+    let Some(root) = inside(ev, doc, &root)? else { return Ok(out) };
+    // The root is either the objects themselves or the table saying where the
+    // blocks holding them are.
+    if let Some(children) = ev.child_named(doc, &root, "children")? {
+        let n = ev.node(doc, &children)?.child_count;
+        for i in 0..n.min(LIMIT as u64 * 4) {
+            let mut entry = children.clone();
+            entry.push(i as usize);
+            let Some(block) = ev.child_named(doc, &entry, "block")? else { continue };
+            let Some(block) = inside(ev, doc, &block)? else { continue };
+            match block_links(ev, doc, &block, &mut out) {
+                Ok(()) => {}
+                Err(e) if e.interrupted() => return Err(e),
+                Err(_) => continue,
+            }
+        }
+        return Ok(out);
+    }
+    block_links(ev, doc, &root, &mut out)?;
+    Ok(out)
+}
+
+/// The links in one block of a heap. What is not a link is not one: free
+/// space keeps its own name and is stepped over.
+fn block_links<S: Source>(
+    ev: &mut Evaluator,
+    doc: &Document<S>,
+    block: &[usize],
+    out: &mut Vec<(String, Vec<usize>)>,
+) -> R<()> {
+    let Some(links) = ev.child_named(doc, block, "links")? else { return Ok(()) };
+    let n = ev.node(doc, &links)?.child_count;
+    for i in 0..n {
+        let mut link = links.clone();
+        link.push(i as usize);
+        match link_message(ev, doc, &link) {
+            Ok(Some(found)) => out.push(found),
+            Ok(None) => {}
             Err(e) if e.interrupted() => return Err(e),
             Err(_) => continue,
         }

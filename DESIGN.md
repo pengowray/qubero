@@ -139,9 +139,20 @@ What is read: superblock versions 0 and 1, object headers of version 1 and 2,
 the messages a dataset is made of (dataspace, datatype, layout, filters,
 attributes, links, symbol tables and continuations), version 1 b-trees for both
 groups and chunks, local heaps, symbol table nodes and global heap collections.
-What is not: fractal heaps and version 2 b-trees, which is where a file written
-with the newest library keeps its links; data layout messages of version 4 and
-later.
+A group with more links than fit as messages keeps them in a fractal heap, and
+that is read too: the header, the table of blocks whose rows double in size,
+and the links written one after another inside those blocks, which is where the
+names are. Where the links stop inside a block is written nowhere, so a run of
+zeros or a stretch too short to hold one ends the run, and a block whose free
+space still holds an older link reads it again. The version 2 b-tree indexing
+those links is read to its root node with its records left as bytes: a record
+is a hash and an offset into that heap rather than anything in the file, and
+the links are already in hand.
+
+What is not: a heap grown past the largest direct block size, whose later rows
+hold indirect blocks and which needs a base two logarithm to tell apart; huge
+and tiny heap objects; free-space managers; and data layout messages of version
+4 and later.
 
 A filtered chunk is the one thing in such a file whose contents are not in the
 file: what is written there is the output of a pipeline of filters, so the
