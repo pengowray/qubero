@@ -138,6 +138,12 @@ pub enum Expr {
     /// while `a` is the larger, and stops at 1 once `a` is smaller. That is
     /// how a template asks a question it cannot afford to ask twice, such as
     /// looking ahead twenty bytes when fewer than twenty are left.
+    ///
+    /// Check which way round it is written. A guard of that shape says "if
+    /// there is not room, the answer is 1 and do not ask `c`", and swapping
+    /// the two sides makes it say the opposite without failing: `c` is then
+    /// read in exactly the cases it was put there to avoid, and what comes
+    /// back is whatever was at an offset nothing checked.
     Less(Box<Expr>, Box<Expr>),
 }
 
