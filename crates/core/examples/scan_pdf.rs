@@ -4,7 +4,7 @@
 use std::fs;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, Explain, Value};
 use qubero_core::formats::{pdf, pdf_xref};
 use qubero_core::source::MemSource;
 
@@ -123,4 +123,31 @@ fn main() {
         }
     }
     println!("  {covered} bytes of {} are inside an object", d.len_bits() / 8);
+
+    // The object streams among them, and what each one holds. Most of a modern
+    // PDF's objects are in here rather than at an offset of their own.
+    let mut streams = 0;
+    let mut inside = 0;
+    for i in 0..objects.child_count as usize {
+        let Ok(Explain::ObjStm { objects: os, total, problem, packed_bytes, decoded_bytes, extends, .. }) =
+            ev.explain(&d, &[9, i], None)
+        else {
+            continue;
+        };
+        streams += 1;
+        inside += total;
+        let number = show(&mut ev, &d, &[9, i, 0]);
+        println!("  object stream {number}: {packed_bytes} packed bytes, {decoded_bytes} decoded, {total} objects");
+        if let Some(p) = problem {
+            println!("    {p}");
+        }
+        if let Some(e) = extends {
+            println!("    extends object stream {e}");
+        }
+        for o in os.iter().take(3) {
+            let text: String = o.text.chars().take(70).collect();
+            println!("    object {:>6}  {} bytes  {text}", o.number, o.len);
+        }
+    }
+    println!("  {streams} object streams holding {inside} objects");
 }

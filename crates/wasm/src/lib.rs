@@ -138,9 +138,7 @@ struct XrefRowDto {
 #[derive(Serialize)]
 struct ObjStmObjectDto {
     number: f64,
-    /// Where it starts in the decompressed bytes, and how long it is. Not an
-    /// offset in the file: these bytes are not in the file.
-    at: f64,
+    /// How long the object is in the decompressed bytes.
     len: f64,
     /// The object as written, cut at the limit the core keeps. `cut` says the
     /// rest was left behind.
@@ -212,10 +210,8 @@ struct ExplainDto {
     /// came to once decompressed.
     objstm_packed: f64,
     objstm_decoded: f64,
-    /// ObjStm: where the objects begin in the decompressed bytes, from
-    /// `/First`, and the object number in `/Extends` where this stream
-    /// continues another (-1 where it does not).
-    objstm_first: f64,
+    /// ObjStm: the object number in `/Extends`, which is the object stream
+    /// this one continues, or -1 where it continues none.
     objstm_extends: f64,
     /// ObjStm: the objects, and how many there are altogether. A stream with
     /// more than `objstm_objects` holds says so with `objstm_total`.
@@ -347,7 +343,6 @@ fn explain_dto(e: Explain) -> ExplainDto {
         xref_total: 0.0,
         objstm_packed: 0.0,
         objstm_decoded: 0.0,
-        objstm_first: 0.0,
         objstm_extends: -1.0,
         objstm_objects: Vec::new(),
         objstm_total: 0.0,
@@ -441,11 +436,10 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 })
                 .collect();
         }
-        Explain::ObjStm { packed_bytes, decoded_bytes, first, extends, objects, total, problem } => {
+        Explain::ObjStm { packed_bytes, decoded_bytes, extends, objects, total, problem, .. } => {
             dto.kind = "objstm";
             dto.objstm_packed = packed_bytes as f64;
             dto.objstm_decoded = decoded_bytes as f64;
-            dto.objstm_first = first as f64;
             dto.objstm_extends = extends.map_or(-1.0, |n| n as f64);
             dto.objstm_total = total as f64;
             dto.problem = problem.unwrap_or_default();
@@ -453,7 +447,6 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 .into_iter()
                 .map(|o| ObjStmObjectDto {
                     number: o.number as f64,
-                    at: o.at as f64,
                     len: o.len as f64,
                     text: o.text,
                     cut: o.cut,

@@ -1891,7 +1891,7 @@ button.insp-xrow-where:hover {
 }
 .insp-orow {
   display: grid;
-  grid-template-columns: 4em 1fr;
+  grid-template-columns: 4em 1fr auto;
   gap: 6px;
   align-items: baseline;
   font-family: var(--mono);
@@ -1918,6 +1918,11 @@ button.insp-xrow-where:hover {
 }
 .insp-orow-cut {
   color: var(--muted);
+}
+.insp-orow-size {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .insp-xproblem {
   font-size: 11px;

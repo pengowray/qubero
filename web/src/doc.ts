@@ -209,7 +209,7 @@ export type Origin = {
  *  bytes, so there is nowhere in the file to go to. */
 export type ObjStmObject = {
   readonly number: number;
-  readonly at: number;
+  /** How long the object is in the decompressed bytes. */
   readonly len: number;
   /** The object as written, cut at the limit the core keeps. */
   readonly text: string;
@@ -297,9 +297,8 @@ export type TypeInfo = {
    *  decompressed. */
   readonly objstm_packed: number;
   readonly objstm_decoded: number;
-  /** ObjStm: where the objects begin in the decompressed bytes, and the object
-   *  number this stream continues, or -1 where it continues none. */
-  readonly objstm_first: number;
+  /** ObjStm: the object stream this one continues, or -1 where it continues
+   *  none. */
   readonly objstm_extends: number;
   /** ObjStm: the objects, and how many there are altogether. */
   readonly objstm_objects: readonly ObjStmObject[];

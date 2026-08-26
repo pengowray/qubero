@@ -29,6 +29,7 @@ function objectLine(o: ObjStmObject): HTMLElement {
   // really does end in dots is not read as a cut one.
   if (o.cut) text.append(span("insp-orow-cut", "…"));
   line.append(text);
+  line.append(span("insp-orow-size", `${o.len.toLocaleString()} B`));
   return line;
 }
 
@@ -71,7 +72,11 @@ export function objstmBody(info: TypeInfo): DocumentFragment {
 
   const head = document.createElement("div");
   head.className = "insp-orow is-head";
-  head.append(span("insp-orow-object", "Object"), span("insp-orow-text", "Contents"));
+  head.append(
+    span("insp-orow-object", "Object"),
+    span("insp-orow-text", "Contents"),
+    span("insp-orow-size", "Size"),
+  );
   frag.append(head);
 
   const list = document.createElement("div");
