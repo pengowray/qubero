@@ -32,17 +32,17 @@ fn main() {
     println!("  trailer      {}", show(&mut ev, &d, &[5, 0]));
     println!("  eof          {}", show(&mut ev, &d, &[7, 0]));
 
-    // The runs the table is written in, which is one for a file saved once.
+    // The subsections the table is written in, one for a file saved once.
     match ev.node(&d, &[4, 0]) {
         Ok(lines) => {
             println!("  {} lines in the table", lines.child_count);
             for i in 0..lines.child_count as usize {
                 let Ok(l) = ev.node(&d, &[4, 0, i]) else { continue };
-                if l.type_name != "Run" {
+                if l.type_name != "Subsection" {
                     continue;
                 }
                 println!(
-                    "    run from object {} for {} entries",
+                    "    subsection from object {} for {} entries",
                     show(&mut ev, &d, &[4, 0, i, 0]),
                     show(&mut ev, &d, &[4, 0, i, 1]),
                 );

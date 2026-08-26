@@ -32,15 +32,15 @@
 //! What that leaves is a header that is text, a table that is text, a trailer
 //! that is text, and a body placed entirely by the table.
 //!
-//! The table is not one run of entries but as many as the writer felt like,
-//! each headed by the object number it starts at and how many entries follow.
-//! Nothing says how many runs there are; what says the table has ended is the
-//! word `trailer` after it. So the entries are one flat list measured to that
-//! word, and each line of it is read as whichever of the two it looks like: an
-//! entry writes `n` or `f` seventeen bytes in and a heading never does. Two
-//! numbers where twenty bytes were expected costs nothing, because a line that
-//! starts where the one before it ended is how the rest of the table is read
-//! anyway.
+//! The table is not one run of entries but as many as the writer felt like.
+//! The spec calls each one a subsection, and each is headed by the object
+//! number it starts at and how many entries follow. Nothing says how many
+//! subsections there are; what says the table has ended is the word `trailer`
+//! after it. So the entries are one flat list measured to that word, and each
+//! line of it is read as whichever of the two it looks like: an entry writes
+//! `n` or `f` seventeen bytes in and a heading never does. Two numbers where
+//! twenty bytes were expected costs nothing, because a line that starts where
+//! the one before it ended is how the rest of the table is read anyway.
 //!
 //! What is not here. A cross-reference *stream*, which is how PDF 1.5 and
 //! later may write the same table compressed inside an object, is not read;
@@ -137,11 +137,12 @@ pub fn pdf() -> Template {
 }
 
 /// One line of the table: an entry that places an object, or the heading that
-/// starts a run of them.
+/// starts a subsection of them.
 ///
 /// Which it is has to be looked at rather than counted, since nothing in front
-/// of the table says how many runs it holds. An entry writes `n` or `f` after
-/// its two numbers and a heading, being two numbers and nothing else, cannot.
+/// of the table says how many subsections it holds. An entry writes `n` or `f`
+/// after its two numbers and a heading, being two numbers and nothing else,
+/// cannot.
 fn line() -> T {
     T::switch(letter_somewhere(), vec![(0, entry())], heading())
 }
@@ -169,11 +170,12 @@ fn letter_somewhere() -> E {
     at(17).mul(at(18)).mul(at(19))
 }
 
-/// The head of a run: the object number its first entry is for, and how many
-/// entries follow. Neither is a fixed width, and the second starts wherever
-/// the first ended.
+/// The head of a subsection: the object number its first entry is for, and how
+/// many entries follow. Neither is a fixed width, and the second starts
+/// wherever the first ended.
 fn heading() -> T {
-    T::inline_structure("Run", vec![("first_object", number()), ("entry_count", number())]).counted_as("run")
+    T::inline_structure("Subsection", vec![("first_object", number()), ("entry_count", number())])
+        .counted_as("subsection")
 }
 
 /// One entry of the table, twenty bytes: where the object is, how many times
@@ -312,9 +314,9 @@ mod tests {
         v
     }
 
-    /// The same file, but with its table split into a run per object the way a
-    /// writer that has saved four times leaves it.
-    fn pdf_bytes_in_runs(eol: &str) -> Vec<u8> {
+    /// The same file, but with its table split into a subsection per object
+    /// the way a writer that has saved four times leaves it.
+    fn pdf_bytes_in_subsections(eol: &str) -> Vec<u8> {
         let entry_eol = if eol.len() == 1 { format!(" {eol}") } else { eol.to_string() };
         let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] >>", "<< /Type /Page >>"];
         let mut v = format!("%PDF-1.7{eol}").into_bytes();
@@ -347,8 +349,8 @@ mod tests {
         assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128));
         // The word it points at is there.
         assert_eq!(ev.node(&d, &[3, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"xref".to_vec() });
-        // The first line of the table is the heading of its one run.
-        assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Run");
+        // The first line of the table is the heading of its one subsection.
+        assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Subsection");
         assert_eq!(ev.node(&d, &[4, 0, 0, 0]).unwrap().value, Value::Int(0));
         assert_eq!(ev.node(&d, &[4, 0, 0, 1]).unwrap().value, Value::Int(4));
     }
@@ -406,20 +408,20 @@ mod tests {
         assert_eq!(ev.node(&d, &[8, 4, 0]).unwrap().value, Value::Int(3));
     }
 
-    /// A table written as a run per object reads as the same objects: the
-    /// headings between them are lines that place nothing.
+    /// A table written as a subsection per object reads as the same objects:
+    /// the headings between them are lines that place nothing.
     #[test]
-    fn a_table_written_in_several_runs_places_every_object() {
+    fn a_table_written_in_several_subsections_places_every_object() {
         for eol in ["\n", "\r\n"] {
-            let bytes = pdf_bytes_in_runs(eol);
+            let bytes = pdf_bytes_in_subsections(eol);
             let first = bytes.windows(7).position(|w| w == b"1 0 obj").expect("an object");
             let d = Document::new(MemSource(bytes));
             let mut ev = Evaluator::new(pdf());
             // Four headings, four entries.
             assert_eq!(ev.node(&d, &[4, 0]).unwrap().child_count, 8, "{eol:?}");
-            assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Run", "{eol:?}");
+            assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Subsection", "{eol:?}");
             assert_eq!(ev.node(&d, &[4, 0, 1]).unwrap().type_name, "Free", "{eol:?}");
-            assert_eq!(ev.node(&d, &[4, 0, 2]).unwrap().type_name, "Run", "{eol:?}");
+            assert_eq!(ev.node(&d, &[4, 0, 2]).unwrap().type_name, "Subsection", "{eol:?}");
             assert_eq!(ev.node(&d, &[4, 0, 2, 0]).unwrap().value, Value::Int(1), "{eol:?}");
             assert_eq!(ev.node(&d, &[4, 0, 3]).unwrap().type_name, "Entry", "{eol:?}");
             // The heading is a line of the table and a child of the object
@@ -427,7 +429,7 @@ mod tests {
             assert_eq!(ev.node(&d, &[8, 2]).unwrap().size_bits, 0, "{eol:?}");
             assert_eq!(ev.node(&d, &[8, 3]).unwrap().offset_bits, first as u64 * 8, "{eol:?}");
             assert_eq!(ev.node(&d, &[8, 3, 0]).unwrap().value, Value::Int(1), "{eol:?}");
-            // And the trailer is the trailer, not the runs the old reading
+            // And the trailer is the trailer, not the subsections the old reading
             // swallowed along with it.
             let trailer = ev.node(&d, &[5, 0]).unwrap().value;
             assert_eq!(trailer, Value::Str(format!("trailer{eol}<< /Size 4 /Root 1 0 R >>{eol}")), "{eol:?}");
