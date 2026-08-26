@@ -1183,7 +1183,7 @@ fn chunk_entry() -> T {
                 "child",
                 T::switch(
                     E::field("node_level"),
-                    vec![(0, at_address("child_address", T::bytes(E::field("chunk_size")).packed_as("hdf5-chunk")))],
+                    vec![(0, at_address("child_address", T::bytes(E::field("chunk_size"))))],
                     at_address("child_address", T::Named("Node".into())),
                 ),
             ),
