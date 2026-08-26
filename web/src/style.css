@@ -1536,6 +1536,23 @@ input.invalid {
   height: 100%;
   background: var(--accent);
 }
+/* An object of the file rather than a region of the template: a path and what
+   is at it, on two lines, since what is at it is a sentence rather than a
+   number and would otherwise be cut off. */
+.ov-object {
+  grid-template-columns: 1fr;
+}
+.ov-object .ov-region-name {
+  font-family: var(--mono);
+}
+.ov-object.is-group .ov-region-name {
+  font-weight: 600;
+}
+.ov-object .ov-region-size {
+  text-align: left;
+  white-space: normal;
+  font-size: 92%;
+}
 .ov-focus {
   display: flex;
   flex-direction: column;

@@ -14,6 +14,7 @@ mod git;
 mod gif;
 mod gzip;
 mod hdf5;
+pub mod h5ad;
 pub mod hdf5_chunk;
 mod id3;
 mod iff;

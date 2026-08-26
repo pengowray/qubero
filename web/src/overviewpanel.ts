@@ -15,8 +15,19 @@
 
 import { formatBytes, formatOffset } from "./doc.js";
 import { NO_TEMPLATE } from "./strings.js";
-import type { Doc, FocusState, OverviewState, Span, TemplateNode } from "./doc.js";
+import type { ContentObject, Doc, FocusState, OverviewState, Span, TemplateNode } from "./doc.js";
 import type { FieldPick } from "./listingview.js";
+
+/** Where an object's bytes are, in a phrase: one run, one chunk at a time, or
+ *  inside the object's own header. */
+function storageText(object: ContentObject): string {
+  if (object.storage === "chunked") {
+    return `chunks of ${object.chunk_dims.map((d) => d.toLocaleString()).join(" × ")}`;
+  }
+  if (object.storage === "contiguous") return `${formatBytes(object.bytes)} in one run`;
+  if (object.storage === "compact") return `${formatBytes(object.bytes)} in the header`;
+  return "";
+}
 
 /** How the map is drawn: a square this wide plus a one-pixel gap. */
 const CELL = 5;
@@ -72,6 +83,10 @@ const TYPE_LABEL = "Type";
 const SCALE_LABEL = "Scale";
 const UNKNOWN_TYPE = "Not identified";
 const REGIONS_TITLE = "Regions";
+/** The contents list, for a format that names what it holds. */
+const CONTENTS_TITLE = "Objects";
+/** Objects listed before the list says how many more there were. */
+const CONTENTS_ROWS = 200;
 const BLOCK_TITLE = "Block";
 const CLOSE_BLOCK = "Close block";
 const PICK_BLOCK = "Pick a cell on the map to measure that part of the file on its own.";
@@ -189,6 +204,7 @@ export class OverviewPanel {
   private readonly readout: HTMLElement;
   private readonly legend: HTMLElement;
   private readonly notes: HTMLElement;
+  private readonly contentsEl: HTMLElement;
   private readonly regionsEl: HTMLElement;
 
   private readonly focusEl: HTMLElement;
@@ -251,6 +267,8 @@ export class OverviewPanel {
     this.legend.className = "ov-legend";
     this.notes = document.createElement("ul");
     this.notes.className = "ov-notes";
+    this.contentsEl = document.createElement("div");
+    this.contentsEl.className = "ov-regions ov-contents";
     this.regionsEl = document.createElement("div");
     this.regionsEl.className = "ov-regions";
 
@@ -290,7 +308,16 @@ export class OverviewPanel {
 
     this.body = document.createElement("div");
     this.body.className = "ov-body";
-    this.body.append(this.facts, this.canvas, this.readout, this.legend, this.notes, this.regionsEl, this.focusEl);
+    this.body.append(
+      this.facts,
+      this.canvas,
+      this.readout,
+      this.legend,
+      this.notes,
+      this.contentsEl,
+      this.regionsEl,
+      this.focusEl,
+    );
     this.el.append(header, this.body);
 
     // Folded away to start with: it reads the whole file to fill itself in,
@@ -402,6 +429,7 @@ export class OverviewPanel {
     this.drawMap(this.canvas, s.classes, this.highlight);
     this.drawLegend(s);
     this.drawNotes(s);
+    this.drawContents();
     this.drawRegions();
     this.renderFocus();
   }
@@ -506,6 +534,66 @@ export class OverviewPanel {
         return li;
       }),
     );
+  }
+
+  // ----- contents -----
+
+  /** What the file says it holds: one row per object, named as the file names
+   *  it. This is the question the region list answers from the template, asked
+   *  of the file instead, and for a format whose objects are all reached by
+   *  address it is the only useful answer: the template's own top level is a
+   *  signature and a superblock. */
+  private drawContents(): void {
+    const reply = this.doc.contents();
+    if (reply.status !== "ok" || reply.node.objects.length === 0) {
+      this.contentsEl.replaceChildren();
+      return;
+    }
+    const { objects, total, anndata, rows, columns } = reply.node;
+    const heading = document.createElement("h3");
+    heading.textContent = CONTENTS_TITLE;
+    const out: HTMLElement[] = [heading];
+    if (anndata) {
+      const note = document.createElement("p");
+      note.className = "ov-note";
+      note.textContent = `AnnData: ${rows.toLocaleString()} observations × ${columns.toLocaleString()} variables`;
+      out.push(note);
+    }
+    for (const object of objects.slice(0, CONTENTS_ROWS)) out.push(this.contentRow(object));
+    if (objects.length < total) {
+      const more = document.createElement("p");
+      more.className = "ov-note";
+      more.textContent = `Showing ${objects.length.toLocaleString()} of ${total.toLocaleString()} objects.`;
+      out.push(more);
+    }
+    this.contentsEl.replaceChildren(...out);
+  }
+
+  /** One object: what it is called, and what it holds. */
+  private contentRow(object: ContentObject): HTMLElement {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = object.group ? "ov-region ov-object is-group" : "ov-region ov-object";
+    const name = document.createElement("span");
+    name.className = "ov-region-name";
+    name.textContent = object.name;
+    const about = document.createElement("span");
+    about.className = "ov-region-size";
+    about.textContent = [
+      object.encoding,
+      object.shape.map((d) => d.toLocaleString()).join(" × "),
+      object.element,
+      storageText(object),
+      object.filters.join(" then "),
+    ]
+      .filter((part) => part !== "")
+      .join(" · ");
+    row.title = `${object.name}  ·  ${formatOffset(object.address * 8)}`;
+    row.append(name, about);
+    row.addEventListener("click", () =>
+      this.onPick({ path: object.path, startBit: object.address * 8, endBit: object.address * 8 + 8 }),
+    );
+    return row;
   }
 
   // ----- regions -----

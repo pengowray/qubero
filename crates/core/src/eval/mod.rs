@@ -412,6 +412,19 @@ impl Evaluator {
         self.lists.entry(path.to_vec()).or_default()
     }
 
+    /// The child of `path` that a structure calls `name`, if it has one.
+    ///
+    /// A reader that walks a file in the format's own terms rather than the
+    /// template's needs this: the field indices of a template are its own
+    /// business and change when a field is added, but a format's names do not.
+    pub fn child_named<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<Vec<usize>>> {
+        Ok(self.child_index(doc, path, name)?.map(|i| {
+            let mut p = path.to_vec();
+            p.push(i);
+            p
+        }))
+    }
+
     pub fn node<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<NodeInfo> {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;

@@ -553,6 +553,44 @@ enum Reply<T: Serialize> {
     Error { message: String },
 }
 
+/// One object of an HDF5 file, in the file's own terms.
+#[derive(Serialize)]
+struct ContentDto {
+    /// Where it is in the template, so picking a row moves the cursor.
+    path: Vec<usize>,
+    /// The path it goes by inside the file: `/obs/n_genes`.
+    name: String,
+    group: bool,
+    /// What the file calls it, where it says: `dataframe`, `csr_matrix`.
+    encoding: String,
+    shape: Vec<f64>,
+    /// What one element is.
+    element: String,
+    /// Which of the three ways its bytes are kept: "contiguous", "compact",
+    /// "chunked", or nothing at all for a group.
+    storage: &'static str,
+    /// How many bytes, where they are in one run.
+    bytes: f64,
+    /// The chunk it is kept in, where it is kept in chunks.
+    chunk_dims: Vec<f64>,
+    /// The filters its chunks were written through, in that order.
+    filters: Vec<String>,
+    /// Where its object header is.
+    address: f64,
+}
+
+/// What an HDF5 file holds, and what kind of file it is.
+#[derive(Serialize)]
+struct ContentsDto {
+    objects: Vec<ContentDto>,
+    total: f64,
+    /// Whether it is an AnnData object, and what the root group calls itself.
+    anndata: bool,
+    encoding: String,
+    rows: f64,
+    columns: f64,
+}
+
 /// One entry of the annotation column.
 #[derive(Serialize)]
 struct SpanDto {
@@ -1018,6 +1056,68 @@ impl Editor {
         };
         let named = self.name_instructions(found);
         reply(Ok(named))
+    }
+
+    /// What an HDF5 file holds, read in the file's own terms rather than the
+    /// template's: {status:"ok",node:{objects,..}}. Empty for every other
+    /// format, since nothing else here has a group tree to walk.
+    pub fn contents(&mut self) -> String {
+        if self.template != "hdf5" {
+            return reply(Ok(ContentsDto {
+                objects: Vec::new(),
+                total: 0.0,
+                anndata: false,
+                encoding: String::new(),
+                rows: 0.0,
+                columns: 0.0,
+            }));
+        }
+        let Some(e) = &mut self.eval else {
+            return reply::<ContentsDto>(Err(EvalError::Failed("no template".into())));
+        };
+        e.begin_slice();
+        let found = match qubero_core::formats::h5ad::contents(e, &self.doc) {
+            Ok(c) => c,
+            Err(err) => return reply::<ContentsDto>(Err(err)),
+        };
+        reply(Ok(ContentsDto {
+            total: found.total as f64,
+            anndata: found.anndata,
+            encoding: found.encoding,
+            rows: found.rows as f64,
+            columns: found.columns as f64,
+            objects: found
+                .objects
+                .into_iter()
+                .map(|o| {
+                    use qubero_core::formats::h5ad::Storage;
+                    // The words a reader sees are the host's business; what
+                    // crosses is which of the three ways the bytes are kept,
+                    // how many there are, and the chunk it is kept in.
+                    let (storage, bytes, chunk_dims, filters) = match o.storage {
+                        Storage::None => ("", 0.0, Vec::new(), Vec::new()),
+                        Storage::Contiguous(n) => ("contiguous", n as f64, Vec::new(), Vec::new()),
+                        Storage::Compact(n) => ("compact", n as f64, Vec::new(), Vec::new()),
+                        Storage::Chunked { dims, filters } => {
+                            ("chunked", 0.0, dims.into_iter().map(|d| d as f64).collect(), filters)
+                        }
+                    };
+                    ContentDto {
+                        path: o.path,
+                        name: o.name,
+                        group: o.group,
+                        encoding: o.encoding,
+                        shape: o.shape.into_iter().map(|d| d as f64).collect(),
+                        element: o.element,
+                        storage,
+                        bytes,
+                        chunk_dims,
+                        filters,
+                        address: o.address as f64,
+                    }
+                })
+                .collect(),
+        }))
     }
 
     /// Rewrite instruction rows through the wasm disassembler, so a call names

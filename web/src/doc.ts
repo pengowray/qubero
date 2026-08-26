@@ -225,6 +225,41 @@ export type ChunkStep = {
   readonly skipped: boolean;
 };
 
+/** One object of an HDF5 file, as the contents list reads it. */
+export type ContentObject = {
+  readonly path: readonly number[];
+  /** The path it goes by inside the file: `/obs/n_genes`. */
+  readonly name: string;
+  readonly group: boolean;
+  /** What the file calls it, where it says: `dataframe`, `csr_matrix`. */
+  readonly encoding: string;
+  readonly shape: readonly number[];
+  /** What one element is. */
+  readonly element: string;
+  /** Which of the three ways its bytes are kept: "contiguous", "compact",
+   *  "chunked", or nothing at all for a group. */
+  readonly storage: string;
+  /** How many bytes, where they are in one run. */
+  readonly bytes: number;
+  /** The chunk it is kept in, where it is kept in chunks. */
+  readonly chunk_dims: readonly number[];
+  /** The filters its chunks were written through, in that order. */
+  readonly filters: readonly string[];
+  /** Where its object header is. */
+  readonly address: number;
+};
+
+/** What an HDF5 file holds, and what kind of file it is. */
+export type Contents = {
+  readonly objects: readonly ContentObject[];
+  readonly total: number;
+  /** Whether it is an AnnData object, and what the root group calls itself. */
+  readonly anndata: boolean;
+  readonly encoding: string;
+  readonly rows: number;
+  readonly columns: number;
+};
+
 export type XrefRow = {
   readonly object: number;
   readonly kind: string;
@@ -703,6 +738,15 @@ export class Doc {
       this.workScheduled = false;
       this.notify();
     }, 0);
+  }
+
+  /**
+   * What the file holds, in its own terms rather than the template's: the
+   * objects of an HDF5 file, each with the path it goes by, what the file
+   * calls it, its shape and where its bytes are. Empty for every other format.
+   */
+  contents(): TemplateReply<Contents> {
+    return this.handleReply(this.editor.contents());
   }
 
   templateNode(path: readonly number[]): TemplateReply<TemplateNode> {
