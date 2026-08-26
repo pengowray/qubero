@@ -49,15 +49,23 @@
 //! `xref` would be, which is what the fields below switch on. Both shapes are
 //! recognised and both are read as far as they can be.
 //!
-//! What is not here. The rows inside a cross-reference stream are compressed,
-//! and nothing here decompresses anything, so they are one run of bytes and
-//! the objects they place are not shown. What the dictionary beside them says
-//! is readable, which is where `/W`, `/Index`, `/Size` and `/Prev` can be
-//! seen. Unpacking them means inflate, then the PNG predictor `/DecodeParms`
-//! usually names, then the widths in `/W`; that belongs beside `ggml_quant`,
-//! which does the same job for packed weights, rather than in a template,
-//! since the bytes it produces are not in the file and nothing here can place
-//! a field outside the file.
+//! The rows inside such a stream are compressed, so the template leaves them
+//! as one run of bytes: every field a template places is a run of the file,
+//! and decompressed rows are not in the file. What they say is read by
+//! [`pdf_xref`](super::pdf_xref) instead and shown beside the field, which is
+//! the arrangement `ggml` and `ggml_quant` already have for packed weights.
+//! The object is marked with [`Ty::packed_as`](crate::template::Ty::packed_as)
+//! so the panel can find its way there.
+//!
+//! What is not here. The objects a cross-reference stream places are not
+//! placed in the tree, only listed beside it, for the same reason the rows
+//! are not fields: a pointer list reads its offsets from an array of nodes,
+//! and there are no nodes to read them from. An offset in that list is a real
+//! place in the file and can be gone to, which is as close as this gets.
+//!
+//! Nor is an *object stream* opened. A modern PDF keeps most of its small
+//! objects compressed together inside one, which is what a row of type 2
+//! names, so the objects that reach the tree at all are the large ones.
 //!
 //! The `/Prev` chain an incrementally saved or linearized file leaves behind
 //! is not followed either, in either shape, so only the most recent table is
@@ -750,6 +758,6 @@ mod tests {
             panic!("nothing explained")
         };
         assert_eq!(total, 0);
-        assert_eq!(problem, Some("compressed with LZWDecode, which is not unpacked here".into()));
+        assert_eq!(problem, Some("LZWDecode compression is not supported.".into()));
     }
 }

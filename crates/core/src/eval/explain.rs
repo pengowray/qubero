@@ -249,7 +249,8 @@ impl Evaluator {
 
         if packed_bytes > XREF_PACKED_LIMIT {
             let mb = XREF_PACKED_LIMIT / (1 << 20);
-            return Ok(answer(Some(format!("the packed rows are over {mb} MB, which is more than is unpacked here")), None));
+            let msg = format!("The compressed data is over the {mb} MB limit and was not decompressed.");
+            return Ok(answer(Some(msg), None));
         }
         let bytes = self.read(doc, &rr, rr.offset, packed_bits)?;
         Ok(match pdf_xref::decode(&dict, &bytes) {

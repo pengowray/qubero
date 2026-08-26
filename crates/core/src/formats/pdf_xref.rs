@@ -135,13 +135,19 @@ pub enum Problem {
 }
 
 impl Problem {
+    /// One sentence, standing on its own. Only the last of these means the
+    /// table is empty; the rest mean the rows are there and were not read, and
+    /// a message that led with "no rows" would be saying something untrue
+    /// about the file.
     pub fn as_str(&self) -> String {
         match self {
-            Problem::Filter(f) => format!("compressed with {f}, which is not unpacked here"),
-            Problem::Widths => "the dictionary gives no /W, so nothing says how wide a row is".into(),
-            Problem::Compressed => "the compressed bytes would not open".into(),
-            Problem::Predictor(p) => format!("/Predictor {p} is not one of the PNG ones"),
-            Problem::EmptyRows => "/W adds up to nothing, so the stream holds no rows".into(),
+            Problem::Filter(f) => format!("{f} compression is not supported."),
+            Problem::Widths => "The stream dictionary has no /W, so the row widths are unknown.".into(),
+            Problem::Compressed => "Decompression failed: the data is not valid zlib.".into(),
+            Problem::Predictor(p) => {
+                format!("/Predictor {p} is not supported; only the PNG predictors (10-15) are.")
+            }
+            Problem::EmptyRows => "The /W widths sum to 0 bytes, so the stream holds no rows.".into(),
         }
     }
 }
