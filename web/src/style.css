@@ -1885,6 +1885,37 @@ button.insp-xrow-where:hover {
   font-size: 10px;
   color: var(--muted);
 }
+.insp-orows {
+  max-height: 20em;
+  overflow-y: auto;
+}
+.insp-orow {
+  display: grid;
+  grid-template-columns: 4em 1fr;
+  gap: 6px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 0;
+}
+.insp-orow.is-head {
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  position: sticky;
+  top: 0;
+}
+.insp-orow-object {
+  text-align: right;
+  color: var(--muted);
+}
+/* An object is written as one line and can run long. Wrapping keeps it in the
+   panel rather than pushing a horizontal scrollbar under every row. */
+.insp-orow-text {
+  overflow-wrap: anywhere;
+}
 .insp-xproblem {
   font-size: 11px;
   color: var(--muted);

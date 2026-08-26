@@ -134,10 +134,24 @@ struct XrefRowDto {
     third: f64,
 }
 
+/// One object inside an object stream.
+#[derive(Serialize)]
+struct ObjStmObjectDto {
+    number: f64,
+    /// Where it starts in the decompressed bytes, and how long it is. Not an
+    /// offset in the file: these bytes are not in the file.
+    at: f64,
+    len: f64,
+    /// The object as written, cut at the limit the core keeps. `cut` says the
+    /// rest was left behind.
+    text: String,
+    cut: bool,
+}
+
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -192,7 +206,21 @@ struct ExplainDto {
     xref_rows: Vec<XrefRowDto>,
     xref_total: f64,
     /// Xref: why there are no rows, where there are none. Empty otherwise.
+    /// An object stream that would not open says why here too.
     problem: String,
+    /// ObjStm: how many bytes the objects are in the file, and how many they
+    /// came to once decompressed.
+    objstm_packed: f64,
+    objstm_decoded: f64,
+    /// ObjStm: where the objects begin in the decompressed bytes, from
+    /// `/First`, and the object number in `/Extends` where this stream
+    /// continues another (-1 where it does not).
+    objstm_first: f64,
+    objstm_extends: f64,
+    /// ObjStm: the objects, and how many there are altogether. A stream with
+    /// more than `objstm_objects` holds says so with `objstm_total`.
+    objstm_objects: Vec<ObjStmObjectDto>,
+    objstm_total: f64,
     /// Quant: the scale the block keeps for each run of weights, where it keeps
     /// them, and how many weights one run covers. Empty for a block with one
     /// scale for all of them.
@@ -317,6 +345,12 @@ fn explain_dto(e: Explain) -> ExplainDto {
         xref_unknown: 0.0,
         xref_rows: Vec::new(),
         xref_total: 0.0,
+        objstm_packed: 0.0,
+        objstm_decoded: 0.0,
+        objstm_first: 0.0,
+        objstm_extends: -1.0,
+        objstm_objects: Vec::new(),
+        objstm_total: 0.0,
         problem: String::new(),
         groups: Vec::new(),
         group_weights: 0.0,
@@ -404,6 +438,25 @@ fn explain_dto(e: Explain) -> ExplainDto {
                     offset: if r.kind == Kind::InFile { r.second as f64 } else { -1.0 },
                     second: r.second as f64,
                     third: r.third as f64,
+                })
+                .collect();
+        }
+        Explain::ObjStm { packed_bytes, decoded_bytes, first, extends, objects, total, problem } => {
+            dto.kind = "objstm";
+            dto.objstm_packed = packed_bytes as f64;
+            dto.objstm_decoded = decoded_bytes as f64;
+            dto.objstm_first = first as f64;
+            dto.objstm_extends = extends.map_or(-1.0, |n| n as f64);
+            dto.objstm_total = total as f64;
+            dto.problem = problem.unwrap_or_default();
+            dto.objstm_objects = objects
+                .into_iter()
+                .map(|o| ObjStmObjectDto {
+                    number: o.number as f64,
+                    at: o.at as f64,
+                    len: o.len as f64,
+                    text: o.text,
+                    cut: o.cut,
                 })
                 .collect();
         }

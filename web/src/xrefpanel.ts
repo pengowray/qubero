@@ -35,7 +35,9 @@ export function xrefNote(info: TypeInfo): string {
 function tally(info: TypeInfo): string {
   const parts: string[] = [];
   const n = (x: number) => x.toLocaleString();
-  if (info.xref_in_file > 0) parts.push(`${n(info.xref_in_file)} at offsets`);
+  if (info.xref_in_file > 0) {
+    parts.push(`${n(info.xref_in_file)} at ${info.xref_in_file === 1 ? "an offset" : "offsets"}`);
+  }
   if (info.xref_in_stream > 0) {
     const one = info.xref_in_stream === 1;
     parts.push(`${n(info.xref_in_stream)} in ${one ? "an object stream" : "object streams"}`);

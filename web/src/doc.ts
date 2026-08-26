@@ -205,6 +205,17 @@ export type Origin = {
 /** What a type permits, beyond what this file's bytes happen to say. */
 /** One row of a cross-reference stream, already decoded. `offset` is a real
  *  place in the file for an in-use row and -1 for every other kind. */
+/** One object inside an object stream. Its offset is inside the decompressed
+ *  bytes, so there is nowhere in the file to go to. */
+export type ObjStmObject = {
+  readonly number: number;
+  readonly at: number;
+  readonly len: number;
+  /** The object as written, cut at the limit the core keeps. */
+  readonly text: string;
+  readonly cut: boolean;
+};
+
 export type XrefRow = {
   readonly object: number;
   readonly kind: string;
@@ -217,7 +228,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -279,8 +290,20 @@ export type TypeInfo = {
   /** Xref: the rows, and how many there are altogether. */
   readonly xref_rows: readonly XrefRow[];
   readonly xref_total: number;
-  /** Xref: why there are no rows, where there are none. Empty otherwise. */
+  /** Xref: why there are no rows, where there are none. An object stream that
+   *  would not open says why here too. Empty otherwise. */
   readonly problem: string;
+  /** ObjStm: how many bytes the objects are in the file, and how many once
+   *  decompressed. */
+  readonly objstm_packed: number;
+  readonly objstm_decoded: number;
+  /** ObjStm: where the objects begin in the decompressed bytes, and the object
+   *  number this stream continues, or -1 where it continues none. */
+  readonly objstm_first: number;
+  readonly objstm_extends: number;
+  /** ObjStm: the objects, and how many there are altogether. */
+  readonly objstm_objects: readonly ObjStmObject[];
+  readonly objstm_total: number;
 };
 
 /** One run of weights inside a block that share a scale of their own. */
