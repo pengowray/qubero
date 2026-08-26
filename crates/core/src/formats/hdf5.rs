@@ -1604,10 +1604,15 @@ mod tests {
         assert!(matches!(value, Value::Bytes { len: 0, .. }), "{value:?}");
     }
 
+    /// `sniff` over a file that is exactly these bytes.
+    fn sniffed(head: &[u8]) -> Option<&'static str> {
+        crate::formats::sniff(head, head.len() as u64)
+    }
+
     /// The signature is the only thing that identifies the container, and
     /// nothing in it says what the file holds.
     #[test]
     fn the_signature_claims_the_file() {
-        assert_eq!(super::super::sniff(b"\x89HDF\r\n\x1a\n\0\0", 4096), Some("hdf5"));
+        assert_eq!(sniffed(b"\x89HDF\r\n\x1a\n\0\0"), Some("hdf5"));
     }
 }

@@ -409,6 +409,18 @@ fn is_pe(head: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// `sniff` over a file that is exactly these bytes and no more.
+    ///
+    /// The length is a real argument, not a formality: a format with no
+    /// signature is recognised by whether the table in its head points inside
+    /// the file, which the head alone cannot say. Where a test cares what that
+    /// length is, it calls `sniff` and gives one; where it does not, saying
+    /// "the file is what you see" is the honest stand-in for a number nobody
+    /// chose.
+    fn sniffed(head: &[u8]) -> Option<&'static str> {
+        sniff(head, head.len() as u64)
+    }
+
     /// An `MZ` file that leaves room for a header of a later format, as
     /// everything from a Windows executable to a DOS extender does: its
     /// relocations start at 0x40, past the pointer at 0x3c.
@@ -527,15 +539,15 @@ mod tests {
 
     #[test]
     fn the_other_formats_still_answer() {
-        assert_eq!(sniff(b"\x89PNG\r\n\x1a\n", 4096), Some("png"));
-        assert_eq!(sniff(b"\0asm\x01\0\0\0", 4096), Some("wasm"));
-        assert_eq!(sniff(b"SQLite format 3\0", 4096), Some("sqlite"));
-        assert_eq!(sniff(b"qoif\0\0\x01\0\0\0\x01\0\x04\0", 4096), Some("qoi"));
-        assert_eq!(sniff(b"GIF89a", 4096), Some("gif"));
+        assert_eq!(sniffed(b"\x89PNG\r\n\x1a\n"), Some("png"));
+        assert_eq!(sniffed(b"\0asm\x01\0\0\0"), Some("wasm"));
+        assert_eq!(sniffed(b"SQLite format 3\0"), Some("sqlite"));
+        assert_eq!(sniffed(b"qoif\0\0\x01\0\0\0\x01\0\x04\0"), Some("qoi"));
+        assert_eq!(sniffed(b"GIF89a"), Some("gif"));
         // Both ways round, and the 42 after the letters is written the way
         // the letters just said it would be.
-        assert_eq!(sniff(b"II*\x00\x08\x00\x00\x00", 4096), Some("tiff"));
-        assert_eq!(sniff(b"MM\x00*\x00\x00\x00\x08", 4096), Some("tiff"));
+        assert_eq!(sniffed(b"II*\x00\x08\x00\x00\x00"), Some("tiff"));
+        assert_eq!(sniffed(b"MM\x00*\x00\x00\x00\x08"), Some("tiff"));
     }
 
     #[test]
@@ -543,22 +555,22 @@ mod tests {
         // An LHA archive whose header size and checksum happen to be the two
         // characters a JSON file opens with. The method at offset 2 is what
         // settles it, and the table of prefixes never gets asked.
-        assert_eq!(sniff(b"{\"-lh5-\0\0\0\0", 4096), Some("lha"));
+        assert_eq!(sniffed(b"{\"-lh5-\0\0\0\0"), Some("lha"));
         // And an ordinary JSON file is still JSON.
-        assert_eq!(sniff(b"{\"name\": 1}", 4096), Some("json"));
+        assert_eq!(sniffed(b"{\"name\": 1}"), Some("json"));
     }
 
     #[test]
     fn one_magic_number_covering_several_formats_is_settled_by_what_follows() {
-        assert_eq!(sniff(b"FORM\0\0\0\x10AIFF", 4096), Some("aiff"));
-        assert_eq!(sniff(b"FORM\0\0\0\x10ILBM", 4096), Some("ilbm"));
+        assert_eq!(sniffed(b"FORM\0\0\0\x10AIFF"), Some("aiff"));
+        assert_eq!(sniffed(b"FORM\0\0\0\x10ILBM"), Some("ilbm"));
         // A JPEG opens with the start of image and then the first marker,
         // which is three bytes; the two on their own are not enough.
-        assert_eq!(sniff(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00", 4096), Some("jpeg"));
-        assert_eq!(sniff(b"\xff\xd8\xff\xdb\x00\x43\x00", 4096), Some("jpeg"));
-        assert_eq!(sniff(b"\xff\xd8hello", 4096), None);
+        assert_eq!(sniffed(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"), Some("jpeg"));
+        assert_eq!(sniffed(b"\xff\xd8\xff\xdb\x00\x43\x00"), Some("jpeg"));
+        assert_eq!(sniffed(b"\xff\xd8hello"), None);
         // An IFF file holding something with no template here is left alone
         // rather than read as one of the two that do.
-        assert_eq!(sniff(b"FORM\0\0\0\x108SVX", 4096), None);
+        assert_eq!(sniffed(b"FORM\0\0\0\x108SVX"), None);
     }
 }
