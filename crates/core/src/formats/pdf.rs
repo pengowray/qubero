@@ -42,11 +42,30 @@
 //! twenty bytes were expected costs nothing, because a line that starts where
 //! the one before it ended is how the rest of the table is read anyway.
 //!
-//! What is not here. A cross-reference *stream*, which is how PDF 1.5 and
-//! later may write the same table compressed inside an object, is not read;
-//! nor is the `/Prev` chain that an incrementally saved or linearized file
-//! leaves behind, so only the most recent table is followed and the objects
-//! the ones before it place are not shown. A free entry other than the first
+//! Since PDF 1.5 there is a second way to write all of that: a
+//! cross-reference *stream*, where the same rows are packed into fixed-width
+//! numbers, compressed, and kept as the contents of an ordinary numbered
+//! object. A file that does it that way has an object number where the word
+//! `xref` would be, which is what the fields below switch on. Both shapes are
+//! recognised and both are read as far as they can be.
+//!
+//! What is not here. The rows inside a cross-reference stream are compressed,
+//! and nothing here decompresses anything, so they are one run of bytes and
+//! the objects they place are not shown. What the dictionary beside them says
+//! is readable, which is where `/W`, `/Index`, `/Size` and `/Prev` can be
+//! seen. Unpacking them means inflate, then the PNG predictor `/DecodeParms`
+//! usually names, then the widths in `/W`; that belongs beside `ggml_quant`,
+//! which does the same job for packed weights, rather than in a template,
+//! since the bytes it produces are not in the file and nothing here can place
+//! a field outside the file.
+//!
+//! The `/Prev` chain an incrementally saved or linearized file leaves behind
+//! is not followed either, in either shape, so only the most recent table is
+//! read and the objects the ones before it place are not shown. A linearized
+//! file keeps a short table at each end and the real one in between, so this
+//! can be most of them.
+//!
+//! A free entry other than the first
 //! holds the number of the next free object rather than an offset, and nothing
 //! here tells it apart from a real one, so an object placed by one is
 //! whatever happens to be at that offset. The first free entry is the head of
@@ -56,6 +75,10 @@ use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, StrLen, Template
 
 /// The six bytes PDF counts as white space between one token and the next.
 const SPACE: &[u8] = b" \t\r\n\x0c\0";
+
+/// What the cross-reference offset points at when the file writes a classic
+/// table. A file that writes a stream instead has an object number there.
+const TABLE: &str = "xref";
 
 /// Where the table's lines begin: just past the word `xref`. The line ending
 /// after it belongs to the first line, which skips whatever white space it
@@ -90,23 +113,49 @@ pub fn pdf() -> Template {
                 ("startxref_at", T::computed(E::to_last_bytes(b"startxref").add(E::size_of("version")))),
                 // The offset that word points at, which is where the table is.
                 ("xref_offset", T::at(E::field("startxref_at").add(E::lit(9)), number())),
-                // From here down, every field is read where the table is and
-                // takes up no room where it is declared.
-                ("xref", T::at(E::field("xref_offset"), T::magic(b"xref"))),
+                // The four bytes the offset points at, which say which of the
+                // two shapes this file uses. `xref` is the word that starts a
+                // classic table; anything else is the object number of a
+                // cross-reference stream, and everything below switches on it.
+                ("xref", T::at(E::field("xref_offset"), T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii))),
                 // Every line of the table, headings and entries together, up
-                // to the word that ends it.
+                // to the word that ends it. A file whose table is a stream has
+                // no lines to read here, and says so with none.
                 (
                     "entries",
-                    T::at(after_xref(), T::sized(E::to_bytes(b"trailer"), T::repeat(line(), Until::End))),
+                    T::at(
+                        after_xref(),
+                        T::matches(E::field("xref"), vec![(TABLE, table_lines())], T::array(line(), E::lit(0))),
+                    ),
                 ),
                 // `trailer` and the dictionary after it, which runs from the
                 // end of the table to the next `startxref`. Not to the last
                 // one: a file that has been saved twice may keep its newest
                 // table in front of everything the older one wrote, and the
                 // trailer belongs to the table above it either way.
+                //
+                // A stream keeps the same information in its own dictionary
+                // and writes no `trailer` at all, so there is nothing here for
+                // one of the two shapes.
                 (
                     "trailer",
-                    T::at(after_table(), T::text(StrLen::Fixed(E::to_bytes(b"startxref")), Encoding::Ascii)),
+                    T::at(
+                        after_table(),
+                        T::matches(
+                            E::field("xref"),
+                            vec![(TABLE, T::text(StrLen::Fixed(E::to_bytes(b"startxref")), Encoding::Ascii))],
+                            T::bytes(E::lit(0)),
+                        ),
+                    ),
+                ),
+                // The other shape: an ordinary numbered object whose contents
+                // are the table. Empty for a file that wrote a classic one.
+                (
+                    "xref_stream",
+                    T::at(
+                        E::field("xref_offset"),
+                        T::matches(E::field("xref"), vec![(TABLE, T::bytes(E::lit(0)))], xref_stream()),
+                    ),
                 ),
                 ("startxref", T::at(E::field("startxref_at"), T::magic(b"startxref"))),
                 // Whatever the file ends with: `%%EOF` and the line ending, or
@@ -133,6 +182,44 @@ pub fn pdf() -> Template {
                 ),
             ],
         ),
+    )
+}
+
+/// The lines of a classic table, from just past the word `xref` to the word
+/// `trailer` that ends it.
+fn table_lines() -> T {
+    T::sized(E::to_bytes(b"trailer"), T::repeat(line(), Until::End))
+}
+
+/// A cross-reference stream: the same table, written as the contents of a
+/// numbered object rather than as lines of text.
+///
+/// The dictionary says how the rows are packed (`/W` gives the width of each
+/// of a row's three numbers) and how they are compressed (`/Filter`, nearly
+/// always `FlateDecode`, often over a PNG predictor named in `/DecodeParms`).
+/// None of that is unpacked here, so the rows are one run of bytes and the
+/// objects they place are not shown. The dictionary is text and is read as it,
+/// which is where `/Size`, `/Index`, `/Root` and `/Prev` can be seen.
+///
+/// The run is measured to the word `endstream` rather than by the `/Length`
+/// the dictionary gives, because that length is often written as a reference
+/// to another object rather than as a number. Compressed bytes that happen to
+/// spell `endstream` would end the run early; the same is true of the `endobj`
+/// that closes every other object here.
+fn xref_stream() -> T {
+    T::structure_named(
+        "XRefStream",
+        "number",
+        "dictionary",
+        vec![
+            ("number", number()),
+            ("generation", number()),
+            ("keyword", T::magic(b"obj")),
+            ("dictionary", T::text(StrLen::Fixed(E::to_bytes(b"stream")), Encoding::Ascii)),
+            ("stream", T::magic(b"stream")),
+            ("rows", T::bytes(E::to_bytes(b"endstream"))),
+            ("endstream", T::magic(b"endstream")),
+        ],
     )
 }
 
@@ -367,7 +454,8 @@ mod tests {
         // rather than as the bytes they are.
         assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128));
         // The word it points at is there.
-        assert_eq!(ev.node(&d, &[3, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"xref".to_vec() });
+        // The four bytes at the offset, which are the word for a classic table.
+        assert_eq!(ev.node(&d, &[3, 0]).unwrap().value, Value::Str("xref".into()));
         // The first line of the table is the heading of its one subsection.
         assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Subsection");
         assert_eq!(ev.node(&d, &[4, 0, 0, 0]).unwrap().value, Value::Int(0));
@@ -405,26 +493,26 @@ mod tests {
         let first = bytes.windows(7).position(|w| w == b"1 0 obj").expect("an object");
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(pdf());
-        let objects = ev.node(&d, &[8]).unwrap();
+        let objects = ev.node(&d, &[9]).unwrap();
         // Five lines: the heading places nothing and neither does the free
         // entry, so three of them are objects.
         assert_eq!(objects.child_count, 5);
-        assert_eq!(ev.node(&d, &[8, 0]).unwrap().size_bits, 0);
-        assert_eq!(ev.node(&d, &[8, 1]).unwrap().size_bits, 0);
-        let one = ev.node(&d, &[8, 2]).unwrap();
+        assert_eq!(ev.node(&d, &[9, 0]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[9, 1]).unwrap().size_bits, 0);
+        let one = ev.node(&d, &[9, 2]).unwrap();
         assert_eq!(one.offset_bits, first as u64 * 8);
-        assert_eq!(ev.node(&d, &[8, 2, 0]).unwrap().value, Value::Int(1));
-        assert_eq!(ev.node(&d, &[8, 2, 1]).unwrap().value, Value::Int(0));
+        assert_eq!(ev.node(&d, &[9, 2, 0]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[9, 2, 1]).unwrap().value, Value::Int(0));
         assert_eq!(
-            ev.node(&d, &[8, 2, 2]).unwrap().value,
+            ev.node(&d, &[9, 2, 2]).unwrap().value,
             Value::Magic { ok: true, bytes: b"obj".to_vec() }
         );
         // The body runs to `endobj`, which is the field after it.
         assert_eq!(
-            ev.node(&d, &[8, 2, 4]).unwrap().value,
+            ev.node(&d, &[9, 2, 4]).unwrap().value,
             Value::Magic { ok: true, bytes: b"endobj".to_vec() }
         );
-        assert_eq!(ev.node(&d, &[8, 4, 0]).unwrap().value, Value::Int(3));
+        assert_eq!(ev.node(&d, &[9, 4, 0]).unwrap().value, Value::Int(3));
     }
 
     /// A table written as a subsection per object reads as the same objects:
@@ -445,9 +533,9 @@ mod tests {
             assert_eq!(ev.node(&d, &[4, 0, 3]).unwrap().type_name, "Entry", "{eol:?}");
             // The heading is a line of the table and a child of the object
             // list, and places nothing; the entry under it places object one.
-            assert_eq!(ev.node(&d, &[8, 2]).unwrap().size_bits, 0, "{eol:?}");
-            assert_eq!(ev.node(&d, &[8, 3]).unwrap().offset_bits, first as u64 * 8, "{eol:?}");
-            assert_eq!(ev.node(&d, &[8, 3, 0]).unwrap().value, Value::Int(1), "{eol:?}");
+            assert_eq!(ev.node(&d, &[9, 2]).unwrap().size_bits, 0, "{eol:?}");
+            assert_eq!(ev.node(&d, &[9, 3]).unwrap().offset_bits, first as u64 * 8, "{eol:?}");
+            assert_eq!(ev.node(&d, &[9, 3, 0]).unwrap().value, Value::Int(1), "{eol:?}");
             // And the trailer is the trailer, not the subsections the old reading
             // swallowed along with it.
             let trailer = ev.node(&d, &[5, 0]).unwrap().value;
@@ -460,8 +548,8 @@ mod tests {
         let d = Document::new(MemSource(pdf_bytes("\n")));
         let mut ev = Evaluator::new(pdf());
         assert_eq!(ev.node(&d, &[5, 0]).unwrap().value, Value::Str("trailer\n<< /Size 4 /Root 1 0 R >>\n".into()));
-        assert_eq!(ev.node(&d, &[6, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"startxref".to_vec() });
-        assert_eq!(ev.node(&d, &[7, 0]).unwrap().value, Value::Str("%%EOF".into()));
+        assert_eq!(ev.node(&d, &[7, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"startxref".to_vec() });
+        assert_eq!(ev.node(&d, &[8, 0]).unwrap().value, Value::Str("%%EOF".into()));
     }
 
     /// The same file with the other line ending, where nothing is where it was
@@ -476,7 +564,7 @@ mod tests {
         assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128));
         assert_eq!(ev.node(&d, &[4, 0, 0, 1]).unwrap().value, Value::Int(4));
         assert_eq!(ev.node(&d, &[4, 0, 4, 1]).unwrap().value, Value::Int(0));
-        assert_eq!(ev.node(&d, &[8, 2]).unwrap().offset_bits, first as u64 * 8);
+        assert_eq!(ev.node(&d, &[9, 2]).unwrap().offset_bits, first as u64 * 8);
     }
 
     #[test]
@@ -523,7 +611,69 @@ mod tests {
             ev.node(&d, &[5, 0]).unwrap().value,
             Value::Str("trailer\n<< /Size 1 /XRefStm 17 >>\n".into())
         );
-        assert_eq!(ev.node(&d, &[8]).unwrap().child_count, 1);
-        assert_eq!(ev.node(&d, &[8, 0]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[9]).unwrap().child_count, 1);
+        assert_eq!(ev.node(&d, &[9, 0]).unwrap().size_bits, 0);
+    }
+    /// A file whose table is a cross-reference stream: an ordinary numbered
+    /// object with the rows packed and compressed inside it.
+    fn pdf_bytes_with_stream() -> Vec<u8> {
+        let mut v = b"%PDF-1.5\n1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec();
+        let table = v.len();
+        v.extend_from_slice(b"2 0 obj\n<</Type/XRef/W[1 2 1]/Index[0 3]/Size 3/Filter/FlateDecode/Length 12>>stream\n");
+        // Twelve bytes standing in for compressed rows. Nothing here unpacks
+        // them, so what they are does not matter; that they are not text does.
+        v.extend_from_slice(&[0x78, 0x9c, 0x00, 0x01, 0xff, 0xfe, 0x0d, 0x0a, 0x80, 0x7f, 0x01, 0x02]);
+        v.extend_from_slice(b"\nendstream\nendobj\n");
+        v.extend_from_slice(format!("startxref\n{table}\n%%EOF").as_bytes());
+        v
+    }
+
+    #[test]
+    fn a_table_written_as_a_stream_reads_as_the_object_it_is() {
+        let bytes = pdf_bytes_with_stream();
+        let table = bytes.windows(7).position(|w| w == b"2 0 obj").expect("the stream object");
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(pdf());
+        assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128));
+        // What is at the offset is an object number, not the word.
+        assert_eq!(ev.node(&d, &[3, 0]).unwrap().value, Value::Str("2 0 ".into()));
+        // So there are no lines of table and no trailer to read.
+        assert_eq!(ev.node(&d, &[4, 0]).unwrap().child_count, 0);
+        assert_eq!(ev.node(&d, &[5, 0]).unwrap().size_bits, 0);
+        // The object itself, with its dictionary as the text it is.
+        let stream = ev.node(&d, &[6, 0]).unwrap();
+        assert_eq!(stream.type_name, "XRefStream");
+        assert_eq!(stream.offset_bits, table as u64 * 8);
+        assert_eq!(ev.node(&d, &[6, 0, 0]).unwrap().value, Value::Int(2));
+        assert_eq!(ev.node(&d, &[6, 0, 1]).unwrap().value, Value::Int(0));
+        assert_eq!(
+            ev.node(&d, &[6, 0, 3]).unwrap().value,
+            Value::Str("\n<</Type/XRef/W[1 2 1]/Index[0 3]/Size 3/Filter/FlateDecode/Length 12>>".into())
+        );
+        assert_eq!(
+            ev.node(&d, &[6, 0, 4]).unwrap().value,
+            Value::Magic { ok: true, bytes: b"stream".to_vec() }
+        );
+        // The rows: the newline after `stream`, twelve bytes, and the newline
+        // before `endstream`.
+        assert_eq!(ev.node(&d, &[6, 0, 5]).unwrap().size_bits, 14 * 8);
+        assert_eq!(
+            ev.node(&d, &[6, 0, 6]).unwrap().value,
+            Value::Magic { ok: true, bytes: b"endstream".to_vec() }
+        );
+        // The end of the file still reads, and no object is placed, since
+        // nothing here unpacks the rows that would place them.
+        assert_eq!(ev.node(&d, &[7, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"startxref".to_vec() });
+        assert_eq!(ev.node(&d, &[8, 0]).unwrap().value, Value::Str("%%EOF".into()));
+        assert_eq!(ev.node(&d, &[9]).unwrap().child_count, 0);
+    }
+
+    /// The other shape is untouched by the branch: a classic table leaves the
+    /// stream field empty.
+    #[test]
+    fn a_classic_table_leaves_no_stream() {
+        let d = Document::new(MemSource(pdf_bytes("\n")));
+        let mut ev = Evaluator::new(pdf());
+        assert_eq!(ev.node(&d, &[6, 0]).unwrap().size_bits, 0);
     }
 }

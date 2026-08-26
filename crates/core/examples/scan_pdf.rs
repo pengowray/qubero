@@ -28,9 +28,18 @@ fn main() {
     println!("  version      {}", show(&mut ev, &d, &[0]));
     println!("  startxref at {}", show(&mut ev, &d, &[1]));
     println!("  table at     {}", show(&mut ev, &d, &[2, 0]));
-    println!("  xref         {}", show(&mut ev, &d, &[3, 0]));
+    println!("  at the offset {}", show(&mut ev, &d, &[3, 0]));
     println!("  trailer      {}", show(&mut ev, &d, &[5, 0]));
-    println!("  eof          {}", show(&mut ev, &d, &[7, 0]));
+    println!("  eof          {}", show(&mut ev, &d, &[8, 0]));
+
+    // The table may be a stream inside an object instead of lines of text.
+    if let Ok(s) = ev.node(&d, &[6, 0]) {
+        if s.size_bits > 0 {
+            println!("  cross-reference stream at {}, {} bytes", s.offset_bits / 8, s.size_bits / 8);
+            println!("    dictionary {}", show(&mut ev, &d, &[6, 0, 3]));
+            println!("    rows       {} bytes, packed and not unpacked here", ev.node(&d, &[6, 0, 5]).map_or(0, |r| r.size_bits / 8));
+        }
+    }
 
     // The subsections the table is written in, one for a file saved once.
     match ev.node(&d, &[4, 0]) {
@@ -51,14 +60,14 @@ fn main() {
         Err(e) => println!("  the table did not read: {e:?}"),
     }
 
-    let Ok(objects) = ev.node(&d, &[8]) else {
+    let Ok(objects) = ev.node(&d, &[9]) else {
         println!("  no objects: the table did not read");
         return;
     };
     println!("  {} objects", objects.child_count);
     let mut covered = 0u64;
     for i in 0..objects.child_count as usize {
-        let o = match ev.node(&d, &[8, i]) {
+        let o = match ev.node(&d, &[9, i]) {
             Ok(o) => o,
             Err(e) => {
                 println!("    [{i}] did not read: {e:?}");
@@ -77,9 +86,9 @@ fn main() {
                 "    [{i}] at {:>9}  {:>8} bytes  {} {} {}",
                 o.offset_bits / 8,
                 o.size_bits / 8,
-                show(&mut ev, &d, &[8, i, 0]),
-                show(&mut ev, &d, &[8, i, 1]),
-                show(&mut ev, &d, &[8, i, 2]),
+                show(&mut ev, &d, &[9, i, 0]),
+                show(&mut ev, &d, &[9, i, 1]),
+                show(&mut ev, &d, &[9, i, 2]),
             );
         }
     }
