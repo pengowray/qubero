@@ -2,6 +2,7 @@
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
 mod aiff;
+mod appledouble;
 mod au;
 mod bmp;
 mod cbor;
@@ -49,6 +50,7 @@ pub mod wasm_disasm;
 mod wasm_opcodes;
 
 pub use aiff::aiff;
+pub use appledouble::{appledouble, applesingle};
 pub use au::au;
 pub use bmp::bmp;
 pub use cbor::cbor;
@@ -96,7 +98,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -140,6 +142,8 @@ pub fn builtin(name: &str) -> Option<Template> {
         "jpeg" => Some(jpeg()),
         "pdf" => Some(pdf()),
         "hdf5" => Some(hdf5()),
+        "appledouble" => Some(appledouble()),
+        "applesingle" => Some(applesingle()),
         _ => None,
     }
 }
@@ -182,6 +186,8 @@ const MAGIC: &[(&[u8], &str)] = &[
     // them are this container and nothing in the first bytes says which.
     (b"\x89HDF\r\n\x1a\n", "hdf5"),
     (b"ID3", "id3"),
+    (b"\x00\x05\x16\x07", "appledouble"),
+    (b"\x00\x05\x16\x00", "applesingle"),
     (b"{\"", "json"),
 ];
 
