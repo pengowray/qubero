@@ -117,10 +117,23 @@ struct TextDto {
     truncated: bool,
 }
 
+/// One row of a cross-reference stream, already decoded: the object it is
+/// for, what it says about that object, and where that puts it. `offset` is
+/// -1 for a row that names no place in the file, which is every row but an
+/// in-use one.
+#[derive(Serialize)]
+struct XrefRowDto {
+    object: f64,
+    kind: &'static str,
+    offset: f64,
+    second: f64,
+    third: f64,
+}
+
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "quant" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -156,6 +169,25 @@ struct ExplainDto {
     /// Quant: where the block starts, so a weight's bits can be found from the
     /// offset it carries.
     block_bits: f64,
+    /// Xref: the three widths from `/W`, and the PNG predictor where there was
+    /// one, which is -1 where there was not.
+    xref_widths: Vec<f64>,
+    xref_predictor: f64,
+    /// Xref: how many bytes the rows are in the file, and how many they came
+    /// to once decompressed.
+    xref_packed: f64,
+    xref_decoded: f64,
+    /// Xref: how many rows of each kind there are, over the whole table rather
+    /// than over the ones listed.
+    xref_free: f64,
+    xref_in_file: f64,
+    xref_in_stream: f64,
+    /// Xref: the rows, and how many there are altogether. A table with more
+    /// than `xref_rows` holds says so with `xref_total`.
+    xref_rows: Vec<XrefRowDto>,
+    xref_total: f64,
+    /// Xref: why there are no rows, where there are none. Empty otherwise.
+    problem: String,
     /// Quant: the scale the block keeps for each run of weights, where it keeps
     /// them, and how many weights one run covers. Empty for a block with one
     /// scale for all of them.
@@ -270,6 +302,16 @@ fn explain_dto(e: Explain) -> ExplainDto {
         second_subtract: false,
         second_per_group: false,
         block_bits: 0.0,
+        xref_widths: Vec::new(),
+        xref_predictor: -1.0,
+        xref_packed: 0.0,
+        xref_decoded: 0.0,
+        xref_free: 0.0,
+        xref_in_file: 0.0,
+        xref_in_stream: 0.0,
+        xref_rows: Vec::new(),
+        xref_total: 0.0,
+        problem: String::new(),
         groups: Vec::new(),
         group_weights: 0.0,
         bias: 0.0,
@@ -319,6 +361,40 @@ fn explain_dto(e: Explain) -> ExplainDto {
                     value: w.value,
                     bits: part_dto(w.bits),
                     high: w.high.map(part_dto),
+                })
+                .collect();
+        }
+        Explain::XrefRows {
+            widths,
+            predictor,
+            packed_bytes,
+            decoded_bytes,
+            free,
+            in_file,
+            in_stream,
+            rows,
+            total,
+            problem,
+        } => {
+            use qubero_core::formats::pdf_xref::Kind;
+            dto.kind = "xref";
+            dto.xref_widths = widths.iter().map(|w| f64::from(*w)).collect();
+            dto.xref_predictor = predictor.map_or(-1.0, f64::from);
+            dto.xref_packed = packed_bytes as f64;
+            dto.xref_decoded = decoded_bytes as f64;
+            dto.xref_free = free as f64;
+            dto.xref_in_file = in_file as f64;
+            dto.xref_in_stream = in_stream as f64;
+            dto.xref_total = total as f64;
+            dto.problem = problem.unwrap_or_default();
+            dto.xref_rows = rows
+                .into_iter()
+                .map(|r| XrefRowDto {
+                    object: r.object as f64,
+                    kind: r.kind.as_str(),
+                    offset: if r.kind == Kind::InFile { r.second as f64 } else { -1.0 },
+                    second: r.second as f64,
+                    third: r.third as f64,
                 })
                 .collect();
         }

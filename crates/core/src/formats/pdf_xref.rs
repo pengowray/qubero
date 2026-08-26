@@ -37,6 +37,11 @@
 //! the offsets a reader gets out of a cross-reference stream do not account for
 //! anything like the whole file.
 
+/// What [`StructDef::packed`](crate::template::StructDef::packed) calls this,
+/// so the template can mark the object whose contents these are and the panel
+/// can find its way back here.
+pub const PACKING: &str = "pdf_xref";
+
 /// What a row says the object is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

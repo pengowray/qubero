@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
+use crate::formats::pdf_xref;
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -63,9 +64,45 @@ pub enum Explain {
         /// rather than on the block's scales.
         at: Option<usize>,
     },
+    /// A cross-reference stream, decompressed and split into the rows it
+    /// stands for. Shown for the cursor anywhere in the object, because the
+    /// rows are not bytes of the file and there is nothing to land on: what
+    /// the reader is standing on is the packed run they came out of.
+    XrefRows {
+        /// The widths from `/W` and the predictor from `/DecodeParms`, which
+        /// say how the run was taken apart.
+        widths: [u32; 3],
+        predictor: Option<u32>,
+        /// How many bytes the run is in the file, and how many it came to once
+        /// decompressed.
+        packed_bytes: u64,
+        decoded_bytes: u64,
+        /// How many rows there are of each kind, over the whole table rather
+        /// than over the ones listed.
+        free: usize,
+        in_file: usize,
+        in_stream: usize,
+        /// The rows themselves, up to [`XREF_ROWS_SHOWN`] of them, and how
+        /// many there are altogether. A table with more says so rather than
+        /// looking complete.
+        rows: Vec<pdf_xref::Row>,
+        total: usize,
+        /// Why there are no rows, where there are none.
+        problem: Option<String>,
+    },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
+
+/// How many rows of a cross-reference stream are handed to a reader at once.
+/// A table runs to one row an object, and a panel is not the place to read a
+/// hundred thousand of them.
+pub const XREF_ROWS_SHOWN: usize = 512;
+
+/// The largest packed run this will decompress for a panel that is redrawn
+/// every time the cursor moves. Four megabytes of compressed table is a file
+/// with millions of objects; nothing real reaches it.
+const XREF_PACKED_LIMIT: u64 = 4 << 20;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlagBit {
@@ -147,12 +184,78 @@ impl Evaluator {
             let r = self.memo.get(at).expect("resolved").clone();
             let Ty::Struct(def) = &r.ty else { continue };
             let Some(packing) = def.packed.clone() else { continue };
+            if &*packing == pdf_xref::PACKING {
+                return self.explain_xref(doc, at, &r);
+            }
             let Some(kind) = ggml_quant::by_name(&packing) else { continue };
             let bytes = self.read(doc, &r, r.offset, kind.block_bytes() as u64 * 8)?;
             let Some(block) = ggml_quant::unpack(kind, &bytes) else { continue };
             return Ok(quant_of(kind, block, r.offset, at_bits));
         }
         Ok(Explain::Plain)
+    }
+
+    /// A cross-reference stream taken apart. The dictionary beside the packed
+    /// run says how, so both are read from the object the cursor is in.
+    ///
+    /// A run that will not decode is still an answer: what the dictionary said
+    /// is worth showing next to the reason, since between them they are how a
+    /// reader works out whether the file is odd or this is.
+    fn explain_xref<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved) -> R<Explain> {
+        let Ty::Struct(def) = &r.ty else { return Ok(Explain::Plain) };
+        let field = |name: &str| def.fields.iter().position(|f| &*f.name == name);
+        let (Some(d), Some(p)) = (field("dictionary"), field("rows")) else { return Ok(Explain::Plain) };
+
+        let mut dict_path = at.to_vec();
+        dict_path.push(d);
+        let Value::Str(dict) = self.node(doc, &dict_path)?.value else { return Ok(Explain::Plain) };
+
+        let mut rows_path = at.to_vec();
+        rows_path.push(p);
+        self.resolve(doc, &rows_path)?;
+        let packed_bits = self.size_of(doc, &rows_path)?;
+        let rr = self.memo.get(&rows_path).expect("resolved").clone();
+        let packed_bytes = packed_bits / 8;
+
+        let answer = |problem: Option<String>, t: Option<pdf_xref::Table>| {
+            let t = t.unwrap_or(pdf_xref::Table {
+                rows: Vec::new(),
+                widths: [0, 0, 0],
+                predictor: None,
+                decoded_bytes: 0,
+                trailing_bytes: 0,
+            });
+            let mut counts = (0usize, 0usize, 0usize);
+            for row in &t.rows {
+                match row.kind {
+                    pdf_xref::Kind::Free => counts.0 += 1,
+                    pdf_xref::Kind::InFile => counts.1 += 1,
+                    _ => counts.2 += 1,
+                }
+            }
+            Explain::XrefRows {
+                widths: t.widths,
+                predictor: t.predictor,
+                packed_bytes,
+                decoded_bytes: t.decoded_bytes as u64,
+                free: counts.0,
+                in_file: counts.1,
+                in_stream: counts.2,
+                total: t.rows.len(),
+                rows: t.rows.into_iter().take(XREF_ROWS_SHOWN).collect(),
+                problem,
+            }
+        };
+
+        if packed_bytes > XREF_PACKED_LIMIT {
+            let mb = XREF_PACKED_LIMIT / (1 << 20);
+            return Ok(answer(Some(format!("the packed rows are over {mb} MB, which is more than is unpacked here")), None));
+        }
+        let bytes = self.read(doc, &rr, rr.offset, packed_bits)?;
+        Ok(match pdf_xref::decode(&dict, &bytes) {
+            Ok(t) => answer(None, Some(t)),
+            Err(p) => answer(Some(p.as_str()), None),
+        })
     }
 
     fn value_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Value> {

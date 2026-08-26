@@ -7,6 +7,7 @@
 import type { TemplateNode, TypeInfo } from "./doc.js";
 import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.js";
 import { quantBody, type GoTo } from "./quantpanel.js";
+import { xrefBody, xrefNote } from "./xrefpanel.js";
 
 /** Write a value the reader picked here rather than typed. */
 export type Apply = (path: readonly number[], text: string) => void;
@@ -32,6 +33,7 @@ function headingFor(info: TypeInfo): string {
   if (info.kind === "flags") return "Flags";
   if (info.kind === "float") return "Bit layout";
   if (info.kind === "quant") return "Weights";
+  if (info.kind === "xref") return "Cross-reference rows";
   return `Defined values (${info.cases.length})`;
 }
 
@@ -39,6 +41,7 @@ function headingFor(info: TypeInfo): string {
 function headingNote(info: TypeInfo): string {
   if (info.kind === "float") return FLOATS[info.format]?.name ?? "";
   if (info.kind === "quant") return info.name;
+  if (info.kind === "xref") return xrefNote(info);
   return "";
 }
 
@@ -409,6 +412,7 @@ export function typePanel(
   const frag = document.createDocumentFragment();
   frag.append(heading(headingFor(info), headingNote(info)));
   if (info.kind === "quant") frag.append(quantBody(info, goTo, redraw));
+  else if (info.kind === "xref") frag.append(xrefBody(info, goTo));
   else if (info.kind === "float") frag.append(floatBody(info));
   else if (info.kind === "magic") frag.append(magicBody(info));
   else if (info.kind === "enum") frag.append(enumBody(info, path, apply));

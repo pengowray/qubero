@@ -1836,3 +1836,57 @@ input.invalid {
   line-height: 1.4;
   pointer-events: none;
 }
+
+/* A cross-reference stream's rows: object number, where it is, and the odd
+   generation that is not zero. The offset is a button where the row names a
+   place in the file, so a reader can go and look at the object. */
+.insp-xrows {
+  max-height: 20em;
+  overflow-y: auto;
+}
+.insp-xrow {
+  display: grid;
+  grid-template-columns: 5em 1fr auto;
+  gap: 6px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 0;
+}
+.insp-xrow.is-head {
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  position: sticky;
+  top: 0;
+}
+.insp-xrow-object {
+  text-align: right;
+  color: var(--muted);
+}
+.insp-xrow-where {
+  text-align: left;
+}
+button.insp-xrow-where {
+  font: inherit;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+}
+button.insp-xrow-where:hover {
+  text-decoration: underline;
+}
+.insp-xrow-note {
+  font-size: 10px;
+  color: var(--muted);
+}
+.insp-xproblem {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0;
+}

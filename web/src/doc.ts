@@ -203,8 +203,18 @@ export type Origin = {
 };
 
 /** What a type permits, beyond what this file's bytes happen to say. */
+/** One row of a cross-reference stream, already decoded. `offset` is a real
+ *  place in the file for an in-use row and -1 for every other kind. */
+export type XrefRow = {
+  readonly object: number;
+  readonly kind: string;
+  readonly offset: number;
+  readonly second: number;
+  readonly third: number;
+};
+
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -249,6 +259,24 @@ export type TypeInfo = {
    *  them, and which one the cursor is inside (-1 for none). */
   readonly weights: readonly QuantWeight[];
   readonly at: number;
+  /** Xref: the widths from `/W`, and the PNG predictor where there was one
+   *  (-1 where there was not). */
+  readonly xref_widths: readonly number[];
+  readonly xref_predictor: number;
+  /** Xref: how many bytes the rows are in the file, and how many once
+   *  decompressed. */
+  readonly xref_packed: number;
+  readonly xref_decoded: number;
+  /** Xref: how many rows of each kind, over the whole table rather than over
+   *  the ones listed. */
+  readonly xref_free: number;
+  readonly xref_in_file: number;
+  readonly xref_in_stream: number;
+  /** Xref: the rows, and how many there are altogether. */
+  readonly xref_rows: readonly XrefRow[];
+  readonly xref_total: number;
+  /** Xref: why there are no rows, where there are none. Empty otherwise. */
+  readonly problem: string;
 };
 
 /** One run of weights inside a block that share a scale of their own. */

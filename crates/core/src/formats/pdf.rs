@@ -221,6 +221,7 @@ fn xref_stream() -> T {
             ("endstream", T::magic(b"endstream")),
         ],
     )
+    .packed_as(super::pdf_xref::PACKING)
 }
 
 /// One line of the table: an entry that places an object, or the heading that
@@ -628,6 +629,28 @@ mod tests {
         v
     }
 
+    /// A stream file whose rows are the ones given, packed `/W [1 2 2]` and
+    /// compressed the way a writer compresses them.
+    fn pdf_bytes_with_stream_of(rows: &[(u64, u64, u64, u64)]) -> Vec<u8> {
+        let mut packed = Vec::new();
+        for (_, kind, second, third) in rows {
+            packed.push(*kind as u8);
+            packed.extend_from_slice(&(*second as u16).to_be_bytes());
+            packed.extend_from_slice(&(*third as u16).to_be_bytes());
+        }
+        let data = miniz_oxide::deflate::compress_to_vec_zlib(&packed, 6);
+        let mut v = b"%PDF-1.5\n1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec();
+        let table = v.len();
+        v.extend_from_slice(
+            format!("2 0 obj\n<</Type/XRef/W[1 2 2]/Index[0 {}]/Filter/FlateDecode/Length {}>>stream\n", rows.len(), data.len())
+                .as_bytes(),
+        );
+        v.extend_from_slice(&data);
+        v.extend_from_slice(b"\nendstream\nendobj\n");
+        v.extend_from_slice(format!("startxref\n{table}\n%%EOF").as_bytes());
+        v
+    }
+
     #[test]
     fn a_table_written_as_a_stream_reads_as_the_object_it_is() {
         let bytes = pdf_bytes_with_stream();
@@ -675,5 +698,58 @@ mod tests {
         let d = Document::new(MemSource(pdf_bytes("\n")));
         let mut ev = Evaluator::new(pdf());
         assert_eq!(ev.node(&d, &[6, 0]).unwrap().size_bits, 0);
+    }
+    /// The panel behind the stream object: the rows, taken apart, for the
+    /// cursor anywhere in it.
+    #[test]
+    fn the_rows_are_explained_from_anywhere_in_the_stream_object() {
+        use crate::eval::Explain;
+        use crate::formats::pdf_xref::{Kind, Row};
+
+        let bytes = pdf_bytes_with_stream_of(&[
+            (0, 0, 3, 0xffff),
+            (1, 1, 0x2c, 0),
+            (2, 2, 9, 5),
+        ]);
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(pdf());
+
+        // On the object itself, and on the packed run inside it: a reader
+        // lands on the second and would see nothing if only the first
+        // answered.
+        for path in [&[6, 0][..], &[6, 0, 5][..]] {
+            let Explain::XrefRows { widths, rows, total, free, in_file, in_stream, problem, .. } =
+                ev.explain(&d, path, None).unwrap()
+            else {
+                panic!("no rows explained at {path:?}");
+            };
+            assert_eq!(problem, None, "{path:?}");
+            assert_eq!(widths, [1, 2, 2], "{path:?}");
+            assert_eq!(total, 3, "{path:?}");
+            assert_eq!((free, in_file, in_stream), (1, 1, 1), "{path:?}");
+            assert_eq!(rows[0], Row { object: 0, kind: Kind::Free, second: 3, third: 0xffff, at: 0 });
+            assert_eq!(rows[1], Row { object: 1, kind: Kind::InFile, second: 0x2c, third: 0, at: 5 });
+            assert_eq!(rows[2], Row { object: 2, kind: Kind::InStream, second: 9, third: 5, at: 10 });
+        }
+    }
+
+    /// A stream nothing here can open says why, and still says what the
+    /// dictionary asked for.
+    #[test]
+    fn a_stream_that_cannot_be_opened_says_so_in_the_panel() {
+        use crate::eval::Explain;
+        let mut v = b"%PDF-1.5\n".to_vec();
+        let table = v.len();
+        v.extend_from_slice(b"1 0 obj\n<</Type/XRef/W[1 2 1]/Size 1/Filter/LZWDecode/Length 4>>stream\n");
+        v.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        v.extend_from_slice(b"\nendstream\nendobj\n");
+        v.extend_from_slice(format!("startxref\n{table}\n%%EOF").as_bytes());
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(pdf());
+        let Explain::XrefRows { problem, total, .. } = ev.explain(&d, &[6, 0], None).unwrap() else {
+            panic!("nothing explained")
+        };
+        assert_eq!(total, 0);
+        assert_eq!(problem, Some("compressed with LZWDecode, which is not unpacked here".into()));
     }
 }
