@@ -155,6 +155,21 @@ impl Evaluator {
                 hit.unwrap_or(total) as i128
             }
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
+            // A field beside this one, and a path down into it.
+            Expr::Within(field) => {
+                let field = field.clone();
+                let Some((first, rest)) = field.split_first() else { return fail("no field named") };
+                let Some(mut p) = self.find_field(at, first) else {
+                    return fail(format!("unknown field {first}"));
+                };
+                if !self.descend(doc, &mut p, rest)? {
+                    return fail(format!("{first} has no field named {}", rest.join(".")));
+                }
+                match self.node(doc, &p)?.value.as_int() {
+                    Some(v) => v,
+                    None => return fail(format!("{} holds no number", field.join("."))),
+                }
+            }
             Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {
                 0 => self.eval_expr_at(doc, at, b, here)?,
                 v => v,

@@ -86,14 +86,17 @@
 //! field.
 //!
 //! A variable-length element is a length, the address of a global heap
-//! collection and an index into it. The collection is reached from the data
-//! rather than from any header, and an object inside one is found by walking
-//! the collection rather than by arithmetic, so nothing places either. The
-//! three numbers are shown as what they are, which is where the string is.
+//! collection and an index into it. All three are shown, and the collection is
+//! placed, so the bytes are one step from the note that names them. Which
+//! object in the collection is the one is left to the reader: the objects have
+//! no fixed size, so the fifteenth is wherever the fourteen before it ended,
+//! and there is no expression here for "the element whose index is this".
 //!
-//! An attribute's value keeps its bytes for now. Its datatype is inside the
-//! attribute rather than beside it, and an expression reads the fields of the
-//! structures it sits in, not the fields inside a structure beside it.
+//! An attribute's value reads as elements too, by the datatype written inside
+//! the attribute rather than beside it. That is the one thing the IR could not
+//! say: `Expr::Ref` names a field beside this one and stops there, so
+//! `Expr::Within` was added to name a field and then a path down into it.
+//! `shape` on an `.h5ad` group is two numbers because of it.
 
 use crate::template::{
     Encoding,
@@ -114,6 +117,7 @@ pub fn hdf5() -> Template {
         .with_type("LocalHeap", local_heap())
         .with_type("Datatype", datatype())
         .with_type("Dataspace", dataspace())
+        .with_type("GlobalHeap", global_heap())
 }
 
 fn root() -> T {
@@ -622,8 +626,30 @@ fn datatype() -> T {
 /// How wide one element is, from the datatype message beside this one. Zero
 /// when there is none in reach, which reads as one byte rather than dividing
 /// by nothing.
-fn element_size() -> E {
-    E::sibling(&["body", "size"]).or(E::lit(1))
+/// Where the datatype describing a run of elements is written. A dataset's is
+/// a message of its own beside the layout message that places the bytes; an
+/// attribute writes one inside itself, before its data. The elements are read
+/// the same way either way, so the only difference is how the three things a
+/// reader needs are reached.
+#[derive(Clone, Copy)]
+enum Described {
+    /// By a datatype message among the same object's messages.
+    Beside,
+    /// By the datatype written inside the attribute holding the elements.
+    Inside,
+}
+
+impl Described {
+    fn part(self, name: &str) -> E {
+        match self {
+            Described::Beside => E::sibling(&["body", name]),
+            Described::Inside => E::within(&["datatype", name]),
+        }
+    }
+}
+
+fn element_size(by: Described) -> E {
+    by.part("size").or(E::lit(1))
 }
 
 /// A field of no bytes holding the width of one element, so that everything
@@ -634,25 +660,26 @@ fn element_size() -> E {
 /// that cannot vary from one element to the next: naming a field is such an
 /// expression and asking a message two levels away is not. Without this a
 /// column of ten million strings would be measured by reading all ten million.
-fn element_size_field() -> (&'static str, T) {
-    ("element_size", T::computed(element_size()))
+fn element_size_field(by: Described) -> (&'static str, T) {
+    ("element_size", T::computed(element_size(by)))
 }
 
 /// What one element of a dataset is, read from the datatype message that sits
 /// before the layout one among the object's messages. A datatype this does not
 /// take apart leaves its elements as their own bytes, which is still one row
 /// per element and still the right size.
-fn element_type() -> T {
+fn element_type(by: Described) -> T {
     // Class, byte order, width and sign in one number, so a single switch can
     // ask about all four: there is no bitwise operator here, and four nested
     // switches would say the same thing at four times the length.
-    let bits = E::sibling(&["body", "bit_field"]);
+    let bits = by.part("bit_field");
     let big_endian = bits.clone().sub(bits.clone().div(E::lit(2)).mul(E::lit(2)));
     let signed = bits.clone().div(E::lit(8)).sub(bits.div(E::lit(16)).mul(E::lit(2)));
-    let key = E::sibling(&["body", "class"])
+    let key = by
+        .part("class")
         .mul(E::lit(1000))
         .add(big_endian.mul(E::lit(500)))
-        .add(E::sibling(&["body", "size"]).mul(E::lit(2)))
+        .add(by.part("size").mul(E::lit(2)))
         .add(signed);
     let numeric = vec![
         (2, T::u8()),
@@ -688,7 +715,7 @@ fn element_type() -> T {
     let numeric: Vec<(i128, T)> = numeric.into_iter().map(|(k, t)| (k, of(t))).collect();
     let opaque = of(T::sized(width.clone(), T::bytes(width.clone())));
     T::switch(
-        E::sibling(&["body", "class"]),
+        by.part("class"),
         vec![
             (0, T::switch(key.clone(), numeric.clone(), opaque.clone())),
             (1, T::switch(key, numeric, opaque.clone())),
@@ -722,7 +749,12 @@ fn element_type() -> T {
     )
 }
 
-/// The note a variable-length element leaves in place of its contents.
+/// The note a variable-length element leaves in place of its contents: how
+/// long it is, which global heap collection holds it, and which object in that
+/// collection it is. The collection is placed, so the bytes are one step away;
+/// which object is which is a matter of reading the indices, since the objects
+/// are of no fixed size and the fifteenth is wherever the fourteen before it
+/// ended.
 fn vlen_reference() -> T {
     T::inline_structure(
         "GlobalHeapId",
@@ -730,6 +762,70 @@ fn vlen_reference() -> T {
             ("length", T::u32(Little).counted_as("bytes")),
             ("collection_address", addr()),
             ("object_index", T::u32(Little)),
+            ("collection", at_address("collection_address", T::Named("GlobalHeap".into()))),
+        ],
+    )
+}
+
+/// A global heap collection: everything that had no fixed size, written
+/// together in one block that several datasets share.
+fn global_heap() -> T {
+    T::structure(
+        "GlobalHeap",
+        vec![
+            ("signature", T::magic(b"GCOL")),
+            ("version", T::u8()),
+            ("reserved", T::bytes(E::lit(3))),
+            ("collection_size", length().counted_as("bytes")),
+            (
+                "objects",
+                T::sized(
+                    E::field("collection_size").sub(E::lit(16)),
+                    T::repeat(global_heap_object(), Until::End),
+                )
+                .counted_as("objects"),
+            ),
+        ],
+    )
+}
+
+/// One object in a collection. Index zero is not an object but the free space
+/// after the last one, and it says how much there is in the same field the
+/// others use for their length.
+fn global_heap_object() -> T {
+    // A collection is a round number of bytes and its objects are not, so the
+    // last few bytes can be too few to hold even the sixteen a header takes.
+    // That tail is padding rather than an object read past the end of the
+    // collection, and this is where the difference is decided: what is left,
+    // before anything is read.
+    T::switch(
+        E::Remaining.less_than(E::lit(16)),
+        vec![(1, T::structure("Padding", vec![("padding", T::bytes(E::Remaining))]))],
+        heap_object(),
+    )
+}
+
+fn heap_object() -> T {
+    T::structure_named(
+        "HeapObject",
+        "object_index",
+        "data",
+        vec![
+            ("object_index", T::u16(Little)),
+            ("reference_count", T::u16(Little)),
+            ("reserved", T::u32(Little)),
+            ("size", length().counted_as("bytes")),
+            // Rounded up to eight bytes, and the padding belongs to nobody.
+            //
+            // Object zero is the free space rather than an object, and its
+            // size counts the sixteen bytes of header this one has already
+            // read, so it is measured to the end of the collection instead:
+            // that is what free space is, and it saves subtracting a header
+            // from a length that may be shorter than one.
+            (
+                "data",
+                T::switch(E::field("object_index"), vec![(0, T::bytes(E::Remaining))], T::bytes(pad8(E::field("size")))),
+            ),
         ],
     )
 }
@@ -738,10 +834,10 @@ fn vlen_reference() -> T {
 /// bytes in front of them are how far the elements can see: an expression
 /// reads the fields of the structures it sits in, and both of these are
 /// answers from somewhere else in the object header.
-fn elements(bytes: E) -> T {
+fn elements(by: Described, bytes: E) -> T {
     T::inline_structure(
         "Data",
-        vec![element_size_field(), ("run_bytes", T::computed(bytes)), ("elements", element_type())],
+        vec![element_size_field(by), ("run_bytes", T::computed(bytes)), ("elements", element_type(by))],
     )
 }
 
@@ -965,7 +1061,7 @@ fn layout_v1() -> T {
                             0,
                             T::inline_structure(
                                 "Compact",
-                                vec![("size", T::u32(Little)), ("data", elements(E::field("size")))],
+                                vec![("size", T::u32(Little)), ("data", elements(Described::Beside, E::field("size")))],
                             ),
                         ),
                         (2, at_address("address", T::Named("Node".into()))),
@@ -995,7 +1091,7 @@ fn layout_v3() -> T {
                             0,
                             T::inline_structure(
                                 "Compact",
-                                vec![("size", T::u16(Little)), ("data", elements(E::field("size")))],
+                                vec![("size", T::u16(Little)), ("data", elements(Described::Beside, E::field("size")))],
                             ),
                         ),
                         (
@@ -1005,7 +1101,7 @@ fn layout_v3() -> T {
                                 vec![
                                     ("address", addr()),
                                     ("size", length()),
-                                    ("data", at_address("address", elements(E::field("size")))),
+                                    ("data", at_address("address", elements(Described::Beside, E::field("size")))),
                                 ],
                             ),
                         ),
@@ -1175,7 +1271,10 @@ fn attribute() -> T {
                     T::sized(E::field("dataspace_size"), T::Named("Dataspace".into())),
                 ),
             ),
-            ("data", T::bytes(E::Remaining)),
+            // Whatever is left is the value, read as elements by the datatype
+            // written just above it. `shape` is two numbers, `encoding-type`
+            // is a word, and both are what a reader of an `.h5ad` came for.
+            ("data", elements(Described::Inside, E::Remaining)),
         ],
     )
 }
@@ -1369,7 +1468,7 @@ fn chunk_entry() -> T {
                             "child_address",
                             T::switch(
                                 E::sibling(&["body", "filter_count"]),
-                                vec![(0, elements(E::field("chunk_size")))],
+                                vec![(0, elements(Described::Beside, E::field("chunk_size")))],
                                 T::bytes(E::field("chunk_size")),
                             ),
                         ),

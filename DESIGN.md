@@ -126,14 +126,23 @@ since a list only gets a stride when its element size is an expression that
 cannot vary per element, and a column of ten million strings measured one at a
 time is not a column anyone can scroll.
 
+An attribute's value reads as elements as well, and that is what `Expr::Within`
+was added for: the datatype describing an attribute's value is written *inside*
+the attribute, and `Expr::Ref` names a field beside this one and stops there.
+`Within` names a field and then a path down into it. Global heap collections
+are placed too, so a variable-length string is one step from the note that
+points at it; which object in a collection is the one is left to the reader,
+since the objects have no fixed size and there is no expression for "the
+element whose index is this".
+
 What is read: superblock versions 0 and 1, object headers of version 1 and 2,
 the messages a dataset is made of (dataspace, datatype, layout, filters,
 attributes, links, symbol tables and continuations), version 1 b-trees for both
-groups and chunks, local heaps and symbol table nodes. What is not: fractal
-heaps and version 2 b-trees, which is where a file written with the newest
-library keeps its links; data layout messages of version 4 and later; and the
-contents of a chunk, which are deflated and belong with the other packed
-contents rather than in a field.
+groups and chunks, local heaps, symbol table nodes and global heap collections.
+What is not: fractal heaps and version 2 b-trees, which is where a file written
+with the newest library keeps its links; data layout messages of version 4 and
+later; and the contents of a filtered chunk, which are deflated and belong with
+the other packed contents rather than in a field.
 
 A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,

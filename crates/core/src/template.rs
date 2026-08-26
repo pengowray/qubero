@@ -123,6 +123,13 @@ pub enum Expr {
     /// lists further in again. Zero when nothing earlier has it, so `Or` can
     /// name what to do without one.
     Sibling(Arc<[String]>),
+    /// The value at `field`, a path that starts at a field declared before
+    /// this one in the same structure (or in one it sits inside) and then goes
+    /// down into it. `Ref` names a field beside this one and stops there,
+    /// which is no use when what has to be read is one level in: an HDF5
+    /// attribute writes its own datatype inside itself, and how wide one of
+    /// its elements is, is a field of that.
+    Within(Arc<[String]>),
     /// The first of the two that is not zero. Pairs with `Prev` to say "this
     /// one, or the last one that had one".
     Or(Box<Expr>, Box<Expr>),
@@ -223,6 +230,11 @@ impl Expr {
     /// list that has one, e.g. `sibling(&["body", "bits_per_sample"])`.
     pub fn sibling(field: &[&str]) -> Expr {
         Expr::Sibling(field.iter().map(|s| s.to_string()).collect())
+    }
+    /// A field declared before this one, and a path down into it, e.g.
+    /// `within(&["datatype", "size"])`.
+    pub fn within(field: &[&str]) -> Expr {
+        Expr::Within(field.iter().map(|s| s.to_string()).collect())
     }
     /// This, or `rhs` when this is zero.
     pub fn or(self, rhs: Expr) -> Expr {

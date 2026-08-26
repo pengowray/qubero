@@ -1559,3 +1559,43 @@ fn less_than_answers_one_or_zero_and_or_stops_at_the_one() {
     ));
     assert_eq!(ev.node(&doc(b"x"), &[0]).unwrap().value, Value::Int(1));
 }
+
+/// A field beside this one, and a path down into it. `Ref` stops at the field:
+/// an HDF5 attribute writes the datatype of its own value inside itself, and
+/// how wide one element is, is a field of that datatype rather than a field of
+/// the attribute.
+#[test]
+fn an_expression_can_read_a_field_inside_the_field_beside_it() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("kind", T::structure("Kind", vec![("tag", T::u8()), ("width", T::u8())])),
+                ("count", T::u8()),
+                ("values", T::array(T::bytes(E::within(&["kind", "width"])), E::field("count"))),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(t);
+    let d = doc(&[7, 2, 3, 0xa0, 0xa1, 0xb0, 0xb1, 0xc0, 0xc1]);
+    let values = ev.node(&d, &[2]).unwrap();
+    assert_eq!(values.child_count, 3);
+    assert_eq!(ev.node(&d, &[2, 2]).unwrap().offset_bits, 7 * 8);
+    assert_eq!(ev.node(&d, &[2, 2]).unwrap().size_bits, 16);
+
+    // A path that names nothing is an error on that field and not a wrong
+    // number that reads as if it were right.
+    let bad = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("kind", T::structure("Kind", vec![("tag", T::u8())])),
+                ("value", T::bytes(E::within(&["kind", "width"]))),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(bad);
+    assert!(ev.node(&doc(&[1, 2, 3]), &[1]).is_err());
+}
