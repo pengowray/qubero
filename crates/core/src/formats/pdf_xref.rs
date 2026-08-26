@@ -240,7 +240,7 @@ fn be(bytes: &[u8]) -> u64 {
 /// Step over the line ending the template left on either end. A zlib stream
 /// starts with a byte whose low nibble is 8, and deflate is a bit stream that
 /// cannot begin with a line ending either, so nothing real is lost.
-fn trim_stream(data: &[u8]) -> &[u8] {
+pub(super) fn trim_stream(data: &[u8]) -> &[u8] {
     let start = data.iter().position(|b| !matches!(b, b'\r' | b'\n')).unwrap_or(data.len());
     let end = data.iter().rposition(|b| !matches!(b, b'\r' | b'\n')).map_or(start, |i| i + 1);
     &data[start..end.max(start)]
@@ -248,7 +248,7 @@ fn trim_stream(data: &[u8]) -> &[u8] {
 
 /// Decompress, as zlib and then as raw deflate. A writer that leaves the zlib
 /// header off is out of spec and not rare.
-fn inflate(data: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn inflate(data: &[u8]) -> Option<Vec<u8>> {
     use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit as zlib;
     use miniz_oxide::inflate::decompress_to_vec_with_limit as raw;
     // A cross-reference stream holds a row per object. A hundred megabytes of
@@ -318,7 +318,7 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 /// is one. `/Filter` may be one name or an array of them; a stream with more
 /// than one is not taken apart here even when Flate is among them, since the
 /// order they were applied in matters and this only knows how to undo one.
-fn unsupported_filter(dict: &str) -> Option<String> {
+pub(super) fn unsupported_filter(dict: &str) -> Option<String> {
     let after = value_after(dict, "Filter")?;
     // The value and no more of the dictionary than that: an array runs to its
     // closing bracket, and a bare name to the end of the name. Reading past
@@ -342,13 +342,13 @@ fn unsupported_filter(dict: &str) -> Option<String> {
 }
 
 /// Bytes that may appear in a PDF name after the `/`.
-fn name_char(c: char) -> bool {
+pub(super) fn name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == '+' || c == '#'
 }
 
 /// Where the value of `/key` begins, with `/key` matched whole: a dictionary
 /// holding `/Length1` does not answer for `/Length`.
-fn value_after<'a>(dict: &'a str, key: &str) -> Option<&'a str> {
+pub(super) fn value_after<'a>(dict: &'a str, key: &str) -> Option<&'a str> {
     let mut from = 0;
     while let Some(i) = dict[from..].find('/') {
         let start = from + i + 1;
@@ -362,7 +362,7 @@ fn value_after<'a>(dict: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// The number written after `/key`, where one is.
-fn number_after(dict: &str, key: &str) -> Option<i64> {
+pub(super) fn number_after(dict: &str, key: &str) -> Option<i64> {
     let after = value_after(dict, key)?;
     let end = after.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(after.len());
     after[..end].parse().ok()
@@ -370,7 +370,7 @@ fn number_after(dict: &str, key: &str) -> Option<i64> {
 
 /// The numbers of the array written after `/key`, where one is. A key whose
 /// value is not an array answers nothing rather than the first number after it.
-fn array_after(dict: &str, key: &str) -> Option<Vec<i64>> {
+pub(super) fn array_after(dict: &str, key: &str) -> Option<Vec<i64>> {
     let after = value_after(dict, key)?;
     let inside = after.strip_prefix('[')?;
     let end = inside.find(']')?;
