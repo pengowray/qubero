@@ -1916,6 +1916,9 @@ button.insp-xrow-where:hover {
 .insp-orow-text {
   overflow-wrap: anywhere;
 }
+.insp-orow-cut {
+  color: var(--muted);
+}
 .insp-xproblem {
   font-size: 11px;
   color: var(--muted);

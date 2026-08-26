@@ -104,8 +104,8 @@ pub enum Explain {
         decoded_bytes: u64,
         /// Where the objects begin in the decompressed bytes, from `/First`.
         first: u64,
-        /// The object number in `/Extends`, where this stream continues
-        /// another. Not followed.
+        /// The object number in `/Extends`: the object stream this one is a
+        /// continuation of, where it is one. Not followed.
         extends: Option<u64>,
         /// The objects, up to [`OBJSTM_SHOWN`] of them, and how many the
         /// dictionary said there were.

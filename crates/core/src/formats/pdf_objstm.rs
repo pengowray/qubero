@@ -25,9 +25,9 @@
 //! arrangement as [`pdf_xref`](super::pdf_xref): the template leaves the
 //! compressed bytes whole and this says what they hold.
 //!
-//! What is not done. `/Extends`, which chains one object stream onto another
-//! so that a writer can append without rewriting, is read and reported but not
-//! followed. The objects are handed over as the text they are written in
+//! What is not done. `/Extends`, which names the object stream this one is a
+//! continuation of, is read and reported but not followed, so the objects in
+//! the stream it points back to are not listed here. The objects are handed over as the text they are written in
 //! rather than parsed into dictionaries: a reader who wants to see
 //! `/Type /Page` wants to see the bytes that say so, and a PDF object parser
 //! is a larger thing than this.
@@ -71,7 +71,8 @@ pub struct Stream {
     pub first: usize,
     /// How many bytes the stream came to once decompressed.
     pub decoded_bytes: usize,
-    /// The object number in `/Extends`, where this stream continues another.
+    /// The object number in `/Extends`: the object stream this one is a
+    /// continuation of, where it is one.
     pub extends: Option<u64>,
 }
 
@@ -92,9 +93,9 @@ impl Problem {
     /// One sentence, standing on its own.
     pub fn as_str(&self) -> String {
         match self {
-            Problem::Filter(f) => format!("{f} compression is not supported."),
+            Problem::Filter(f) => format!("{f} is not supported; the stream cannot be decompressed."),
             Problem::Compressed => "Decompression failed: the data is not valid zlib.".into(),
-            Problem::Header => "The stream dictionary has no /N and /First, so the objects cannot be found.".into(),
+            Problem::Header => "Missing /N and /First: the objects inside cannot be located.".into(),
             Problem::Pairs => "The object numbers at the front of the stream could not be read.".into(),
         }
     }

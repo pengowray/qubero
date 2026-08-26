@@ -24,7 +24,11 @@ function objectLine(o: ObjStmObject): HTMLElement {
   const line = document.createElement("div");
   line.className = "insp-orow";
   line.append(span("insp-orow-object", `${o.number.toLocaleString()} 0`));
-  line.append(span("insp-orow-text", o.cut ? `${o.text}…` : o.text));
+  const text = span("insp-orow-text", o.text);
+  // The ellipsis is grey and outside the object's own text, so an object that
+  // really does end in dots is not read as a cut one.
+  if (o.cut) text.append(span("insp-orow-cut", "…"));
+  line.append(text);
   return line;
 }
 
@@ -54,11 +58,14 @@ export function objstmBody(info: TypeInfo): DocumentFragment {
     return frag;
   }
 
-  frag.append(span("insp-qsubhead", "These objects are in the compressed data, not at offsets in the file."));
+  frag.append(span("insp-qsubhead", "These objects are stored in the compressed data and have no file offsets."));
 
   if (info.objstm_extends >= 0) {
     frag.append(
-      span("insp-qcount", `More objects continue in object ${info.objstm_extends.toLocaleString()} (/Extends).`),
+      span(
+        "insp-qcount",
+        `Extends object stream ${info.objstm_extends.toLocaleString()}; its objects are not listed here (/Extends).`,
+      ),
     );
   }
 
