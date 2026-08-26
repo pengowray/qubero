@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::pdf_xref;
+use crate::formats::{pdf_objstm, pdf_xref};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -93,9 +93,42 @@ pub enum Explain {
         /// Why there are no rows, where there are none.
         problem: Option<String>,
     },
+    /// An object stream, opened into the objects it holds. Shown for the
+    /// cursor anywhere in the object, because the objects inside are not bytes
+    /// of the file: what the reader is standing on is the compressed run they
+    /// came out of.
+    ObjStm {
+        /// How many bytes the run is in the file, and how many it came to once
+        /// decompressed.
+        packed_bytes: u64,
+        decoded_bytes: u64,
+        /// Where the objects begin in the decompressed bytes, from `/First`.
+        first: u64,
+        /// The object number in `/Extends`, where this stream continues
+        /// another. Not followed.
+        extends: Option<u64>,
+        /// The objects, up to [`OBJSTM_SHOWN`] of them, and how many the
+        /// dictionary said there were.
+        objects: Vec<pdf_objstm::Object>,
+        total: usize,
+        /// Why there are no objects, where there are none.
+        problem: Option<String>,
+    },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
+
+/// How many objects of an object stream are handed to a reader at once.
+pub const OBJSTM_SHOWN: usize = 256;
+
+/// How much of an object is read to find out whether it is an object stream.
+/// Its dictionary comes first and no real one runs longer than this, so an
+/// image object several megabytes long is passed over for the price of a page.
+const OBJSTM_DICT_PREFIX: u64 = 8 << 10;
+
+/// The largest compressed run this will open for a panel that is redrawn every
+/// time the cursor moves.
+const OBJSTM_PACKED_LIMIT: u64 = 4 << 20;
 
 /// How many rows of a cross-reference stream are handed to a reader at once.
 /// A table runs to one row an object, and a panel is not the place to read a
@@ -190,6 +223,9 @@ impl Evaluator {
             if &*packing == pdf_xref::PACKING {
                 return self.explain_xref(doc, at, &r);
             }
+            if &*packing == pdf_objstm::PACKING {
+                return self.explain_objstm(doc, at, &r);
+            }
             let Some(kind) = ggml_quant::by_name(&packing) else { continue };
             let bytes = self.read(doc, &r, r.offset, kind.block_bytes() as u64 * 8)?;
             let Some(block) = ggml_quant::unpack(kind, &bytes) else { continue };
@@ -260,6 +296,62 @@ impl Evaluator {
         let bytes = self.read(doc, &rr, rr.offset, packed_bits)?;
         Ok(match pdf_xref::decode(&dict, &bytes) {
             Ok(t) => answer(None, Some(t)),
+            Err(p) => answer(Some(p.as_str()), None),
+        })
+    }
+
+    /// An object stream opened. Every object in the file arrives here, because
+    /// only the dictionary inside one says whether it is an object stream, so
+    /// the first thing this does is read enough of the body to find out and
+    /// hand back `Plain` for the objects that are not.
+    fn explain_objstm<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved) -> R<Explain> {
+        let Ty::Struct(def) = &r.ty else { return Ok(Explain::Plain) };
+        let Some(b) = def.fields.iter().position(|f| &*f.name == "body") else { return Ok(Explain::Plain) };
+
+        let mut body_path = at.to_vec();
+        body_path.push(b);
+        self.resolve(doc, &body_path)?;
+        let body_bits = self.size_of(doc, &body_path)?;
+        let br = self.memo.get(&body_path).expect("resolved").clone();
+
+        // The dictionary and no more of the object than that. A body with no
+        // `stream` keyword in its first few kilobytes is not an object stream,
+        // and neither is one whose dictionary says it is something else.
+        let head = self.read(doc, &br, br.offset, body_bits.min(OBJSTM_DICT_PREFIX * 8))?;
+        let Some((dict, _)) = pdf_objstm::split_body(&head) else { return Ok(Explain::Plain) };
+        if !pdf_objstm::is_object_stream(dict) {
+            return Ok(Explain::Plain);
+        }
+
+        let packed_bytes = body_bits / 8;
+        let answer = |problem: Option<String>, s: Option<pdf_objstm::Stream>| {
+            let s = s.unwrap_or(pdf_objstm::Stream {
+                objects: Vec::new(),
+                claimed: 0,
+                first: 0,
+                decoded_bytes: 0,
+                extends: None,
+            });
+            Explain::ObjStm {
+                packed_bytes,
+                decoded_bytes: s.decoded_bytes as u64,
+                first: s.first as u64,
+                extends: s.extends,
+                total: s.objects.len(),
+                objects: s.objects.into_iter().take(OBJSTM_SHOWN).collect(),
+                problem,
+            }
+        };
+
+        if packed_bytes > OBJSTM_PACKED_LIMIT {
+            let mb = OBJSTM_PACKED_LIMIT / (1 << 20);
+            let msg = format!("The compressed data is over the {mb} MB limit and was not decompressed.");
+            return Ok(answer(Some(msg), None));
+        }
+        let body = self.read(doc, &br, br.offset, body_bits)?;
+        let Some((dict, data)) = pdf_objstm::split_body(&body) else { return Ok(Explain::Plain) };
+        Ok(match pdf_objstm::decode(dict, data) {
+            Ok(s) => answer(None, Some(s)),
             Err(p) => answer(Some(p.as_str()), None),
         })
     }

@@ -63,9 +63,13 @@
 //! and there are no nodes to read them from. An offset in that list is a real
 //! place in the file and can be gone to, which is as close as this gets.
 //!
-//! Nor is an *object stream* opened. A modern PDF keeps most of its small
-//! objects compressed together inside one, which is what a row of type 2
-//! names, so the objects that reach the tree at all are the large ones.
+//! An *object stream* is opened, but beside the tree rather than in it. A
+//! modern PDF keeps most of its small objects compressed together inside one,
+//! which is what a row of type 2 names, so the objects that reach the tree at
+//! all are the large ones. Every object is marked with the object-stream
+//! packing and [`pdf_objstm`](super::pdf_objstm) decides which of them is one:
+//! the objects inside are text rather than fields, for the same reason the
+//! cross-reference rows are.
 //!
 //! The `/Prev` chain an incrementally saved or linearized file leaves behind
 //! is not followed either, in either shape, so only the most recent table is
@@ -384,6 +388,10 @@ fn object() -> T {
         ],
     )
     .counted_as("object")
+    // Every object, because nothing outside an object says which of them is an
+    // object stream: the dictionary inside it does, and that is read where the
+    // packing is unpacked rather than where the field is placed.
+    .packed_as(super::pdf_objstm::PACKING)
 }
 
 /// A number written as digits, with the white space in front of it and the one
@@ -769,5 +777,70 @@ mod tests {
         };
         assert_eq!(total, 0);
         assert_eq!(problem, Some("LZWDecode compression is not supported.".into()));
+    }
+
+    /// A file whose fourth object is an object stream holding two more. The
+    /// table places the stream, and the two inside it are nowhere in the file
+    /// on their own, which is the whole point of the shape.
+    fn pdf_with_object_stream() -> Vec<u8> {
+        let inside = [(5u64, "<</Type/Page/Parent 2 0 R>>"), (6, "<</Type/Font/BaseFont/Helvetica>>")];
+        let mut pairs = String::new();
+        let mut objs = String::new();
+        for (n, body) in inside {
+            pairs.push_str(&format!("{n} {} ", objs.len()));
+            objs.push_str(body);
+            objs.push(' ');
+        }
+        let first = pairs.len();
+        let packed = miniz_oxide::deflate::compress_to_vec_zlib(format!("{pairs}{objs}").as_bytes(), 6);
+        let stm = format!("<</Type/ObjStm/N 2/First {first}/Length {}/Filter/FlateDecode>>", packed.len());
+
+        let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] >>", "<< /Type /Page >>"];
+        let mut v = b"%PDF-1.7\n".to_vec();
+        let mut at = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            at.push(v.len());
+            v.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        at.push(v.len());
+        v.extend_from_slice(format!("4 0 obj\n{stm}\nstream\n").as_bytes());
+        v.extend_from_slice(&packed);
+        v.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let table = v.len();
+        v.extend_from_slice(format!("xref\n0 {}\n", at.len() + 1).as_bytes());
+        v.extend_from_slice(b"0000000000 65535 f \n");
+        for a in &at {
+            v.extend_from_slice(format!("{a:010} 00000 n \n").as_bytes());
+        }
+        v.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R >>\n");
+        v.extend_from_slice(format!("startxref\n{table}\n%%EOF").as_bytes());
+        v
+    }
+
+    /// The objects a stream holds are read out of it and named, and an object
+    /// that is not a stream is left alone.
+    #[test]
+    fn an_object_stream_gives_up_the_objects_inside_it() {
+        use crate::eval::Explain;
+        let d = Document::new(MemSource(pdf_with_object_stream()));
+        let mut ev = Evaluator::new(pdf());
+        // The heading and the free entry place nothing, so object one is third.
+        assert_eq!(ev.node(&d, &[9, 2, 0]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[9, 5, 0]).unwrap().value, Value::Int(4));
+
+        let Explain::ObjStm { objects, total, problem, decoded_bytes, .. } = ev.explain(&d, &[9, 5], None).unwrap()
+        else {
+            panic!("the fourth object is an object stream")
+        };
+        assert_eq!(problem, None);
+        assert_eq!(total, 2);
+        assert!(decoded_bytes > 0);
+        assert_eq!(objects.iter().map(|o| o.number).collect::<Vec<_>>(), vec![5, 6]);
+        assert_eq!(objects[0].text, "<</Type/Page/Parent 2 0 R>>");
+        assert_eq!(objects[1].text, "<</Type/Font/BaseFont/Helvetica>>");
+
+        // An ordinary object has no stream in it and nothing extra to say.
+        assert_eq!(ev.explain(&d, &[9, 2], None).unwrap(), Explain::Plain);
     }
 }
