@@ -130,6 +130,15 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    /// One when the first is less than the second, and zero otherwise.
+    ///
+    /// There is no `if` here and this is not one. It is a number like any
+    /// other, and what makes it useful is `Or`, which takes its right side
+    /// only when its left side is zero: `a.less_than(b).or(c)` answers `c`
+    /// while `a` is the larger, and stops at 1 once `a` is smaller. That is
+    /// how a template asks a question it cannot afford to ask twice, such as
+    /// looking ahead twenty bytes when fewer than twenty are left.
+    Less(Box<Expr>, Box<Expr>),
 }
 
 impl Expr {
@@ -224,6 +233,10 @@ impl Expr {
     }
     pub fn div(self, rhs: Expr) -> Expr {
         Expr::Div(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is less than `rhs`, and zero otherwise.
+    pub fn less_than(self, rhs: Expr) -> Expr {
+        Expr::Less(Box::new(self), Box::new(rhs))
     }
 }
 

@@ -241,6 +241,9 @@ impl Evaluator {
             Expr::Add(a, b) => self.eval_expr_at(doc, at, a, here)? + self.eval_expr_at(doc, at, b, here)?,
             Expr::Sub(a, b) => self.eval_expr_at(doc, at, a, here)? - self.eval_expr_at(doc, at, b, here)?,
             Expr::Mul(a, b) => self.eval_expr_at(doc, at, a, here)? * self.eval_expr_at(doc, at, b, here)?,
+            Expr::Less(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? < self.eval_expr_at(doc, at, b, here)?)
+            }
             Expr::Div(a, b) => {
                 let d = self.eval_expr_at(doc, at, b, here)?;
                 if d == 0 {

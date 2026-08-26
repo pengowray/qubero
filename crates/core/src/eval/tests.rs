@@ -1501,3 +1501,61 @@ fn the_last_of_a_word_is_read_from_the_end_of_a_file_that_arrives_in_pieces() {
     assert_eq!(value, Value::Int(at as i128));
     assert!(fetched <= 4, "the end of the file is all that is read: {fetched} blocks fetched");
 }
+/// `Less` is one or zero, and `Or` after it is what makes that a choice: the
+/// look-ahead on its right is never read while the left says there is no room
+/// for one.
+#[test]
+fn less_than_answers_one_or_zero_and_or_stops_at_the_one() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("head", T::u8()),
+                ("short", T::computed(E::Remaining.less_than(E::lit(4)))),
+                ("long", T::computed(E::lit(4).less_than(E::Remaining))),
+                // The right side reads the byte four along, which a two-byte
+                // file does not have. It is never asked for there, because
+                // the left side has already answered one.
+                ("guarded", T::computed(E::Remaining.less_than(E::lit(4)).or(E::peek_at(E::lit(4 * 8), 8, Big)))),
+            ],
+        ),
+    );
+    // One byte left after the head: too short, and the peek is not made.
+    let mut ev = Evaluator::new(t.clone());
+    let d = doc(b"ab");
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Int(1));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Int(0));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Int(1));
+
+    // Five bytes left: room for the peek, which reads the byte it found.
+    let mut ev = Evaluator::new(t);
+    let d = doc(b"abcdef");
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Int(0));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Int(1));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Int(i128::from(b'f')));
+
+    // Equal is not less, either way round.
+    let both = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("head", T::u8()),
+                ("short", T::computed(E::Remaining.less_than(E::lit(4)))),
+                ("long", T::computed(E::lit(4).less_than(E::Remaining))),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(both);
+    let d = doc(b"abcde");
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Int(0));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Int(0));
+
+    // Negative numbers compare as numbers, not as the bytes they came from.
+    let mut ev = Evaluator::new(Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::computed(E::lit(-3).less_than(E::lit(2))))]),
+    ));
+    assert_eq!(ev.node(&doc(b"x"), &[0]).unwrap().value, Value::Int(1));
+}

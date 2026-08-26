@@ -219,7 +219,7 @@ impl Evaluator {
 pub(super) fn uniform(e: &Expr) -> bool {
     match e {
         Expr::Lit(_) | Expr::Ref(_) => true,
-        Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Or(a, b) => {
+        Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Or(a, b) | Expr::Less(a, b) => {
             uniform(a) && uniform(b)
         }
         // Remaining and Idx count from the element; the peeks read it; Prev,

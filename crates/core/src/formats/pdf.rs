@@ -147,8 +147,8 @@ fn line() -> T {
     T::switch(too_short_for_an_entry().or(letter_somewhere()), vec![(0, entry())], heading())
 }
 
-/// Zero while twenty bytes of table are left, and something else once fewer
-/// than that are.
+/// One when less than twenty bytes of table are left, and zero while an entry
+/// would still fit.
 ///
 /// A look-ahead that reads past the end of the table is an error, and it takes
 /// the table, the trailer and every object with it. There is a table that ends
@@ -159,11 +159,10 @@ fn line() -> T {
 /// bytes behind it to look into.
 ///
 /// A line too short to be an entry is a heading whatever its bytes say, so the
-/// answer is known without looking and `Or` is what stops the looking: it takes
-/// the second of the two only when the first is zero. Twenty divided by what is
-/// left is that test, since a division rounds towards nothing.
+/// answer is known without looking, and `Or` is what stops the looking: it
+/// takes the second of the two only when the first is zero.
 fn too_short_for_an_entry() -> E {
-    E::lit(20).div(E::Remaining.add(E::lit(1)))
+    E::Remaining.less_than(E::lit(20))
 }
 
 /// Zero when one of the three bytes an entry's letter could be written at is
