@@ -53,7 +53,9 @@ export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): Op
       });
     }
     if (method === 8) {
-      const grows = unpacked !== null && unpacked !== packed ? `, unpacks to ${formatBytes(unpacked)}` : "";
+      // Zero means the header does not say, as a streamed entry's does not:
+      // its real size is in the data descriptor after the data.
+      const grows = unpacked !== null && unpacked !== 0 && unpacked !== packed ? `, unpacks to ${formatBytes(unpacked)}` : "";
       return withLimit(Math.max(packed, unpacked ?? 0), {
         name: entry,
         detail: `${entry} · deflate, ${formatBytes(packed)}${grows}`,
@@ -74,7 +76,7 @@ export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): Op
     const stored = leafName(textField(doc, siblings, "name"));
     const name = stored ?? gzipInnerName(doc.name);
     const unpacked = numberField(siblings, "original_size");
-    const grows = unpacked !== null && unpacked !== packed ? `, unpacks to ${formatBytes(unpacked)}` : "";
+    const grows = unpacked !== null && unpacked !== 0 && unpacked !== packed ? `, unpacks to ${formatBytes(unpacked)}` : "";
     return withLimit(Math.max(packed, unpacked ?? 0), {
       name,
       detail: `${name} · deflate, ${formatBytes(packed)}${grows}`,
