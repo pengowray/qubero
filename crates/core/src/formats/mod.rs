@@ -27,6 +27,7 @@ mod mca;
 mod midi;
 mod mp4;
 mod nes;
+mod old_mac;
 mod pak;
 mod pcx;
 mod pdf;
@@ -73,6 +74,7 @@ pub use mca::mca;
 pub use midi::midi;
 pub use mp4::mp4;
 pub use nes::nes;
+pub use old_mac::{binhex, compactpro, macbinary, stuffit};
 pub use pe::pe;
 pub use pak::pak;
 pub use pcx::pcx;
@@ -110,7 +112,7 @@ pub fn omezarr() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "bardstale"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -158,6 +160,10 @@ pub fn builtin(name: &str) -> Option<Template> {
         "hdf5" => Some(hdf5()),
         "appledouble" => Some(appledouble()),
         "applesingle" => Some(applesingle()),
+        "macbinary" => Some(macbinary()),
+        "binhex" => Some(binhex()),
+        "stuffit" => Some(stuffit()),
+        "compactpro" => Some(compactpro()),
         "bardstale" => Some(bards_tale()),
         _ => None,
     }
@@ -218,7 +224,15 @@ const MAGIC: &[(&[u8], &str)] = &[
 /// also the size and checksum an LHA archive could open with, and only one of
 /// the two knows enough to say so.
 pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
-    if is_bards_tale(head, len) {
+    if is_macbinary(head, len) {
+        Some("macbinary")
+    } else if is_binhex(head) {
+        Some("binhex")
+    } else if is_stuffit(head) {
+        Some("stuffit")
+    } else if is_compactpro(head, len) {
+        Some("compactpro")
+    } else if is_bards_tale(head, len) {
         Some("bardstale")
     } else if is_mca(head, len) {
         Some("mca")
@@ -262,6 +276,31 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn is_macbinary(head: &[u8], len: u64) -> bool {
+    if head.len() < 128 || head[0] != 0 || head[74] != 0 || !(1..=63).contains(&head[1]) { return false; }
+    let be32 = |at: usize| u32::from_be_bytes(head[at..at + 4].try_into().expect("four bytes")) as u64;
+    let be16 = |at: usize| u16::from_be_bytes(head[at..at + 2].try_into().expect("two bytes")) as u64;
+    let blocks = |n: u64| n.saturating_add(127) / 128 * 128;
+    128u64.saturating_add(blocks(be16(120))).saturating_add(blocks(be32(83))).saturating_add(blocks(be32(87))).saturating_add(blocks(be16(99))) <= len
+}
+
+fn is_binhex(head: &[u8]) -> bool {
+    head.windows(40).any(|w| w == b"(This file must be converted with BinHex")
+}
+
+fn is_stuffit(head: &[u8]) -> bool {
+    const SIGS: [&[u8; 4]; 9] = [b"SIT!", b"ST46", b"ST50", b"ST60", b"ST65", b"STin", b"STi2", b"STi3", b"STi4"];
+    let classic = head.get(10..14) == Some(b"rLau") && head.get(..4).is_some_and(|s| SIGS.iter().any(|magic| s == *magic));
+    let sit5 = head.starts_with(b"StuffIt (c)1997-") && head.get(20..78) == Some(b" Aladdin Systems, Inc., http://www.aladdinsys.com/StuffIt/");
+    classic || sit5
+}
+
+fn is_compactpro(head: &[u8], len: u64) -> bool {
+    let Some(raw) = head.get(4..8) else { return false };
+    let directory = u32::from_be_bytes(raw.try_into().expect("four bytes")) as u64;
+    head.get(..2) == Some(&[1, 1]) && (8..len).contains(&directory)
 }
 
 /// Whether these bytes are a Bard's Tale I DOS `.TPW` file.

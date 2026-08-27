@@ -159,21 +159,22 @@ fn info() -> T {
 /// The Finder's flags, by the names the Carbon headers give them.
 const FINDER_FLAGS: &[(u32, &str)] = &[
     (0, "is on desk"),
-    (7, "shared"),
-    (8, "has no INITs"),
-    (9, "has been inited"),
-    (11, "has custom icon"),
-    (12, "stationery"),
-    (13, "name locked"),
-    (14, "has bundle"),
-    (15, "invisible"),
+    (6, "shared"),
+    (7, "has no INITs"),
+    (8, "has been inited"),
+    (10, "has custom icon"),
+    (11, "stationery"),
+    (12, "name locked"),
+    (13, "has bundle"),
+    (14, "invisible"),
+    (15, "alias"),
 ];
 
 /// The flags the Finder keeps in the second half of the block.
 const EXT_FINDER_FLAGS: &[(u32, &str)] = &[
-    (6, "extended flags are invalid"),
-    (7, "has custom badge"),
-    (15, "object is busy"),
+    (7, "object is busy"),
+    (8, "has custom badge"),
+    (15, "extended flags are invalid"),
 ];
 
 /// The block of extended attributes: its own head over the AppleDouble
@@ -412,5 +413,33 @@ mod tests {
         assert_eq!(count.value, Value::Int(-1));
         // The fork begins at 173, its map 256 into that, the count 28 into the map.
         assert_eq!(count.offset_bits, (173 + 256 + 28) * 8);
+    }
+
+    #[test]
+    fn finder_flag_bits_match_the_classic_mac_constants() {
+        let mut b = vec![0u8; 32];
+        b[8..10].copy_from_slice(&0x64c0u16.to_be_bytes());
+        b[24..26].copy_from_slice(&0x8180u16.to_be_bytes());
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(Template::new("finder", info()));
+        let Value::Flags { set, unnamed, .. } = ev.node(&d, &[2]).unwrap().value else { panic!("not flags") };
+        assert_eq!(set, ["shared", "has no INITs", "has custom icon", "has bundle", "invisible"]);
+        assert_eq!(unnamed, 0);
+        let Value::Flags { set, unnamed, .. } = ev.node(&d, &[7]).unwrap().value else { panic!("not flags") };
+        assert_eq!(set, ["object is busy", "has custom badge", "extended flags are invalid"]);
+        assert_eq!(unnamed, 0);
+    }
+
+    #[test]
+    fn dot_underscore_ds_store_reads_as_appledouble() {
+        // `._.DS_Store` has no special wrapper of its own: it is precisely an
+        // AppleDouble sidecar with Finder info and (usually) a resource fork.
+        // Keep this named case so it cannot regress behind generic `._` tests.
+        let v = appledouble_file();
+        assert_eq!(crate::formats::sniff(&v, v.len() as u64), Some("appledouble"));
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(appledouble());
+        assert_eq!(ev.node(&d, &[5]).unwrap().child_count, 2);
+        assert!(ev.node(&d, &[5, 1, 7, 0]).is_ok());
     }
 }

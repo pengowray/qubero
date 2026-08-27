@@ -133,4 +133,3 @@ pub fn weights(ty: E, weights_in: &dyn Fn() -> E) -> T {
         T::bytes(E::Remaining),
     )
 }
-

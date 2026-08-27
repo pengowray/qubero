@@ -222,4 +222,3 @@ pub const COM_IMAGE_FLAGS: &[(u32, &str)] = &[
     (4, "native entrypoint"),
     (16, "trackdebugdata"),
 ];
-
