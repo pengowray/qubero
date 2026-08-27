@@ -18,6 +18,7 @@ const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.
 const TEMPLATE_LABEL: Record<string, string> = {
   bardstale: "Bard's Tale I (DOS save)",
   lnk: "Windows shortcut",
+  omezarr: "OME-Zarr metadata",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */

@@ -24,7 +24,7 @@ let say: (text: string, warn?: boolean) => void = () => {};
 
 const DROP_TITLE = "Drop to open";
 const DROP_HINT = "or drop a file anywhere on this page";
-const FOLDER_MSG = "Can't open folders. Drop a single file.";
+const FOLDER_MSG = "To open an OME-Zarr folder, use Open OME-Zarr.";
 const manyFilesMsg = (name: string, ignored: number): string =>
   `Opened ${name}. Ignored ${ignored} other ${ignored === 1 ? "file" : "files"}.`;
 const discardMsg = (open: string, next: string): string =>
@@ -554,15 +554,39 @@ function pick(): void {
   input.click();
 }
 
+/** Pick an OME-Zarr directory and open its root NGFF metadata document. */
+function pickOmeZarr(): void {
+  const input = el("input", { type: "file" });
+  input.setAttribute("webkitdirectory", "");
+  input.addEventListener("change", () => {
+    const files = Array.from(input.files ?? []);
+    // A root .zattrs carries multiscales for v0.1--0.4; v0.5 uses zarr.json.
+    // Nested metadata describes an array, not the OME-Zarr image store.
+    const metadata = files.find((f) => {
+      const parts = f.webkitRelativePath.replace(/\\/g, "/").split("/");
+      return parts.length === 2 && (f.name === ".zattrs" || f.name === "zarr.json");
+    });
+    if (metadata === undefined) {
+      say("This folder has no root OME-Zarr metadata (.zattrs or zarr.json).", true);
+      return;
+    }
+    openFile(metadata, `Opened OME-Zarr metadata from ${metadata.webkitRelativePath}.`);
+  });
+  input.click();
+}
+
 function welcome(): void {
   const openBtn = el("button", { type: "button", textContent: "Open a file", className: "primary" });
   openBtn.addEventListener("click", pick);
+  const openOmeZarrBtn = el("button", { type: "button", textContent: "Open OME-Zarr", className: "secondary" });
+  openOmeZarrBtn.addEventListener("click", pickOmeZarr);
   const drop = el(
     "div",
     { className: "welcome" },
     el("h1", { textContent: "Qubero" }),
     el("p", { textContent: "A hex editor for files of any size. Nothing leaves your device." }),
     openBtn,
+    openOmeZarrBtn,
     el("p", { className: "hint", textContent: DROP_HINT }),
   );
   app.replaceChildren(drop);

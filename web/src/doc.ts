@@ -19,6 +19,15 @@ const CHUNK_CAPACITY = 512; // 32 MiB resident at most
 // file, which nothing here can answer.
 const IDENTIFY_WINDOW = 64 * 1024;
 
+/** The OME-NGFF keys that distinguish an OME-Zarr metadata JSON document from
+ * an ordinary Zarr store record. */
+function isOmeZarrMetadata(name: string, bytes: Uint8Array): boolean {
+  const leaf = name.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+  if (leaf !== ".zattrs" && leaf !== "zarr.json") return false;
+  const text = new TextDecoder().decode(bytes);
+  return /"(?:multiscales|ome)"\s*:/.test(text);
+}
+
 type MagicModule = typeof import("./pkg-magic/qubero_magic.js");
 let magic: Promise<MagicModule> | null = null;
 
@@ -667,7 +676,11 @@ export class Doc {
     const n = Math.min(8192, this.lengthBytes);
     if (n === 0) return null;
     await this.ensureRange(0, n);
-    const name = this.editor.sniff_template(this.read(0, n).bytes, this.lengthBytes);
+    const head = this.read(0, n).bytes;
+    // An OME-Zarr store is a directory, so its identifying record is JSON
+    // metadata rather than a byte signature.
+    if (isOmeZarrMetadata(this.name, head)) return "omezarr";
+    const name = this.editor.sniff_template(head, this.lengthBytes);
     return name === "" ? null : name;
   }
 

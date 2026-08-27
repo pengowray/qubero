@@ -102,8 +102,15 @@ pub fn json() -> Template {
     Template::new("json", Ty::json())
 }
 
+/// OME-Zarr metadata is JSON. Keeping it as its own template makes the
+/// store's root metadata identifiable without inventing a binary layout for
+/// the separately stored Zarr chunks.
+pub fn omezarr() -> Template {
+    Template::new("omezarr", Ty::json())
+}
+
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "bardstale"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -122,6 +129,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "whisper" => Some(whisper()),
         "safetensors" => Some(safetensors()),
         "json" => Some(json()),
+        "omezarr" => Some(omezarr()),
         "bmp" => Some(bmp()),
         "pcx" => Some(pcx()),
         "tga" => Some(tga()),
