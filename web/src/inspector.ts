@@ -11,7 +11,7 @@ import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { bitSizeText, childWord, countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
-import { openPlan, type OpenPlan } from "./openplan.js";
+import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
 import { extraction } from "./bitextract.js";
 import { crc32, hex32, hexBytes, lhaCrc16, sha1, sum8 } from "./integrity.js";
 
@@ -704,7 +704,7 @@ export class Inspector {
       const data = siblings.find((x) => x.name === "data");
       const uncompressedSize = siblings.find((x) => x.name === "uncompressed_size");
       if (compression === undefined || data === undefined || data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
-      const method = Number(compression.edit_text);
+      const method = fieldNumber(compression);
       const packedBytes = data.size_bits / 8;
       const coveredBytes = uncompressedSize === undefined ? packedBytes : Number(uncompressedSize.edit_text);
       if (method !== 0 && method !== 8) return null;
@@ -783,7 +783,7 @@ export class Inspector {
       const expected = Number(n.edit_text);
       // -lh0- is the stored method; compressed LHA methods need their own
       // decoders before their CRC of the uncompressed file can be checked.
-      if (method === undefined || Number(method.edit_text) !== 0x2d_6c_68_30_2d || data === undefined || !Number.isFinite(expected)) return null;
+      if (method === undefined || fieldNumber(method) !== 0x2d_6c_68_30_2d || data === undefined || !Number.isFinite(expected)) return null;
       if (data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
       const bytes = data.size_bits / 8;
       return {

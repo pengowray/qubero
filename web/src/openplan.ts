@@ -107,7 +107,11 @@ function siblingNodes(doc: Doc, path: readonly number[]): readonly TemplateNode[
 
 function numberField(siblings: readonly TemplateNode[], name: string): number | null {
   const f = siblings.find((x) => x.name === name);
-  if (f === undefined) return null;
+  return f === undefined ? null : fieldNumber(f);
+}
+
+/** The field's numeric value, or null when there is none. */
+export function fieldNumber(f: TemplateNode): number | null {
   const v = Number(f.edit_text);
   if (Number.isFinite(v) && f.edit_text !== "") return v;
   // An enum's edit text is the value's name; the number rides in its shown
