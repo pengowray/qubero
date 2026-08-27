@@ -67,6 +67,10 @@ impl Evaluator {
                 let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
                 self.add_up(doc, &p, name)?
             }
+            Expr::MaxOf(name) => {
+                let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
+                self.maximum(doc, &p, name)?
+            }
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
                 (None, _) => return fail(format!("{name} is not a number")),
@@ -249,6 +253,21 @@ impl Evaluator {
             total = next;
         }
         Ok(total)
+    }
+
+    /// The largest number in a list. An empty list answers zero.
+    fn maximum<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<i128> {
+        let n = self.child_count(doc, path)?;
+        let mut largest = 0i128;
+        let mut child = path.to_vec();
+        for i in 0..n as usize {
+            child.push(i);
+            let value = self.node(doc, &child)?.value.as_int();
+            child.pop();
+            let Some(value) = value else { return fail(format!("{what} holds no number there")) };
+            largest = largest.max(value);
+        }
+        Ok(largest)
     }
 
     /// Field `name` of the element before this one, in the nearest enclosing

@@ -20,13 +20,17 @@ const TEMPLATE_LABEL: Record<string, string> = {
   bardstale: "Bard's Tale I (DOS save)",
   cr2: "Canon CR2",
   dng: "Adobe DNG",
+  it: "Impulse Tracker IT",
   lnk: "Windows shortcut",
+  mod: "ProTracker MOD",
   nef: "Nikon NEF",
   omezarr: "OME-Zarr metadata",
   orf: "Olympus ORF",
   pef: "Pentax PEF",
   rw2: "Panasonic RW2",
   srw: "Samsung SRW",
+  s3m: "Scream Tracker S3M",
+  xm: "FastTracker XM",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */

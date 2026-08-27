@@ -58,6 +58,9 @@ pub enum Expr {
     /// segment writes how many codes there are of each of the sixteen
     /// lengths, and then that many symbols, without ever writing the total.
     SumOf(Arc<str>),
+    /// The largest number in an earlier array. Tracker modules keep their
+    /// pattern count implicitly as the greatest entry in the order table.
+    MaxOf(Arc<str>),
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     ///
@@ -198,6 +201,11 @@ impl Expr {
     /// The numbers of the earlier array field `name`, added up.
     pub fn sum_of(name: &str) -> Expr {
         Expr::SumOf(name.into())
+    }
+    /// The largest number in the earlier array field `name`, or zero when it
+    /// is empty.
+    pub fn max_of(name: &str) -> Expr {
+        Expr::MaxOf(name.into())
     }
     /// The next `bits` bits without consuming them, read the given way round.
     pub fn peek(bits: u32, endian: Endian) -> Expr {

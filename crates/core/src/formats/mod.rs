@@ -45,6 +45,7 @@ mod swf;
 mod tap;
 mod tga;
 mod tiff;
+mod tracker;
 mod vpk;
 mod w4v;
 mod wad;
@@ -91,6 +92,7 @@ pub use swf::swf;
 pub use tap::tap;
 pub use tga::tga;
 pub use tiff::{camera_raw, tiff};
+pub use tracker::{it, mod_file, s3m, xm};
 pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
@@ -116,7 +118,7 @@ pub fn omezarr() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "swf", "zip", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
+    &["png", "swf", "zip", "wasm", "mp4", "id3", "wav", "w4v", "midi", "mod", "s3m", "xm", "it", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -130,6 +132,10 @@ pub fn builtin(name: &str) -> Option<Template> {
         "wav" => Some(wav()),
         "w4v" => Some(w4v()),
         "midi" => Some(midi()),
+        "mod" => Some(mod_file()),
+        "s3m" => Some(s3m()),
+        "xm" => Some(xm()),
+        "it" => Some(it()),
         "sqlite" => Some(sqlite()),
         "pe" => Some(pe()),
         "msdos" => Some(dos()),
@@ -236,7 +242,15 @@ const MAGIC: &[(&[u8], &str)] = &[
 /// also the size and checksum an LHA archive could open with, and only one of
 /// the two knows enough to say so.
 pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
-    if is_macbinary(head, len) {
+    if head.starts_with(b"Extended Module: ") {
+        Some("xm")
+    } else if head.starts_with(b"IMPM") {
+        Some("it")
+    } else if is_s3m(head) {
+        Some("s3m")
+    } else if is_mod(head) {
+        Some("mod")
+    } else if is_macbinary(head, len) {
         Some("macbinary")
     } else if is_binhex(head) {
         Some("binhex")
@@ -290,6 +304,17 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn is_s3m(head: &[u8]) -> bool {
+    head.get(28) == Some(&0x1a) && head.get(29) == Some(&16) && head.get(44..48) == Some(b"SCRM")
+}
+
+fn is_mod(head: &[u8]) -> bool {
+    let Some(sig) = head.get(1080..1084) else { return false };
+    matches!(sig, b"M.K." | b"M!K!" | b"M&K!" | b"FLT4" | b"FLT8" | b"4CHN" | b"6CHN" | b"8CHN" | b"OKTA" | b"CD81")
+        || (sig[0].is_ascii_digit() && sig[1..] == *b"CHN")
+        || (sig[..2].iter().all(u8::is_ascii_digit) && matches!(&sig[2..], b"CH" | b"CN"))
 }
 
 /// Identify the TIFF-based camera RAW formats whose bytes distinguish them.

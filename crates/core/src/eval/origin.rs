@@ -229,7 +229,7 @@ impl Evaluator {
                     out.push(o);
                 }
             }
-            Expr::ProductOf(name) => {
+            Expr::ProductOf(name) | Expr::SumOf(name) | Expr::MaxOf(name) => {
                 if let Some(p) = self.find_field(at, name) {
                     let mut o = self.origin(doc, role, name.to_string(), p);
                     o.value = self.eval_expr(doc, at, e)?.to_string();
