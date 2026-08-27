@@ -275,6 +275,9 @@ The type table (`web/src/typetable.ts`) edits values in place with this. It rebu
 its rows from scratch on every document change, so the open input is re-created each
 render with its text and caret restored; a committed edit can restructure the tree
 (change a count, flip a switch) and the edited row may simply not exist afterwards.
+`Open visible sections` expands one visible level at a time with bounded previews,
+so an overview does not accidentally draw a million-element list. Expanded
+composites also show undefined gaps with the same offset and length as Listing.
 The inspector's per-type lenses are the same idea in TS, but they cannot serve the
 table: they are byte-aligned and `DataView`-sized, while a template field can be three
 bits at an odd offset. Core owns encoding; the inspector's lenses stay where they are
@@ -345,7 +348,10 @@ first of them and the wanted ones are the last.
 Headings come from the trail of enclosing structures. Entering several at once
 is one heading rather than one per level, because five rows reading `sections[9]`,
 `body`, `entries[0]`, `body`, `code` push the fields off the screen to say what
-one row can say.
+one row can say. Top-level headings are larger and carry more space than nested
+ones, while field rows keep a fixed scroll unit. On touch, vertical movement
+advances those virtual rows and horizontal movement remains the native column
+scroll.
 
 The bytes are shown as text as well, but only where they read as text: three
 bytes or more, and mostly printable. A one-byte count of 65 beside an `A`
@@ -426,12 +432,12 @@ otherwise be 512 entries saying `[0]`, `[1]`, `[2]`, which is less information
 than one saying `codes  512 values`. Text repeats are not collapsed, because
 GUANO lines are each worth reading.
 
-Colour comes from the field's path, not from its position on screen, so
-scrolling never repaints the file in different colours. Six hues, and the name
-is always on the chip, so colour is never the only signal. Selection and the
-cursor are painted after the tints and keep the upper hand where they overlap;
-the tints themselves are deliberately weak against the background (about 1.6:1)
-because they sit under hex digits that have to stay readable.
+Colour describes the field's data family, not its arbitrary path, so
+numbers, text, markers, named categories, structures and opaque bytes keep the
+same small colour vocabulary in every view. The hex grid colours digits and a
+hairline rather than filling the byte: neutral fill remains selection, accent
+fill plus underline remains the active field, and an outline remains the
+cursor. A short vertical hairline marks field boundaries.
 
 How many chips fit is worked out from the text before any are drawn, from the
 column width measured on the previous frame, and what is left over is counted

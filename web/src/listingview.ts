@@ -6,9 +6,10 @@
 // can know how many rows a file has without walking all of it, and `spans` is
 // windowed by bit range, which is the same shape.
 
-import { formatOffset } from "./doc.js";
+import { formatBytes, formatOffset } from "./doc.js";
 import { bitSizeText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
 import type { Doc, Span } from "./doc.js";
+import { fieldClass } from "./fieldstyle.js";
 
 /** Rows fetched beyond the ones on screen, so a wheel notch has somewhere to
  *  go before the next fetch. */
@@ -125,6 +126,13 @@ export class ListingView {
   private rowHeight = 20;
   private selected: string | null = null;
   private dragging = false;
+  /** A vertical touch drag. Horizontal movement remains the body's native
+   * column scroll; `touch-action: pan-x` lets the browser choose between them. */
+  private touch: { readonly id: number; y: number; remainder: number; moved: boolean } | null = null;
+  private suppressClick = false;
+  /** Explanation from the latest span request while a large variable-length
+   * structure is being mapped. */
+  private workStatus = "";
   /** Where the cursor went while this view was hidden. */
   private pendingBit: number | null = null;
   /** Whether the file's first bytes matched a template, which decides what an
@@ -162,6 +170,10 @@ export class ListingView {
     this.el.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     this.el.addEventListener("keydown", (e) => this.onKey(e));
     this.rowsEl.addEventListener("click", (e) => this.onClick(e));
+    this.el.addEventListener("pointerdown", (e) => this.onTouchDown(e));
+    this.el.addEventListener("pointermove", (e) => this.onTouchMove(e));
+    this.el.addEventListener("pointerup", (e) => this.onTouchUp(e));
+    this.el.addEventListener("pointercancel", (e) => this.onTouchUp(e));
     this.track.addEventListener("pointerdown", (e) => this.onTrackDown(e));
     this.track.addEventListener("pointermove", (e) => this.onTrackMove(e));
     this.track.addEventListener("pointerup", (e) => this.onTrackUp(e));
@@ -175,7 +187,9 @@ export class ListingView {
       this.pendingBit = null;
       this.setBit(bit);
     }
-    const probe = this.rowsEl.firstElementChild as HTMLElement | null;
+    // Headings are deliberately taller than data rows; the scroll unit remains
+    // one field row so a touch or wheel step does not change speed at a section.
+    const probe = this.rowsEl.querySelector<HTMLElement>(".lv-row:not(.lv-heading)");
     const h = probe?.getBoundingClientRect().height ?? 0;
     if (h > 0) this.rowHeight = h;
     this.visibleRows = Math.max(1, Math.floor(this.rowsEl.clientHeight / this.rowHeight));
@@ -225,7 +239,19 @@ export class ListingView {
    *  sit inside change. */
   private rowsFrom(bit: number, want: number): Row[] {
     const r = this.doc.spans(bit, this.doc.lengthBits, want);
-    if (r.status !== "ok") return [];
+    if (r.status !== "ok") {
+      if (r.status === "working") {
+        const reached = Math.min(this.doc.lengthBytes, r.reachedBytes);
+        const percent = this.doc.lengthBytes === 0 ? 100 : Math.floor((reached / this.doc.lengthBytes) * 100);
+        this.workStatus = `Estimating field lengths… ${formatBytes(reached)} of ${formatBytes(this.doc.lengthBytes)} (${percent}%)`;
+      } else if (r.status === "pending") {
+        this.workStatus = "Loading bytes needed to map these fields…";
+      } else {
+        this.workStatus = r.message;
+      }
+      return [];
+    }
+    this.workStatus = "";
     const rows: Row[] = [];
     let previous: string[] = [];
     for (const s of r.node) {
@@ -309,6 +335,11 @@ export class ListingView {
   }
 
   private onClick(e: MouseEvent): void {
+    if (this.suppressClick) {
+      this.suppressClick = false;
+      e.preventDefault();
+      return;
+    }
     const row = (e.target as HTMLElement).closest(".lv-row") as HTMLElement | null;
     const key = row?.dataset["path"];
     if (row === null || key === undefined) return;
@@ -320,6 +351,33 @@ export class ListingView {
       startBit: start,
       endBit: start + Number(row.dataset["size"] ?? 0),
     });
+  }
+
+  private onTouchDown(e: PointerEvent): void {
+    if (e.pointerType !== "touch" || (e.target as HTMLElement).closest(".lv-track") !== null) return;
+    this.touch = { id: e.pointerId, y: e.clientY, remainder: 0, moved: false };
+    this.el.setPointerCapture(e.pointerId);
+  }
+
+  private onTouchMove(e: PointerEvent): void {
+    const t = this.touch;
+    if (t === null || t.id !== e.pointerId) return;
+    const dy = e.clientY - t.y;
+    t.y = e.clientY;
+    t.remainder -= dy;
+    if (Math.abs(t.remainder) < this.rowHeight) return;
+    const rows = Math.trunc(t.remainder / this.rowHeight);
+    t.remainder -= rows * this.rowHeight;
+    t.moved = true;
+    this.scrollBy(rows);
+  }
+
+  private onTouchUp(e: PointerEvent): void {
+    const t = this.touch;
+    if (t === null || t.id !== e.pointerId) return;
+    this.suppressClick = t.moved;
+    if (this.el.hasPointerCapture(e.pointerId)) this.el.releasePointerCapture(e.pointerId);
+    this.touch = null;
   }
 
   private onTrackDown(e: PointerEvent): void {
@@ -355,7 +413,7 @@ export class ListingView {
     const rows = this.rowsFrom(this.topBit, this.visibleRows + OVERSCAN);
     if (rows.length === 0) {
       const r = this.doc.spans(this.topBit, this.doc.lengthBits, 1);
-      this.status.textContent = r.status === "error" ? r.message : "";
+      this.status.textContent = this.workStatus || (r.status === "error" ? r.message : "");
     } else {
       this.status.textContent = "";
     }
@@ -378,6 +436,7 @@ export class ListingView {
     el.style.setProperty("--depth", String(r.depth));
     if (r.kind === "heading") {
       el.classList.add("lv-heading");
+      if (r.depth === 0) el.classList.add("lv-major");
       const text = document.createElement("span");
       text.className = "lv-heading-text";
       text.textContent = r.text;
@@ -391,6 +450,7 @@ export class ListingView {
     el.dataset["size"] = String(s.size_bits);
     if (r.key === this.selected) el.classList.add("is-selected");
     if (s.gap) el.classList.add("lv-gap");
+    else el.classList.add(fieldClass(s.kind));
 
     const cells = COLUMNS.map(([cls]) => {
       const c = document.createElement("span");

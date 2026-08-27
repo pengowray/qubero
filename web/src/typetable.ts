@@ -4,8 +4,9 @@
 // the text as that field's type and writes only that field's bits.
 
 import { formatBytes, formatOffset } from "./doc.js";
-import { bitSizeText, childWord, countText } from "./strings.js";
+import { bitSizeText, childWord, countText, GAP_LABEL } from "./strings.js";
 import type { Doc, TemplateNode } from "./doc.js";
+import { fieldClass } from "./fieldstyle.js";
 
 const PAGE = 200;
 /** The Value column shows a preview of a long field, so editing it here would
@@ -19,6 +20,11 @@ const NOT_YET = "…";
  * the whole Field column. Deeper levels are marked rather than further
  * indented. */
 const MAX_INDENT_DEPTH = 5;
+/** Opening every visible composite remains an overview rather than an
+ * accidental request for thousands of rows. Repeated presses progressively
+ * open the next visible level. */
+const OVERVIEW_SECTIONS = 24;
+const OVERVIEW_CHILDREN = 24;
 
 function treeIndent(depth: number, extra: number): string {
   return `${Math.min(depth, MAX_INDENT_DEPTH) * 16 + extra}px`;
@@ -89,8 +95,25 @@ export class TypeTable {
     this.el.setAttribute("aria-label", "Fields");
 
     const table = document.createElement("table");
+    const actions = document.createElement("div");
+    actions.className = "tt-actions";
+    const overview = document.createElement("button");
+    overview.type = "button";
+    overview.textContent = "Open visible sections";
+    overview.title = "Open one visible level, with a bounded preview of large lists";
+    overview.addEventListener("click", () => this.openVisibleSections());
+    const collapse = document.createElement("button");
+    collapse.type = "button";
+    collapse.textContent = "Collapse to overview";
+    collapse.addEventListener("click", () => {
+      this.expanded.clear();
+      this.expanded.add("");
+      this.shown.clear();
+      this.render();
+    });
+    actions.append(overview, collapse);
     const head = document.createElement("thead");
-    head.innerHTML = "<tr><th>Offset</th><th>Field</th><th>Value</th><th>Type</th><th>Size</th></tr>";
+    head.innerHTML = "<tr><th>Offset</th><th>Field</th><th>Value</th><th>Type</th><th>Length</th></tr>";
     this.body = document.createElement("tbody");
     table.append(head, this.body);
     this.empty = document.createElement("p");
@@ -105,7 +128,7 @@ export class TypeTable {
     this.progress.className = "tt-progress";
     this.progress.setAttribute("role", "status");
     this.progress.hidden = true;
-    this.el.append(this.empty, table, this.progress, this.note, this.status);
+    this.el.append(actions, this.empty, table, this.progress, this.note, this.status);
     this.expanded.add("");
     this.body.addEventListener("click", (e) => this.onClick(e));
     this.body.addEventListener("keydown", (e) => this.onKey(e));
@@ -113,6 +136,20 @@ export class TypeTable {
       if (this.editing?.waiting) this.commit();
       else this.render();
     });
+  }
+
+  /** Open the composites already on screen. This gives a useful broad view in
+   * one press without recursively evaluating an unbounded file. */
+  private openVisibleSections(): void {
+    const rows = Array.from(this.body.querySelectorAll<HTMLElement>('tr[data-composite="1"]'))
+      .filter((row) => !this.expanded.has(row.dataset["path"] ?? ""))
+      .slice(0, OVERVIEW_SECTIONS);
+    for (const row of rows) {
+      const k = row.dataset["path"] ?? "";
+      this.expanded.add(k);
+      if (!this.shown.has(k)) this.shown.set(k, OVERVIEW_CHILDREN);
+    }
+    this.render();
   }
 
   /**
@@ -379,6 +416,8 @@ export class TypeTable {
     tr.dataset["value"] = n.edit_text;
     if (k === this.selected) tr.classList.add("tt-selected");
     if (!n.ok) tr.classList.add("tt-bad");
+    tr.classList.add(fieldClass(n.kind));
+    if (n.composite) tr.dataset["composite"] = "1";
 
     const name = document.createElement("td");
     name.style.paddingLeft = treeIndent(depth, 4);
@@ -447,7 +486,7 @@ export class TypeTable {
         this.addSelectedChild(frag, n, depth, limit);
         return;
       }
-      for (const c of kids.node) this.addRows(frag, c, depth + 1);
+      this.addChildRows(frag, n, kids.node, depth + 1, kids.node.length >= n.child_count);
       if (n.child_count > limit) {
         const tr2 = document.createElement("tr");
         const td = document.createElement("td");
@@ -464,6 +503,51 @@ export class TypeTable {
       }
       this.addSelectedChild(frag, n, depth, limit);
     }
+  }
+
+  /** Children in file order, with the stretches the template leaves undefined
+   * made explicit just as they are in Listing. Trailing slack is only shown
+   * when every child is present; a paged list may still fill it. */
+  private addChildRows(
+    frag: DocumentFragment,
+    parent: TemplateNode,
+    children: readonly TemplateNode[],
+    depth: number,
+    complete: boolean,
+  ): void {
+    let at = parent.offset_bits;
+    const end = parent.offset_bits + parent.size_bits;
+    for (const child of children) {
+      if (child.offset_bits > at && child.offset_bits < end) this.addGapRow(frag, at, Math.min(child.offset_bits, end), depth);
+      this.addRows(frag, child, depth);
+      const childEnd = child.offset_bits + child.size_bits;
+      if (child.offset_bits <= end) at = Math.max(at, Math.min(childEnd, end));
+    }
+    if (complete && at < end) this.addGapRow(frag, at, end, depth);
+  }
+
+  private addGapRow(frag: DocumentFragment, startBit: number, endBit: number, depth: number): void {
+    if (endBit <= startBit) return;
+    const tr = document.createElement("tr");
+    tr.className = "tt-gap";
+    const off = document.createElement("td");
+    off.className = "tt-num tt-addr";
+    off.textContent = formatOffset(startBit);
+    const name = document.createElement("td");
+    name.style.paddingLeft = treeIndent(depth, 4);
+    const spacer = document.createElement("span");
+    spacer.className = "tt-toggle tt-leaf";
+    name.append(spacer, document.createTextNode(GAP_LABEL));
+    const value = document.createElement("td");
+    value.textContent = "not described by this template";
+    const type = document.createElement("td");
+    type.className = "tt-type";
+    type.textContent = "undefined";
+    const length = document.createElement("td");
+    length.className = "tt-num";
+    length.textContent = bitSizeText(endBit - startBit);
+    tr.append(off, name, value, type, length);
+    frag.append(tr);
   }
 
   /**

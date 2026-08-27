@@ -6,6 +6,7 @@
 
 import type { Doc, Span } from "./doc.js";
 import { GAP_LABEL, NO_TEMPLATE } from "./strings.js";
+import { fieldClass } from "./fieldstyle.js";
 
 export type Pane = "hex" | "ascii";
 /** What sits to the right of the bytes: their text, or what the template says
@@ -46,8 +47,6 @@ const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"
 
 /** How many entries one screenful of the annotation column may hold. */
 const SPAN_LIMIT = 600;
-/** Colours the annotation column cycles through, as class suffixes. */
-const TINTS = 6;
 /** Longest value shown on a chip before it is cut short. */
 const CHIP_VALUE = 32;
 /** Rough width of a character in the chip font, for working out how many
@@ -92,14 +91,6 @@ function chipDetail(s: Span): string {
       : `${s.size_bits.toLocaleString()} bits`;
   }
   return s.value.length > CHIP_VALUE ? `${s.value.slice(0, CHIP_VALUE)}\u2026` : s.value;
-}
-
-/** A field's colour, from its place in the tree rather than its place on the
- *  screen, so scrolling never repaints the file in different colours. */
-function tintOf(path: readonly number[]): number {
-  let n = path.length;
-  for (const i of path) n = (n * 31 + i) % (TINTS * 7919);
-  return n % TINTS;
 }
 
 function asciiGlyph(b: number): string {
@@ -996,7 +987,7 @@ export class HexView {
     el.type = "button";
     el.className = "hv-chip";
     if (s.gap) el.classList.add("hv-chip-gap");
-    else el.classList.add(`hv-t${tintOf(s.path)}`);
+    else el.classList.add(fieldClass(s.kind));
     if (carried) el.classList.add("hv-chip-carried");
     // A structure that reads on one line is the whole chip: `[47]` is the
     // element's number in a repeat and says nothing, and the line says
@@ -1138,7 +1129,10 @@ export class HexView {
         const si = fields && off >= start && off < start + windowBytes ? byteSpan[off - start] ?? -1 : -1;
         if (si >= 0) {
           const s = spans[si];
-          if (s !== undefined && !s.gap) h.classList.add("hv-tint", `hv-t${tintOf(s.path)}`);
+          if (s !== undefined && !s.gap) {
+            h.classList.add("hv-tint", fieldClass(s.kind));
+            if (off === Math.floor(s.offset_bits / 8)) h.classList.add("hv-field-start");
+          }
         }
         if (hl.length > 0) {
           // The text column cannot show part of a byte, so a partly covered

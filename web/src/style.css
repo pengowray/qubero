@@ -301,6 +301,73 @@ input.invalid {
   padding: 8px 10px;
   margin: 0;
 }
+.tt-actions {
+  display: flex;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.tt-actions button {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.tt-gap td {
+  color: var(--muted);
+  font-style: italic;
+  border-top: 1px dashed color-mix(in srgb, var(--line) 70%, transparent);
+}
+.tt-gap .tt-type {
+  font-style: normal;
+}
+
+/* Meaning, shared by Hex, Listing and Structure. These five colours identify
+   stable data families rather than arbitrary siblings; overlapping UI state
+   is carried by background, underline and outline instead. */
+.field-number {
+  --field-color: #1769aa;
+}
+.field-text {
+  --field-color: #147a5b;
+}
+.field-marker {
+  --field-color: #a65300;
+}
+.field-category {
+  --field-color: #7b4db3;
+}
+.field-structure {
+  --field-color: #3c6f78;
+}
+.field-binary {
+  --field-color: var(--muted);
+}
+@media (prefers-color-scheme: dark) {
+  .field-number {
+    --field-color: #67ace6;
+  }
+  .field-text {
+    --field-color: #55c69b;
+  }
+  .field-marker {
+    --field-color: #f0a15c;
+  }
+  .field-category {
+    --field-color: #bd91ec;
+  }
+  .field-structure {
+    --field-color: #79b8c2;
+  }
+}
+.field-number .tt-val,
+.field-text .tt-val,
+.field-marker .tt-val,
+.field-category .tt-val,
+.field-structure .tt-val,
+.field-binary .tt-val {
+  color: var(--field-color);
+}
 
 /* ---- dropping a file ---- */
 .dropzone {
@@ -397,50 +464,16 @@ input.invalid {
 .hv-pending {
   color: var(--muted);
 }
-/* Field colours for the annotation column. Six hues, told apart by name as
-   well as colour: every tinted stretch has its name beside it. */
-.hv-t0 {
-  --tint: #0072b2;
-}
-.hv-t1 {
-  --tint: #d55e00;
-}
-.hv-t2 {
-  --tint: #009e73;
-}
-.hv-t3 {
-  --tint: #cc79a7;
-}
-.hv-t4 {
-  --tint: #b07d00;
-}
-.hv-t5 {
-  --tint: #6a4bc4;
-}
-@media (prefers-color-scheme: dark) {
-  .hv-t0 {
-    --tint: #4ea3e8;
-  }
-  .hv-t1 {
-    --tint: #ef8a4a;
-  }
-  .hv-t2 {
-    --tint: #3fbf98;
-  }
-  .hv-t3 {
-    --tint: #e79cc4;
-  }
-  .hv-t4 {
-    --tint: #d8ab3a;
-  }
-  .hv-t5 {
-    --tint: #a68cf0;
-  }
-}
-/* The bytes of a field. Selection and the cursor are defined after this, so
-   they keep the upper hand where they overlap. */
+/* Meaning is a restrained text colour and hairline. It does not fill the byte
+   cell, leaving fills available for selection and active-field state. */
 .hv-tint {
-  background: color-mix(in srgb, var(--tint) 26%, transparent);
+  color: color-mix(in srgb, var(--field-color) 84%, var(--fg));
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--field-color) 48%, transparent);
+}
+.hv-field-start {
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, var(--field-color) 65%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--field-color) 48%, transparent);
 }
 .hv-hl {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
@@ -568,9 +601,9 @@ input.invalid {
   max-width: 26ch;
   padding: 0 6px;
   border: 0;
-  border-left: 3px solid var(--tint);
+  border-left: 3px solid var(--field-color);
   border-radius: 3px;
-  background: color-mix(in srgb, var(--tint) 22%, transparent);
+  background: color-mix(in srgb, var(--field-color) 10%, transparent);
   color: var(--fg);
   display: flex;
   gap: 6px;
@@ -579,7 +612,7 @@ input.invalid {
   cursor: pointer;
 }
 .hv-chip:hover {
-  background: color-mix(in srgb, var(--tint) 34%, transparent);
+  background: color-mix(in srgb, var(--field-color) 20%, transparent);
 }
 .hv-chip > b {
   font-weight: 600;
@@ -603,7 +636,7 @@ input.invalid {
   color: var(--muted);
 }
 .hv-chip-gap {
-  --tint: var(--muted);
+  --field-color: var(--muted);
   border-left-style: dashed;
   color: color-mix(in srgb, var(--fg) 80%, var(--bg));
   cursor: default;
@@ -934,6 +967,40 @@ input.invalid {
   color: var(--muted);
   margin-top: 4px;
 }
+.insp-semantics {
+  margin-top: 3px;
+}
+.insp-semantic-value,
+.insp-check-result,
+.insp-hash-result {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.insp-check-result,
+.insp-hash-result {
+  color: var(--muted);
+  margin-top: 3px;
+}
+.insp-check-result.ok {
+  color: var(--good);
+}
+.insp-check-result.bad {
+  color: var(--warn);
+}
+.insp-check-button,
+.insp-hash-actions button {
+  min-height: 26px;
+  padding: 3px 7px;
+  font-size: 12px;
+}
+.insp-hash-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .insp-field::placeholder {
   color: var(--muted);
   font-style: italic;
@@ -1262,10 +1329,12 @@ input.invalid {
   display: flex;
   font-family: var(--mono);
   font-size: 13px;
-  line-height: 20px;
+  line-height: 24px;
   outline: none;
   user-select: none;
-  touch-action: none;
+  /* Horizontal movement scrolls the wide columns natively; vertical movement
+     stays available to the virtual field scroller in listingview.ts. */
+  touch-action: pan-x;
 }
 .listing:focus-visible {
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -1285,7 +1354,7 @@ input.invalid {
   display: grid;
   grid-template-columns: 10ch 14ch 25ch 24ch minmax(16ch, 1fr) 14ch;
   gap: 0 2ch;
-  height: 20px;
+  height: 24px;
   white-space: pre;
   /* Below this the columns scroll rather than overlap. `1fr` on its own would
      let the value and the type collapse into each other. */
@@ -1320,6 +1389,9 @@ input.invalid {
 .lv-value {
   color: var(--fg);
 }
+.lv-row:not(.lv-gap) .lv-type {
+  color: var(--field-color);
+}
 /* An instruction, or a block of weights, is one thing, so it reads across the
    two columns a field would have split between a name and a value. Such a row
    leaves its name cell out: this claims the field and value columns, and a cell already
@@ -1339,11 +1411,25 @@ input.invalid {
 .lv-heading {
   color: var(--fg);
   font-weight: 600;
+  height: 32px;
+  line-height: 26px;
+  padding-top: 6px;
 }
 .lv-heading-text {
   grid-column: 4 / 7;
   padding-left: calc(var(--depth, 0) * 1ch);
   border-bottom: 1px solid var(--line);
+}
+.lv-heading.lv-major {
+  height: 38px;
+  padding-top: 10px;
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 28px;
+  letter-spacing: 0.01em;
+}
+.lv-major .lv-heading-text {
+  border-bottom-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
 .lv-track {
   width: 14px;
