@@ -91,6 +91,58 @@ input.invalid {
   color: var(--muted);
 }
 
+/* ---- tab strip ---- */
+/* Documents opened out of other documents. Absent for a single file, so the
+   page keeps its usual look until a second tab exists. */
+.tabstrip {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.tabstrip-tabs {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+}
+.tab.is-active {
+  background: var(--bg);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.tab-pick,
+.tab-close {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  font-size: 12px;
+  min-height: 30px;
+}
+.tab-pick {
+  padding: 4px 4px 4px 10px;
+  color: var(--muted);
+}
+.tab.is-active .tab-pick {
+  color: var(--fg);
+}
+/* An unsaved-edits marker beside the name, paired with the "(edited)" text in
+   the toolbar so it is never colour or shape alone. */
+.tab.is-edited .tab-pick::after {
+  content: "•";
+  margin-left: 5px;
+  color: var(--accent);
+}
+.tab-close {
+  padding: 4px 8px 4px 4px;
+  color: var(--muted);
+}
+.tab-close:hover {
+  color: var(--warn);
+}
+
 /* ---- toolbar / statusbar ---- */
 .toolbar,
 .statusbar {
@@ -968,6 +1020,12 @@ input.invalid {
   margin-top: 4px;
 }
 .insp-semantics {
+  margin-top: 3px;
+}
+.insp-openas {
+  margin-top: 3px;
+}
+.insp-openas .insp-check-button {
   margin-top: 3px;
 }
 .insp-semantic-value,

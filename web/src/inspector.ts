@@ -11,6 +11,7 @@ import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { bitSizeText, childWord, countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
+import { openPlan, type OpenPlan } from "./openplan.js";
 import { extraction } from "./bitextract.js";
 import { crc32, hex32, hexBytes, lhaCrc16, sha1, sum8 } from "./integrity.js";
 
@@ -49,6 +50,8 @@ export class Inspector {
   private readonly semantics: HTMLElement;
   /** Which other fields settled this one's length, count, type or place. */
   private readonly origins: HTMLElement;
+  /** Offer to open this field's bytes as a document in a tab of its own. */
+  private readonly openAs: HTMLElement;
   /** What the hex view has selected, in file order. More than one run is
    *  allowed because a value a format does not keep in one piece is more than
    *  one run of bits. Empty when nothing is selected. */
@@ -74,6 +77,8 @@ export class Inspector {
   onPick: (path: readonly number[]) => void = () => {};
   /** Asked for when the reader follows an offset, so the views can follow. */
   onGoTo: (bitOffset: number, ranges?: readonly BitRange[]) => void = () => {};
+  /** Asked for when the reader opens a field's bytes as their own document. */
+  onOpenTab: (bytes: Uint8Array, name: string, origin: string) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -221,7 +226,10 @@ export class Inspector {
       const p = t.dataset["path"];
       if (p !== undefined) this.onPick(p === "" ? [] : p.split("/").map(Number));
     });
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.note, this.semantics, this.origins, this.types);
+    this.openAs = document.createElement("div");
+    this.openAs.className = "insp-openas";
+    this.openAs.hidden = true;
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.note, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -561,6 +569,54 @@ export class Inspector {
     this.fillOrigins(path);
     this.fillTypes(path, n);
     this.fillSemantics(path, n);
+    this.fillOpenAs(path, n);
+  }
+
+  /**
+   * A field whose bytes are a whole embedded file, or any plain run of bytes,
+   * can be opened as a document in a tab of its own. A run stored compressed
+   * is decompressed on the way, which is the point: those bytes exist nowhere
+   * in this file, so a tab is the only place to read them.
+   */
+  private fillOpenAs(path: readonly number[], n: TemplateNode): void {
+    const plan = openPlan(this.doc, path, n);
+    if (plan === null) {
+      this.openAs.hidden = true;
+      this.openAs.replaceChildren();
+      return;
+    }
+    const detail = document.createElement("div");
+    detail.className = "insp-detail";
+    detail.textContent = plan.detail;
+    const parts: Node[] = [subhead("Open as a file"), detail];
+    if (plan.load !== null) parts.push(this.openButton(plan));
+    this.openAs.replaceChildren(...parts);
+    this.openAs.hidden = false;
+  }
+
+  private openButton(plan: OpenPlan): HTMLElement {
+    const load = plan.load;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "insp-check-button";
+    button.textContent = "Open in a new tab";
+    button.addEventListener("click", () => {
+      if (load === null) return;
+      button.disabled = true;
+      this.status.textContent = "Loading…";
+      load()
+        .then((bytes) => {
+          this.status.textContent = "";
+          this.onOpenTab(bytes, plan.name, plan.origin);
+        })
+        .catch((cause: unknown) => {
+          this.status.textContent = cause instanceof Error ? cause.message : "Couldn't open these bytes.";
+        })
+        .finally(() => {
+          button.disabled = false;
+        });
+    });
+    return button;
   }
 
   /** Date lenses keep the stored integer visible above. Large integrity

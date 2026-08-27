@@ -566,6 +566,19 @@ export function formatBytes(n: number): string {
   return `${x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x)} ${units[i]}`;
 }
 
+/** In-memory bytes as a `ByteSource`, for documents that come out of another
+ *  one rather than off a disk: a decompressed zip entry, a run of bytes opened
+ *  on its own. */
+export function bytesSource(bytes: Uint8Array, name: string): ByteSource {
+  return {
+    size: bytes.length,
+    name,
+    slice(start, end) {
+      return { arrayBuffer: () => Promise.resolve(bytes.slice(start, end).buffer as ArrayBuffer) };
+    },
+  };
+}
+
 export type ReadResult = {
   readonly bytes: Uint8Array;
   /** True when every byte came from loaded data. False means a reload will follow. */
