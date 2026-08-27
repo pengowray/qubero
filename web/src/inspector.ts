@@ -12,15 +12,14 @@ import { LENSES, type Lens } from "./lenses.js";
 import { bitSizeText, childWord, countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
 import { extraction } from "./bitextract.js";
-import { crc32, hex32, sha256 } from "./integrity.js";
+import { crc32, hex32, hexBytes, lhaCrc16, sha1, sum8 } from "./integrity.js";
 
 const AUTO_CHECK_BYTES = 1024 * 1024;
 
 type IntegrityPlan = {
   readonly label: string;
-  readonly expected: number;
   readonly bytes: number;
-  load(): Promise<Uint8Array>;
+  check(): Promise<{ actual: string; expected: string }>;
 };
 
 /** Structure reads the template's field; the other two read raw bytes. */
@@ -570,8 +569,7 @@ export class Inspector {
   private fillSemantics(path: readonly number[], n: TemplateNode): void {
     const date = this.dateText(path, n);
     const plan = this.integrityPlan(path, n);
-    const hashable = n.size_bits > 0 && n.size_bits % 8 === 0 && n.offset_bits % 8 === 0;
-    if (date === null && plan === null && !hashable) {
+    if (date === null && plan === null) {
       this.semantics.hidden = true;
       this.semantics.replaceChildren();
       return;
@@ -584,7 +582,6 @@ export class Inspector {
       parts.push(value);
     }
     if (plan !== null) parts.push(this.integrityWidget(plan));
-    if (hashable && n.size_bits / 8 <= this.doc.lengthBytes) parts.push(this.hashWidget(n));
     this.semantics.replaceChildren(...parts);
     this.semantics.hidden = false;
   }
@@ -628,40 +625,115 @@ export class Inspector {
   }
 
   private integrityPlan(path: readonly number[], n: TemplateNode): IntegrityPlan | null {
-    const numeric = Number(n.edit_text);
-    if (!Number.isFinite(numeric)) return null;
-    const expected = numeric >>> 0;
     const siblings = this.siblings(path);
     if (this.doc.template === "png" && n.name === "crc") {
+      const numeric = Number(n.edit_text);
+      if (!Number.isFinite(numeric)) return null;
+      const expected = numeric >>> 0;
       const type = siblings.find((x) => x.name === "type");
       if (type === undefined || type.offset_bits % 8 !== 0 || n.offset_bits % 8 !== 0) return null;
       const at = type.offset_bits / 8;
       const bytes = n.offset_bits / 8 - at;
-      return { label: "PNG CRC-32", expected, bytes, load: () => this.loadBytes(at, bytes) };
+      return {
+        label: "PNG CRC-32",
+        bytes,
+        check: async () => ({ actual: hex32(crc32(await this.loadBytes(at, bytes))), expected: hex32(expected) }),
+      };
     }
     if (this.doc.template === "zip" && n.name === "crc32") {
+      const numeric = Number(n.edit_text);
+      if (!Number.isFinite(numeric)) return null;
+      const expected = numeric >>> 0;
       const compression = siblings.find((x) => x.name === "compression");
       const data = siblings.find((x) => x.name === "data");
+      const uncompressedSize = siblings.find((x) => x.name === "uncompressed_size");
       if (compression === undefined || data === undefined || data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
       const method = Number(compression.edit_text);
       const packedBytes = data.size_bits / 8;
+      const coveredBytes = uncompressedSize === undefined ? packedBytes : Number(uncompressedSize.edit_text);
       if (method !== 0 && method !== 8) return null;
       return {
         label: method === 0 ? "ZIP CRC-32 (stored data)" : "ZIP CRC-32 (deflated data)",
-        expected,
-        bytes: packedBytes,
-        load: async () => {
+        bytes: Number.isFinite(coveredBytes) ? coveredBytes : packedBytes,
+        check: async () => {
           const packed = await this.loadBytes(data.offset_bits / 8, packedBytes);
-          return method === 0 ? packed : decompress(packed, "deflate-raw");
+          const unpacked = method === 0 ? packed : await decompress(packed, "deflate-raw");
+          return { actual: hex32(crc32(unpacked)), expected: hex32(expected) };
+        },
+      };
+    }
+    if (this.doc.template === "gzip" && n.name === "header_crc" && n.size_bits === 16 && n.offset_bits % 8 === 0) {
+      const bytes = n.offset_bits / 8;
+      return {
+        label: "gzip header CRC-16",
+        bytes,
+        check: async () => {
+          const stored = await this.loadBytes(n.offset_bits / 8, 2);
+          const expected = stored[0]! | (stored[1]! << 8);
+          return { actual: hex16(crc32(await this.loadBytes(0, bytes)) & 0xffff), expected: hex16(expected) };
         },
       };
     }
     if (this.doc.template === "gzip" && n.name === "crc32") {
+      const numeric = Number(n.edit_text);
+      if (!Number.isFinite(numeric)) return null;
+      const expected = numeric >>> 0;
+      const compressed = siblings.find((x) => x.name === "compressed");
+      const originalSize = siblings.find((x) => x.name === "original_size");
+      if (compressed === undefined || compressed.offset_bits % 8 !== 0 || compressed.size_bits % 8 !== 0) return null;
+      const packedBytes = compressed.size_bits / 8;
+      const declaredBytes = originalSize === undefined ? packedBytes : Number(originalSize.edit_text);
+      // ISIZE is modulo 2^32. A non-empty stream declaring zero may really
+      // expand to 4 GiB, so never start that case merely because it says zero.
+      const expandedBytes = declaredBytes === 0 && packedBytes > 2 ? 0x1_0000_0000 : declaredBytes;
       return {
-        label: "gzip CRC-32",
-        expected,
-        bytes: this.doc.lengthBytes,
-        load: async () => decompress(await this.loadBytes(0, this.doc.lengthBytes), "gzip"),
+        label: "gzip CRC-32 (uncompressed data)",
+        bytes: Number.isFinite(expandedBytes) ? expandedBytes : packedBytes,
+        check: async () => {
+          const packed = await this.loadBytes(compressed.offset_bits / 8, packedBytes);
+          const unpacked = await decompress(packed, "deflate-raw");
+          return { actual: hex32(crc32(unpacked)), expected: hex32(expected) };
+        },
+      };
+    }
+    if ((this.doc.template === "gitindex" || this.doc.template === "gitpackidx") && n.name === "checksum" && path.length === 1 && n.size_bits === 160 && n.offset_bits % 8 === 0) {
+      const bytes = n.offset_bits / 8;
+      return {
+        label: "Git file SHA-1",
+        bytes,
+        check: async () => ({
+          actual: await sha1(await this.loadBytes(0, bytes)),
+          expected: hexBytes(await this.loadBytes(n.offset_bits / 8, 20)),
+        }),
+      };
+    }
+    if (this.doc.template === "lha" && n.name === "header_checksum" && n.size_bits === 8 && n.offset_bits % 8 === 0) {
+      const entry = this.doc.templateChildren(path.slice(0, -2), 0, 8);
+      if (entry.status !== "ok") return null;
+      const headerSize = entry.node.find((x) => x.name === "header_size");
+      const expected = Number(n.edit_text);
+      if (headerSize === undefined || !Number.isFinite(expected)) return null;
+      const bytes = Number(headerSize.edit_text);
+      const at = n.offset_bits / 8 + 1;
+      return {
+        label: "LHA header checksum",
+        bytes,
+        check: async () => ({ actual: hex8(sum8(await this.loadBytes(at, bytes))), expected: hex8(expected) }),
+      };
+    }
+    if (this.doc.template === "lha" && n.name === "crc" && n.size_bits === 16) {
+      const method = siblings.find((x) => x.name === "method");
+      const data = siblings.find((x) => x.name === "data");
+      const expected = Number(n.edit_text);
+      // -lh0- is the stored method; compressed LHA methods need their own
+      // decoders before their CRC of the uncompressed file can be checked.
+      if (method === undefined || Number(method.edit_text) !== 0x2d_6c_68_30_2d || data === undefined || !Number.isFinite(expected)) return null;
+      if (data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
+      const bytes = data.size_bits / 8;
+      return {
+        label: "LHA CRC-16 (stored data)",
+        bytes,
+        check: async () => ({ actual: hex16(lhaCrc16(await this.loadBytes(data.offset_bits / 8, bytes))), expected: hex16(expected) }),
       };
     }
     return null;
@@ -676,10 +748,10 @@ export class Inspector {
       result.className = "insp-check-result";
       result.textContent = "Checking…";
       try {
-        const actual = crc32(await plan.load());
-        const ok = actual === plan.expected;
+        const { actual, expected } = await plan.check();
+        const ok = actual === expected;
         result.classList.add(ok ? "ok" : "bad");
-        result.textContent = ok ? `Valid · ${hex32(actual)}` : `Mismatch · calculated ${hex32(actual)}, stored ${hex32(plan.expected)}`;
+        result.textContent = ok ? `Valid · ${actual}` : `Mismatch · calculated ${actual}, stored ${expected}`;
       } catch (cause) {
         result.classList.add("bad");
         result.textContent = cause instanceof Error ? cause.message : "Could not check this data.";
@@ -697,29 +769,6 @@ export class Inspector {
       button.addEventListener("click", () => void run());
       box.append(button, result);
     }
-    return box;
-  }
-
-  /** Ad-hoc hashes fingerprint any byte-aligned field, including formats that
-   * store no hash of their own. */
-  private hashWidget(n: TemplateNode): HTMLElement {
-    const box = document.createElement("div");
-    box.className = "insp-hashes";
-    const result = document.createElement("div");
-    result.className = "insp-hash-result";
-    const crc = document.createElement("button");
-    crc.type = "button";
-    crc.textContent = "CRC-32";
-    const sha = document.createElement("button");
-    sha.type = "button";
-    sha.textContent = "SHA-256";
-    const load = (): Promise<Uint8Array> => this.loadBytes(n.offset_bits / 8, n.size_bits / 8);
-    crc.addEventListener("click", () => void load().then((b) => { result.textContent = hex32(crc32(b)); }).catch((e: unknown) => { result.textContent = String(e); }));
-    sha.addEventListener("click", () => void load().then(sha256).then((h) => { result.textContent = h; }).catch((e: unknown) => { result.textContent = String(e); }));
-    const actions = document.createElement("div");
-    actions.className = "insp-hash-actions";
-    actions.append(crc, sha, ` ${formatBytes(n.size_bits / 8)}`);
-    box.append(subhead("Hash this field"), actions, result);
     return box;
   }
 
@@ -1198,6 +1247,14 @@ function modeLabel(mode: Mode): string {
 
 function pad(value: number): string {
   return value.toString().padStart(2, "0");
+}
+
+function hex8(value: number): string {
+  return `0x${(value & 0xff).toString(16).padStart(2, "0")}`;
+}
+
+function hex16(value: number): string {
+  return `0x${(value & 0xffff).toString(16).padStart(4, "0")}`;
 }
 
 function unixDate(seconds: number, suffix: string): string {

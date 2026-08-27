@@ -971,14 +971,12 @@ input.invalid {
   margin-top: 3px;
 }
 .insp-semantic-value,
-.insp-check-result,
-.insp-hash-result {
+.insp-check-result {
   font-family: var(--mono);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.insp-check-result,
-.insp-hash-result {
+.insp-check-result {
   color: var(--muted);
   margin-top: 3px;
 }
@@ -988,17 +986,9 @@ input.invalid {
 .insp-check-result.bad {
   color: var(--warn);
 }
-.insp-check-button,
-.insp-hash-actions button {
+.insp-check-button {
   min-height: 26px;
   padding: 3px 7px;
-  font-size: 12px;
-}
-.insp-hash-actions {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  color: var(--muted);
   font-size: 12px;
 }
 .insp-field::placeholder {
