@@ -95,6 +95,7 @@ const TAG: &[(i128, &str)] = &[
     (323, "tile length"),
     (324, "tile offsets"),
     (325, "tile byte counts"),
+    (330, "sub ifds"),
     (338, "extra samples"),
     (339, "sample format"),
     (529, "ycbcr coefficients"),
@@ -102,10 +103,66 @@ const TAG: &[(i128, &str)] = &[
     (531, "ycbcr positioning"),
     (532, "reference black white"),
     (700, "xmp"),
+    (33421, "cfa repeat pattern dimensions"),
+    (33422, "cfa pattern"),
     (33432, "copyright"),
     (33723, "iptc"),
     (34665, "exif ifd"),
+    (34675, "icc profile"),
+    (34713, "nikon nef info"),
     (34853, "gps ifd"),
+    // TIFF/EP and DNG camera-raw metadata. DNG deliberately extends TIFF
+    // rather than wrapping it, and proprietary raw formats use many of the
+    // same tags alongside their maker-specific records.
+    (37398, "tiff/ep standard id"),
+    (50706, "dng version"),
+    (50707, "dng backward version"),
+    (50708, "unique camera model"),
+    (50709, "localised camera model"),
+    (50710, "cfa plane colour"),
+    (50711, "cfa layout"),
+    (50712, "linearisation table"),
+    (50713, "black level repeat dimensions"),
+    (50714, "black level"),
+    (50715, "black level delta h"),
+    (50716, "black level delta v"),
+    (50717, "white level"),
+    (50718, "default scale"),
+    (50719, "default crop origin"),
+    (50720, "default crop size"),
+    (50721, "colour matrix 1"),
+    (50722, "colour matrix 2"),
+    (50723, "camera calibration 1"),
+    (50724, "camera calibration 2"),
+    (50725, "reduction matrix 1"),
+    (50726, "reduction matrix 2"),
+    (50727, "analogue balance"),
+    (50728, "as shot neutral"),
+    (50729, "as shot white xy"),
+    (50730, "baseline exposure"),
+    (50731, "baseline noise"),
+    (50732, "baseline sharpness"),
+    (50733, "bayer green split"),
+    (50734, "linear response limit"),
+    (50735, "camera serial number"),
+    (50736, "lens info"),
+    (50737, "chroma blur radius"),
+    (50738, "anti alias strength"),
+    (50739, "shadow scale"),
+    (50740, "dng private data"),
+    (50741, "maker note safety"),
+    (50778, "calibration illuminant 1"),
+    (50779, "calibration illuminant 2"),
+    (50780, "best quality scale"),
+    (50781, "raw data unique id"),
+    (50827, "original raw file name"),
+    (50828, "original raw file data"),
+    (50829, "active area"),
+    (50830, "masked areas"),
+    (50831, "as shot icc profile"),
+    (50832, "as shot pre-profile matrix"),
+    (50833, "current icc profile"),
+    (50834, "current pre-profile matrix"),
 ];
 
 /// The tags of the directory `exif ifd` points at: what the camera knew when
@@ -239,8 +296,19 @@ const FIELD_TYPE: &[(i128, &str)] = &[
 ];
 
 pub fn tiff() -> Template {
+    tiff_named("tiff")
+}
+
+/// Camera RAW formats in the TIFF family share the complete TIFF layout. A
+/// distinct template name preserves the more precise result from sniffing and
+/// makes each format available explicitly in the template picker.
+pub fn camera_raw(name: &str) -> Template {
+    tiff_named(name)
+}
+
+fn tiff_named(name: &str) -> Template {
     let part = tiff_part();
-    Template::new("tiff", part.root.clone()).with_part(&part)
+    Template::new(name, part.root.clone()).with_part(&part)
 }
 
 /// The whole of a TIFF and the names it refers to, for a format that carries

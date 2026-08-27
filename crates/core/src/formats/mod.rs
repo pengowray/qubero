@@ -90,7 +90,7 @@ pub use sqlite::sqlite;
 pub use swf::swf;
 pub use tap::tap;
 pub use tga::tga;
-pub use tiff::tiff;
+pub use tiff::{camera_raw, tiff};
 pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
@@ -116,7 +116,7 @@ pub fn omezarr() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "swf", "zip", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
+    &["png", "swf", "zip", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -161,6 +161,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "gitpackidx" => Some(git_pack_index()),
         "qoi" => Some(qoi()),
         "tiff" => Some(tiff()),
+        "dng" | "nef" | "cr2" | "arw" | "orf" | "rw2" | "pef" | "srw" => Some(camera_raw(name)),
         "jpeg" => Some(jpeg()),
         "pdf" => Some(pdf()),
         "hdf5" => Some(hdf5()),
@@ -251,6 +252,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("whisper")
     } else if is_safetensors(head) {
         Some("safetensors")
+    } else if let Some(raw) = camera_raw_format(head) {
+        Some(raw)
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
     } else if is_pe(head) {
@@ -287,6 +290,77 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Identify the TIFF-based camera RAW formats whose bytes distinguish them.
+/// Extension names are deliberately not involved: dropped files can be
+/// renamed, and a normal TIFF should not become a NEF merely because of its
+/// filename. DNG has its own version tag; CR2, ORF, and RW2 have fixed header
+/// markers; the remaining TIFF variants require both a camera make and RAW
+/// sensor metadata.
+fn camera_raw_format(head: &[u8]) -> Option<&'static str> {
+    if head.get(8..12) == Some(b"CR\x02\0") && (head.starts_with(b"II*\0") || head.starts_with(b"MM\0*")) {
+        return Some("cr2");
+    }
+    if head.starts_with(b"IIRO") || head.starts_with(b"MMOR") {
+        return Some("orf");
+    }
+    if head.starts_with(b"IIU\0") {
+        return Some("rw2");
+    }
+
+    let little = if head.starts_with(b"II*\0") {
+        true
+    } else if head.starts_with(b"MM\0*") {
+        false
+    } else {
+        return None;
+    };
+    let u16_at = |at: usize| -> Option<u16> {
+        let b: [u8; 2] = head.get(at..at + 2)?.try_into().ok()?;
+        Some(if little { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
+    };
+    let u32_at = |at: usize| -> Option<u32> {
+        let b: [u8; 4] = head.get(at..at + 4)?.try_into().ok()?;
+        Some(if little { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
+    };
+    let ifd = usize::try_from(u32_at(4)?).ok()?;
+    let count = usize::from(u16_at(ifd)?);
+    let mut make: Option<&[u8]> = None;
+    let mut raw_sensor = false;
+    for i in 0..count.min(4096) {
+        let at = ifd.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+        let tag = u16_at(at)?;
+        let kind = u16_at(at + 2)?;
+        let values = usize::try_from(u32_at(at + 4)?).ok()?;
+        if tag == 50706 {
+            return Some("dng");
+        }
+        raw_sensor |= matches!(tag, 33421 | 33422 | 34713 | 37398 | 50710..=50741 | 50778..=50834);
+        if tag == 271 && kind == 2 && values > 0 {
+            let start = if values <= 4 { at + 8 } else { usize::try_from(u32_at(at + 8)?).ok()? };
+            make = head.get(start..start.checked_add(values.min(64))?);
+        }
+    }
+    if !raw_sensor {
+        return None;
+    }
+    let make = make?;
+    if starts_ascii_case_insensitive(make, b"NIKON") {
+        Some("nef")
+    } else if starts_ascii_case_insensitive(make, b"SONY") {
+        Some("arw")
+    } else if starts_ascii_case_insensitive(make, b"PENTAX") || starts_ascii_case_insensitive(make, b"RICOH") {
+        Some("pef")
+    } else if starts_ascii_case_insensitive(make, b"SAMSUNG") {
+        Some("srw")
+    } else {
+        None
+    }
+}
+
+fn starts_ascii_case_insensitive(value: &[u8], prefix: &[u8]) -> bool {
+    value.get(..prefix.len()).is_some_and(|s| s.eq_ignore_ascii_case(prefix))
 }
 
 fn is_macbinary(head: &[u8], len: u64) -> bool {
@@ -663,6 +737,55 @@ mod tests {
         // the letters just said it would be.
         assert_eq!(sniffed(b"II*\x00\x08\x00\x00\x00"), Some("tiff"));
         assert_eq!(sniffed(b"MM\x00*\x00\x00\x00\x08"), Some("tiff"));
+    }
+
+    fn little_tiff(entries: &[(u16, u16, u32, [u8; 4])], tail: &[u8]) -> Vec<u8> {
+        let mut v = b"II*\0\x08\0\0\0".to_vec();
+        v.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, kind, count, value) in entries {
+            v.extend_from_slice(&tag.to_le_bytes());
+            v.extend_from_slice(&kind.to_le_bytes());
+            v.extend_from_slice(&count.to_le_bytes());
+            v.extend_from_slice(value);
+        }
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(tail);
+        v
+    }
+
+    #[test]
+    fn dng_is_distinguished_from_an_ordinary_tiff_by_its_version_tag() {
+        let dng = little_tiff(&[(50706, 1, 4, [1, 6, 0, 0])], &[]);
+        assert_eq!(sniffed(&dng), Some("dng"));
+
+        // A camera make by itself does not prove that an otherwise ordinary
+        // TIFF is the maker's proprietary RAW format.
+        let make_at = 8 + 2 + 12 + 4;
+        let tiff = little_tiff(&[(271, 2, 6, (make_at as u32).to_le_bytes())], b"NIKON\0");
+        assert_eq!(sniffed(&tiff), Some("tiff"));
+    }
+
+    #[test]
+    fn tiff_raw_variants_need_both_sensor_metadata_and_the_camera_make() {
+        for (make, want) in [(b"NIKON\0".as_slice(), "nef"), (b"SONY\0", "arw"), (b"PENTAX\0", "pef"), (b"SAMSUNG\0", "srw")] {
+            let make_at = 8 + 2 + 2 * 12 + 4;
+            let raw = little_tiff(
+                &[
+                    (271, 2, make.len() as u32, (make_at as u32).to_le_bytes()),
+                    (33421, 3, 2, [2, 0, 2, 0]),
+                ],
+                make,
+            );
+            assert_eq!(sniffed(&raw), Some(want), "{}", String::from_utf8_lossy(make));
+        }
+    }
+
+    #[test]
+    fn raw_formats_with_header_markers_are_recognised_directly() {
+        assert_eq!(sniffed(b"II*\0\x10\0\0\0CR\x02\0"), Some("cr2"));
+        assert_eq!(sniffed(b"IIRO\x08\0\0\0"), Some("orf"));
+        assert_eq!(sniffed(b"MMOR\0\0\0\x08"), Some("orf"));
+        assert_eq!(sniffed(b"IIU\0\x08\0\0\0"), Some("rw2"));
     }
 
     #[test]

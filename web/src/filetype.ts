@@ -16,9 +16,17 @@ const DIALOG_CLOSE = "Close";
 const IDENTIFIED_FROM = `Identified from the file's first bytes, using the rule database of the Unix "file" command.`;
 const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
 const TEMPLATE_LABEL: Record<string, string> = {
+  arw: "Sony ARW",
   bardstale: "Bard's Tale I (DOS save)",
+  cr2: "Canon CR2",
+  dng: "Adobe DNG",
   lnk: "Windows shortcut",
+  nef: "Nikon NEF",
   omezarr: "OME-Zarr metadata",
+  orf: "Olympus ORF",
+  pef: "Pentax PEF",
+  rw2: "Panasonic RW2",
+  srw: "Samsung SRW",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */
