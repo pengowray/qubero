@@ -7,7 +7,7 @@
 // windowed by bit range, which is the same shape.
 
 import { formatOffset } from "./doc.js";
-import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
+import { bitSizeText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
 import type { Doc, Span } from "./doc.js";
 
 /** Rows fetched beyond the ones on screen, so a wheel notch has somewhere to
@@ -22,6 +22,10 @@ const LOOK_BACK = 1024;
 const LOOK_BACK_LIMIT = 1 << 22;
 /** Fields asked for in one call, however far back the window reaches. */
 const SPAN_LIMIT = 4096;
+/** Deep parser paths are still carried in full, but more indentation stops
+ * helping after a few levels. The heading continues to name the changed
+ * suffix, so no context is thrown away. */
+const MAX_INDENT = 4;
 
 export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
@@ -41,8 +45,14 @@ function trailParts(trail: readonly string[]): string[] {
     const last = out[out.length - 1];
     const bare = /^\[\d+\]$/.test(part);
     const labelled = !bare && /^\[\d+\] /.test(part);
-    if (last !== undefined && (bare || (labelled && !last.includes("[")))) out[out.length - 1] = last + part;
-    else out.push(part);
+    if (last !== undefined && (bare || (labelled && !last.includes("[")))) {
+      out[out.length - 1] = last + part;
+    } else if (last !== part) {
+      // Pointer-heavy formats can pass through several IR wrappers all
+      // called `object` or `body`. Repeating that label implies a hierarchy
+      // the file itself does not have, so it is one logical level here.
+      out.push(part);
+    }
   }
   return out;
 }
@@ -228,13 +238,13 @@ export class ListingView {
       if (from < parts.length) {
         rows.push({
           kind: "heading",
-          depth: from,
-          text: parts.slice(from).join(" › "),
+          depth: Math.min(from, MAX_INDENT),
+          text: `${from > MAX_INDENT ? "… › " : ""}${parts.slice(from).join(" › ")}`,
           key: `h:${s.offset_bits}:${from}`,
         });
       }
       previous = parts;
-      rows.push({ kind: "field", depth: parts.length, span: s, key: s.path.join("/") });
+      rows.push({ kind: "field", depth: Math.min(parts.length, MAX_INDENT), span: s, key: s.path.join("/") });
     }
     return rows;
   }
@@ -387,8 +397,16 @@ export class ListingView {
       c.className = cls;
       return c;
     });
-    const [addr, bytes, name, value, type] = cells as [HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement];
+    const [addr, length, bytes, name, value, type] = cells as [
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+    ];
     addr.textContent = formatOffset(s.offset_bits);
+    length.textContent = bitSizeText(s.size_bits);
     const raw = fieldBytes(this.doc, s);
     const ascii = document.createElement("i");
     ascii.className = "lv-ascii";
@@ -402,13 +420,13 @@ export class ListingView {
       // row, where a row one line high shows half of each of them.
       el.classList.add("lv-inline");
       value.textContent = s.line;
-      el.append(addr, bytes, value, type);
+      el.append(addr, length, bytes, value, type);
       return el;
     }
     if (s.gap) {
       name.textContent = GAP_LABEL;
-      value.textContent = "";
-      type.textContent = "";
+      value.textContent = "not described by this template";
+      type.textContent = "undefined";
     } else {
       name.textContent = s.name;
       value.textContent = s.count > 0 ? runText(s) : s.value;
@@ -429,6 +447,7 @@ export class ListingView {
 
 const COLUMNS = [
   ["lv-addr", "Offset"],
+  ["lv-length", "Length"],
   ["lv-bytes", "Bytes"],
   ["lv-name", "Field"],
   ["lv-value", "Value"],

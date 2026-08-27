@@ -4,7 +4,7 @@
 // the text as that field's type and writes only that field's bits.
 
 import { formatBytes, formatOffset } from "./doc.js";
-import { childWord, countText } from "./strings.js";
+import { bitSizeText, childWord, countText } from "./strings.js";
 import type { Doc, TemplateNode } from "./doc.js";
 
 const PAGE = 200;
@@ -15,6 +15,14 @@ const INLINE_LIMIT = { bytes: 16, str: 64 } as const;
 const WRITE_RETRIES = 8;
 /** A cell whose value is still being worked out. Not zero, and not nothing. */
 const NOT_YET = "…";
+/** Preserve the underlying tree, but stop its parser wrappers from consuming
+ * the whole Field column. Deeper levels are marked rather than further
+ * indented. */
+const MAX_INDENT_DEPTH = 5;
+
+function treeIndent(depth: number, extra: number): string {
+  return `${Math.min(depth, MAX_INDENT_DEPTH) * 16 + extra}px`;
+}
 
 export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
@@ -52,14 +60,6 @@ function label(n: TemplateNode): (Node | string)[] {
   num.className = "tt-num-note";
   num.textContent = m[2] ?? "";
   return [`${m[1]} `, num];
-}
-
-function sizeText(bits: number): string {
-  if (bits % 8 === 0) {
-    const b = bits / 8;
-    return b === 1 ? "1 byte" : `${b.toLocaleString()} bytes`;
-  }
-  return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
 }
 
 export class TypeTable {
@@ -364,7 +364,7 @@ export class TypeTable {
     tr.className = r.status === "pending" ? "tt-pending" : "tt-error";
     const td = document.createElement("td");
     td.colSpan = 5;
-    td.style.paddingLeft = `${depth * 16 + 8}px`;
+    td.style.paddingLeft = treeIndent(depth, 8);
     td.textContent = r.status === "pending" ? `Loading ${what}` : `${what}: ${r.message}`;
     tr.append(td);
     frag.append(tr);
@@ -381,7 +381,14 @@ export class TypeTable {
     if (!n.ok) tr.classList.add("tt-bad");
 
     const name = document.createElement("td");
-    name.style.paddingLeft = `${depth * 16 + 4}px`;
+    name.style.paddingLeft = treeIndent(depth, 4);
+    if (depth > MAX_INDENT_DEPTH) {
+      const deeper = document.createElement("span");
+      deeper.className = "tt-depth-more";
+      deeper.textContent = "… ";
+      deeper.title = `${depth - MAX_INDENT_DEPTH} deeper internal ${depth - MAX_INDENT_DEPTH === 1 ? "level" : "levels"}`;
+      name.append(deeper);
+    }
     const open = this.expanded.has(k);
     if (n.composite) {
       const b = document.createElement("button");
@@ -423,7 +430,7 @@ export class TypeTable {
     off.textContent = formatOffset(n.offset_bits);
     const size = document.createElement("td");
     size.className = "tt-num";
-    size.textContent = sizeText(n.size_bits);
+    size.textContent = bitSizeText(n.size_bits);
     tr.append(off, name, value, type, size);
     frag.append(tr);
 
@@ -445,7 +452,7 @@ export class TypeTable {
         const tr2 = document.createElement("tr");
         const td = document.createElement("td");
         td.colSpan = 5;
-        td.style.paddingLeft = `${(depth + 1) * 16 + 8}px`;
+        td.style.paddingLeft = treeIndent(depth + 1, 8);
         const b = document.createElement("button");
         b.type = "button";
         b.dataset["more"] = k;
@@ -476,7 +483,7 @@ export class TypeTable {
       tr.className = "tt-skip";
       const td = document.createElement("td");
       td.colSpan = 5;
-      td.style.paddingLeft = `${(depth + 1) * 16 + 8}px`;
+      td.style.paddingLeft = treeIndent(depth + 1, 8);
       td.textContent = `${countText(skipped, childWord(n))} hidden`;
       tr.append(td);
       frag.append(tr);

@@ -268,6 +268,10 @@ input.invalid {
 .tt-num-note {
   color: var(--muted);
 }
+.tt-depth-more {
+  color: var(--muted);
+  font-style: italic;
+}
 .tt-bad .tt-val {
   color: var(--warn);
 }
@@ -895,6 +899,10 @@ input.invalid {
   color: var(--fg);
   font-weight: 600;
 }
+.insp-crumb-more {
+  color: var(--accent);
+  font-style: italic;
+}
 .insp-field {
   width: 100%;
   font-family: var(--mono);
@@ -1247,7 +1255,7 @@ input.invalid {
   /* Narrower than this the columns would overlap, so the body scrolls
      sideways instead. Every part that lays out a row shares the width, or the
      rows would get a second scrollbar inside the first. */
-  --lv-min: 95ch;
+  --lv-min: 115ch;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -1275,7 +1283,7 @@ input.invalid {
 .lv-header,
 .lv-row {
   display: grid;
-  grid-template-columns: 10ch 35ch 16ch minmax(22ch, 1fr) 14ch;
+  grid-template-columns: 10ch 14ch 25ch 24ch minmax(16ch, 1fr) 14ch;
   gap: 0 2ch;
   height: 20px;
   white-space: pre;
@@ -1304,6 +1312,7 @@ input.invalid {
 .lv-addr {
   color: var(--addr);
 }
+.lv-length,
 .lv-bytes,
 .lv-type {
   color: var(--muted);
@@ -1313,10 +1322,10 @@ input.invalid {
 }
 /* An instruction, or a block of weights, is one thing, so it reads across the
    two columns a field would have split between a name and a value. Such a row
-   leaves its name cell out: this claims column three, and a cell already
+   leaves its name cell out: this claims the field and value columns, and a cell already
    sitting there would put this one on a grid row of its own. */
 .lv-inline .lv-value {
-  grid-column: 3 / 5;
+  grid-column: 4 / 6;
 }
 .lv-gap .lv-name {
   font-style: italic;
@@ -1332,7 +1341,7 @@ input.invalid {
   font-weight: 600;
 }
 .lv-heading-text {
-  grid-column: 3 / 6;
+  grid-column: 4 / 7;
   padding-left: calc(var(--depth, 0) * 1ch);
   border-bottom: 1px solid var(--line);
 }

@@ -981,6 +981,10 @@ mod tests {
     #[test]
     fn the_other_formats_still_answer() {
         assert_eq!(sniffed(b"\x89PNG\r\n\x1a\n"), Some("png"));
+        // HDF5 containers remain openable through the ordinary file picker;
+        // `.h5ad` is one of their application-level conventions, not tied to
+        // the separate OME-Zarr directory action on the welcome screen.
+        assert_eq!(sniffed(b"\x89HDF\r\n\x1a\n"), Some("hdf5"));
         assert_eq!(sniffed(b"\0asm\x01\0\0\0"), Some("wasm"));
         assert_eq!(sniffed(b"SQLite format 3\0"), Some("sqlite"));
         assert_eq!(sniffed(b"qoif\0\0\x01\0\0\0\x01\0\x04\0"), Some("qoi"));

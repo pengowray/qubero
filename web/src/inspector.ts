@@ -9,7 +9,7 @@ import { formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { childWord, countText } from "./strings.js";
+import { bitSizeText, childWord, countText } from "./strings.js";
 import { typePanel } from "./typepanel.js";
 import { extraction } from "./bitextract.js";
 
@@ -55,6 +55,9 @@ export class Inspector {
   private at: readonly number[] | null = null;
   /** A field picked by name stays shown until the cursor moves off it. */
   private pinned: readonly number[] | null = null;
+  /** Deep parser-only paths start compact. The omitted middle can be expanded
+   * in place when somebody does need to inspect the underlying wrappers. */
+  private crumbsExpanded = false;
 
   /** Asked for when a breadcrumb is clicked, so the views can follow. */
   onPick: (path: readonly number[]) => void = () => {};
@@ -131,6 +134,11 @@ export class Inspector {
     this.crumbs.addEventListener("click", (e) => {
       const t = e.target;
       if (!(t instanceof HTMLElement)) return;
+      if (t.dataset["expand"] !== undefined) {
+        this.crumbsExpanded = true;
+        this.render();
+        return;
+      }
       const p = t.dataset["path"];
       if (p !== undefined) this.onPick(p === "" ? [] : p.split("/").map(Number));
     });
@@ -529,7 +537,7 @@ export class Inspector {
     const at = document.createElement("span");
     at.className = "addr";
     at.textContent = formatOffset(n.offset_bits);
-    this.detail.replaceChildren(at, ` · ${n.type} · ${sizeText(n.size_bits)}`);
+    this.detail.replaceChildren(at, ` · ${n.type} · ${bitSizeText(n.size_bits)}`);
     this.showFormula(n.offset_bits, n.size_bits, false);
     const long = !n.composite && (n.kind === "bytes" || n.kind === "str");
     this.area.hidden = !long;
@@ -723,11 +731,11 @@ export class Inspector {
    * doubles the length of a deep path without saying more.
    */
   private trail(path: readonly number[]): HTMLElement[] {
-    const out: HTMLElement[] = [];
+    const items: { label: string; path: readonly number[]; here: boolean }[] = [];
     for (let i = 0; i <= path.length; i++) {
       const node = this.doc.templateNode(path.slice(0, i));
       if (node.status !== "ok") {
-        out.push(this.crumb("?", path.slice(0, i), i === path.length));
+        items.push({ label: "?", path: path.slice(0, i), here: i === path.length });
         continue;
       }
       const n = node.node;
@@ -735,15 +743,39 @@ export class Inspector {
       if (isList && i < path.length) {
         // Fold the element index into the list's own name.
         const to = path.slice(0, i + 1);
-        out.push(this.crumb(`${n.name}[${path[i]}]`, to, i + 1 === path.length));
+        items.push({ label: `${n.name}[${path[i]}]`, path: to, here: i + 1 === path.length });
         i += 1;
         continue;
       }
       // A struct field is often called `body`; its type says what it holds.
       const label = n.composite && n.type !== n.name ? `${n.name} (${n.type})` : n.name;
-      out.push(this.crumb(label, path.slice(0, i), i === path.length));
+      const previous = items[items.length - 1];
+      if (previous !== undefined && previous.label === label) {
+        // Repeated `object`/`body` wrappers are one logical step. Keep the
+        // deepest target so following the crumb still reaches the useful one.
+        items[items.length - 1] = { label, path: path.slice(0, i), here: i === path.length };
+      } else {
+        items.push({ label, path: path.slice(0, i), here: i === path.length });
+      }
     }
-    return out;
+    const MAX_CRUMBS = 7;
+    if (this.crumbsExpanded || items.length <= MAX_CRUMBS) {
+      return items.map((item) => this.crumb(item.label, item.path, item.here));
+    }
+    const head = items.slice(0, 2);
+    const tail = items.slice(-3);
+    const hidden = items.slice(2, -3);
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "insp-crumb insp-crumb-more";
+    more.dataset["expand"] = "";
+    more.textContent = `… ${hidden.length} internal levels`;
+    more.title = hidden.map((item) => item.label).join(" › ");
+    return [
+      ...head.map((item) => this.crumb(item.label, item.path, item.here)),
+      more,
+      ...tail.map((item) => this.crumb(item.label, item.path, item.here)),
+    ];
   }
 
   private crumb(label: string, path: readonly number[], here: boolean): HTMLElement {
@@ -980,12 +1012,4 @@ function hexText(bytes: Uint8Array): string {
 
 function modeLabel(mode: Mode): string {
   return mode === "structure" ? "Field" : mode === "le" ? "Little-endian" : "Big-endian";
-}
-
-function sizeText(bits: number): string {
-  if (bits % 8 === 0) {
-    const b = bits / 8;
-    return b === 1 ? "1 byte" : `${b.toLocaleString()} bytes`;
-  }
-  return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
 }

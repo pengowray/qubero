@@ -1,8 +1,21 @@
 // Text that more than one view shows. Two views naming the same thing two ways
 // is the reader's problem, not a detail of whichever file happens to draw it.
 
-/** What a stretch of bytes no field covers is called. */
-export const GAP_LABEL = "no field";
+/** What a stretch of bytes no field covers is called. `Unmapped` makes it
+ * clear that the bytes still exist; only the selected template has no
+ * definition for them. */
+export const GAP_LABEL = "unmapped";
+
+/** Exact on-disk extent of a field. Counts stay in bytes wherever possible:
+ * a reader comparing adjacent rows usually wants the stored length, not a
+ * rounded human-size approximation. */
+export function bitSizeText(bits: number): string {
+  if (bits % 8 === 0) {
+    const bytes = bits / 8;
+    return bytes === 1 ? "1 byte" : `${bytes.toLocaleString()} bytes`;
+  }
+  return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
+}
 
 /** Shown where fields would be when nothing has said what the file's are. */
 export const NO_TEMPLATE = "No template selected";
