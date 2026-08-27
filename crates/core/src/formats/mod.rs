@@ -5,6 +5,7 @@ mod aiff;
 mod appledouble;
 mod au;
 mod bmp;
+mod bards_tale;
 mod cbor;
 mod dos;
 mod ggml;
@@ -54,6 +55,7 @@ pub use aiff::aiff;
 pub use appledouble::{appledouble, applesingle};
 pub use au::au;
 pub use bmp::bmp;
+pub use bards_tale::bards_tale;
 pub use cbor::cbor;
 pub use dos::dos;
 pub use gguf::gguf;
@@ -99,7 +101,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -145,6 +147,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "hdf5" => Some(hdf5()),
         "appledouble" => Some(appledouble()),
         "applesingle" => Some(applesingle()),
+        "bardstale" => Some(bards_tale()),
         _ => None,
     }
 }
@@ -204,7 +207,9 @@ const MAGIC: &[(&[u8], &str)] = &[
 /// also the size and checksum an LHA archive could open with, and only one of
 /// the two knows enough to say so.
 pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
-    if is_mca(head, len) {
+    if is_bards_tale(head, len) {
+        Some("bardstale")
+    } else if is_mca(head, len) {
         Some("mca")
     } else if is_whisper(head) {
         Some("whisper")
@@ -244,6 +249,33 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Whether these bytes are a Bard's Tale I DOS `.TPW` file.
+///
+/// The format has no magic number. Its two record sizes, the discriminator at
+/// byte 16, a printable NUL-padded name and the zero high bytes of the first
+/// three character enums together make a much narrower signature than size or
+/// extension alone.
+fn is_bards_tale(head: &[u8], len: u64) -> bool {
+    if head.len() < 17 || !matches!((len, head[16]), (109, 1) | (113, 2)) {
+        return false;
+    }
+    let name = &head[..16];
+    let Some(end) = name.iter().position(|&b| b == 0) else { return false };
+    if end == 0 || !name[..end].iter().all(|&b| b.is_ascii_graphic() || b == b' ') || name[end..].iter().any(|&b| b != 0) {
+        return false;
+    }
+    if head[16] == 2 {
+        return true;
+    }
+    head.len() >= 23
+        && head[18] == 0
+        && head[20] == 0
+        && head[22] == 0
+        && head[17] & 1 == 0
+        && head[19] <= 6
+        && head[21] <= 9
 }
 
 /// Whether these leading bytes are a Windows bitmap.
