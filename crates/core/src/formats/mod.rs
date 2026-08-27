@@ -22,6 +22,7 @@ mod iff;
 mod ilbm;
 mod jpeg;
 mod lha;
+mod lnk;
 mod mca;
 mod midi;
 mod mp4;
@@ -67,6 +68,7 @@ pub use id3::id3;
 pub use ilbm::ilbm;
 pub use jpeg::jpeg;
 pub use lha::lha;
+pub use lnk::lnk;
 pub use mca::mca;
 pub use midi::midi;
 pub use mp4::mp4;
@@ -101,7 +103,7 @@ pub fn json() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "bardstale"]
+    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -137,6 +139,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "mca" => Some(mca()),
         "tap" => Some(tap()),
         "lha" => Some(lha()),
+        "lnk" => Some(lnk()),
         "cbor" => Some(cbor()),
         "gitindex" => Some(git_index()),
         "gitpackidx" => Some(git_pack_index()),
@@ -223,6 +226,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("msdos")
     } else if is_lha(head) {
         Some("lha")
+    } else if is_lnk(head) {
+        Some("lnk")
     } else if is_bmp(head) {
         Some("bmp")
     } else if is_pnm(head) {
@@ -307,6 +312,18 @@ fn is_pcx(head: &[u8]) -> bool {
 /// signature every tool that identifies these files uses.
 fn is_lha(head: &[u8]) -> bool {
     matches!(head.get(2..7), Some([b'-', b'l', b'h' | b'z', _, b'-']))
+}
+
+/// Whether these leading bytes are a Shell Link (`.lnk`).  Its header size
+/// and LinkCLSID together are fixed by the format, which is strong enough to
+/// identify a shortcut without relying on its filename extension.
+fn is_lnk(head: &[u8]) -> bool {
+    head.len() >= 20
+        && head[..4] == [0x4c, 0, 0, 0]
+        && head[4..20] == [
+            0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+        ]
 }
 
 /// Whether these leading bytes are a netpbm file.

@@ -15,7 +15,20 @@ const DIALOG_TITLE = "File type";
 const DIALOG_CLOSE = "Close";
 const IDENTIFIED_FROM = `Identified from the file's first bytes, using the rule database of the Unix "file" command.`;
 const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
-export const fullTemplateLine = (name: string): string => `The Fields table uses Qubero's full ${name} template.`;
+const TEMPLATE_LABEL: Record<string, string> = {
+  bardstale: "Bard's Tale I (DOS save)",
+  lnk: "Windows shortcut",
+};
+
+/** A built-in's human-facing name; internal names remain stable API values. */
+export const templateLabel = (name: string): string => TEMPLATE_LABEL[name] ?? name;
+
+/** A useful identity when the full template recognises a format the rule database does not. */
+export const templateTypeName = (name: string): string =>
+  name === "bardstale" ? "The Bard's Tale I MS-DOS save game" : `${templateLabel(name)} file`;
+
+export const fullTemplateLine = (name: string): string =>
+  `The Fields table uses Qubero's full ${templateLabel(name)} template.`;
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
 

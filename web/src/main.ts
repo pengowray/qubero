@@ -8,7 +8,7 @@ import { ListingView } from "./listingview.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
-import { fileType, fullTemplateLine } from "./filetype.js";
+import { fileType, fullTemplateLine, templateLabel, templateTypeName } from "./filetype.js";
 import { TypeTable } from "./typetable.js";
 
 const appEl = document.getElementById("app");
@@ -187,7 +187,7 @@ function mount(doc: Doc): void {
   const tmpl = el("select", { className: "tb-tmpl" });
   tmpl.setAttribute("aria-label", "Template");
   tmpl.append(el("option", { value: "", textContent: "No template" }));
-  for (const n of doc.templateNames) tmpl.append(el("option", { value: n, textContent: `Template: ${n}` }));
+  for (const n of doc.templateNames) tmpl.append(el("option", { value: n, textContent: `Template: ${templateLabel(n)}` }));
   // The generated template is not one of the built-ins, so switching back to it
   // rebuilds it rather than looking it up by name.
   let reapplySignature: (() => Promise<void>) | null = null;
@@ -229,9 +229,16 @@ function mount(doc: Doc): void {
       if (waiting !== null) clearTimeout(waiting);
       if (id === null) {
         overview.setIdentity("");
-        // A file with a template is not unknown, whatever the rules make of
-        // it, so only a file without one says so.
-        if (!templated) {
+        // A full template has stronger structural evidence than the generic
+        // rule database. Keep its answer visible when those rules have no
+        // signature for the format (as with a Bard's Tale TPW record).
+        if (templated && name !== null) {
+          const identity = templateTypeName(name);
+          kind.named(identity);
+          overview.setIdentity(identity);
+          kind.details(null, fullTemplateLine(name));
+          void kind.addTools(doc, null, name);
+        } else {
           kind.unknown();
           kind.details(null, "");
           void kind.addTools(doc, null, name);
