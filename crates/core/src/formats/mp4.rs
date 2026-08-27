@@ -5,12 +5,13 @@
 //! the template's type table.
 //!
 //! What is here: the box tree, ftyp, the movie/track/media headers in both
-//! their 32-bit and 64-bit versions, hdlr, the sample description down to
-//! avc1, and the AVC decoder configuration record with its SPS and PPS, each
-//! NAL unit split into its header bits and payload.
+//! their 32-bit and 64-bit versions, metadata keys and typed values, timing,
+//! size and chunk indexes, the sample description down to visual entries, and
+//! the AVC decoder configuration record with its SPS and PPS. Blackmagic RAW
+//! adds known per-frame camera metadata, picture headers, and motion samples.
 //!
 //! What is not: the contents of an SPS or PPS, which are exp-golomb coded bit
-//! fields the IR cannot describe yet, and sample tables beyond stsd.
+//! fields the IR cannot describe yet, nor proprietary compressed BRAW essence.
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
@@ -61,7 +62,11 @@ const NAL_TYPE: &[(i128, &str)] = &[
 ];
 
 pub fn mp4() -> Template {
-    Template::new("mp4", T::repeat(T::Named("Box".into()), Until::End)).with_type("Box", boxes())
+    template_named("mp4")
+}
+
+pub(crate) fn template_named(name: &str) -> Template {
+    Template::new(name, T::repeat(T::Named("Box".into()), Until::End)).with_type("Box", boxes())
 }
 
 fn boxes() -> T {
@@ -112,6 +117,19 @@ fn payload(len: E) -> T {
     cases.push((cc("mdhd"), mdhd()));
     cases.push((cc("hdlr"), hdlr(len.clone())));
     cases.push((cc("stsd"), stsd()));
+    cases.push((cc("stts"), time_to_sample()));
+    cases.push((cc("ctts"), composition_offsets()));
+    cases.push((cc("stsc"), sample_to_chunk()));
+    cases.push((cc("stsz"), sample_sizes()));
+    cases.push((cc("stco"), chunk_offsets(false)));
+    cases.push((cc("co64"), chunk_offsets(true)));
+    cases.push((cc("stss"), sync_samples()));
+    cases.push((cc("meta"), metadata()));
+    cases.push((cc("keys"), metadata_keys()));
+    cases.push((cc("ilst"), metadata_items()));
+    cases.push((cc("mogy"), motion_vector("Gyroscope")));
+    cases.push((cc("moac"), motion_vector("Accelerometer")));
+    cases.push((cc("mdat"), media_data(len.clone())));
     cases.push((cc("avcC"), avcc()));
     T::switch(E::field("type"), cases, T::bytes(len))
 }
@@ -266,7 +284,22 @@ fn sample_entry() -> T {
                 "body",
                 T::sized(
                     rest.clone(),
-                    T::switch(E::field("format"), vec![(cc("avc1"), visual_sample_entry()), (cc("hvc1"), visual_sample_entry())], T::bytes(rest)),
+                    T::switch(
+                        E::field("format"),
+                        vec![
+                            (cc("avc1"), visual_sample_entry()),
+                            (cc("hvc1"), visual_sample_entry()),
+                            (cc("brlt"), visual_sample_entry()),
+                            (cc("brxq"), visual_sample_entry()),
+                            (cc("brst"), visual_sample_entry()),
+                            (cc("brvm"), visual_sample_entry()),
+                            (cc("brhq"), visual_sample_entry()),
+                            (cc("brvl"), visual_sample_entry()),
+                            (cc("brvn"), visual_sample_entry()),
+                            (cc("brvo"), visual_sample_entry()),
+                        ],
+                        T::bytes(rest),
+                    ),
                 ),
             ),
         ],
@@ -297,6 +330,283 @@ fn visual_sample_entry() -> T {
             ("depth", u16be()),
             ("pre_defined3", T::Int { bits: 16, endian: Big }),
             ("boxes", T::repeat(T::Named("Box".into()), Until::End)),
+        ],
+    )
+}
+
+fn counted_full_box(name: &'static str, entry: T) -> T {
+    let mut fields = full_box();
+    fields.extend(vec![("entry_count", u32be()), ("entries", T::array(entry, E::field("entry_count")))]);
+    T::structure(name, fields)
+}
+
+fn time_to_sample() -> T {
+    counted_full_box(
+        "TimeToSample",
+        T::structure("TimeToSampleEntry", vec![("sample_count", u32be()), ("sample_delta", u32be())]),
+    )
+}
+
+fn composition_offsets() -> T {
+    let offset = T::switch(
+        E::field("version"),
+        vec![(1, T::Int { bits: 32, endian: Big })],
+        u32be(),
+    );
+    counted_full_box(
+        "CompositionOffsets",
+        T::structure("CompositionOffsetEntry", vec![("sample_count", u32be()), ("sample_offset", offset)]),
+    )
+}
+
+fn sample_to_chunk() -> T {
+    counted_full_box(
+        "SampleToChunk",
+        T::structure(
+            "SampleToChunkEntry",
+            vec![("first_chunk", u32be()), ("samples_per_chunk", u32be()), ("sample_description_index", u32be())],
+        ),
+    )
+}
+
+fn sample_sizes() -> T {
+    let mut fields = full_box();
+    fields.extend(vec![
+        ("sample_size", u32be()),
+        ("sample_count", u32be()),
+        (
+            "entry_sizes",
+            T::switch(
+                E::field("sample_size"),
+                vec![(0, T::array(u32be(), E::field("sample_count")))],
+                T::bytes(E::lit(0)),
+            ),
+        ),
+    ]);
+    T::structure("SampleSizes", fields)
+}
+
+fn chunk_offsets(wide: bool) -> T {
+    counted_full_box(if wide { "ChunkOffsets64" } else { "ChunkOffsets32" }, if wide { T::u64(Big) } else { u32be() })
+}
+
+fn sync_samples() -> T {
+    counted_full_box("SyncSamples", u32be())
+}
+
+/// QuickTime metadata is a full `meta` box whose children are regular boxes.
+fn metadata() -> T {
+    let mut fields = full_box();
+    fields.push(("boxes", T::repeat(T::Named("Box".into()), Until::End)));
+    T::structure("Metadata", fields)
+}
+
+fn metadata_keys() -> T {
+    let entry = T::structure(
+        "MetadataKey",
+        vec![
+            ("size", u32be()),
+            ("namespace", T::utf8(E::lit(4))),
+            ("name", T::utf8(E::field("size").sub(E::lit(8)))),
+        ],
+    );
+    let mut fields = full_box();
+    fields.extend(vec![("entry_count", u32be()), ("entries", T::array(entry, E::field("entry_count")))]);
+    T::structure("MetadataKeys", fields)
+}
+
+fn metadata_items() -> T {
+    T::repeat(
+        T::structure(
+            "MetadataItem",
+            vec![
+                ("size", u32be()),
+                ("key_index", u32be()),
+                ("value", T::sized(E::field("size").sub(E::lit(8)), metadata_data())),
+            ],
+        ),
+        Until::End,
+    )
+}
+
+fn metadata_data() -> T {
+    T::structure(
+        "MetadataData",
+        vec![
+            ("size", u32be()),
+            ("magic", T::magic(b"data")),
+            ("type", T::enumeration("MetadataType", u32be(), METADATA_TYPES)),
+            ("locale", u32be()),
+            (
+                "value",
+                T::sized(
+                    E::field("size").sub(E::lit(16)),
+                    T::switch(
+                        E::field("type"),
+                        vec![
+                            (1, T::utf8(E::Remaining)),
+                            (23, T::F32(Big)),
+                            (24, T::F64(Big)),
+                            (65, T::Int { bits: 8, endian: Big }),
+                            (66, T::Int { bits: 16, endian: Big }),
+                            (67, T::Int { bits: 32, endian: Big }),
+                            (70, T::array(T::F32(Big), E::lit(2))),
+                            (71, T::array(T::F32(Big), E::lit(2))),
+                            (74, T::Int { bits: 64, endian: Big }),
+                            (75, T::u8()),
+                            (76, u16be()),
+                            (77, u32be()),
+                            (78, T::u64(Big)),
+                        ],
+                        T::bytes(E::Remaining),
+                    ),
+                ),
+            ),
+        ],
+    )
+}
+
+const METADATA_TYPES: &[(i128, &str)] = &[
+    (1, "UTF-8"),
+    (23, "float32"),
+    (24, "float64"),
+    (65, "signed int8"),
+    (66, "signed int16"),
+    (67, "signed int32"),
+    (70, "point/size (2 × float32)"),
+    (71, "dimensions (2 × float32)"),
+    (74, "signed int64"),
+    (75, "unsigned int8"),
+    (76, "unsigned int16"),
+    (77, "unsigned int32"),
+    (78, "unsigned int64"),
+];
+
+fn motion_vector(name: &'static str) -> T {
+    T::structure(
+        name,
+        vec![("x", T::F32(Little)), ("y", T::F32(Little)), ("z", T::F32(Little))],
+    )
+}
+
+/// Decode the first BRAW sample when an `mdat` starts with its `bmdf` marker.
+/// Sample tables still expose every subsequent sample's offset and size.
+fn media_data(len: E) -> T {
+    let too_short = len.clone().less_than(E::lit(8));
+    let marker = E::peek_at(E::lit(4 * 8), 32, Big);
+    T::switch(
+        too_short.or(marker),
+        vec![
+            (cc("bmdf"), first_braw_sample(len.clone())),
+            (cc("mogy"), motion_samples()),
+            (cc("moac"), motion_samples()),
+        ],
+        T::bytes(len),
+    )
+}
+
+fn motion_samples() -> T {
+    let body_len = E::field("size").sub(E::lit(8));
+    T::repeat(
+        T::structure(
+            "BlackmagicMotionSample",
+            vec![
+                ("size", u32be()),
+                ("type", T::utf8(E::lit(4))),
+                (
+                    "value",
+                    T::sized(
+                        body_len.clone(),
+                        T::switch(
+                            E::field("type"),
+                            vec![(cc("mogy"), motion_vector("Gyroscope")), (cc("moac"), motion_vector("Accelerometer"))],
+                            T::bytes(body_len),
+                        ),
+                    ),
+                ),
+            ],
+        ),
+        Until::End,
+    )
+}
+
+fn first_braw_sample(len: E) -> T {
+    T::structure(
+        "BrawMediaData",
+        vec![
+            ("metadata_size", u32be()),
+            ("metadata_magic", T::magic(b"bmdf")),
+            (
+                "frame_metadata",
+                T::sized(
+                    E::field("metadata_size").sub(E::lit(8)),
+                    T::repeat(frame_metadata_atom(), Until::End),
+                ),
+            ),
+            ("picture_magic", T::magic(b"braw")),
+            ("picture_size", u32be()),
+            (
+                "picture",
+                T::sized(
+                    E::field("picture_size").sub(E::lit(8)),
+                    T::structure(
+                        "BrawPicture",
+                        vec![
+                            ("sample_header", T::bytes(E::lit(12))),
+                            ("width", u16be()),
+                            ("height", u16be()),
+                            ("slice_height", u16be()),
+                            ("compressed_essence", T::bytes(E::Remaining)),
+                        ],
+                    ),
+                ),
+            ),
+            (
+                "remaining_samples",
+                T::bytes(
+                    len.sub(E::field("metadata_size"))
+                        .sub(E::field("picture_size")),
+                ),
+            ),
+        ],
+    )
+}
+
+fn frame_metadata_atom() -> T {
+    let body_len = E::field("size").sub(E::lit(8));
+    T::structure(
+        "BrawFrameMetadata",
+        vec![
+            ("size", u32be()),
+            ("type", T::utf8(E::lit(4))),
+            (
+                "value",
+                T::sized(
+                    body_len.clone(),
+                    T::switch(
+                        E::field("type"),
+                        vec![
+                            (
+                                cc("srte"),
+                                T::structure("SensorRate", vec![("numerator", u32be()), ("denominator", u32be())]),
+                            ),
+                            (cc("innd"), T::F32(Big)),
+                            (cc("agpf"), T::F32(Big)),
+                            (cc("expo"), T::F32(Big)),
+                            (cc("isoe"), u32be()),
+                            (cc("wkel"), u32be()),
+                            (cc("wtin"), u16be()),
+                            (cc("asct"), u32be()),
+                            (cc("asti"), u16be()),
+                            (cc("shtv"), T::utf8_padded(body_len.clone(), 0)),
+                            (cc("aptr"), T::utf8_padded(body_len.clone(), 0)),
+                            (cc("dsnc"), T::utf8_padded(body_len.clone(), 0)),
+                            (cc("fcln"), T::utf8_padded(body_len.clone(), 0)),
+                        ],
+                        T::bytes(body_len),
+                    ),
+                ),
+            ),
         ],
     )
 }
@@ -445,5 +755,78 @@ mod tests {
         let mdat = ev.node(&d, &[1]).unwrap();
         assert_eq!(mdat.size_bits, (8 + 20) * 8);
         assert_eq!(ev.node(&d, &[1, 2]).unwrap().size_bits, 20 * 8);
+    }
+
+    #[test]
+    fn braw_media_exposes_frame_metadata_and_picture_header() {
+        let mut metadata_atom = 12u32.to_be_bytes().to_vec();
+        metadata_atom.extend_from_slice(b"expo");
+        metadata_atom.extend_from_slice(&1.5f32.to_be_bytes());
+
+        let mut media = 20u32.to_be_bytes().to_vec();
+        media.extend_from_slice(b"bmdf");
+        media.extend_from_slice(&metadata_atom);
+        media.extend_from_slice(b"braw");
+        media.extend_from_slice(&29u32.to_be_bytes());
+        media.extend_from_slice(&[0x11; 12]);
+        media.extend_from_slice(&4096u16.to_be_bytes());
+        media.extend_from_slice(&2160u16.to_be_bytes());
+        media.extend_from_slice(&270u16.to_be_bytes());
+        media.extend_from_slice(&[0xaa, 0xbb, 0xcc]);
+
+        let mut file = boxed(b"wide", b"");
+        file.extend_from_slice(&boxed(b"mdat", &media));
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(template_named("braw"));
+
+        assert_eq!(ev.node(&d, &[1, 2, 0]).unwrap().value, Value::UInt(20));
+        assert_eq!(ev.node(&d, &[1, 2, 2, 0, 1]).unwrap().value, Value::Str("expo".into()));
+        assert_eq!(ev.node(&d, &[1, 2, 5, 1]).unwrap().value, Value::UInt(4096));
+        assert_eq!(ev.node(&d, &[1, 2, 5, 2]).unwrap().value, Value::UInt(2160));
+        assert_eq!(ev.node(&d, &[1, 2, 5, 4]).unwrap().size_bits, 24);
+    }
+
+    #[test]
+    fn quicktime_metadata_keys_and_typed_values_are_visible() {
+        let mut keys = vec![0; 4];
+        keys.extend_from_slice(&1u32.to_be_bytes());
+        keys.extend_from_slice(&26u32.to_be_bytes());
+        keys.extend_from_slice(b"mdta");
+        keys.extend_from_slice(b"com.blackmagic.iso");
+
+        let mut data = 20u32.to_be_bytes().to_vec();
+        data.extend_from_slice(b"data");
+        data.extend_from_slice(&77u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&800u32.to_be_bytes());
+        let mut item = 28u32.to_be_bytes().to_vec();
+        item.extend_from_slice(&1u32.to_be_bytes());
+        item.extend_from_slice(&data);
+
+        let mut file = boxed(b"keys", &keys);
+        file.extend_from_slice(&boxed(b"ilst", &item));
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(template_named("braw"));
+
+        assert_eq!(
+            ev.node(&d, &[0, 2, 3, 0, 2]).unwrap().value,
+            Value::Str("com.blackmagic.iso".into())
+        );
+        assert_eq!(ev.node(&d, &[1, 2, 0, 1]).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &[1, 2, 0, 2, 4]).unwrap().value, Value::UInt(800));
+    }
+
+    #[test]
+    fn blackmagic_motion_samples_decode_three_axes() {
+        let mut sample = 20u32.to_be_bytes().to_vec();
+        sample.extend_from_slice(b"mogy");
+        sample.extend_from_slice(&1.0f32.to_le_bytes());
+        sample.extend_from_slice(&2.0f32.to_le_bytes());
+        sample.extend_from_slice(&3.0f32.to_le_bytes());
+        let d = Document::new(MemSource(boxed(b"mdat", &sample)));
+        let mut ev = Evaluator::new(template_named("braw"));
+
+        assert_eq!(ev.node(&d, &[0, 2, 0, 1]).unwrap().value, Value::Str("mogy".into()));
+        assert_eq!(ev.node(&d, &[0, 2, 0, 2]).unwrap().child_count, 3);
     }
 }

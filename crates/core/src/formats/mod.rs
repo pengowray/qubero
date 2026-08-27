@@ -2,10 +2,12 @@
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
 mod aiff;
+mod aseprite;
 mod assimp;
 mod appledouble;
 mod au;
 mod bmp;
+mod braw;
 mod bards_tale;
 mod cbor;
 mod coff;
@@ -64,8 +66,10 @@ mod wasm_opcodes;
 
 pub use aiff::aiff;
 pub use appledouble::{appledouble, applesingle};
+pub use aseprite::aseprite;
 pub use au::au;
 pub use bmp::bmp;
+pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use cbor::cbor;
 pub use coff::coff;
@@ -130,7 +134,7 @@ pub fn omezarr() -> Template {
 
 pub fn builtin_names() -> &'static [&'static str] {
     &[
-        "png", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
+        "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
@@ -151,6 +155,8 @@ pub fn builtin_names() -> &'static [&'static str] {
 pub fn builtin(name: &str) -> Option<Template> {
     match name {
         "png" => Some(png()),
+        "aseprite" => Some(aseprite()),
+        "braw" => Some(braw()),
         "swf" => Some(swf()),
         "zip" => Some(zip()),
         "wasm" => Some(wasm()),
@@ -274,7 +280,11 @@ const MAGIC: &[(&[u8], &str)] = &[
 /// also the size and checksum an LHA archive could open with, and only one of
 /// the two knows enough to say so.
 pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
-    if head.starts_with(b"Extended Module: ") {
+    if is_braw(head) {
+        Some("braw")
+    } else if head.get(4..6) == Some(&[0xe0, 0xa5]) {
+        Some("aseprite")
+    } else if head.starts_with(b"Extended Module: ") {
         Some("xm")
     } else if head.starts_with(b"IMPM") {
         Some("it")
@@ -348,6 +358,16 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// BRAW is a QuickTime-family container, but unlike ordinary MP4 camera files
+/// it commonly starts with a `wide` compatibility box followed by `mdat`.
+/// Requiring both per-frame markers keeps this from claiming generic MOVs.
+fn is_braw(head: &[u8]) -> bool {
+    head.get(4..8) == Some(b"wide")
+        && head.get(12..16) == Some(b"mdat")
+        && head.windows(4).any(|w| w == b"bmdf")
+        && head.windows(4).any(|w| w == b"braw")
 }
 
 /// Assimp formats with enough evidence in their bytes to identify safely.
@@ -860,6 +880,15 @@ mod tests {
     /// chose.
     fn sniffed(head: &[u8]) -> Option<&'static str> {
         sniff(head, head.len() as u64)
+    }
+
+    #[test]
+    fn blackmagic_raw_needs_container_and_frame_markers() {
+        let braw = b"\0\0\0\x08wide\0\0\0\x30mdat\0\0\0\x14bmdf\0\0\0\x0cexpo\x3f\xc0\0\0braw";
+        assert_eq!(sniffed(braw), Some("braw"));
+
+        let generic_mov = b"\0\0\0\x08wide\0\0\0\x18mdatgeneric payload";
+        assert_ne!(sniffed(generic_mov), Some("braw"));
     }
 
     /// An `MZ` file that leaves room for a header of a later format, as
