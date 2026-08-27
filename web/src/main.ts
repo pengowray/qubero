@@ -24,7 +24,7 @@ let say: (text: string, warn?: boolean) => void = () => {};
 
 const DROP_TITLE = "Drop to open";
 const DROP_HINT = "or drop a file anywhere on this page";
-const FOLDER_MSG = "To open an OME-Zarr folder, use Open OME-Zarr.";
+const FOLDER_MSG = "Opening OME-Zarr folders is temporarily unavailable.";
 const manyFilesMsg = (name: string, ignored: number): string =>
   `Opened ${name}. Ignored ${ignored} other ${ignored === 1 ? "file" : "files"}.`;
 const discardMsg = (open: string, next: string): string =>
@@ -578,7 +578,7 @@ function pickOmeZarr(): void {
 function welcome(): void {
   const openBtn = el("button", { type: "button", textContent: "Open a file", className: "primary" });
   openBtn.addEventListener("click", pick);
-  const openOmeZarrBtn = el("button", { type: "button", textContent: "Open OME-Zarr", className: "secondary" });
+  const openOmeZarrBtn = el("button", { type: "button", textContent: "Open OME-Zarr", className: "secondary", hidden: true });
   openOmeZarrBtn.addEventListener("click", pickOmeZarr);
   const drop = el(
     "div",
