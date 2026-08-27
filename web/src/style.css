@@ -675,8 +675,9 @@ input.invalid {
   .panel-right {
     border-left: 0;
     border-top: 1px solid var(--line);
+    flex: 0 1 45%;
     max-height: 45%;
-    overflow: auto;
+    overflow: hidden;
   }
   .panel-right.is-collapsed .panel-toggle {
     writing-mode: horizontal-tb;
@@ -696,10 +697,12 @@ input.invalid {
 }
 @media (max-width: 700px) {
   .inspector {
+    flex: 1;
+    min-height: 0;
     width: auto;
     border-left: 0;
     border-top: 1px solid var(--line);
-    max-height: 40%;
+    max-height: none;
   }
 }
 /* The mode buttons are a control, not a heading over what follows, so they sit
