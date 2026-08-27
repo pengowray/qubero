@@ -56,7 +56,7 @@ const discardMsg = (open: string, next: string): string =>
 const closesMsg = (): string => {
   const doc = activeDoc();
   if (doc === null) return "";
-  const what = tabs.length > 1 ? `all ${tabs.length} tabs` : doc.name;
+  const what = tabs.length > 1 ? `all ${tabs.length} open files` : doc.name;
   return `Closes ${what}${modifiedTab() !== null ? " (unsaved edits)" : ""}`;
 };
 const selectedBytes = (n: number): string => (n === 1 ? "1 byte" : `${n.toLocaleString()} bytes`);
@@ -110,7 +110,7 @@ function closeTab(i: number): void {
  *  single file looks the way it always has. */
 function tabStrip(): HTMLElement {
   const strip = el("nav", { className: "tabstrip" });
-  strip.setAttribute("aria-label", "Open documents");
+  strip.setAttribute("aria-label", "Open files");
   const list = el("div", { className: "tabstrip-tabs" });
   list.setAttribute("role", "tablist");
   tabs.forEach((tab, i) => {

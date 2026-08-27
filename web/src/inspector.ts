@@ -599,7 +599,7 @@ export class Inspector {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "insp-check-button";
-    button.textContent = "Open in a new tab";
+    button.textContent = `Open ${plan.name}`;
     button.addEventListener("click", () => {
       if (load === null) return;
       button.disabled = true;
