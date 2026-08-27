@@ -41,6 +41,7 @@ mod qoi;
 mod png;
 mod safetensors;
 mod sqlite;
+mod swf;
 mod tap;
 mod tga;
 mod tiff;
@@ -49,6 +50,7 @@ mod w4v;
 mod wad;
 mod wav;
 mod whisper;
+mod zip;
 mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
@@ -85,6 +87,7 @@ pub use qoi::qoi;
 pub use png::png;
 pub use safetensors::safetensors;
 pub use sqlite::sqlite;
+pub use swf::swf;
 pub use tap::tap;
 pub use tga::tga;
 pub use tiff::tiff;
@@ -93,6 +96,7 @@ pub use w4v::w4v;
 pub use wad::wad;
 pub use wav::wav;
 pub use whisper::whisper;
+pub use zip::zip;
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
@@ -112,12 +116,14 @@ pub fn omezarr() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
+    &["png", "swf", "zip", "wasm", "mp4", "id3", "wav", "w4v", "midi", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
     match name {
         "png" => Some(png()),
+        "swf" => Some(swf()),
+        "zip" => Some(zip()),
         "wasm" => Some(wasm()),
         "mp4" => Some(mp4()),
         "id3" => Some(id3()),
@@ -179,6 +185,11 @@ pub fn builtin(name: &str) -> Option<Template> {
 const MAGIC: &[(&[u8], &str)] = &[
     (b"SQLite format 3\0", "sqlite"),
     (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"FWS", "swf"),
+    (b"CWS", "swf"),
+    (b"ZWS", "swf"),
+    (b"PK\x03\x04", "zip"),
+    (b"PK\x05\x06", "zip"),
     (b"\0asm", "wasm"),
     (b"GGUF", "gguf"),
     (b"MThd", "midi"),
