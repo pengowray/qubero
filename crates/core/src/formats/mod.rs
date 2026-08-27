@@ -2,6 +2,7 @@
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
 mod aiff;
+mod assimp;
 mod appledouble;
 mod au;
 mod bmp;
@@ -128,7 +129,23 @@ pub fn omezarr() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod", "s3m", "xm", "it", "sqlite", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
+    &[
+        "png", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
+        "s3m", "xm", "it", "sqlite", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
+        "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
+        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
+        "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
+        "macbinary", "binhex", "stuffit", "compactpro", "bardstale",
+        // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
+        // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
+        "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
+        "csm", "dxf", "fbx", "glb", "gltf", "hmp", "ifc", "ifczip", "iqm", "irr", "irrmesh", "lwo", "lws",
+        "lxo", "m3d", "md2", "md3", "md5", "mdc", "mdl", "ms3d", "ndo", "nff", "obj", "off", "ogre",
+        "ogrexml", "ogex", "ply", "pmx", "q3bsp", "pk3", "q3o", "q3s", "raw3d", "sib", "smd", "stl",
+        "ter", "unreal3d", "usd", "usda", "usdc", "usdz", "vta", "x", "x3d", "x3db", "x3dv", "xgl",
+        "3d", "ac", "acc", "a3d", "amj", "ask", "dae", "enff", "md5anim", "md5camera", "md5mesh", "mesh",
+        "mesh.xml", "mot", "prj", "raw", "scn", "step", "stp", "uc", "vrm", "zae", "zgl",
+    ]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -193,7 +210,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "stuffit" => Some(stuffit()),
         "compactpro" => Some(compactpro()),
         "bardstale" => Some(bards_tale()),
-        _ => None,
+        _ => assimp::template(name),
     }
 }
 
@@ -309,6 +326,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("pnm")
     } else if is_pcx(head) {
         Some("pcx")
+    } else if let Some(model) = assimp_format(head, len) {
+        Some(model)
     } else if let Some((_, name)) = MAGIC.iter().find(|(magic, _)| head.starts_with(magic)) {
         Some(name)
     } else if head.starts_with(b"FORM") && head.len() >= 12 {
@@ -326,6 +345,105 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         } else {
             Some("wav")
         }
+    } else {
+        None
+    }
+}
+
+/// Assimp formats with enough evidence in their bytes to identify safely.
+/// Text grammars such as OBJ and NFF have no mandatory opening token and stay
+/// manual templates. ZIP packages also remain ZIP unless a model-specific
+/// member name is visible in the fetched prefix.
+fn assimp_format(head: &[u8], len: u64) -> Option<&'static str> {
+    let prefix = &head[..head.len().min(4096)];
+    let has = |needle: &[u8]| prefix.windows(needle.len()).any(|w| w == needle);
+    let binary_stl = head
+        .get(80..84)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+        .and_then(|triangles| 84u64.checked_add(u64::from(triangles).checked_mul(50)?))
+        == Some(len);
+
+    if head.starts_with(b"ASSIMP.binary-dump.") {
+        Some("assbin")
+    } else if head.starts_with(b"Kaydara FBX Binary  \0\x1a\0") {
+        Some("fbx")
+    } else if head.starts_with(b"INTERQUAKEMODEL\0") {
+        Some("iqm")
+    } else if head.starts_with(b"MS3D000000") {
+        Some("ms3d")
+    } else if head.starts_with(b"PXR-USDC") {
+        Some("usdc")
+    } else if head.starts_with(b"TERRAGENTERRAIN ") {
+        Some("ter")
+    } else if head.starts_with(b"BLENDER") {
+        Some("blend")
+    } else if head.starts_with(b"BB3D") {
+        Some("b3d")
+    } else if head.starts_with(b"glTF") {
+        Some("glb")
+    } else if head.starts_with(b"IDP2") {
+        Some("md2")
+    } else if head.starts_with(b"IDP3") {
+        Some("md3")
+    } else if head.starts_with(b"IDPC") {
+        Some("mdc")
+    } else if matches!(head.get(..4), Some(b"IDPO" | b"IDST" | b"IDSQ" | b"MDL2" | b"MDL3" | b"MDL4" | b"MDL5" | b"MDL7")) {
+        Some("mdl")
+    } else if matches!(head.get(..4), Some(b"HMP4" | b"HMP5" | b"HMP7")) {
+        Some("hmp")
+    } else if matches!(head.get(..4), Some(b"3DMO" | b"3dmo")) {
+        Some("m3d")
+    } else if head.starts_with(b"PMX ") {
+        Some("pmx")
+    } else if head.starts_with(b"IBSP") {
+        Some("q3bsp")
+    } else if head.starts_with(b"quick3Do") {
+        Some("q3o")
+    } else if head.starts_with(b"quick3Ds") {
+        Some("q3s")
+    } else if head.starts_with(b"nendo ") {
+        Some("ndo")
+    } else if head.starts_with(b"xof ") {
+        Some("x")
+    } else if head.starts_with(b"FORM") && matches!(head.get(8..12), Some(b"LWOB" | b"LWO2" | b"LXOB")) {
+        match head.get(8..12) {
+            Some(b"LXOB") => Some("lxo"),
+            _ => Some("lwo"),
+        }
+    } else if head.starts_with(b"AC3D") {
+        Some("ac3d")
+    } else if head.starts_with(b"ply\n") || head.starts_with(b"ply\r") {
+        Some("ply")
+    } else if head.starts_with(b"OFF\n") || head.starts_with(b"OFF\r") || head.starts_with(b"OFF ") {
+        Some("off")
+    } else if head.starts_with(b"HIERARCHY") {
+        Some("bvh")
+    } else if head.starts_with(b"MD5Version ") {
+        Some("md5")
+    } else if head.starts_with(b"#X3D ") {
+        Some("x3dv")
+    } else if head.starts_with(b"ISO-10303-21;") {
+        Some("ifc")
+    } else if head.starts_with(b"AutoCAD Binary DXF\r\n\x1a") {
+        Some("dxf")
+    } else if head.starts_with(b"PK") && has(b"3D/3dmodel.model") {
+        Some("3mf")
+    } else if head.starts_with(b"{") && has(b"\"asset\"") && has(b"\"version\"")
+    {
+        Some("gltf")
+    } else if has(b"<COLLADA") {
+        Some("collada")
+    } else if has(b"<X3D") {
+        Some("x3d")
+    } else if has(b"<amf") {
+        Some("amf")
+    } else if (head.starts_with(b"solid ") && has(b"facet normal") && has(b"outer loop")) || binary_stl
+    {
+        Some("stl")
+    } else if head.len() >= 6 && head.starts_with(b"MM") {
+        let declared = u32::from_le_bytes(head[2..6].try_into().expect("four bytes")) as u64;
+        (declared == len && len >= 6).then_some("3ds")
     } else {
         None
     }
@@ -904,6 +1022,60 @@ mod tests {
         let checksum = 0u8.wrapping_sub(omf.iter().fold(0u8, |sum, &b| sum.wrapping_add(b)));
         omf.push(checksum);
         assert_eq!(sniffed(&omf), Some("omf"));
+    }
+
+    #[test]
+    fn assimp_binary_families_are_recognised_without_extensions() {
+        for (bytes, want) in [
+            (b"Kaydara FBX Binary  \0\x1a\0\xe8\x1c\0\0".as_slice(), "fbx"),
+            (b"INTERQUAKEMODEL\0\x02\0\0\0".as_slice(), "iqm"),
+            (b"BB3D\x10\0\0\0\x01\0\0\0".as_slice(), "b3d"),
+            (b"glTF\x02\0\0\0\x0c\0\0\0".as_slice(), "glb"),
+            (b"PXR-USDC\0\x09\0\0\0\0\0\0".as_slice(), "usdc"),
+            (b"IDP2\x0f\0\0\0".as_slice(), "md2"),
+            (b"IDP3\x0f\0\0\0".as_slice(), "md3"),
+            (b"IDPC\x02\0\0\0".as_slice(), "mdc"),
+            (b"HMP7\0\0\0\0".as_slice(), "hmp"),
+            (b"3DMO\x20\0\0\0".as_slice(), "m3d"),
+            (b"MS3D000000\x04\0\0\0".as_slice(), "ms3d"),
+            (b"nendo 1.2\0\0\0".as_slice(), "ndo"),
+            (b"TERRAGENTERRAIN SIZE".as_slice(), "ter"),
+        ] {
+            assert_eq!(sniffed(bytes), Some(want), "{want}");
+        }
+
+        let mut lwo = b"FORM\0\0\0\x0cLWO2".to_vec();
+        lwo.extend_from_slice(b"TAGS\0\0\0\0");
+        assert_eq!(sniffed(&lwo), Some("lwo"));
+
+        let mut three_ds = b"MM".to_vec();
+        three_ds.extend_from_slice(&10u32.to_le_bytes());
+        three_ds.extend_from_slice(&[0; 4]);
+        assert_eq!(sniffed(&three_ds), Some("3ds"));
+        // The two-byte token alone is far too common to claim.
+        assert_eq!(sniff(b"MM\x06\0\0\0", 100), None);
+    }
+
+    #[test]
+    fn assimp_text_and_json_families_use_grammar_markers() {
+        assert_eq!(sniffed(b"AC3Db\nMATERIAL \"white\""), Some("ac3d"));
+        assert_eq!(sniffed(b"HIERARCHY\nROOT hips\n"), Some("bvh"));
+        assert_eq!(sniffed(b"OFF\n8 6 0\n"), Some("off"));
+        assert_eq!(sniffed(b"MD5Version 10\ncommandline \"\"\n"), Some("md5"));
+        assert_eq!(sniffed(br#"{"asset":{"version":"2.0"},"meshes":[]}"#), Some("gltf"));
+        assert_eq!(sniffed(br#"<?xml version="1.0"?><COLLADA/>"#), Some("collada"));
+        assert_eq!(sniffed(br#"<?xml version="1.0"?><X3D/>"#), Some("x3d"));
+        // An ordinary JSON object remains JSON; the two glTF keys together
+        // are the evidence, not merely its representation.
+        assert_eq!(sniffed(br#"{"version":"2.0","name":"not a model"}"#), Some("json"));
+    }
+
+    #[test]
+    fn binary_stl_uses_its_exact_facet_count_and_file_length() {
+        let mut stl = vec![0; 84 + 2 * 50];
+        stl[80..84].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(sniffed(&stl), Some("stl"));
+        assert_eq!(sniff(&stl, stl.len() as u64 + 1), None);
     }
 
     fn little_tiff(entries: &[(u16, u16, u32, [u8; 4])], tail: &[u8]) -> Vec<u8> {

@@ -59,7 +59,8 @@ invalidates only the fields that read the edited bytes is the upgrade when that 
 
 Built-in templates live in `crates/core/src/formats/` (including PNG, wasm, MP4,
 Matroska, raw DV, ISO 9660, COFF, OMF, ID3, WAV, W4V, MIDI, SQLite, PE, MS-DOS,
-PDF, and HDF5), one file per format plus `wasm_opcodes.rs` for the
+PDF, HDF5, and the complete current Assimp importer set), one file per substantial
+format plus shared family modules such as `assimp.rs` and `wasm_opcodes.rs` for the
 instruction table. WAV carries the metadata chunks bat recorders write: GUANO (`guan`) as
 UTF-8 lines,
 and `wamd` as a stream of tagged items whose tag numbers were read out of files
@@ -69,6 +70,15 @@ undocumented bytes, and 512 six-bit codes packed MSB first. That layout follows
 the reverse-engineered decoder in the batchi project and covers only the six-bit
 flavour; wider ones would need the code width read from a sibling chunk, which a
 field cannot do.
+
+The Assimp family module is deliberately a breadth layer over the importer
+registry rather than fifty claims of equal parsing depth. GLB, 3DS, B3D, IFF-based
+LWO/LXO, ZIP packages, Assbin, FBX, IQM, MD2/MD3, DirectX X and USDC expose their
+container or header fields. JSON models use the JSON reader, XML honours byte-order
+marks, and line-oriented interchange formats expose their source records. Mixed or
+proprietary formats whose representation cannot be selected honestly from a shared
+header keep their payload as bytes. Automatic detection is narrower still: only a
+signature or a cross-checked size is allowed to claim a dropped file.
 
 SQLite reads down to the rows. The header and the page grid are ordinary: the
 fields are flat in the root struct so the page size is in scope where the pages
@@ -167,7 +177,8 @@ chunk, so what a reader sees is the numbers rather than the compression.
 
 A text format for templates,
 and importers for C structs and bitfields, ASN.1, protobuf, Zig packed structs,
-Python pickle and C# StructLayout, are next. Further target formats: zip, rkyv, glTF.
+Python pickle and C# StructLayout, are next. Further target formats: rkyv and
+virtual-disk containers (VDI, VHD and VHDX).
 Text encodings live in `text.rs`: UTF-8, ASCII, Latin-1, CP437, UTF-16 either
 way, plus two that the bytes settle. Hand-rolled rather than pulled in, against
 the usual preference for libraries: `encoding_rs` carries the whole WHATWG set
