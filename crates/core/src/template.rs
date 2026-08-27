@@ -485,6 +485,10 @@ pub enum Ty {
     Computed(Expr),
     /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
     Leb128 { signed: bool },
+    /// EBML's big-endian variable-size integer. The first set bit says how
+    /// many bytes the field occupies. Element IDs keep that marker as part of
+    /// their value; element sizes remove it.
+    EbmlVint { strip_marker: bool },
     /// MIDI's variable-length quantity: seven bits per byte, most significant
     /// group first, high bit set on every byte but the last. LEB128 packs the
     /// same seven bits the other way round, so it cannot stand in for this.
@@ -670,6 +674,12 @@ impl Ty {
     }
     pub fn leb_u() -> Ty {
         Ty::Leb128 { signed: false }
+    }
+    pub fn ebml_id() -> Ty {
+        Ty::EbmlVint { strip_marker: false }
+    }
+    pub fn ebml_size() -> Ty {
+        Ty::EbmlVint { strip_marker: true }
     }
     /// A field of no bits whose value is an expression.
     pub fn computed(e: Expr) -> Ty {
@@ -913,6 +923,8 @@ impl Ty {
                 format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
             }
             Ty::Vlq => "vlq".into(),
+            Ty::EbmlVint { strip_marker: false } => "EBML ID".into(),
+            Ty::EbmlVint { strip_marker: true } => "EBML size".into(),
             Ty::Computed(_) => "computed".into(),
             Ty::SqliteVarint => "varint".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),

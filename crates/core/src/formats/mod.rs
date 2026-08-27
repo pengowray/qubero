@@ -7,7 +7,9 @@ mod au;
 mod bmp;
 mod bards_tale;
 mod cbor;
+mod coff;
 mod dos;
+mod dv;
 mod ggml;
 pub mod ggml_quant;
 mod gguf;
@@ -20,14 +22,17 @@ pub mod hdf5_chunk;
 mod id3;
 mod iff;
 mod ilbm;
+mod iso9660;
 mod jpeg;
 mod lha;
 mod lnk;
 mod mca;
 mod midi;
+mod mkv;
 mod mp4;
 mod nes;
 mod old_mac;
+mod omf;
 mod pak;
 mod pcx;
 mod pdf;
@@ -62,7 +67,9 @@ pub use au::au;
 pub use bmp::bmp;
 pub use bards_tale::bards_tale;
 pub use cbor::cbor;
+pub use coff::coff;
 pub use dos::dos;
+pub use dv::dv;
 pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
 pub use gif::gif;
@@ -70,14 +77,17 @@ pub use gzip::gzip;
 pub use hdf5::hdf5;
 pub use id3::id3;
 pub use ilbm::ilbm;
+pub use iso9660::iso9660;
 pub use jpeg::jpeg;
 pub use lha::lha;
 pub use lnk::lnk;
 pub use mca::mca;
 pub use midi::midi;
+pub use mkv::mkv;
 pub use mp4::mp4;
 pub use nes::nes;
 pub use old_mac::{binhex, compactpro, macbinary, stuffit};
+pub use omf::omf;
 pub use pe::pe;
 pub use pak::pak;
 pub use pcx::pcx;
@@ -118,7 +128,7 @@ pub fn omezarr() -> Template {
 }
 
 pub fn builtin_names() -> &'static [&'static str] {
-    &["png", "swf", "zip", "wasm", "mp4", "id3", "wav", "w4v", "midi", "mod", "s3m", "xm", "it", "sqlite", "pe", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
+    &["png", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod", "s3m", "xm", "it", "sqlite", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json", "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad", "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle", "macbinary", "binhex", "stuffit", "compactpro", "bardstale"]
 }
 
 pub fn builtin(name: &str) -> Option<Template> {
@@ -128,6 +138,9 @@ pub fn builtin(name: &str) -> Option<Template> {
         "zip" => Some(zip()),
         "wasm" => Some(wasm()),
         "mp4" => Some(mp4()),
+        "mkv" => Some(mkv()),
+        "dv" => Some(dv()),
+        "iso9660" => Some(iso9660()),
         "id3" => Some(id3()),
         "wav" => Some(wav()),
         "w4v" => Some(w4v()),
@@ -138,6 +151,8 @@ pub fn builtin(name: &str) -> Option<Template> {
         "it" => Some(it()),
         "sqlite" => Some(sqlite()),
         "pe" => Some(pe()),
+        "coff" => Some(coff()),
+        "omf" => Some(omf()),
         "msdos" => Some(dos()),
         "gguf" => Some(gguf()),
         "whisper" => Some(whisper()),
@@ -270,8 +285,18 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some(raw)
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         Some("mp4")
+    } else if is_mkv(head) {
+        Some("mkv")
+    } else if is_iso9660(head) {
+        Some("iso9660")
+    } else if is_dv(head, len) {
+        Some("dv")
     } else if is_pe(head) {
         Some("pe")
+    } else if is_coff(head, len) {
+        Some("coff")
+    } else if is_omf(head) {
+        Some("omf")
     } else if is_dos(head) {
         Some("msdos")
     } else if is_lha(head) {
@@ -304,6 +329,90 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Matroska is EBML with a `DocType` of `matroska`; the EBML signature alone
+/// would also claim WebM and unrelated EBML documents.
+fn is_mkv(head: &[u8]) -> bool {
+    head.starts_with(b"\x1a\x45\xdf\xa3")
+        && head[..256.min(head.len())].windows(8).any(|w| w == b"matroska")
+}
+
+/// ECMA-119 records its first descriptor at sector 16. The identifier is five
+/// bytes into that sector after the descriptor type.
+fn is_iso9660(head: &[u8]) -> bool {
+    matches!(head.get(16 * 2048), Some(0..=3))
+        && head.get(16 * 2048 + 1..16 * 2048 + 6) == Some(b"CD001")
+}
+
+/// Raw DV has no single magic number. Eight consecutive DIF IDs establish the
+/// fixed header/subcode/VAUX/audio/video order of the first sequence, and a
+/// whole file is an integral count of 525/60 or 625/50 frames.
+fn is_dv(head: &[u8], len: u64) -> bool {
+    if len == 0 || (!len.is_multiple_of(120_000) && !len.is_multiple_of(144_000)) || head.len() < 8 * 80 {
+        return false;
+    }
+    let section = [0u8, 1, 1, 2, 2, 2, 3, 4];
+    let number = [0u8, 0, 1, 0, 1, 2, 0, 0];
+    (0..8).all(|i| {
+        let at = i * 80;
+        head[at] >> 5 == section[i] && head[at + 1] >> 4 == 0 && head[at + 2] == number[i]
+    })
+}
+
+/// A standalone Microsoft COFF object has no magic. Its known machine, zero
+/// optional-header length, bounded section table, and every file pointer have
+/// to agree with the file length before it is claimed.
+fn is_coff(head: &[u8], len: u64) -> bool {
+    if head.len() < 20 {
+        return false;
+    }
+    let u16_at = |at: usize| u16::from_le_bytes([head[at], head[at + 1]]);
+    let u32_at = |at: usize| u32::from_le_bytes([head[at], head[at + 1], head[at + 2], head[at + 3]]);
+    let machine = u16_at(0);
+    if !matches!(machine, 0x014c | 0x0166 | 0x01c0 | 0x01c4 | 0x01f0 | 0x0200 | 0x5032 | 0x5064 | 0x5128 | 0x8664 | 0xaa64)
+        || u16_at(16) != 0
+    {
+        return false;
+    }
+    let sections = usize::from(u16_at(2));
+    let Some(table_size) = sections.checked_mul(40) else { return false };
+    let Some(table_end) = 20usize.checked_add(table_size) else { return false };
+    if sections == 0 || sections > 96 || table_end > head.len() || table_end as u64 > len {
+        return false;
+    }
+    for i in 0..sections {
+        let at = 20 + i * 40;
+        let raw_size = u64::from(u32_at(at + 16));
+        let raw_at = u64::from(u32_at(at + 20));
+        let reloc_at = u64::from(u32_at(at + 24));
+        let relocs = u64::from(u16_at(at + 32));
+        if (raw_size != 0 && (raw_at < table_end as u64 || raw_at.checked_add(raw_size).is_none_or(|end| end > len)))
+            || (relocs != 0 && (reloc_at < table_end as u64 || reloc_at.checked_add(relocs * 10).is_none_or(|end| end > len)))
+        {
+            return false;
+        }
+    }
+    let symbols_at = u64::from(u32_at(8));
+    let symbols = u64::from(u32_at(12));
+    (symbols_at == 0 && symbols == 0)
+        || (symbols_at >= table_end as u64
+            && symbols_at.checked_add(symbols.saturating_mul(18)).is_some_and(|end| end + 4 <= len))
+}
+
+/// OMF modules begin with a named THEADR/LHEADR record. The length includes
+/// the checksum; the checksum is either zero (explicitly permitted) or makes
+/// the byte sum of the complete record zero modulo 256.
+fn is_omf(head: &[u8]) -> bool {
+    if !matches!(head.first(), Some(0x80 | 0x82)) || head.len() < 5 {
+        return false;
+    }
+    let len = usize::from(u16::from_le_bytes([head[1], head[2]]));
+    let end = 3usize.saturating_add(len);
+    if len < 2 || end > head.len() || usize::from(head[3]) > len - 2 {
+        return false;
+    }
+    head[end - 1] == 0 || head[..end].iter().fold(0u8, |sum, &b| sum.wrapping_add(b)) == 0
 }
 
 fn is_s3m(head: &[u8]) -> bool {
@@ -762,6 +871,39 @@ mod tests {
         // the letters just said it would be.
         assert_eq!(sniffed(b"II*\x00\x08\x00\x00\x00"), Some("tiff"));
         assert_eq!(sniffed(b"MM\x00*\x00\x00\x00\x08"), Some("tiff"));
+    }
+
+    #[test]
+    fn media_containers_and_retro_objects_are_recognised() {
+        let mkv = b"\x1a\x45\xdf\xa3\x8b\x42\x82\x88matroska";
+        assert_eq!(sniff(mkv, mkv.len() as u64), Some("mkv"));
+        // EBML by itself, and WebM in particular, is not Matroska.
+        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x84webm", 9), None);
+
+        let mut iso = vec![0; 16 * 2048 + 7];
+        iso[16 * 2048] = 1;
+        iso[16 * 2048 + 1..16 * 2048 + 6].copy_from_slice(b"CD001");
+        iso[16 * 2048 + 6] = 1;
+        assert_eq!(sniff(&iso, 40 * 2048), Some("iso9660"));
+
+        let mut dv = vec![0xff; 8 * 80];
+        for (i, (section, number)) in [(0, 0), (1, 0), (1, 1), (2, 0), (2, 1), (2, 2), (3, 0), (4, 0)].into_iter().enumerate() {
+            let at = i * 80;
+            dv[at] = section << 5 | 0x1f;
+            dv[at + 1] = 0x07;
+            dv[at + 2] = number;
+        }
+        assert_eq!(sniff(&dv, 120_000), Some("dv"));
+
+        let mut coff = vec![0; 60];
+        coff[0..2].copy_from_slice(&0x014cu16.to_le_bytes());
+        coff[2..4].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(sniff(&coff, coff.len() as u64), Some("coff"));
+
+        let mut omf = vec![0x80, 5, 0, 3, b'F', b'O', b'O'];
+        let checksum = 0u8.wrapping_sub(omf.iter().fold(0u8, |sum, &b| sum.wrapping_add(b)));
+        omf.push(checksum);
+        assert_eq!(sniffed(&omf), Some("omf"));
     }
 
     fn little_tiff(entries: &[(u16, u16, u32, [u8; 4])], tail: &[u8]) -> Vec<u8> {

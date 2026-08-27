@@ -268,6 +268,27 @@ impl Evaluator {
         fail("variable-length number longer than 4 bytes")
     }
 
+    /// EBML VINT: the first set bit selects a width from one to eight bytes.
+    /// It is framing for an element ID and part of that ID, while a data-size
+    /// field removes it before the number is used.
+    pub(super) fn read_ebml_vint<S: Source>(&self, doc: &Document<S>, r: &Resolved, strip_marker: bool) -> R<(u128, u64)> {
+        let first = self.read(doc, r, r.offset, 8)?[0];
+        if first == 0 {
+            return fail("EBML variable-size integer has no marker bit");
+        }
+        let width = u64::from(first.leading_zeros() + 1);
+        let bytes = self.read(doc, r, r.offset, width * 8)?;
+        let mut value = if strip_marker {
+            u128::from(first & (0xff >> width))
+        } else {
+            u128::from(first)
+        };
+        for &b in &bytes[1..] {
+            value = (value << 8) | u128::from(b);
+        }
+        Ok((value, width))
+    }
+
     /// SQLite's varint: seven bits per byte, most significant group first, and
     /// a ninth byte that contributes all eight of its bits. The result is
     /// 64-bit two's complement, so a negative row id reads as one.
@@ -307,6 +328,7 @@ impl Evaluator {
                 if *signed { Value::Int(v as i128) } else { Value::UInt(v) }
             }
             Ty::Vlq => Value::UInt(self.read_vlq(doc, r)?.0),
+            Ty::EbmlVint { strip_marker } => Value::UInt(self.read_ebml_vint(doc, r, *strip_marker)?.0),
             Ty::Computed(e) => {
                 if let Some(v) = self.memo.get(at).and_then(|m| m.computed) {
                     return Ok(Value::Int(v));

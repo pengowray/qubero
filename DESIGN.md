@@ -43,7 +43,7 @@ exception to "use a library for UI primitives": no virtual-list library survives
 
 ### Templates are expressions, not a static layout
 `crates/core/src/template.rs` is the IR: ints/floats of any bit width and endianness,
-LEB128, magic, bytes/utf8 with computed length, struct, array with computed count,
+LEB128, EBML VINT, magic, bytes/utf8 with computed length, struct, array with computed count,
 repeat-until (end of container, or an element whose field matches bytes), `Sized`
 (parse inside an N-byte window) and `Switch` (choose a type by an earlier field).
 Expressions are integer arithmetic over earlier fields; a short text or byte field
@@ -57,8 +57,9 @@ coarse (whole memo on any edit), so on a large templated file every keystroke
 re-walks the root repeat from offset 0: O(file) per edit. A dependency tracker that
 invalidates only the fields that read the edited bytes is the upgrade when that bites.
 
-Built-in templates live in `crates/core/src/formats/` (PNG, wasm, MP4, ID3, WAV,
-W4V, MIDI, SQLite, PE, MS-DOS, PDF, HDF5), one file per format plus `wasm_opcodes.rs` for the
+Built-in templates live in `crates/core/src/formats/` (including PNG, wasm, MP4,
+Matroska, raw DV, ISO 9660, COFF, OMF, ID3, WAV, W4V, MIDI, SQLite, PE, MS-DOS,
+PDF, and HDF5), one file per format plus `wasm_opcodes.rs` for the
 instruction table. WAV carries the metadata chunks bat recorders write: GUANO (`guan`) as
 UTF-8 lines,
 and `wamd` as a stream of tagged items whose tag numbers were read out of files

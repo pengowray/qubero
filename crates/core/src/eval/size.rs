@@ -106,6 +106,10 @@ impl Evaluator {
                     let (_, n) = self.read_vlq(doc, &r)?;
                     n * 8
                 }
+                Ty::EbmlVint { strip_marker } => {
+                    let (_, n) = self.read_ebml_vint(doc, &r, *strip_marker)?;
+                    n * 8
+                }
                 Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => match **inner {
                     Ty::Leb128 { .. } => {
                         let (_, n) = self.read_leb(doc, &r)?;
@@ -113,6 +117,10 @@ impl Evaluator {
                     }
                     Ty::Vlq => {
                         let (_, n) = self.read_vlq(doc, &r)?;
+                        n * 8
+                    }
+                    Ty::EbmlVint { strip_marker } => {
+                        let (_, n) = self.read_ebml_vint(doc, &r, strip_marker)?;
                         n * 8
                     }
                     Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,

@@ -25,7 +25,7 @@ pub const EDIT_LIMIT_BYTES: u64 = 4096;
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
@@ -125,6 +125,30 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
                 let (min, max) = leb_limits(room, false);
                 format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
             })
+        }
+        Ty::EbmlVint { strip_marker } => {
+            let room = (size_bits / 8) as usize;
+            if !(1..=8).contains(&room) {
+                return Err("an EBML variable-size integer is one to eight bytes".into());
+            }
+            let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
+            if *strip_marker {
+                let usable = room * 7;
+                // The top bit pattern is not a byte count; it preserves an
+                // element whose size is explicitly unknown.
+                let max = (1u128 << usable) - 1;
+                if v > max {
+                    return Err(format!("{room}-byte EBML size range is 0 to {max}. Field sizes can't change yet."));
+                }
+                Ok(write_uint(v | (1u128 << usable), (room * 8) as u32, Endian::Big))
+            } else {
+                let marker = 1u128 << (room * 8 - room);
+                let max = (marker << 1) - 1;
+                if v < marker || v > max {
+                    return Err(format!("{room}-byte EBML ID must include its marker bit ({marker} to {max})."));
+                }
+                Ok(write_uint(v, (room * 8) as u32, Endian::Big))
+            }
         }
         Ty::SqliteVarint => {
             let room = (size_bits / 8) as usize;
@@ -674,6 +698,15 @@ mod tests {
         assert_eq!(leb_signed(-123456, 3).unwrap(), vec![0xc0, 0xbb, 0x78]);
         assert_eq!(leb_signed(2, 2).unwrap(), vec![0x82, 0x00]);
         assert!(leb_signed(-123456, 2).is_none());
+    }
+
+    #[test]
+    fn ebml_vints_keep_their_current_width() {
+        assert_eq!(encode(&Ty::ebml_size(), "8", 8, &StrState::default()).unwrap(), vec![0x88]);
+        assert_eq!(encode(&Ty::ebml_size(), "8", 16, &StrState::default()).unwrap(), vec![0x40, 0x08]);
+        assert_eq!(encode(&Ty::ebml_size(), "16383", 16, &StrState::default()).unwrap(), vec![0x7f, 0xff]);
+        assert_eq!(encode(&Ty::ebml_id(), "0x4282", 16, &StrState::default()).unwrap(), vec![0x42, 0x82]);
+        assert!(encode(&Ty::ebml_id(), "0x82", 16, &StrState::default()).is_err());
     }
 
     #[test]
