@@ -390,6 +390,7 @@ mod tests {
         let mut mb = vec![0u8; 128];
         mb[1] = 1;
         mb[2] = b'X';
+        mb[65..73].copy_from_slice(b"TEXTttxt");
         assert_eq!(crate::formats::sniff(&mb, mb.len() as u64), Some("macbinary"));
 
         let hqx = b"(This file must be converted with BinHex 4.0):!!!!:";

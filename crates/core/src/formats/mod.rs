@@ -319,6 +319,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("s3m")
     } else if is_mod(head) {
         Some("mod")
+    } else if is_mca(head, len) {
+        Some("mca")
     } else if is_macbinary(head, len) {
         Some("macbinary")
     } else if is_binhex(head) {
@@ -329,8 +331,6 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("compactpro")
     } else if is_bards_tale(head, len) {
         Some("bardstale")
-    } else if is_mca(head, len) {
-        Some("mca")
     } else if is_whisper(head) {
         Some("whisper")
     } else if is_safetensors(head) {
@@ -716,12 +716,47 @@ fn starts_ascii_case_insensitive(value: &[u8], prefix: &[u8]) -> bool {
     value.get(..prefix.len()).is_some_and(|s| s.eq_ignore_ascii_case(prefix))
 }
 
+/// Whether these leading bytes are a MacBinary envelope.
+///
+/// The format has no magic number at the front: the header opens with a zero
+/// byte, the length of the name and the name itself, and the fork lengths it
+/// carries have to add up to the file. That much is only a handful of bytes,
+/// and a table of small big-endian numbers can satisfy all of it by accident,
+/// so the version at 122 decides how the rest is weighed. MacBinary II and
+/// III sign their header with a CRC of it; MacBinary I has no CRC, so instead
+/// the type and creator have to be four printable characters each, which the
+/// four-letter codes of a real file always are and a table of offsets is not.
 fn is_macbinary(head: &[u8], len: u64) -> bool {
-    if head.len() < 128 || head[0] != 0 || head[74] != 0 || !(1..=63).contains(&head[1]) { return false; }
+    if head.len() < 128 || head[0] != 0 || head[74] != 0 || head[82] != 0 || !(1..=63).contains(&head[1]) {
+        return false;
+    }
+    let name = &head[2..2 + head[1] as usize];
+    if name.iter().any(|&b| b < 0x20 || b == 0x7f) {
+        return false;
+    }
     let be32 = |at: usize| u32::from_be_bytes(head[at..at + 4].try_into().expect("four bytes")) as u64;
     let be16 = |at: usize| u16::from_be_bytes(head[at..at + 2].try_into().expect("two bytes")) as u64;
+    let signed = match head[122] {
+        129 | 130 => header_crc(&head[..124]) == be16(124) as u16,
+        0 => head[65..73].iter().all(|&b| (0x20..0x7f).contains(&b)),
+        _ => false,
+    };
     let blocks = |n: u64| n.saturating_add(127) / 128 * 128;
-    128u64.saturating_add(blocks(be16(120))).saturating_add(blocks(be32(83))).saturating_add(blocks(be32(87))).saturating_add(blocks(be16(99))) <= len
+    signed
+        && 128u64.saturating_add(blocks(be16(120))).saturating_add(blocks(be32(83))).saturating_add(blocks(be32(87))).saturating_add(blocks(be16(99))) <= len
+}
+
+/// The CRC-16 a MacBinary II header is signed with: XMODEM, polynomial
+/// 0x1021, starting at zero, high bit first.
+fn header_crc(bytes: &[u8]) -> u16 {
+    let mut crc = 0u16;
+    for &b in bytes {
+        crc ^= u16::from(b) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+        }
+    }
+    crc
 }
 
 fn is_binhex(head: &[u8]) -> bool {
@@ -1062,6 +1097,17 @@ mod tests {
         assert_eq!(sniff(&region(182), (2 + 182) * 4096), Some("mca"));
         // Two chunks in the smallest region the tables allow.
         assert_eq!(sniff(&region(2), 4 * 4096), Some("mca"));
+    }
+
+    /// A region whose chunks sit past sector 256 has a non-zero second byte,
+    /// which is the name length a MacBinary header would have there. The
+    /// tables are the stronger evidence and are weighed first.
+    #[test]
+    fn a_region_is_not_taken_for_a_macbinary_envelope() {
+        let mut v = region(182);
+        let sector = 300u32;
+        v[..3].copy_from_slice(&sector.to_be_bytes()[1..]);
+        assert_eq!(sniff(&v, 400 * 4096), Some("mca"));
     }
 
     #[test]
