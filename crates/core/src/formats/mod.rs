@@ -11,8 +11,10 @@ mod braw;
 mod bards_tale;
 mod cbor;
 mod coff;
+mod corel;
 mod dos;
 mod dv;
+mod eps;
 mod ggml;
 pub mod ggml_quant;
 mod gguf;
@@ -27,6 +29,7 @@ mod iff;
 mod ilbm;
 mod iso9660;
 mod jpeg;
+mod ico;
 mod lha;
 mod lnk;
 mod mca;
@@ -44,6 +47,7 @@ pub mod pdf_xref;
 mod pe;
 pub mod pe_tables;
 mod pi1;
+mod psd;
 mod pnm;
 mod qoi;
 mod png;
@@ -53,7 +57,9 @@ mod swf;
 mod tap;
 mod tga;
 mod tiff;
+mod thumbsdb;
 mod tracker;
+mod unity;
 mod vpk;
 mod w4v;
 mod wad;
@@ -73,8 +79,10 @@ pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use cbor::cbor;
 pub use coff::coff;
+pub use corel::{cdr, cmx};
 pub use dos::dos;
 pub use dv::dv;
+pub use eps::eps;
 pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
 pub use gif::gif;
@@ -84,6 +92,7 @@ pub use id3::id3;
 pub use ilbm::ilbm;
 pub use iso9660::iso9660;
 pub use jpeg::jpeg;
+pub use ico::ico;
 pub use lha::lha;
 pub use lnk::lnk;
 pub use mca::mca;
@@ -98,6 +107,7 @@ pub use pak::pak;
 pub use pcx::pcx;
 pub use pdf::pdf;
 pub use pi1::pi1;
+pub use psd::psd;
 pub use pnm::pnm;
 pub use qoi::qoi;
 pub use png::png;
@@ -107,7 +117,9 @@ pub use swf::swf;
 pub use tap::tap;
 pub use tga::tga;
 pub use tiff::{camera_raw, tiff};
+pub use thumbsdb::thumbsdb;
 pub use tracker::{it, mod_file, s3m, xm};
+pub use unity::{unity_assets, unity_bundle};
 pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
@@ -139,7 +151,8 @@ pub fn builtin_names() -> &'static [&'static str] {
         "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
-        "macbinary", "binhex", "stuffit", "compactpro", "bardstale",
+        "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
+        "unityassets", "unitybundle", "thumbsdb", "ico",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -216,6 +229,14 @@ pub fn builtin(name: &str) -> Option<Template> {
         "stuffit" => Some(stuffit()),
         "compactpro" => Some(compactpro()),
         "bardstale" => Some(bards_tale()),
+        "cdr" => Some(cdr()),
+        "cmx" => Some(cmx()),
+        "psd" => Some(psd()),
+        "eps" => Some(eps()),
+        "unityassets" => Some(unity_assets()),
+        "unitybundle" => Some(unity_bundle()),
+        "thumbsdb" => Some(thumbsdb()),
+        "ico" => Some(ico()),
         _ => assimp::template(name),
     }
 }
@@ -259,6 +280,12 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"MM\x00*", "tiff"),
     (b".snd", "au"),
     (b"%PDF-", "pdf"),
+    (b"8BPS", "psd"),
+    (b"%!PS-Adobe-", "eps"),
+    (b"\xc5\xd0\xd3\xc6", "eps"),
+    (b"UnityFS\0", "unitybundle"),
+    (b"UnityRaw\0", "unitybundle"),
+    (b"UnityWeb\0", "unitybundle"),
     // An `.h5ad` single-cell dataset, a Keras model, a NASA product: all of
     // them are this container and nothing in the first bytes says which.
     (b"\x89HDF\r\n\x1a\n", "hdf5"),
@@ -336,6 +363,12 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("pnm")
     } else if is_pcx(head) {
         Some("pcx")
+    } else if is_ico(head, len) {
+        Some("ico")
+    } else if is_unity_assets(head, len) {
+        Some("unityassets")
+    } else if is_thumbs_db(head) {
+        Some("thumbsdb")
     } else if let Some(model) = assimp_format(head, len) {
         Some(model)
     } else if let Some((_, name)) = MAGIC.iter().find(|(magic, _)| head.starts_with(magic)) {
@@ -347,6 +380,10 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
             b"ILBM" | b"PBM " => Some("ilbm"),
             _ => None,
         }
+    } else if head.starts_with(b"RIFF") && head.len() >= 12 && head[8..11] == *b"CDR" {
+        Some("cdr")
+    } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"CMX1") {
+        Some("cmx")
     } else if head.starts_with(b"RIFF") && head.len() >= 12 && &head[8..12] == b"WAVE" {
         // The only thing that marks a W4V is the format tag inside `fmt `, so
         // this needs a few more bytes than a magic number would.
@@ -358,6 +395,50 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn is_ico(head: &[u8], len: u64) -> bool {
+    if head.len() < 6 || head[..2] != [0, 0] || !matches!(&head[2..4], [1, 0] | [2, 0]) {
+        return false;
+    }
+    let count = u16::from_le_bytes([head[4], head[5]]) as usize;
+    if count == 0 || count > 256 || head.len() < 6 + count * 16 { return false; }
+    let table_end = (6 + count * 16) as u64;
+    (0..count).all(|i| {
+        let at = 6 + i * 16;
+        let size = u32::from_le_bytes(head[at + 8..at + 12].try_into().unwrap()) as u64;
+        let offset = u32::from_le_bytes(head[at + 12..at + 16].try_into().unwrap()) as u64;
+        size > 0 && offset >= table_end && offset.checked_add(size).is_some_and(|end| end <= len)
+    })
+}
+
+fn is_unity_assets(head: &[u8], len: u64) -> bool {
+    if head.len() < 20 { return false; }
+    let be32 = |at: usize| u32::from_be_bytes(head[at..at + 4].try_into().unwrap());
+    let version = be32(8);
+    if !(9..=23).contains(&version) || !matches!(head[16], 0 | 1) { return false; }
+    let (metadata, file_size, data_offset, header_size) = if version >= 22 {
+        if head.len() < 48 { return false; }
+        (
+            be32(20) as u64,
+            u64::from_be_bytes(head[24..32].try_into().unwrap()),
+            u64::from_be_bytes(head[32..40].try_into().unwrap()),
+            48u64,
+        )
+    } else {
+        (be32(0) as u64, be32(4) as u64, be32(12) as u64, 20u64)
+    };
+    metadata >= 8
+        && file_size <= len
+        && len - file_size < 16
+        && data_offset >= header_size + metadata
+        && data_offset <= file_size
+}
+
+fn is_thumbs_db(head: &[u8]) -> bool {
+    const CFB: &[u8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
+    const CATALOG: &[u8] = b"C\0a\0t\0a\0l\0o\0g\0";
+    head.starts_with(CFB) && head.windows(CATALOG.len()).any(|w| w == CATALOG)
 }
 
 /// BRAW is a QuickTime-family container, but unlike ordinary MP4 camera files
@@ -1022,6 +1103,37 @@ mod tests {
         // the letters just said it would be.
         assert_eq!(sniffed(b"II*\x00\x08\x00\x00\x00"), Some("tiff"));
         assert_eq!(sniffed(b"MM\x00*\x00\x00\x00\x08"), Some("tiff"));
+    }
+
+    #[test]
+    fn design_graphics_and_unity_formats_are_recognised() {
+        assert_eq!(sniffed(b"8BPS\0\x01\0\0\0\0\0\0"), Some("psd"));
+        assert_eq!(sniffed(b"%!PS-Adobe-3.0 EPSF-3.0\n"), Some("eps"));
+        assert_eq!(sniffed(b"RIFF\x10\0\0\0CDR9vers\0\0\0\0"), Some("cdr"));
+        assert_eq!(sniffed(b"RIFF\x10\0\0\0CMX1cont\0\0\0\0"), Some("cmx"));
+        assert_eq!(sniffed(b"UnityFS\0\0\0\0\x08version\0revision\0"), Some("unitybundle"));
+
+        let mut ico = vec![0, 0, 1, 0, 1, 0];
+        ico.extend_from_slice(&[16, 16, 0, 0, 1, 0, 32, 0]);
+        ico.extend_from_slice(&4u32.to_le_bytes());
+        ico.extend_from_slice(&22u32.to_le_bytes());
+        ico.extend_from_slice(&40u32.to_le_bytes());
+        assert_eq!(sniff(&ico, ico.len() as u64), Some("ico"));
+
+        let mut assets = vec![0; 84];
+        assets[8..12].copy_from_slice(&22u32.to_be_bytes());
+        assets[16] = 0;
+        assets[20..24].copy_from_slice(&24u32.to_be_bytes());
+        assets[24..32].copy_from_slice(&84u64.to_be_bytes());
+        assets[32..40].copy_from_slice(&80u64.to_be_bytes());
+        assert_eq!(sniff(&assets, assets.len() as u64), Some("unityassets"));
+
+        let mut thumbs = vec![0; 600];
+        thumbs[..8].copy_from_slice(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1");
+        let catalog = b"C\0a\0t\0a\0l\0o\0g\0";
+        thumbs[512..512 + catalog.len()].copy_from_slice(catalog);
+        assert_eq!(sniff(&thumbs, thumbs.len() as u64), Some("thumbsdb"));
+        assert_eq!(sniff(&thumbs[..512], 512), None, "an arbitrary compound file is not necessarily Thumbs.db");
     }
 
     #[test]
