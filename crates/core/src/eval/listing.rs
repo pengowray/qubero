@@ -288,45 +288,52 @@ impl Evaluator {
                 span.count = 0;
             } else if let Some((run, count)) = self.collapsible(doc, &path)? {
                 let run_info = self.node(doc, &run)?;
-                span = self.span_of(doc, &run, &run_info)?;
-                span.count = count;
-                let mut covered = 0u64;
-                for i in 0..count.min(SAMPLE) {
-                    let mut elem = run.clone();
-                    elem.push(i as usize);
-                    let info = self.node(doc, &elem)?;
-                    let value = brief(&info.value);
-                    if !value.is_empty() {
-                        span.sample.push(value);
-                    } else if info.composite {
-                        // A named record such as `[81] phonemizer.rules.keys`
-                        // contributes the useful name, not its array index.
-                        let index = format!("[{i}]");
-                        let named = info.name.strip_prefix(&index).unwrap_or(&info.name).trim();
-                        if !named.is_empty() {
-                            span.sample.push(named.to_string());
+                // Pointer-heavy formats can reach a leaf through an
+                // overlapping placement whose repeated ancestor has already
+                // ended. Collapsing that ancestor would return a span behind
+                // `at` forever. Only substitute the run when it covers the
+                // byte this request is actually advancing from.
+                if run_info.offset_bits <= at && at < run_info.offset_bits + run_info.size_bits {
+                    span = self.span_of(doc, &run, &run_info)?;
+                    span.count = count;
+                    let mut covered = 0u64;
+                    for i in 0..count.min(SAMPLE) {
+                        let mut elem = run.clone();
+                        elem.push(i as usize);
+                        let info = self.node(doc, &elem)?;
+                        let value = brief(&info.value);
+                        if !value.is_empty() {
+                            span.sample.push(value);
+                        } else if info.composite {
+                            // A named record such as `[81] phonemizer.rules.keys`
+                            // contributes the useful name, not its array index.
+                            let index = format!("[{i}]");
+                            let named = info.name.strip_prefix(&index).unwrap_or(&info.name).trim();
+                            if !named.is_empty() {
+                                span.sample.push(named.to_string());
+                            }
+                        }
+                        if info.size_bits > 0 {
+                            span.parts.push(SpanPart {
+                                size_bits: info.size_bits,
+                                label: info.name,
+                                rest: false,
+                            });
+                            covered = covered.saturating_add(info.size_bits);
                         }
                     }
-                    if info.size_bits > 0 {
-                        span.parts.push(SpanPart {
-                            size_bits: info.size_bits,
-                            label: info.name,
-                            rest: false,
-                        });
-                        covered = covered.saturating_add(info.size_bits);
+                    // A run of values that each read as nothing, such as matching
+                    // signatures, is better left to say only how many there are.
+                    if span.sample.iter().all(|s| s.is_empty()) {
+                        span.sample.clear();
                     }
-                }
-                // A run of values that each read as nothing, such as matching
-                // signatures, is better left to say only how many there are.
-                if span.sample.iter().all(|s| s.is_empty()) {
-                    span.sample.clear();
-                }
-                if covered < span.size_bits {
-                    span.parts.push(SpanPart {
-                        size_bits: span.size_bits - covered,
-                        label: format!("{} more", count.saturating_sub(SAMPLE)),
-                        rest: true,
-                    });
+                    if covered < span.size_bits {
+                        span.parts.push(SpanPart {
+                            size_bits: span.size_bits - covered,
+                            label: format!("{} more", count.saturating_sub(SAMPLE)),
+                            rest: true,
+                        });
+                    }
                 }
             }
             let next = span.offset_bits + span.size_bits;

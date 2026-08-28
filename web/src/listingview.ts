@@ -28,11 +28,14 @@ const SPAN_LIMIT = 4096;
  * helping after a few levels. The heading continues to name the changed
  * suffix, so no context is thrown away. */
 const MAX_INDENT = 4;
+/** Preserve the useful tail of a deep parser path. The full path remains in
+ * the heading tooltip. */
+const BREADCRUMB_PARTS = 5;
 
 export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
 type Row =
-  | { readonly kind: "heading"; readonly depth: number; readonly text: string; readonly key: string }
+  | { readonly kind: "heading"; readonly depth: number; readonly text: string; readonly fullText: string; readonly key: string }
   | { readonly kind: "field"; readonly depth: number; readonly span: Span; readonly key: string };
 
 /** An index belongs to the name before it rather than on a line of its own:
@@ -136,6 +139,9 @@ export class ListingView {
   private workStatus = "";
   /** Furthest physical byte reached by the latest unfinished mapping pass. */
   private workReachedBits = 0;
+  /** Wheel input received while the evaluator is yielding. It is replayed
+   * when the next slice completes instead of being silently discarded. */
+  private pendingScrollRows = 0;
   /** Where the cursor went while this view was hidden. */
   private pendingBit: number | null = null;
   /** Whether the file's first bytes matched a template, which decides what an
@@ -181,7 +187,15 @@ export class ListingView {
     this.track.addEventListener("pointermove", (e) => this.onTrackMove(e));
     this.track.addEventListener("pointerup", (e) => this.onTrackUp(e));
     this.track.addEventListener("pointercancel", (e) => this.onTrackUp(e));
-    doc.onChange(() => this.render());
+    doc.onChange(() => {
+      if (this.pendingScrollRows !== 0) {
+        const rows = this.pendingScrollRows;
+        this.pendingScrollRows = 0;
+        this.scrollBy(rows);
+      } else {
+        this.render();
+      }
+    });
   }
 
   relayout(): void {
@@ -270,10 +284,15 @@ export class ListingView {
       let from = 0;
       while (from < parts.length && samePrefix(parts, previous, from + 1)) from++;
       if (from < parts.length) {
+        const changed = parts.slice(from);
+        const compact = changed.length > BREADCRUMB_PARTS
+          ? ["…", ...changed.slice(-(BREADCRUMB_PARTS - 1))]
+          : changed;
         rows.push({
           kind: "heading",
           depth: Math.min(from, MAX_INDENT),
-          text: `${from > MAX_INDENT ? "… › " : ""}${parts.slice(from).join(" › ")}`,
+          text: `${from > MAX_INDENT && compact[0] !== "…" ? "… › " : ""}${compact.join(" › ")}`,
+          fullText: parts.join(" › "),
           key: `h:${s.offset_bits}:${from}`,
         });
       }
@@ -294,11 +313,13 @@ export class ListingView {
    *  fixed number of fields from further back returns the first of them, and
    *  the last ones are the ones wanted. A field is at least a byte, so one per
    *  byte of the window is enough to cross it. */
-  private fieldsBefore(bit: number, want: number): Span[] {
+  private fieldsBefore(bit: number, want: number): Span[] | null {
     for (let back = LOOK_BACK; ; back *= 2) {
       const from = Math.max(0, bit - back);
       const max = Math.min(SPAN_LIMIT, Math.ceil((bit - from) / 8) + want);
-      const fields = this.fieldsFrom(from, max).filter((s) => s.offset_bits < bit);
+      const reply = this.doc.spans(from, this.doc.lengthBits, max);
+      if (reply.status !== "ok") return null;
+      const fields = reply.node.filter((s) => s.offset_bits < bit);
       if (fields.length >= want || from === 0 || back > LOOK_BACK_LIMIT) return fields.slice(-want);
     }
   }
@@ -310,11 +331,34 @@ export class ListingView {
       // down and a notch up land back where they started. Counting rows would
       // not: how many headings a screenful carries depends on where it starts,
       // which is not the same going the other way.
-      const ahead = this.fieldsFrom(this.topBit, rows + 2);
-      const next = ahead[rows] ?? ahead[ahead.length - 1];
-      if (next !== undefined) this.topBit = next.offset_bits;
+      const reply = this.doc.spans(this.topBit, this.doc.lengthBits, rows + 2);
+      if (reply.status !== "ok") {
+        this.pendingScrollRows = Math.min(SPAN_LIMIT, this.pendingScrollRows + rows);
+        this.render();
+        return;
+      }
+      const future = reply.node.filter((span) => span.offset_bits > this.topBit);
+      const next = future[rows - 1] ?? future[future.length - 1];
+      if (next !== undefined) {
+        this.topBit = next.offset_bits;
+      } else {
+        // A collapsed run can be the only returned row and begin before the
+        // current bit. Step past its represented extent so it cannot trap the
+        // wheel on the same row forever.
+        const covering = reply.node.find((span) =>
+          span.offset_bits <= this.topBit && this.topBit < span.offset_bits + span.size_bits,
+        );
+        if (covering !== undefined) {
+          this.topBit = Math.min(this.doc.lengthBits - 1, covering.offset_bits + covering.size_bits);
+        }
+      }
     } else {
       const back = this.fieldsBefore(this.topBit, -rows);
+      if (back === null) {
+        this.pendingScrollRows = Math.max(-SPAN_LIMIT, this.pendingScrollRows + rows);
+        this.render();
+        return;
+      }
       this.topBit = back[0]?.offset_bits ?? 0;
     }
     this.render();
@@ -468,6 +512,7 @@ export class ListingView {
       const text = document.createElement("span");
       text.className = "lv-heading-text";
       text.textContent = r.text;
+      text.title = r.fullText;
       el.append(text);
       return el;
     }
@@ -530,7 +575,7 @@ export class ListingView {
     }
     if (s.gap) {
       name.textContent = GAP_LABEL;
-      value.textContent = "not described by this template";
+      value.textContent = "";
       type.textContent = "undefined";
     } else {
       name.textContent = s.name;

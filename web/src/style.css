@@ -1539,6 +1539,7 @@ input.invalid {
 }
 .lv-heading-text {
   grid-column: 4 / 7;
+  min-width: 0;
   padding-left: calc(var(--depth, 0) * 1ch);
   border-bottom: 1px solid var(--line);
 }

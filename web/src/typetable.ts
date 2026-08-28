@@ -851,7 +851,7 @@ export class TypeTable {
     spacer.className = "tt-toggle tt-leaf";
     name.append(spacer, document.createTextNode(GAP_LABEL));
     const value = document.createElement("td");
-    value.textContent = "not described by this template";
+    value.textContent = "";
     const type = document.createElement("td");
     type.className = "tt-type";
     type.textContent = "undefined";
