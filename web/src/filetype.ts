@@ -42,6 +42,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   com: "DOS .COM program",
   msdos: "MS-DOS program",
   ne: "16-bit Windows program",
+  macho: "Mach-O",
   bpf: "eBPF object",
   thumbsdb: "Windows Thumbs.db",
   unityassets: "Unity serialized assets",

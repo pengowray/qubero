@@ -16,6 +16,7 @@ mod dos;
 mod dv;
 mod elf;
 mod machine;
+mod macho;
 mod ne;
 pub mod ne_disasm;
 pub mod bpf_opcodes;
@@ -91,6 +92,7 @@ pub use dv::dv;
 pub use eps::eps;
 pub use elf::{bpf, elf};
 pub use ne::ne;
+pub use macho::macho;
 pub use ne_disasm::Program as NeProgram;
 pub use elf_disasm::Program as ElfProgram;
 pub use gguf::gguf;
@@ -162,7 +164,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
-        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne",
+        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "macho",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -202,6 +204,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "msdos" => Some(dos()),
         "com" => Some(com()),
         "ne" => Some(ne()),
+        "macho" => Some(macho()),
         "gguf" => Some(gguf()),
         "whisper" => Some(whisper()),
         "safetensors" => Some(safetensors()),
@@ -297,6 +300,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"UnityWeb\0", "unitybundle"),
     // An `.h5ad` single-cell dataset, a Keras model, a NASA product: all of
     // them are this container and nothing in the first bytes says which.
+    (b"\xfe\xed\xfa\xce", "macho"),
+    (b"\xfe\xed\xfa\xcf", "macho"),
+    (b"\xce\xfa\xed\xfe", "macho"),
+    (b"\xcf\xfa\xed\xfe", "macho"),
     (b"\x89HDF\r\n\x1a\n", "hdf5"),
     (b"ID3", "id3"),
     (b"\x00\x05\x16\x07", "appledouble"),
@@ -356,6 +363,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("dv")
     } else if let Some(name) = elf_format(head) {
         Some(name)
+    } else if is_universal(head, len) {
+        Some("macho")
     } else if is_pak(head, len) {
         Some("pak")
     } else if is_ne(head) {
@@ -1002,6 +1011,47 @@ fn is_dos(head: &[u8], len: u64) -> bool {
         // enough of it has arrived to say.
         None => at as u64 + 2 > len,
     }
+}
+
+/// Whether this is a universal binary: several Mach-O files in one, with a
+/// table at the front saying which machine each of them is for.
+///
+/// The four bytes it opens with are a Java class file's as well, and the four
+/// after them are what tells the two apart. A universal binary counts the
+/// files inside it, and nobody ships one with hundreds; a class file writes
+/// its version there, which has been at least 45 since 1996.
+fn is_universal(head: &[u8], len: u64) -> bool {
+    let sixty_four = match head.get(..4) {
+        Some(b"\xca\xfe\xba\xbe") => false,
+        Some(b"\xca\xfe\xba\xbf") => true,
+        _ => return false,
+    };
+    let count = match head.get(4..8) {
+        Some(b) => u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64,
+        None => return false,
+    };
+    if !(1..=16).contains(&count) {
+        return false;
+    }
+    // Where the first file inside is, and how long it is: both are in the
+    // file if this is one.
+    let (at, size) = match sixty_four {
+        false => match (head.get(16..20), head.get(20..24)) {
+            (Some(a), Some(s)) => (
+                u32::from_be_bytes([a[0], a[1], a[2], a[3]]) as u64,
+                u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as u64,
+            ),
+            _ => return false,
+        },
+        true => match (head.get(16..24), head.get(24..32)) {
+            (Some(a), Some(s)) => (
+                u64::from_be_bytes(a.try_into().expect("eight bytes")),
+                u64::from_be_bytes(s.try_into().expect("eight bytes")),
+            ),
+            _ => return false,
+        },
+    };
+    at >= 8 && at.saturating_add(size) <= len
 }
 
 /// Whether this is a Quake archive rather than one of the other things that

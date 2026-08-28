@@ -44,7 +44,7 @@ fn walk(
     path: &[usize],
     depth: usize,
 ) {
-    if depth > 6 {
+    if depth > 8 {
         return;
     }
     let Ok(n) = ev.node(doc, path) else { return };
