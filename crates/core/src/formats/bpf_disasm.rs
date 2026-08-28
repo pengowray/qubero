@@ -93,7 +93,7 @@ impl Program {
         let names = p.strings(ev, doc, &bodies, name_table)?;
         for i in 0..count {
             let at = int_field(ev, doc, &child(&headers, i), "name_offset")? as u64;
-            p.sections[i].name = names.get(&at).cloned().unwrap_or_default();
+            p.sections[i].name = name_at(&names, at);
         }
 
         // Symbols, and the string table each symbol table names.
@@ -110,7 +110,7 @@ impl Program {
                 let at = int_field(ev, doc, &s, "name_offset")? as u64;
                 let info = named(ev, doc, &s, "info")?;
                 let sym = Symbol {
-                    name: strings.get(&at).cloned().unwrap_or_default(),
+                    name: name_at(&strings, at),
                     kind: int_field(ev, doc, &info, "type")?,
                     section: int_field(ev, doc, &s, "section_index")? as usize,
                     value: int_field(ev, doc, &s, "value")? as u64,
@@ -151,16 +151,16 @@ impl Program {
         Ok(p)
     }
 
-    /// The strings in a string table, by their offset into it, which is how
-    /// every name in an ELF is written down.
+    /// The strings in a string table, each with its offset into that table,
+    /// which is how every name in an ELF is written down.
     fn strings<S: Source>(
         &self,
         ev: &mut Evaluator,
         doc: &Document<S>,
         bodies: &[usize],
         section: usize,
-    ) -> R<HashMap<u64, String>> {
-        let mut out = HashMap::new();
+    ) -> R<Vec<(u64, String)>> {
+        let mut out = Vec::new();
         let Some(s) = self.sections.get(section) else { return Ok(out) };
         if s.kind != STRTAB {
             return Ok(out);
@@ -170,7 +170,7 @@ impl Program {
         for k in 0..count {
             let n = ev.node(doc, &child(&body, k))?;
             if let Value::Str(text) = n.value {
-                out.insert(n.offset_bits / 8 - s.offset, text);
+                out.push((n.offset_bits / 8 - s.offset, text));
             }
         }
         Ok(out)
@@ -179,8 +179,8 @@ impl Program {
     /// One instruction as a line of text. `path` is the instruction in the
     /// tree, which is a child of a section's body.
     pub fn instruction_line<S: Source>(&self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<String> {
-        let (section, index) = match path.len() {
-            n if n >= 2 => (path[n - 2], path[n - 1]),
+        let section = match path.len() {
+            n if n >= 2 => path[n - 2],
             _ => return Err(EvalError::Failed("instruction outside a section".into())),
         };
         let code = int_field(ev, doc, path, "opcode")? as u8;
@@ -198,16 +198,43 @@ impl Program {
         let at = ev.node(doc, path)?.offset_bits / 8;
         let start = self.sections.get(section).map(|s| s.offset).unwrap_or(0);
         let byte = at.saturating_sub(start);
-        Ok(self.line(code, dst, src, off, imm, high, section, byte, index))
+        // A distance in this instruction set is counted in eight-byte slots,
+        // not in instructions: the load of a 64-bit immediate takes two of
+        // them and is one instruction. So a jump is read against where the
+        // instruction sits, not against how many came before it.
+        Ok(self.line(code, dst, src, off, imm, high, section, byte, byte / 8))
+    }
+
+    /// What a relocation says fills in this instruction, by name.
+    ///
+    /// A symbol with no name of its own stands for a whole section, which is
+    /// what a call to a function the compiler kept to itself is written
+    /// against. The function that section starts with is the name a reader
+    /// wants; the section's own name is the fallback.
+    fn patched(&self, section: usize, byte: u64) -> Option<String> {
+        let symbol = self.symbols.get(*self.relocations.get(&(section, byte))?)?;
+        if !symbol.name.is_empty() {
+            return Some(symbol.name.clone());
+        }
+        if let Some(name) = self.functions.get(&(symbol.section, symbol.value)) {
+            return Some(name.clone());
+        }
+        self.sections.get(symbol.section).map(|s| s.name.clone()).filter(|n| !n.is_empty())
     }
 
     /// The text of one instruction, once its fields have been read.
     #[allow(clippy::too_many_arguments)]
-    fn line(&self, code: u8, dst: u8, src: u8, off: i16, imm: i32, high: i32, section: usize, byte: u64, index: usize) -> String {
+    fn line(&self, code: u8, dst: u8, src: u8, off: i16, imm: i32, high: i32, section: usize, byte: u64, slot: u64) -> String {
         let reg = |n: u8| format!("r{n}");
+        // What a relocation says patches this instruction, if one does. Both
+        // a call to another program and a load of a map are written as a
+        // number the loader replaces, and the relocation is what says which
+        // symbol it replaces it with.
+        let patched = self.patched(section, byte);
         match code {
             // A call: to a helper the kernel provides, to another program in
             // this object, or to a kernel function named by its BTF id.
+            0x85 if patched.is_some() => format!("call {}", patched.unwrap_or_default()),
             0x85 => match src {
                 0 => match helper(imm) {
                     Some(name) => format!("call {name}"),
@@ -217,7 +244,7 @@ impl Program {
                     let target = (byte as i64 + 8 * (imm as i64 + 1)).max(0) as u64;
                     match self.functions.get(&(section, target)) {
                         Some(name) => format!("call {name}"),
-                        None => format!("call instruction {}", index as i64 + imm as i64 + 1),
+                        None => format!("call instruction {}", slot as i64 + imm as i64 + 1),
                     }
                 }
                 2 => format!("call kernel function #{imm}"),
@@ -227,18 +254,24 @@ impl Program {
             // unless a relocation says the loader fills it in, in which case
             // the name of what it fills in is the useful half.
             0x18 => {
-                let name = self.relocations.get(&(section, byte)).and_then(|s| self.symbols.get(*s)).map(|s| s.name.clone());
+                let name = patched;
                 let value = ((high as i64) << 32) | (imm as u32 as i64);
-                match (src, name) {
-                    (0, _) => format!("{} = {}", reg(dst), number(value)),
-                    (1, Some(name)) => format!("{} = map {name}", reg(dst)),
-                    (2, Some(name)) => format!("{} = map {name} + {}", reg(dst), number(high as i64)),
-                    (3, Some(name)) => format!("{} = &{name}", reg(dst)),
-                    (4, Some(name)) => format!("{} = &{name}", reg(dst)),
-                    _ => self.substitute(code, dst, src, off, imm, high, index),
+                match (name, src) {
+                    // A file that has been through the loader says in the
+                    // source register that the number is a map; one that has
+                    // not says nothing and leaves a relocation instead. Both
+                    // mean the same thing, and the name is what to show.
+                    (Some(name), 1 | 2) => format!("{} = map {name}", reg(dst)),
+                    // The number left in the instruction is an offset into
+                    // whatever the relocation names, which is how a load of a
+                    // variable in a section is written.
+                    (Some(name), _) if value != 0 => format!("{} = {name} + {}", reg(dst), number(value)),
+                    (Some(name), _) => format!("{} = {name}", reg(dst)),
+                    (None, 0) => format!("{} = {}", reg(dst), number(value)),
+                    (None, _) => self.substitute(code, dst, src, off, imm, high, slot),
                 }
             }
-            _ => self.substitute(code, dst, src, off, imm, high, index),
+            _ => self.substitute(code, dst, src, off, imm, high, slot),
         }
     }
 
@@ -246,7 +279,7 @@ impl Program {
     /// registers and numbers written into it. An opcode with no description is
     /// one the standard does not define, and says so.
     #[allow(clippy::too_many_arguments)]
-    fn substitute(&self, code: u8, dst: u8, src: u8, off: i16, imm: i32, high: i32, index: usize) -> String {
+    fn substitute(&self, code: u8, dst: u8, src: u8, off: i16, imm: i32, high: i32, slot: u64) -> String {
         let Some(form) = form(code, src, off, imm) else {
             return format!("(unknown opcode 0x{code:02x})");
         };
@@ -264,7 +297,7 @@ impl Program {
         // A jump says where it goes as a distance. Which instruction that is
         // is the thing a reader wants and the thing the file does not write.
         if form.contains("goto +offset") {
-            text = format!("{text} (instruction {})", index as i64 + off as i64 + 1);
+            text = format!("{text} (instruction {})", slot as i64 + off as i64 + 1);
         }
         text
     }
@@ -282,11 +315,23 @@ impl Program {
             }
             out.push_str(&format!("{}:\n", s.name));
             for k in 0..n.child_count as usize {
-                let line = self.instruction_line(ev, doc, &child(&body, k))?;
-                out.push_str(&format!("{k:5}  {line}\n"));
+                let at = child(&body, k);
+                let slot = (ev.node(doc, &at)?.offset_bits / 8).saturating_sub(s.offset) / 8;
+                let line = self.instruction_line(ev, doc, &at)?;
+                out.push_str(&format!("{slot:5}  {line}\n"));
             }
         }
         Ok(out)
+    }
+}
+
+/// The name at an offset into a string table. An offset need not be the start
+/// of a string: a linker that has written `.relsocket/main` has `socket/main`
+/// four bytes into it, and writes that offset rather than the name again.
+fn name_at(table: &[(u64, String)], at: u64) -> String {
+    match table.iter().rev().find(|(start, text)| *start <= at && at <= start + text.len() as u64) {
+        Some((start, text)) => text[(at - start) as usize..].to_string(),
+        None => String::new(),
     }
 }
 
@@ -384,15 +429,22 @@ mod tests {
         text.extend(insn(0x18, 1, 1, 0, 0)); // r1 = the map, once the loader fills it in
         text.extend(insn(0x00, 0, 0, 0, 0)); // the second half of that load
         text.extend(insn(0x85, 0, 0, 0, 1)); // call bpf_map_lookup_elem
-        text.extend(insn(0x15, 0, 0, 1, 0)); // if r0 == 0 goto +1
+        text.extend(insn(0x15, 0, 0, 3, 0)); // if r0 == 0 goto +3, over the load below
+        text.extend(insn(0x18, 2, 0, 0, 7)); // r2 = 7, in two slots
+        text.extend(insn(0x00, 0, 0, 0, 0)); // the second half of that load
         text.extend(insn(0xbf, 0, 6, 0, 0)); // r0 = r6
         text.extend(insn(0x95, 0, 0, 0, 0)); // exit
+        text.extend(insn(0x18, 3, 0, 0, 0)); // r3 = the same map, as a compiler writes it
+        text.extend(insn(0x00, 0, 0, 0, 0)); // the second half of that load
 
         let maps = vec![0u8; 32];
         let mut rel = Vec::new();
         rel.extend_from_slice(&8u64.to_le_bytes()); // the immediate of the load
         rel.extend_from_slice(&1u32.to_le_bytes()); // R_BPF_64_64
         rel.extend_from_slice(&1u32.to_le_bytes()); // symbol 1
+        rel.extend_from_slice(&72u64.to_le_bytes()); // the load at the end
+        rel.extend_from_slice(&1u32.to_le_bytes());
+        rel.extend_from_slice(&1u32.to_le_bytes());
 
         let strtab = b"\0counter_map\0xdp_prog\0".to_vec();
         let mut symtab = symbol(0, 0, 0, 0, 0);
@@ -462,7 +514,11 @@ mod tests {
 
     #[test]
     fn a_load_of_a_map_names_the_map() {
-        assert!(listing().contains("r1 = map counter_map"), "{}", listing());
+        let text = listing();
+        // With the source register saying the number is a map.
+        assert!(text.contains("r1 = map counter_map"), "{text}");
+        // And without, which is what a compiler writes and a relocation says.
+        assert!(text.contains("r3 = counter_map"), "{text}");
     }
 
     #[test]
@@ -472,8 +528,12 @@ mod tests {
 
     #[test]
     fn a_jump_says_which_instruction_it_goes_to() {
-        // The jump is instruction 3 and goes one past the next, which is 5.
-        assert!(listing().contains("if r0 == 0 goto +1 (instruction 5)"), "{}", listing());
+        // The jump is in slot 4 and goes three slots past the next one, which
+        // lands on the exit in slot 8. Counting instructions rather than slots
+        // would land a slot short: the load between them takes two.
+        let text = listing();
+        assert!(text.contains("if r0 == 0 goto +3 (instruction 8)"), "{text}");
+        assert!(text.contains("    8  return"), "{text}");
     }
 
     #[test]
