@@ -14,6 +14,8 @@ mod coff;
 mod corel;
 mod dos;
 mod dv;
+mod elf;
+pub mod bpf_opcodes;
 mod eps;
 mod ggml;
 pub mod ggml_quant;
@@ -83,6 +85,7 @@ pub use corel::{cdr, cmx};
 pub use dos::dos;
 pub use dv::dv;
 pub use eps::eps;
+pub use elf::{bpf, elf};
 pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
 pub use gif::gif;
@@ -152,7 +155,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
-        "unityassets", "unitybundle", "thumbsdb", "ico",
+        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -237,6 +240,8 @@ pub fn builtin(name: &str) -> Option<Template> {
         "unitybundle" => Some(unity_bundle()),
         "thumbsdb" => Some(thumbsdb()),
         "ico" => Some(ico()),
+        "elf" => Some(elf()),
+        "bpf" => Some(bpf()),
         _ => assimp::template(name),
     }
 }
@@ -345,6 +350,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("iso9660")
     } else if is_dv(head, len) {
         Some("dv")
+    } else if let Some(name) = elf_format(head) {
+        Some(name)
     } else if is_pe(head) {
         Some("pe")
     } else if is_coff(head, len) {
@@ -395,6 +402,23 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// An ELF, and which of the two templates reads it. The machine is at offset
+/// 18 whichever class the file is, and it is written the way the file writes
+/// its numbers, so the byte at offset 5 has to be read before it can be.
+/// A machine of 247 is BPF, whose instructions the `bpf` template decodes;
+/// anything else is an ELF whose code is bytes.
+fn elf_format(head: &[u8]) -> Option<&'static str> {
+    if !head.starts_with(b"\x7fELF") || head.len() < 20 {
+        return None;
+    }
+    let machine = match head[5] {
+        1 => u16::from_le_bytes([head[18], head[19]]),
+        2 => u16::from_be_bytes([head[18], head[19]]),
+        _ => return None,
+    };
+    Some(if machine == 247 { "bpf" } else { "elf" })
 }
 
 fn is_ico(head: &[u8], len: u64) -> bool {
