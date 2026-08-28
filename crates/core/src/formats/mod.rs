@@ -16,6 +16,7 @@ mod dos;
 mod dv;
 mod elf;
 mod machine;
+mod ne;
 pub mod bpf_opcodes;
 pub mod bpf_disasm;
 mod eps;
@@ -88,6 +89,7 @@ pub use dos::{com, dos};
 pub use dv::dv;
 pub use eps::eps;
 pub use elf::{bpf, elf};
+pub use ne::ne;
 pub use bpf_disasm::Program as BpfProgram;
 pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
@@ -158,7 +160,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
-        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com",
+        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -197,6 +199,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "omf" => Some(omf()),
         "msdos" => Some(dos()),
         "com" => Some(com()),
+        "ne" => Some(ne()),
         "gguf" => Some(gguf()),
         "whisper" => Some(whisper()),
         "safetensors" => Some(safetensors()),
@@ -356,6 +359,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("dv")
     } else if let Some(name) = elf_format(head) {
         Some(name)
+    } else if is_ne(head) {
+        Some("ne")
     } else if is_pe(head) {
         Some("pe")
     } else if is_coff(head, len) {
@@ -1000,6 +1005,19 @@ fn is_dos(head: &[u8], len: u64) -> bool {
     }
 }
 
+/// Whether these leading bytes are a 16-bit Windows or OS/2 program: an `MZ`
+/// whose pointer at 0x3c reaches a header saying `NE`.
+fn is_ne(head: &[u8]) -> bool {
+    if !head.starts_with(b"MZ") || head.len() < 0x40 {
+        return false;
+    }
+    let at = u32::from_le_bytes([head[0x3c], head[0x3d], head[0x3e], head[0x3f]]) as usize;
+    match at.checked_add(2) {
+        Some(end) if end <= head.len() => &head[at..end] == b"NE",
+        _ => false,
+    }
+}
+
 /// Whether these leading bytes are a Windows executable rather than a DOS one.
 ///
 /// Both open with `MZ`. What separates them is a PE signature at the offset
@@ -1094,10 +1112,18 @@ mod tests {
     }
 
     #[test]
+    fn a_16_bit_windows_program_is_an_ne_rather_than_a_dos_one() {
+        let mut v = mz(0x80, 0x100, false);
+        v[0x80..0x82].copy_from_slice(b"NE");
+        assert_eq!(sniff(&v, v.len() as u64), Some("ne"));
+    }
+
+    #[test]
     fn a_later_format_with_no_template_is_left_to_the_rules() {
         let mut v = mz(0x80, 0x100, false);
-        // Windows 3.x, which is neither a PE nor a DOS program.
-        v[0x80..0x82].copy_from_slice(b"NE");
+        // A DOS extender's program, which is neither a PE nor a DOS one and
+        // has no template here.
+        v[0x80..0x82].copy_from_slice(b"LE");
         assert_eq!(sniff(&v, v.len() as u64), None);
     }
 

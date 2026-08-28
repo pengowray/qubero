@@ -155,6 +155,13 @@ pub enum Expr {
     /// read in exactly the cases it was put there to avoid, and what comes
     /// back is whatever was at an offset nothing checked.
     Less(Box<Expr>, Box<Expr>),
+    /// This shifted left by that many bits.
+    ///
+    /// A format that stores a shift count rather than a size needs it: a
+    /// 16-bit Windows executable writes where a segment starts in units of
+    /// however many bytes the header's alignment count says, so the offset in
+    /// the table is only an offset once it has been shifted.
+    Shl(Box<Expr>, Box<Expr>),
     /// One bit of a number, as one or zero.
     ///
     /// What a switch needs to key on a flag. A section of a program says it
@@ -268,6 +275,10 @@ impl Expr {
         Expr::Div(Box::new(self), Box::new(rhs))
     }
     /// One when this is less than `rhs`, and zero otherwise.
+    /// This shifted left by `rhs` bits.
+    pub fn shl(self, rhs: Expr) -> Expr {
+        Expr::Shl(Box::new(self), Box::new(rhs))
+    }
     /// Bit `n` of this, counting from the least significant.
     pub fn bit(self, n: u32) -> Expr {
         Expr::Bit(Box::new(self), n)
