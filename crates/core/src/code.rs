@@ -155,10 +155,16 @@ fn riscv(bytes: &[u8], sixty_four: bool) -> Option<Insn> {
     Some(Insn { len: 4, text: text_of(&insn) })
 }
 
+/// A RISC-V instruction as text. The mnemonic is lowercased because the
+/// compressed ones come back as `C.nop`, and every other machine here writes
+/// its instructions in lower case, as does every RISC-V toolchain.
 fn text_of(insn: &raki::Instruction) -> String {
     let mut out = String::new();
     let _ = write!(out, "{insn}");
-    out
+    match out.split_once(' ') {
+        Some((mnemonic, rest)) => format!("{} {rest}", mnemonic.to_lowercase()),
+        None => out.to_lowercase(),
+    }
 }
 
 #[cfg(test)]
@@ -177,7 +183,8 @@ mod tests {
         assert!(ret.text.contains("ret"), "{}", ret.text);
         // riscv: addi a0, zero, 1 (32-bit) and a compressed nop
         assert_eq!(decode(Isa::Riscv64, &[0x13, 0x05, 0x10, 0x00]).len, 4);
-        assert_eq!(decode(Isa::Riscv64, &[0x01, 0x00]).len, 2);
+        // The compressed form, whose mnemonic the decoder writes as `C.nop`.
+        assert_eq!(decode(Isa::Riscv64, &[0x01, 0x00]), Insn { len: 2, text: "c.nop".into() });
     }
 
     #[test]
