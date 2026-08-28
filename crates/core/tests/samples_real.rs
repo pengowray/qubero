@@ -90,6 +90,10 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
                 continue;
             }
             collect(&path, out);
+        } else if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+            // The repository's own files: the collection is versioned by its
+            // lists, and those are not samples.
+            continue;
         } else if path.extension().is_none_or(|e| e != "md" && e != "tsv" && e != "py") {
             out.push(path);
         }
