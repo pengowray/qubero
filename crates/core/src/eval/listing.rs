@@ -113,7 +113,9 @@ pub(super) fn plain(ty: &Ty) -> bool {
         | Ty::F8 { .. }
         | Ty::Magic(_)
         | Ty::TextInt { .. }
-        | Ty::Bytes(_) => true,
+        | Ty::Bytes(_)
+        // An instruction is one thing, however many bytes it took to write.
+        | Ty::Insn { .. } => true,
         // A number or a piece of text inside JSON is a value like any other;
         // an object or an array holds them.
         Ty::Json(shape) => !shape.composite(),

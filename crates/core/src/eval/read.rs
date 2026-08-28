@@ -253,6 +253,25 @@ impl Evaluator {
         fail("LEB128 longer than 10 bytes")
     }
 
+    /// The instruction at the front of this field, decoded. Reads as much as
+    /// the machine's longest instruction, or as much as the field's container
+    /// has left, whichever is less: an instruction at the end of a section is
+    /// still an instruction, and reading past the section would be reading
+    /// somebody else's bytes.
+    pub(super) fn read_insn<S: Source>(&self, doc: &Document<S>, r: &Resolved, isa: crate::code::Isa) -> R<crate::code::Insn> {
+        let room = (r.limit.saturating_sub(r.offset)).min(isa.longest() as u64 * 8) / 8 * 8;
+        if room == 0 {
+            return fail("no room for an instruction");
+        }
+        let bytes = self.read(doc, r, r.offset, room)?;
+        let mut insn = crate::code::decode(isa, &bytes);
+        // Whatever the decoder says, an instruction covers bytes this field
+        // has: a truncated one at the end of a section is as long as what is
+        // left of it.
+        insn.len = insn.len.clamp(1, (room / 8) as usize);
+        Ok(insn)
+    }
+
     /// A variable-length quantity: the high bit says another byte follows, and
     /// the seven bits below it are the next group down. Four bytes is the most
     /// a Standard MIDI File is allowed to use.
@@ -328,6 +347,7 @@ impl Evaluator {
                 if *signed { Value::Int(v as i128) } else { Value::UInt(v) }
             }
             Ty::Vlq => Value::UInt(self.read_vlq(doc, r)?.0),
+            Ty::Insn { isa } => Value::Str(self.read_insn(doc, r, *isa)?.text),
             Ty::EbmlVint { strip_marker } => Value::UInt(self.read_ebml_vint(doc, r, *strip_marker)?.0),
             Ty::Computed(e) => {
                 if let Some(v) = self.memo.get(at).and_then(|m| m.computed) {

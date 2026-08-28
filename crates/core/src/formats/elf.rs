@@ -28,6 +28,7 @@
 //! Names are a pass over the parsed tree: see [`super::bpf_disasm`].
 
 use super::bpf_opcodes::{OPCODES, REGS};
+use crate::code::Isa;
 use crate::template::{Anchor, Endian, Endian::*, Expr as E, Template, Ty as T, Until};
 
 const CLASS: &[(i128, &str)] = &[(1, "32-bit"), (2, "64-bit")];
@@ -159,22 +160,40 @@ const SYMBOL_VISIBILITY: &[(i128, &str)] = &[(0, "default"), (1, "internal"), (2
 const BPF_RELOCATIONS: &[(i128, &str)] =
     &[(0, "R_BPF_NONE"), (1, "R_BPF_64_64"), (2, "R_BPF_64_ABS64"), (3, "R_BPF_64_ABS32"), (4, "R_BPF_64_NODYLD32"), (10, "R_BPF_64_32")];
 
-/// Any ELF file. Executable sections stay bytes: what a machine's instructions
-/// mean is that machine's business, and this template is not a disassembler
-/// for all of them.
-pub fn elf() -> Template {
-    Template::new("elf", ident(false))
+/// The machines whose instructions this can read, by the number the header
+/// writes. A file for anything else keeps its code as bytes, which is honest:
+/// a decoder that does not know the machine would make words up.
+///
+/// 32-bit ARM is read as the four-byte encoding. A real ARM program mixes that
+/// with the two-byte one and marks which is which with `$a` and `$t` symbols;
+/// following those is work for later.
+fn decoded(bits: u32) -> Vec<(i128, Isa)> {
+    vec![
+        (3, Isa::X86_32),
+        (40, Isa::Arm),
+        (62, Isa::X86_64),
+        (183, Isa::Aarch64),
+        // One number for the machine either way: how wide its registers are
+        // is what the class already said.
+        (243, if bits == 64 { Isa::Riscv64 } else { Isa::Riscv32 }),
+    ]
 }
 
-/// An ELF object for the BPF machine, whose executable sections are read as
-/// instructions.
+/// Any ELF file, with the code in it read as instructions when the machine is
+/// one this knows.
+pub fn elf() -> Template {
+    Template::new("elf", ident())
+}
+
+/// An ELF object for the BPF machine. The same template under another name, so
+/// that what the file is called and what the naming pass runs on agree.
 pub fn bpf() -> Template {
-    Template::new("bpf", ident(true))
+    Template::new("bpf", ident())
 }
 
 /// The sixteen bytes every ELF opens with, and then the header the class and
 /// the data encoding between them select.
-fn ident(decode_code: bool) -> T {
+fn ident() -> T {
     T::structure(
         "ELF",
         vec![
@@ -191,8 +210,8 @@ fn ident(decode_code: bool) -> T {
                 T::switch(
                     E::field("class"),
                     vec![
-                        (1, by_endian(32, decode_code)),
-                        (2, by_endian(64, decode_code)),
+                        (1, by_endian(32)),
+                        (2, by_endian(64)),
                     ],
                     T::bytes(E::lit(0)),
                 ),
@@ -201,10 +220,10 @@ fn ident(decode_code: bool) -> T {
     )
 }
 
-fn by_endian(bits: u32, decode_code: bool) -> T {
+fn by_endian(bits: u32) -> T {
     T::switch(
         E::field("data"),
-        vec![(1, body(bits, Little, decode_code)), (2, body(bits, Big, decode_code))],
+        vec![(1, body(bits, Little)), (2, body(bits, Big))],
         T::bytes(E::lit(0)),
     )
 }
@@ -234,7 +253,7 @@ fn rela_size(bits: u32) -> i128 {
 
 /// The rest of the header, the two tables it points at, and the sections
 /// themselves.
-fn body(bits: u32, e: Endian, decode_code: bool) -> T {
+fn body(bits: u32, e: Endian) -> T {
     T::structure(
         "ELFHeader",
         vec![
@@ -279,7 +298,7 @@ fn body(bits: u32, e: Endian, decode_code: bool) -> T {
                     &["offset"],
                     Anchor::File,
                     E::lit(0),
-                    section_body(bits, e, decode_code),
+                    section_body(bits, e),
                 )
                 .skipping_zero(),
             ),
@@ -330,21 +349,25 @@ fn section_header(bits: u32, e: Endian) -> T {
 
 /// What is in a section, read as its type says. Anything unrecognised is the
 /// bytes, which is what a section of program data is.
-fn section_body(bits: u32, e: Endian, decode_code: bool) -> T {
+fn section_body(bits: u32, e: Endian) -> T {
     let size = || E::elem_field("section_headers", E::idx(), &["size"]);
     let raw = T::bytes(size());
     // Program bits marked executable are code. Only the BPF template reads
     // them as instructions, and only for exactly `alloc | execute`, which is
     // what a compiler writes for a program section.
-    let progbits = if decode_code {
-        T::switch(
-            E::elem_field("section_headers", E::idx(), &["flags"]),
-            vec![(6, T::sized(size(), T::repeat(instruction(e), Until::End)))],
-            T::bytes(size()),
-        )
-    } else {
-        raw.clone()
-    };
+    // A section of program bits marked executable is code. Which machine's
+    // code it is, the header said, and that is a field this switch can reach:
+    // an expression looks through the structures it is nested in, and the
+    // machine is one of the header's own fields.
+    let mut machines: Vec<(i128, T)> = vec![(247, T::sized(size(), T::repeat(instruction(e), Until::End)))];
+    for (machine, isa) in decoded(bits) {
+        machines.push((machine, T::sized(size(), T::repeat(T::insn(isa), Until::End))));
+    }
+    let progbits = T::switch(
+        E::elem_field("section_headers", E::idx(), &["flags"]),
+        vec![(6, T::switch(E::field("machine"), machines, T::bytes(size())))],
+        T::bytes(size()),
+    );
     T::switch(
         E::elem_field("section_headers", E::idx(), &["type"]),
         vec![
@@ -520,13 +543,34 @@ mod tests {
         assert_eq!(ev.node(&d, &[7, 15, 1, 0, 4]).unwrap().value, Value::Int(2));
     }
 
+    /// The same object with the machine changed to x86-64, whose code the
+    /// header's own field is what picks a decoder for.
     #[test]
-    fn the_plain_template_leaves_code_as_bytes() {
-        let d = Document::new(MemSource(object()));
+    fn the_machine_in_the_header_picks_the_decoder() {
+        let mut bytes = object();
+        bytes[18] = 62; // x86-64
+        // mov eax, 1 (five bytes) and ret (one).
+        bytes[64..80].copy_from_slice(&[
+            0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+        ]);
+        let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(elf());
         let code = ev.node(&d, &[7, 15, 1]).unwrap();
-        assert_eq!(code.type_name, "bytes[]");
-        assert_eq!(code.size_bits, 16 * 8);
+        assert_eq!(code.type_name, "x86-64[]");
+        assert_eq!(ev.node(&d, &[7, 15, 1, 0]).unwrap().value, Value::Str("mov eax, 0x1".into()));
+        assert_eq!(ev.node(&d, &[7, 15, 1, 0]).unwrap().size_bits, 5 * 8);
+        assert_eq!(ev.node(&d, &[7, 15, 1, 1]).unwrap().value, Value::Str("ret".into()));
+    }
+
+    /// A machine with no decoder here keeps its code as bytes rather than
+    /// having words invented for it.
+    #[test]
+    fn a_machine_with_no_decoder_keeps_its_bytes() {
+        let mut bytes = object();
+        bytes[18] = 22; // S/390
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(elf());
+        assert_eq!(ev.node(&d, &[7, 15, 1]).unwrap().type_name, "bytes[]");
     }
 
     /// A big-endian 32-bit header, which is the other end of what the switches

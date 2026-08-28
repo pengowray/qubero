@@ -609,6 +609,12 @@ pub enum Ty {
     /// `"dtype": "F8_E4M3"`. `on` names the field, the way `Switch` does with
     /// a number.
     Match { on: Expr, cases: Arc<[(String, Ty)]>, default: Arc<Ty> },
+    /// One machine instruction, as long as the machine says it is. What that
+    /// length is, is only known by decoding: on x86 it is anywhere from one
+    /// byte to fifteen, and even on a machine whose instructions are all four
+    /// bytes it takes the decoder to say whether these four are one at all.
+    /// See [`crate::code`].
+    Insn { isa: crate::code::Isa },
     /// A type from the template's table, by name. This is what makes a format
     /// whose boxes contain boxes expressible: the type refers to itself.
     Named(Arc<str>),
@@ -832,6 +838,10 @@ impl Ty {
             other => other,
         }
     }
+    /// One instruction of `isa`, at wherever the field is placed.
+    pub fn insn(isa: crate::code::Isa) -> Ty {
+        Ty::Insn { isa }
+    }
     pub fn sqlite_varint() -> Ty {
         Ty::SqliteVarint
     }
@@ -929,6 +939,7 @@ impl Ty {
             Ty::SqliteVarint => "varint".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),
+            Ty::Insn { isa } => isa.name().to_string(),
             Ty::Magic(b) => format!("magic[{}]", b.len()),
             Ty::Bytes(_) => "bytes[]".into(),
             Ty::Str { len, enc } => {

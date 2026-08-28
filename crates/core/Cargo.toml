@@ -13,3 +13,10 @@ proptest = "1"
 rustc-hash = "2"
 regex-automata = { version = "0.4.18", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "hybrid", "perf-literal"] }
 miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
+# Machine code decoders, for the executable sections of a program. Default
+# features drag in serde and a terminal colour library; a decoder and the text
+# it formats are all this needs.
+yaxpeax-arch = { version = "0.3.2", default-features = false, features = ["std"] }
+yaxpeax-x86 = { version = "2.2.0", default-features = false, features = ["std", "fmt"] }
+yaxpeax-arm = { version = "0.4.0", default-features = false, features = ["std", "fmt"] }
+raki = "1.3.2"
