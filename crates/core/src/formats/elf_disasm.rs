@@ -52,6 +52,9 @@ pub struct Section {
 /// A symbol: what it is called, and where it sits.
 #[derive(Debug, Clone, Default)]
 pub struct Symbol {
+    /// Where the symbol record sits in the parsed tree.
+    pub path: Vec<usize>,
+    pub source_bits: u64,
     pub name: String,
     pub kind: i128,
     /// How many bytes the symbol covers, which is what says whether an address
@@ -75,6 +78,9 @@ pub struct Program {
     header: Vec<usize>,
     pub sections: Vec<Section>,
     pub symbols: Vec<Symbol>,
+    /// Symbols claimed by all static and dynamic symbol tables, available
+    /// without reading each record.
+    pub symbol_total: usize,
     /// Which symbol patches which instruction: a section index and an offset
     /// into it, as a relocation writes them.
     relocations: HashMap<(usize, u64), usize>,
@@ -83,8 +89,9 @@ pub struct Program {
 }
 
 impl Program {
-    /// Read the section headers, the names, the symbols and the relocations.
-    pub fn read<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Program> {
+    /// Read just the section catalogue. This is enough for an overview and
+    /// avoids walking a large debug symbol table until somebody opens it.
+    pub fn read_sections<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Program> {
         let mut p = Program::default();
         p.header = named(ev, doc, &[], "header")?;
         // An object file's symbols are offsets into their sections; a
@@ -113,7 +120,23 @@ impl Program {
         for i in 0..count {
             let at = int_field(ev, doc, &child(&headers, i), "name_offset")? as u64;
             p.sections[i].name = name_at(&names, at);
+            if p.sections[i].kind == SYMTAB || p.sections[i].kind == DYNSYM {
+                p.symbol_total += ev.node(doc, &child(&bodies, i))?.child_count as usize;
+            }
         }
+
+        Ok(p)
+    }
+
+    /// Read the section headers, the names, the symbols and the relocations.
+    pub fn read<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Program> {
+        let mut p = Program::read_sections(ev, doc)?;
+        let headers = {
+            let at = named(ev, doc, &p.header, "section_headers")?;
+            child(&at, 0)
+        };
+        let bodies = named(ev, doc, &p.header, "sections")?;
+        let count = p.sections.len();
 
         // Symbols, and the string table each symbol table names.
         for i in 0..count {
@@ -129,6 +152,8 @@ impl Program {
                 let at = int_field(ev, doc, &s, "name_offset")? as u64;
                 let info = named(ev, doc, &s, "info")?;
                 let sym = Symbol {
+                    path: s.clone(),
+                    source_bits: ev.node(doc, &s)?.offset_bits,
                     name: name_at(&strings, at),
                     kind: int_field(ev, doc, &info, "type")?,
                     size: int_field(ev, doc, &s, "size")? as u64,
@@ -672,11 +697,16 @@ mod tests {
     fn the_tables_name_the_sections_and_the_symbols() {
         let d = Document::new(MemSource(object()));
         let mut ev = Evaluator::new(bpf());
+        let overview = Program::read_sections(&mut ev, &d).unwrap();
+        assert_eq!(overview.symbol_total, 4);
+        assert!(overview.symbols.is_empty());
         let p = Program::read(&mut ev, &d).unwrap();
         let names: Vec<&str> = p.sections.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["", "xdp", ".relxdp", ".maps", ".symtab", ".strtab", ".shstrtab"]);
         let symbols: Vec<&str> = p.symbols.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(symbols, ["", "counter_map", "xdp_prog", ""]);
+        assert_eq!(p.symbols[1].path, [7, 15, 4, 1]);
+        assert!(p.symbols[1].source_bits > 0);
     }
 
     #[test]

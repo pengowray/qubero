@@ -271,6 +271,51 @@ export type Contents = {
   readonly columns: number;
 };
 
+export type ElfContents = {
+  readonly sections: readonly {
+    readonly path: readonly number[];
+    readonly name: string;
+    readonly kind: number;
+    readonly address: number;
+    readonly offset: number;
+    readonly size: number;
+  }[];
+  readonly symbols: readonly {
+    readonly path: readonly number[];
+    readonly source_bits: number;
+    readonly name: string;
+    readonly kind: number;
+    readonly section: number;
+    readonly value: number;
+    readonly size: number;
+  }[];
+  readonly symbol_total: number;
+};
+
+export type IsoVolume = {
+  readonly descriptor_path: readonly number[];
+  readonly volume: string;
+  readonly joliet: boolean;
+  readonly block_size: number;
+  readonly blocks: number;
+  readonly root_extent: number;
+  readonly root_size: number;
+  readonly root_source_bits: number;
+};
+
+export type IsoDirectory = {
+  readonly entries: readonly {
+    readonly name: string;
+    readonly directory: boolean;
+    readonly extent: number;
+    readonly size: number;
+    readonly source_bits: number;
+    readonly extents: number;
+    readonly multi_extent: boolean;
+  }[];
+  readonly total: number;
+};
+
 export type XrefRow = {
   readonly object: number;
   readonly kind: string;
@@ -794,6 +839,19 @@ export class Doc {
    */
   contents(): TemplateReply<Contents> {
     return this.handleReply(this.editor.contents());
+  }
+
+  /** Named ELF sections and at most `symbolLimit` symbols. */
+  elfContents(symbolLimit: number): TemplateReply<ElfContents> {
+    return this.handleReply(this.editor.elf_contents(symbolLimit));
+  }
+
+  isoVolume(): TemplateReply<IsoVolume> {
+    return this.handleReply(this.editor.iso_volume());
+  }
+
+  isoDirectory(extent: number, size: number, blockSize: number, limit: number, joliet: boolean): TemplateReply<IsoDirectory> {
+    return this.handleReply(this.editor.iso_directory(extent, size, blockSize, limit, joliet));
   }
 
   templateNode(path: readonly number[]): TemplateReply<TemplateNode> {

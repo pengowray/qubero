@@ -25,6 +25,9 @@ pub struct Editor {
     /// relocations say, so an instruction can name the map it loads and the
     /// helper it calls.
     bpf: Option<formats::ElfProgram>,
+    /// Whether `bpf` includes symbols and relocations rather than only named
+    /// sections for the logical overview.
+    bpf_complete: bool,
     /// The same for a 16-bit Windows program, whose relocations say what its
     /// calls into other modules are calls to.
     ne: Option<formats::NeProgram>,
@@ -601,6 +604,65 @@ struct ContentsDto {
     columns: f64,
 }
 
+/// The named parts of an ELF file. Unlike the storage template, these have
+/// resolved section and symbol names rather than string-table offsets.
+#[derive(Serialize)]
+struct ElfContentsDto {
+    sections: Vec<ElfSectionDto>,
+    symbols: Vec<ElfSymbolDto>,
+    symbol_total: f64,
+}
+
+#[derive(Serialize)]
+struct ElfSectionDto {
+    path: Vec<usize>,
+    name: String,
+    kind: f64,
+    address: f64,
+    offset: f64,
+    size: f64,
+}
+
+#[derive(Serialize)]
+struct ElfSymbolDto {
+    path: Vec<usize>,
+    source_bits: f64,
+    name: String,
+    kind: f64,
+    section: f64,
+    value: f64,
+    size: f64,
+}
+
+#[derive(Serialize)]
+struct IsoVolumeDto {
+    descriptor_path: Vec<usize>,
+    volume: String,
+    joliet: bool,
+    block_size: f64,
+    blocks: f64,
+    root_extent: f64,
+    root_size: f64,
+    root_source_bits: f64,
+}
+
+#[derive(Serialize)]
+struct IsoDirectoryDto {
+    entries: Vec<IsoEntryDto>,
+    total: f64,
+}
+
+#[derive(Serialize)]
+struct IsoEntryDto {
+    name: String,
+    directory: bool,
+    extent: f64,
+    size: f64,
+    source_bits: f64,
+    extents: f64,
+    multi_extent: bool,
+}
+
 /// One entry of the annotation column.
 #[derive(Serialize)]
 struct SpanDto {
@@ -839,7 +901,7 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store), eval: None, disasm: None, bpf: None, ne: None, template: String::new(), scan: None, focus: None }
+        Editor { doc: Document::new(store), eval: None, disasm: None, bpf: None, bpf_complete: false, ne: None, template: String::new(), scan: None, focus: None }
     }
 
     fn changed(&mut self) {
@@ -848,6 +910,7 @@ impl Editor {
         }
         self.disasm = None;
         self.bpf = None;
+        self.bpf_complete = false;
         self.ne = None;
         self.scan = None;
         self.focus = None;
@@ -861,6 +924,7 @@ impl Editor {
         }
         self.disasm = None;
         self.bpf = None;
+        self.bpf_complete = false;
         self.ne = None;
         self.scan = None;
         self.focus = None;
@@ -969,6 +1033,7 @@ impl Editor {
     pub fn set_template(&mut self, name: &str) -> bool {
         self.disasm = None;
         self.bpf = None;
+        self.bpf_complete = false;
         self.ne = None;
         self.template = name.to_string();
         if name.is_empty() {
@@ -999,6 +1064,7 @@ impl Editor {
         // full template was in use no longer applies.
         self.disasm = None;
         self.bpf = None;
+        self.bpf_complete = false;
         self.ne = None;
         self.template = String::new();
         match magicrule::match_signature(rules, head) {
@@ -1192,6 +1258,230 @@ impl Editor {
         }))
     }
 
+    /// Named ELF sections and a bounded prefix of its symbols. The semantic
+    /// pass is cached because resolving names crosses several linked tables.
+    pub fn elf_contents(&mut self, symbol_limit: u32) -> String {
+        if self.template != "elf" && self.template != "bpf" {
+            return reply::<ElfContentsDto>(Err(EvalError::Failed("not an ELF template".into())));
+        }
+        let Some(e) = &mut self.eval else {
+            return reply::<ElfContentsDto>(Err(EvalError::Failed("no template".into())));
+        };
+        let need_symbols = symbol_limit > 0;
+        if self.bpf.is_none() || (need_symbols && !self.bpf_complete) {
+            e.set_slice(None);
+            let read = if need_symbols {
+                formats::ElfProgram::read(e, &self.doc)
+            } else {
+                formats::ElfProgram::read_sections(e, &self.doc)
+            };
+            e.set_slice(Some(WORK_SLICE));
+            match read {
+                Ok(program) => {
+                    self.bpf = Some(program);
+                    self.bpf_complete = need_symbols;
+                }
+                Err(error) => return reply::<ElfContentsDto>(Err(error)),
+            }
+        }
+        let Some(program) = &self.bpf else {
+            return reply::<ElfContentsDto>(Err(EvalError::Failed("could not resolve ELF tables".into())));
+        };
+        let sections = program.sections.iter().enumerate().map(|(i, section)| ElfSectionDto {
+            path: vec![7, 14, 0, i],
+            name: section.name.clone(),
+            kind: section.kind as f64,
+            address: section.addr as f64,
+            offset: section.offset as f64,
+            size: section.size as f64,
+        }).collect();
+        let symbols = program.symbols.iter().take(symbol_limit as usize).map(|symbol| ElfSymbolDto {
+            path: symbol.path.clone(),
+            source_bits: symbol.source_bits as f64,
+            name: symbol.name.clone(),
+            kind: symbol.kind as f64,
+            section: symbol.section as f64,
+            value: symbol.value as f64,
+            size: symbol.size as f64,
+        }).collect();
+        reply(Ok(ElfContentsDto {
+            sections,
+            symbols,
+            symbol_total: program.symbol_total as f64,
+        }))
+    }
+
+    /// The primary ISO 9660 volume and its root-directory pointer.
+    pub fn iso_volume(&self) -> String {
+        if self.template != "iso9660" {
+            return reply::<IsoVolumeDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
+        }
+        let mut descriptor = vec![0u8; 2048];
+        let mut primary = None;
+        let mut joliet = None;
+        for i in 0..64usize {
+            let at = (16 + i as u64) * 2048;
+            if at + 2048 > self.doc.len_bytes() {
+                break;
+            }
+            let missing = self.doc.read_bytes(at, &mut descriptor);
+            if !missing.is_empty() {
+                return reply::<IsoVolumeDto>(Err(EvalError::Pending(missing)));
+            }
+            if &descriptor[1..6] != b"CD001" {
+                continue;
+            }
+            if descriptor[0] == 255 {
+                break;
+            }
+            let is_primary = descriptor[0] == 1;
+            let is_joliet = descriptor[0] == 2
+                && matches!(&descriptor[88..91], b"%/@" | b"%/C" | b"%/E");
+            if !is_primary && !is_joliet {
+                continue;
+            }
+            let le16 = |p: usize| u16::from_le_bytes([descriptor[p], descriptor[p + 1]]) as u64;
+            let le32 = |p: usize| u32::from_le_bytes(descriptor[p..p + 4].try_into().unwrap()) as u64;
+            let volume = if is_joliet {
+                let decoded: String = descriptor[40..72]
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                    .filter_map(|c| char::from_u32(c as u32))
+                    .collect();
+                decoded.trim_end_matches([' ', '\0']).to_string()
+            } else {
+                String::from_utf8_lossy(&descriptor[40..72]).trim_end_matches([' ', '\0']).to_string()
+            };
+            let root = 156usize;
+            let found = IsoVolumeDto {
+                descriptor_path: vec![1, i, 3],
+                volume,
+                joliet: is_joliet,
+                block_size: le16(128) as f64,
+                blocks: le32(80) as f64,
+                root_extent: le32(root + 2) as f64,
+                root_size: le32(root + 10) as f64,
+                root_source_bits: ((at + root as u64) * 8) as f64,
+            };
+            if is_joliet {
+                joliet = Some(found);
+            } else {
+                primary = Some(found);
+            }
+        }
+        match joliet.or(primary) {
+            Some(volume) => reply(Ok(volume)),
+            None => reply::<IsoVolumeDto>(Err(EvalError::Failed("primary volume descriptor not found".into()))),
+        }
+    }
+
+    /// One ISO directory, bounded for display but counted in full. Child
+    /// directories are read only when their logical row is opened.
+    pub fn iso_directory(&self, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
+        if self.template != "iso9660" {
+            return reply::<IsoDirectoryDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
+        }
+        let block = block_size as u64;
+        let len = size as u64;
+        let at = (extent as u64).saturating_mul(block);
+        if block == 0 || len > 32 * 1024 * 1024 || at.saturating_add(len) > self.doc.len_bytes() {
+            return reply::<IsoDirectoryDto>(Err(EvalError::Failed("invalid or unusually large ISO directory".into())));
+        }
+        let mut bytes = vec![0u8; len as usize];
+        let missing = self.doc.read_bytes(at, &mut bytes);
+        if !missing.is_empty() {
+            return reply::<IsoDirectoryDto>(Err(EvalError::Pending(missing)));
+        }
+        let mut entries: Vec<IsoEntryDto> = Vec::new();
+        let mut total = 0usize;
+        let mut last_name = String::new();
+        let mut last_multi = false;
+        let mut pos = 0usize;
+        while pos < bytes.len() {
+            let record_len = bytes[pos] as usize;
+            if record_len == 0 {
+                let next = ((pos as u64 / block) + 1) * block;
+                pos = next as usize;
+                continue;
+            }
+            if record_len < 34 || pos + record_len > bytes.len() {
+                break;
+            }
+            let name_len = bytes[pos + 32] as usize;
+            if pos + 33 + name_len > pos + record_len {
+                break;
+            }
+            let raw = &bytes[pos + 33..pos + 33 + name_len];
+            if raw != [0] && raw != [1] {
+                let mut name: String = if joliet {
+                    raw.chunks_exact(2)
+                        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                        .filter_map(|c| char::from_u32(c as u32))
+                        .collect()
+                } else {
+                    String::from_utf8_lossy(raw).into_owned()
+                };
+                // Rock Ridge NM carries the POSIX name in the System Use
+                // area. It wins over the restricted ISO identifier.
+                let mut system = pos + 33 + name_len + usize::from(name_len % 2 == 0);
+                let end = pos + record_len;
+                let mut rock_ridge = String::new();
+                while system + 4 <= end {
+                    let field_len = bytes[system + 2] as usize;
+                    if field_len < 4 || system + field_len > end {
+                        break;
+                    }
+                    if &bytes[system..system + 2] == b"NM" && field_len >= 5 {
+                        rock_ridge.push_str(&String::from_utf8_lossy(&bytes[system + 5..system + field_len]));
+                    }
+                    system += field_len;
+                }
+                if !rock_ridge.is_empty() {
+                    name = rock_ridge;
+                } else {
+                    if let Some(version) = name.rfind(';') {
+                        if name[version + 1..].chars().all(|c| c.is_ascii_digit()) {
+                            name.truncate(version);
+                        }
+                    }
+                    if name.ends_with('.') {
+                        name.pop();
+                    }
+                }
+                let multi = bytes[pos + 25] & 0x80 != 0;
+                let continuation = last_multi && name == last_name;
+                let le32 = |p: usize| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as u64;
+                let part_size = le32(pos + 10) as f64;
+                if continuation {
+                    if let Some(previous) = entries.last_mut() {
+                        if previous.name == name {
+                            previous.size += part_size;
+                            previous.extents += 1.0;
+                            previous.multi_extent = multi;
+                        }
+                    }
+                } else {
+                    total += 1;
+                }
+                if !continuation && entries.len() < limit as usize {
+                    entries.push(IsoEntryDto {
+                        name: name.clone(),
+                        directory: bytes[pos + 25] & 2 != 0,
+                        extent: le32(pos + 2) as f64,
+                        size: part_size,
+                        source_bits: ((at + pos as u64) * 8) as f64,
+                        extents: 1.0,
+                        multi_extent: multi,
+                    });
+                }
+                last_name = name;
+                last_multi = multi;
+            }
+            pos += record_len;
+        }
+        reply(Ok(IsoDirectoryDto { entries, total: total as f64 }))
+    }
+
     /// Rewrite instruction rows through a disassembler, so a call names the
     /// function it calls. Anything that does not work out keeps the row the
     /// template already produced: a name is an improvement on a number, not a
@@ -1237,8 +1527,9 @@ impl Editor {
             return found.into_iter().map(span_dto).collect();
         }
         let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
-        if self.bpf.is_none() {
+        if !self.bpf_complete {
             self.bpf = formats::ElfProgram::read(e, &self.doc).ok();
+            self.bpf_complete = self.bpf.is_some();
         }
         let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };
         found
@@ -1263,13 +1554,14 @@ impl Editor {
             return found.into_iter().map(span_dto).collect();
         }
         let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
-        if self.bpf.is_none() {
+        if !self.bpf_complete {
             // Reading the symbol table of a whole program is more than one
             // screenful of work, and stopping halfway would mean starting
             // again on every screenful after it. So this one runs to an
             // answer, and what it costs is paid once.
             e.set_slice(None);
             self.bpf = formats::ElfProgram::read(e, &self.doc).ok();
+            self.bpf_complete = self.bpf.is_some();
             e.set_slice(Some(WORK_SLICE));
         }
         let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };

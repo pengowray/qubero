@@ -930,6 +930,325 @@ function sqliteOutline(doc: Doc): TemplateReply<LogicalOutline> {
   };
 }
 
+const ELF_SECTION_KINDS = new Map<number, string>([
+  [0, "null"], [1, "program data"], [2, "symbols"], [3, "strings"], [4, "relocations + addends"],
+  [5, "hash"], [6, "dynamic linking"], [7, "notes"], [8, "uninitialized data"], [9, "relocations"],
+  [11, "dynamic symbols"], [14, "initializers"], [15, "finalizers"], [16, "pre-initializers"], [17, "group"],
+]);
+
+const ELF_SYMBOL_KINDS = new Map<number, string>([
+  [0, "symbol"], [1, "object"], [2, "function"], [3, "section"], [4, "file"], [5, "common"], [6, "TLS"], [10, "indirect function"],
+]);
+
+function enumName(value: string | null, fallback: string): string {
+  return value?.replace(/ \([^)]*\)$/, "") || fallback;
+}
+
+function elfOutline(
+  doc: Doc,
+  expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> {
+  const symbolLimit = expanded.has("/symbols") ? shown.get("/symbols") ?? LOGICAL_PAGE : 0;
+  const reply = doc.elfContents(symbolLimit);
+  if (reply.status !== "ok") return reply;
+  const elf = reply.node;
+  const header = [7];
+  const bits = enumName(nodeValue(doc, [1]), "ELF");
+  const endian = enumName(nodeValue(doc, [2]), "");
+  const objectType = enumName(nodeValue(doc, [...header, 0]), "object");
+  const machine = enumName(nodeValue(doc, [...header, 1]), "machine");
+  const entry = Number(nodeValue(doc, [...header, 3]) ?? 0);
+  const programHeaders = doc.templateNode([...header, 13, 0]);
+  if (programHeaders.status !== "ok") return programHeaders;
+  const nodes: LogicalNode[] = [{
+    id: "/", parentId: null, label: "Program image", fullName: "/", depth: 0, group: true, hasChildren: true,
+    sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
+    value: [objectType, machine, bits, endian].filter(Boolean).join(" · "), type: doc.template === "bpf" ? "eBPF ELF" : "ELF",
+    logicalBytes: doc.lengthBytes, logicalApproximate: false, title: `${machine} ${objectType}`,
+  }];
+
+  const addGroup = (id: string, label: string, count: number, value: string, sourcePath: number[]): void => {
+    nodes.push({
+      id, parentId: "/", label, fullName: id, depth: 1, group: true, hasChildren: count > 0,
+      sourcePath, sourceBits: null, sourceText: count > 0 ? "table" : "—", value, type: "catalogue",
+      logicalBytes: null, logicalApproximate: false, title: `${count.toLocaleString()} ${label.toLowerCase()}`,
+    });
+  };
+
+  addGroup("/segments", "Segments", programHeaders.node.child_count, `${programHeaders.node.child_count.toLocaleString()} mapped regions`, [...header, 13]);
+  for (let i = 0; i < programHeaders.node.child_count; i++) {
+    const path = [...header, 13, 0, i];
+    const segment = doc.templateNode(path);
+    if (segment.status !== "ok") return segment;
+    const wide = bits.startsWith("64");
+    const offsetIndex = wide ? 2 : 1;
+    const addressIndex = wide ? 3 : 2;
+    const fileSizeIndex = wide ? 5 : 4;
+    const memorySizeIndex = wide ? 6 : 5;
+    const flagsIndex = wide ? 1 : 6;
+    const fileSize = Number(nodeValue(doc, [...path, fileSizeIndex]) ?? 0);
+    const memorySize = Number(nodeValue(doc, [...path, memorySizeIndex]) ?? 0);
+    const offset = Number(nodeValue(doc, [...path, offsetIndex]) ?? 0);
+    const address = nodeValue(doc, [...path, addressIndex]) ?? "0";
+    const kind = enumName(nodeValue(doc, [...path, 0]), "segment");
+    const flags = nodeValue(doc, [...path, flagsIndex]) ?? "";
+    nodes.push({
+      id: `/segments/${i}`, parentId: "/segments", label: `${kind} ${i + 1}`, fullName: `/segments/${i}`,
+      depth: 2, group: false, hasChildren: false, sourcePath: path, sourceBits: segment.node.offset_bits,
+      sourceText: formatOffset(segment.node.offset_bits),
+      value: [`file ${formatOffset(offset * 8)}`, `virtual ${address}`, flags, memorySize !== fileSize ? `${formatBytes(fileSize)} file → ${formatBytes(memorySize)} memory` : ""].filter(Boolean).join(" · "),
+      type: "segment", logicalBytes: memorySize, logicalApproximate: false, title: `${kind} segment`,
+    });
+  }
+
+  addGroup("/sections", "Sections", elf.sections.length, `${elf.sections.length.toLocaleString()} linked sections`, [...header, 14]);
+  for (let i = 0; i < elf.sections.length; i++) {
+    const section = elf.sections[i];
+    if (section === undefined) continue;
+    const headerPath = section.path;
+    const flags = nodeValue(doc, [...headerPath, 2]) ?? "";
+    const kind = ELF_SECTION_KINDS.get(section.kind) ?? enumName(nodeValue(doc, [...headerPath, 1]), `type ${section.kind}`);
+    nodes.push({
+      id: `/sections/${i}`, parentId: "/sections", label: section.name || (i === 0 ? "Null section" : `Section ${i}`),
+      fullName: section.name || `/sections/${i}`, depth: 2, group: false, hasChildren: false,
+      sourcePath: [7, 15, i], sourceBits: section.offset * 8, sourceText: section.kind === 8 ? "memory only" : formatOffset(section.offset * 8),
+      value: [kind, flags, section.address > 0 ? `virtual ${formatOffset(section.address * 8)}` : ""].filter(Boolean).join(" · "),
+      type: "section", logicalBytes: section.size, logicalApproximate: false, title: section.name || `Section ${i}`,
+    });
+  }
+
+  addGroup("/symbols", "Symbols", elf.symbol_total, `${elf.symbol_total.toLocaleString()} named and unnamed symbols`, [...header, 15]);
+  for (let i = 0; i < elf.symbols.length; i++) {
+    const symbol = elf.symbols[i];
+    if (symbol === undefined) continue;
+    const section = elf.sections[symbol.section];
+    const kind = ELF_SYMBOL_KINDS.get(symbol.kind) ?? `type ${symbol.kind}`;
+    nodes.push({
+      id: `/symbols/${i}`, parentId: "/symbols", label: symbol.name || `(unnamed ${kind})`, fullName: symbol.name || `/symbols/${i}`,
+      depth: 2, group: false, hasChildren: false, sourcePath: symbol.path,
+      sourceBits: symbol.source_bits, sourceText: formatOffset(symbol.source_bits),
+      value: [`value ${formatOffset(symbol.value * 8)}`, section?.name || "", symbol.size > 0 ? formatBytes(symbol.size) : ""].filter(Boolean).join(" · "),
+      type: kind, logicalBytes: symbol.size, logicalApproximate: false, title: symbol.name || kind,
+    });
+  }
+  const remaining = elf.symbol_total - elf.symbols.length;
+  return {
+    status: "ok",
+    node: {
+      format: doc.template ?? "elf", title: "ELF program image",
+      summary: [machine, objectType, `${elf.sections.length.toLocaleString()} sections`, `${elf.symbol_total.toLocaleString()} symbols`, entry > 0 ? `entry ${formatOffset(entry * 8)}` : ""].filter(Boolean).join(" · "),
+      nodes, total: nodes.length + remaining, sizeLabel: "Memory / data size",
+      ...(remaining > 0 && expanded.has("/symbols") ? { more: [{ sectionId: "/symbols", afterId: elf.symbols.length === 0 ? "/symbols" : `/symbols/${elf.symbols.length - 1}`, count: remaining, label: "symbols" }] } : {}),
+    },
+  };
+}
+
+function isoOutline(
+  doc: Doc,
+  expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> {
+  const volumeReply = doc.isoVolume();
+  if (volumeReply.status !== "ok") return volumeReply;
+  const volume = volumeReply.node;
+  const volumeBytes = volume.blocks * volume.block_size;
+  const title = volume.volume || "ISO 9660 volume";
+  const nodes: LogicalNode[] = [{
+    id: "/", parentId: null, label: "Disc image", fullName: "/", depth: 0, group: true, hasChildren: true,
+    sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
+    value: `${title} · ${volume.blocks.toLocaleString()} blocks · ${formatBytes(volume.block_size)} blocks${volume.joliet ? " · Joliet names" : ""}`,
+    type: "ISO 9660", logicalBytes: volumeBytes, logicalApproximate: false, title,
+  }, {
+    id: "/volume", parentId: "/", label: "Volume information", fullName: "/volume", depth: 1,
+    group: false, hasChildren: false, sourcePath: volume.descriptor_path, sourceBits: 16 * 2048 * 8,
+    sourceText: "sector 16", value: title, type: "primary volume", logicalBytes: 2048,
+    logicalApproximate: false, title: `${title} primary volume descriptor`,
+  }, {
+    id: "/files", parentId: "/", label: "Files", fullName: "/files", depth: 1, group: true, hasChildren: true,
+    sourcePath: volume.descriptor_path, sourceBits: volume.root_extent * volume.block_size * 8,
+    sourceText: formatOffset(volume.root_extent * volume.block_size * 8), value: "root directory", type: "directory",
+    logicalBytes: volume.root_size, logicalApproximate: false, title: "Root directory",
+  }];
+  const more: LogicalMore[] = [];
+  let omitted = 0;
+  const visited = new Set<string>();
+  const addDirectory = (id: string, extent: number, size: number, depth: number): TemplateReply<never> | null => {
+    if (!expanded.has(id)) return null;
+    const visit = `${extent}:${size}`;
+    if (visited.has(visit)) return null;
+    visited.add(visit);
+    const limit = shown.get(id) ?? LOGICAL_PAGE;
+    const reply = doc.isoDirectory(extent, size, volume.block_size, limit, volume.joliet);
+    if (reply.status !== "ok") return reply;
+    const children: Array<{ id: string; extent: number; size: number; depth: number }> = [];
+    for (let i = 0; i < reply.node.entries.length; i++) {
+      const entry = reply.node.entries[i];
+      if (entry === undefined) continue;
+      const childId = `${id}/${encodeURIComponent(entry.name || `entry-${i}`)}~${i}`;
+      const dataBits = entry.extent * volume.block_size * 8;
+      nodes.push({
+        id: childId, parentId: id, label: entry.name || `(entry ${i + 1})`, fullName: childId.slice(6),
+        depth, group: entry.directory, hasChildren: entry.directory,
+        sourcePath: volume.descriptor_path, sourceBits: dataBits,
+        sourceText: entry.extents > 1 ? "multiple" : formatOffset(dataBits),
+        value: entry.directory ? "directory" : entry.extents > 1 ? `${entry.extents.toLocaleString()} extents` : "file data",
+        type: entry.directory ? "directory" : "file",
+        logicalBytes: entry.size, logicalApproximate: false,
+        title: `${entry.name || `Entry ${i + 1}`} · directory record at ${formatOffset(entry.source_bits)}`,
+      });
+      if (entry.directory) children.push({ id: childId, extent: entry.extent, size: entry.size, depth: depth + 1 });
+    }
+    const remaining = reply.node.total - reply.node.entries.length;
+    omitted += remaining;
+    if (remaining > 0) {
+      more.push({
+        sectionId: id,
+        afterId: reply.node.entries.length === 0 ? id : `${id}/${encodeURIComponent(reply.node.entries.at(-1)?.name || `entry-${reply.node.entries.length - 1}`)}~${reply.node.entries.length - 1}`,
+        count: remaining,
+        label: "entries",
+      });
+    }
+    for (const child of children) {
+      const pending = addDirectory(child.id, child.extent, child.size, child.depth);
+      if (pending !== null) return pending;
+    }
+    return null;
+  };
+  const pending = addDirectory("/files", volume.root_extent, volume.root_size, 2);
+  if (pending !== null) return pending;
+  return {
+    status: "ok",
+    node: {
+      format: "iso9660", title: "ISO 9660 filesystem",
+      summary: `${title} · ${volume.blocks.toLocaleString()} blocks · ${formatBytes(volumeBytes)}`,
+      nodes, total: nodes.length + omitted, sizeLabel: "Data size", ...(more.length > 0 ? { more } : {}),
+    },
+  };
+}
+
+function durationText(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(2) : seconds.toFixed(1)} s`;
+  const whole = Math.round(seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const rest = whole % 60;
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}` : `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+const WAV_METADATA = new Set(["guan", "wamd", "bext", "iXML", "_PMX", "axml", "id3", "ID3", "LIST", "cue", "smpl", "inst", "plst"]);
+const WAV_LABELS = new Map<string, string>([
+  ["fmt", "Audio format"], ["data", "Audio samples"], ["fact", "Sample count"], ["guan", "GUANO metadata"],
+  ["wamd", "Wildlife Acoustics metadata"], ["bext", "Broadcast metadata"], ["iXML", "iXML metadata"],
+  ["_PMX", "XMP metadata"], ["axml", "AXML metadata"], ["id3", "ID3 metadata"], ["ID3", "ID3 metadata"],
+  ["LIST", "Metadata list"], ["cue", "Cue points"], ["smpl", "Sampler data"], ["inst", "Instrument"], ["plst", "Playlist"],
+]);
+
+function wavOutline(doc: Doc): TemplateReply<LogicalOutline> {
+  const chunksReply = doc.templateNode([3]);
+  if (chunksReply.status !== "ok") return chunksReply;
+  let format = "audio";
+  let channels = 0;
+  let sampleRate = 0;
+  let byteRate = 0;
+  let blockAlign = 0;
+  let bitsPerSample = 0;
+  const formats: LogicalNode[] = [];
+  const audio: LogicalNode[] = [];
+  const metadata: LogicalNode[] = [];
+  const other: LogicalNode[] = [];
+  let audioBytes = 0;
+  for (let i = 0; i < chunksReply.node.child_count; i++) {
+    const path = [3, i];
+    const chunk = doc.templateNode(path);
+    if (chunk.status !== "ok") return chunk;
+    const body = doc.templateNode([...path, 2]);
+    if (body.status !== "ok") return body;
+    const rawId = nodeValue(doc, [...path, 0]) ?? chunk.node.name;
+    const id = rawId.trimEnd();
+    const label = WAV_LABELS.get(id) ?? (id ? `${id} chunk` : `Chunk ${i + 1}`);
+    if (id === "fmt") {
+      format = enumName(nodeValue(doc, [...path, 2, 0]), "audio");
+      channels = Number(nodeValue(doc, [...path, 2, 1]) ?? 0);
+      sampleRate = Number(nodeValue(doc, [...path, 2, 2]) ?? 0);
+      byteRate = Number(nodeValue(doc, [...path, 2, 3]) ?? 0);
+      blockAlign = Number(nodeValue(doc, [...path, 2, 4]) ?? 0);
+      bitsPerSample = Number(nodeValue(doc, [...path, 2, 5]) ?? 0);
+      formats.push({
+        id: `/format/${i}`, parentId: "/", label, fullName: "/format", depth: 1, group: false, hasChildren: false,
+        sourcePath: path, sourceBits: chunk.node.offset_bits, sourceText: formatOffset(chunk.node.offset_bits),
+        value: [`${sampleRate.toLocaleString()} Hz`, `${channels.toLocaleString()} channel${channels === 1 ? "" : "s"}`, `${bitsPerSample}-bit`, format].filter(Boolean).join(" · "),
+        type: "audio format", logicalBytes: body.node.size_bits / 8, logicalApproximate: false, title: "WAVE format chunk",
+      });
+      continue;
+    }
+    const common = {
+      sourcePath: path, sourceBits: body.node.offset_bits, sourceText: formatOffset(body.node.offset_bits),
+      logicalBytes: body.node.size_bits / 8, logicalApproximate: false,
+    } as const;
+    if (id === "data") {
+      const bytes = body.node.size_bits / 8;
+      audioBytes += bytes;
+      const frames = blockAlign > 0 ? Math.floor(bytes / blockAlign) : 0;
+      const duration = byteRate > 0 ? durationText(bytes / byteRate) : "";
+      audio.push({
+        id: `/audio/${i}`, parentId: "/audio", label: audio.length === 0 ? "Samples" : `Samples ${audio.length + 1}`,
+        fullName: `/audio/${i}`, depth: 2, group: false, hasChildren: false, ...common,
+        value: [frames > 0 ? `${frames.toLocaleString()} frames` : "", duration].filter(Boolean).join(" · ") || "sample data",
+        type: bitsPerSample > 0 ? `${format} ${bitsPerSample}-bit` : format, title: `${label} · ${formatBytes(bytes)}`,
+      });
+      continue;
+    }
+    const target = WAV_METADATA.has(id) || id === "fact" ? metadata : other;
+    let detail = `${formatBytes(body.node.size_bits / 8)} payload`;
+    if (id === "fact") {
+      const count = Number(nodeValue(doc, [...path, 2, 0]) ?? 0);
+      if (count > 0) detail = `${count.toLocaleString()} samples`;
+    } else if (id === "cue") {
+      const count = Number(nodeValue(doc, [...path, 2, 0]) ?? 0);
+      if (count >= 0) detail = `${count.toLocaleString()} cue points`;
+    } else if (id === "LIST") {
+      const listType = nodeValue(doc, [...path, 2, 0]);
+      if (listType) detail = `${listType.trim()} list`;
+    }
+    const parentId = target === metadata ? "/metadata" : "/other";
+    target.push({
+      id: `${parentId}/${i}`, parentId, label, fullName: `${parentId}/${id || i}`, depth: 2,
+      group: false, hasChildren: false, ...common, value: detail, type: id || "chunk", title: `${rawId} chunk`,
+    });
+  }
+  const kind = doc.template === "w4v" ? "W4V" : "WAVE";
+  const duration = byteRate > 0 ? durationText(audioBytes / byteRate) : "";
+  const nodes: LogicalNode[] = [{
+    id: "/", parentId: null, label: "Audio file", fullName: "/", depth: 0, group: true, hasChildren: true,
+    sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
+    value: [`${sampleRate.toLocaleString()} Hz`, channels > 0 ? `${channels} channel${channels === 1 ? "" : "s"}` : "", `${bitsPerSample}-bit`, duration].filter((part) => part && part !== "0 Hz" && part !== "0-bit").join(" · "),
+    type: kind, logicalBytes: audioBytes, logicalApproximate: false, title: `${kind} audio`,
+  }, ...formats];
+  const addSection = (id: string, label: string, rows: LogicalNode[], value: string): void => {
+    if (rows.length === 0) return;
+    nodes.push({
+      id, parentId: "/", label, fullName: id, depth: 1, group: true, hasChildren: true,
+      sourcePath: rows[0]?.sourcePath ?? [], sourceBits: rows[0]?.sourceBits ?? null, sourceText: rows.length === 1 ? rows[0]?.sourceText ?? "" : "multiple",
+      value, type: "chunk group", logicalBytes: rows.reduce((sum, row) => sum + (row.logicalBytes ?? 0), 0),
+      logicalApproximate: false, title: label,
+    });
+    nodes.push(...rows);
+  };
+  addSection("/audio", "Audio data", audio, [duration, `${audio.length.toLocaleString()} data chunk${audio.length === 1 ? "" : "s"}`].filter(Boolean).join(" · "));
+  addSection("/metadata", "Metadata and markers", metadata, `${metadata.length.toLocaleString()} chunk${metadata.length === 1 ? "" : "s"}`);
+  addSection("/other", "Other chunks", other, `${other.length.toLocaleString()} chunk${other.length === 1 ? "" : "s"}`);
+  return {
+    status: "ok",
+    node: {
+      format: doc.template ?? "wav", title: `${kind} audio`,
+      summary: [format, sampleRate > 0 ? `${sampleRate.toLocaleString()} Hz` : "", channels > 0 ? `${channels} channel${channels === 1 ? "" : "s"}` : "", duration].filter(Boolean).join(" · "),
+      nodes, total: nodes.length, sizeLabel: "Chunk data",
+    },
+  };
+}
+
 /** Adapters are intentionally independent of the view. GGUF, ZIP, SQLite,
  * RIFF and MP4 can add semantic nodes here without changing the table UI. */
 const ADAPTERS: readonly Adapter[] = [
@@ -937,6 +1256,9 @@ const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "gguf", read: ggufOutline },
   { matches: (doc) => doc.template === "zip" || doc.template === "zarrzip", read: archiveOutline },
   { matches: (doc) => doc.template === "sqlite" || doc.template === "self", read: (doc) => sqliteOutline(doc) },
+  { matches: (doc) => doc.template === "elf" || doc.template === "bpf", read: elfOutline },
+  { matches: (doc) => doc.template === "iso9660", read: isoOutline },
+  { matches: (doc) => doc.template === "wav" || doc.template === "w4v", read: (doc) => wavOutline(doc) },
 ];
 
 export function hasLogicalOutline(doc: Doc): boolean {
