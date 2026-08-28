@@ -25,8 +25,19 @@ const METHODS: &[(i128, &str)] = &[
 ];
 
 pub fn zip() -> Template {
+    archive("zip")
+}
+
+/// A Zarr store written into a ZIP, which zarr-python calls a ZipStore. The
+/// records are the records of any archive; the name is what says the entries
+/// are a store's metadata and chunks rather than loose files.
+pub fn zarrzip() -> Template {
+    archive("zarrzip")
+}
+
+fn archive(name: &str) -> Template {
     Template::new(
-        "zip",
+        name,
         T::structure(
             "ZIP",
             vec![(

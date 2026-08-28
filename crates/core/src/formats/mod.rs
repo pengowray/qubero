@@ -139,7 +139,7 @@ pub use w4v::w4v;
 pub use wad::wad;
 pub use wav::wav;
 pub use whisper::whisper;
-pub use zip::zip;
+pub use zip::{zarrzip, zip};
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
@@ -158,11 +158,12 @@ pub fn omezarr() -> Template {
     Template::new("omezarr", Ty::json())
 }
 
+
 pub fn builtin_names() -> &'static [&'static str] {
     &[
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
-        "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
+        "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
@@ -213,6 +214,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "safetensors" => Some(safetensors()),
         "json" => Some(json()),
         "omezarr" => Some(omezarr()),
+        "zarrzip" => Some(zarrzip()),
         "bmp" => Some(bmp()),
         "pcx" => Some(pcx()),
         "tga" => Some(tga()),
@@ -385,6 +387,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("omf")
     } else if is_dos(head, len) {
         Some("msdos")
+    } else if is_zarr_zip(head) {
+        Some("zarrzip")
     } else if is_lha(head) {
         Some("lha")
     } else if is_lnk(head) {
@@ -890,6 +894,64 @@ fn is_lha(head: &[u8]) -> bool {
     matches!(head.get(2..7), Some([b'-', b'l', b'h' | b'z', _, b'-']))
 }
 
+/// Whether these leading bytes are a Zarr store written into a ZIP.
+///
+/// A ZipStore is an ordinary archive whose entries are a store's keys, so the
+/// only thing that tells one from any other ZIP is the names inside it. This
+/// walks the local file headers in the head window looking for a metadata key:
+/// `.zarray`, `.zgroup` or `.zattrs` for a v2 store, `zarr.json` for a v3 one.
+///
+/// The walk needs each record's length to reach the next, and a streamed entry
+/// writes zero there and its real size in a descriptor after the data. Rather
+/// than scan for that descriptor, the walk stops: what it has read so far is
+/// still allowed to answer. It stops at the central directory too, which is
+/// where the names run out.
+///
+/// Entry order is a writer's choice, so a store whose metadata lands past the
+/// window is not recognised here. The archive still opens as a ZIP, and the
+/// contents view names the store from the entries themselves.
+fn is_zarr_zip(head: &[u8]) -> bool {
+    let mut at = 0usize;
+    while let Some(record) = head.get(at..at.saturating_add(30)) {
+        if record[..4] != *b"PK\x03\x04" {
+            return false;
+        }
+        let u16_at = |i: usize| u16::from_le_bytes([record[i], record[i + 1]]) as usize;
+        let u32_at = |i: usize| u32::from_le_bytes([record[i], record[i + 1], record[i + 2], record[i + 3]]) as usize;
+        let flags = u16_at(6);
+        let compressed = u32_at(18);
+        let name_length = u16_at(26);
+        let extra_length = u16_at(28);
+        let names_at = at + 30;
+        let Some(name) = head.get(names_at..names_at.saturating_add(name_length)) else {
+            return false;
+        };
+        if is_zarr_key(name) {
+            return true;
+        }
+        // A streamed entry writes zero for its size here and the real one in a
+        // descriptor after the data, so there is no way on to the next record.
+        if flags & 8 != 0 {
+            return false;
+        }
+        let Some(next) = names_at
+            .checked_add(name_length)
+            .and_then(|n| n.checked_add(extra_length))
+            .and_then(|n| n.checked_add(compressed))
+        else {
+            return false;
+        };
+        at = next;
+    }
+    false
+}
+
+/// Whether an archive entry's name is one of a Zarr store's metadata keys.
+fn is_zarr_key(name: &[u8]) -> bool {
+    let leaf = name.rsplit(|&b| b == b'/' || b == b'\\').next().unwrap_or(name);
+    matches!(leaf, b".zarray" | b".zgroup" | b".zattrs" | b"zarr.json")
+}
+
 /// Whether these leading bytes are a Shell Link (`.lnk`).  Its header size
 /// and LinkCLSID together are fixed by the format, which is strong enough to
 /// identify a shortcut without relying on its filename extension.
@@ -1319,6 +1381,43 @@ mod tests {
         assert_eq!(sniff(&region(182)[..8191], len), None);
         // A length that is not a count of sectors is not a region either.
         assert_eq!(sniff(&region(182), len + 1), None);
+    }
+
+    /// One stored ZIP local file record, from its signature to the end of its
+    /// data. Enough for the sniff, which never reaches the central directory.
+    fn zip_entry(name: &[u8], data: &[u8], streamed: bool) -> Vec<u8> {
+        let mut v = b"PK\x03\x04".to_vec();
+        v.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        v.extend_from_slice(&(if streamed { 8u16 } else { 0u16 }).to_le_bytes());
+        v.extend_from_slice(&[0; 10]); // method, time, date, crc
+        v.extend_from_slice(&(if streamed { 0 } else { data.len() as u32 }).to_le_bytes());
+        v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes()); // extra
+        v.extend_from_slice(name);
+        v.extend_from_slice(data);
+        v
+    }
+
+    #[test]
+    fn a_zarr_store_in_a_zip_is_told_from_an_ordinary_archive() {
+        // v2: the root group's marker, ahead of a chunk that says nothing.
+        let mut v2 = zip_entry(b"image.zarr/0/0.0.0", b"chunkbytes", false);
+        v2.extend_from_slice(&zip_entry(b"image.zarr/.zgroup", br#"{"zarr_format":2}"#, false));
+        assert_eq!(sniffed(&v2), Some("zarrzip"));
+
+        // v3, where one file name carries both the format and the metadata.
+        let v3 = zip_entry(b"zarr.json", br#"{"zarr_format":3,"node_type":"group"}"#, false);
+        assert_eq!(sniffed(&v3), Some("zarrzip"));
+
+        // An archive of ordinary files is still an archive.
+        let plain = zip_entry(b"notes.txt", b"hello", false);
+        assert_eq!(sniffed(&plain), Some("zip"));
+
+        // A streamed entry gives no way on to the next record, so the walk
+        // stops rather than reading the data as a header.
+        let streamed = zip_entry(b"a.txt", b"data", true);
+        assert_eq!(sniffed(&streamed), Some("zip"));
     }
 
     #[test]
