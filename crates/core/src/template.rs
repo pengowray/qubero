@@ -756,6 +756,11 @@ impl Ty {
     pub fn decimal(len: StrLen) -> Ty {
         Ty::TextInt { len, radix: 10 }
     }
+    /// A number written as hexadecimal digits, which is how a cpio archive
+    /// writes every number in its header. See [`Ty::TextInt`].
+    pub fn hex_digits(len: StrLen) -> Ty {
+        Ty::TextInt { len, radix: 16 }
+    }
     /// The text in this field, read as the JSON it holds.
     pub fn json() -> Ty {
         Ty::Json(json::Shape::Doc)

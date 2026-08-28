@@ -23,6 +23,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   cr2: "Canon CR2",
   cdr: "CorelDRAW CDR",
   cmx: "Corel Presentation Exchange CMX",
+  cpio: "cpio archive (initramfs)",
   dng: "Adobe DNG",
   dtb: "Device tree blob",
   grubenv: "GRUB environment block",

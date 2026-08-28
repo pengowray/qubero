@@ -12,6 +12,7 @@ mod bards_tale;
 mod cbor;
 mod coff;
 mod corel;
+mod cpio;
 mod dos;
 mod dtb;
 mod dv;
@@ -91,6 +92,7 @@ pub use bards_tale::bards_tale;
 pub use cbor::cbor;
 pub use coff::coff;
 pub use corel::{cdr, cmx};
+pub use cpio::cpio;
 pub use dos::{com, dos};
 pub use dtb::dtb;
 pub use dv::dv;
@@ -170,7 +172,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp",
+        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -242,6 +244,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "lha" => Some(lha()),
         "lnk" => Some(lnk()),
         "cbor" => Some(cbor()),
+        "cpio" => Some(cpio()),
         "gitindex" => Some(git_index()),
         "gitpackidx" => Some(git_pack_index()),
         "qoi" => Some(qoi()),
@@ -285,6 +288,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"\x89PNG\r\n\x1a\n", "png"),
     (b"\xd0\x0d\xfe\xed", "dtb"),
     (grubenv::SIGNATURE, "grubenv"),
+    // An initramfs, and every other cpio archive written this century.
+    (b"070701", "cpio"),
+    (b"070702", "cpio"),
     (b"FWS", "swf"),
     (b"CWS", "swf"),
     (b"ZWS", "swf"),
@@ -1510,6 +1516,7 @@ mod tests {
         login[44..49].copy_from_slice(b"pengo");
         login[340..344].copy_from_slice(&1_700_000_000i32.to_le_bytes());
         assert_eq!(sniffed(&login), Some("utmp"));
+        assert_eq!(sniffed(b"0707010000000A"), Some("cpio"));
         assert_eq!(sniffed(&login[..383]), None);
     }
 
