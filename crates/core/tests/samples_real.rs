@@ -27,16 +27,27 @@ fn every_sample_still_reads() {
     let mut files = Vec::new();
     collect(&root, &mut files);
     assert!(!files.is_empty(), "no files under {}", root.display());
+    let mut read_count = 0;
     for path in files {
         let bytes = std::fs::read(&path).unwrap();
         let head = &bytes[..bytes.len().min(0x9000)];
-        let Some(name) = formats::sniff(head, bytes.len() as u64) else { continue };
+        // A `.COM` file has no header to say what it is, so the extension is
+        // what says it. Everything else the file itself announces.
+        let name = match path.extension().is_some_and(|e| e.eq_ignore_ascii_case("com")) {
+            true => "com",
+            false => match formats::sniff(head, bytes.len() as u64) {
+                Some(name) => name,
+                None => panic!("nothing reads {}", path.display()),
+            },
+        };
         let template = formats::builtin(name).unwrap_or_else(|| panic!("no template {name}"));
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);
         eprintln!("--- {} as {name}", path.display());
         read(&mut ev, &doc, &[], 0);
+        read_count += 1;
     }
+    eprintln!("{read_count} samples read");
 }
 
 /// Resolve a node and enough of what is under it to prove the file reads. A
