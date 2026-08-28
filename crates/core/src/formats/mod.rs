@@ -62,6 +62,7 @@ mod pi1;
 mod psd;
 mod pnm;
 mod qoi;
+mod rpm;
 mod png;
 mod safetensors;
 mod le;
@@ -135,6 +136,7 @@ pub use pi1::pi1;
 pub use psd::psd;
 pub use pnm::pnm;
 pub use qoi::qoi;
+pub use rpm::rpm;
 pub use png::png;
 pub use safetensors::safetensors;
 pub use le::le;
@@ -178,7 +180,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
+        "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -253,6 +255,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "cbor" => Some(cbor()),
         "cpio" => Some(cpio()),
         "ar" => Some(ar()),
+        "rpm" => Some(rpm()),
         "deb" => Some(deb()),
         "gitindex" => Some(git_index()),
         "gitpackidx" => Some(git_pack_index()),
@@ -301,6 +304,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     // A static library, and the outside of a Debian package: `sniff` has
     // already asked whether this one is a package.
     (ar::MAGIC, "ar"),
+    (rpm::MAGIC, "rpm"),
     // An initramfs, and every other cpio archive written this century.
     (b"070701", "cpio"),
     (b"070702", "cpio"),
