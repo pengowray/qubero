@@ -417,6 +417,13 @@ impl Evaluator {
                 Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => (**elem).clone(),
                 _ => continue,
             };
+            // Instructions stay one entry per line however many there are.
+            // A run of them is a program, and a row saying "245,678
+            // instructions" is the one thing a reader of a program does not
+            // want in place of the program.
+            if matches!(elem.base(), Ty::Insn { .. }) {
+                continue;
+            }
             // Text stays one entry per line: GUANO lines are each worth reading.
             // A type that only says what it is once it is placed, such as a
             // WAVE sample whose width an earlier chunk declared, is judged by

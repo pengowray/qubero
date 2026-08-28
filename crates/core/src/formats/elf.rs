@@ -565,6 +565,20 @@ mod tests {
         assert_eq!(ev.node(&d, &[7, 15, 1, 1]).unwrap().value, Value::Str("ret".into()));
     }
 
+    /// A long run of anything else is one row saying how many there are. A
+    /// program is the exception: the rows are what there is to read.
+    #[test]
+    fn every_instruction_gets_its_own_row() {
+        let mut bytes = object();
+        bytes[18] = 62; // x86-64
+        bytes[64..80].copy_from_slice(&[0x90; 16]); // sixteen nops
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(elf());
+        let rows = ev.spans(&d, 64 * 8, 80 * 8, 32).unwrap();
+        assert_eq!(rows.len(), 16, "{rows:?}");
+        assert!(rows.iter().all(|r| r.type_name == "x86-64"), "{rows:?}");
+    }
+
     /// A machine with no decoder here keeps its code as bytes rather than
     /// having words invented for it.
     #[test]
