@@ -449,3 +449,103 @@ fn instruction(e: Endian) -> T {
     )
     .counted_as("instruction")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::Document;
+    use crate::eval::{Evaluator, Value};
+    use crate::source::MemSource;
+
+    /// A little-endian 64-bit object for the BPF machine, with one executable
+    /// section holding two instructions and one section with no bits in the
+    /// file at all.
+    pub(super) fn object() -> Vec<u8> {
+        let text: Vec<u8> = vec![
+            // r1 = 2
+            0xb7, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, //
+            // exit
+            0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let mut v = b"\x7fELF".to_vec();
+        v.extend_from_slice(&[2, 1, 1, 0, 0]);
+        v.extend_from_slice(&[0; 7]);
+        v.extend_from_slice(&1u16.to_le_bytes()); // relocatable
+        v.extend_from_slice(&247u16.to_le_bytes()); // BPF
+        v.extend_from_slice(&1u32.to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes()); // entry
+        v.extend_from_slice(&0u64.to_le_bytes()); // program header offset
+        v.extend_from_slice(&80u64.to_le_bytes()); // section header offset
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&64u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&64u16.to_le_bytes());
+        v.extend_from_slice(&2u16.to_le_bytes()); // two section headers
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&text);
+        // Section 0 is the null section, which points nowhere.
+        v.extend_from_slice(&[0; 64]);
+        // Section 1: program bits, allocated and executable, the code above.
+        let mut shdr = Vec::new();
+        shdr.extend_from_slice(&0u32.to_le_bytes()); // name offset
+        shdr.extend_from_slice(&1u32.to_le_bytes()); // progbits
+        shdr.extend_from_slice(&6u64.to_le_bytes()); // alloc | execute
+        shdr.extend_from_slice(&0u64.to_le_bytes()); // address
+        shdr.extend_from_slice(&64u64.to_le_bytes()); // offset
+        shdr.extend_from_slice(&(text.len() as u64).to_le_bytes());
+        shdr.extend_from_slice(&0u32.to_le_bytes());
+        shdr.extend_from_slice(&0u32.to_le_bytes());
+        shdr.extend_from_slice(&8u64.to_le_bytes());
+        shdr.extend_from_slice(&0u64.to_le_bytes());
+        v.extend_from_slice(&shdr);
+        v
+    }
+
+    #[test]
+    fn an_executable_section_reads_as_instructions() {
+        let d = Document::new(MemSource(object()));
+        let mut ev = Evaluator::new(bpf());
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Enum { raw: 2, name: Some("64-bit".into()), hex: false });
+        // The code is at the offset its own section header gives.
+        let code = ev.node(&d, &[7, 15, 1]).unwrap();
+        assert_eq!(code.type_name, "BpfInsn[]");
+        assert_eq!(code.offset_bits, 64 * 8);
+        assert_eq!(code.child_count, 2);
+        // `r1 = 2`: the destination is in the low nibble of the second byte,
+        // which is what a little-endian object writes.
+        assert_eq!(ev.node(&d, &[7, 15, 1, 0, 2]).unwrap().value, Value::Enum { raw: 1, name: Some("r1".into()), hex: false });
+        assert_eq!(ev.node(&d, &[7, 15, 1, 0, 4]).unwrap().value, Value::Int(2));
+    }
+
+    #[test]
+    fn the_plain_template_leaves_code_as_bytes() {
+        let d = Document::new(MemSource(object()));
+        let mut ev = Evaluator::new(elf());
+        let code = ev.node(&d, &[7, 15, 1]).unwrap();
+        assert_eq!(code.type_name, "bytes[]");
+        assert_eq!(code.size_bits, 16 * 8);
+    }
+
+    /// A big-endian 32-bit header, which is the other end of what the switches
+    /// cover: the words are half as wide and the numbers read the other way.
+    #[test]
+    fn a_big_endian_32_bit_header_reads_its_own_way() {
+        let mut v = b"\x7fELF".to_vec();
+        v.extend_from_slice(&[1, 2, 1, 0, 0]);
+        v.extend_from_slice(&[0; 7]);
+        v.extend_from_slice(&2u16.to_be_bytes()); // executable
+        v.extend_from_slice(&40u16.to_be_bytes()); // ARM
+        v.extend_from_slice(&1u32.to_be_bytes());
+        v.extend_from_slice(&0x8000u32.to_be_bytes()); // entry
+        v.extend_from_slice(&0u32.to_be_bytes());
+        v.extend_from_slice(&0u32.to_be_bytes());
+        v.extend_from_slice(&0u32.to_be_bytes());
+        v.extend_from_slice(&52u16.to_be_bytes());
+        v.extend_from_slice(&[0; 10]);
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(elf());
+        assert_eq!(ev.node(&d, &[7, 1]).unwrap().value, Value::Enum { raw: 40, name: Some("ARM".into()), hex: false });
+        assert_eq!(ev.node(&d, &[7, 3]).unwrap().value, Value::UInt(0x8000));
+    }
+}

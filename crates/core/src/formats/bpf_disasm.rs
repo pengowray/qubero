@@ -331,3 +331,155 @@ fn int_field<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize], n
     let p = named(ev, doc, path, name)?;
     int_at(ev, doc, &p)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::Evaluator;
+    use crate::formats::bpf;
+    use crate::source::MemSource;
+
+    fn insn(op: u8, dst: u8, src: u8, off: i16, imm: i32) -> Vec<u8> {
+        let mut v = vec![op, (src << 4) | dst];
+        v.extend_from_slice(&off.to_le_bytes());
+        v.extend_from_slice(&imm.to_le_bytes());
+        v
+    }
+
+    /// A 64-bit section header. The fields are in the order the standard puts
+    /// them in, which is what the template reads.
+    #[allow(clippy::too_many_arguments)]
+    fn shdr(name: u32, kind: u32, flags: u64, offset: u64, size: u64, link: u32, info: u32, entry: u64) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&name.to_le_bytes());
+        v.extend_from_slice(&kind.to_le_bytes());
+        v.extend_from_slice(&flags.to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes());
+        v.extend_from_slice(&offset.to_le_bytes());
+        v.extend_from_slice(&size.to_le_bytes());
+        v.extend_from_slice(&link.to_le_bytes());
+        v.extend_from_slice(&info.to_le_bytes());
+        v.extend_from_slice(&8u64.to_le_bytes());
+        v.extend_from_slice(&entry.to_le_bytes());
+        v
+    }
+
+    fn symbol(name: u32, info: u8, section: u16, value: u64, size: u64) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&name.to_le_bytes());
+        v.push(info);
+        v.push(0);
+        v.extend_from_slice(&section.to_le_bytes());
+        v.extend_from_slice(&value.to_le_bytes());
+        v.extend_from_slice(&size.to_le_bytes());
+        v
+    }
+
+    /// An object of the shape a compiler writes: a program section, the map it
+    /// looks something up in, the relocation that ties the two together, and
+    /// the tables that give everything a name.
+    fn object() -> Vec<u8> {
+        let mut text = Vec::new();
+        text.extend(insn(0xbf, 6, 1, 0, 0)); // r6 = r1
+        text.extend(insn(0x18, 1, 1, 0, 0)); // r1 = the map, once the loader fills it in
+        text.extend(insn(0x00, 0, 0, 0, 0)); // the second half of that load
+        text.extend(insn(0x85, 0, 0, 0, 1)); // call bpf_map_lookup_elem
+        text.extend(insn(0x15, 0, 0, 1, 0)); // if r0 == 0 goto +1
+        text.extend(insn(0xbf, 0, 6, 0, 0)); // r0 = r6
+        text.extend(insn(0x95, 0, 0, 0, 0)); // exit
+
+        let maps = vec![0u8; 32];
+        let mut rel = Vec::new();
+        rel.extend_from_slice(&8u64.to_le_bytes()); // the immediate of the load
+        rel.extend_from_slice(&1u32.to_le_bytes()); // R_BPF_64_64
+        rel.extend_from_slice(&1u32.to_le_bytes()); // symbol 1
+
+        let strtab = b"\0counter_map\0xdp_prog\0".to_vec();
+        let mut symtab = symbol(0, 0, 0, 0, 0);
+        symtab.extend(symbol(1, 0x11, 3, 0, 32)); // global object, in the maps section
+        symtab.extend(symbol(13, 0x12, 1, 0, text.len() as u64)); // global function, in the code
+        let shstrtab = b"\0xdp\0.relxdp\0.maps\0.symtab\0.strtab\0.shstrtab\0".to_vec();
+
+        // Everything after the header, in order, each section aligned to eight.
+        let mut body = Vec::new();
+        let mut offsets = Vec::new();
+        for part in [&text, &rel, &maps, &symtab, &strtab, &shstrtab] {
+            while (64 + body.len()) % 8 != 0 {
+                body.push(0);
+            }
+            offsets.push(64 + body.len() as u64);
+            body.extend_from_slice(part);
+        }
+        while (64 + body.len()) % 8 != 0 {
+            body.push(0);
+        }
+        let shoff = 64 + body.len() as u64;
+
+        let mut v = b"\x7fELF".to_vec();
+        v.extend_from_slice(&[2, 1, 1, 0, 0]);
+        v.extend_from_slice(&[0; 7]);
+        v.extend_from_slice(&1u16.to_le_bytes());
+        v.extend_from_slice(&247u16.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes());
+        v.extend_from_slice(&shoff.to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&64u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&64u16.to_le_bytes());
+        v.extend_from_slice(&7u16.to_le_bytes());
+        v.extend_from_slice(&6u16.to_le_bytes()); // names are in section 6
+        v.extend_from_slice(&body);
+        v.extend(shdr(0, 0, 0, 0, 0, 0, 0, 0));
+        v.extend(shdr(1, 1, 6, offsets[0], text.len() as u64, 0, 0, 0)); // xdp
+        v.extend(shdr(5, 9, 0x40, offsets[1], rel.len() as u64, 4, 1, 16)); // .relxdp
+        v.extend(shdr(13, 1, 3, offsets[2], maps.len() as u64, 0, 0, 0)); // .maps
+        v.extend(shdr(19, 2, 0, offsets[3], symtab.len() as u64, 5, 1, 24)); // .symtab
+        v.extend(shdr(27, 3, 0, offsets[4], strtab.len() as u64, 0, 0, 0)); // .strtab
+        v.extend(shdr(35, 3, 0, offsets[5], shstrtab.len() as u64, 0, 0, 0)); // .shstrtab
+        v
+    }
+
+    fn listing() -> String {
+        let d = Document::new(MemSource(object()));
+        let mut ev = Evaluator::new(bpf());
+        let p = Program::read(&mut ev, &d).unwrap();
+        p.listing(&mut ev, &d).unwrap()
+    }
+
+    #[test]
+    fn the_tables_name_the_sections_and_the_symbols() {
+        let d = Document::new(MemSource(object()));
+        let mut ev = Evaluator::new(bpf());
+        let p = Program::read(&mut ev, &d).unwrap();
+        let names: Vec<&str> = p.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["", "xdp", ".relxdp", ".maps", ".symtab", ".strtab", ".shstrtab"]);
+        let symbols: Vec<&str> = p.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(symbols, ["", "counter_map", "xdp_prog"]);
+    }
+
+    #[test]
+    fn a_load_of_a_map_names_the_map() {
+        assert!(listing().contains("r1 = map counter_map"), "{}", listing());
+    }
+
+    #[test]
+    fn a_call_names_the_helper_it_calls() {
+        assert!(listing().contains("call bpf_map_lookup_elem"), "{}", listing());
+    }
+
+    #[test]
+    fn a_jump_says_which_instruction_it_goes_to() {
+        // The jump is instruction 3 and goes one past the next, which is 5.
+        assert!(listing().contains("if r0 == 0 goto +1 (instruction 5)"), "{}", listing());
+    }
+
+    #[test]
+    fn an_ordinary_instruction_is_the_standards_own_description() {
+        let text = listing();
+        assert!(text.contains("r6 = r1"), "{text}");
+        assert!(text.contains("return"), "{text}");
+    }
+}
