@@ -694,6 +694,7 @@ function durationText(seconds: number): string {
 const WAV_METADATA = new Set(["guan", "wamd", "bext", "iXML", "_PMX", "axml", "id3", "ID3", "LIST", "cue", "smpl", "inst", "plst"]);
 const WAV_LABELS = new Map<string, string>([
   ["fmt", "Audio format"], ["data", "Audio samples"], ["fact", "Sample count"], ["guan", "GUANO metadata"],
+  ["ds64", "64-bit sizes"],
   ["wamd", "Wildlife Acoustics metadata"], ["bext", "Broadcast metadata"], ["iXML", "iXML metadata"],
   ["_PMX", "XMP metadata"], ["axml", "AXML metadata"], ["id3", "ID3 metadata"], ["ID3", "ID3 metadata"],
   ["LIST", "Metadata list"], ["cue", "Cue points"], ["smpl", "Sampler data"], ["inst", "Instrument"], ["plst", "Playlist"],
@@ -772,7 +773,8 @@ function wavOutline(doc: Doc): TemplateReply<LogicalOutline> {
       group: false, hasChildren: false, ...common, value: detail, type: id || "chunk", title: `${rawId} chunk`,
     });
   }
-  const kind = doc.template === "w4v" ? "W4V" : "WAVE";
+  const container = String(nodeValue(doc, [0]) ?? "RIFF").trim();
+  const kind = doc.template === "w4v" ? "W4V" : container === "RF64" || container === "RIFX" ? container : "WAVE";
   const duration = byteRate > 0 ? durationText(audioBytes / byteRate) : "";
   const nodes: LogicalNode[] = [{
     id: "/", parentId: null, label: "Audio file", fullName: "/", depth: 0, group: true, hasChildren: true,

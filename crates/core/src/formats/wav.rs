@@ -19,7 +19,7 @@
 //! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
 //! read by the same template that reads one at the front of an MP3.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// A four-character chunk id as the big-endian number a switch compares.
 fn cc(s: &str) -> i128 {
@@ -68,7 +68,29 @@ const WAMD_TAG: &[(i128, &str)] = &[
 ];
 
 pub fn wav() -> Template {
-    riff("wav", chunk_body(Some(samples())))
+    Template::new(
+        "wav",
+        T::structure(
+            "RIFF",
+            vec![
+                ("magic", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
+                ("size", T::switch(E::field("magic"), vec![(cc("RIFX"), T::u32(Big))], T::u32(Little))),
+                ("form", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
+                (
+                    "chunks",
+                    T::switch(
+                        E::field("magic"),
+                        vec![(cc("RIFX"), T::repeat(T::Named("ChunkBE".into()), Until::End))],
+                        T::repeat(T::Named("Chunk".into()), Until::End),
+                    ),
+                ),
+            ],
+        ),
+    )
+    .with_type("Chunk", chunk(chunk_body_endian(Some(samples(Little)), Little), Little))
+    .with_type("ListItem", list_item(Little))
+    .with_type("ChunkBE", chunk(chunk_body_endian(Some(samples(Big)), Big), Big))
+    .with_type("ListItemBE", list_item(Big))
 }
 
 /// The RIFF frame shared by WAVE and its relatives.
@@ -85,11 +107,22 @@ pub(super) fn riff(name: &str, body: T) -> Template {
             ],
         ),
     )
-    .with_type("Chunk", chunk(body))
-    .with_type("ListItem", list_item())
+    .with_type("Chunk", chunk(body, Little))
+    .with_type("ListItem", list_item(Little))
 }
 
-fn chunk(body: T) -> T {
+fn chunk(body: T, endian: Endian) -> T {
+    // RF64 writes 0xffffffff in a data chunk's 32-bit size slot and puts the
+    // real length in the preceding ds64 chunk. Adding one before `or` keeps a
+    // genuine zero-length RIFF chunk distinct from the expression language's
+    // "missing" zero.
+    let body_size = || {
+        E::field("size")
+            .less_than(E::lit(0xffff_ffff_i128))
+            .mul(E::field("size").add(E::lit(1)))
+            .or(E::sibling(&["body", "data_size"]).add(E::lit(1)))
+            .sub(E::lit(1))
+    };
     // A chunk body is padded to an even length. The pad byte is not counted in
     // the size, so it is a field of its own: size - (size / 2) * 2.
     // A chunk of an odd length is padded to an even one, and the last chunk in
@@ -97,8 +130,8 @@ fn chunk(body: T) -> T {
     // pad byte is there when the length is odd and there is a byte left to be
     // it, which is what the guard multiplies by.
     let pad = || {
-        E::field("size")
-            .sub(E::field("size").div(E::lit(2)).mul(E::lit(2)))
+        body_size()
+            .sub(body_size().div(E::lit(2)).mul(E::lit(2)))
             .mul(E::lit(0).less_than(E::Remaining))
     };
     T::structure_named(
@@ -107,8 +140,8 @@ fn chunk(body: T) -> T {
         "body",
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
-            ("size", T::u32(Little)),
-            ("body", T::sized(E::field("size"), body)),
+            ("size", T::u32(endian)),
+            ("body", T::sized(body_size(), body)),
             ("pad", T::bytes(pad())),
         ],
     )
@@ -131,7 +164,7 @@ fn chunk(body: T) -> T {
 ///
 /// A file whose format nobody here knows keeps its data as bytes, rather than
 /// being read as something it was never said to be.
-fn samples() -> T {
+fn samples(endian: Endian) -> T {
     let bits = || E::sibling(&["body", "bits_per_sample"]);
     let raw = || T::bytes(E::Remaining);
     // A run of samples `width` bytes apart, which is what the rest of the
@@ -139,7 +172,7 @@ fn samples() -> T {
     let run = |width: i128, elem: T| T::array(elem, E::Remaining.div(E::lit(width)));
     // Integer samples are signed, except 8-bit, which the format defines as
     // unsigned with 128 for silence.
-    let pcm = |bits: u32| T::Int { bits, endian: Little };
+    let pcm = |bits: u32| T::Int { bits, endian };
     let by_width = || {
         T::switch(
             bits(),
@@ -152,7 +185,7 @@ fn samples() -> T {
             raw(),
         )
     };
-    let floats = || T::switch(bits(), vec![(32, run(4, T::F32(Little))), (64, run(8, T::F64(Little)))], raw());
+    let floats = || T::switch(bits(), vec![(32, run(4, T::F32(endian))), (64, run(8, T::F64(endian)))], raw());
     let by_format = |format: E| {
         T::switch(format, vec![(0x0001, by_width()), (0x0003, floats())], raw())
     };
@@ -168,18 +201,22 @@ fn samples() -> T {
 /// What is inside a chunk, by its id. `data` is left as bytes unless a format
 /// on top of WAVE knows how to read it.
 pub(super) fn chunk_body(data: Option<T>) -> T {
+    chunk_body_endian(data, Little)
+}
+
+fn chunk_body_endian(data: Option<T>, endian: Endian) -> T {
     let mut cases = vec![
-            (cc("fmt "), fmt()),
-            (cc("fact"), T::structure("Fact", vec![("sample_count", T::u32(Little))])),
+            (cc("fmt "), fmt(endian)),
+            (cc("fact"), T::structure("Fact", vec![("sample_count", T::u32(endian))])),
             (cc("guan"), guano()),
-            (cc("wamd"), T::repeat(wamd_item(), Until::End)),
-            (cc("cue "), cue()),
-            (cc("LIST"), list()),
-            (cc("ds64"), ds64()),
-            (cc("bext"), bext()),
-            (cc("smpl"), smpl()),
+            (cc("wamd"), T::repeat(wamd_item(endian), Until::End)),
+            (cc("cue "), cue(endian)),
+            (cc("LIST"), list(endian)),
+            (cc("ds64"), ds64(endian)),
+            (cc("bext"), bext(endian)),
+            (cc("smpl"), smpl(endian)),
             (cc("inst"), inst()),
-            (cc("plst"), plst()),
+            (cc("plst"), plst(endian)),
             // Whole documents kept inside a chunk: XML from recorders and
             // editing suites, and an ID3 tag as it appears in an MP3.
             (cc("iXML"), xml()),
@@ -194,19 +231,19 @@ pub(super) fn chunk_body(data: Option<T>) -> T {
     T::switch(E::field("id"), cases, T::bytes(E::Remaining))
 }
 
-fn fmt() -> T {
+fn fmt(endian: Endian) -> T {
     T::structure(
         "Format",
         vec![
-            ("format", T::enumeration_hex("FormatTag", T::u16(Little), FORMAT_TAG)),
-            ("channels", T::u16(Little)),
-            ("sample_rate", T::u32(Little)),
-            ("byte_rate", T::u32(Little)),
-            ("block_align", T::u16(Little)),
-            ("bits_per_sample", T::u16(Little)),
+            ("format", T::enumeration_hex("FormatTag", T::u16(endian), FORMAT_TAG)),
+            ("channels", T::u16(endian)),
+            ("sample_rate", T::u32(endian)),
+            ("byte_rate", T::u32(endian)),
+            ("block_align", T::u16(endian)),
+            ("bits_per_sample", T::u16(endian)),
             // 16-byte fmt chunks stop here. Longer ones carry an extension,
             // which the extensible format fills in and others leave opaque.
-            ("extra", T::switch(E::field("format"), vec![(0xfffe, extensible())], T::bytes(E::Remaining))),
+            ("extra", T::switch(E::field("format"), vec![(0xfffe, extensible(endian))], T::bytes(E::Remaining))),
         ],
     )
 }
@@ -214,20 +251,20 @@ fn fmt() -> T {
 /// What `WAVE_FORMAT_EXTENSIBLE` adds: how many of the bits per sample are
 /// real, which speaker each channel drives, and the format tag again, this
 /// time as the first two bytes of a GUID.
-fn extensible() -> T {
+fn extensible(endian: Endian) -> T {
     let sub_format = T::structure(
         "SubFormat",
         vec![
-            ("format", T::enumeration_hex("FormatTag", T::u16(Little), FORMAT_TAG)),
+            ("format", T::enumeration_hex("FormatTag", T::u16(endian), FORMAT_TAG)),
             ("guid", T::bytes(E::lit(14))),
         ],
     );
     T::structure(
         "Extensible",
         vec![
-            ("extension_size", T::u16(Little)),
-            ("valid_bits_per_sample", T::u16(Little)),
-            ("channel_mask", T::enumeration_hex("ChannelMask", T::u32(Little), CHANNEL_MASK)),
+            ("extension_size", T::u16(endian)),
+            ("valid_bits_per_sample", T::u16(endian)),
+            ("channel_mask", T::enumeration_hex("ChannelMask", T::u32(endian), CHANNEL_MASK)),
             ("sub_format", sub_format),
         ],
     )
@@ -241,12 +278,12 @@ fn guano() -> T {
     )
 }
 
-fn wamd_item() -> T {
+fn wamd_item(endian: Endian) -> T {
     T::structure(
         "Item",
         vec![
-            ("tag", T::enumeration("WamdTag", T::u16(Little), WAMD_TAG)),
-            ("length", T::u32(Little)),
+            ("tag", T::enumeration("WamdTag", T::u16(endian), WAMD_TAG)),
+            ("length", T::u32(endian)),
             // Ids 1 to 6 hold text; the rest are bytes, so read them as text
             // only when they say they are.
             (
@@ -264,33 +301,36 @@ fn wamd_item() -> T {
     )
 }
 
-fn cue() -> T {
+fn cue(endian: Endian) -> T {
     let point = T::structure(
         "CuePoint",
         vec![
-            ("id", T::u32(Little)),
-            ("position", T::u32(Little)),
+            ("id", T::u32(endian)),
+            ("position", T::u32(endian)),
             ("chunk", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
-            ("chunk_start", T::u32(Little)),
-            ("block_start", T::u32(Little)),
-            ("sample_offset", T::u32(Little)),
+            ("chunk_start", T::u32(endian)),
+            ("block_start", T::u32(endian)),
+            ("sample_offset", T::u32(endian)),
         ],
     );
-    T::structure("Cue", vec![("count", T::u32(Little)), ("points", T::array(point, E::field("count")))])
+    T::structure("Cue", vec![("count", T::u32(endian)), ("points", T::array(point, E::field("count")))])
 }
 
 /// A LIST holds a type and then more chunks, of whichever flavour that type says.
-fn list() -> T {
+fn list(endian: Endian) -> T {
     T::structure(
         "List",
         vec![
             ("type", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
-            ("items", T::repeat(T::Named("ListItem".into()), Until::End)),
+            (
+                "items",
+                T::repeat(T::Named(if endian == Big { "ListItemBE" } else { "ListItem" }.into()), Until::End),
+            ),
         ],
     )
 }
 
-fn list_item() -> T {
+fn list_item(endian: Endian) -> T {
     // A chunk of an odd length is padded to an even one, and the last chunk in
     // a file often is not: the writer had nothing to follow it with. So the
     // pad byte is there when the length is odd and there is a byte left to be
@@ -305,7 +345,7 @@ fn list_item() -> T {
         "Chunk",
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
-            ("size", T::u32(Little)),
+            ("size", T::u32(endian)),
             (
                 "body",
                 T::sized(
@@ -313,9 +353,9 @@ fn list_item() -> T {
                     T::switch(
                         E::field("id"),
                         vec![
-                            (cc("labl"), labelled()),
-                            (cc("note"), labelled()),
-                            (cc("ltxt"), labelled_text()),
+                            (cc("labl"), labelled(endian)),
+                            (cc("note"), labelled(endian)),
+                            (cc("ltxt"), labelled_text(endian)),
                         ],
                         // INFO items are NUL-terminated Latin-1 text.
                         T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Latin1),
@@ -327,28 +367,28 @@ fn list_item() -> T {
     )
 }
 
-fn labelled() -> T {
+fn labelled(endian: Endian) -> T {
     T::structure(
         "Label",
         vec![
-            ("cue_id", T::u32(Little)),
+            ("cue_id", T::u32(endian)),
             ("text", T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Latin1)),
         ],
     )
 }
 
 /// `ltxt`: a label that covers a stretch of samples rather than a point.
-fn labelled_text() -> T {
+fn labelled_text(endian: Endian) -> T {
     T::structure(
         "LabelledText",
         vec![
-            ("cue_id", T::u32(Little)),
-            ("sample_length", T::u32(Little)),
+            ("cue_id", T::u32(endian)),
+            ("sample_length", T::u32(endian)),
             ("purpose", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
-            ("country", T::u16(Little)),
-            ("language", T::u16(Little)),
-            ("dialect", T::u16(Little)),
-            ("code_page", T::u16(Little)),
+            ("country", T::u16(endian)),
+            ("language", T::u16(endian)),
+            ("dialect", T::u16(endian)),
+            ("code_page", T::u16(endian)),
             ("text", T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Latin1)),
         ],
     )
@@ -358,18 +398,18 @@ fn labelled_text() -> T {
 /// bytes before the coding history: version 1 took the UMID out of the reserved
 /// area, version 2 took the loudness values out of what was left. So the version
 /// says which of those two exist, and what is reserved is what they did not use.
-fn bext() -> T {
+fn bext(endian: Endian) -> T {
     let ascii = |n: i128| T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii);
-    let i16le = || T::Int { bits: 16, endian: Little };
+    let i16e = || T::Int { bits: 16, endian };
     // Each of these is hundredths of a unit, so -2300 is -23.00 LUFS.
     let loudness = T::structure(
         "Loudness",
         vec![
-            ("integrated", i16le()),
-            ("range", i16le()),
-            ("max_true_peak", i16le()),
-            ("max_momentary", i16le()),
-            ("max_short_term", i16le()),
+            ("integrated", i16e()),
+            ("range", i16e()),
+            ("max_true_peak", i16e()),
+            ("max_momentary", i16e()),
+            ("max_short_term", i16e()),
         ],
     );
     T::structure(
@@ -381,9 +421,9 @@ fn bext() -> T {
             ("origination_date", ascii(10)),
             ("origination_time", ascii(8)),
             // Samples since midnight, as the two halves of a 64-bit count.
-            ("time_reference_low", T::u32(Little)),
-            ("time_reference_high", T::u32(Little)),
-            ("version", T::u16(Little)),
+            ("time_reference_low", T::u32(endian)),
+            ("time_reference_high", T::u32(endian)),
+            ("version", T::u16(endian)),
             ("umid", T::switch(E::field("version"), vec![(0, T::bytes(E::lit(0)))], T::bytes(E::lit(64)))),
             ("loudness", T::switch(E::field("version"), vec![(2, loudness)], T::bytes(E::lit(0)))),
             // 254 bytes, minus whatever those two took out of them.
@@ -394,32 +434,32 @@ fn bext() -> T {
 }
 
 /// `smpl`: what a sampler needs to play the file as an instrument.
-fn smpl() -> T {
+fn smpl(endian: Endian) -> T {
     let sample_loop = T::structure(
         "Loop",
         vec![
-            ("id", T::u32(Little)),
-            ("type", T::enumeration("LoopType", T::u32(Little), LOOP_TYPE)),
-            ("start", T::u32(Little)),
-            ("end", T::u32(Little)),
-            ("fraction", T::u32(Little)),
+            ("id", T::u32(endian)),
+            ("type", T::enumeration("LoopType", T::u32(endian), LOOP_TYPE)),
+            ("start", T::u32(endian)),
+            ("end", T::u32(endian)),
+            ("fraction", T::u32(endian)),
             // Zero means keep looping.
-            ("play_count", T::u32(Little)),
+            ("play_count", T::u32(endian)),
         ],
     );
     T::structure(
         "Sampler",
         vec![
-            ("manufacturer", T::u32(Little)),
-            ("product", T::u32(Little)),
+            ("manufacturer", T::u32(endian)),
+            ("product", T::u32(endian)),
             // Nanoseconds per sample: 22675 at 44.1 kHz.
-            ("sample_period", T::u32(Little)),
-            ("midi_unity_note", T::u32(Little)),
-            ("midi_pitch_fraction", T::u32(Little)),
-            ("smpte_format", T::enumeration("SmpteFormat", T::u32(Little), SMPTE_FORMAT)),
-            ("smpte_offset", T::u32(Little)),
-            ("loop_count", T::u32(Little)),
-            ("sampler_data", T::u32(Little)),
+            ("sample_period", T::u32(endian)),
+            ("midi_unity_note", T::u32(endian)),
+            ("midi_pitch_fraction", T::u32(endian)),
+            ("smpte_format", T::enumeration("SmpteFormat", T::u32(endian), SMPTE_FORMAT)),
+            ("smpte_offset", T::u32(endian)),
+            ("loop_count", T::u32(endian)),
+            ("sampler_data", T::u32(endian)),
             ("loops", T::array(sample_loop, E::field("loop_count"))),
             ("extra", T::bytes(E::Remaining)),
         ],
@@ -445,12 +485,12 @@ fn inst() -> T {
 }
 
 /// `plst`: play these stretches, in this order.
-fn plst() -> T {
+fn plst(endian: Endian) -> T {
     let segment = T::structure(
         "Segment",
-        vec![("cue_id", T::u32(Little)), ("length", T::u32(Little)), ("repeats", T::u32(Little))],
+        vec![("cue_id", T::u32(endian)), ("length", T::u32(endian)), ("repeats", T::u32(endian))],
     );
-    T::structure("Playlist", vec![("count", T::u32(Little)), ("segments", T::array(segment, E::field("count")))])
+    T::structure("Playlist", vec![("count", T::u32(endian)), ("segments", T::array(segment, E::field("count")))])
 }
 
 /// A chunk holding a whole XML document, padded out with NULs.
@@ -458,14 +498,14 @@ fn xml() -> T {
     T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Utf8)
 }
 
-fn ds64() -> T {
+fn ds64(endian: Endian) -> T {
     T::structure(
         "DataSize64",
         vec![
-            ("riff_size", T::u64(Little)),
-            ("data_size", T::u64(Little)),
-            ("sample_count", T::u64(Little)),
-            ("table_length", T::u32(Little)),
+            ("riff_size", T::u64(endian)),
+            ("data_size", T::u64(endian)),
+            ("sample_count", T::u64(endian)),
+            ("table_length", T::u32(endian)),
             ("table", T::bytes(E::Remaining)),
         ],
     )
@@ -517,6 +557,69 @@ mod tests {
         let data = ev.node(&d, &[3, 1]).unwrap();
         assert_eq!(data.type_name, "Chunk");
         assert_eq!(data.size_bits, (8 + 3) * 8);
+    }
+
+    #[test]
+    fn rifx_uses_big_endian_chunk_fields_and_samples() {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_be_bytes());
+        fmt.extend_from_slice(&1u16.to_be_bytes());
+        fmt.extend_from_slice(&8000u32.to_be_bytes());
+        fmt.extend_from_slice(&16000u32.to_be_bytes());
+        fmt.extend_from_slice(&2u16.to_be_bytes());
+        fmt.extend_from_slice(&16u16.to_be_bytes());
+        let be_chunk = |id: &[u8; 4], body: &[u8]| {
+            let mut out = id.to_vec();
+            out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            out.extend_from_slice(body);
+            out
+        };
+        let mut body = b"WAVE".to_vec();
+        body.extend(be_chunk(b"fmt ", &fmt));
+        body.extend(be_chunk(b"data", &[0, 1, 0xff, 0xfe]));
+        let mut bytes = b"RIFX".to_vec();
+        bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        bytes.extend(body);
+
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(40));
+        assert_eq!(ev.node(&d, &[3, 0, 2, 2]).unwrap().value, Value::UInt(8000));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 0]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 1]).unwrap().value, Value::Int(-2));
+    }
+
+    #[test]
+    fn rf64_uses_ds64_for_the_sentinel_data_size() {
+        let mut ds64 = Vec::new();
+        ds64.extend_from_slice(&76u64.to_le_bytes());
+        ds64.extend_from_slice(&4u64.to_le_bytes());
+        ds64.extend_from_slice(&2u64.to_le_bytes());
+        ds64.extend_from_slice(&0u32.to_le_bytes());
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&8000u32.to_le_bytes());
+        fmt.extend_from_slice(&16000u32.to_le_bytes());
+        fmt.extend_from_slice(&2u16.to_le_bytes());
+        fmt.extend_from_slice(&16u16.to_le_bytes());
+        let mut body = b"WAVE".to_vec();
+        body.extend(chunk_bytes(b"ds64", &ds64));
+        body.extend(chunk_bytes(b"fmt ", &fmt));
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&u32::MAX.to_le_bytes());
+        body.extend_from_slice(&[1, 0, 0xfe, 0xff]);
+        let mut bytes = b"RF64".to_vec();
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend(body);
+
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 0, 2, 1]).unwrap().value, Value::UInt(4));
+        assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().size_bits, 32);
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::Int(-2));
     }
 
     pub(super) fn sample() -> Vec<u8> {
