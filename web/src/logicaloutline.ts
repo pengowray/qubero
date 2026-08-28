@@ -536,7 +536,10 @@ function readZarrMetadata(doc: Doc, entry: ZipEntry): { readonly meta: Record<st
 /** Turn the archive's entries into the tree the store is written as: a node
  * per group and array, and every other entry counted against the array whose
  * folder it sits under. */
-function zarrNodes(doc: Doc, entries: readonly ZipEntry[]): TemplateReply<Map<string, ZarrNode>> {
+function zarrNodes(
+  doc: Doc,
+  entries: readonly ZipEntry[],
+): TemplateReply<{ readonly nodes: Map<string, ZarrNode>; readonly unowned: number }> {
   const nodes = new Map<string, ZarrNode>();
   const at = (prefix: string, entry: ZipEntry): ZarrNode => {
     const found = nodes.get(prefix);
@@ -552,6 +555,10 @@ function zarrNodes(doc: Doc, entries: readonly ZipEntry[]): TemplateReply<Map<st
   for (const entry of entries) {
     if (!ZARR_METADATA.has(entry.leaf)) continue;
     const node = at(entry.prefix, entry);
+    // Which node this is comes from the file name in v2, so it holds even when
+    // the file itself cannot be read. v3 writes one file for both and has to
+    // be read to say which.
+    if (entry.leaf === ".zarray") node.kind = "array";
     if (parsed >= ZARR_METADATA_FILES) {
       node.unreadMetadata = true;
       continue;
@@ -561,6 +568,10 @@ function zarrNodes(doc: Doc, entries: readonly ZipEntry[]): TemplateReply<Map<st
     if (read.pending) return { status: "pending", reachedBytes: 0 };
     if (read.meta === null) {
       node.unreadMetadata = true;
+      if (entry.leaf !== ".zattrs") {
+        node.metadataPath = entry.path;
+        node.metadataOffsetBits = entry.offsetBits;
+      }
       continue;
     }
     if (entry.leaf === ".zattrs") {
@@ -580,7 +591,11 @@ function zarrNodes(doc: Doc, entries: readonly ZipEntry[]): TemplateReply<Map<st
     }
   }
   // Every entry that is not metadata belongs to the innermost array above it.
+  // What none of them claims is still in the archive and still gets counted:
+  // a store whose metadata would not read has no arrays to own its chunks,
+  // and a file zipped beside the store belongs to no array at all.
   const arrays = [...nodes.values()].filter((node) => node.kind === "array");
+  let unowned = 0;
   for (const entry of entries) {
     if (ZARR_METADATA.has(entry.leaf) || entry.name.endsWith("/")) continue;
     let owner: ZarrNode | null = null;
@@ -589,14 +604,21 @@ function zarrNodes(doc: Doc, entries: readonly ZipEntry[]): TemplateReply<Map<st
       if (inside && (owner === null || array.prefix.length > owner.prefix.length)) owner = array;
     }
     if (owner !== null) owner.chunks.push(entry);
+    else unowned += 1;
   }
-  return { status: "ok", node: nodes };
+  return { status: "ok", node: { nodes, unowned } };
 }
 
 /** The one line under the title: what the store is laid out as and how big.
  * The kind of store is the title and the Type column, so it is not repeated
  * here. */
-function zarrSummary(ome: Record<string, unknown> | null, arrays: number, chunks: number, partial: boolean): string {
+function zarrSummary(
+  ome: Record<string, unknown> | null,
+  arrays: number,
+  chunks: number,
+  unowned: number,
+  partial: boolean,
+): string {
   const levels = omeLevels(ome);
   const axes = omeAxes(ome);
   const atLeast = partial ? "at least " : "";
@@ -605,6 +627,7 @@ function zarrSummary(ome: Record<string, unknown> | null, arrays: number, chunks
     levels > 0 ? countText(levels, "resolution level") : "",
     countText(arrays, "array"),
     `${atLeast}${countText(chunks, "chunk")}`,
+    unowned > 0 ? `${atLeast}${countText(unowned, "other entry")}` : "",
   ].filter(Boolean).join(" \u00b7 ");
 }
 
@@ -618,13 +641,18 @@ function zarrOutline(
 ): TemplateReply<LogicalOutline> {
   const built = zarrNodes(doc, entries);
   if (built.status !== "ok") return built;
-  const store = built.node;
+  const { nodes: store, unowned } = built.node;
   const rootMeta = store.get("")?.attributes ?? store.get("")?.meta ?? null;
   const rootOme = omeBlock(rootMeta);
   // A store written as a folder inside the archive puts everything one level
   // down, and that folder is the image rather than the archive.
   const shallowest = [...store.keys()].sort((a, b) => a.length - b.length)[0] ?? "";
-  const base = store.has("") ? "" : shallowest.split("/")[0] ?? "";
+  const top = shallowest.split("/")[0] ?? "";
+  // An archive holding two stores side by side has no single folder to stand
+  // for the whole of it, and folding one of them into the root would give two
+  // rows the same place in the tree.
+  const shared = top !== "" && [...store.keys()].every((prefix) => prefix === top || prefix.startsWith(`${top}/`));
+  const base = store.has("") || !shared ? "" : top;
   const baseOme = rootOme ?? omeBlock(store.get(base)?.attributes ?? null);
 
   const nodes: LogicalNode[] = [];
@@ -636,7 +664,7 @@ function zarrOutline(
     id: "/", parentId: null, label: baseOme === null ? "Store" : "Image", fullName: base === "" ? "/" : base,
     depth: 0, group: true, hasChildren: store.size > 0, sourcePath: [], sourceBits: 0,
     sourceText: formatOffset(0),
-    value: zarrSummary(baseOme, arrays, chunkTotal, partial),
+    value: zarrSummary(baseOme, arrays, chunkTotal, unowned, partial),
     type: baseOme === null ? "Zarr" : "OME-Zarr",
     logicalBytes: null, logicalApproximate: false,
     title: `${totalEntries.toLocaleString()} archive entries`,
@@ -665,6 +693,9 @@ function zarrOutline(
           shape.length > 0 ? times(shape) : "",
           chunkShape.length > 0 ? `${counted} of ${times(chunkShape)}` : counted,
           codecs.join(" then "),
+          // Shape and element type are missing rather than absent, and a row
+          // that just leaves them out looks like an array without them.
+          node.meta === null && node.unreadMetadata ? "metadata not read" : "",
         ].filter(Boolean).join(" \u00b7 ")
       : node.unreadMetadata
         ? "metadata not read"
@@ -731,7 +762,7 @@ function zarrOutline(
     node: {
       format: "zarrzip",
       title: baseOme === null ? "Zarr store" : "OME-Zarr image",
-      summary: zarrSummary(baseOme, arrays, chunkTotal, partial),
+      summary: zarrSummary(baseOme, arrays, chunkTotal, unowned, partial),
       nodes, total: nodes.length,
       sizeLabel: "Logical size",
       ...(more.length === 0 ? {} : { more }),
