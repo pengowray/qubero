@@ -25,6 +25,16 @@ const MAX_INDENT_DEPTH = 5;
  * open the next visible level. */
 const OVERVIEW_SECTIONS = 24;
 const OVERVIEW_CHILDREN = 24;
+/** Enough boundaries to show the shape without turning Length into a second
+ * tree. The last mark represents the rest of a larger structure. */
+const ANATOMY_PARTS = 6;
+
+type AnatomyPart = {
+  readonly sizeBits: number;
+  readonly label: string;
+  readonly gap: boolean;
+  readonly rest: boolean;
+};
 
 function treeIndent(depth: number, extra: number): string {
   return `${Math.min(depth, MAX_INDENT_DEPTH) * 16 + extra}px`;
@@ -78,6 +88,10 @@ export class TypeTable {
   private readonly progress: HTMLParagraphElement;
   private readonly expanded = new Set<string>();
   private readonly shown = new Map<string, number>();
+  /** Direct-child extents learned when a composite is opened. Keeping this
+   * small preview means collapsing the row does not throw its useful shape
+   * away. It is cleared whenever the document changes. */
+  private readonly anatomy = new Map<string, readonly AnatomyPart[]>();
   private selected: string | null = null;
   private editing: Editing | null = null;
   /** Cell to focus once the table has been rebuilt. */
@@ -133,6 +147,7 @@ export class TypeTable {
     this.body.addEventListener("click", (e) => this.onClick(e));
     this.body.addEventListener("keydown", (e) => this.onKey(e));
     doc.onChange(() => {
+      this.anatomy.clear();
       if (this.editing?.waiting) this.commit();
       else this.render();
     });
@@ -468,8 +483,13 @@ export class TypeTable {
     off.className = "tt-num tt-addr";
     off.textContent = formatOffset(n.offset_bits);
     const size = document.createElement("td");
-    size.className = "tt-num";
-    size.textContent = bitSizeText(n.size_bits);
+    size.className = "tt-num tt-length";
+    const total = document.createElement("span");
+    total.className = "tt-length-total";
+    total.textContent = bitSizeText(n.size_bits);
+    size.append(total);
+    const knownAnatomy = this.anatomy.get(k);
+    if (knownAnatomy !== undefined) this.appendAnatomy(size, knownAnatomy, n.name);
     tr.append(off, name, value, type, size);
     frag.append(tr);
 
@@ -486,7 +506,13 @@ export class TypeTable {
         this.addSelectedChild(frag, n, depth, limit);
         return;
       }
-      this.addChildRows(frag, n, kids.node, depth + 1, kids.node.length >= n.child_count);
+      const complete = kids.node.length >= n.child_count;
+      const parts = this.anatomyParts(n, kids.node, complete);
+      if (parts.length > 1) {
+        this.anatomy.set(k, parts);
+        this.appendAnatomy(size, parts, n.name);
+      }
+      this.addChildRows(frag, n, kids.node, depth + 1, complete);
       if (n.child_count > limit) {
         const tr2 = document.createElement("tr");
         const td = document.createElement("td");
@@ -503,6 +529,68 @@ export class TypeTable {
       }
       this.addSelectedChild(frag, n, depth, limit);
     }
+  }
+
+  /** A miniature version of the field-anatomy strip: direct children and
+   * undefined stretches occupy their real share of the parent's extent. */
+  private anatomyParts(parent: TemplateNode, children: readonly TemplateNode[], complete: boolean): AnatomyPart[] {
+    const start = parent.offset_bits;
+    const end = start + parent.size_bits;
+    if (end <= start) return [];
+    const runs = children
+      .map((child) => ({
+        start: Math.max(start, child.offset_bits),
+        end: Math.min(end, child.offset_bits + child.size_bits),
+        label: child.name,
+      }))
+      .filter((run) => run.end > run.start)
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+    const all: AnatomyPart[] = [];
+    let at = start;
+    for (const run of runs) {
+      if (run.start > at) all.push({ sizeBits: run.start - at, label: GAP_LABEL, gap: true, rest: false });
+      const from = Math.max(at, run.start);
+      if (run.end > from) all.push({ sizeBits: run.end - from, label: run.label, gap: false, rest: false });
+      at = Math.max(at, run.end);
+      if (at >= end) break;
+    }
+    if (at < end) {
+      all.push({
+        sizeBits: end - at,
+        label: complete ? GAP_LABEL : `${Math.max(0, parent.child_count - children.length).toLocaleString()} more`,
+        gap: complete,
+        rest: !complete,
+      });
+    }
+    if (all.length <= ANATOMY_PARTS) return all;
+    const head = all.slice(0, ANATOMY_PARTS - 1);
+    const tail = all.slice(ANATOMY_PARTS - 1);
+    head.push({
+      sizeBits: tail.reduce((sum, part) => sum + part.sizeBits, 0),
+      label: `${tail.length.toLocaleString()} more parts`,
+      gap: false,
+      rest: true,
+    });
+    return head;
+  }
+
+  private appendAnatomy(cell: HTMLElement, parts: readonly AnatomyPart[], name: string): void {
+    cell.querySelector(".tt-length-anatomy")?.remove();
+    const bar = document.createElement("span");
+    bar.className = "tt-length-anatomy";
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", `${name}: ${parts.map((part) => bitSizeText(part.sizeBits)).join(", ")}`);
+    const total = Math.max(1, parts.reduce((sum, part) => sum + part.sizeBits, 0));
+    for (const part of parts) {
+      const mark = document.createElement("span");
+      mark.className = "tt-length-part";
+      if (part.gap) mark.classList.add("is-gap");
+      if (part.rest) mark.classList.add("is-rest");
+      mark.style.flexGrow = String(part.sizeBits / total);
+      mark.title = `${part.label}: ${bitSizeText(part.sizeBits)}`;
+      bar.append(mark);
+    }
+    cell.append(bar);
   }
 
   /** Children in file order, with the stretches the template leaves undefined

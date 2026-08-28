@@ -7,7 +7,7 @@
   --accent: #2457c5;
   --accent-soft: #dbe5fb;
   --warn: #b4361f;
-  --addr: #8a6100;
+  --addr: #737982;
   --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
@@ -22,7 +22,7 @@
     --accent: #7ea2ff;
     --accent-soft: #2a3a63;
     --warn: #ff8a6a;
-    --addr: #c9a45c;
+    --addr: #858c95;
   }
 }
 
@@ -281,6 +281,37 @@ input.invalid {
   color: var(--muted);
   font-size: 12px;
 }
+.tt-length-total {
+  display: block;
+}
+/* A compact echo of the field-anatomy strip: the total remains readable as
+   text, while direct child extents become quiet, immediately comparable marks. */
+.tt-length-anatomy {
+  display: flex;
+  width: 8.5ch;
+  height: 7px;
+  margin-top: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  border-radius: 2px;
+}
+.tt-length-part {
+  min-width: 2px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border-right: 1px solid var(--bg);
+}
+.tt-length-part:nth-child(even) {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+}
+.tt-length-part:last-child {
+  border-right: 0;
+}
+.tt-length-part.is-gap {
+  background: repeating-linear-gradient(-45deg, transparent 0 2px, color-mix(in srgb, var(--muted) 32%, transparent) 2px 3px);
+}
+.tt-length-part.is-rest {
+  background: color-mix(in srgb, var(--muted) 22%, var(--panel));
+}
 /* Anything that names a place in the file, as opposed to a value read from
    it, shares one color so an address can be told from data at a glance. */
 .addr,
@@ -371,6 +402,9 @@ input.invalid {
   border-top: 1px dashed color-mix(in srgb, var(--line) 70%, transparent);
 }
 .tt-gap .tt-type {
+  font-style: normal;
+}
+.tt-gap .tt-addr {
   font-style: normal;
 }
 
