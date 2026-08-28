@@ -423,7 +423,9 @@ fn relocation(bits: u32, e: Endian, addend: bool) -> T {
 fn instruction(e: Endian) -> T {
     let reg = |name: &'static str| (name, T::enumeration("Register", T::UInt { bits: 4, endian: Big }, REGS));
     let (first, second) = if e == Little { (reg("src"), reg("dst")) } else { (reg("dst"), reg("src")) };
-    T::structure(
+    // One row per instruction in the linear views rather than one per field:
+    // an opcode, its registers and its immediate are one instruction.
+    T::inline_structure(
         "BpfInsn",
         vec![
             ("opcode", T::enumeration_hex("BpfOpcode", T::u8(), OPCODES)),
