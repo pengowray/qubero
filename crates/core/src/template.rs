@@ -39,6 +39,16 @@ pub enum Expr {
     /// `Elem { array: "tensors", field: ["offset"] }`. Empty when the elements
     /// are the numbers themselves.
     Elem { array: Arc<str>, index: Box<Expr>, field: Arc<[String]> },
+    /// The value at `field` in the first element of the earlier list `array`
+    /// whose `key` holds `tag`. `Elem` reaches an element by where it is,
+    /// which is no use when what an element is, is written in it: a ZIP local
+    /// header keeps an entry's real 64-bit size in an extra field tagged 1,
+    /// in a list the writer may order as it likes, put its own records in,
+    /// and leave out entirely.
+    ///
+    /// Zero when nothing in the list is tagged that way, or when the element
+    /// found has no such field, so `Or` can name what to do without one.
+    Tagged { array: Arc<str>, key: Arc<[String]>, tag: i128, field: Arc<[String]> },
     /// The numbers of one earlier array multiplied together: what a shape
     /// describes. A GGUF tensor says it is 2560 by 5120 and never says it is
     /// 13,107,200 numbers, and the room between one tensor and the next is not
@@ -196,6 +206,15 @@ impl Expr {
         Expr::Elem {
             array: array.into(),
             index: Box::new(index),
+            field: field.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+    /// Field `field` of the first element of `array` whose `key` holds `tag`.
+    pub fn tagged(array: &str, key: &[&str], tag: i128, field: &[&str]) -> Expr {
+        Expr::Tagged {
+            array: array.into(),
+            key: key.iter().map(|s| s.to_string()).collect(),
+            tag,
             field: field.iter().map(|s| s.to_string()).collect(),
         }
     }

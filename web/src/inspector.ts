@@ -702,7 +702,8 @@ export class Inspector {
       const expected = numeric >>> 0;
       const compression = siblings.find((x) => x.name === "compression");
       const data = siblings.find((x) => x.name === "data");
-      const uncompressedSize = siblings.find((x) => x.name === "uncompressed_size");
+      const uncompressedSize =
+        siblings.find((x) => x.name === "unpacked_size") ?? siblings.find((x) => x.name === "uncompressed_size");
       if (compression === undefined || data === undefined || data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
       const method = fieldNumber(compression);
       const packedBytes = data.size_bits / 8;

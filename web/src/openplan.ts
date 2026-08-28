@@ -42,7 +42,9 @@ export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): Op
   if (doc.template === "zip" && n.name === "data") {
     const method = numberField(siblings, "compression");
     const entry = leafName(textField(doc, siblings, "name")) ?? n.name;
-    const unpacked = numberField(siblings, "uncompressed_size");
+    // `unpacked_size` is the header's number once a ZIP64 entry's placeholder
+    // has been answered from its extra fields; older templates have neither.
+    const unpacked = numberField(siblings, "unpacked_size") ?? numberField(siblings, "uncompressed_size");
     const where = `${entry} in ${doc.name}, ${formatBytes(packed)} at offset 0x${at.toString(16)}`;
     if (method === 0) {
       return withLimit(packed, {

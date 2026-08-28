@@ -493,8 +493,10 @@ function zipEntries(doc: Doc): TemplateReply<{ readonly entries: ZipEntry[]; rea
       prefix: folderOf(name),
       stored: compression === "stored",
       compression: compression || "file",
-      compressedBytes: Number(nodeValue(doc, [...body, 6]) ?? 0),
-      unpackedBytes: Number(nodeValue(doc, [...body, 7]) ?? 0),
+      // The header's own sizes are placeholders in a ZIP64 archive; the two
+      // fields after the extra fields are the ones the template resolved.
+      compressedBytes: Number(nodeValue(doc, [...body, 12]) ?? 0),
+      unpackedBytes: Number(nodeValue(doc, [...body, 13]) ?? 0),
       offsetBits: signature.node.offset_bits,
     });
   }
@@ -522,7 +524,7 @@ function readZarrMetadata(doc: Doc, entry: ZipEntry): { readonly meta: Record<st
   if (!entry.stored || entry.compressedBytes === 0 || entry.compressedBytes > ZARR_METADATA_BYTES) {
     return { meta: null, pending: false };
   }
-  const dataNode = doc.templateNode([...entry.path, 1, 12]);
+  const dataNode = doc.templateNode([...entry.path, 1, 14]);
   if (dataNode.status !== "ok") return { meta: null, pending: true };
   const { bytes, complete } = doc.read(dataNode.node.offset_bits / 8, entry.compressedBytes);
   if (!complete) return { meta: null, pending: true };

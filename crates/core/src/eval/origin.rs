@@ -261,6 +261,35 @@ impl Evaluator {
                 }
                 out.push(o);
             }
+            // The element that says what it is, rather than one at a known
+            // place: the answer came from wherever in the list the tag was,
+            // and that is the element to point at.
+            Expr::Tagged { array, key, tag, field } => {
+                let Some(list) = self.find_field(at, array) else { return Ok(()) };
+                let n = self.child_count(doc, &list)?;
+                for i in 0..n as usize {
+                    let mut p = list.clone();
+                    p.push(i);
+                    let mut keyed = p.clone();
+                    if !self.descend(doc, &mut keyed, key)? {
+                        continue;
+                    }
+                    if self.node(doc, &keyed)?.value.as_int() != Some(*tag) {
+                        continue;
+                    }
+                    let mut label = format!("{array}[{i}]");
+                    for name in field.iter() {
+                        match self.child_index(doc, &p, name)? {
+                            Some(j) => p.push(j),
+                            None => return Ok(()),
+                        }
+                        label = format!("{label}.{name}");
+                    }
+                    let o = self.origin(doc, role, label, p);
+                    out.push(o);
+                    break;
+                }
+            }
             Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Or(a, b) | Expr::Less(a, b) => {
                 self.from_expr(doc, at, a, role, out)?;
                 self.from_expr(doc, at, b, role, out)?;

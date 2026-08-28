@@ -937,16 +937,44 @@ fn is_zarr_zip(head: &[u8]) -> bool {
         if flags & 8 != 0 {
             return false;
         }
-        let Some(next) = names_at
-            .checked_add(name_length)
-            .and_then(|n| n.checked_add(extra_length))
-            .and_then(|n| n.checked_add(compressed))
-        else {
+        let extra_at = names_at + name_length;
+        let Some(extra) = head.get(extra_at..extra_at.saturating_add(extra_length)) else {
+            return false;
+        };
+        let Some(compressed) = entry_size(compressed, extra) else {
+            return false;
+        };
+        let Some(next) = extra_at.checked_add(extra_length).and_then(|n| n.checked_add(compressed)) else {
             return false;
         };
         at = next;
     }
     false
+}
+
+/// How long a local entry's data is, from wherever the header put it: the
+/// size field, or the extra field tagged 1 when the size field is the
+/// placeholder a ZIP64 entry writes there. Nothing when the placeholder is
+/// there and no extra field answers it, since there is then no way on to the
+/// next record from here.
+fn entry_size(size: usize, extra: &[u8]) -> Option<usize> {
+    if size != 0xFFFF_FFFF {
+        return Some(size);
+    }
+    let mut at = 0usize;
+    while let Some(record) = extra.get(at..at.saturating_add(4)) {
+        let id = u16::from_le_bytes([record[0], record[1]]) as usize;
+        let len = u16::from_le_bytes([record[2], record[3]]) as usize;
+        let body = extra.get(at + 4..at + 4 + len)?;
+        // The local header's record holds the unpacked size and then the
+        // compressed one, both eight bytes, both always written.
+        if id == 1 {
+            let packed = body.get(8..16)?;
+            return usize::try_from(u64::from_le_bytes(packed.try_into().ok()?)).ok();
+        }
+        at += 4 + len;
+    }
+    None
 }
 
 /// Whether an archive entry's name is one of a Zarr store's metadata keys.
@@ -1402,6 +1430,28 @@ mod tests {
         v
     }
 
+    /// The same entry as a writer that uses ZIP64 for everything writes it:
+    /// placeholders in the header and the sizes in an extra field.
+    fn zip64_entry(name: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut v = b"PK\x03\x04".to_vec();
+        v.extend_from_slice(&45u16.to_le_bytes()); // version needed
+        v.extend_from_slice(&0u16.to_le_bytes()); // flags
+        v.extend_from_slice(&[0; 10]); // method, time, date, crc
+        v.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        v.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        v.extend_from_slice(&24u16.to_le_bytes()); // extra
+        v.extend_from_slice(name);
+        v.extend_from_slice(&0x5455u16.to_le_bytes()); // a timestamp first
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes()); // then the sizes
+        v.extend_from_slice(&16u16.to_le_bytes());
+        v.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        v.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        v.extend_from_slice(data);
+        v
+    }
+
     #[test]
     fn a_zarr_store_in_a_zip_is_told_from_an_ordinary_archive() {
         // v2: the root group's marker, ahead of a chunk that says nothing.
@@ -1421,6 +1471,12 @@ mod tests {
         // stops rather than reading the data as a header.
         let streamed = zip_entry(b"a.txt", b"data", true);
         assert_eq!(sniffed(&streamed), Some("zip"));
+
+        // An archive written with ZIP64 sizes throughout: the walk reaches the
+        // second entry only by reading the extra field the first one wrote.
+        let mut wide = zip64_entry(b"image.zarr/0/0.0.0", b"chunkbytes");
+        wide.extend_from_slice(&zip64_entry(b"image.zarr/.zgroup", br#"{"zarr_format":2}"#));
+        assert_eq!(sniffed(&wide), Some("zarrzip"));
     }
 
     #[test]
