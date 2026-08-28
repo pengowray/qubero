@@ -124,7 +124,7 @@ pub use pnm::pnm;
 pub use qoi::qoi;
 pub use png::png;
 pub use safetensors::safetensors;
-pub use sqlite::sqlite;
+pub use sqlite::{self_db, sqlite};
 pub use swf::swf;
 pub use tap::tap;
 pub use tga::tga;
@@ -159,7 +159,7 @@ pub fn omezarr() -> Template {
 pub fn builtin_names() -> &'static [&'static str] {
     &[
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
-        "s3m", "xm", "it", "sqlite", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
+        "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
@@ -198,6 +198,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "xm" => Some(xm()),
         "it" => Some(it()),
         "sqlite" => Some(sqlite()),
+        "self" => Some(self_db()),
         "pe" => Some(pe()),
         "coff" => Some(coff()),
         "omf" => Some(omf()),
@@ -365,6 +366,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some(name)
     } else if is_universal(head, len) {
         Some("macho")
+    } else if is_self(head) {
+        Some("self")
     } else if is_pak(head, len) {
         Some("pak")
     } else if is_ne(head) {
@@ -419,6 +422,13 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A SELF file: a SQLite database whose application id is the four letters
+/// `SELF`. Every SELF file is a valid SQLite database, so this is asked
+/// before the magic table sends it to the plain `sqlite` template.
+fn is_self(head: &[u8]) -> bool {
+    head.starts_with(b"SQLite format 3\0") && head.get(68..72) == Some(b"SELF")
 }
 
 /// An ELF, and which of the two templates reads it. The machine is at offset

@@ -44,6 +44,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   ne: "16-bit Windows program",
   macho: "Mach-O",
   bpf: "eBPF object",
+  self: "SELF program database",
   thumbsdb: "Windows Thumbs.db",
   unityassets: "Unity serialized assets",
   unitybundle: "Unity AssetBundle",

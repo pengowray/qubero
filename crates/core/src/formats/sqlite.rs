@@ -267,6 +267,17 @@ fn page(adjust: E, usable: E, rec: T) -> T {
 }
 
 pub fn sqlite() -> Template {
+    database("sqlite", "SQLite", T::u32(Big))
+}
+
+/// A SELF file: a program stored as a SQLite database, one row per segment.
+/// Nothing about the layout differs, so this is the same template under
+/// another name, with the application id read as the four letters it is.
+pub fn self_db() -> Template {
+    database("self", "SELF", T::magic(b"SELF"))
+}
+
+fn database(name: &str, root: &str, application_id: T) -> Template {
     // A page size of 1 means 65536: the field is two bytes and cannot hold it.
     // There is no conditional expression, so a switch says it instead.
     // What of a page a payload may use: the page less whatever the header
@@ -278,9 +289,9 @@ pub fn sqlite() -> Template {
     let rest =
         |size: E| T::repeat(T::sized(size.clone(), page(E::lit(0), usable(&size), record())), Until::End);
     Template::new(
-        "sqlite",
+        name,
         T::structure(
-            "SQLite",
+            root,
             vec![
                 ("magic", T::magic(b"SQLite format 3\0")),
                 ("page_size", T::u16(Big)),
@@ -303,7 +314,7 @@ pub fn sqlite() -> Template {
                 ("text_encoding", T::enumeration("TextEncoding", T::u32(Big), TEXT_ENCODING)),
                 ("user_version", T::i32(Big)),
                 ("incremental_vacuum", T::u32(Big)),
-                ("application_id", T::u32(Big)),
+                ("application_id", application_id),
                 ("reserved", T::bytes(E::lit(20))),
                 ("version_valid_for", T::u32(Big)),
                 ("sqlite_version", T::u32(Big)),
@@ -332,6 +343,7 @@ mod tests {
     // and the pages after it.
     const PAGE_SIZE: usize = 1;
     const TEXT_ENCODING: usize = 16;
+    const APPLICATION_ID: usize = 19;
     const PAGE1: usize = 23;
     const PAGES: usize = 24;
     // Field indices inside a b-tree leaf page. A page is its own struct: the
@@ -428,6 +440,30 @@ mod tests {
         let cells = [cell_bytes(1, 42, "hi"), cell_bytes(2, -3, "there")];
         b.extend_from_slice(&leaf_page(&cells, PAGE, 0));
         b
+    }
+
+    /// The same database with the four letters that say the rows are a
+    /// program: `SELF` where SQLite keeps the application id.
+    fn program() -> Vec<u8> {
+        let mut b = db();
+        b[68..72].copy_from_slice(b"SELF");
+        b
+    }
+
+    #[test]
+    fn a_program_kept_in_a_database_is_told_from_a_plain_one() {
+        let bytes = program();
+        assert_eq!(crate::formats::sniff(&bytes, bytes.len() as u64), Some("self"));
+        assert_eq!(crate::formats::sniff(&db(), PAGE as u64 * 2), Some("sqlite"));
+
+        // Same layout, read under the name of what it holds. The application
+        // id is the four letters rather than the number they add up to.
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(self_db());
+        assert_eq!(ev.node(&d, &[]).unwrap().type_name, "SELF");
+        let id = ev.node(&d, &[APPLICATION_ID]).unwrap();
+        assert_eq!(id.value, Value::Magic { ok: true, bytes: b"SELF".to_vec() });
+        assert_eq!(ev.node(&d, &[PAGE1, CELL_COUNT]).unwrap().value, Value::UInt(1));
     }
 
     #[test]
