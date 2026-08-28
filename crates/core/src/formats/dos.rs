@@ -135,18 +135,30 @@ pub fn com() -> Template {
 /// An entry point outside the program is a broken header or a file that is not
 /// what it says. Then the whole module is data, which is the reading that
 /// claims least.
-fn load_module(len: E) -> T {
+fn load_module(claimed: E) -> T {
+    // A header that claims more pages than the file holds is not unheard of:
+    // a library built to be linked into something else counts pages it never
+    // wrote. The program is then what there is of it, since reading past the
+    // end of the file would leave nothing readable at all.
+    let fits = claimed.clone().less_than(E::Remaining);
+    let len = claimed.clone().mul(fits.clone()).add(E::Remaining.mul(E::lit(1).sub(fits)));
+    // Where the loader jumps, counted from the start of the program. Measured
+    // inside the window below, so the rest of the file is what is left of the
+    // program rather than what is left of the file.
     let entry = E::field("initial_cs").mul(E::lit(PARAGRAPH)).add(E::field("initial_ip"));
     // Inside the program means both ends: a negative entry point is as much
     // outside it as one past the last byte.
-    let inside = E::lit(-1).less_than(entry.clone()).mul(entry.clone().less_than(len.clone()));
-    let start = entry.mul(inside.clone()).add(len.clone().mul(E::lit(1).sub(inside)));
-    T::structure(
-        "LoadModule",
-        vec![
-            ("data", T::bytes(start.clone())),
-            ("code", T::sized(len.sub(start), T::repeat(T::insn(Isa::X86_16), Until::End))),
-        ],
+    let inside = E::lit(-1).less_than(entry.clone()).mul(entry.clone().less_than(E::Remaining));
+    let start = entry.mul(inside.clone()).add(E::Remaining.mul(E::lit(1).sub(inside)));
+    T::sized(
+        len,
+        T::structure(
+            "LoadModule",
+            vec![
+                ("data", T::bytes(start)),
+                ("code", T::sized(E::Remaining, T::repeat(T::insn(Isa::X86_16), Until::End))),
+            ],
+        ),
     )
 }
 
@@ -240,6 +252,20 @@ mod tests {
         let code = ev.node(&d, &[LOAD_MODULE, 1]).unwrap();
         assert_eq!(code.offset_bits / 8, 0x40 + 0x30);
         assert_eq!(ev.node(&d, &[LOAD_MODULE, 1, 0]).unwrap().type_name, "x86-16");
+    }
+
+    /// A header claiming more pages than the file holds, which is what a
+    /// library built to be linked into something else writes. The program is
+    /// read to the end of the file rather than not at all.
+    #[test]
+    fn a_program_longer_than_its_file_is_read_to_the_end_of_it() {
+        let mut v = sample(0);
+        v[0x04..0x06].copy_from_slice(&40u16.to_le_bytes()); // forty pages of it
+        let len = v.len() as u64;
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(dos());
+        let module = ev.node(&d, &[LOAD_MODULE]).unwrap();
+        assert_eq!(module.offset_bits / 8 + module.size_bits / 8, len);
     }
 
     /// An entry point past the end of the program is not one, and the module
