@@ -420,12 +420,77 @@ function zipOutline(
   };
 }
 
+function sqliteOutline(doc: Doc): TemplateReply<LogicalOutline> {
+  const schemaReply = doc.templateNode([23, 6]);
+  if (schemaReply.status !== "ok") return schemaReply;
+  const pageSizeRaw = Number(nodeValue(doc, [1]));
+  const pageSize = pageSizeRaw === 1 ? 65_536 : pageSizeRaw;
+  const pageCount = Number.isFinite(pageSize) && pageSize > 0 ? Math.ceil(doc.lengthBytes / pageSize) : 0;
+  const encoding = nodeValue(doc, [16])?.replace(/ \(\d+\)$/, "") ?? "text";
+  const isSelf = doc.template === "self";
+  const title = isSelf ? "SELF program database" : "SQLite schema";
+  const root: LogicalNode = {
+    id: "/", parentId: null, label: isSelf ? "Program database" : "Database", fullName: "/",
+    depth: 0, group: true, hasChildren: true, sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
+    value: `${pageCount.toLocaleString()} pages · ${formatBytes(pageSize)} page size · ${encoding}`,
+    type: isSelf ? "SELF" : "SQLite", logicalBytes: null, logicalApproximate: false, title,
+  };
+  const groups = new Map<string, LogicalNode>();
+  const entries: LogicalNode[] = [];
+  for (let i = 0; i < schemaReply.node.child_count; i++) {
+    const cellPath = [23, 6, i];
+    const cell = doc.templateNode(cellPath);
+    if (cell.status !== "ok") return cell;
+    const record = [...cellPath, 2];
+    const kind = (nodeValue(doc, [...record, 2]) ?? "object").toLowerCase();
+    const plural = kind === "index" ? "indexes" : `${kind}s`;
+    const pluralLabel = plural[0]?.toUpperCase() + plural.slice(1);
+    const name = nodeValue(doc, [...record, 3]) ?? cell.node.name;
+    const tableName = nodeValue(doc, [...record, 4]) ?? "";
+    const rootPage = nodeValue(doc, [...record, 5]) ?? "0";
+    const sql = nodeValue(doc, [...record, 6]) ?? "";
+    const groupId = `/${kind}s`;
+    const old = groups.get(groupId);
+    groups.set(groupId, old === undefined ? {
+      id: groupId, parentId: "/", label: pluralLabel, fullName: groupId,
+      depth: 1, group: true, hasChildren: true, sourcePath: [23, 6], sourceBits: null, sourceText: "page 1",
+      value: `1 ${kind}`, type: "schema group", logicalBytes: cell.node.size_bits / 8,
+      logicalApproximate: false, title: `${kind} definitions in sqlite_schema`,
+    } : {
+      ...old,
+      value: `${Number.parseInt(old.value, 10) + 1} ${plural}`,
+      logicalBytes: (old.logicalBytes ?? 0) + cell.node.size_bits / 8,
+    });
+    const detail = [tableName !== name ? `on ${tableName}` : "", `root page ${rootPage}`, sql].filter(Boolean).join(" · ");
+    entries.push({
+      id: `${groupId}/${i}`, parentId: groupId, label: name, fullName: name, depth: 2, group: false,
+      hasChildren: false, sourcePath: cellPath, sourceBits: cell.node.offset_bits,
+      sourceText: formatOffset(cell.node.offset_bits), value: detail, type: kind,
+      logicalBytes: cell.node.size_bits / 8, logicalApproximate: false,
+      title: sql || `${kind} ${name}`,
+    });
+  }
+  const nodes = [root];
+  for (const group of groups.values()) {
+    nodes.push(group, ...entries.filter((entry) => entry.parentId === group.id));
+  }
+  return {
+    status: "ok",
+    node: {
+      format: isSelf ? "self" : "sqlite", title,
+      summary: `${schemaReply.node.child_count.toLocaleString()} schema objects · ${pageCount.toLocaleString()} pages · ${formatBytes(pageSize)} page size`,
+      nodes, total: nodes.length, sizeLabel: "Schema extent",
+    },
+  };
+}
+
 /** Adapters are intentionally independent of the view. GGUF, ZIP, SQLite,
  * RIFF and MP4 can add semantic nodes here without changing the table UI. */
 const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "hdf5", read: (doc) => hdf5Outline(doc) },
   { matches: (doc) => doc.template === "gguf", read: ggufOutline },
   { matches: (doc) => doc.template === "zip", read: zipOutline },
+  { matches: (doc) => doc.template === "sqlite" || doc.template === "self", read: (doc) => sqliteOutline(doc) },
 ];
 
 export function hasLogicalOutline(doc: Doc): boolean {
