@@ -598,6 +598,87 @@ function elfOutline(
   };
 }
 
+function isoOutline(
+  doc: Doc,
+  expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> {
+  const volumeReply = doc.isoVolume();
+  if (volumeReply.status !== "ok") return volumeReply;
+  const volume = volumeReply.node;
+  const volumeBytes = volume.blocks * volume.block_size;
+  const title = volume.volume || "ISO 9660 volume";
+  const nodes: LogicalNode[] = [{
+    id: "/", parentId: null, label: "Disc image", fullName: "/", depth: 0, group: true, hasChildren: true,
+    sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
+    value: `${title} · ${volume.blocks.toLocaleString()} blocks · ${formatBytes(volume.block_size)} blocks`,
+    type: "ISO 9660", logicalBytes: volumeBytes, logicalApproximate: false, title,
+  }, {
+    id: "/volume", parentId: "/", label: "Volume information", fullName: "/volume", depth: 1,
+    group: false, hasChildren: false, sourcePath: volume.descriptor_path, sourceBits: 16 * 2048 * 8,
+    sourceText: "sector 16", value: title, type: "primary volume", logicalBytes: 2048,
+    logicalApproximate: false, title: `${title} primary volume descriptor`,
+  }, {
+    id: "/files", parentId: "/", label: "Files", fullName: "/files", depth: 1, group: true, hasChildren: true,
+    sourcePath: [...volume.descriptor_path, 14], sourceBits: volume.root_extent * volume.block_size * 8,
+    sourceText: formatOffset(volume.root_extent * volume.block_size * 8), value: "root directory", type: "directory",
+    logicalBytes: volume.root_size, logicalApproximate: false, title: "Root directory",
+  }];
+  const more: LogicalMore[] = [];
+  let omitted = 0;
+  const visited = new Set<string>();
+  const addDirectory = (id: string, extent: number, size: number, depth: number): TemplateReply<never> | null => {
+    if (!expanded.has(id)) return null;
+    const visit = `${extent}:${size}`;
+    if (visited.has(visit)) return null;
+    visited.add(visit);
+    const limit = shown.get(id) ?? LOGICAL_PAGE;
+    const reply = doc.isoDirectory(extent, size, volume.block_size, limit);
+    if (reply.status !== "ok") return reply;
+    const children: Array<{ id: string; extent: number; size: number; depth: number }> = [];
+    for (let i = 0; i < reply.node.entries.length; i++) {
+      const entry = reply.node.entries[i];
+      if (entry === undefined) continue;
+      const childId = `${id}/${encodeURIComponent(entry.name || `entry-${i}`)}~${i}`;
+      const dataBits = entry.extent * volume.block_size * 8;
+      nodes.push({
+        id: childId, parentId: id, label: entry.name || `(entry ${i + 1})`, fullName: childId.slice(6),
+        depth, group: entry.directory, hasChildren: entry.directory,
+        sourcePath: [...volume.descriptor_path, 14], sourceBits: dataBits, sourceText: formatOffset(dataBits),
+        value: entry.directory ? "directory" : "file data", type: entry.directory ? "directory" : "file",
+        logicalBytes: entry.size, logicalApproximate: false,
+        title: `${entry.name || `Entry ${i + 1}`} · directory record at ${formatOffset(entry.source_bits)}`,
+      });
+      if (entry.directory) children.push({ id: childId, extent: entry.extent, size: entry.size, depth: depth + 1 });
+    }
+    const remaining = reply.node.total - reply.node.entries.length;
+    omitted += remaining;
+    if (remaining > 0) {
+      more.push({
+        sectionId: id,
+        afterId: reply.node.entries.length === 0 ? id : `${id}/${encodeURIComponent(reply.node.entries.at(-1)?.name || `entry-${reply.node.entries.length - 1}`)}~${reply.node.entries.length - 1}`,
+        count: remaining,
+        label: "entries",
+      });
+    }
+    for (const child of children) {
+      const pending = addDirectory(child.id, child.extent, child.size, child.depth);
+      if (pending !== null) return pending;
+    }
+    return null;
+  };
+  const pending = addDirectory("/files", volume.root_extent, volume.root_size, 2);
+  if (pending !== null) return pending;
+  return {
+    status: "ok",
+    node: {
+      format: "iso9660", title: "ISO 9660 filesystem",
+      summary: `${title} · ${volume.blocks.toLocaleString()} blocks · ${formatBytes(volumeBytes)}`,
+      nodes, total: nodes.length + omitted, sizeLabel: "Data size", ...(more.length > 0 ? { more } : {}),
+    },
+  };
+}
+
 /** Adapters are intentionally independent of the view. GGUF, ZIP, SQLite,
  * RIFF and MP4 can add semantic nodes here without changing the table UI. */
 const ADAPTERS: readonly Adapter[] = [
@@ -606,6 +687,7 @@ const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "zip", read: zipOutline },
   { matches: (doc) => doc.template === "sqlite" || doc.template === "self", read: (doc) => sqliteOutline(doc) },
   { matches: (doc) => doc.template === "elf" || doc.template === "bpf", read: elfOutline },
+  { matches: (doc) => doc.template === "iso9660", read: isoOutline },
 ];
 
 export function hasLogicalOutline(doc: Doc): boolean {

@@ -458,10 +458,11 @@ export class TypeTable {
     summary.append(summaryCell);
     frag.append(summary);
     const byId = new Map(reply.node.nodes.map((node) => [node.id, node]));
+    const parents = new Set(reply.node.nodes.flatMap((node) => node.parentId === null ? [] : [node.parentId]));
     const moreByAfter = new Map(reply.node.more?.map((more) => [more.afterId, more]) ?? []);
     for (const node of reply.node.nodes) {
       if (!this.logicalVisible(node, byId)) continue;
-      this.addLogicalRow(frag, node, node.hasChildren || reply.node.nodes.some((child) => child.parentId === node.id));
+      this.addLogicalRow(frag, node, node.hasChildren || parents.has(node.id));
       const more = moreByAfter.get(node.id);
       if (more !== undefined) this.addLogicalMoreRow(frag, more.sectionId, more.count, more.label);
     }
