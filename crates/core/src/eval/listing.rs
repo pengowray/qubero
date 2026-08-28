@@ -257,97 +257,15 @@ impl Evaluator {
             let path = self.inline_ancestor(&path);
             let inline = matches!(self.memo[&path].ty.base(), Ty::Struct(s) if s.inline);
             let info = self.node(doc, &path)?;
-            let mut span = self.span_of(doc, &path, &info)?;
-            // A bit no field covers at all, which in a format whose objects
-            // are all placed by address is the space between two of them. It
-            // runs to wherever the next placed stretch begins.
-            if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
-                let ends = self.placement_after(doc, at)?.unwrap_or(doc.len_bits()).max(at + 8);
-                span.gap = true;
-                span.offset_bits = at;
-                span.size_bits = ends - at;
-                span.count = 0;
-                at = ends;
-                out.push(span);
-                continue;
-            }
-            if inline {
-                let mut parts = Vec::new();
-                self.one_line(doc, &path, &mut parts)?;
-                span.line = Some(parts.join(" "));
+            let span = if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
+                self.gap_before_the_next_placement(doc, &path, &info, at)?
+            } else if inline {
+                self.one_row(doc, &path, &info)?
             } else if info.composite {
-                // Inside it, but in none of its children: the template has
-                // nothing to say about these bytes.
-                span.gap = true;
-                span.offset_bits = at;
-                let mut ends = info.offset_bits + info.size_bits;
-                // The gap runs to whatever comes next, which need not be a
-                // child of the structure it is in. In a PDF whose objects a
-                // cross-reference stream places, the list of them is empty and
-                // stretches to the end of the file, while the table, the
-                // trailer and the end marker are placed beside it rather than
-                // inside it. Ending the gap where the list ends would swallow
-                // all three and leave most of the file unannotated.
-                for k in (0..=path.len()).rev() {
-                    if let Some(next) = self.next_child_start(doc, &path[..k], at)? {
-                        ends = ends.min(next);
-                    }
-                }
-                if let Some(next) = self.placement_after(doc, at)? {
-                    ends = ends.min(next);
-                }
-                span.size_bits = ends - at;
-                span.count = 0;
-            } else if let Some((run, count)) = self.collapsible(doc, &path)? {
-                let run_info = self.node(doc, &run)?;
-                // Pointer-heavy formats can reach a leaf through an
-                // overlapping placement whose repeated ancestor has already
-                // ended. Collapsing that ancestor would return a span behind
-                // `at` forever. Only substitute the run when it covers the
-                // byte this request is actually advancing from.
-                if run_info.offset_bits <= at && at < run_info.offset_bits + run_info.size_bits {
-                    span = self.span_of(doc, &run, &run_info)?;
-                    span.count = count;
-                    let mut covered = 0u64;
-                    for i in 0..count.min(SAMPLE) {
-                        let mut elem = run.clone();
-                        elem.push(i as usize);
-                        let info = self.node(doc, &elem)?;
-                        let value = brief(&info.value);
-                        if !value.is_empty() {
-                            span.sample.push(value);
-                        } else if info.composite {
-                            // A named record such as `[81] phonemizer.rules.keys`
-                            // contributes the useful name, not its array index.
-                            let index = format!("[{i}]");
-                            let named = info.name.strip_prefix(&index).unwrap_or(&info.name).trim();
-                            if !named.is_empty() {
-                                span.sample.push(named.to_string());
-                            }
-                        }
-                        if info.size_bits > 0 {
-                            span.parts.push(SpanPart {
-                                size_bits: info.size_bits,
-                                label: info.name,
-                                rest: false,
-                            });
-                            covered = covered.saturating_add(info.size_bits);
-                        }
-                    }
-                    // A run of values that each read as nothing, such as matching
-                    // signatures, is better left to say only how many there are.
-                    if span.sample.iter().all(|s| s.is_empty()) {
-                        span.sample.clear();
-                    }
-                    if covered < span.size_bits {
-                        span.parts.push(SpanPart {
-                            size_bits: span.size_bits - covered,
-                            label: format!("{} more", count.saturating_sub(SAMPLE)),
-                            rest: true,
-                        });
-                    }
-                }
-            }
+                self.gap_inside(doc, &path, &info, at)?
+            } else {
+                self.field_or_its_run(doc, &path, &info, at)?
+            };
             let next = span.offset_bits + span.size_bits;
             at = if next > at { next } else { at + 8 };
             if span.size_bits > 0 {
@@ -355,6 +273,121 @@ impl Evaluator {
             }
         }
         Ok(out)
+    }
+
+    /// A bit no field covers at all, which in a format whose objects are all
+    /// placed by address is the space between two of them. It runs to wherever
+    /// the next placed stretch begins.
+    fn gap_before_the_next_placement<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        info: &NodeInfo,
+        at: u64,
+    ) -> R<Span> {
+        let mut span = self.span_of(doc, path, info)?;
+        let ends = self.placement_after(doc, at)?.unwrap_or(doc.len_bits()).max(at + 8);
+        span.gap = true;
+        span.offset_bits = at;
+        span.size_bits = ends - at;
+        span.count = 0;
+        Ok(span)
+    }
+
+    /// Inside a structure, but in none of its children: the template has
+    /// nothing to say about these bytes.
+    ///
+    /// The gap runs to whatever comes next, which need not be a child of the
+    /// structure it is in. In a PDF whose objects a cross-reference stream
+    /// places, the list of them is empty and stretches to the end of the file,
+    /// while the table, the trailer and the end marker are placed beside it
+    /// rather than inside it. Ending the gap where the list ends would swallow
+    /// all three and leave most of the file unannotated.
+    fn gap_inside<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo, at: u64) -> R<Span> {
+        let mut span = self.span_of(doc, path, info)?;
+        let mut ends = info.offset_bits + info.size_bits;
+        for k in (0..=path.len()).rev() {
+            if let Some(next) = self.next_child_start(doc, &path[..k], at)? {
+                ends = ends.min(next);
+            }
+        }
+        if let Some(next) = self.placement_after(doc, at)? {
+            ends = ends.min(next);
+        }
+        span.gap = true;
+        span.offset_bits = at;
+        span.size_bits = ends - at;
+        span.count = 0;
+        Ok(span)
+    }
+
+    /// A structure marked to read on one row, as the one row it reads as.
+    fn one_row<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
+        let mut span = self.span_of(doc, path, info)?;
+        let mut parts = Vec::new();
+        self.one_line(doc, path, &mut parts)?;
+        span.line = Some(parts.join(" "));
+        Ok(span)
+    }
+
+    /// A field, or the long run of values or records it belongs to. Several
+    /// hundred rows of a model's tensor table would fill the column with less
+    /// than one entry saying what the section is, so the run stands for them,
+    /// with the first few sampled to say what is in it.
+    fn field_or_its_run<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        info: &NodeInfo,
+        at: u64,
+    ) -> R<Span> {
+        let span = self.span_of(doc, path, info)?;
+        let Some((run, count)) = self.collapsible(doc, path)? else { return Ok(span) };
+        let run_info = self.node(doc, &run)?;
+        // Pointer-heavy formats can reach a leaf through an overlapping
+        // placement whose repeated ancestor has already ended. Collapsing that
+        // ancestor would return a span behind `at` forever. Only substitute the
+        // run when it covers the byte this request is actually advancing from.
+        if run_info.offset_bits > at || at >= run_info.offset_bits + run_info.size_bits {
+            return Ok(span);
+        }
+        let mut span = self.span_of(doc, &run, &run_info)?;
+        span.count = count;
+        let mut covered = 0u64;
+        for i in 0..count.min(SAMPLE) {
+            let mut elem = run.clone();
+            elem.push(i as usize);
+            let info = self.node(doc, &elem)?;
+            let value = brief(&info.value);
+            if !value.is_empty() {
+                span.sample.push(value);
+            } else if info.composite {
+                // A named record such as `[81] phonemizer.rules.keys`
+                // contributes the useful name, not its array index.
+                let index = format!("[{i}]");
+                let named = info.name.strip_prefix(&index).unwrap_or(&info.name).trim();
+                if !named.is_empty() {
+                    span.sample.push(named.to_string());
+                }
+            }
+            if info.size_bits > 0 {
+                span.parts.push(SpanPart { size_bits: info.size_bits, label: info.name, rest: false });
+                covered = covered.saturating_add(info.size_bits);
+            }
+        }
+        // A run of values that each read as nothing, such as matching
+        // signatures, is better left to say only how many there are.
+        if span.sample.iter().all(|s| s.is_empty()) {
+            span.sample.clear();
+        }
+        if covered < span.size_bits {
+            span.parts.push(SpanPart {
+                size_bits: span.size_bits - covered,
+                label: format!("{} more", count.saturating_sub(SAMPLE)),
+                rest: true,
+            });
+        }
+        Ok(span)
     }
 
     pub(super) fn span_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
