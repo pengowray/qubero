@@ -6,7 +6,10 @@
 use qubero_core::eval::{Explain, Origin};
 use qubero_core::{diescript, dosbasic};
 use qubero_core::search::{self, Needle, Search, Step};
-use qubero_core::{formats, magicrule, overview, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span, Value};
+use qubero_core::{
+    formats, magicrule, overview, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span,
+    SpanPart, Value,
+};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -613,6 +616,23 @@ struct SpanDto {
     line: Option<String>,
     /// The first few values of a run shown as one entry.
     sample: Vec<String>,
+    /// First element extents followed by the uninspected remainder.
+    parts: Vec<SpanPartDto>,
+}
+
+#[derive(Serialize)]
+struct SpanPartDto {
+    size_bits: f64,
+    label: String,
+    rest: bool,
+}
+
+fn span_part_dto(part: SpanPart) -> SpanPartDto {
+    SpanPartDto {
+        size_bits: part.size_bits as f64,
+        label: part.label,
+        rest: part.rest,
+    }
 }
 
 fn span_dto(s: Span) -> SpanDto {
@@ -630,6 +650,7 @@ fn span_dto(s: Span) -> SpanDto {
         count: s.count as f64,
         line: s.line,
         sample: s.sample,
+        parts: s.parts.into_iter().map(span_part_dto).collect(),
     }
 }
 

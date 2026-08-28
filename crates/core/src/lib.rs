@@ -27,7 +27,7 @@ pub mod text;
 
 pub use document::Document;
 pub use encode::EDIT_LIMIT_BYTES;
-pub use eval::{EvalError, Evaluator, NodeInfo, Span, Value, Write};
+pub use eval::{EvalError, Evaluator, NodeInfo, Span, SpanPart, Value, Write};
 pub use piece::PieceTable;
 pub use save::{Run, RunKind};
 pub use search::{Needle, Search, Step};

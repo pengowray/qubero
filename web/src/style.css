@@ -281,12 +281,12 @@ input.invalid {
   color: var(--muted);
   font-size: 12px;
 }
-.tt-length-total {
+.length-total {
   display: block;
 }
 /* A compact echo of the field-anatomy strip: the total remains readable as
    text, while direct child extents become quiet, immediately comparable marks. */
-.tt-length-anatomy {
+.length-anatomy {
   display: flex;
   width: 8.5ch;
   height: 7px;
@@ -295,21 +295,21 @@ input.invalid {
   background: color-mix(in srgb, var(--muted) 12%, transparent);
   border-radius: 2px;
 }
-.tt-length-part {
+.length-part {
   min-width: 2px;
   background: color-mix(in srgb, var(--accent) 18%, var(--panel));
   border-right: 1px solid var(--bg);
 }
-.tt-length-part:nth-child(even) {
+.length-part:nth-child(even) {
   background: color-mix(in srgb, var(--accent) 9%, var(--panel));
 }
-.tt-length-part:last-child {
+.length-part:last-child {
   border-right: 0;
 }
-.tt-length-part.is-gap {
+.length-part.is-gap {
   background: repeating-linear-gradient(-45deg, transparent 0 2px, color-mix(in srgb, var(--muted) 32%, transparent) 2px 3px);
 }
-.tt-length-part.is-rest {
+.length-part.is-rest {
   background: color-mix(in srgb, var(--muted) 22%, var(--panel));
 }
 /* Anything that names a place in the file, as opposed to a value read from
@@ -1470,6 +1470,15 @@ input.invalid {
 }
 .lv-value {
   color: var(--fg);
+}
+.lv-length.has-anatomy {
+  padding-top: 1px;
+  line-height: 13px;
+}
+.lv-length.has-anatomy .length-anatomy {
+  width: 10ch;
+  height: 5px;
+  margin-top: 1px;
 }
 .lv-row:not(.lv-gap) .lv-type {
   color: var(--field-color);

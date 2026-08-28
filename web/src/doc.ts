@@ -139,7 +139,7 @@ export type Span = {
   readonly value: string;
   readonly kind: string;
   readonly gap: boolean;
-  /** Fields this entry stands for, when a run of numbers is shown as one. */
+  /** Fields this entry stands for, when a large run is shown as one. */
   readonly count: number;
   /** A structure that reads on one row, already joined: an instruction rather
    *  than its opcode and its immediate. Null for a field that reads as its own
@@ -147,6 +147,8 @@ export type Span = {
   readonly line: string | null;
   /** The first few values of a run shown as one entry. */
   readonly sample: string[];
+  /** First element extents of a collapsed run, then its remaining extent. */
+  readonly parts: readonly { readonly size_bits: number; readonly label: string; readonly rest: boolean }[];
 };
 
 /** What the byte-class scan behind the overview has found so far. */

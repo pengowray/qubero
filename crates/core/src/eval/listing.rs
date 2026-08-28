@@ -17,8 +17,8 @@ pub struct Span {
     pub value: Value,
     /// No field covers these bits.
     pub gap: bool,
-    /// How many fields this entry stands for, when a run of numbers is shown
-    /// as one. Zero for a single field.
+    /// How many fields this entry stands for, when a large run of values or
+    /// records is shown as one. Zero for a single field.
     pub count: u64,
     /// A structure marked to read on one row, already joined: `local.get 0`
     /// rather than an `op` row and an `imm` row. None for everything else,
@@ -28,6 +28,17 @@ pub struct Span {
     /// many and nothing about what, and a run of zeroes and a run of samples
     /// are worth telling apart without opening either.
     pub sample: Vec<String>,
+    /// The first few element extents of a collapsed run. These let a compact
+    /// view show the run's on-disk rhythm without spelling it as `8|12|...`.
+    pub parts: Vec<SpanPart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanPart {
+    pub size_bits: u64,
+    pub label: String,
+    /// The uninspected remainder of the run rather than one element.
+    pub rest: bool,
 }
 
 /// Values from the front of a collapsed run, at most this many.
@@ -79,6 +90,10 @@ pub(super) fn brief(v: &Value) -> String {
 
 /// A run of these is worth one entry rather than one each.
 const COLLAPSE_RUN: u64 = 8;
+/// Records carry more meaning than scalar samples, so short lists stay open.
+/// Beyond this point the list's section row and a few record names are a more
+/// useful first view than scores of repeated internal fields.
+const COLLAPSE_COMPLEX_RUN: u64 = 32;
 
 /// A type that holds one number or one run of bytes, and nothing inside it.
 pub(super) fn plain(ty: &Ty) -> bool {
@@ -220,9 +235,9 @@ impl Evaluator {
     ///
     /// Two things are not one field each. A stretch no field covers, which is
     /// the slack at the end of a structure, comes back as a gap. A long run of
-    /// plain numbers, such as W4V's 512 codes, comes back as the run itself:
-    /// several hundred entries reading `[0]`, `[1]`, `[2]` would fill the
-    /// column with less than one entry saying what the run is.
+    /// values, such as W4V's 512 codes, or records, such as a model's tensor
+    /// table, comes back as the run itself: several hundred internal rows would
+    /// fill the column with less than one entry saying what the section is.
     pub fn spans<S: Source>(&mut self, doc: &Document<S>, from: u64, to: u64, max: usize) -> R<Vec<Span>> {
         self.resolve(doc, &[])?;
         let root_size = self.size_of(doc, &[])?;
@@ -275,15 +290,43 @@ impl Evaluator {
                 let run_info = self.node(doc, &run)?;
                 span = self.span_of(doc, &run, &run_info)?;
                 span.count = count;
+                let mut covered = 0u64;
                 for i in 0..count.min(SAMPLE) {
                     let mut elem = run.clone();
                     elem.push(i as usize);
-                    span.sample.push(brief(&self.node(doc, &elem)?.value));
+                    let info = self.node(doc, &elem)?;
+                    let value = brief(&info.value);
+                    if !value.is_empty() {
+                        span.sample.push(value);
+                    } else if info.composite {
+                        // A named record such as `[81] phonemizer.rules.keys`
+                        // contributes the useful name, not its array index.
+                        let index = format!("[{i}]");
+                        let named = info.name.strip_prefix(&index).unwrap_or(&info.name).trim();
+                        if !named.is_empty() {
+                            span.sample.push(named.to_string());
+                        }
+                    }
+                    if info.size_bits > 0 {
+                        span.parts.push(SpanPart {
+                            size_bits: info.size_bits,
+                            label: info.name,
+                            rest: false,
+                        });
+                        covered = covered.saturating_add(info.size_bits);
+                    }
                 }
                 // A run of values that each read as nothing, such as matching
                 // signatures, is better left to say only how many there are.
                 if span.sample.iter().all(|s| s.is_empty()) {
                     span.sample.clear();
+                }
+                if covered < span.size_bits {
+                    span.parts.push(SpanPart {
+                        size_bits: span.size_bits - covered,
+                        label: format!("{} more", count.saturating_sub(SAMPLE)),
+                        rest: true,
+                    });
                 }
             }
             let next = span.offset_bits + span.size_bits;
@@ -319,6 +362,7 @@ impl Evaluator {
             count: 0,
             line: None,
             sample: Vec::new(),
+            parts: Vec::new(),
         })
     }
 
@@ -355,8 +399,8 @@ impl Evaluator {
         Ok(())
     }
 
-    /// The nearest run of plain numbers `path` sits in, if it is long enough to
-    /// be worth showing as one entry.
+    /// The nearest repeated run `path` sits in, if it is long enough to be
+    /// worth showing as one entry. Records use the higher threshold above.
     pub(super) fn collapsible<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<(Vec<usize>, u64)>> {
         for k in 0..path.len() {
             let ty = self.memo[&path[..k]].ty.clone();
@@ -368,16 +412,19 @@ impl Evaluator {
             // A type that only says what it is once it is placed, such as a
             // WAVE sample whose width an earlier chunk declared, is judged by
             // what the first element turned out to be.
-            if !plain(&elem) {
+            let complex = if !plain(&elem) {
                 let mut first = path[..k].to_vec();
                 first.push(0);
                 match self.node(doc, &first) {
-                    Ok(info) if !info.composite => {}
+                    Ok(info) => info.composite,
                     _ => continue,
                 }
-            }
+            } else {
+                false
+            };
             let n = self.child_count(doc, &path[..k])?;
-            if n >= COLLAPSE_RUN {
+            let threshold = if complex { COLLAPSE_COMPLEX_RUN } else { COLLAPSE_RUN };
+            if n >= threshold {
                 return Ok(Some((path[..k].to_vec(), n)));
             }
         }

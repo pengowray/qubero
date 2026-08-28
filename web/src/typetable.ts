@@ -7,6 +7,8 @@ import { formatBytes, formatOffset } from "./doc.js";
 import { bitSizeText, childWord, countText, GAP_LABEL } from "./strings.js";
 import type { Doc, TemplateNode } from "./doc.js";
 import { fieldClass } from "./fieldstyle.js";
+import { appendAnatomy } from "./anatomy.js";
+import type { AnatomyPart } from "./anatomy.js";
 
 const PAGE = 200;
 /** The Value column shows a preview of a long field, so editing it here would
@@ -28,13 +30,9 @@ const OVERVIEW_CHILDREN = 24;
 /** Enough boundaries to show the shape without turning Length into a second
  * tree. The last mark represents the rest of a larger structure. */
 const ANATOMY_PARTS = 6;
-
-type AnatomyPart = {
-  readonly sizeBits: number;
-  readonly label: string;
-  readonly gap: boolean;
-  readonly rest: boolean;
-};
+/** Small composites are cheap enough to preview before they are opened. This
+ * is what makes length + value read immediately as two stored components. */
+const EAGER_ANATOMY_CHILDREN = 6;
 
 function treeIndent(depth: number, extra: number): string {
   return `${Math.min(depth, MAX_INDENT_DEPTH) * 16 + extra}px`;
@@ -485,11 +483,27 @@ export class TypeTable {
     const size = document.createElement("td");
     size.className = "tt-num tt-length";
     const total = document.createElement("span");
-    total.className = "tt-length-total";
+    total.className = "length-total";
     total.textContent = bitSizeText(n.size_bits);
     size.append(total);
-    const knownAnatomy = this.anatomy.get(k);
-    if (knownAnatomy !== undefined) this.appendAnatomy(size, knownAnatomy, n.name);
+    let knownAnatomy = this.anatomy.get(k);
+    if (
+      knownAnatomy === undefined &&
+      !open &&
+      n.composite &&
+      n.child_count > 1 &&
+      n.child_count <= EAGER_ANATOMY_CHILDREN
+    ) {
+      const preview = this.doc.templateChildren(n.path, 0, n.child_count);
+      if (preview.status === "ok") {
+        const parts = this.anatomyParts(n, preview.node, true);
+        if (parts.length > 1) {
+          this.anatomy.set(k, parts);
+          knownAnatomy = parts;
+        }
+      }
+    }
+    if (knownAnatomy !== undefined) appendAnatomy(size, knownAnatomy, n.name);
     tr.append(off, name, value, type, size);
     frag.append(tr);
 
@@ -510,7 +524,7 @@ export class TypeTable {
       const parts = this.anatomyParts(n, kids.node, complete);
       if (parts.length > 1) {
         this.anatomy.set(k, parts);
-        this.appendAnatomy(size, parts, n.name);
+        appendAnatomy(size, parts, n.name);
       }
       this.addChildRows(frag, n, kids.node, depth + 1, complete);
       if (n.child_count > limit) {
@@ -572,25 +586,6 @@ export class TypeTable {
       rest: true,
     });
     return head;
-  }
-
-  private appendAnatomy(cell: HTMLElement, parts: readonly AnatomyPart[], name: string): void {
-    cell.querySelector(".tt-length-anatomy")?.remove();
-    const bar = document.createElement("span");
-    bar.className = "tt-length-anatomy";
-    bar.setAttribute("role", "img");
-    bar.setAttribute("aria-label", `${name}: ${parts.map((part) => bitSizeText(part.sizeBits)).join(", ")}`);
-    const total = Math.max(1, parts.reduce((sum, part) => sum + part.sizeBits, 0));
-    for (const part of parts) {
-      const mark = document.createElement("span");
-      mark.className = "tt-length-part";
-      if (part.gap) mark.classList.add("is-gap");
-      if (part.rest) mark.classList.add("is-rest");
-      mark.style.flexGrow = String(part.sizeBits / total);
-      mark.title = `${part.label}: ${bitSizeText(part.sizeBits)}`;
-      bar.append(mark);
-    }
-    cell.append(bar);
   }
 
   /** Children in file order, with the stretches the template leaves undefined

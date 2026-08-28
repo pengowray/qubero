@@ -28,7 +28,7 @@ mod walk;
 mod tests;
 
 pub use explain::{Explain, FlagBit};
-pub use listing::Span;
+pub use listing::{Span, SpanPart};
 pub use origin::{Origin, Role};
 
 #[derive(Debug, Clone, PartialEq)]

@@ -62,6 +62,32 @@ fn spans_cover_a_stretch_without_a_call_per_field() {
 }
 
 #[test]
+fn listing_summarises_only_large_runs_of_records() {
+    let record = || T::structure("Record", vec![("value", T::u8())]);
+    let bytes: Vec<u8> = (0..40).collect();
+    let d = doc(&bytes);
+
+    // A large record array is a logical section first. Its exact total and a
+    // bounded sample of element extents are enough to decide whether to open
+    // it; resolving all forty internal fields into rows is not.
+    let mut large = Evaluator::new(Template::new("t", T::array(record(), E::lit(40))));
+    let spans = large.spans(&d, 0, 40 * 8, 100).unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!((spans[0].count, spans[0].size_bits), (40, 40 * 8));
+    assert_eq!(spans[0].parts.len(), 5);
+    assert_eq!(spans[0].parts[0].size_bits, 8);
+    assert!(spans[0].parts[4].rest);
+    assert_eq!(spans[0].parts[4].size_bits, 36 * 8);
+
+    // Short record arrays stay expanded; WAV chunks and other small repeated
+    // structures should not turn into summaries merely because they repeat.
+    let mut small = Evaluator::new(Template::new("t", T::array(record(), E::lit(12))));
+    let spans = small.spans(&d, 0, 12 * 8, 100).unwrap();
+    assert_eq!(spans.len(), 12);
+    assert!(spans.iter().all(|span| span.count == 0));
+}
+
+#[test]
 fn struct_with_count_driven_array() {
     let t = Template::new(
         "t",

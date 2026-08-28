@@ -7,9 +7,10 @@
 // windowed by bit range, which is the same shape.
 
 import { formatBytes, formatOffset } from "./doc.js";
-import { bitSizeText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
+import { bitSizeText, childWord, countText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
 import type { Doc, Span } from "./doc.js";
 import { fieldClass } from "./fieldstyle.js";
+import { appendAnatomy } from "./anatomy.js";
 
 /** Rows fetched beyond the ones on screen, so a wheel notch has somewhere to
  *  go before the next fetch. */
@@ -63,7 +64,7 @@ function trailParts(trail: readonly string[]): string[] {
  *  whether to open it. The sample never covers the whole run: a run is not
  *  collapsed until it is longer than the sample. */
 function runText(s: Span): string {
-  const count = `${s.count.toLocaleString()} values`;
+  const count = countText(s.count, childWord(s));
   return s.sample.length === 0 ? count : `${s.sample.join(", ")} … ${count}`;
 }
 
@@ -466,7 +467,24 @@ export class ListingView {
       HTMLElement,
     ];
     addr.textContent = formatOffset(s.offset_bits);
-    length.textContent = bitSizeText(s.size_bits);
+    if (s.parts.length > 1) {
+      length.classList.add("has-anatomy");
+      const total = document.createElement("span");
+      total.className = "length-total";
+      total.textContent = bitSizeText(s.size_bits);
+      length.append(total);
+      appendAnatomy(
+        length,
+        s.parts.map((part) => ({
+          sizeBits: part.size_bits,
+          label: part.label,
+          rest: part.rest,
+        })),
+        s.name,
+      );
+    } else {
+      length.textContent = bitSizeText(s.size_bits);
+    }
     const raw = fieldBytes(this.doc, s);
     const ascii = document.createElement("i");
     ascii.className = "lv-ascii";

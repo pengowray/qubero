@@ -1105,7 +1105,10 @@ export class HexView {
         h.dataset["off"] = a.dataset["off"] = String(off);
         h.dataset["pane"] = "hex";
         a.dataset["pane"] = "ascii";
-        const hl = this.highlightBits(off);
+        // A user-selected range temporarily replaces the active-field mark.
+        // Keeping both over the same bytes made adjacent or overlapping state
+        // impossible to parse; clearing the selection reveals the field again.
+        const hl = selection === null ? this.highlightBits(off) : [];
         const sb = selection === null ? null : this.selectionBits(selection, off);
         if (off < len) {
           const b = bytes[off - start] ?? 0;
