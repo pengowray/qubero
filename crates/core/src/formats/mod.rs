@@ -361,7 +361,7 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("coff")
     } else if is_omf(head) {
         Some("omf")
-    } else if is_dos(head) {
+    } else if is_dos(head, len) {
         Some("msdos")
     } else if is_lha(head) {
         Some("lha")
@@ -976,7 +976,7 @@ fn is_mca(head: &[u8], len: u64) -> bool {
 /// only once the bytes it points at have been seen and are none of `PE`, `NE`,
 /// `LE` or `LX`. A pointer past what has been read leaves the file unclaimed, which is
 /// the same answer `is_pe` gives to a short read and for the same reason.
-fn is_dos(head: &[u8]) -> bool {
+fn is_dos(head: &[u8], len: u64) -> bool {
     if !head.starts_with(b"MZ") || head.len() < 0x1c {
         return false;
     }
@@ -987,7 +987,15 @@ fn is_dos(head: &[u8]) -> bool {
     let at = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
     match head.get(at..at + 2) {
         Some(sig) => !matches!(sig, b"PE" | b"NE" | b"LE" | b"LX"),
-        None => false,
+        // An offset past the end of the file is not pointing at a header, so
+        // there is none and this is a DOS program. Several packers leave
+        // whatever they like in those four bytes: PKLITE writes the middle of
+        // its copyright notice there, which reads as an offset of a gigabyte.
+        //
+        // Past what has been read but still inside the file is a different
+        // answer: the header may be there, and the file stays unclaimed until
+        // enough of it has arrived to say.
+        None => at as u64 + 2 > len,
     }
 }
 
@@ -1069,9 +1077,19 @@ mod tests {
     fn a_header_past_what_was_read_is_not_claimed() {
         // It may be a Windows executable, and reading it as a DOS one would
         // describe the stub that exists to say the program needs Windows.
-        assert_eq!(sniff(&mz(0x400, 0x100, false), 0x100), None);
+        // The file is long enough to hold the header; only the read is short.
+        assert_eq!(sniff(&mz(0x400, 0x100, false), 0x800), None);
         // Even a short read of a real PE: better unclaimed than wrong.
-        assert_eq!(sniff(&mz(0x80, 0x40, false), 0x40), None);
+        assert_eq!(sniff(&mz(0x80, 0x40, false), 0x400), None);
+    }
+
+    /// A pointer past the end of the file points at nothing, whatever it says.
+    /// PKLITE leaves the middle of its copyright notice in those four bytes,
+    /// which reads as an offset of a gigabyte into a program of thirty
+    /// kilobytes.
+    #[test]
+    fn a_pointer_past_the_end_of_the_file_is_not_a_header() {
+        assert_eq!(sniff(&mz(0x4120_2e63, 0x100, false), 0x100), Some("msdos"));
     }
 
     #[test]

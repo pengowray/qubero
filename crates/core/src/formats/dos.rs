@@ -36,11 +36,15 @@ pub fn header_fields() -> Vec<(&'static str, T)> {
         ("header_paragraphs", T::u16(Little)),
         ("min_extra_paragraphs", T::u16(Little)),
         ("max_extra_paragraphs", T::u16(Little)),
-        ("initial_ss", T::u16(Little)),
+        // A segment relative to where the program is loaded, and signed: a
+        // packer that puts its entry point before the bytes it unpacks writes
+        // a negative one, and 0xfff0 read as 65,520 would put the entry a
+        // megabyte past a program of thirty kilobytes.
+        ("initial_ss", T::Int { bits: 16, endian: Little }),
         ("initial_sp", T::u16(Little)),
         ("checksum", T::u16(Little)),
         ("initial_ip", T::u16(Little)),
-        ("initial_cs", T::u16(Little)),
+        ("initial_cs", T::Int { bits: 16, endian: Little }),
         ("relocation_table", T::u16(Little)),
         ("overlay_number", T::u16(Little)),
     ]
@@ -122,7 +126,9 @@ pub fn dos() -> Template {
 /// claims least.
 fn load_module(len: E) -> T {
     let entry = E::field("initial_cs").mul(E::lit(PARAGRAPH)).add(E::field("initial_ip"));
-    let inside = entry.clone().less_than(len.clone());
+    // Inside the program means both ends: a negative entry point is as much
+    // outside it as one past the last byte.
+    let inside = E::lit(-1).less_than(entry.clone()).mul(entry.clone().less_than(len.clone()));
     let start = entry.mul(inside.clone()).add(len.clone().mul(E::lit(1).sub(inside)));
     T::structure(
         "LoadModule",
