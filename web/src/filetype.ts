@@ -63,11 +63,14 @@ export const templateLabel = (name: string): string => TEMPLATE_LABEL[name] ?? n
 
 /** A useful identity when the full template recognises a format the rule
  * database does not. A label that is already plural is what the file is:
- * "Login records file" reads as a mistake, "Login records" does not. */
+ * "Login records file" reads as a mistake, "Login records" does not. Only a
+ * label of several words, since a template with no label of its own falls
+ * back to its own name and half the model formats are called things like
+ * `3ds`, which is a file and not a plural of anything. */
 export const templateTypeName = (name: string): string => {
   if (name === "bardstale") return "The Bard's Tale I MS-DOS save game";
   const label = templateLabel(name);
-  return label.endsWith("s") ? label : `${label} file`;
+  return label.endsWith("s") && label.includes(" ") ? label : `${label} file`;
 };
 
 export const fullTemplateLine = (name: string): string =>
