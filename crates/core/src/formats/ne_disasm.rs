@@ -300,6 +300,25 @@ mod tests {
         assert_eq!(line(1).as_deref(), Some("callf USER.5"));
     }
 
+    /// The path a listing row carries, which is what the editor hands this
+    /// pass: the instruction, its section's contents, and the segment above
+    /// them. Reading the segment out of that path is what says which
+    /// segment's relocations to look in.
+    #[test]
+    fn the_segment_is_read_out_of_the_path_a_row_carries() {
+        let path = [1, 33, 0, 0, 4, 0, 0, 1];
+        assert_eq!(Program::segment_of(&path), Some(0));
+        let second = [1, 33, 0, 3, 4, 0, 0, 12];
+        assert_eq!(Program::segment_of(&second), Some(3));
+
+        // And the line that comes back for that path is the named one.
+        let d = Document::new(MemSource(sample()));
+        let mut ev = Evaluator::new(ne());
+        let p = Program::read(&mut ev, &d).unwrap();
+        let segment = Program::segment_of(&path).unwrap();
+        assert_eq!(p.instruction_line(&mut ev, &d, &path, segment).unwrap().as_deref(), Some("callf USER.5"));
+    }
+
     #[test]
     fn an_instruction_nothing_patches_keeps_the_row_it_had() {
         assert_eq!(line(2), None);

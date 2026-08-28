@@ -71,7 +71,7 @@ const COMMAND: &[(i128, &str)] = &[
     (0xd, "dylib id"),
     (0xe, "load dynamic linker"),
     (0xf, "dynamic linker id"),
-    (0x10, "preboud dylib"),
+    (0x10, "prebound dylib"),
     (0x11, "routines"),
     (0x12, "sub framework"),
     (0x13, "sub umbrella"),
