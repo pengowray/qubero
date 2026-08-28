@@ -997,6 +997,50 @@ end marker and says the table did not. Nor is a table written as several runs
 of object numbers: the entries of the first run are read, and the heading of
 the second is whatever the trailer after them turns out to hold.
 
+### A size written somewhere else
+A ZIP entry is measured by the `compressed_size` in its local header, and for
+thirty years that was the whole story. It is not any more. An entry too big for
+32 bits writes 0xFFFFFFFF there and its real size in an extra field tagged 1,
+and the advice a writer is now given, in OME-NGFF's RFC-9 among others, is to do
+that for every entry whatever its size, so that a store written a chunk at a
+time never has to decide. Read as a number, the placeholder measures the entry
+as four gigabytes and takes every record after it with it.
+
+The extra fields were a run of bytes here, so the size was not reachable even
+though it was sitting fifty bytes back. They are now what they are: tagged
+records, each an id, a length, and a body, read as a list. Which is worth
+having on its own, since an archive keeps its timestamps, its Unix ownership
+and its alignment padding there and none of it was named before.
+
+Reaching into that list is the one addition. `Expr::Tagged { array, key, tag,
+field }` is the value at `field` in the first element of `array` whose `key`
+holds `tag`, and zero when nothing does, so `Or` can name what to do without
+one. `Elem` reaches an element by where it is, which is no use here: the writer
+may put the record anywhere in the list, put its own records around it, and
+leave it out entirely. So the length of an entry's data is the header's size
+when the header wrote one, then the tagged record, then the scan for a data
+descriptor that a streamed entry already needed. A streamed ZIP64 entry asks
+all three, and correctly: its extra field is there and holds zeros, because the
+writer did not know the sizes when it wrote either of them.
+
+The same tag means something else in the central directory. There, only the
+fields whose 32-bit counterparts hold the placeholder are written, in a fixed
+order, so an entry that sits past four gigabytes in a small archive carries an
+offset and no sizes at all. The record is read by asking, field by field, what
+the header around it said, which an expression can do because a name inside a
+record reaches outward through the structures it sits in.
+
+One thing is decided rather than read. Nothing in a data descriptor says
+whether its two sizes are four bytes each or eight; the answer is whether the
+entry was a ZIP64 one, and the descriptor is a record of its own with no way
+back to the header it belongs to except the search `Expr::Sibling` already does
+for a WAVE `data` chunk asking what `fmt ` declared. It looks back for the
+nearest local header's `compressed_size` and takes a placeholder there as the
+answer. A writer that streams a ZIP64 entry while leaving those sizes at zero
+is read as the narrower one, and the eight bytes left over read as a record
+nobody defined, which the walk passes over as bytes to the next `PK`. Wrong
+shape, right place.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
