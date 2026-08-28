@@ -51,6 +51,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   self: "SELF SQLite executable",
   thumbsdb: "Windows Thumbs.db",
   unityassets: "Unity serialized assets",
+  utmp: "Login records (utmp/wtmp/btmp)",
   unitybundle: "Unity AssetBundle",
 };
 

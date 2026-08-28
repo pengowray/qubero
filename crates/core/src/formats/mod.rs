@@ -70,6 +70,7 @@ mod tiff;
 mod thumbsdb;
 mod tracker;
 mod unity;
+mod utmp;
 mod vpk;
 mod w4v;
 mod wad;
@@ -138,6 +139,7 @@ pub use tiff::{camera_raw, tiff};
 pub use thumbsdb::thumbsdb;
 pub use tracker::{it, mod_file, s3m, xm};
 pub use unity::{unity_assets, unity_bundle};
+pub use utmp::utmp;
 pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
@@ -168,7 +170,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv",
+        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -259,6 +261,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "cmx" => Some(cmx()),
         "psd" => Some(psd()),
         "eps" => Some(eps()),
+        "utmp" => Some(utmp()),
         "unityassets" => Some(unity_assets()),
         "unitybundle" => Some(unity_bundle()),
         "thumbsdb" => Some(thumbsdb()),
@@ -424,6 +427,11 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
             b"ILBM" | b"PBM " => Some("ilbm"),
             _ => None,
         }
+    } else if utmp::is_utmp(head, len) {
+        // Last of the careful tests, and last for a reason: a file with no
+        // header of its own is recognised by the shape of what is in it, so
+        // anything that says what it is gets to say so first.
+        Some("utmp")
     } else if head.starts_with(b"RIFF") && head.len() >= 12 && head[8..11] == *b"CDR" {
         Some("cdr")
     } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"CMX1") {
@@ -1493,6 +1501,16 @@ mod tests {
     fn linux_system_files_are_recognised() {
         assert_eq!(sniffed(b"\xd0\x0d\xfe\xed\0\0\x01\x00"), Some("dtb"));
         assert_eq!(sniffed(b"# GRUB Environment Block\n####"), Some("grubenv"));
+
+        // A login record file says nothing about itself: it is recognised by
+        // being a whole number of records, the first of which could be one.
+        let mut login = vec![0u8; 384];
+        login[0] = 7; // a user process
+        login[8..13].copy_from_slice(b"pts/0");
+        login[44..49].copy_from_slice(b"pengo");
+        login[340..344].copy_from_slice(&1_700_000_000i32.to_le_bytes());
+        assert_eq!(sniffed(&login), Some("utmp"));
+        assert_eq!(sniffed(&login[..383]), None);
     }
 
     #[test]

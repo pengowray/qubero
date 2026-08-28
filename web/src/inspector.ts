@@ -649,6 +649,7 @@ export class Inspector {
     if ((this.doc.template === "mp4" || this.doc.template === "braw") && (n.name === "creation_time" || n.name === "modification_time")) {
       return quickTimeDate(raw);
     }
+    if (this.doc.template === "utmp" && n.name === "tv_sec") return unixDate(raw, "UTC");
     if (this.doc.template === "mca" && path.length === 2) {
       const parent = this.doc.templateNode(path.slice(0, -1));
       if (parent.status === "ok" && parent.node.name === "timestamps") return unixDate(raw, "UTC");
