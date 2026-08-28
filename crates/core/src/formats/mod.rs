@@ -2,6 +2,7 @@
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
 mod aiff;
+mod ar;
 mod aseprite;
 mod assimp;
 mod appledouble;
@@ -85,6 +86,7 @@ pub mod wasm_disasm;
 mod wasm_opcodes;
 
 pub use aiff::aiff;
+pub use ar::{ar, deb};
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
@@ -176,7 +178,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
+        "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -250,6 +252,8 @@ pub fn builtin(name: &str) -> Option<Template> {
         "lnk" => Some(lnk()),
         "cbor" => Some(cbor()),
         "cpio" => Some(cpio()),
+        "ar" => Some(ar()),
+        "deb" => Some(deb()),
         "gitindex" => Some(git_index()),
         "gitpackidx" => Some(git_pack_index()),
         "qoi" => Some(qoi()),
@@ -294,6 +298,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"\x89PNG\r\n\x1a\n", "png"),
     (b"\xd0\x0d\xfe\xed", "dtb"),
     (grubenv::SIGNATURE, "grubenv"),
+    // A static library, and the outside of a Debian package: `sniff` has
+    // already asked whether this one is a package.
+    (ar::MAGIC, "ar"),
     // An initramfs, and every other cpio archive written this century.
     (b"070701", "cpio"),
     (b"070702", "cpio"),
@@ -429,6 +436,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("unityassets")
     } else if is_thumbs_db(head) {
         Some("thumbsdb")
+    } else if is_deb(head) {
+        Some("deb")
     } else if let Some(model) = assimp_format(head, len) {
         Some(model)
     } else if let Some((_, name)) = MAGIC.iter().find(|(magic, _)| head.starts_with(magic)) {
@@ -530,6 +539,13 @@ fn is_unity_assets(head: &[u8], len: u64) -> bool {
         && len - file_size < 16
         && data_offset >= header_size + metadata
         && data_offset <= file_size
+}
+
+/// A Debian package: an `ar` archive whose first member is the version stamp
+/// that says it is one. Every other archive of this shape is a library, and
+/// only the name of that first member tells the two apart.
+fn is_deb(head: &[u8]) -> bool {
+    head.starts_with(ar::MAGIC) && head.get(8..8 + ar::DEBIAN_BINARY.len()) == Some(ar::DEBIAN_BINARY.as_bytes())
 }
 
 fn is_thumbs_db(head: &[u8]) -> bool {

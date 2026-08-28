@@ -802,6 +802,12 @@ impl Ty {
     pub fn hex_digits(len: StrLen) -> Ty {
         Ty::TextInt { len, radix: 16 }
     }
+    /// A number written as octal digits, which is how an `ar` header writes a
+    /// file's mode: a Unix mode is three digits of three bits and is read in no
+    /// other base. See [`Ty::TextInt`].
+    pub fn octal(len: StrLen) -> Ty {
+        Ty::TextInt { len, radix: 8 }
+    }
     /// The text in this field, read as the JSON it holds.
     pub fn json() -> Ty {
         Ty::Json(json::Shape::Doc)
