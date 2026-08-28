@@ -436,6 +436,7 @@ mod tests {
         text.extend(insn(0x95, 0, 0, 0, 0)); // exit
         text.extend(insn(0x18, 3, 0, 0, 0)); // r3 = the same map, as a compiler writes it
         text.extend(insn(0x00, 0, 0, 0, 0)); // the second half of that load
+        text.extend(insn(0x85, 0, 1, 0, -1)); // call a function the compiler kept to itself
 
         let maps = vec![0u8; 32];
         let mut rel = Vec::new();
@@ -445,11 +446,15 @@ mod tests {
         rel.extend_from_slice(&72u64.to_le_bytes()); // the load at the end
         rel.extend_from_slice(&1u32.to_le_bytes());
         rel.extend_from_slice(&1u32.to_le_bytes());
+        rel.extend_from_slice(&88u64.to_le_bytes()); // the call after it
+        rel.extend_from_slice(&10u32.to_le_bytes()); // R_BPF_64_32
+        rel.extend_from_slice(&3u32.to_le_bytes()); // the section symbol below
 
         let strtab = b"\0counter_map\0xdp_prog\0".to_vec();
         let mut symtab = symbol(0, 0, 0, 0, 0);
         symtab.extend(symbol(1, 0x11, 3, 0, 32)); // global object, in the maps section
         symtab.extend(symbol(13, 0x12, 1, 0, text.len() as u64)); // global function, in the code
+        symtab.extend(symbol(0, 3, 1, 0, 0)); // the code section itself, which has no name of its own
         let shstrtab = b"\0xdp\0.relxdp\0.maps\0.symtab\0.strtab\0.shstrtab\0".to_vec();
 
         // Everything after the header, in order, each section aligned to eight.
@@ -509,7 +514,7 @@ mod tests {
         let names: Vec<&str> = p.sections.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["", "xdp", ".relxdp", ".maps", ".symtab", ".strtab", ".shstrtab"]);
         let symbols: Vec<&str> = p.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(symbols, ["", "counter_map", "xdp_prog"]);
+        assert_eq!(symbols, ["", "counter_map", "xdp_prog", ""]);
     }
 
     #[test]
@@ -524,6 +529,14 @@ mod tests {
     #[test]
     fn a_call_names_the_helper_it_calls() {
         assert!(listing().contains("call bpf_map_lookup_elem"), "{}", listing());
+    }
+
+    #[test]
+    fn a_call_a_relocation_stands_for_names_what_it_calls() {
+        // Written against the section rather than the function, which is what
+        // a compiler does for a function it kept to itself. The name comes
+        // from the function that section starts with.
+        assert!(listing().contains("call xdp_prog"), "{}", listing());
     }
 
     #[test]
