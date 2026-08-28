@@ -13,9 +13,17 @@ const ISAS: &[&str] = &["x86-64", "x86", "x86-16", "arm64", "arm", "thumb", "ris
 fn main() {
     let path = std::env::args().nth(1).expect("usage: scan_code <file>");
     let bytes = std::fs::read(&path).unwrap();
-    let Some(name) = formats::sniff(&bytes[..bytes.len().min(4096)], bytes.len() as u64) else {
-        println!("no template");
-        return;
+    // A second argument names the template, for a file that has no header to
+    // say what it is.
+    let name = match std::env::args().nth(2) {
+        Some(name) => Box::leak(name.into_boxed_str()) as &str,
+        None => match formats::sniff(&bytes[..bytes.len().min(4096)], bytes.len() as u64) {
+            Some(name) => name,
+            None => {
+                println!("no template");
+                return;
+            }
+        },
     };
     println!("template: {name}");
     let doc = Document::new(MemSource(bytes));

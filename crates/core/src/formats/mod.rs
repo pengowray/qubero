@@ -84,7 +84,7 @@ pub use bards_tale::bards_tale;
 pub use cbor::cbor;
 pub use coff::coff;
 pub use corel::{cdr, cmx};
-pub use dos::dos;
+pub use dos::{com, dos};
 pub use dv::dv;
 pub use eps::eps;
 pub use elf::{bpf, elf};
@@ -158,7 +158,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
-        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf",
+        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -196,6 +196,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "coff" => Some(coff()),
         "omf" => Some(omf()),
         "msdos" => Some(dos()),
+        "com" => Some(com()),
         "gguf" => Some(gguf()),
         "whisper" => Some(whisper()),
         "safetensors" => Some(safetensors()),

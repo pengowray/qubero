@@ -113,6 +113,17 @@ pub fn dos() -> Template {
     Template::new("msdos", T::structure("DOSExecutable", fields))
 }
 
+/// A `.COM` program: 16-bit code from the first byte, and nothing else. There
+/// is no header, so nothing marks one out: a template for it is one to pick by
+/// hand, and picking it is what says the file is a program at all.
+///
+/// DOS loaded these at offset 0x100 of a segment, with the program's own data
+/// wherever the program put it. As with an `.EXE`, what follows the code is
+/// read as code too, because nothing in the file says where it stops.
+pub fn com() -> Template {
+    Template::new("com", T::repeat(T::insn(Isa::X86_16), Until::End))
+}
+
 /// The program, split where the loader jumps into it.
 ///
 /// There is no table of sections in a DOS executable, so nothing marks which
@@ -250,6 +261,19 @@ mod tests {
         v[0x02..0x04].copy_from_slice(&0u16.to_le_bytes());
         v[0x04..0x06].copy_from_slice(&2u16.to_le_bytes());
         assert_eq!(bytes_of(v, &[LOAD_MODULE]), 1024 - 0x40);
+    }
+
+    /// A `.COM` file is code and nothing else, from its first byte.
+    #[test]
+    fn a_com_file_is_read_as_code_from_the_start() {
+        // A jump over fifteen bytes, then int 0x20. The decoder writes the
+        // displacement the instruction holds, which is what `$+0xf` is.
+        let v = vec![0xe9, 0x0f, 0x00, 0xcd, 0x20];
+        let d = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(com());
+        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Str("jmp $+0xf".into()));
+        assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 3 * 8);
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("int 0x20".into()));
     }
 
     #[test]

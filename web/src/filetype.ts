@@ -39,6 +39,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   xm: "FastTracker XM",
   eps: "Encapsulated PostScript",
   elf: "ELF",
+  com: "DOS .COM program",
+  msdos: "MS-DOS program",
   bpf: "eBPF object",
   thumbsdb: "Windows Thumbs.db",
   unityassets: "Unity serialized assets",
