@@ -11,7 +11,8 @@ use qubero_core::source::MemSource;
 
 fn main() {
     let root = std::env::args().nth(1).expect("usage: check_tree <dir> [template]");
-    let only = std::env::args().nth(2);
+    let only = std::env::args().nth(2).filter(|a| a != "-");
+    let depth: usize = std::env::args().nth(3).and_then(|d| d.parse().ok()).unwrap_or(5);
     let mut files = Vec::new();
     collect(Path::new(&root), &mut files);
     let (mut read, mut failed) = (0, 0);
@@ -25,7 +26,7 @@ fn main() {
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);
         let mut errors = Vec::new();
-        walk(&mut ev, &doc, &[], 0, &mut errors);
+        walk(&mut ev, &doc, &[], 0, depth, &mut errors);
         read += 1;
         if !errors.is_empty() {
             failed += 1;
@@ -38,8 +39,15 @@ fn main() {
     println!("{read} files read, {failed} with something that does not read");
 }
 
-fn walk(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: usize, out: &mut Vec<(Vec<usize>, EvalError)>) {
-    if depth > 5 || out.len() > 8 {
+fn walk(
+    ev: &mut Evaluator,
+    doc: &Document<MemSource>,
+    path: &[usize],
+    depth: usize,
+    max: usize,
+    out: &mut Vec<(Vec<usize>, EvalError)>,
+) {
+    if depth > max || out.len() > 8 {
         return;
     }
     let node = match ev.node(doc, path) {
@@ -54,7 +62,7 @@ fn walk(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: us
     for i in ends {
         let mut child = path.to_vec();
         child.push(i);
-        walk(ev, doc, &child, depth + 1, out);
+        walk(ev, doc, &child, depth + 1, max, out);
     }
 }
 

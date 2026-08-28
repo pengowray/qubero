@@ -337,15 +337,135 @@ fn resource() -> T {
             ("handle", T::u16(Little)),
             ("usage", T::u16(Little)),
             (
-                "bytes",
+                "contents",
                 T::at(
                     E::field("sector").shl(E::sibling(&["shift"])),
-                    T::bytes(E::field("length").shl(E::sibling(&["shift"]))),
+                    T::sized(E::field("length").shl(E::sibling(&["shift"])), contents()),
                 ),
             ),
         ],
     )
     .counted_as("resource")
+}
+
+/// What is in a resource, read as the type it sits under. A type this does not
+/// know stays bytes, and so does every type whose layout is a program of its
+/// own to read: a dialog and a menu are trees of controls, and a version block
+/// is a tree of keys and values.
+fn contents() -> T {
+    T::switch(
+        E::field("type"),
+        vec![
+            (
+                0x8001,
+                T::structure(
+                    "CursorImage",
+                    vec![("hotspot_x", T::u16(Little)), ("hotspot_y", T::u16(Little)), ("image", dib())],
+                ),
+            ),
+            (0x8002, dib()),
+            (0x8003, dib()),
+            (0x8006, string_table()),
+            (0x800c, group("GroupCursor")),
+            (0x800e, group("GroupIcon")),
+        ],
+        T::bytes(E::Remaining),
+    )
+}
+
+/// A device-independent bitmap: the header Windows reads its shape from, and
+/// the colours and pixels after it. An icon's height counts twice, once for
+/// the picture and once for the mask that says which of it is see-through.
+fn dib() -> T {
+    T::structure(
+        "Bitmap",
+        vec![
+            ("header_size", T::u32(Little)),
+            ("width", T::i32(Little)),
+            ("height", T::i32(Little)),
+            ("planes", T::u16(Little)),
+            ("bits_per_pixel", T::u16(Little)),
+            ("compression", T::u32(Little)),
+            ("image_size", T::u32(Little)),
+            ("x_pixels_per_metre", T::i32(Little)),
+            ("y_pixels_per_metre", T::i32(Little)),
+            ("colours_used", T::u32(Little)),
+            ("colours_important", T::u32(Little)),
+            ("palette_and_pixels", T::bytes(E::Remaining)),
+        ],
+    )
+}
+
+/// The strings of one block: sixteen consecutive string numbers, each a length
+/// byte and that many characters. An entry of no length is a number the
+/// program never used.
+fn string_table() -> T {
+    T::repeat(
+        T::structure_named(
+            "String",
+            "text",
+            "",
+            vec![
+                ("length", T::u8()),
+                // A string that says it is longer than what is left of the
+                // block is read to the end of the block. The last entry of a
+                // block a linker padded with something other than zeros says
+                // exactly that, and reading it as written would run into the
+                // resource after it.
+                ("text", T::text(StrLen::Fixed(fits(E::field("length"))), Encoding::Latin1)),
+            ],
+        )
+        .counted_as("string"),
+        Until::End,
+    )
+}
+
+/// `want` bytes, or what is left where there are fewer.
+fn fits(want: E) -> E {
+    let room = want.clone().less_than(E::Remaining.add(E::lit(1)));
+    want.mul(room.clone()).add(E::Remaining.mul(E::lit(1).sub(room)))
+}
+
+/// The directory that says which pictures make up one icon or one cursor: the
+/// header an `.ico` file opens with, and an entry per size. Each entry names
+/// the resource that holds the picture, where a file would hold an offset.
+fn group(name: &str) -> T {
+    let entry = if name == "GroupIcon" {
+        T::structure(
+            "GroupIconEntry",
+            vec![
+                ("width", T::u8()),
+                ("height", T::u8()),
+                ("colours", T::u8()),
+                ("reserved", T::u8()),
+                ("planes", T::u16(Little)),
+                ("bits_per_pixel", T::u16(Little)),
+                ("bytes", T::u32(Little)),
+                ("resource_id", T::u16(Little)),
+            ],
+        )
+    } else {
+        T::structure(
+            "GroupCursorEntry",
+            vec![
+                ("width", T::u16(Little)),
+                ("height", T::u16(Little)),
+                ("planes", T::u16(Little)),
+                ("bits_per_pixel", T::u16(Little)),
+                ("bytes", T::u32(Little)),
+                ("resource_id", T::u16(Little)),
+            ],
+        )
+    };
+    T::structure(
+        name,
+        vec![
+            ("reserved", T::u16(Little)),
+            ("type", T::enumeration("PictureType", T::u16(Little), &[(1, "icon"), (2, "cursor")])),
+            ("count", T::u16(Little)),
+            ("entries", T::array(entry.counted_as("picture"), E::field("count"))),
+        ],
+    )
 }
 
 /// A table of names, each a length byte, that many characters, and the ordinal
