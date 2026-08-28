@@ -28,10 +28,22 @@ fn main() {
     println!("template: {name}");
     let doc = Document::new(MemSource(bytes));
     let mut ev = Evaluator::new(formats::builtin(name).unwrap());
-    walk(&mut ev, &doc, &[], 0);
+    // The symbol tables, when the file is one that has them, so a branch can
+    // say where it goes by name.
+    let program = match name {
+        "elf" | "bpf" => formats::ElfProgram::read(&mut ev, &doc).ok(),
+        _ => None,
+    };
+    walk(&mut ev, &doc, &program, &[], 0);
 }
 
-fn walk(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: usize) {
+fn walk(
+    ev: &mut Evaluator,
+    doc: &Document<MemSource>,
+    program: &Option<formats::ElfProgram>,
+    path: &[usize],
+    depth: usize,
+) {
     if depth > 6 {
         return;
     }
@@ -42,16 +54,39 @@ fn walk(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: us
         let count = n.child_count as usize;
         let last = ev.node(doc, &child(path, count.saturating_sub(1))).map(|l| l.offset_bits / 8).unwrap_or(0);
         println!("{path:?} {} instructions, {} to {last:x}", count, n.offset_bits / 8);
-        for k in (0..count).step_by(if count > 8 { count / 6 } else { 1 }).take(7) {
-            if let Ok(insn) = ev.node(doc, &child(path, k)) {
-                println!("  {k:7} {:8x}  {:?}", insn.offset_bits / 8, insn.value);
+        // The first few branches, which are the rows a naming pass changes.
+        let mut shown = 0;
+        for k in 0..count.min(4000) {
+            if shown >= 8 {
+                break;
+            }
+            let at = child(path, k);
+            let Ok(insn) = ev.node(doc, &at) else { continue };
+            if !format!("{:?}", insn.value).contains('$') {
+                continue;
+            }
+            let named = program.as_ref().and_then(|p| p.machine_line(ev, doc, &at).ok().flatten());
+            match named {
+                Some(line) => println!("  {k:7} {:8x}  {line}", insn.offset_bits / 8),
+                None => println!("  {k:7} {:8x}  {:?} (no name)", insn.offset_bits / 8, insn.value),
+            }
+            shown += 1;
+        }
+        for k in (0..count).step_by(if count > 8 { count / 6 } else { 1 }).take(0) {
+            let at = child(path, k);
+            if let Ok(insn) = ev.node(doc, &at) {
+                let named = program.as_ref().and_then(|p| p.machine_line(ev, doc, &at).ok().flatten());
+                match named {
+                    Some(line) => println!("  {k:7} {:8x}  {line}", insn.offset_bits / 8),
+                    None => println!("  {k:7} {:8x}  {:?}", insn.offset_bits / 8, insn.value),
+                }
             }
         }
         println!("  walked in {:?}", start.elapsed());
         return;
     }
     for i in 0..n.child_count.min(64) as usize {
-        walk(ev, doc, &child(path, i), depth + 1);
+        walk(ev, doc, program, &child(path, i), depth + 1);
     }
 }
 

@@ -16,7 +16,7 @@ fn main() {
     if std::env::args().any(|a| a == "--tree") {
         walk(&mut ev, &doc, &[], 0);
     }
-    let p = formats::BpfProgram::read(&mut ev, &doc).unwrap();
+    let p = formats::ElfProgram::read(&mut ev, &doc).unwrap();
     for s in &p.sections {
         println!("section {:16} type {:3} {:6} bytes at {}", s.name, s.kind, s.size, s.offset);
     }

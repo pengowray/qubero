@@ -24,7 +24,7 @@ pub struct Editor {
     /// The same for an eBPF object: what its sections, symbols and
     /// relocations say, so an instruction can name the map it loads and the
     /// helper it calls.
-    bpf: Option<formats::BpfProgram>,
+    bpf: Option<formats::ElfProgram>,
     /// The template in use, which decides whether a listing row goes through
     /// the disassembler.
     template: String,
@@ -658,6 +658,12 @@ fn span_part_dto(part: SpanPart) -> SpanPartDto {
     }
 }
 
+/// Whether a row is one machine instruction, which is what the type column
+/// says when a template read it with a decoder.
+fn is_machine(type_name: &str) -> bool {
+    qubero_core::code::Isa::named(type_name).is_some()
+}
+
 fn span_dto(s: Span) -> SpanDto {
     let (kind, value, _, _) = shown(&s.value);
     SpanDto {
@@ -1187,6 +1193,7 @@ impl Editor {
         match self.template.as_str() {
             "wasm" => self.name_wasm(found),
             "bpf" => self.name_bpf(found),
+            "elf" => self.name_machine(found),
             _ => found.into_iter().map(span_dto).collect(),
         }
     }
@@ -1223,13 +1230,42 @@ impl Editor {
         }
         let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
         if self.bpf.is_none() {
-            self.bpf = formats::BpfProgram::read(e, &self.doc).ok();
+            self.bpf = formats::ElfProgram::read(e, &self.doc).ok();
         }
         let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };
         found
             .into_iter()
             .map(|s| {
                 let named = if s.type_name == "BpfInsn" { p.instruction_line(e, &self.doc, &s.path).ok() } else { None };
+                let mut dto = span_dto(s);
+                if let Some(line) = named {
+                    dto.line = Some(line);
+                }
+                dto
+            })
+            .collect()
+    }
+
+    /// Rewrite machine instructions through the symbol table, so a call says
+    /// the name of what it calls. A file with no symbols keeps every row it
+    /// had, which is most of what is on a disk: a program is usually stripped
+    /// before it ships.
+    fn name_machine(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        if !found.iter().any(|s| is_machine(&s.type_name)) {
+            return found.into_iter().map(span_dto).collect();
+        }
+        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
+        if self.bpf.is_none() {
+            self.bpf = formats::ElfProgram::read(e, &self.doc).ok();
+        }
+        let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };
+        found
+            .into_iter()
+            .map(|s| {
+                let named = match is_machine(&s.type_name) {
+                    true => p.machine_line(e, &self.doc, &s.path).ok().flatten(),
+                    false => None,
+                };
                 let mut dto = span_dto(s);
                 if let Some(line) = named {
                     dto.line = Some(line);

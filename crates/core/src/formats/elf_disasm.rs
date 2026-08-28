@@ -1,4 +1,4 @@
-//! Named disassembly for eBPF objects: instructions with the names the file
+//! Named disassembly for ELF files: instructions with the names the file
 //! knows, rather than the numbers it stores.
 //!
 //! This is not a template, for the same reason the wasm pass is not one. A
@@ -26,6 +26,10 @@ use crate::eval::{EvalError, Evaluator, R, Value};
 use crate::source::Source;
 
 const SYMTAB: i128 = 2;
+/// The symbols a program keeps for the loader rather than for a debugger. A
+/// stripped file has these and nothing else, and they are what names the
+/// functions a library offers.
+const DYNSYM: i128 = 11;
 const STRTAB: i128 = 3;
 const RELA: i128 = 4;
 const REL: i128 = 9;
@@ -35,6 +39,10 @@ const REL: i128 = 9;
 pub struct Section {
     pub name: String,
     pub kind: i128,
+    /// Where the section is when the program is running, which is what a
+    /// symbol's address and a branch's target are counted in. Zero in an
+    /// object file, where nothing has been given an address yet.
+    pub addr: u64,
     /// Where the section starts in the file, so a relocation's offset into it
     /// can be turned into a place in the tree.
     pub offset: u64,
@@ -46,6 +54,9 @@ pub struct Section {
 pub struct Symbol {
     pub name: String,
     pub kind: i128,
+    /// How many bytes the symbol covers, which is what says whether an address
+    /// is inside it or merely after it.
+    pub size: u64,
     /// The section it belongs to, as an index into [`Program::sections`].
     pub section: usize,
     /// Its offset within that section.
@@ -56,6 +67,10 @@ pub struct Symbol {
 /// without walking the file again.
 #[derive(Debug, Clone, Default)]
 pub struct Program {
+    /// Whether this is an object file rather than a program. It decides what a
+    /// symbol's value means: an offset into its section here, an address
+    /// anywhere it has been given one.
+    relocatable: bool,
     /// Path to the header, which every other path here hangs off.
     header: Vec<usize>,
     pub sections: Vec<Section>,
@@ -72,6 +87,9 @@ impl Program {
     pub fn read<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Program> {
         let mut p = Program::default();
         p.header = named(ev, doc, &[], "header")?;
+        // An object file's symbols are offsets into their sections; a
+        // program's are addresses.
+        p.relocatable = int_field(ev, doc, &p.header, "type")? == 1;
         let headers = {
             let at = named(ev, doc, &p.header, "section_headers")?;
             child(&at, 0)
@@ -83,6 +101,7 @@ impl Program {
             p.sections.push(Section {
                 name: String::new(),
                 kind: int_field(ev, doc, &h, "type")?,
+                addr: int_field(ev, doc, &h, "address")? as u64,
                 offset: int_field(ev, doc, &h, "offset")? as u64,
                 size: int_field(ev, doc, &h, "size")? as u64,
             });
@@ -98,7 +117,7 @@ impl Program {
 
         // Symbols, and the string table each symbol table names.
         for i in 0..count {
-            if p.sections[i].kind != SYMTAB {
+            if p.sections[i].kind != SYMTAB && p.sections[i].kind != DYNSYM {
                 continue;
             }
             let strings = int_field(ev, doc, &child(&headers, i), "link")? as usize;
@@ -112,6 +131,7 @@ impl Program {
                 let sym = Symbol {
                     name: name_at(&strings, at),
                     kind: int_field(ev, doc, &info, "type")?,
+                    size: int_field(ev, doc, &s, "size")? as u64,
                     section: int_field(ev, doc, &s, "section_index")? as usize,
                     value: int_field(ev, doc, &s, "value")? as u64,
                 };
@@ -300,6 +320,73 @@ impl Program {
             text = format!("{text} (instruction {})", slot as i64 + off as i64 + 1);
         }
         text
+    }
+
+    /// The address a symbol stands for. An object file writes an offset into
+    /// a section, and a program writes the address itself.
+    fn symbol_address(&self, symbol: &Symbol) -> u64 {
+        match self.relocatable {
+            true => self.sections.get(symbol.section).map_or(0, |s| s.addr) + symbol.value,
+            false => symbol.value,
+        }
+    }
+
+    /// What is at this address, by name: a function or a piece of data the
+    /// symbol table names, and how far into it the address is.
+    ///
+    /// A symbol with no size of its own covers only where it starts. Files
+    /// written by hand and files written by an assembler both do that, and
+    /// treating such a symbol as covering everything after it would name the
+    /// whole rest of the section after the first label in it.
+    pub fn name_at_address(&self, addr: u64) -> Option<String> {
+        let mut best: Option<(&Symbol, u64)> = None;
+        for symbol in self.symbols.iter().filter(|s| !s.name.is_empty() && (s.kind == 1 || s.kind == 2)) {
+            let start = self.symbol_address(symbol);
+            if addr < start {
+                continue;
+            }
+            let into = addr - start;
+            if into > 0 && into >= symbol.size {
+                continue;
+            }
+            if best.is_none_or(|(_, was)| into < was) {
+                best = Some((symbol, into));
+            }
+        }
+        let (symbol, into) = best?;
+        Some(match into {
+            0 => symbol.name.clone(),
+            n => format!("{}+0x{n:x}", symbol.name),
+        })
+    }
+
+    /// One machine instruction with the name of whatever it branches to
+    /// written in place of the distance the file holds. `None` when the
+    /// instruction goes nowhere, or goes somewhere nothing has a name for: the
+    /// row the template produced is already right, and a name is the only
+    /// thing worth replacing it for.
+    pub fn machine_line<S: Source>(&self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<Option<String>> {
+        let section = match path.len() {
+            n if n >= 2 => path[n - 2],
+            _ => return Ok(None),
+        };
+        let node = ev.node(doc, path)?;
+        let Some(isa) = crate::code::Isa::named(&node.type_name) else { return Ok(None) };
+        let Value::Str(text) = node.value else { return Ok(None) };
+        let len = (node.size_bits / 8) as usize;
+        let Some(rel) = crate::code::relative_target(isa, &text, len) else { return Ok(None) };
+        // Where this instruction is when the program is running, which is what
+        // a branch is counted in and what a symbol is written in.
+        let Some(s) = self.sections.get(section) else { return Ok(None) };
+        let addr = s.addr + (node.offset_bits / 8).saturating_sub(s.offset);
+        let target = addr.checked_add_signed(rel).unwrap_or(addr);
+        let Some(name) = self.name_at_address(target) else { return Ok(None) };
+        // The distance is what the name replaces: `call $+0x13a` is what the
+        // file says, and `call memcpy` is what it means.
+        let at = text.find('$').expect("a target came from one");
+        let end = text[at..].find(|c: char| c != '$' && c != '+' && c != '-' && c != 'x' && !c.is_ascii_hexdigit());
+        let rest = end.map(|e| &text[at + e..]).unwrap_or("");
+        Ok(Some(format!("{}{name}{rest}", &text[..at])))
     }
 
     /// Every instruction of every executable section, as text. What a person
@@ -504,6 +591,81 @@ mod tests {
         let mut ev = Evaluator::new(bpf());
         let p = Program::read(&mut ev, &d).unwrap();
         p.listing(&mut ev, &d).unwrap()
+    }
+
+    /// An object for a real machine, with a call to a function the symbol
+    /// table names and a jump into the middle of that function.
+    fn x86_object() -> Vec<u8> {
+        let mut text = Vec::new();
+        text.extend([0xe8, 0x04, 0x00, 0x00, 0x00]); // call the four bytes past it, which is `work`
+        text.extend([0xeb, 0x07]); // jmp +7, into the middle of it
+        text.extend([0x90, 0x90]); // padding between the two
+        text.extend([0x55, 0x48, 0x89, 0xe5, 0x5d, 0xc3]); // work: push rbp, mov, pop, ret
+
+        let strtab = b"\0work\0".to_vec();
+        let mut symtab = symbol(0, 0, 0, 0, 0);
+        symtab.extend(symbol(1, 0x12, 1, 9, 6)); // a function, nine bytes in, six long
+        let shstrtab = b"\0.text\0.symtab\0.strtab\0".to_vec();
+
+        let mut body = Vec::new();
+        let mut offsets = Vec::new();
+        for part in [&text, &symtab, &strtab, &shstrtab] {
+            while (64 + body.len()) % 8 != 0 {
+                body.push(0);
+            }
+            offsets.push(64 + body.len() as u64);
+            body.extend_from_slice(part);
+        }
+        while (64 + body.len()) % 8 != 0 {
+            body.push(0);
+        }
+        let shoff = 64 + body.len() as u64;
+
+        let mut v = b"\x7fELF".to_vec();
+        v.extend_from_slice(&[2, 1, 1, 0, 0]);
+        v.extend_from_slice(&[0; 7]);
+        v.extend_from_slice(&1u16.to_le_bytes()); // relocatable
+        v.extend_from_slice(&62u16.to_le_bytes()); // x86-64
+        v.extend_from_slice(&1u32.to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes());
+        v.extend_from_slice(&shoff.to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&64u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&64u16.to_le_bytes());
+        v.extend_from_slice(&5u16.to_le_bytes());
+        v.extend_from_slice(&4u16.to_le_bytes()); // names are in section 4
+        v.extend_from_slice(&body);
+        v.extend(shdr(0, 0, 0, 0, 0, 0, 0, 0));
+        v.extend(shdr(1, 1, 6, offsets[0], text.len() as u64, 0, 0, 0)); // .text
+        v.extend(shdr(7, 2, 0, offsets[1], symtab.len() as u64, 3, 1, 24)); // .symtab
+        v.extend(shdr(15, 3, 0, offsets[2], strtab.len() as u64, 0, 0, 0)); // .strtab
+        v.extend(shdr(23, 3, 0, offsets[3], shstrtab.len() as u64, 0, 0, 0)); // .shstrtab
+        v
+    }
+
+    fn named_line(index: usize) -> Option<String> {
+        let d = Document::new(MemSource(x86_object()));
+        let mut ev = Evaluator::new(crate::formats::elf());
+        let p = Program::read(&mut ev, &d).unwrap();
+        p.machine_line(&mut ev, &d, &[7, 15, 1, index]).unwrap()
+    }
+
+    #[test]
+    fn a_call_says_the_name_of_what_it_calls() {
+        assert_eq!(named_line(0).as_deref(), Some("call work"));
+    }
+
+    #[test]
+    fn a_jump_into_a_function_says_how_far_into_it() {
+        assert_eq!(named_line(1).as_deref(), Some("jmp work+0x5"));
+    }
+
+    #[test]
+    fn an_instruction_that_goes_nowhere_keeps_the_row_it_had() {
+        assert_eq!(named_line(2), None);
     }
 
     #[test]

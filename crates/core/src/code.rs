@@ -53,6 +53,23 @@ impl Isa {
         }
     }
 
+    /// The machine a type column named, for a pass that has the name and
+    /// wants the decoder.
+    pub fn named(name: &str) -> Option<Isa> {
+        [
+            Isa::X86_64,
+            Isa::X86_32,
+            Isa::X86_16,
+            Isa::Aarch64,
+            Isa::Arm,
+            Isa::Thumb,
+            Isa::Riscv32,
+            Isa::Riscv64,
+        ]
+        .into_iter()
+        .find(|isa| isa.name() == name)
+    }
+
     /// The smallest an instruction can be, which is how far to step over
     /// something that is not one.
     fn step(self) -> usize {
@@ -79,6 +96,10 @@ impl Isa {
 pub struct Insn {
     pub len: usize,
     pub text: String,
+    /// Where a branch goes, as a distance from the first byte of this
+    /// instruction. `None` for everything that is not a branch, and for the
+    /// machines whose decoder here does not say.
+    pub target: Option<i64>,
 }
 
 /// Decode the instruction at the front of `bytes`. Never fails: bytes that are
@@ -86,7 +107,7 @@ pub struct Insn {
 /// counts in.
 pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
     if bytes.is_empty() {
-        return Insn { len: 0, text: String::new() };
+        return Insn { len: 0, text: String::new(), target: None };
     }
     let decoded = match isa {
         Isa::X86_64 => x86_64(bytes),
@@ -98,44 +119,78 @@ pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
         Isa::Riscv32 => riscv(bytes, false),
         Isa::Riscv64 => riscv(bytes, true),
     };
-    decoded.unwrap_or_else(|| Insn { len: isa.step().min(bytes.len()), text: "(bad)".into() })
+    let mut insn =
+        decoded.unwrap_or_else(|| Insn { len: isa.step().min(bytes.len()), text: "(bad)".into(), target: None });
+    insn.target = relative_target(isa, &insn.text, insn.len);
+    insn
+}
+
+/// Where a branch goes, read out of the text the decoder wrote.
+///
+/// Both yaxpeax decoders write a branch as a distance with a `$` for where it
+/// is counted from, and the two of them count from different places: x86 from
+/// the end of the instruction, because that is what the instruction holds, and
+/// ARM from the start, because that is what its instruction holds. This
+/// answers in the one unit a reader of a file can use, which is a distance
+/// from the first byte of the instruction.
+///
+/// RISC-V is not here. Its decoder writes the distance as an operand like any
+/// other number, with nothing to say that this one is an address, and guessing
+/// which operand of which instruction is a target is how a disassembler starts
+/// making things up.
+pub fn relative_target(isa: Isa, text: &str, len: usize) -> Option<i64> {
+    let at = text.find('$')?;
+    let rest = &text[at + 1..];
+    let (sign, digits) = match rest.as_bytes().first()? {
+        b'+' => (1i64, &rest[1..]),
+        b'-' => (-1i64, &rest[1..]),
+        _ => return None,
+    };
+    let digits = digits.strip_prefix("0x")?;
+    let end = digits.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(digits.len());
+    let value = i64::from_str_radix(&digits[..end], 16).ok()?;
+    let from_start = match isa {
+        Isa::X86_64 | Isa::X86_32 | Isa::X86_16 => len as i64,
+        _ => 0,
+    };
+    Some(from_start + sign * value)
 }
 
 fn x86_64(bytes: &[u8]) -> Option<Insn> {
     let mut reader = U8Reader::new(bytes);
     let insn = yaxpeax_x86::long_mode::InstDecoder::default().decode(&mut reader).ok()?;
-    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string() })
+    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string(), target: None })
 }
 
 fn x86_32(bytes: &[u8]) -> Option<Insn> {
     let mut reader = U8Reader::new(bytes);
     let insn = yaxpeax_x86::protected_mode::InstDecoder::default().decode(&mut reader).ok()?;
-    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string() })
+    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string(), target: None })
 }
 
 fn x86_16(bytes: &[u8]) -> Option<Insn> {
     let mut reader = U8Reader::new(bytes);
     let insn = yaxpeax_x86::real_mode::InstDecoder::default().decode(&mut reader).ok()?;
-    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string() })
+    Some(Insn { len: insn.len().to_const() as usize, text: insn.to_string(), target: None })
 }
 
 fn aarch64(bytes: &[u8]) -> Option<Insn> {
     let mut reader = U8Reader::new(bytes);
     let insn = yaxpeax_arm::armv8::a64::InstDecoder::default().decode(&mut reader).ok()?;
-    Some(Insn { len: 4, text: insn.to_string() })
+    Some(Insn { len: 4, text: insn.to_string(), target: None })
 }
 
 fn arm(bytes: &[u8]) -> Option<Insn> {
     let mut reader = U8Reader::new(bytes);
     let insn = yaxpeax_arm::armv7::InstDecoder::armv7().decode(&mut reader).ok()?;
-    Some(Insn { len: 4, text: insn.to_string() })
+    Some(Insn { len: 4, text: insn.to_string(), target: None })
 }
 
 fn thumb(bytes: &[u8]) -> Option<Insn> {
     let mut reader = U8Reader::new(bytes);
     let insn = yaxpeax_arm::armv7::InstDecoder::default_thumb().decode(&mut reader).ok()?;
     let len = if insn.wide { 4 } else { 2 };
-    Some(Insn { len, text: insn.to_string() })
+    Some(Insn { len, text: insn.to_string(), target: None })
 }
 
 /// RISC-V, where the low two bits of the first byte say whether the
@@ -145,14 +200,14 @@ fn riscv(bytes: &[u8], sixty_four: bool) -> Option<Insn> {
     if bytes[0] & 0b11 != 0b11 {
         let word = u16::from_le_bytes([bytes[0], *bytes.get(1)?]);
         let insn = word.decode(isa).ok()?;
-        return Some(Insn { len: 2, text: text_of(&insn) });
+        return Some(Insn { len: 2, text: text_of(&insn), target: None });
     }
     if bytes.len() < 4 {
         return None;
     }
     let word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
     let insn = word.decode(isa).ok()?;
-    Some(Insn { len: 4, text: text_of(&insn) })
+    Some(Insn { len: 4, text: text_of(&insn), target: None })
 }
 
 /// A RISC-V instruction as text. The mnemonic is lowercased because the
@@ -176,7 +231,7 @@ mod tests {
         // mov eax, 1
         assert_eq!(decode(Isa::X86_64, &[0xb8, 0x01, 0x00, 0x00, 0x00]).len, 5);
         // ret
-        assert_eq!(decode(Isa::X86_64, &[0xc3]), Insn { len: 1, text: "ret".into() });
+        assert_eq!(decode(Isa::X86_64, &[0xc3]), Insn { len: 1, text: "ret".into(), target: None });
         // aarch64: ret
         let ret = decode(Isa::Aarch64, &[0xc0, 0x03, 0x5f, 0xd6]);
         assert_eq!(ret.len, 4);
@@ -184,13 +239,29 @@ mod tests {
         // riscv: addi a0, zero, 1 (32-bit) and a compressed nop
         assert_eq!(decode(Isa::Riscv64, &[0x13, 0x05, 0x10, 0x00]).len, 4);
         // The compressed form, whose mnemonic the decoder writes as `C.nop`.
-        assert_eq!(decode(Isa::Riscv64, &[0x01, 0x00]), Insn { len: 2, text: "c.nop".into() });
+        assert_eq!(decode(Isa::Riscv64, &[0x01, 0x00]), Insn { len: 2, text: "c.nop".into(), target: None });
+    }
+
+    /// Both decoders write a branch as a distance, and they count it from
+    /// different places. What comes back is counted from one place: the first
+    /// byte of the instruction.
+    #[test]
+    fn a_branch_says_how_far_it_goes_from_where_it_is() {
+        // call the next instruction, which is five bytes on.
+        assert_eq!(decode(Isa::X86_64, &[0xe8, 0, 0, 0, 0]).target, Some(5));
+        // A jump to itself, which is how a program hangs.
+        assert_eq!(decode(Isa::X86_64, &[0xeb, 0xfe]).target, Some(0));
+        // bl to its own address, and a branch eight bytes on.
+        assert_eq!(decode(Isa::Aarch64, &[0x00, 0x00, 0x00, 0x94]).target, Some(0));
+        assert_eq!(decode(Isa::Aarch64, &[0x02, 0x00, 0x00, 0x14]).target, Some(8));
+        // Anything that is not a branch goes nowhere.
+        assert_eq!(decode(Isa::X86_64, &[0xc3]).target, None);
     }
 
     #[test]
     fn bytes_that_are_not_an_instruction_step_by_the_smallest_one() {
         let bad = decode(Isa::X86_64, &[0x06]);
-        assert_eq!(bad, Insn { len: 1, text: "(bad)".into() });
+        assert_eq!(bad, Insn { len: 1, text: "(bad)".into(), target: None });
         // Four bytes of nothing on a machine whose instructions are four bytes.
         assert_eq!(decode(Isa::Aarch64, &[0xff, 0xff, 0xff, 0xff]).len, 4);
     }

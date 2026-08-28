@@ -25,7 +25,7 @@
 //! What the template cannot do is name anything. A section's name is an offset
 //! into another section, a symbol's name an offset into a third, and the IR's
 //! expressions reach siblings and ancestors, not across the file by index.
-//! Names are a pass over the parsed tree: see [`super::bpf_disasm`].
+//! Names are a pass over the parsed tree: see [`super::elf_disasm`].
 
 use super::bpf_opcodes::{OPCODES, REGS};
 use crate::code::Isa;
