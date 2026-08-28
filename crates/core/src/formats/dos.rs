@@ -140,8 +140,7 @@ fn load_module(claimed: E) -> T {
     // a library built to be linked into something else counts pages it never
     // wrote. The program is then what there is of it, since reading past the
     // end of the file would leave nothing readable at all.
-    let fits = claimed.clone().less_than(E::Remaining);
-    let len = claimed.clone().mul(fits.clone()).add(E::Remaining.mul(E::lit(1).sub(fits)));
+    let len = claimed.at_most(E::Remaining);
     // Where the loader jumps, counted from the start of the program. Measured
     // inside the window below, so the rest of the file is what is left of the
     // program rather than what is left of the file.

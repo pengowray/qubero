@@ -40,6 +40,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   rw2: "Panasonic RW2",
   srw: "Samsung SRW",
   s3m: "Scream Tracker S3M",
+  spp: "CCSDS space packets",
   xm: "FastTracker XM",
   zarrzip: "Zarr ZipStore",
   eps: "Encapsulated PostScript",
@@ -53,16 +54,21 @@ const TEMPLATE_LABEL: Record<string, string> = {
   self: "SELF SQLite executable",
   thumbsdb: "Windows Thumbs.db",
   unityassets: "Unity serialized assets",
-  utmp: "Login records (utmp/wtmp/btmp)",
+  utmp: "Login records",
   unitybundle: "Unity AssetBundle",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */
 export const templateLabel = (name: string): string => TEMPLATE_LABEL[name] ?? name;
 
-/** A useful identity when the full template recognises a format the rule database does not. */
-export const templateTypeName = (name: string): string =>
-  name === "bardstale" ? "The Bard's Tale I MS-DOS save game" : `${templateLabel(name)} file`;
+/** A useful identity when the full template recognises a format the rule
+ * database does not. A label that is already plural is what the file is:
+ * "Login records file" reads as a mistake, "Login records" does not. */
+export const templateTypeName = (name: string): string => {
+  if (name === "bardstale") return "The Bard's Tale I MS-DOS save game";
+  const label = templateLabel(name);
+  return label.endsWith("s") ? label : `${label} file`;
+};
 
 export const fullTemplateLine = (name: string): string =>
   `The Fields table uses Qubero's full ${templateLabel(name)} template.`;

@@ -172,6 +172,21 @@ pub enum Expr {
     /// however many bytes the header's alignment count says, so the offset in
     /// the table is only an offset once it has been shifted.
     Shl(Box<Expr>, Box<Expr>),
+    /// The smaller of the two, and the larger of the two.
+    ///
+    /// What a length that must not run past the end of the file needs.
+    /// `Min(claimed, Remaining)` is the file cut off mid-transmission: the
+    /// last space packet of a capture says how long it is and the recording
+    /// stopped eight bytes short, and an MS-DOS header counts pages a library
+    /// never wrote. Reading what is there is the answer in both cases, and
+    /// refusing to place it would hide the very thing that went wrong.
+    ///
+    /// Written by hand this is a comparison multiplied by each side and added
+    /// back together, which three templates did before this existed. `Max`
+    /// is the other end of the same clamp: a program's entry point is inside
+    /// the program or the program is not what it said it was.
+    Min(Box<Expr>, Box<Expr>),
+    Max(Box<Expr>, Box<Expr>),
     /// How many bytes of padding follow a run of `n` bytes, to bring what
     /// comes after it back onto a boundary of `align`.
     ///
@@ -316,6 +331,15 @@ impl Expr {
     }
     pub fn less_than(self, rhs: Expr) -> Expr {
         Expr::Less(Box::new(self), Box::new(rhs))
+    }
+    /// This, or `rhs` when `rhs` is the smaller: what a length that must not
+    /// run past the end of its container is written as.
+    pub fn at_most(self, rhs: Expr) -> Expr {
+        Expr::Min(Box::new(self), Box::new(rhs))
+    }
+    /// This, or `rhs` when `rhs` is the larger.
+    pub fn at_least(self, rhs: Expr) -> Expr {
+        Expr::Max(Box::new(self), Box::new(rhs))
     }
     /// The padding after a run of `self` bytes, to the next multiple of
     /// `align`. Nothing at all when the run already ended on one.

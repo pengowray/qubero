@@ -201,6 +201,8 @@ impl Evaluator {
             Expr::Sub(a, b) => self.eval_expr_at(doc, at, a, here)? - self.eval_expr_at(doc, at, b, here)?,
             Expr::Mul(a, b) => self.eval_expr_at(doc, at, a, here)? * self.eval_expr_at(doc, at, b, here)?,
             Expr::Bit(a, n) => (self.eval_expr_at(doc, at, a, here)? >> n) & 1,
+            Expr::Min(a, b) => self.eval_expr_at(doc, at, a, here)?.min(self.eval_expr_at(doc, at, b, here)?),
+            Expr::Max(a, b) => self.eval_expr_at(doc, at, a, here)?.max(self.eval_expr_at(doc, at, b, here)?),
             // What is left of a boundary, which is nothing at all when the
             // run before it already ended on one.
             Expr::PadTo { n, align } => {

@@ -64,6 +64,7 @@ mod qoi;
 mod png;
 mod safetensors;
 mod le;
+mod spp;
 mod sqlite;
 mod swf;
 mod tap;
@@ -135,6 +136,7 @@ pub use qoi::qoi;
 pub use png::png;
 pub use safetensors::safetensors;
 pub use le::le;
+pub use spp::spp;
 pub use sqlite::{self_db, sqlite};
 pub use swf::swf;
 pub use tap::tap;
@@ -174,7 +176,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal",
+        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -211,6 +213,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "s3m" => Some(s3m()),
         "xm" => Some(xm()),
         "it" => Some(it()),
+        "spp" => Some(spp()),
         "sqlite" => Some(sqlite()),
         "self" => Some(self_db()),
         "pe" => Some(pe()),
@@ -442,6 +445,11 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         // header of its own is recognised by the shape of what is in it, so
         // anything that says what it is gets to say so first.
         Some("utmp")
+    } else if spp::is_spp(head, len) {
+        // The same, and for the same reason: a stream of space packets is
+        // recognised by one packet's length landing on the next one's header,
+        // which is evidence about the whole file rather than about its front.
+        Some("spp")
     } else if head.starts_with(b"RIFF") && head.len() >= 12 && head[8..11] == *b"CDR" {
         Some("cdr")
     } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"CMX1") {
@@ -1523,6 +1531,24 @@ mod tests {
         assert_eq!(sniffed(b"0707010000000A"), Some("cpio"));
         assert_eq!(sniffed(b"LPKSHHRH\0\0\0\0"), Some("journal"));
         assert_eq!(sniffed(&login[..383]), None);
+    }
+
+    /// A stream of CCSDS space packets, which says nothing about itself: what
+    /// makes it one is that each packet's length lands on the next header.
+    #[test]
+    fn a_space_packet_stream_is_recognised_by_its_lengths_chaining() {
+        let mut v = Vec::new();
+        for i in 0..10u16 {
+            v.extend_from_slice(&0x0817u16.to_be_bytes()); // telemetry, APID 0x17
+            v.extend_from_slice(&(0xc000 | i).to_be_bytes());
+            v.extend_from_slice(&9u16.to_be_bytes());
+            v.extend_from_slice(b"ten bytes!");
+        }
+        assert_eq!(sniffed(&v), Some("spp"));
+        // One byte in the wrong place and no length lands anywhere.
+        let mut broken = v.clone();
+        broken[5] = 0xff;
+        assert_eq!(sniffed(&broken), None);
     }
 
     #[test]

@@ -230,7 +230,14 @@ impl Evaluator {
 pub(super) fn uniform(e: &Expr) -> bool {
     match e {
         Expr::Lit(_) | Expr::Ref(_) => true,
-        Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Or(a, b) | Expr::Less(a, b) => {
+        Expr::Add(a, b)
+        | Expr::Sub(a, b)
+        | Expr::Mul(a, b)
+        | Expr::Div(a, b)
+        | Expr::Or(a, b)
+        | Expr::Less(a, b)
+        | Expr::Min(a, b)
+        | Expr::Max(a, b) => {
             uniform(a) && uniform(b)
         }
         // Padding asks nothing the run it follows did not already ask.

@@ -1089,6 +1089,35 @@ journal payload whose object flags say XZ, LZ4 or ZSTD. Showing what is in
 those means decompressing them, which is the same open question the gzip
 template already stands in front of.
 
+### A file with no front
+A stream of CCSDS Space Packets has no magic number, no start-of-packet
+marker, and no checksum. A packet is six octets of header and then its data
+field, and the header's last two octets hold a count one fewer than the length
+of that field. The only way to find the second packet is to have read the
+first.
+
+That makes the template trivial and the recognition the whole problem. The
+answer is the same shape as the one a Zarr store in a ZIP needed: read the
+lengths and see whether they chain. Eight packets in a row, each beginning
+with the three zero bits that say this is version 1 of the standard, is the
+evidence; a file of zeros chains perfectly well as seven-octet packets of
+nothing, so a stream in which no header says anything at all is refused. It
+sits at the end of the careful tests, after the table of signatures, because
+a file that says what it is should get to say so first.
+
+A real capture is a recording that was stopped, and the one this was written
+against ends eight bytes into a packet that says it is 231 long. Reading what
+is there is the answer, so the data field is `Min(claimed, Remaining)`. Three
+templates had already written that clamp out as a comparison multiplied by
+each side and added back together, which is `Expr::Min` and `Expr::Max` now:
+an MS-DOS header that counts pages a library never wrote wants the same thing.
+
+What the packets hold is not here and cannot be. The standard says the data
+field may begin with a secondary header, that its format is registered with
+the mission rather than with CCSDS, and that a packet whose APID is all ones
+is an idle packet sent to keep a downlink busy. A capture is mostly those: of
+the 242,725 packets in the one this was tested against, 229,231 are idle.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing

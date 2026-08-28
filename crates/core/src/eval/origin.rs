@@ -295,7 +295,14 @@ impl Evaluator {
                     break;
                 }
             }
-            Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Or(a, b) | Expr::Less(a, b) => {
+            Expr::Add(a, b)
+            | Expr::Sub(a, b)
+            | Expr::Mul(a, b)
+            | Expr::Div(a, b)
+            | Expr::Or(a, b)
+            | Expr::Less(a, b)
+            | Expr::Min(a, b)
+            | Expr::Max(a, b) => {
                 self.from_expr(doc, at, a, role, out)?;
                 self.from_expr(doc, at, b, role, out)?;
             }
