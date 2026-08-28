@@ -420,7 +420,10 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("cdr")
     } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"CMX1") {
         Some("cmx")
-    } else if head.starts_with(b"RIFF") && head.len() >= 12 && &head[8..12] == b"WAVE" {
+    } else if (head.starts_with(b"RIFF") || head.starts_with(b"RF64") || head.starts_with(b"RIFX"))
+        && head.len() >= 12
+        && &head[8..12] == b"WAVE"
+    {
         // The only thing that marks a W4V is the format tag inside `fmt `, so
         // this needs a few more bytes than a magic number would.
         if head.len() >= 22 && &head[12..16] == b"fmt " && &head[20..22] == b"AW" {
@@ -1466,6 +1469,13 @@ mod tests {
         thumbs[512..512 + catalog.len()].copy_from_slice(catalog);
         assert_eq!(sniff(&thumbs, thumbs.len() as u64), Some("thumbsdb"));
         assert_eq!(sniff(&thumbs[..512], 512), None, "an arbitrary compound file is not necessarily Thumbs.db");
+    }
+
+    #[test]
+    fn wave_container_variants_are_recognised() {
+        assert_eq!(sniffed(b"RIFF\x10\0\0\0WAVEfmt \0\0\0\0"), Some("wav"));
+        assert_eq!(sniffed(b"RF64\xff\xff\xff\xffWAVEds64\0\0\0\0"), Some("wav"));
+        assert_eq!(sniffed(b"RIFX\0\0\0\x10WAVEfmt \0\0\0\0"), Some("wav"));
     }
 
     #[test]
