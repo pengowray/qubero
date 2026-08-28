@@ -33,8 +33,8 @@ pub(super) fn iff(name: &str, body: T) -> Template {
 
 fn chunk(body: T) -> T {
     // Odd-sized bodies are followed by a pad byte that the size does not
-    // count. There is no modulo, so: size - (size / 2) * 2.
-    let pad = E::field("size").sub(E::field("size").div(E::lit(2)).mul(E::lit(2)));
+    // count.
+    let pad = E::field("size").pad_to(2);
     T::structure_named(
         "Chunk",
         "id",

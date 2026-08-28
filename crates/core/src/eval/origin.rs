@@ -299,6 +299,9 @@ impl Evaluator {
                 self.from_expr(doc, at, a, role, out)?;
                 self.from_expr(doc, at, b, role, out)?;
             }
+            // Padding is decided by whatever said how long the run before it
+            // was, which is the field worth pointing at.
+            Expr::PadTo { n, .. } => self.from_expr(doc, at, n, role, out)?,
             _ => {}
         }
         Ok(())

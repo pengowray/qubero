@@ -1060,16 +1060,23 @@ counterparts were left as placeholders. Both are read the same way: the whole
 run is a `Sized` window, and every field that might not be there is a `Switch`
 on whether there is still room for it, which is `Expr::Remaining` compared
 against the field's own width. A file from an older writer stops where it
-stopped, and what follows it is not read as the fields it does not have.
+stopped, and what follows it is not read as the fields it does not have. Since
+both wrote that out, it is `Ty::if_room(ty)`, and `Ty::present_if(when, ty)`
+where the format has something else to say about whether the field is there.
+How much room is the type's own size, so nothing declares its width twice.
 
 The other shared answer is about padding. Three of these formats align
 something to a boundary: a device tree pads a node's name to four bytes, a cpio
 archive pads its name and its file data to four, and a journal pads every
-object to eight. There is no remainder operator, so each writes the same
+object to eight. There is no remainder operator, so each wrote out the same
 subtraction: `n` less the whole fours in it is the overhang, four less that is
 the padding, and the same subtraction again takes it back off in the case where
 the run already ended on a boundary and the answer came to four rather than
-none.
+none. Three copies of an arithmetic whose only interesting case is the one it
+keeps getting wrong is an argument, so it is `Expr::PadTo { n, align }` now.
+Four older templates were writing it too, in a form that only worked for two:
+IFF, AIFF and the two Corel containers pad an odd chunk to an even boundary,
+and an AppleDouble attribute name pads to four.
 
 `Ty::TextInt` grew a base. PDF needed decimal digits read as a number; cpio
 writes every number in its header as eight hexadecimal digits, which is the

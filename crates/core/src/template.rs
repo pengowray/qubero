@@ -172,6 +172,18 @@ pub enum Expr {
     /// however many bytes the header's alignment count says, so the offset in
     /// the table is only an offset once it has been shifted.
     Shl(Box<Expr>, Box<Expr>),
+    /// How many bytes of padding follow a run of `n` bytes, to bring what
+    /// comes after it back onto a boundary of `align`.
+    ///
+    /// Every format that aligns anything needs this, and there is no
+    /// remainder operator to write it with: a device tree pads a node's name
+    /// to four bytes, a cpio archive pads its names and its files to four,
+    /// and a systemd journal pads every object to eight. Written by hand it
+    /// is `n` less the whole fours in it, four less that, and the same
+    /// subtraction again to take back off the four that a run already ending
+    /// on a boundary would otherwise be padded by. Three formats wrote that
+    /// out before it became this.
+    PadTo { n: Box<Expr>, align: u32 },
     /// One bit of a number, as one or zero.
     ///
     /// What a switch needs to key on a flag. A section of a program says it
@@ -304,6 +316,11 @@ impl Expr {
     }
     pub fn less_than(self, rhs: Expr) -> Expr {
         Expr::Less(Box::new(self), Box::new(rhs))
+    }
+    /// The padding after a run of `self` bytes, to the next multiple of
+    /// `align`. Nothing at all when the run already ended on one.
+    pub fn pad_to(self, align: u32) -> Expr {
+        Expr::PadTo { n: Box::new(self), align }
     }
 }
 
@@ -907,6 +924,30 @@ impl Ty {
     }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
+    }
+    /// A field that is there only while its container still has room for it.
+    ///
+    /// What a format that grew a field at a time needs. A systemd journal
+    /// header is as long as it says it is, and which fields are in it depends
+    /// on which release wrote it: a file from 2012 stops where the fields it
+    /// knew about stopped. Reading one that is not there takes the bytes of
+    /// whatever follows the header instead, and every field after it as well.
+    ///
+    /// How much room it needs is the type's own size, so nothing has to say
+    /// it twice. A type whose size depends on the bytes cannot be measured
+    /// before it is read, and asks only that the container is not already
+    /// finished.
+    pub fn if_room(ty: Ty) -> Ty {
+        Ty::present_if(Expr::lit(1), ty)
+    }
+    /// The same, and only where `when` says so as well: a ZIP64 record in a
+    /// central directory holds only the fields whose 32-bit counterparts were
+    /// left as placeholders, so each of them asks both questions. `when` is a
+    /// number that is one or zero, which is what a comparison answers.
+    pub fn present_if(when: Expr, ty: Ty) -> Ty {
+        let bytes = crate::decode::fixed_bits(&ty).map_or(1, |b| (b + 7) / 8) as i128;
+        let room = Expr::lit(bytes - 1).less_than(Expr::Remaining);
+        Ty::switch(when.mul(room), vec![(1, ty)], Ty::bytes(Expr::lit(0)))
     }
     pub fn enumeration(name: &str, inner: Ty, cases: &[(i128, &str)]) -> Ty {
         Ty::enum_with(name, inner, cases, &[], false)

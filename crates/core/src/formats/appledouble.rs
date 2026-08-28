@@ -212,7 +212,7 @@ fn attr() -> T {
             ("flags", T::u16(Big)),
             ("namelen", T::u8()),
             ("name", T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Utf8)),
-            ("pad", T::bytes(header.clone().add(E::lit(3)).div(E::lit(4)).mul(E::lit(4)).sub(header))),
+            ("pad", T::bytes(header.pad_to(4))),
             ("data", T::at(E::field("at"), T::bytes(E::field("length")))),
         ],
     )

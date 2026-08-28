@@ -81,14 +81,8 @@ fn markers() -> T {
             ("name", T::utf8(E::field("name_length"))),
             // A pstring is padded to an even total, and the length byte
             // counts towards it: one pad byte when the name is even, none
-            // when it is odd. There is no modulo, so it is written out.
-            (
-                "pad",
-                T::bytes({
-                    let used = E::field("name_length").add(E::lit(1));
-                    used.clone().sub(used.div(E::lit(2)).mul(E::lit(2)))
-                }),
-            ),
+            // when it is odd.
+            ("pad", T::bytes(E::field("name_length").add(E::lit(1)).pad_to(2))),
         ],
     )
     .counted_as("marker");

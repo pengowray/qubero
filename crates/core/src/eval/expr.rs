@@ -201,6 +201,16 @@ impl Evaluator {
             Expr::Sub(a, b) => self.eval_expr_at(doc, at, a, here)? - self.eval_expr_at(doc, at, b, here)?,
             Expr::Mul(a, b) => self.eval_expr_at(doc, at, a, here)? * self.eval_expr_at(doc, at, b, here)?,
             Expr::Bit(a, n) => (self.eval_expr_at(doc, at, a, here)? >> n) & 1,
+            // What is left of a boundary, which is nothing at all when the
+            // run before it already ended on one.
+            Expr::PadTo { n, align } => {
+                if *align == 0 {
+                    return fail("padded to a boundary of nothing");
+                }
+                let align = i128::from(*align);
+                let n = self.eval_expr_at(doc, at, &n.clone(), here)?;
+                (align - n.rem_euclid(align)).rem_euclid(align)
+            }
             Expr::Shl(a, b) => {
                 let by = self.eval_expr_at(doc, at, b, here)?;
                 if !(0..64).contains(&by) {

@@ -35,7 +35,7 @@ fn fourcc() -> T {
 }
 
 fn chunk() -> T {
-    let pad = E::field("size").sub(E::field("size").div(E::lit(2)).mul(E::lit(2)));
+    let pad = E::field("size").pad_to(2);
     T::structure_named(
         "CorelChunk",
         "id",
@@ -71,7 +71,7 @@ fn list() -> T {
 }
 
 fn raw_chunk() -> T {
-    let pad = E::field("size").sub(E::field("size").div(E::lit(2)).mul(E::lit(2)));
+    let pad = E::field("size").pad_to(2);
     T::structure_named(
         "CorelListMember",
         "id",

@@ -103,7 +103,7 @@ fn begin_node() -> T {
         "BeginNode",
         vec![
             ("name", T::cstr()),
-            ("padding", T::bytes(pad4(E::size_of("name")))),
+            ("padding", T::bytes(E::size_of("name").pad_to(4))),
         ],
     )
 }
@@ -120,22 +120,9 @@ fn property() -> T {
             ("nameoff", T::u32(Big)),
             ("name", T::at(E::field("off_dt_strings").add(E::field("nameoff")), T::cstr())),
             ("value", T::bytes(E::field("len"))),
-            ("padding", T::bytes(pad4(E::field("len")))),
+            ("padding", T::bytes(E::field("len").pad_to(4))),
         ],
     )
-}
-
-/// How many bytes of padding follow a run of `n` bytes, to bring the next
-/// token back onto a four-byte boundary.
-///
-/// There is no remainder operator, so the remainder is written out: `n` less
-/// the whole fours in it. Four less that is the padding, except when the run
-/// already ended on a boundary, where it comes to four rather than none, so
-/// the same subtraction is done again to take it back off.
-fn pad4(n: E) -> E {
-    let over = n.clone().sub(n.div(E::lit(4)).mul(E::lit(4)));
-    let pad = E::lit(4).sub(over);
-    pad.clone().sub(pad.div(E::lit(4)).mul(E::lit(4)))
 }
 
 #[cfg(test)]

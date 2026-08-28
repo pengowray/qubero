@@ -103,27 +103,20 @@ fn header() -> T {
             // Everything past here was added a release at a time, and the
             // header's own size is what says how far a given file goes. A
             // journal from 2012 stops after the monotonic timestamp.
-            ("n_data", if_room(8, T::u64(Little))),
-            ("n_fields", if_room(8, T::u64(Little))),
-            ("n_tags", if_room(8, T::u64(Little))),
-            ("n_entry_arrays", if_room(8, T::u64(Little))),
-            ("data_hash_chain_depth", if_room(8, T::u64(Little))),
-            ("field_hash_chain_depth", if_room(8, T::u64(Little))),
-            ("tail_entry_array_offset", if_room(4, T::u32(Little))),
-            ("tail_entry_array_n_entries", if_room(4, T::u32(Little))),
-            ("tail_entry_offset", if_room(8, T::u64(Little))),
+            ("n_data", T::if_room(T::u64(Little))),
+            ("n_fields", T::if_room(T::u64(Little))),
+            ("n_tags", T::if_room(T::u64(Little))),
+            ("n_entry_arrays", T::if_room(T::u64(Little))),
+            ("data_hash_chain_depth", T::if_room(T::u64(Little))),
+            ("field_hash_chain_depth", T::if_room(T::u64(Little))),
+            ("tail_entry_array_offset", T::if_room(T::u32(Little))),
+            ("tail_entry_array_n_entries", T::if_room(T::u32(Little))),
+            ("tail_entry_offset", T::if_room(T::u64(Little))),
             // A newer systemd than this template knows about wrote something
             // here, and the header said how much.
             ("unread", T::bytes(E::Remaining)),
         ],
     )
-}
-
-/// A field that is there only while the header still has room for it, which
-/// is how a file written by an older systemd stops early without anything
-/// after it being read from the wrong bytes.
-fn if_room(bytes: i128, ty: T) -> T {
-    T::switch(E::lit(bytes - 1).less_than(E::Remaining), vec![(1, ty)], T::bytes(E::lit(0)))
 }
 
 /// The 128-bit identifiers systemd stamps on a machine, a boot and a file.
@@ -161,7 +154,7 @@ fn object() -> T {
                     T::bytes(E::Remaining),
                 ),
             ),
-            ("padding", T::switch(written(), vec![(1, T::bytes(pad8(E::field("size"))))], T::bytes(E::lit(0)))),
+            ("padding", T::switch(written(), vec![(1, T::bytes(E::field("size").pad_to(8)))], T::bytes(E::lit(0)))),
         ],
     )
     .counted_as("object")
@@ -309,15 +302,6 @@ fn tag() -> T {
 /// A field the compact layout added, and the older layout does not have.
 fn only_compact(ty: T) -> T {
     T::switch(compact(), vec![(1, ty)], T::bytes(E::lit(0)))
-}
-
-/// How many bytes of padding follow an object of `n` bytes, to bring the next
-/// one back onto an eight-byte boundary. The same subtraction as `dtb` and
-/// `cpio` do to four.
-fn pad8(n: E) -> E {
-    let over = n.clone().sub(n.div(E::lit(8)).mul(E::lit(8)));
-    let pad = E::lit(8).sub(over);
-    pad.clone().sub(pad.div(E::lit(8)).mul(E::lit(8)))
 }
 
 #[cfg(test)]

@@ -1634,3 +1634,68 @@ fn an_expression_can_read_a_field_inside_the_field_beside_it() {
     let mut ev = Evaluator::new(bad);
     assert!(ev.node(&doc(&[1, 2, 3]), &[1]).is_err());
 }
+
+/// Padding to a boundary, including the case every hand-written version of
+/// this arithmetic gets wrong: a run that already ends on one is followed by
+/// no padding rather than by a whole unit of it.
+#[test]
+fn padding_measures_to_the_next_boundary_and_no_further() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("len", T::u8()),
+                ("value", T::bytes(E::field("len"))),
+                ("padding", T::bytes(E::field("len").pad_to(4))),
+                ("after", T::u8()),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(t.clone());
+    // Five bytes of value, so three of padding, and the byte after them.
+    let d = doc(&[5, 1, 2, 3, 4, 5, 0, 0, 0, 0xaa]);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 3 * 8);
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::UInt(0xaa));
+    // Four bytes of value ends on the boundary, so nothing follows it.
+    let mut ev = Evaluator::new(t);
+    let d = doc(&[4, 1, 2, 3, 4, 0xbb]);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 0);
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::UInt(0xbb));
+}
+
+/// A field read only while there is room for it, which is how a header that
+/// grew a field at a time is read by whoever wrote it.
+#[test]
+fn a_field_with_no_room_left_is_not_read_at_all() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("size", T::u8()),
+                (
+                    "header",
+                    T::sized(
+                        E::field("size"),
+                        T::structure(
+                            "Header",
+                            vec![("a", T::u16(Big)), ("b", T::if_room(T::u16(Big))), ("c", T::if_room(T::u32(Big)))],
+                        ),
+                    ),
+                ),
+            ],
+        ),
+    );
+    // Four bytes of header: `b` is there and `c` is not.
+    let mut ev = Evaluator::new(t.clone());
+    let d = doc(&[4, 0, 1, 0, 2, 9, 9, 9, 9]);
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value, Value::UInt(2));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().size_bits, 0);
+    // Two bytes, and neither of them is read from the bytes after the window.
+    let mut ev = Evaluator::new(t);
+    let d = doc(&[2, 0, 1, 9, 9, 9, 9]);
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().size_bits, 0);
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().size_bits, 0);
+}

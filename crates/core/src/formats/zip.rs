@@ -256,21 +256,16 @@ fn zip64_central() -> T {
     T::structure(
         "Zip64Fields",
         vec![
-            ("uncompressed_size", present_if(masked("uncompressed_size"), 8, T::u64(Little))),
-            ("compressed_size", present_if(masked("compressed_size"), 8, T::u64(Little))),
-            ("local_header_offset", present_if(masked("local_header_offset"), 8, T::u64(Little))),
-            ("disk_number", present_if(E::lit(MASKED16 - 1).less_than(E::field("disk_number")), 4, T::u32(Little))),
+            ("uncompressed_size", T::present_if(masked("uncompressed_size"), T::u64(Little))),
+            ("compressed_size", T::present_if(masked("compressed_size"), T::u64(Little))),
+            ("local_header_offset", T::present_if(masked("local_header_offset"), T::u64(Little))),
+            (
+                "disk_number",
+                T::present_if(E::lit(MASKED16 - 1).less_than(E::field("disk_number")), T::u32(Little)),
+            ),
             ("rest", T::bytes(E::Remaining)),
         ],
     )
-}
-
-/// A field that is there only when `when` says so, and only while the record
-/// still has room for it. A writer that leaves one out has to be read as
-/// having left it out, or every field after it is read from the wrong bytes.
-fn present_if(when: E, bytes: i128, ty: T) -> T {
-    let room = E::lit(bytes - 1).less_than(E::Remaining);
-    T::switch(when.mul(room), vec![(1, ty)], T::bytes(E::lit(0)))
 }
 fn text(len: &str) -> T {
     T::text(StrLen::Fixed(E::field(len)), Encoding::Unknown)

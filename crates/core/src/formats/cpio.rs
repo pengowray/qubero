@@ -64,9 +64,9 @@ fn entry() -> T {
             ("name", T::text(StrLen::Padded { size: E::field("c_namesize"), pad: 0 }, Encoding::Utf8)),
             // The name is padded so that the file's bytes start on a
             // four-byte boundary, counting from the front of the header.
-            ("name_padding", T::bytes(pad4(E::lit(HEADER).add(E::field("c_namesize"))))),
+            ("name_padding", T::bytes(E::lit(HEADER).add(E::field("c_namesize")).pad_to(4))),
             ("data", T::bytes(E::field("c_filesize"))),
-            ("data_padding", T::bytes(pad4(E::field("c_filesize")))),
+            ("data_padding", T::bytes(E::field("c_filesize").pad_to(4))),
         ],
     )
     .counted_as("entry")
@@ -107,15 +107,6 @@ fn appended() -> T {
     // An archive that ends where the file ends has nothing to look at, and
     // looking anyway is an error rather than an answer.
     T::switch(E::lit(1).less_than(E::Remaining), vec![(1, named)], T::bytes(E::Remaining))
-}
-
-/// How many bytes of padding follow a run of `n` bytes, to bring what comes
-/// next back onto a four-byte boundary. Written as a subtraction because
-/// there is no remainder operator: see the same arithmetic in `dtb`.
-fn pad4(n: E) -> E {
-    let over = n.clone().sub(n.div(E::lit(4)).mul(E::lit(4)));
-    let pad = E::lit(4).sub(over);
-    pad.clone().sub(pad.div(E::lit(4)).mul(E::lit(4)))
 }
 
 #[cfg(test)]

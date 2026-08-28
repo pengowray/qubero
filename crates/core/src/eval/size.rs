@@ -233,6 +233,8 @@ pub(super) fn uniform(e: &Expr) -> bool {
         Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Or(a, b) | Expr::Less(a, b) => {
             uniform(a) && uniform(b)
         }
+        // Padding asks nothing the run it follows did not already ask.
+        Expr::PadTo { n, .. } => uniform(n),
         // Remaining and Idx count from the element; the peeks read it; Prev,
         // Sibling and Elem ask another one; SizeOf asks a field beside it.
         _ => false,
