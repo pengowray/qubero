@@ -1041,6 +1041,47 @@ is read as the narrower one, and the eight bytes left over read as a record
 nobody defined, which the walk passes over as bytes to the next `PK`. Wrong
 shape, right place.
 
+### A header that says how much of itself there is
+Five formats a Linux system leaves lying about went in together, and none of
+them needed anything new. That is the point of adding them: the IR is tested by
+what it cannot say, and this time it could say all of it. A flattened device
+tree is a stream of tokens and three blocks at offsets the header gives, a GRUB
+environment block is text padded with `#` to exactly 1024 bytes, `wtmp` is one
+struct repeated with nothing in front of it, an initramfs is a cpio archive
+whose numbers are written as hexadecimal digits, and a systemd journal is an
+arena of tagged objects.
+
+What they have in common is worth naming, because two of them do the same
+thing and so does the ZIP64 work above it. A journal header is as long as
+`header_size` says, and which fields are in it depends on which systemd wrote
+it: `n_data` arrived in 187, the chain depths in 246, the tail entry array in
+252. A ZIP64 record in a central directory holds only the fields whose 32-bit
+counterparts were left as placeholders. Both are read the same way: the whole
+run is a `Sized` window, and every field that might not be there is a `Switch`
+on whether there is still room for it, which is `Expr::Remaining` compared
+against the field's own width. A file from an older writer stops where it
+stopped, and what follows it is not read as the fields it does not have.
+
+The other shared answer is about padding. Three of these formats align
+something to a boundary: a device tree pads a node's name to four bytes, a cpio
+archive pads its name and its file data to four, and a journal pads every
+object to eight. There is no remainder operator, so each writes the same
+subtraction: `n` less the whole fours in it is the overhang, four less that is
+the padding, and the same subtraction again takes it back off in the case where
+the run already ended on a boundary and the answer came to four rather than
+none.
+
+`Ty::TextInt` grew a base. PDF needed decimal digits read as a number; cpio
+writes every number in its header as eight hexadecimal digits, which is the
+same field with a different radix, and the length of a file being text is what
+the padding arithmetic then has to work from.
+
+Two things are deliberately not read. A compressed stream inside any of them
+stays a run of bytes named by its magic: the second half of an initramfs, and a
+journal payload whose object flags say XZ, LZ4 or ZSTD. Showing what is in
+those means decompressing them, which is the same open question the gzip
+template already stands in front of.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
