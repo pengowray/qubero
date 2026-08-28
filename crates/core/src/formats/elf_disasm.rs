@@ -52,6 +52,9 @@ pub struct Section {
 /// A symbol: what it is called, and where it sits.
 #[derive(Debug, Clone, Default)]
 pub struct Symbol {
+    /// Where the symbol record sits in the parsed tree.
+    pub path: Vec<usize>,
+    pub source_bits: u64,
     pub name: String,
     pub kind: i128,
     /// How many bytes the symbol covers, which is what says whether an address
@@ -129,6 +132,8 @@ impl Program {
                 let at = int_field(ev, doc, &s, "name_offset")? as u64;
                 let info = named(ev, doc, &s, "info")?;
                 let sym = Symbol {
+                    path: s.clone(),
+                    source_bits: ev.node(doc, &s)?.offset_bits,
                     name: name_at(&strings, at),
                     kind: int_field(ev, doc, &info, "type")?,
                     size: int_field(ev, doc, &s, "size")? as u64,
@@ -677,6 +682,8 @@ mod tests {
         assert_eq!(names, ["", "xdp", ".relxdp", ".maps", ".symtab", ".strtab", ".shstrtab"]);
         let symbols: Vec<&str> = p.symbols.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(symbols, ["", "counter_map", "xdp_prog", ""]);
+        assert_eq!(p.symbols[1].path, [7, 15, 4, 1]);
+        assert!(p.symbols[1].source_bits > 0);
     }
 
     #[test]

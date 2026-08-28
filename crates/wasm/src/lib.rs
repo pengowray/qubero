@@ -601,6 +601,36 @@ struct ContentsDto {
     columns: f64,
 }
 
+/// The named parts of an ELF file. Unlike the storage template, these have
+/// resolved section and symbol names rather than string-table offsets.
+#[derive(Serialize)]
+struct ElfContentsDto {
+    sections: Vec<ElfSectionDto>,
+    symbols: Vec<ElfSymbolDto>,
+    symbol_total: f64,
+}
+
+#[derive(Serialize)]
+struct ElfSectionDto {
+    path: Vec<usize>,
+    name: String,
+    kind: f64,
+    address: f64,
+    offset: f64,
+    size: f64,
+}
+
+#[derive(Serialize)]
+struct ElfSymbolDto {
+    path: Vec<usize>,
+    source_bits: f64,
+    name: String,
+    kind: f64,
+    section: f64,
+    value: f64,
+    size: f64,
+}
+
 /// One entry of the annotation column.
 #[derive(Serialize)]
 struct SpanDto {
@@ -1189,6 +1219,51 @@ impl Editor {
                     }
                 })
                 .collect(),
+        }))
+    }
+
+    /// Named ELF sections and a bounded prefix of its symbols. The semantic
+    /// pass is cached because resolving names crosses several linked tables.
+    pub fn elf_contents(&mut self, symbol_limit: u32) -> String {
+        if self.template != "elf" && self.template != "bpf" {
+            return reply::<ElfContentsDto>(Err(EvalError::Failed("not an ELF template".into())));
+        }
+        let Some(e) = &mut self.eval else {
+            return reply::<ElfContentsDto>(Err(EvalError::Failed("no template".into())));
+        };
+        if self.bpf.is_none() {
+            e.set_slice(None);
+            let read = formats::ElfProgram::read(e, &self.doc);
+            e.set_slice(Some(WORK_SLICE));
+            match read {
+                Ok(program) => self.bpf = Some(program),
+                Err(error) => return reply::<ElfContentsDto>(Err(error)),
+            }
+        }
+        let Some(program) = &self.bpf else {
+            return reply::<ElfContentsDto>(Err(EvalError::Failed("could not resolve ELF tables".into())));
+        };
+        let sections = program.sections.iter().enumerate().map(|(i, section)| ElfSectionDto {
+            path: vec![7, 14, 0, i],
+            name: section.name.clone(),
+            kind: section.kind as f64,
+            address: section.addr as f64,
+            offset: section.offset as f64,
+            size: section.size as f64,
+        }).collect();
+        let symbols = program.symbols.iter().take(symbol_limit as usize).map(|symbol| ElfSymbolDto {
+            path: symbol.path.clone(),
+            source_bits: symbol.source_bits as f64,
+            name: symbol.name.clone(),
+            kind: symbol.kind as f64,
+            section: symbol.section as f64,
+            value: symbol.value as f64,
+            size: symbol.size as f64,
+        }).collect();
+        reply(Ok(ElfContentsDto {
+            sections,
+            symbols,
+            symbol_total: program.symbols.len() as f64,
         }))
     }
 

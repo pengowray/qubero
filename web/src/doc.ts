@@ -271,6 +271,27 @@ export type Contents = {
   readonly columns: number;
 };
 
+export type ElfContents = {
+  readonly sections: readonly {
+    readonly path: readonly number[];
+    readonly name: string;
+    readonly kind: number;
+    readonly address: number;
+    readonly offset: number;
+    readonly size: number;
+  }[];
+  readonly symbols: readonly {
+    readonly path: readonly number[];
+    readonly source_bits: number;
+    readonly name: string;
+    readonly kind: number;
+    readonly section: number;
+    readonly value: number;
+    readonly size: number;
+  }[];
+  readonly symbol_total: number;
+};
+
 export type XrefRow = {
   readonly object: number;
   readonly kind: string;
@@ -794,6 +815,11 @@ export class Doc {
    */
   contents(): TemplateReply<Contents> {
     return this.handleReply(this.editor.contents());
+  }
+
+  /** Named ELF sections and at most `symbolLimit` symbols. */
+  elfContents(symbolLimit: number): TemplateReply<ElfContents> {
+    return this.handleReply(this.editor.elf_contents(symbolLimit));
   }
 
   templateNode(path: readonly number[]): TemplateReply<TemplateNode> {

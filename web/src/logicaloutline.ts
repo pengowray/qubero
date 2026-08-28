@@ -484,6 +484,120 @@ function sqliteOutline(doc: Doc): TemplateReply<LogicalOutline> {
   };
 }
 
+const ELF_SECTION_KINDS = new Map<number, string>([
+  [0, "null"], [1, "program data"], [2, "symbols"], [3, "strings"], [4, "relocations + addends"],
+  [5, "hash"], [6, "dynamic linking"], [7, "notes"], [8, "uninitialized data"], [9, "relocations"],
+  [11, "dynamic symbols"], [14, "initializers"], [15, "finalizers"], [16, "pre-initializers"], [17, "group"],
+]);
+
+const ELF_SYMBOL_KINDS = new Map<number, string>([
+  [0, "symbol"], [1, "object"], [2, "function"], [3, "section"], [4, "file"], [5, "common"], [6, "TLS"], [10, "indirect function"],
+]);
+
+function enumName(value: string | null, fallback: string): string {
+  return value?.replace(/ \([^)]*\)$/, "") || fallback;
+}
+
+function elfOutline(
+  doc: Doc,
+  expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> {
+  const symbolLimit = expanded.has("/symbols") ? shown.get("/symbols") ?? LOGICAL_PAGE : 0;
+  const reply = doc.elfContents(symbolLimit);
+  if (reply.status !== "ok") return reply;
+  const elf = reply.node;
+  const header = [7];
+  const bits = enumName(nodeValue(doc, [1]), "ELF");
+  const endian = enumName(nodeValue(doc, [2]), "");
+  const objectType = enumName(nodeValue(doc, [...header, 0]), "object");
+  const machine = enumName(nodeValue(doc, [...header, 1]), "machine");
+  const entry = Number(nodeValue(doc, [...header, 3]) ?? 0);
+  const programHeaders = doc.templateNode([...header, 13, 0]);
+  if (programHeaders.status !== "ok") return programHeaders;
+  const nodes: LogicalNode[] = [{
+    id: "/", parentId: null, label: "Program image", fullName: "/", depth: 0, group: true, hasChildren: true,
+    sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
+    value: [objectType, machine, bits, endian].filter(Boolean).join(" · "), type: doc.template === "bpf" ? "eBPF ELF" : "ELF",
+    logicalBytes: doc.lengthBytes, logicalApproximate: false, title: `${machine} ${objectType}`,
+  }];
+
+  const addGroup = (id: string, label: string, count: number, value: string, sourcePath: number[]): void => {
+    nodes.push({
+      id, parentId: "/", label, fullName: id, depth: 1, group: true, hasChildren: count > 0,
+      sourcePath, sourceBits: null, sourceText: count > 0 ? "table" : "—", value, type: "catalogue",
+      logicalBytes: null, logicalApproximate: false, title: `${count.toLocaleString()} ${label.toLowerCase()}`,
+    });
+  };
+
+  addGroup("/segments", "Segments", programHeaders.node.child_count, `${programHeaders.node.child_count.toLocaleString()} mapped regions`, [...header, 13]);
+  for (let i = 0; i < programHeaders.node.child_count; i++) {
+    const path = [...header, 13, 0, i];
+    const segment = doc.templateNode(path);
+    if (segment.status !== "ok") return segment;
+    const wide = bits.startsWith("64");
+    const offsetIndex = wide ? 2 : 1;
+    const addressIndex = wide ? 3 : 2;
+    const fileSizeIndex = wide ? 5 : 4;
+    const memorySizeIndex = wide ? 6 : 5;
+    const flagsIndex = wide ? 1 : 6;
+    const fileSize = Number(nodeValue(doc, [...path, fileSizeIndex]) ?? 0);
+    const memorySize = Number(nodeValue(doc, [...path, memorySizeIndex]) ?? 0);
+    const offset = Number(nodeValue(doc, [...path, offsetIndex]) ?? 0);
+    const address = nodeValue(doc, [...path, addressIndex]) ?? "0";
+    const kind = enumName(nodeValue(doc, [...path, 0]), "segment");
+    const flags = nodeValue(doc, [...path, flagsIndex]) ?? "";
+    nodes.push({
+      id: `/segments/${i}`, parentId: "/segments", label: `${kind} ${i + 1}`, fullName: `/segments/${i}`,
+      depth: 2, group: false, hasChildren: false, sourcePath: path, sourceBits: segment.node.offset_bits,
+      sourceText: formatOffset(segment.node.offset_bits),
+      value: [`file ${formatOffset(offset * 8)}`, `virtual ${address}`, flags, memorySize !== fileSize ? `${formatBytes(fileSize)} file → ${formatBytes(memorySize)} memory` : ""].filter(Boolean).join(" · "),
+      type: "segment", logicalBytes: memorySize, logicalApproximate: false, title: `${kind} segment`,
+    });
+  }
+
+  addGroup("/sections", "Sections", elf.sections.length, `${elf.sections.length.toLocaleString()} linked sections`, [...header, 14]);
+  for (let i = 0; i < elf.sections.length; i++) {
+    const section = elf.sections[i];
+    if (section === undefined) continue;
+    const headerPath = section.path;
+    const flags = nodeValue(doc, [...headerPath, 2]) ?? "";
+    const kind = ELF_SECTION_KINDS.get(section.kind) ?? enumName(nodeValue(doc, [...headerPath, 1]), `type ${section.kind}`);
+    nodes.push({
+      id: `/sections/${i}`, parentId: "/sections", label: section.name || (i === 0 ? "Null section" : `Section ${i}`),
+      fullName: section.name || `/sections/${i}`, depth: 2, group: false, hasChildren: false,
+      sourcePath: [7, 15, i], sourceBits: section.offset * 8, sourceText: section.kind === 8 ? "memory only" : formatOffset(section.offset * 8),
+      value: [kind, flags, section.address > 0 ? `virtual ${formatOffset(section.address * 8)}` : ""].filter(Boolean).join(" · "),
+      type: "section", logicalBytes: section.size, logicalApproximate: false, title: section.name || `Section ${i}`,
+    });
+  }
+
+  addGroup("/symbols", "Symbols", elf.symbol_total, `${elf.symbol_total.toLocaleString()} named and unnamed symbols`, [...header, 15]);
+  for (let i = 0; i < elf.symbols.length; i++) {
+    const symbol = elf.symbols[i];
+    if (symbol === undefined) continue;
+    const section = elf.sections[symbol.section];
+    const kind = ELF_SYMBOL_KINDS.get(symbol.kind) ?? `type ${symbol.kind}`;
+    nodes.push({
+      id: `/symbols/${i}`, parentId: "/symbols", label: symbol.name || `(unnamed ${kind})`, fullName: symbol.name || `/symbols/${i}`,
+      depth: 2, group: false, hasChildren: false, sourcePath: symbol.path,
+      sourceBits: symbol.source_bits, sourceText: formatOffset(symbol.source_bits),
+      value: [`value ${formatOffset(symbol.value * 8)}`, section?.name || "", symbol.size > 0 ? formatBytes(symbol.size) : ""].filter(Boolean).join(" · "),
+      type: kind, logicalBytes: symbol.size, logicalApproximate: false, title: symbol.name || kind,
+    });
+  }
+  const remaining = elf.symbol_total - elf.symbols.length;
+  return {
+    status: "ok",
+    node: {
+      format: doc.template ?? "elf", title: "ELF program image",
+      summary: [machine, objectType, `${elf.sections.length.toLocaleString()} sections`, `${elf.symbol_total.toLocaleString()} symbols`, entry > 0 ? `entry ${formatOffset(entry * 8)}` : ""].filter(Boolean).join(" · "),
+      nodes, total: nodes.length + remaining, sizeLabel: "Memory / data size",
+      ...(remaining > 0 && expanded.has("/symbols") ? { more: [{ sectionId: "/symbols", afterId: elf.symbols.length === 0 ? "/symbols" : `/symbols/${elf.symbols.length - 1}`, count: remaining, label: "symbols" }] } : {}),
+    },
+  };
+}
+
 /** Adapters are intentionally independent of the view. GGUF, ZIP, SQLite,
  * RIFF and MP4 can add semantic nodes here without changing the table UI. */
 const ADAPTERS: readonly Adapter[] = [
@@ -491,6 +605,7 @@ const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "gguf", read: ggufOutline },
   { matches: (doc) => doc.template === "zip", read: zipOutline },
   { matches: (doc) => doc.template === "sqlite" || doc.template === "self", read: (doc) => sqliteOutline(doc) },
+  { matches: (doc) => doc.template === "elf" || doc.template === "bpf", read: elfOutline },
 ];
 
 export function hasLogicalOutline(doc: Doc): boolean {
