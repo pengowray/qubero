@@ -28,6 +28,7 @@ pub mod ggml_quant;
 mod gguf;
 mod git;
 mod gif;
+mod grubenv;
 mod gzip;
 mod hdf5;
 pub mod h5ad;
@@ -101,6 +102,7 @@ pub use elf_disasm::Program as ElfProgram;
 pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
 pub use gif::gif;
+pub use grubenv::grubenv;
 pub use gzip::gzip;
 pub use hdf5::hdf5;
 pub use id3::id3;
@@ -166,7 +168,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb",
+        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -224,6 +226,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "au" => Some(au()),
         "pi1" => Some(pi1()),
         "nes" => Some(nes()),
+        "grubenv" => Some(grubenv()),
         "gzip" => Some(gzip()),
         "gif" => Some(gif()),
         "aiff" => Some(aiff()),
@@ -278,6 +281,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"SQLite format 3\0", "sqlite"),
     (b"\x89PNG\r\n\x1a\n", "png"),
     (b"\xd0\x0d\xfe\xed", "dtb"),
+    (grubenv::SIGNATURE, "grubenv"),
     (b"FWS", "swf"),
     (b"CWS", "swf"),
     (b"ZWS", "swf"),
@@ -1488,6 +1492,7 @@ mod tests {
     #[test]
     fn linux_system_files_are_recognised() {
         assert_eq!(sniffed(b"\xd0\x0d\xfe\xed\0\0\x01\x00"), Some("dtb"));
+        assert_eq!(sniffed(b"# GRUB Environment Block\n####"), Some("grubenv"));
     }
 
     #[test]

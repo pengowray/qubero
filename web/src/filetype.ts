@@ -25,6 +25,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   cmx: "Corel Presentation Exchange CMX",
   dng: "Adobe DNG",
   dtb: "Device tree blob",
+  grubenv: "GRUB environment block",
   it: "Impulse Tracker IT",
   ico: "Windows icon/cursor",
   lnk: "Windows shortcut",
