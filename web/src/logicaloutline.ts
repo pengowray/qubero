@@ -611,7 +611,7 @@ function isoOutline(
   const nodes: LogicalNode[] = [{
     id: "/", parentId: null, label: "Disc image", fullName: "/", depth: 0, group: true, hasChildren: true,
     sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
-    value: `${title} · ${volume.blocks.toLocaleString()} blocks · ${formatBytes(volume.block_size)} blocks`,
+    value: `${title} · ${volume.blocks.toLocaleString()} blocks · ${formatBytes(volume.block_size)} blocks${volume.joliet ? " · Joliet names" : ""}`,
     type: "ISO 9660", logicalBytes: volumeBytes, logicalApproximate: false, title,
   }, {
     id: "/volume", parentId: "/", label: "Volume information", fullName: "/volume", depth: 1,
@@ -620,7 +620,7 @@ function isoOutline(
     logicalApproximate: false, title: `${title} primary volume descriptor`,
   }, {
     id: "/files", parentId: "/", label: "Files", fullName: "/files", depth: 1, group: true, hasChildren: true,
-    sourcePath: [...volume.descriptor_path, 14], sourceBits: volume.root_extent * volume.block_size * 8,
+    sourcePath: volume.descriptor_path, sourceBits: volume.root_extent * volume.block_size * 8,
     sourceText: formatOffset(volume.root_extent * volume.block_size * 8), value: "root directory", type: "directory",
     logicalBytes: volume.root_size, logicalApproximate: false, title: "Root directory",
   }];
@@ -633,7 +633,7 @@ function isoOutline(
     if (visited.has(visit)) return null;
     visited.add(visit);
     const limit = shown.get(id) ?? LOGICAL_PAGE;
-    const reply = doc.isoDirectory(extent, size, volume.block_size, limit);
+    const reply = doc.isoDirectory(extent, size, volume.block_size, limit, volume.joliet);
     if (reply.status !== "ok") return reply;
     const children: Array<{ id: string; extent: number; size: number; depth: number }> = [];
     for (let i = 0; i < reply.node.entries.length; i++) {
@@ -644,8 +644,10 @@ function isoOutline(
       nodes.push({
         id: childId, parentId: id, label: entry.name || `(entry ${i + 1})`, fullName: childId.slice(6),
         depth, group: entry.directory, hasChildren: entry.directory,
-        sourcePath: [...volume.descriptor_path, 14], sourceBits: dataBits, sourceText: formatOffset(dataBits),
-        value: entry.directory ? "directory" : "file data", type: entry.directory ? "directory" : "file",
+        sourcePath: volume.descriptor_path, sourceBits: dataBits,
+        sourceText: entry.extents > 1 ? "multiple" : formatOffset(dataBits),
+        value: entry.directory ? "directory" : entry.extents > 1 ? `${entry.extents.toLocaleString()} extents` : "file data",
+        type: entry.directory ? "directory" : "file",
         logicalBytes: entry.size, logicalApproximate: false,
         title: `${entry.name || `Entry ${i + 1}`} · directory record at ${formatOffset(entry.source_bits)}`,
       });
@@ -679,6 +681,128 @@ function isoOutline(
   };
 }
 
+function durationText(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(2) : seconds.toFixed(1)} s`;
+  const whole = Math.round(seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const rest = whole % 60;
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}` : `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+const WAV_METADATA = new Set(["guan", "wamd", "bext", "iXML", "_PMX", "axml", "id3", "ID3", "LIST", "cue", "smpl", "inst", "plst"]);
+const WAV_LABELS = new Map<string, string>([
+  ["fmt", "Audio format"], ["data", "Audio samples"], ["fact", "Sample count"], ["guan", "GUANO metadata"],
+  ["wamd", "Wildlife Acoustics metadata"], ["bext", "Broadcast metadata"], ["iXML", "iXML metadata"],
+  ["_PMX", "XMP metadata"], ["axml", "AXML metadata"], ["id3", "ID3 metadata"], ["ID3", "ID3 metadata"],
+  ["LIST", "Metadata list"], ["cue", "Cue points"], ["smpl", "Sampler data"], ["inst", "Instrument"], ["plst", "Playlist"],
+]);
+
+function wavOutline(doc: Doc): TemplateReply<LogicalOutline> {
+  const chunksReply = doc.templateNode([3]);
+  if (chunksReply.status !== "ok") return chunksReply;
+  let format = "audio";
+  let channels = 0;
+  let sampleRate = 0;
+  let byteRate = 0;
+  let blockAlign = 0;
+  let bitsPerSample = 0;
+  const formats: LogicalNode[] = [];
+  const audio: LogicalNode[] = [];
+  const metadata: LogicalNode[] = [];
+  const other: LogicalNode[] = [];
+  let audioBytes = 0;
+  for (let i = 0; i < chunksReply.node.child_count; i++) {
+    const path = [3, i];
+    const chunk = doc.templateNode(path);
+    if (chunk.status !== "ok") return chunk;
+    const body = doc.templateNode([...path, 2]);
+    if (body.status !== "ok") return body;
+    const rawId = nodeValue(doc, [...path, 0]) ?? chunk.node.name;
+    const id = rawId.trimEnd();
+    const label = WAV_LABELS.get(id) ?? (id ? `${id} chunk` : `Chunk ${i + 1}`);
+    if (id === "fmt") {
+      format = enumName(nodeValue(doc, [...path, 2, 0]), "audio");
+      channels = Number(nodeValue(doc, [...path, 2, 1]) ?? 0);
+      sampleRate = Number(nodeValue(doc, [...path, 2, 2]) ?? 0);
+      byteRate = Number(nodeValue(doc, [...path, 2, 3]) ?? 0);
+      blockAlign = Number(nodeValue(doc, [...path, 2, 4]) ?? 0);
+      bitsPerSample = Number(nodeValue(doc, [...path, 2, 5]) ?? 0);
+      formats.push({
+        id: `/format/${i}`, parentId: "/", label, fullName: "/format", depth: 1, group: false, hasChildren: false,
+        sourcePath: path, sourceBits: chunk.node.offset_bits, sourceText: formatOffset(chunk.node.offset_bits),
+        value: [`${sampleRate.toLocaleString()} Hz`, `${channels.toLocaleString()} channel${channels === 1 ? "" : "s"}`, `${bitsPerSample}-bit`, format].filter(Boolean).join(" · "),
+        type: "audio format", logicalBytes: body.node.size_bits / 8, logicalApproximate: false, title: "WAVE format chunk",
+      });
+      continue;
+    }
+    const common = {
+      sourcePath: path, sourceBits: body.node.offset_bits, sourceText: formatOffset(body.node.offset_bits),
+      logicalBytes: body.node.size_bits / 8, logicalApproximate: false,
+    } as const;
+    if (id === "data") {
+      const bytes = body.node.size_bits / 8;
+      audioBytes += bytes;
+      const frames = blockAlign > 0 ? Math.floor(bytes / blockAlign) : 0;
+      const duration = byteRate > 0 ? durationText(bytes / byteRate) : "";
+      audio.push({
+        id: `/audio/${i}`, parentId: "/audio", label: audio.length === 0 ? "Samples" : `Samples ${audio.length + 1}`,
+        fullName: `/audio/${i}`, depth: 2, group: false, hasChildren: false, ...common,
+        value: [frames > 0 ? `${frames.toLocaleString()} frames` : "", duration].filter(Boolean).join(" · ") || "sample data",
+        type: bitsPerSample > 0 ? `${format} ${bitsPerSample}-bit` : format, title: `${label} · ${formatBytes(bytes)}`,
+      });
+      continue;
+    }
+    const target = WAV_METADATA.has(id) || id === "fact" ? metadata : other;
+    let detail = `${formatBytes(body.node.size_bits / 8)} payload`;
+    if (id === "fact") {
+      const count = Number(nodeValue(doc, [...path, 2, 0]) ?? 0);
+      if (count > 0) detail = `${count.toLocaleString()} samples`;
+    } else if (id === "cue") {
+      const count = Number(nodeValue(doc, [...path, 2, 0]) ?? 0);
+      if (count >= 0) detail = `${count.toLocaleString()} cue points`;
+    } else if (id === "LIST") {
+      const listType = nodeValue(doc, [...path, 2, 0]);
+      if (listType) detail = `${listType.trim()} list`;
+    }
+    const parentId = target === metadata ? "/metadata" : "/other";
+    target.push({
+      id: `${parentId}/${i}`, parentId, label, fullName: `${parentId}/${id || i}`, depth: 2,
+      group: false, hasChildren: false, ...common, value: detail, type: id || "chunk", title: `${rawId} chunk`,
+    });
+  }
+  const kind = doc.template === "w4v" ? "W4V" : "WAVE";
+  const duration = byteRate > 0 ? durationText(audioBytes / byteRate) : "";
+  const nodes: LogicalNode[] = [{
+    id: "/", parentId: null, label: "Audio file", fullName: "/", depth: 0, group: true, hasChildren: true,
+    sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
+    value: [`${sampleRate.toLocaleString()} Hz`, channels > 0 ? `${channels} channel${channels === 1 ? "" : "s"}` : "", `${bitsPerSample}-bit`, duration].filter((part) => part && part !== "0 Hz" && part !== "0-bit").join(" · "),
+    type: kind, logicalBytes: audioBytes, logicalApproximate: false, title: `${kind} audio`,
+  }, ...formats];
+  const addSection = (id: string, label: string, rows: LogicalNode[], value: string): void => {
+    if (rows.length === 0) return;
+    nodes.push({
+      id, parentId: "/", label, fullName: id, depth: 1, group: true, hasChildren: true,
+      sourcePath: rows[0]?.sourcePath ?? [], sourceBits: rows[0]?.sourceBits ?? null, sourceText: rows.length === 1 ? rows[0]?.sourceText ?? "" : "multiple",
+      value, type: "chunk group", logicalBytes: rows.reduce((sum, row) => sum + (row.logicalBytes ?? 0), 0),
+      logicalApproximate: false, title: label,
+    });
+    nodes.push(...rows);
+  };
+  addSection("/audio", "Audio data", audio, [duration, `${audio.length.toLocaleString()} data chunk${audio.length === 1 ? "" : "s"}`].filter(Boolean).join(" · "));
+  addSection("/metadata", "Metadata and markers", metadata, `${metadata.length.toLocaleString()} chunk${metadata.length === 1 ? "" : "s"}`);
+  addSection("/other", "Other chunks", other, `${other.length.toLocaleString()} chunk${other.length === 1 ? "" : "s"}`);
+  return {
+    status: "ok",
+    node: {
+      format: doc.template ?? "wav", title: `${kind} audio`,
+      summary: [format, sampleRate > 0 ? `${sampleRate.toLocaleString()} Hz` : "", channels > 0 ? `${channels} channel${channels === 1 ? "" : "s"}` : "", duration].filter(Boolean).join(" · "),
+      nodes, total: nodes.length, sizeLabel: "Chunk data",
+    },
+  };
+}
+
 /** Adapters are intentionally independent of the view. GGUF, ZIP, SQLite,
  * RIFF and MP4 can add semantic nodes here without changing the table UI. */
 const ADAPTERS: readonly Adapter[] = [
@@ -688,6 +812,7 @@ const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "sqlite" || doc.template === "self", read: (doc) => sqliteOutline(doc) },
   { matches: (doc) => doc.template === "elf" || doc.template === "bpf", read: elfOutline },
   { matches: (doc) => doc.template === "iso9660", read: isoOutline },
+  { matches: (doc) => doc.template === "wav" || doc.template === "w4v", read: (doc) => wavOutline(doc) },
 ];
 
 export function hasLogicalOutline(doc: Doc): boolean {

@@ -101,6 +101,9 @@ export class TypeTable {
    * away. It is cleared whenever the document changes. */
   private readonly anatomy = new Map<string, readonly AnatomyPart[]>();
   private selected: string | null = null;
+  /** Logical rows can share one storage node while pointing at different
+   * byte extents, as ISO directory entries do. */
+  private selectedLogicalId: string | null = null;
   private editing: Editing | null = null;
   /** Cell to focus once the table has been rebuilt. */
   private focusKey: string | null = null;
@@ -178,6 +181,7 @@ export class TypeTable {
     this.outlineMode = mode;
     this.outlineModeChosen = true;
     this.editing = null;
+    if (mode === "storage") this.selectedLogicalId = null;
     this.render();
   }
 
@@ -233,6 +237,7 @@ export class TypeTable {
     if (this.outlineMode === "logical" && this.logical !== null) {
       const node = this.logical.nodes.find((candidate) => key(candidate.sourcePath) === k);
       if (node !== undefined) {
+        this.selectedLogicalId = node.id;
         const byId = new Map(this.logical.nodes.map((candidate) => [candidate.id, candidate]));
         let parent = node.parentId;
         while (parent !== null) {
@@ -251,6 +256,7 @@ export class TypeTable {
   /** Drop the selection and any half-typed value. */
   clearSelection(): void {
     this.selected = null;
+    this.selectedLogicalId = null;
     this.editing = null;
     this.status.textContent = "";
     this.render();
@@ -300,6 +306,7 @@ export class TypeTable {
     const startBit = Number(row.dataset["start"]);
     const endBit = Number(row.dataset["end"]);
     this.selected = k;
+    this.selectedLogicalId = row.dataset["logicalId"] ?? null;
     if (t.closest("[data-edit]")) this.beginEdit(k, row.dataset["value"] ?? "");
     else this.editing = null;
     this.render();
@@ -515,7 +522,7 @@ export class TypeTable {
     }
     tr.title = node.title;
     if (node.group) tr.dataset["logicalGroup"] = "1";
-    if (k === this.selected) tr.classList.add("tt-selected");
+    if (this.selectedLogicalId === node.id || (this.selectedLogicalId === null && k === this.selected)) tr.classList.add("tt-selected");
     tr.classList.add(fieldClass(node.group ? "composite" : "bytes"));
     const source = document.createElement("td");
     source.className = "tt-num tt-addr";

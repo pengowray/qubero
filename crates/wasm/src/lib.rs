@@ -638,6 +638,7 @@ struct ElfSymbolDto {
 struct IsoVolumeDto {
     descriptor_path: Vec<usize>,
     volume: String,
+    joliet: bool,
     block_size: f64,
     blocks: f64,
     root_extent: f64,
@@ -658,6 +659,8 @@ struct IsoEntryDto {
     extent: f64,
     size: f64,
     source_bits: f64,
+    extents: f64,
+    multi_extent: bool,
 }
 
 /// One entry of the annotation column.
@@ -1314,6 +1317,8 @@ impl Editor {
             return reply::<IsoVolumeDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
         }
         let mut descriptor = vec![0u8; 2048];
+        let mut primary = None;
+        let mut joliet = None;
         for i in 0..64usize {
             let at = (16 + i as u64) * 2048;
             if at + 2048 > self.doc.len_bytes() {
@@ -1329,29 +1334,50 @@ impl Editor {
             if descriptor[0] == 255 {
                 break;
             }
-            if descriptor[0] != 1 {
+            let is_primary = descriptor[0] == 1;
+            let is_joliet = descriptor[0] == 2
+                && matches!(&descriptor[88..91], b"%/@" | b"%/C" | b"%/E");
+            if !is_primary && !is_joliet {
                 continue;
             }
             let le16 = |p: usize| u16::from_le_bytes([descriptor[p], descriptor[p + 1]]) as u64;
             let le32 = |p: usize| u32::from_le_bytes(descriptor[p..p + 4].try_into().unwrap()) as u64;
-            let volume = String::from_utf8_lossy(&descriptor[40..72]).trim_end_matches([' ', '\0']).to_string();
+            let volume = if is_joliet {
+                let decoded: String = descriptor[40..72]
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                    .filter_map(|c| char::from_u32(c as u32))
+                    .collect();
+                decoded.trim_end_matches([' ', '\0']).to_string()
+            } else {
+                String::from_utf8_lossy(&descriptor[40..72]).trim_end_matches([' ', '\0']).to_string()
+            };
             let root = 156usize;
-            return reply(Ok(IsoVolumeDto {
+            let found = IsoVolumeDto {
                 descriptor_path: vec![1, i, 3],
                 volume,
+                joliet: is_joliet,
                 block_size: le16(128) as f64,
                 blocks: le32(80) as f64,
                 root_extent: le32(root + 2) as f64,
                 root_size: le32(root + 10) as f64,
                 root_source_bits: ((at + root as u64) * 8) as f64,
-            }));
+            };
+            if is_joliet {
+                joliet = Some(found);
+            } else {
+                primary = Some(found);
+            }
         }
-        reply::<IsoVolumeDto>(Err(EvalError::Failed("primary volume descriptor not found".into())))
+        match joliet.or(primary) {
+            Some(volume) => reply(Ok(volume)),
+            None => reply::<IsoVolumeDto>(Err(EvalError::Failed("primary volume descriptor not found".into()))),
+        }
     }
 
     /// One ISO directory, bounded for display but counted in full. Child
     /// directories are read only when their logical row is opened.
-    pub fn iso_directory(&self, extent: f64, size: f64, block_size: f64, limit: u32) -> String {
+    pub fn iso_directory(&self, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
         if self.template != "iso9660" {
             return reply::<IsoDirectoryDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
         }
@@ -1366,8 +1392,10 @@ impl Editor {
         if !missing.is_empty() {
             return reply::<IsoDirectoryDto>(Err(EvalError::Pending(missing)));
         }
-        let mut entries = Vec::new();
+        let mut entries: Vec<IsoEntryDto> = Vec::new();
         let mut total = 0usize;
+        let mut last_name = String::new();
+        let mut last_multi = false;
         let mut pos = 0usize;
         while pos < bytes.len() {
             let record_len = bytes[pos] as usize;
@@ -1385,9 +1413,32 @@ impl Editor {
             }
             let raw = &bytes[pos + 33..pos + 33 + name_len];
             if raw != [0] && raw != [1] {
-                total += 1;
-                if entries.len() < limit as usize {
-                    let mut name = String::from_utf8_lossy(raw).into_owned();
+                let mut name: String = if joliet {
+                    raw.chunks_exact(2)
+                        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                        .filter_map(|c| char::from_u32(c as u32))
+                        .collect()
+                } else {
+                    String::from_utf8_lossy(raw).into_owned()
+                };
+                // Rock Ridge NM carries the POSIX name in the System Use
+                // area. It wins over the restricted ISO identifier.
+                let mut system = pos + 33 + name_len + usize::from(name_len % 2 == 0);
+                let end = pos + record_len;
+                let mut rock_ridge = String::new();
+                while system + 4 <= end {
+                    let field_len = bytes[system + 2] as usize;
+                    if field_len < 4 || system + field_len > end {
+                        break;
+                    }
+                    if &bytes[system..system + 2] == b"NM" && field_len >= 5 {
+                        rock_ridge.push_str(&String::from_utf8_lossy(&bytes[system + 5..system + field_len]));
+                    }
+                    system += field_len;
+                }
+                if !rock_ridge.is_empty() {
+                    name = rock_ridge;
+                } else {
                     if let Some(version) = name.rfind(';') {
                         if name[version + 1..].chars().all(|c| c.is_ascii_digit()) {
                             name.truncate(version);
@@ -1396,15 +1447,35 @@ impl Editor {
                     if name.ends_with('.') {
                         name.pop();
                     }
-                    let le32 = |p: usize| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as u64;
+                }
+                let multi = bytes[pos + 25] & 0x80 != 0;
+                let continuation = last_multi && name == last_name;
+                let le32 = |p: usize| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as u64;
+                let part_size = le32(pos + 10) as f64;
+                if continuation {
+                    if let Some(previous) = entries.last_mut() {
+                        if previous.name == name {
+                            previous.size += part_size;
+                            previous.extents += 1.0;
+                            previous.multi_extent = multi;
+                        }
+                    }
+                } else {
+                    total += 1;
+                }
+                if !continuation && entries.len() < limit as usize {
                     entries.push(IsoEntryDto {
-                        name,
+                        name: name.clone(),
                         directory: bytes[pos + 25] & 2 != 0,
                         extent: le32(pos + 2) as f64,
-                        size: le32(pos + 10) as f64,
+                        size: part_size,
                         source_bits: ((at + pos as u64) * 8) as f64,
+                        extents: 1.0,
+                        multi_extent: multi,
                     });
                 }
+                last_name = name;
+                last_multi = multi;
             }
             pos += record_len;
         }

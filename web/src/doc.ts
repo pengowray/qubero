@@ -295,6 +295,7 @@ export type ElfContents = {
 export type IsoVolume = {
   readonly descriptor_path: readonly number[];
   readonly volume: string;
+  readonly joliet: boolean;
   readonly block_size: number;
   readonly blocks: number;
   readonly root_extent: number;
@@ -309,6 +310,8 @@ export type IsoDirectory = {
     readonly extent: number;
     readonly size: number;
     readonly source_bits: number;
+    readonly extents: number;
+    readonly multi_extent: boolean;
   }[];
   readonly total: number;
 };
@@ -847,8 +850,8 @@ export class Doc {
     return this.handleReply(this.editor.iso_volume());
   }
 
-  isoDirectory(extent: number, size: number, blockSize: number, limit: number): TemplateReply<IsoDirectory> {
-    return this.handleReply(this.editor.iso_directory(extent, size, blockSize, limit));
+  isoDirectory(extent: number, size: number, blockSize: number, limit: number, joliet: boolean): TemplateReply<IsoDirectory> {
+    return this.handleReply(this.editor.iso_directory(extent, size, blockSize, limit, joliet));
   }
 
   templateNode(path: readonly number[]): TemplateReply<TemplateNode> {
