@@ -651,6 +651,7 @@ export class Inspector {
     }
     if (this.doc.template === "utmp" && n.name === "tv_sec") return unixDate(raw, "UTC");
     if (this.doc.template === "cpio" && n.name === "c_mtime") return unixDate(raw, "UTC");
+    if ((this.doc.template === "ar" || this.doc.template === "deb") && n.name === "mtime") return unixDate(raw, "UTC");
     // A journal keeps its wall-clock times in microseconds.
     if (this.doc.template === "journal" && n.name.endsWith("realtime")) return unixDate(raw / 1e6, "UTC");
     if (this.doc.template === "mca" && path.length === 2) {

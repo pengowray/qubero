@@ -16,6 +16,7 @@ const DIALOG_CLOSE = "Close";
 const IDENTIFIED_FROM = `Identified from the file's first bytes, using the rule database of the Unix "file" command.`;
 const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
 const TEMPLATE_LABEL: Record<string, string> = {
+  ar: "Unix archive",
   aseprite: "Aseprite",
   braw: "Blackmagic RAW",
   arw: "Sony ARW",
@@ -24,6 +25,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   cdr: "CorelDRAW CDR",
   cmx: "Corel Presentation Exchange CMX",
   cpio: "cpio archive (initramfs)",
+  deb: "Debian package",
   dng: "Adobe DNG",
   dtb: "Device tree blob",
   grubenv: "GRUB environment block",
@@ -37,6 +39,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   orf: "Olympus ORF",
   pef: "Pentax PEF",
   psd: "Adobe Photoshop PSD/PSB",
+  rpm: "RPM package",
   rw2: "Panasonic RW2",
   srw: "Samsung SRW",
   s3m: "Scream Tracker S3M",

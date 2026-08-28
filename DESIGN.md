@@ -1118,6 +1118,46 @@ the mission rather than with CCSDS, and that a packet whose APID is all ones
 is an idle packet sent to keep a downlink busy. A capture is mostly those: of
 the 242,725 packets in the one this was tested against, 229,231 are idle.
 
+### Two ways to write a package
+A Debian package and an RPM hold the same thing and agree on nothing about how
+to write it. Both went in together, and between them they cost the IR one
+constructor.
+
+A `.deb` is an `ar` archive, which is the oldest archive format Unix still
+uses: a magic line and then members, each with sixty bytes of header written as
+text. A static library is the same file with object files in it, so one
+template reads both and the only thing that makes a package a package is the
+name of the first member, `debian-binary`. Every number in the header is
+digits, left aligned in a field padded with spaces, and the mode is octal
+because a Unix mode is read in no other base, which is `Ty::octal` and the
+third radix `TextInt` has grown. The awkward part is that GNU `ar` leaves the
+timestamp, owner and mode of its long-name table blank. An empty field is not a
+number and reading it as one would report an error where the archive did
+nothing wrong, so each of those fields is a `Switch` on `Expr::Peek` of its own
+first byte: a space at the front of a left-aligned field means there is nothing
+in it, and the field reads as the spaces it holds.
+
+An RPM is a lead nobody reads any more, two headers of the same shape, and the
+payload. A header is a run of sixteen-byte index entries and a store of bytes
+those entries point into, so the values are in no order and the space between
+them is alignment padding: a run of four-byte numbers starts on a four-byte
+boundary. Reading the store in order would mean guessing at that padding, so
+the store is a `PointerList` and every value is at the offset its own entry
+gives, which leaves what no entry claims as a gap. The list sits in a
+structure inside the store's `Sized` window rather than being the window: an
+anchor of `Anchor::Window` looks outside the field asking, so a list that is
+its own window would count from the file. The two headers keep separate tag
+vocabularies, because the numbers overlap and mean different things: 1000 in
+the signature header is how many bytes follow it, and 1000 in the header is the
+package's name. One asymmetry has a test of its own, since a file read a byte
+late is unreadable from there on: the signature section is padded to a multiple
+of eight bytes and the header after it is not.
+
+Both stop in the same place. A `.deb` carries two tar archives and an RPM
+carries a cpio archive, and all three are compressed. Naming which compressor
+wrote one from its first bytes is as far as this goes, which is where the
+initramfs stopped as well.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
