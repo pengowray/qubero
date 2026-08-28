@@ -33,11 +33,23 @@ export type LogicalOutline = {
   readonly progressText?: string;
   /** The final column is semantic and can differ by adapter. */
   readonly sizeLabel?: string;
+  readonly more?: readonly LogicalMore[];
+};
+
+export type LogicalMore = {
+  readonly sectionId: string;
+  readonly afterId: string;
+  readonly count: number;
+  readonly label: string;
 };
 
 type Adapter = {
   readonly matches: (doc: Doc) => boolean;
-  readonly read: (doc: Doc, expanded: ReadonlySet<string>) => TemplateReply<LogicalOutline>;
+  readonly read: (
+    doc: Doc,
+    expanded: ReadonlySet<string>,
+    shown: ReadonlyMap<string, number>,
+  ) => TemplateReply<LogicalOutline>;
 };
 
 const LOGICAL_PAGE = 80;
@@ -191,7 +203,11 @@ function ggufItemDescription(doc: Doc, section: string, path: readonly number[],
   return fallback;
 }
 
-function ggufOutline(doc: Doc, expanded: ReadonlySet<string>): TemplateReply<LogicalOutline> {
+function ggufOutline(
+  doc: Doc,
+  expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> {
   const tensorsReply = doc.templateNode([2]);
   if (tensorsReply.status !== "ok") return tensorsReply;
   const metadataReply = doc.templateNode([3]);
@@ -231,6 +247,7 @@ function ggufOutline(doc: Doc, expanded: ReadonlySet<string>): TemplateReply<Log
   ] as const;
   let progressText: string | undefined;
   let omitted = 0;
+  const more: LogicalMore[] = [];
   for (const section of sections) {
     nodes.push({
       id: section.id,
@@ -253,7 +270,7 @@ function ggufOutline(doc: Doc, expanded: ReadonlySet<string>): TemplateReply<Log
     // through expanded sections in file order instead of starting competing
     // walks in a single render.
     if (!expanded.has(section.id) || progressText !== undefined) continue;
-    const limit = Math.min(LOGICAL_PAGE, section.count);
+    const limit = Math.min(shown.get(section.id) ?? LOGICAL_PAGE, section.count);
     let added = 0;
     for (let i = 0; i < limit; i++) {
       const path = [...section.path, i];
@@ -289,6 +306,14 @@ function ggufOutline(doc: Doc, expanded: ReadonlySet<string>): TemplateReply<Log
       added += 1;
     }
     omitted += section.count - added;
+    if (added < section.count) {
+      more.push({
+        sectionId: section.id,
+        afterId: added === 0 ? section.id : `${section.id}/${added - 1}`,
+        count: section.count - added,
+        label: section.type,
+      });
+    }
   }
   return {
     status: "ok",
@@ -299,7 +324,98 @@ function ggufOutline(doc: Doc, expanded: ReadonlySet<string>): TemplateReply<Log
       nodes,
       total: nodes.length + omitted,
       ...(progressText === undefined ? {} : { progressText }),
+      ...(more.length === 0 ? {} : { more }),
       sizeLabel: "Stored extent",
+    },
+  };
+}
+
+function zipOutline(
+  doc: Doc,
+  _expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> {
+  const recordsReply = doc.templateNode([0]);
+  if (recordsReply.status !== "ok") return recordsReply;
+  const locals: Array<{ path: number[]; node: import("./doc.js").TemplateNode }> = [];
+  for (let i = 0; i < recordsReply.node.child_count; i++) {
+    const signature = doc.templateNode([0, i, 0]);
+    if (signature.status !== "ok") return signature;
+    if (!signature.node.value.startsWith("local file")) continue;
+    const record = doc.templateNode([0, i]);
+    if (record.status !== "ok") return record;
+    locals.push({ path: [0, i], node: record.node });
+  }
+  const limit = Math.min(shown.get("/entries") ?? LOGICAL_PAGE, locals.length);
+  const folderNodes = new Map<string, LogicalNode>();
+  const fileNodes: LogicalNode[] = [];
+  let unpackedTotal = 0;
+  for (const local of locals.slice(0, limit)) {
+    const name = nodeValue(doc, [...local.path, 1, 10]) ?? local.node.name;
+    const clean = name.replace(/\\/g, "/").replace(/^\/+/, "");
+    const parts = clean.split("/").filter(Boolean);
+    let parentId = "/";
+    const ancestors: string[] = [];
+    for (let i = 0; i < Math.max(0, parts.length - (clean.endsWith("/") ? 0 : 1)); i++) {
+      const label = parts[i] ?? "";
+      const id = `${parentId === "/" ? "" : parentId}/${label}`;
+      if (!folderNodes.has(id)) {
+        folderNodes.set(id, {
+          id, parentId, label, fullName: id, depth: i + 1, group: true, hasChildren: true,
+          sourcePath: local.path, sourceBits: null, sourceText: "multiple", value: "folder", type: "folder",
+          logicalBytes: 0, logicalApproximate: false, title: id,
+        });
+      }
+      parentId = id;
+      ancestors.push(id);
+    }
+    if (clean.endsWith("/")) continue;
+    const compressed = Number(nodeValue(doc, [...local.path, 1, 6]) ?? 0);
+    const unpacked = Number(nodeValue(doc, [...local.path, 1, 7]) ?? 0);
+    const compression = nodeValue(doc, [...local.path, 1, 2])?.replace(/ \(\d+\)$/, "") ?? "file";
+    unpackedTotal += unpacked;
+    for (const id of ancestors) {
+      const folder = folderNodes.get(id);
+      if (folder !== undefined) folderNodes.set(id, { ...folder, logicalBytes: (folder.logicalBytes ?? 0) + unpacked });
+    }
+    fileNodes.push({
+      id: `/entry/${local.path[1]}`, parentId, label: parts.at(-1) ?? clean, fullName: clean,
+      depth: parts.length, group: false, hasChildren: false, sourcePath: local.path,
+      sourceBits: local.node.offset_bits, sourceText: formatOffset(local.node.offset_bits),
+      value: `${formatBytes(compressed)} stored · ${compression}`, type: "file",
+      logicalBytes: unpacked, logicalApproximate: false,
+      title: `${clean} · ${formatBytes(compressed)} stored, ${formatBytes(unpacked)} unpacked`,
+    });
+  }
+  const root: LogicalNode = {
+    id: "/", parentId: null, label: "Archive", fullName: "/", depth: 0, group: true, hasChildren: true,
+    sourcePath: [], sourceBits: 0, sourceText: formatOffset(0), value: `${locals.length.toLocaleString()} entries`,
+    type: "ZIP", logicalBytes: unpackedTotal, logicalApproximate: limit < locals.length,
+    title: "ZIP archive",
+  };
+  const unordered = [...folderNodes.values(), ...fileNodes];
+  const children = new Map<string, LogicalNode[]>();
+  for (const node of unordered) {
+    const parent = node.parentId ?? "/";
+    const list = children.get(parent) ?? [];
+    list.push(node);
+    children.set(parent, list);
+  }
+  const nodes = [root];
+  const append = (parent: string): void => {
+    for (const node of children.get(parent) ?? []) {
+      nodes.push(node);
+      if (node.group) append(node.id);
+    }
+  };
+  append("/");
+  const remaining = locals.length - limit;
+  return {
+    status: "ok",
+    node: {
+      format: "zip", title: "ZIP archive", summary: `${locals.length.toLocaleString()} entries`, nodes,
+      total: nodes.length + remaining, sizeLabel: "Unpacked size",
+      ...(remaining === 0 ? {} : { more: [{ sectionId: "/entries", afterId: "/", count: remaining, label: "entries" }] }),
     },
   };
 }
@@ -309,14 +425,19 @@ function ggufOutline(doc: Doc, expanded: ReadonlySet<string>): TemplateReply<Log
 const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "hdf5", read: (doc) => hdf5Outline(doc) },
   { matches: (doc) => doc.template === "gguf", read: ggufOutline },
+  { matches: (doc) => doc.template === "zip", read: zipOutline },
 ];
 
 export function hasLogicalOutline(doc: Doc): boolean {
   return ADAPTERS.some((adapter) => adapter.matches(doc));
 }
 
-export function logicalOutline(doc: Doc, expanded: ReadonlySet<string>): TemplateReply<LogicalOutline> | null {
-  return ADAPTERS.find((adapter) => adapter.matches(doc))?.read(doc, expanded) ?? null;
+export function logicalOutline(
+  doc: Doc,
+  expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> | null {
+  return ADAPTERS.find((adapter) => adapter.matches(doc))?.read(doc, expanded, shown) ?? null;
 }
 
 export function logicalLength(node: LogicalNode): string {

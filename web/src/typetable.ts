@@ -94,6 +94,7 @@ export class TypeTable {
   private readonly collapseButton: HTMLButtonElement;
   private readonly expanded = new Set<string>();
   private readonly logicalExpanded = new Set<string>(["/"]);
+  private readonly logicalShown = new Map<string, number>();
   private readonly shown = new Map<string, number>();
   /** Direct-child extents learned when a composite is opened. Keeping this
    * small preview means collapsing the row does not throw its useful shape
@@ -184,6 +185,7 @@ export class TypeTable {
     if (this.outlineMode === "logical") {
       this.logicalExpanded.clear();
       this.logicalExpanded.add("/");
+      this.logicalShown.clear();
     } else {
       this.expanded.clear();
       this.expanded.add("");
@@ -262,6 +264,13 @@ export class TypeTable {
     if (more) {
       const k = more.dataset["more"] ?? "";
       this.shown.set(k, (this.shown.get(k) ?? PAGE) + PAGE);
+      this.render();
+      return;
+    }
+    const logicalMore = t.closest<HTMLElement>("[data-logical-more]");
+    if (logicalMore) {
+      const id = logicalMore.dataset["logicalMore"] ?? "";
+      this.logicalShown.set(id, (this.logicalShown.get(id) ?? 80) + 80);
       this.render();
       return;
     }
@@ -416,7 +425,7 @@ export class TypeTable {
 
   private renderLogical(): void {
     this.setHead(["Source", "Object", "Shape / contents", "Type", "Size"]);
-    const reply = logicalOutline(this.doc, this.logicalExpanded);
+    const reply = logicalOutline(this.doc, this.logicalExpanded, this.logicalShown);
     const frag = document.createDocumentFragment();
     if (reply === null) {
       this.outlineMode = "storage";
@@ -449,11 +458,14 @@ export class TypeTable {
     summary.append(summaryCell);
     frag.append(summary);
     const byId = new Map(reply.node.nodes.map((node) => [node.id, node]));
+    const moreByAfter = new Map(reply.node.more?.map((more) => [more.afterId, more]) ?? []);
     for (const node of reply.node.nodes) {
       if (!this.logicalVisible(node, byId)) continue;
       this.addLogicalRow(frag, node, node.hasChildren || reply.node.nodes.some((child) => child.parentId === node.id));
+      const more = moreByAfter.get(node.id);
+      if (more !== undefined) this.addLogicalMoreRow(frag, more.sectionId, more.count, more.label);
     }
-    if (reply.node.nodes.length < reply.node.total) {
+    if ((reply.node.more?.length ?? 0) === 0 && reply.node.nodes.length < reply.node.total) {
       const more = document.createElement("tr");
       more.className = "tt-skip";
       const td = document.createElement("td");
@@ -465,6 +477,21 @@ export class TypeTable {
     this.rebuilding = true;
     this.body.replaceChildren(frag);
     this.rebuilding = false;
+  }
+
+  private addLogicalMoreRow(frag: DocumentFragment, sectionId: string, count: number, label: string): void {
+    const tr = document.createElement("tr");
+    tr.className = "tt-more-row";
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tt-more";
+    button.dataset["logicalMore"] = sectionId;
+    button.textContent = `Show ${Math.min(80, count).toLocaleString()} more · ${count.toLocaleString()} ${label} remaining`;
+    td.append(button);
+    tr.append(td);
+    frag.append(tr);
   }
 
   private logicalVisible(node: LogicalNode, byId: ReadonlyMap<string, LogicalNode>): boolean {
