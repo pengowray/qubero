@@ -42,6 +42,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   com: "DOS .COM program",
   msdos: "MS-DOS program",
   ne: "16-bit Windows program",
+  le: "Linear executable (LE/LX)",
   macho: "Mach-O",
   bpf: "eBPF object",
   self: "SELF program database",

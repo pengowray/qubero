@@ -59,6 +59,7 @@ mod pnm;
 mod qoi;
 mod png;
 mod safetensors;
+mod le;
 mod sqlite;
 mod swf;
 mod tap;
@@ -124,6 +125,7 @@ pub use pnm::pnm;
 pub use qoi::qoi;
 pub use png::png;
 pub use safetensors::safetensors;
+pub use le::le;
 pub use sqlite::{self_db, sqlite};
 pub use swf::swf;
 pub use tap::tap;
@@ -164,7 +166,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
-        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "macho",
+        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -254,6 +256,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "thumbsdb" => Some(thumbsdb()),
         "ico" => Some(ico()),
         "elf" => Some(elf()),
+        "le" => Some(le()),
         "bpf" => Some(bpf()),
         _ => assimp::template(name),
     }
@@ -372,6 +375,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("pak")
     } else if is_ne(head) {
         Some("ne")
+    } else if is_le(head) {
+        Some("le")
     } else if is_pe(head) {
         Some("pe")
     } else if is_coff(head, len) {
@@ -1091,6 +1096,19 @@ fn is_ne(head: &[u8]) -> bool {
     }
 }
 
+/// Whether these leading bytes are a linear executable: an `MZ` whose pointer
+/// at 0x3c reaches a header saying `LE` or `LX`. One template reads both.
+fn is_le(head: &[u8]) -> bool {
+    if !head.starts_with(b"MZ") || head.len() < 0x40 {
+        return false;
+    }
+    let at = u32::from_le_bytes([head[0x3c], head[0x3d], head[0x3e], head[0x3f]]) as usize;
+    match at.checked_add(2) {
+        Some(end) if end <= head.len() => matches!(&head[at..end], b"LE" | b"LX"),
+        _ => false,
+    }
+}
+
 /// Whether these leading bytes are a Windows executable rather than a DOS one.
 ///
 /// Both open with `MZ`. What separates them is a PE signature at the offset
@@ -1210,12 +1228,18 @@ mod tests {
     }
 
     #[test]
-    fn a_later_format_with_no_template_is_left_to_the_rules() {
+    fn both_linear_executables_read_with_the_one_template() {
+        // A Windows VxD driver and a 32-bit OS/2 program: the same header
+        // under two signatures.
         let mut v = mz(0x80, 0x100, false);
-        // A DOS extender's program, which is neither a PE nor a DOS one and
-        // has no template here.
         v[0x80..0x82].copy_from_slice(b"LE");
-        assert_eq!(sniff(&v, v.len() as u64), None);
+        assert_eq!(sniff(&v, v.len() as u64), Some("le"));
+        v[0x80..0x82].copy_from_slice(b"LX");
+        assert_eq!(sniff(&v, v.len() as u64), Some("le"));
+        // A signature nothing knows is a DOS program with something after it,
+        // which is what the file is until a header says otherwise.
+        v[0x80..0x82].copy_from_slice(b"LC");
+        assert_eq!(sniff(&v, v.len() as u64), Some("msdos"));
     }
 
     #[test]
