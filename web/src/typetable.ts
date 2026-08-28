@@ -294,6 +294,7 @@ export class TypeTable {
     if (t.closest("[data-edit]")) this.beginEdit(k, row.dataset["value"] ?? "");
     else this.editing = null;
     this.render();
+    if (!Number.isFinite(startBit) || !Number.isFinite(endBit)) return;
     this.onPick({ path: pathOf(k), startBit, endBit });
   }
 
@@ -414,8 +415,8 @@ export class TypeTable {
   }
 
   private renderLogical(): void {
-    this.setHead(["Source", "Object", "Shape / contents", "Type", "Logical size"]);
-    const reply = logicalOutline(this.doc);
+    this.setHead(["Source", "Object", "Shape / contents", "Type", "Size"]);
+    const reply = logicalOutline(this.doc, this.logicalExpanded);
     const frag = document.createDocumentFragment();
     if (reply === null) {
       this.outlineMode = "storage";
@@ -435,6 +436,11 @@ export class TypeTable {
     }
     this.progress.hidden = true;
     this.logical = reply.node;
+    this.setHead(["Source", "Object", "Shape / contents", "Type", reply.node.sizeLabel ?? "Logical size"]);
+    if (reply.node.progressText !== undefined) {
+      this.progress.textContent = reply.node.progressText;
+      this.progress.hidden = false;
+    }
     const summary = document.createElement("tr");
     summary.className = "tt-logical-summary";
     const summaryCell = document.createElement("td");
@@ -445,7 +451,7 @@ export class TypeTable {
     const byId = new Map(reply.node.nodes.map((node) => [node.id, node]));
     for (const node of reply.node.nodes) {
       if (!this.logicalVisible(node, byId)) continue;
-      this.addLogicalRow(frag, node, reply.node.nodes.some((child) => child.parentId === node.id));
+      this.addLogicalRow(frag, node, node.hasChildren || reply.node.nodes.some((child) => child.parentId === node.id));
     }
     if (reply.node.nodes.length < reply.node.total) {
       const more = document.createElement("tr");
@@ -475,8 +481,10 @@ export class TypeTable {
     const k = key(node.sourcePath);
     tr.dataset["path"] = k;
     tr.dataset["logicalId"] = node.id;
-    tr.dataset["start"] = String(node.sourceBits);
-    tr.dataset["end"] = String(node.sourceBits + 8);
+    if (node.sourceBits !== null) {
+      tr.dataset["start"] = String(node.sourceBits);
+      tr.dataset["end"] = String(node.sourceBits + 8);
+    }
     tr.title = node.title;
     if (node.group) tr.dataset["logicalGroup"] = "1";
     if (k === this.selected) tr.classList.add("tt-selected");
