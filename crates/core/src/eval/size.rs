@@ -189,6 +189,7 @@ impl Evaluator {
                 if n < 0 {
                     return fail("negative count");
                 }
+                self.list_mut(path).expected_count = Some(n as u64);
                 Ok(n as u64)
             }
             // As many children as the array of offsets has entries.

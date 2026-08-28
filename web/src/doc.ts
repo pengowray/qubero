@@ -479,6 +479,14 @@ export type TemplateReply<T> =
   | { readonly status: "working"; readonly reachedBytes: number }
   | { readonly status: "error"; readonly message: string };
 
+export type ExtentEstimate = {
+  readonly path: readonly number[];
+  readonly measured_items: number;
+  readonly total_items: number;
+  readonly measured_bits: number;
+  readonly estimated_bits: number;
+};
+
 type RawReply<T> =
   | { status: "ok"; node: T; wanted?: number[] }
   | { status: "pending"; chunks: number[]; reached_bytes: number }
@@ -643,6 +651,17 @@ export class Doc {
   // ----- templates -----
 
   template: string | null = null;
+
+  /** Best current projection for a variable-size array still being walked. */
+  extentEstimate(): ExtentEstimate | null {
+    const raw = this.editor.extent_estimate();
+    if (raw === "") return null;
+    try {
+      return JSON.parse(raw) as ExtentEstimate;
+    } catch {
+      return null;
+    }
+  }
 
   get templateNames(): string[] {
     return this.editor.template_names();

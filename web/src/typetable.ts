@@ -9,6 +9,8 @@ import type { Doc, TemplateNode } from "./doc.js";
 import { fieldClass } from "./fieldstyle.js";
 import { appendAnatomy } from "./anatomy.js";
 import type { AnatomyPart } from "./anatomy.js";
+import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.js";
+import type { LogicalNode, LogicalOutline } from "./logicaloutline.js";
 
 const PAGE = 200;
 /** The Value column shows a preview of a long field, so editing it here would
@@ -84,7 +86,14 @@ export class TypeTable {
   private readonly note: HTMLParagraphElement;
   /** How far the structure has been worked out, while that is still going on. */
   private readonly progress: HTMLParagraphElement;
+  private readonly head: HTMLTableRowElement;
+  private readonly modeGroup: HTMLElement;
+  private readonly logicalButton: HTMLButtonElement;
+  private readonly storageButton: HTMLButtonElement;
+  private readonly openButton: HTMLButtonElement;
+  private readonly collapseButton: HTMLButtonElement;
   private readonly expanded = new Set<string>();
+  private readonly logicalExpanded = new Set<string>(["/"]);
   private readonly shown = new Map<string, number>();
   /** Direct-child extents learned when a composite is opened. Keeping this
    * small preview means collapsing the row does not throw its useful shape
@@ -96,6 +105,9 @@ export class TypeTable {
   private focusKey: string | null = null;
   /** True while render() is replacing the rows, so blur is not a cancel. */
   private rebuilding = false;
+  private outlineMode: "logical" | "storage" = "storage";
+  private outlineModeChosen = false;
+  private logical: LogicalOutline | null = null;
 
   onPick: (pick: FieldPick) => void = () => {};
   /** Ctrl+click on a field holding an offset: go to where it points. */
@@ -109,23 +121,32 @@ export class TypeTable {
     const table = document.createElement("table");
     const actions = document.createElement("div");
     actions.className = "tt-actions";
-    const overview = document.createElement("button");
-    overview.type = "button";
-    overview.textContent = "Open visible sections";
-    overview.title = "Open one visible level, with a bounded preview of large lists";
-    overview.addEventListener("click", () => this.openVisibleSections());
-    const collapse = document.createElement("button");
-    collapse.type = "button";
-    collapse.textContent = "Collapse to overview";
-    collapse.addEventListener("click", () => {
-      this.expanded.clear();
-      this.expanded.add("");
-      this.shown.clear();
-      this.render();
-    });
-    actions.append(overview, collapse);
+    this.modeGroup = document.createElement("div");
+    this.modeGroup.className = "tt-modes";
+    this.modeGroup.setAttribute("role", "group");
+    this.modeGroup.setAttribute("aria-label", "Outline");
+    this.logicalButton = document.createElement("button");
+    this.logicalButton.type = "button";
+    this.logicalButton.textContent = "Logical";
+    this.storageButton = document.createElement("button");
+    this.storageButton.type = "button";
+    this.storageButton.textContent = "Storage";
+    this.logicalButton.addEventListener("click", () => this.setOutlineMode("logical"));
+    this.storageButton.addEventListener("click", () => this.setOutlineMode("storage"));
+    this.modeGroup.append(this.logicalButton, this.storageButton);
+    this.openButton = document.createElement("button");
+    this.openButton.type = "button";
+    this.openButton.textContent = "Open visible sections";
+    this.openButton.title = "Open one visible level, with a bounded preview of large lists";
+    this.openButton.addEventListener("click", () => this.openVisibleSections());
+    this.collapseButton = document.createElement("button");
+    this.collapseButton.type = "button";
+    this.collapseButton.textContent = "Collapse to overview";
+    this.collapseButton.addEventListener("click", () => this.collapseOverview());
+    actions.append(this.modeGroup, this.openButton, this.collapseButton);
     const head = document.createElement("thead");
-    head.innerHTML = "<tr><th>Offset</th><th>Field</th><th>Value</th><th>Type</th><th>Length</th></tr>";
+    this.head = document.createElement("tr");
+    head.append(this.head);
     this.body = document.createElement("tbody");
     table.append(head, this.body);
     this.empty = document.createElement("p");
@@ -146,14 +167,42 @@ export class TypeTable {
     this.body.addEventListener("keydown", (e) => this.onKey(e));
     doc.onChange(() => {
       this.anatomy.clear();
+      this.logical = null;
       if (this.editing?.waiting) this.commit();
       else this.render();
     });
   }
 
+  private setOutlineMode(mode: "logical" | "storage"): void {
+    this.outlineMode = mode;
+    this.outlineModeChosen = true;
+    this.editing = null;
+    this.render();
+  }
+
+  private collapseOverview(): void {
+    if (this.outlineMode === "logical") {
+      this.logicalExpanded.clear();
+      this.logicalExpanded.add("/");
+    } else {
+      this.expanded.clear();
+      this.expanded.add("");
+      this.shown.clear();
+    }
+    this.render();
+  }
+
   /** Open the composites already on screen. This gives a useful broad view in
    * one press without recursively evaluating an unbounded file. */
   private openVisibleSections(): void {
+    if (this.outlineMode === "logical") {
+      const rows = Array.from(this.body.querySelectorAll<HTMLElement>('tr[data-logical-group="1"]'))
+        .filter((row) => !this.logicalExpanded.has(row.dataset["logicalId"] ?? ""))
+        .slice(0, OVERVIEW_SECTIONS);
+      for (const row of rows) this.logicalExpanded.add(row.dataset["logicalId"] ?? "");
+      this.render();
+      return;
+    }
     const rows = Array.from(this.body.querySelectorAll<HTMLElement>('tr[data-composite="1"]'))
       .filter((row) => !this.expanded.has(row.dataset["path"] ?? ""))
       .slice(0, OVERVIEW_SECTIONS);
@@ -179,6 +228,17 @@ export class TypeTable {
   reveal(path: readonly number[]): void {
     const k = key(path);
     if (k === this.selected) return;
+    if (this.outlineMode === "logical" && this.logical !== null) {
+      const node = this.logical.nodes.find((candidate) => key(candidate.sourcePath) === k);
+      if (node !== undefined) {
+        const byId = new Map(this.logical.nodes.map((candidate) => [candidate.id, candidate]));
+        let parent = node.parentId;
+        while (parent !== null) {
+          this.logicalExpanded.add(parent);
+          parent = byId.get(parent)?.parentId ?? null;
+        }
+      }
+    }
     for (let i = 0; i < path.length; i++) this.expanded.add(key(path.slice(0, i)));
     this.selected = k;
     this.editing = null;
@@ -209,6 +269,13 @@ export class TypeTable {
     if (!row) return;
     const k = row.dataset["path"] ?? "";
     if (t.closest(".tt-toggle")) {
+      const logicalId = row.dataset["logicalId"];
+      if (logicalId !== undefined) {
+        if (this.logicalExpanded.has(logicalId)) this.logicalExpanded.delete(logicalId);
+        else this.logicalExpanded.add(logicalId);
+        this.render();
+        return;
+      }
       if (this.expanded.has(k)) this.expanded.delete(k);
       else this.expanded.add(k);
       this.render();
@@ -299,6 +366,19 @@ export class TypeTable {
       return;
     }
     this.empty.hidden = true;
+    const hasLogical = hasLogicalOutline(this.doc);
+    this.modeGroup.hidden = !hasLogical;
+    if (hasLogical && !this.outlineModeChosen) this.outlineMode = "logical";
+    if (!hasLogical) this.outlineMode = "storage";
+    this.logicalButton.classList.toggle("is-on", this.outlineMode === "logical");
+    this.storageButton.classList.toggle("is-on", this.outlineMode === "storage");
+    this.logicalButton.setAttribute("aria-pressed", String(this.outlineMode === "logical"));
+    this.storageButton.setAttribute("aria-pressed", String(this.outlineMode === "storage"));
+    if (this.outlineMode === "logical") {
+      this.renderLogical();
+      return;
+    }
+    this.setHead(["Offset", "Field", "Value", "Type", "Length"]);
     const frag = document.createDocumentFragment();
     const root = this.doc.templateNode([]);
     if (root.status === "ok") {
@@ -312,6 +392,7 @@ export class TypeTable {
       if (root.status === "working") this.showProgress(root.reachedBytes);
       this.addPlaceholderRoot(frag);
       this.addReadyChildren(frag, [], 1);
+      this.addEstimateRow(frag, root.reachedBytes);
     } else {
       this.progress.hidden = true;
       this.addStatusRow(frag, root, 0, "file");
@@ -322,12 +403,126 @@ export class TypeTable {
     this.restoreFocus();
   }
 
+  private setHead(labels: readonly string[]): void {
+    this.head.replaceChildren(
+      ...labels.map((label) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        return th;
+      }),
+    );
+  }
+
+  private renderLogical(): void {
+    this.setHead(["Source", "Object", "Shape / contents", "Type", "Logical size"]);
+    const reply = logicalOutline(this.doc);
+    const frag = document.createDocumentFragment();
+    if (reply === null) {
+      this.outlineMode = "storage";
+      this.render();
+      return;
+    }
+    if (reply.status !== "ok") {
+      this.logical = null;
+      this.progress.hidden = reply.status === "error";
+      this.progress.textContent =
+        reply.status === "error"
+          ? ""
+          : `Reading the logical outline… ${formatBytes(reply.reachedBytes)} read so far`;
+      if (reply.status === "error") this.addStatusRow(frag, reply, 0, "logical outline");
+      this.body.replaceChildren(frag);
+      return;
+    }
+    this.progress.hidden = true;
+    this.logical = reply.node;
+    const summary = document.createElement("tr");
+    summary.className = "tt-logical-summary";
+    const summaryCell = document.createElement("td");
+    summaryCell.colSpan = 5;
+    summaryCell.textContent = `${reply.node.title} · ${reply.node.summary}`;
+    summary.append(summaryCell);
+    frag.append(summary);
+    const byId = new Map(reply.node.nodes.map((node) => [node.id, node]));
+    for (const node of reply.node.nodes) {
+      if (!this.logicalVisible(node, byId)) continue;
+      this.addLogicalRow(frag, node, reply.node.nodes.some((child) => child.parentId === node.id));
+    }
+    if (reply.node.nodes.length < reply.node.total) {
+      const more = document.createElement("tr");
+      more.className = "tt-skip";
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.textContent = `${(reply.node.total - reply.node.nodes.length).toLocaleString()} more objects not listed`;
+      more.append(td);
+      frag.append(more);
+    }
+    this.rebuilding = true;
+    this.body.replaceChildren(frag);
+    this.rebuilding = false;
+  }
+
+  private logicalVisible(node: LogicalNode, byId: ReadonlyMap<string, LogicalNode>): boolean {
+    let parent = node.parentId;
+    while (parent !== null) {
+      if (!this.logicalExpanded.has(parent)) return false;
+      parent = byId.get(parent)?.parentId ?? null;
+    }
+    return true;
+  }
+
+  private addLogicalRow(frag: DocumentFragment, node: LogicalNode, hasChildren: boolean): void {
+    const tr = document.createElement("tr");
+    const k = key(node.sourcePath);
+    tr.dataset["path"] = k;
+    tr.dataset["logicalId"] = node.id;
+    tr.dataset["start"] = String(node.sourceBits);
+    tr.dataset["end"] = String(node.sourceBits + 8);
+    tr.title = node.title;
+    if (node.group) tr.dataset["logicalGroup"] = "1";
+    if (k === this.selected) tr.classList.add("tt-selected");
+    tr.classList.add(fieldClass(node.group ? "composite" : "bytes"));
+    const source = document.createElement("td");
+    source.className = "tt-num tt-addr";
+    source.textContent = node.sourceText;
+    const name = document.createElement("td");
+    name.style.paddingLeft = treeIndent(node.depth, 4);
+    if (hasChildren) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "tt-toggle";
+      const open = this.logicalExpanded.has(node.id);
+      toggle.textContent = open ? "▾" : "▸";
+      toggle.setAttribute("aria-label", open ? "Collapse" : "Expand");
+      toggle.setAttribute("aria-expanded", String(open));
+      name.append(toggle);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "tt-toggle tt-leaf";
+      name.append(spacer);
+    }
+    name.append(document.createTextNode(node.label));
+    const value = document.createElement("td");
+    value.className = "tt-val";
+    value.textContent = node.value;
+    const type = document.createElement("td");
+    type.className = "tt-type";
+    type.textContent = node.type;
+    const length = document.createElement("td");
+    length.className = "tt-num tt-length";
+    length.textContent = logicalLength(node);
+    tr.append(source, name, value, type, length);
+    frag.append(tr);
+  }
+
   private showProgress(reachedBytes: number): void {
-    this.progress.textContent = `Working out the file's structure… ${formatBytes(reachedBytes)} read so far`;
+    const estimate = this.doc.extentEstimate();
+    this.progress.textContent = estimate === null
+      ? `Working out the file's structure… ${formatBytes(reachedBytes)} read so far`
+      : `Estimating items… ${estimate.measured_items.toLocaleString()} of ${estimate.total_items.toLocaleString()} · ~${bitSizeText(estimate.estimated_bits)}`;
     this.progress.hidden = false;
   }
 
-  /** The row for the file itself, before its length is known. */
+  /** The physical file extent is exact even while its internal fields are not. */
   private addPlaceholderRoot(frag: DocumentFragment): void {
     const tr = document.createElement("tr");
     tr.dataset["path"] = "";
@@ -343,9 +538,35 @@ export class TypeTable {
     off.className = "tt-num tt-addr";
     off.textContent = formatOffset(0);
     const size = document.createElement("td");
-    size.className = "tt-num tt-not-yet";
-    size.textContent = NOT_YET;
+    size.className = "tt-num";
+    size.textContent = bitSizeText(this.doc.lengthBits);
     tr.append(off, name, value, type, size);
+    frag.append(tr);
+  }
+
+  /** The unparsed physical tail, kept distinct from undefined template gaps. */
+  private addEstimateRow(frag: DocumentFragment, reachedBytes: number): void {
+    const startBits = Math.min(this.doc.lengthBits, reachedBytes * 8);
+    if (startBits >= this.doc.lengthBits) return;
+    const estimate = this.doc.extentEstimate();
+    const tr = document.createElement("tr");
+    tr.className = "tt-estimate";
+    const off = document.createElement("td");
+    off.className = "tt-num tt-addr";
+    off.textContent = formatOffset(startBits);
+    const name = document.createElement("td");
+    name.textContent = "Structure remaining";
+    const value = document.createElement("td");
+    value.textContent = estimate === null
+      ? "estimating fields"
+      : `${estimate.measured_items.toLocaleString()} of ${estimate.total_items.toLocaleString()} items measured`;
+    const type = document.createElement("td");
+    type.className = "tt-type";
+    type.textContent = "estimating";
+    const length = document.createElement("td");
+    length.className = "tt-num";
+    length.textContent = bitSizeText(this.doc.lengthBits - startBits);
+    tr.append(off, name, value, type, length);
     frag.append(tr);
   }
 

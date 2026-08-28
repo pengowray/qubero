@@ -1322,6 +1322,14 @@ fn work_done_in_goes_reaches_the_same_answer() {
                 // Each go says how far it has got, and it only ever goes forward.
                 assert!(reached_bits <= end * 8);
                 assert_eq!(reached_bits, sliced.reached_bits());
+                let estimate = sliced.extent_estimate().expect("the array walk has a projection");
+                assert_eq!(estimate.path, vec![1]);
+                assert_eq!(estimate.total_items, n);
+                assert!(estimate.measured_items > 0 && estimate.measured_items < n);
+                // The elements vary from nine to fifteen bytes. An average of
+                // the prefix should stay comfortably around the actual total.
+                assert!(estimate.estimated_bits > want.size_bits / 2);
+                assert!(estimate.estimated_bits < want.size_bits * 2);
             }
             Err(e) => panic!("{e:?}"),
         }

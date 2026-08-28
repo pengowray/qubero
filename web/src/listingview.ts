@@ -134,6 +134,8 @@ export class ListingView {
   /** Explanation from the latest span request while a large variable-length
    * structure is being mapped. */
   private workStatus = "";
+  /** Furthest physical byte reached by the latest unfinished mapping pass. */
+  private workReachedBits = 0;
   /** Where the cursor went while this view was hidden. */
   private pendingBit: number | null = null;
   /** Whether the file's first bytes matched a template, which decides what an
@@ -243,9 +245,13 @@ export class ListingView {
     if (r.status !== "ok") {
       if (r.status === "working") {
         const reached = Math.min(this.doc.lengthBytes, r.reachedBytes);
-        const percent = this.doc.lengthBytes === 0 ? 100 : Math.floor((reached / this.doc.lengthBytes) * 100);
-        this.workStatus = `Estimating field lengths… ${formatBytes(reached)} of ${formatBytes(this.doc.lengthBytes)} (${percent}%)`;
+        this.workReachedBits = reached * 8;
+        const estimate = this.doc.extentEstimate();
+        this.workStatus = estimate === null
+          ? `Estimating field lengths… ${formatBytes(reached)} read so far`
+          : `Estimating items… ${estimate.measured_items.toLocaleString()} of ${estimate.total_items.toLocaleString()} · ~${bitSizeText(estimate.estimated_bits)}`;
       } else if (r.status === "pending") {
+        this.workReachedBits = r.reachedBytes * 8;
         this.workStatus = "Loading bytes needed to map these fields…";
       } else {
         this.workStatus = r.message;
@@ -253,6 +259,7 @@ export class ListingView {
       return [];
     }
     this.workStatus = "";
+    this.workReachedBits = 0;
     const rows: Row[] = [];
     let previous: string[] = [];
     for (const s of r.node) {
@@ -418,8 +425,28 @@ export class ListingView {
     } else {
       this.status.textContent = "";
     }
-    this.rowsEl.replaceChildren(...rows.map((r) => this.rowEl(r)));
+    this.rowsEl.replaceChildren(...(rows.length === 0 && this.workStatus ? [this.estimateRow()] : rows.map((r) => this.rowEl(r))));
     this.drawThumb();
+  }
+
+  private estimateRow(): HTMLElement {
+    const start = Math.min(this.doc.lengthBits, Math.max(this.topBit, this.workReachedBits));
+    const el = document.createElement("div");
+    el.className = "lv-row lv-estimate";
+    const cells = COLUMNS.map(([cls]) => {
+      const cell = document.createElement("span");
+      cell.className = cls;
+      return cell;
+    });
+    const [addr, length, bytes, name, value, type] = cells;
+    if (addr) addr.textContent = formatOffset(start);
+    if (length) length.textContent = bitSizeText(Math.max(0, this.doc.lengthBits - start));
+    if (bytes) bytes.textContent = "…";
+    if (name) name.textContent = "Structure remaining";
+    if (value) value.textContent = this.workStatus;
+    if (type) type.textContent = "estimating";
+    el.append(...cells);
+    return el;
   }
 
   private drawHeader(): void {

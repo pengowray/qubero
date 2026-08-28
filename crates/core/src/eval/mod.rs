@@ -29,6 +29,18 @@ mod tests;
 
 pub use explain::{Explain, FlagBit};
 pub use listing::{Span, SpanPart};
+
+/// A bounded walk over variable-size array elements that has enough samples to
+/// project the array's eventual extent. This is deliberately a projection,
+/// not a node: the exact node remains unavailable until the walk finishes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtentEstimate {
+    pub path: Vec<usize>,
+    pub measured_items: u64,
+    pub total_items: u64,
+    pub measured_bits: u64,
+    pub estimated_bits: u64,
+}
 pub use origin::{Origin, Role};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,6 +179,9 @@ struct ListState {
     /// starts. Walking on from here is what keeps reading a list in order
     /// one step per element rather than one walk per element.
     walk_at: Option<(usize, u64)>,
+    /// An array's declared count. Repeats do not know theirs until they finish,
+    /// so only arrays can project a total extent while being walked.
+    expected_count: Option<u64>,
     /// The offset of every thousandth element of a long list, so one can be
     /// reached without walking from the start. See `walk.rs`.
     checkpoints: Vec<(usize, u64)>,
@@ -312,6 +327,37 @@ impl Evaluator {
     /// How far into the file the reading has got, at its furthest.
     pub fn reached_bits(&self) -> u64 {
         self.reached_bits
+    }
+
+    /// The most advanced unfinished variable-size array walk. Its average
+    /// element extent is projected over the declared count; callers mark the
+    /// result approximate until the ordinary node succeeds.
+    pub fn extent_estimate(&self) -> Option<ExtentEstimate> {
+        self.lists
+            .iter()
+            .filter_map(|(path, state)| {
+                let total = state.expected_count?;
+                let (measured, at) = state.walk_at?;
+                if measured == 0 || measured as u64 >= total {
+                    return None;
+                }
+                let start = self.memo.get(path)?.offset;
+                let measured_bits = at.saturating_sub(start);
+                if measured_bits == 0 {
+                    return None;
+                }
+                let estimated_bits = measured_bits
+                    .saturating_mul(total)
+                    .checked_div(measured as u64)?;
+                Some(ExtentEstimate {
+                    path: path.clone(),
+                    measured_items: measured as u64,
+                    total_items: total,
+                    measured_bits,
+                    estimated_bits,
+                })
+            })
+            .max_by_key(|estimate| (estimate.measured_items, estimate.measured_bits))
     }
 
     /// Charge one element against this go's allowance, and note how far the

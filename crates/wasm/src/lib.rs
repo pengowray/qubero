@@ -7,8 +7,8 @@ use qubero_core::eval::{Explain, Origin};
 use qubero_core::{diescript, dosbasic};
 use qubero_core::search::{self, Needle, Search, Step};
 use qubero_core::{
-    formats, magicrule, overview, ChunkStore, Document, EvalError, Evaluator, NodeInfo, RunKind, Span,
-    SpanPart, Value,
+    formats, magicrule, overview, ChunkStore, Document, EvalError, Evaluator, ExtentEstimate, NodeInfo,
+    RunKind, Span, SpanPart, Value,
 };
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -627,6 +627,25 @@ struct SpanPartDto {
     rest: bool,
 }
 
+#[derive(Serialize)]
+struct ExtentEstimateDto {
+    path: Vec<usize>,
+    measured_items: f64,
+    total_items: f64,
+    measured_bits: f64,
+    estimated_bits: f64,
+}
+
+fn extent_estimate_dto(estimate: ExtentEstimate) -> ExtentEstimateDto {
+    ExtentEstimateDto {
+        path: estimate.path,
+        measured_items: estimate.measured_items as f64,
+        total_items: estimate.total_items as f64,
+        measured_bits: estimate.measured_bits as f64,
+        estimated_bits: estimate.estimated_bits as f64,
+    }
+}
+
 fn span_part_dto(part: SpanPart) -> SpanPartDto {
     SpanPartDto {
         size_bits: part.size_bits as f64,
@@ -909,6 +928,17 @@ impl Editor {
 
     pub fn template_names(&self) -> Vec<String> {
         formats::builtin_names().iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Best current projection for a variable-size array being walked, or an
+    /// empty string when no unfinished walk has enough information yet.
+    pub fn extent_estimate(&self) -> String {
+        self.eval
+            .as_ref()
+            .and_then(Evaluator::extent_estimate)
+            .map(extent_estimate_dto)
+            .map(|estimate| serde_json::to_string(&estimate).unwrap_or_default())
+            .unwrap_or_default()
     }
 
     /// Name of the built-in template matching these leading bytes, or "".
