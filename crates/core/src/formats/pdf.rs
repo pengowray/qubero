@@ -667,6 +667,28 @@ mod tests {
         v
     }
 
+    /// The annotation column over a file whose table is a stream. The list of
+    /// objects such a table places is empty and covers everything after the
+    /// header, so a gap in it used to run to the end of the file and hide the
+    /// stream object, the trailer and the end marker from the column and from
+    /// the listing alike.
+    #[test]
+    fn a_gap_in_an_empty_object_list_ends_where_the_next_field_starts() {
+        let bytes = pdf_bytes_with_stream();
+        let len = bytes.len() as u64;
+        let table = bytes.windows(7).position(|w| w == b"2 0 obj").expect("the stream object") as u64;
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(pdf());
+        let spans = ev.spans(&d, 0, len * 8, 100).expect("the spans");
+        let gap = spans.iter().find(|s| s.gap).expect("the space the first object sits in");
+        assert_eq!((gap.offset_bits + gap.size_bits) / 8, table);
+        // And the object the gap used to swallow is named, down to the word
+        // that opens its stream.
+        let named: Vec<&str> = spans.iter().filter(|s| !s.gap).map(|s| s.name.as_str()).collect();
+        assert!(named.contains(&"stream"), "{named:?}");
+        assert!(named.contains(&"endstream"), "{named:?}");
+    }
+
     #[test]
     fn a_table_written_as_a_stream_reads_as_the_object_it_is() {
         let bytes = pdf_bytes_with_stream();

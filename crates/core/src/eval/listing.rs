@@ -281,10 +281,20 @@ impl Evaluator {
                 span.gap = true;
                 span.offset_bits = at;
                 let mut ends = info.offset_bits + info.size_bits;
-                if matches!(self.memo[&path].ty, Ty::PointerList { .. }) {
-                    if let Some(next) = self.next_child_start(doc, &path, at)? {
+                // The gap runs to whatever comes next, which need not be a
+                // child of the structure it is in. In a PDF whose objects a
+                // cross-reference stream places, the list of them is empty and
+                // stretches to the end of the file, while the table, the
+                // trailer and the end marker are placed beside it rather than
+                // inside it. Ending the gap where the list ends would swallow
+                // all three and leave most of the file unannotated.
+                for k in (0..=path.len()).rev() {
+                    if let Some(next) = self.next_child_start(doc, &path[..k], at)? {
                         ends = ends.min(next);
                     }
+                }
+                if let Some(next) = self.placement_after(doc, at)? {
+                    ends = ends.min(next);
                 }
                 span.size_bits = ends - at;
                 span.count = 0;
