@@ -7,6 +7,7 @@
 import type { Doc, Span } from "./doc.js";
 import { GAP_LABEL, NO_TEMPLATE } from "./strings.js";
 import { fieldClass } from "./fieldstyle.js";
+import { chipDetail, chipsThatFit } from "./chipfit.js";
 
 export type Pane = "hex" | "ascii";
 /** What sits to the right of the bytes: their text, or what the template says
@@ -47,14 +48,6 @@ const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"
 
 /** How many entries one screenful of the annotation column may hold. */
 const SPAN_LIMIT = 600;
-/** Longest value shown on a chip before it is cut short. */
-const CHIP_VALUE = 32;
-/** Rough width of a character in the chip font, for working out how many
- *  chips fit before any of them are drawn. */
-const CHIP_CHAR = 6.7;
-/** Padding, border and gap around a chip's text. */
-const CHIP_CHROME = 20;
-
 /** How many bytes one copy may carry. A selection can be the whole file, and
  *  the bytes have to be fetched and turned into a string before the clipboard
  *  sees them, so past some size the honest answer is no. */
@@ -81,17 +74,26 @@ const COPY_DONE = (bytes: number, asText: boolean): string =>
  *  which is the one thing a plain "keep" cannot say. */
 type Select = "keep" | "clear" | { readonly anchor: number };
 
-/** What a chip says after the name. A run of numbers says how many; raw bytes
- *  say how many, since the bytes themselves are already on the left. */
-function chipDetail(s: Span): string {
-  if (s.count > 0) return `${s.count.toLocaleString()} values`;
-  if (s.gap || s.kind === "bytes") {
-    return s.size_bits % 8 === 0
-      ? `${(s.size_bits / 8).toLocaleString()} bytes`
-      : `${s.size_bits.toLocaleString()} bits`;
-  }
-  return s.value.length > CHIP_VALUE ? `${s.value.slice(0, CHIP_VALUE)}\u2026` : s.value;
-}
+/** A span named on a row, and whether it started above the view. */
+type Chip = { span: Span; carried: boolean };
+
+/** Where the spans on screen land. See `HexView.placeSpans`. */
+type Placed = {
+  spans: Span[];
+  more: boolean;
+  trouble: string | null;
+  byteSpan: Int32Array;
+  byRow: Chip[][];
+};
+
+/** Nothing to place: no template, or the column is turned off. */
+const NO_SPANS = (windowBytes: number): Placed => ({
+  spans: [],
+  more: false,
+  trouble: null,
+  byteSpan: new Int32Array(windowBytes).fill(-1),
+  byRow: [],
+});
 
 function asciiGlyph(b: number): string {
   return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
@@ -963,6 +965,28 @@ export class HexView {
     }
   }
 
+  /** Where the spans on screen land: which one covers each byte, and which
+   *  start on each row. A field is named on the row it starts on; one that
+   *  started above the view is named on the first row, so nothing on screen is
+   *  left unexplained. */
+  private placeSpans(start: number, windowBytes: number, bpr: number): Placed {
+    const { spans, more, error: trouble } = this.spansForView(start, windowBytes);
+    const byteSpan = new Int32Array(windowBytes).fill(-1);
+    const byRow: Chip[][] = Array.from({ length: this.visibleRows }, () => []);
+    for (const [i, s] of spans.entries()) {
+      const from = Math.floor(s.offset_bits / 8);
+      const to = Math.ceil((s.offset_bits + s.size_bits) / 8);
+      for (let b = Math.max(from, start); b < Math.min(to, start + windowBytes); b++) {
+        byteSpan[b - start] = i;
+      }
+      const row = from < start ? 0 : Math.floor((from - start) / bpr);
+      if (row >= 0 && row < this.visibleRows && to > start) {
+        byRow[row]?.push({ span: s, carried: from < start });
+      }
+    }
+    return { spans, more, trouble, byteSpan, byRow };
+  }
+
   /** Spans for the rows on screen. A pending reply leaves the column empty
    *  for one frame; the fetched chunks trigger another render. */
   private spansForView(start: number, count: number): { spans: Span[]; more: boolean; error: string | null } {
@@ -1035,29 +1059,8 @@ export class HexView {
     const templated = this.doc.template !== null;
     const selection = this.selectionRange;
 
-    // Which span covers each byte on screen, and which start on each row.
-    let spans: Span[] = [];
-    let more = false;
-    let trouble: string | null = null;
-    const byteSpan = new Int32Array(windowBytes).fill(-1);
-    const byRow: { span: Span; carried: boolean }[][] = [];
-    if (fields && templated) {
-      ({ spans, more, error: trouble } = this.spansForView(start, windowBytes));
-      for (let r = 0; r < this.visibleRows; r++) byRow.push([]);
-      for (const [i, s] of spans.entries()) {
-        const from = Math.floor(s.offset_bits / 8);
-        const to = Math.ceil((s.offset_bits + s.size_bits) / 8);
-        for (let b = Math.max(from, start); b < Math.min(to, start + windowBytes); b++) {
-          byteSpan[b - start] = i;
-        }
-        // A field is named on the row it starts on. One that started above the
-        // view is named on the first row, so nothing on screen is unexplained.
-        const row = from < start ? 0 : Math.floor((from - start) / bpr);
-        if (row >= 0 && row < this.visibleRows && to > start) {
-          byRow[row]?.push({ span: s, carried: from < start });
-        }
-      }
-    }
+    const { spans, more, trouble, byteSpan, byRow } =
+      fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
 
     const columns = document.createElement("span");
     columns.textContent =
@@ -1190,16 +1193,7 @@ export class HexView {
           continue;
         }
         const entries = byRow[r] ?? [];
-        // Work out how many fit before drawing any, so what is left over can be
-        // counted rather than quietly cut off.
-        let room = this.noteWidth || 320;
-        let shown = 0;
-        for (const { span } of entries) {
-          const w = CHIP_CHROME + (span.name.length + chipDetail(span).length + 1) * CHIP_CHAR;
-          if (shown > 0 && w > room - (shown < entries.length - 1 ? 44 : 0)) break;
-          room -= w;
-          shown += 1;
-        }
+        const shown = chipsThatFit(entries.map(({ span }) => span), this.noteWidth);
         for (const { span, carried } of entries.slice(0, shown)) note.append(this.chip(span, carried));
         if (shown < entries.length) {
           const rest = document.createElement("span");
