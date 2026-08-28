@@ -364,8 +364,11 @@ fn section_body(bits: u32, e: Endian) -> T {
         machines.push((machine, T::sized(size(), T::repeat(T::insn(isa), Until::End))));
     }
     let progbits = T::switch(
-        E::elem_field("section_headers", E::idx(), &["flags"]),
-        vec![(6, T::switch(E::field("machine"), machines, T::bytes(size())))],
+        // The bit that says the section holds instructions. The rest of the
+        // word says whether it is written to, aligned or grouped, and a
+        // linker writes those as it likes.
+        E::elem_field("section_headers", E::idx(), &["flags"]).bit(2),
+        vec![(1, T::switch(E::field("machine"), machines, T::bytes(size())))],
         T::bytes(size()),
     );
     T::switch(

@@ -18,7 +18,7 @@
 use crate::formats::pe_tables::{
     CHARACTERISTICS, DIRECTORY, DLL_CHARACTERISTICS, MACHINE, OPTIONAL_MAGIC, SECTION_FLAGS, SUBSYSTEM,
 };
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 /// Bytes of the optional header before `Switch` reaches the part that differs:
 /// the magic, the two linker version bytes, and five longs.
@@ -148,6 +148,24 @@ pub fn pe() -> Template {
             // a linker may leave room after the data directory.
             ("optional", T::sized(E::field("optional_header_size"), optional)),
             ("sections", T::array(section, E::field("section_count"))),
+            // What the sections hold, each at the offset its own header
+            // gives. A section that is only there once the program is loaded
+            // has nothing in the file and an offset of zero, which points at
+            // nothing rather than at the front of the file.
+            (
+                "section_data",
+                T::pointer_list_sized(
+                    "sections",
+                    &["raw_offset"],
+                    Anchor::File,
+                    E::lit(0),
+                    super::machine::section(
+                        E::elem_field("sections", E::idx(), &["raw_size"]),
+                        E::elem_field("sections", E::idx(), &["characteristics"]),
+                    ),
+                )
+                .skipping_zero(),
+            ),
         ],
     );
 

@@ -15,6 +15,7 @@ mod corel;
 mod dos;
 mod dv;
 mod elf;
+mod machine;
 pub mod bpf_opcodes;
 pub mod bpf_disasm;
 mod eps;

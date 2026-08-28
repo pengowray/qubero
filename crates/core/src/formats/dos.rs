@@ -18,7 +18,8 @@
 //! program appended to the first. DOS never loaded those bytes, so they are
 //! their own field rather than part of the program.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T};
+use crate::code::Isa;
+use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
 /// The fourteen words every `MZ` file starts with, Windows executables
 /// included. `pe.rs` builds on these; a DOS program has nothing after them but
@@ -95,8 +96,8 @@ pub fn dos() -> Template {
             "load_module",
             T::switch(
                 E::field("bytes_on_last_page"),
-                vec![(0, T::bytes(module_len(E::lit(0))))],
-                T::bytes(module_len(E::lit(PAGE).sub(E::field("bytes_on_last_page")))),
+                vec![(0, load_module(module_len(E::lit(0))))],
+                load_module(module_len(E::lit(PAGE).sub(E::field("bytes_on_last_page")))),
             ),
         ),
         // What DOS never loaded. Usually nothing, and worth a field of its own
@@ -106,6 +107,30 @@ pub fn dos() -> Template {
     ]);
 
     Template::new("msdos", T::structure("DOSExecutable", fields))
+}
+
+/// The program, split where the loader jumps into it.
+///
+/// There is no table of sections in a DOS executable, so nothing marks which
+/// of these bytes are code. What the header does say is where execution
+/// starts, and from there to the end is read as instructions. A program that
+/// keeps its data after its code has that data read as instructions too;
+/// there is nothing in the file that would say otherwise.
+///
+/// An entry point outside the program is a broken header or a file that is not
+/// what it says. Then the whole module is data, which is the reading that
+/// claims least.
+fn load_module(len: E) -> T {
+    let entry = E::field("initial_cs").mul(E::lit(PARAGRAPH)).add(E::field("initial_ip"));
+    let inside = entry.clone().less_than(len.clone());
+    let start = entry.mul(inside.clone()).add(len.clone().mul(E::lit(1).sub(inside)));
+    T::structure(
+        "LoadModule",
+        vec![
+            ("data", T::bytes(start.clone())),
+            ("code", T::sized(len.sub(start), T::repeat(T::insn(Isa::X86_16), Until::End))),
+        ],
+    )
 }
 
 /// Bytes of program, given how much of the last page goes unused.
@@ -151,6 +176,13 @@ mod tests {
         ev.node(&d, path).unwrap().value
     }
 
+    /// How many bytes a field covers, for the ones that hold other fields.
+    fn bytes_of(bytes: Vec<u8>, path: &[usize]) -> u64 {
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(dos());
+        ev.node(&d, path).unwrap().size_bits / 8
+    }
+
     /// Field positions in the root struct, past the fourteen words.
     const RELOCATIONS: usize = 14;
     const HEADER_PADDING: usize = 15;
@@ -178,7 +210,28 @@ mod tests {
 
     #[test]
     fn the_program_is_whole_pages_less_the_header_and_the_unused_tail() {
-        assert_eq!(len_of(read(sample(0), &[LOAD_MODULE])), 600);
+        assert_eq!(bytes_of(sample(0), &[LOAD_MODULE]), 600);
+    }
+
+    /// Nothing in the file marks where the code is; the entry point is what
+    /// says where it starts, and everything before it is read as data.
+    #[test]
+    fn the_code_starts_where_the_loader_jumps() {
+        assert_eq!(len_of(read(sample(0), &[LOAD_MODULE, 0])), 0x30);
+        let d = Document::new(MemSource(sample(0)));
+        let mut ev = Evaluator::new(dos());
+        let code = ev.node(&d, &[LOAD_MODULE, 1]).unwrap();
+        assert_eq!(code.offset_bits / 8, 0x40 + 0x30);
+        assert_eq!(ev.node(&d, &[LOAD_MODULE, 1, 0]).unwrap().type_name, "x86-16");
+    }
+
+    /// An entry point past the end of the program is not one, and the module
+    /// is then data from end to end.
+    #[test]
+    fn an_entry_point_outside_the_program_leaves_it_all_data() {
+        let mut v = sample(0);
+        v[0x16..0x18].copy_from_slice(&0xf000u16.to_le_bytes()); // initial_cs
+        assert_eq!(len_of(read(v, &[LOAD_MODULE, 0])), 600);
     }
 
     #[test]
@@ -190,7 +243,7 @@ mod tests {
         v.resize(total, 0);
         v[0x02..0x04].copy_from_slice(&0u16.to_le_bytes());
         v[0x04..0x06].copy_from_slice(&2u16.to_le_bytes());
-        assert_eq!(len_of(read(v, &[LOAD_MODULE])), 1024 - 0x40);
+        assert_eq!(bytes_of(v, &[LOAD_MODULE]), 1024 - 0x40);
     }
 
     #[test]

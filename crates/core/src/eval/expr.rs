@@ -181,6 +181,7 @@ impl Evaluator {
             Expr::Add(a, b) => self.eval_expr_at(doc, at, a, here)? + self.eval_expr_at(doc, at, b, here)?,
             Expr::Sub(a, b) => self.eval_expr_at(doc, at, a, here)? - self.eval_expr_at(doc, at, b, here)?,
             Expr::Mul(a, b) => self.eval_expr_at(doc, at, a, here)? * self.eval_expr_at(doc, at, b, here)?,
+            Expr::Bit(a, n) => (self.eval_expr_at(doc, at, a, here)? >> n) & 1,
             Expr::Less(a, b) => {
                 i128::from(self.eval_expr_at(doc, at, a, here)? < self.eval_expr_at(doc, at, b, here)?)
             }

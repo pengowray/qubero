@@ -155,6 +155,13 @@ pub enum Expr {
     /// read in exactly the cases it was put there to avoid, and what comes
     /// back is whatever was at an offset nothing checked.
     Less(Box<Expr>, Box<Expr>),
+    /// One bit of a number, as one or zero.
+    ///
+    /// What a switch needs to key on a flag. A section of a program says it
+    /// holds code by setting one bit of a word whose other bits say whether
+    /// it can be written to and how it is aligned, and matching the whole word
+    /// would mean listing every combination a linker happens to write.
+    Bit(Box<Expr>, u32),
 }
 
 impl Expr {
@@ -261,6 +268,10 @@ impl Expr {
         Expr::Div(Box::new(self), Box::new(rhs))
     }
     /// One when this is less than `rhs`, and zero otherwise.
+    /// Bit `n` of this, counting from the least significant.
+    pub fn bit(self, n: u32) -> Expr {
+        Expr::Bit(Box::new(self), n)
+    }
     pub fn less_than(self, rhs: Expr) -> Expr {
         Expr::Less(Box::new(self), Box::new(rhs))
     }

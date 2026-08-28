@@ -117,7 +117,10 @@ fn section_data() -> T {
         vec![
             (
                 "bytes",
-                T::bytes(E::elem_field("sections", E::idx(), &["raw_data_size"])),
+                super::machine::section(
+                    E::elem_field("sections", E::idx(), &["raw_data_size"]),
+                    E::elem_field("sections", E::idx(), &["characteristics"]),
+                ),
             ),
             (
                 "relocations",
