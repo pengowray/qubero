@@ -92,7 +92,15 @@ pub(super) fn riff(name: &str, body: T) -> Template {
 fn chunk(body: T) -> T {
     // A chunk body is padded to an even length. The pad byte is not counted in
     // the size, so it is a field of its own: size - (size / 2) * 2.
-    let pad = E::field("size").sub(E::field("size").div(E::lit(2)).mul(E::lit(2)));
+    // A chunk of an odd length is padded to an even one, and the last chunk in
+    // a file often is not: the writer had nothing to follow it with. So the
+    // pad byte is there when the length is odd and there is a byte left to be
+    // it, which is what the guard multiplies by.
+    let pad = || {
+        E::field("size")
+            .sub(E::field("size").div(E::lit(2)).mul(E::lit(2)))
+            .mul(E::lit(0).less_than(E::Remaining))
+    };
     T::structure_named(
         "Chunk",
         "id",
@@ -101,7 +109,7 @@ fn chunk(body: T) -> T {
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
             ("size", T::u32(Little)),
             ("body", T::sized(E::field("size"), body)),
-            ("pad", T::bytes(pad)),
+            ("pad", T::bytes(pad())),
         ],
     )
 }
@@ -283,7 +291,15 @@ fn list() -> T {
 }
 
 fn list_item() -> T {
-    let pad = E::field("size").sub(E::field("size").div(E::lit(2)).mul(E::lit(2)));
+    // A chunk of an odd length is padded to an even one, and the last chunk in
+    // a file often is not: the writer had nothing to follow it with. So the
+    // pad byte is there when the length is odd and there is a byte left to be
+    // it, which is what the guard multiplies by.
+    let pad = || {
+        E::field("size")
+            .sub(E::field("size").div(E::lit(2)).mul(E::lit(2)))
+            .mul(E::lit(0).less_than(E::Remaining))
+    };
     // A LIST member is a chunk like any other, so it is called one.
     T::structure(
         "Chunk",
@@ -306,7 +322,7 @@ fn list_item() -> T {
                     ),
                 ),
             ),
-            ("pad", T::bytes(pad)),
+            ("pad", T::bytes(pad())),
         ],
     )
 }
@@ -470,6 +486,37 @@ mod tests {
             v.push(0);
         }
         v
+    }
+
+    /// A file whose last chunk is an odd number of bytes long and has no pad
+    /// byte after it, which is how a good many recorders wrote them. The pad
+    /// belongs to the chunk, and a chunk with nothing after it never had one.
+    #[test]
+    fn a_last_chunk_of_odd_length_need_not_be_padded() {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&8000u32.to_le_bytes());
+        fmt.extend_from_slice(&8000u32.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&8u16.to_le_bytes());
+        let mut body = b"WAVE".to_vec();
+        body.extend(chunk_bytes(b"fmt ", &fmt));
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&3u32.to_le_bytes());
+        body.extend_from_slice(&[0x80, 0x81, 0x82]);
+        let mut v = b"RIFF".to_vec();
+        v.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        v.extend_from_slice(&body);
+
+        let d = Document::new(MemSource(v.clone()));
+        let mut ev = Evaluator::new(wav());
+        // The whole file is covered, to its last byte.
+        let root = ev.node(&d, &[]).unwrap();
+        assert_eq!(root.size_bits, v.len() as u64 * 8);
+        let data = ev.node(&d, &[3, 1]).unwrap();
+        assert_eq!(data.type_name, "Chunk");
+        assert_eq!(data.size_bits, (8 + 3) * 8);
     }
 
     pub(super) fn sample() -> Vec<u8> {

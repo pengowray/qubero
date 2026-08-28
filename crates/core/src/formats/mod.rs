@@ -276,11 +276,6 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"\xfftOc", "gitpackidx"),
     (b"IWAD", "wad"),
     (b"PWAD", "wad"),
-    // `PACK` also opens a git packfile, which is a different thing with no
-    // template here. A pack writes 2 as a big-endian version next; a Quake
-    // archive writes an offset that would have to be under twelve for the two
-    // to be confused.
-    (b"PACK", "pak"),
     (b"\x34\x12\xaa\x55", "vpk"),
     (b"NES\x1a", "nes"),
     (b"GIF8", "gif"),
@@ -359,6 +354,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("dv")
     } else if let Some(name) = elf_format(head) {
         Some(name)
+    } else if is_pak(head, len) {
+        Some("pak")
     } else if is_ne(head) {
         Some("ne")
     } else if is_pe(head) {
@@ -1005,6 +1002,20 @@ fn is_dos(head: &[u8], len: u64) -> bool {
     }
 }
 
+/// Whether this is a Quake archive rather than one of the other things that
+/// open with `PACK`. A git packfile is the one that turns up: it writes a
+/// big-endian version of 2 where the archive writes the offset of its
+/// directory, and a directory of an archive is after the header and inside the
+/// file, which 33 million rarely is.
+fn is_pak(head: &[u8], len: u64) -> bool {
+    if !head.starts_with(b"PACK") || head.len() < 12 {
+        return false;
+    }
+    let at = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as u64;
+    let size = u32::from_le_bytes([head[8], head[9], head[10], head[11]]) as u64;
+    at >= 12 && at + size <= len
+}
+
 /// Whether these leading bytes are a 16-bit Windows or OS/2 program: an `MZ`
 /// whose pointer at 0x3c reaches a header saying `NE`.
 fn is_ne(head: &[u8]) -> bool {
@@ -1106,6 +1117,24 @@ mod tests {
     /// PKLITE leaves the middle of its copyright notice in those four bytes,
     /// which reads as an offset of a gigabyte into a program of thirty
     /// kilobytes.
+    /// Both open with `PACK`. What tells them apart is what comes next: an
+    /// archive says where its directory is, and a git packfile says which
+    /// version of itself it is.
+    #[test]
+    fn a_git_packfile_is_not_a_quake_archive() {
+        let mut git = b"PACK".to_vec();
+        git.extend_from_slice(&2u32.to_be_bytes());
+        git.extend_from_slice(&14u32.to_be_bytes());
+        git.resize(0x100, 0);
+        assert_eq!(sniff(&git, git.len() as u64), None);
+
+        let mut pak = b"PACK".to_vec();
+        pak.extend_from_slice(&0x40u32.to_le_bytes());
+        pak.extend_from_slice(&0x40u32.to_le_bytes());
+        pak.resize(0x100, 0);
+        assert_eq!(sniff(&pak, pak.len() as u64), Some("pak"));
+    }
+
     #[test]
     fn a_pointer_past_the_end_of_the_file_is_not_a_header() {
         assert_eq!(sniff(&mz(0x4120_2e63, 0x100, false), 0x100), Some("msdos"));
