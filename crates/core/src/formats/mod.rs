@@ -1290,6 +1290,14 @@ mod tests {
         sniff(head, head.len() as u64)
     }
 
+    /// Both start with the same eight bytes, and only the name of the first
+    /// member says which of the two a file is.
+    #[test]
+    fn a_debian_package_is_told_from_a_library_by_its_first_member() {
+        assert_eq!(sniffed(b"!<arch>\ndebian-binary   1700000000  0     0     100644  4         `\n2.0\n"), Some("deb"));
+        assert_eq!(sniffed(b"!<arch>\nhello.o/        1700000000  0     0     100644  4         `\n\x7fELF"), Some("ar"));
+    }
+
     #[test]
     fn blackmagic_raw_needs_container_and_frame_markers() {
         let braw = b"\0\0\0\x08wide\0\0\0\x30mdat\0\0\0\x14bmdf\0\0\0\x0cexpo\x3f\xc0\0\0braw";
