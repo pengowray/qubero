@@ -237,14 +237,37 @@ fn xref_stream() -> T {
 }
 
 /// One line of the table: an entry that places an object, or the heading that
-/// starts a subsection of them.
+/// starts a subsection of them. Or, at the very end, the byte the line above
+/// left of its own line ending; see [`too_short_for_a_line`].
 ///
-/// Which it is has to be looked at rather than counted, since nothing in front
-/// of the table says how many subsections it holds. An entry writes `n` or `f`
-/// after its two numbers and a heading, being two numbers and nothing else,
-/// cannot.
+/// Which of the two it is has to be looked at rather than counted, since
+/// nothing in front of the table says how many subsections it holds. An entry
+/// writes `n` or `f` after its two numbers and a heading, being two numbers
+/// and nothing else, cannot.
 fn line() -> T {
-    T::switch(too_short_for_an_entry().or(letter_somewhere()), vec![(0, entry())], heading())
+    T::switch(
+        too_short_for_a_line(),
+        vec![(0, T::switch(too_short_for_an_entry().or(letter_somewhere()), vec![(0, entry())], heading()))],
+        T::bytes(E::Remaining),
+    )
+}
+
+/// One when what is left of the table is shorter than the shortest line that
+/// could be written there, and zero while a line would still fit.
+///
+/// Every field here takes one byte of the line ending that follows it and no
+/// more, since nothing says which of the three endings a writer used. The
+/// lines below step over whatever is left, so a table reads the same either
+/// way; the last line of the table has nothing below it to do that, and a
+/// file written with CRLF leaves a lone line feed in front of `trailer`.
+///
+/// The table is read to its end, so that byte is a line, and being a byte it
+/// is not one anybody wrote: the shortest heading is a digit, a separator, a
+/// digit and a separator. Under four bytes there is nothing a line could be,
+/// which is also why this takes nothing away: such a line has never read as
+/// anything but the error it now avoids.
+fn too_short_for_a_line() -> E {
+    E::Remaining.less_than(E::lit(4))
 }
 
 /// One when less than twenty bytes of table are left, and zero while an entry
@@ -611,25 +634,45 @@ mod tests {
     /// object, and this one is here so that a reader too old to know about
     /// that finds something where it looks. The heading is the only line, and
     /// there are no twenty bytes behind it to look ahead into.
+    ///
+    /// With CRLF there is a line more: the heading's second number takes the
+    /// carriage return and the table ends with the line feed behind it, which
+    /// no line below is left to step over. That byte used to take the whole
+    /// file down with it.
     #[test]
     fn a_table_with_an_empty_subsection_still_reads() {
-        let mut v = b"%PDF-1.5\n1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec();
-        let table = v.len();
-        v.extend_from_slice(b"xref\n0 0\ntrailer\n<< /Size 1 /XRefStm 17 >>\n");
-        v.extend_from_slice(format!("startxref\n{table}\n%%EOF").as_bytes());
-        let d = Document::new(MemSource(v));
-        let mut ev = Evaluator::new(pdf());
-        assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128));
-        let lines = ev.node(&d, &[4, 0]).unwrap();
-        assert_eq!(lines.child_count, 1);
-        assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Subsection");
-        assert_eq!(ev.node(&d, &[4, 0, 0, 1]).unwrap().value, Value::Int(0));
-        assert_eq!(
-            ev.node(&d, &[5, 0]).unwrap().value,
-            Value::Str("trailer\n<< /Size 1 /XRefStm 17 >>\n".into())
-        );
-        assert_eq!(ev.node(&d, &[9]).unwrap().child_count, 1);
-        assert_eq!(ev.node(&d, &[9, 0]).unwrap().size_bits, 0);
+        for eol in ["\n", "\r\n"] {
+            let mut v = format!("%PDF-1.5{eol}1 0 obj{eol}<< /Type /Catalog >>{eol}endobj{eol}").into_bytes();
+            let table = v.len();
+            v.extend_from_slice(format!("xref{eol}0 0{eol}trailer{eol}<< /Size 1 /XRefStm 17 >>{eol}").as_bytes());
+            v.extend_from_slice(format!("startxref{eol}{table}{eol}%%EOF").as_bytes());
+            let len = v.len() as u64;
+            let d = Document::new(MemSource(v));
+            let mut ev = Evaluator::new(pdf());
+            assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(table as i128), "{eol:?}");
+            let lines = ev.node(&d, &[4, 0]).unwrap();
+            assert_eq!(lines.child_count, if eol == "\n" { 1 } else { 2 }, "{eol:?}");
+            assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().type_name, "Subsection", "{eol:?}");
+            assert_eq!(ev.node(&d, &[4, 0, 0, 1]).unwrap().value, Value::Int(0), "{eol:?}");
+            // What the heading left of its line ending, and nothing else.
+            if eol == "\r\n" {
+                assert_eq!(ev.node(&d, &[4, 0, 1]).unwrap().size_bits, 8);
+            }
+            // The trailer starts where the table ends either way: it is
+            // measured to the word, not to where the lines got to.
+            assert_eq!(
+                ev.node(&d, &[5, 0]).unwrap().value,
+                Value::Str(format!("trailer{eol}<< /Size 1 /XRefStm 17 >>{eol}")),
+                "{eol:?}"
+            );
+            // A line that is a leftover byte places no object, the same
+            // answer the heading above it gives.
+            assert_eq!(ev.node(&d, &[9]).unwrap().child_count, if eol == "\n" { 1 } else { 2 }, "{eol:?}");
+            assert_eq!(ev.node(&d, &[9, 0]).unwrap().size_bits, 0, "{eol:?}");
+            // And the whole file lays out, which is what the lone line feed
+            // used to stop.
+            assert!(ev.spans(&d, 0, len * 8, 100).is_ok(), "{eol:?}");
+        }
     }
     /// A file whose table is a cross-reference stream: an ordinary numbered
     /// object with the rows packed and compressed inside it.
