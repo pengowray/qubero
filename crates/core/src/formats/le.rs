@@ -53,8 +53,8 @@ const OS_TYPE: &[(i128, &str)] = &[
 const MODULE_FLAGS: &[(u32, &str)] = &[
     (0, "single data"),
     (2, "per-process initialization"),
-    (4, "internal fixups done"),
-    (5, "external fixups done"),
+    (4, "internal fixups applied"),
+    (5, "external fixups applied"),
     (8, "not PM compatible"),
     (9, "PM compatible"),
     (13, "link error"),
@@ -79,9 +79,9 @@ const OBJECT_FLAGS: &[(u32, &str)] = &[
     (9, "permanent and resident"),
     (10, "permanent and long lockable"),
     (12, "16:16 alias required"),
-    (13, "big"),
+    (13, "big (32-bit)"),
     (14, "conforming"),
-    (15, "IO privilege level"),
+    (15, "I/O privilege level"),
 ];
 
 /// What the map says about one page. Only a valid one has its bytes where the
@@ -91,7 +91,7 @@ const PAGE_FLAGS: &[(i128, &str)] = &[
     (1, "iterated"),
     (2, "invalid"),
     (3, "zero filled"),
-    (4, "range"),
+    (4, "range of pages"),
 ];
 
 pub fn le() -> Template {
@@ -198,7 +198,7 @@ fn header(kind: Kind) -> T {
             ("instance_demand_count", T::u32(Little)),
             ("heap_size", T::u32(Little)),
             ("stack_size", T::u32(Little)),
-            ("tail", tail()),
+            ("reserved", tail()),
             // The map comes before the objects because an object reaches into
             // it: its pages are a run of entries, and an entry is what says
             // where a page is. Both are read where the header says they are,
@@ -296,9 +296,9 @@ fn object(kind: Kind) -> T {
             ("flags", T::flags("ObjectFlags", T::u32(Little), &flags)),
             // Where its pages start in the map, counted from one.
             ("map_index", T::u32(Little)),
-            ("map_size", T::u32(Little)),
+            ("map_entries", T::u32(Little)),
             ("reserved", T::u32(Little)),
-            ("pages", T::array(page(kind), E::field("map_size"))),
+            ("pages", T::array(page(kind), E::field("map_entries"))),
         ],
     )
     .counted_as("object")
