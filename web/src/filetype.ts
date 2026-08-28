@@ -38,6 +38,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   s3m: "Scream Tracker S3M",
   xm: "FastTracker XM",
   eps: "Encapsulated PostScript",
+  elf: "ELF",
+  bpf: "eBPF object",
   thumbsdb: "Windows Thumbs.db",
   unityassets: "Unity serialized assets",
   unitybundle: "Unity AssetBundle",
