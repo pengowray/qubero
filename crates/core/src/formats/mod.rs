@@ -13,6 +13,7 @@ mod cbor;
 mod coff;
 mod corel;
 mod dos;
+mod dtb;
 mod dv;
 mod elf;
 mod machine;
@@ -89,6 +90,7 @@ pub use cbor::cbor;
 pub use coff::coff;
 pub use corel::{cdr, cmx};
 pub use dos::{com, dos};
+pub use dtb::dtb;
 pub use dv::dv;
 pub use eps::eps;
 pub use elf::{bpf, elf};
@@ -164,7 +166,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng",
+        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -190,6 +192,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "wasm" => Some(wasm()),
         "mp4" => Some(mp4()),
         "mkv" => Some(mkv()),
+        "dtb" => Some(dtb()),
         "dv" => Some(dv()),
         "iso9660" => Some(iso9660()),
         "id3" => Some(id3()),
@@ -274,6 +277,7 @@ pub fn builtin(name: &str) -> Option<Template> {
 const MAGIC: &[(&[u8], &str)] = &[
     (b"SQLite format 3\0", "sqlite"),
     (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"\xd0\x0d\xfe\xed", "dtb"),
     (b"FWS", "swf"),
     (b"CWS", "swf"),
     (b"ZWS", "swf"),
@@ -1477,6 +1481,13 @@ mod tests {
         let mut wide = zip64_entry(b"image.zarr/0/0.0.0", b"chunkbytes");
         wide.extend_from_slice(&zip64_entry(b"image.zarr/.zgroup", br#"{"zarr_format":2}"#));
         assert_eq!(sniffed(&wide), Some("zarrzip"));
+    }
+
+    /// The files a Linux system leaves lying about, none of which look like
+    /// anything else.
+    #[test]
+    fn linux_system_files_are_recognised() {
+        assert_eq!(sniffed(b"\xd0\x0d\xfe\xed\0\0\x01\x00"), Some("dtb"));
     }
 
     #[test]

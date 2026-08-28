@@ -24,6 +24,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   cdr: "CorelDRAW CDR",
   cmx: "Corel Presentation Exchange CMX",
   dng: "Adobe DNG",
+  dtb: "Device tree blob",
   it: "Impulse Tracker IT",
   ico: "Windows icon/cursor",
   lnk: "Windows shortcut",
