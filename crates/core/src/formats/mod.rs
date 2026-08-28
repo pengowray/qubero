@@ -38,6 +38,7 @@ mod id3;
 mod iff;
 mod ilbm;
 mod iso9660;
+mod journal;
 mod jpeg;
 mod ico;
 mod lha;
@@ -112,6 +113,7 @@ pub use id3::id3;
 pub use ilbm::ilbm;
 pub use iso9660::iso9660;
 pub use jpeg::jpeg;
+pub use journal::journal;
 pub use ico::ico;
 pub use lha::lha;
 pub use lnk::lnk;
@@ -172,7 +174,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio",
+        "pak", "vpk", "mca", "tap", "lha", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -251,6 +253,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "tiff" => Some(tiff()),
         "dng" | "nef" | "cr2" | "arw" | "orf" | "rw2" | "pef" | "srw" => Some(camera_raw(name)),
         "jpeg" => Some(jpeg()),
+        "journal" => Some(journal()),
         "pdf" => Some(pdf()),
         "hdf5" => Some(hdf5()),
         "appledouble" => Some(appledouble()),
@@ -291,6 +294,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     // An initramfs, and every other cpio archive written this century.
     (b"070701", "cpio"),
     (b"070702", "cpio"),
+    (b"LPKSHHRH", "journal"),
     (b"FWS", "swf"),
     (b"CWS", "swf"),
     (b"ZWS", "swf"),
@@ -1517,6 +1521,7 @@ mod tests {
         login[340..344].copy_from_slice(&1_700_000_000i32.to_le_bytes());
         assert_eq!(sniffed(&login), Some("utmp"));
         assert_eq!(sniffed(b"0707010000000A"), Some("cpio"));
+        assert_eq!(sniffed(b"LPKSHHRH\0\0\0\0"), Some("journal"));
         assert_eq!(sniffed(&login[..383]), None);
     }
 

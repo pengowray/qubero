@@ -28,6 +28,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   dtb: "Device tree blob",
   grubenv: "GRUB environment block",
   it: "Impulse Tracker IT",
+  journal: "systemd journal",
   ico: "Windows icon/cursor",
   lnk: "Windows shortcut",
   mod: "ProTracker MOD",
