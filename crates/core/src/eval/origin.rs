@@ -26,6 +26,9 @@ pub enum Role {
     Type,
     /// Where it starts.
     Position,
+    /// What it says. A field of no bits is worked out from other fields, and
+    /// those are the fields to name.
+    Value,
     /// Not about this field at all: this field is an offset, and points there.
     Points,
 }
@@ -37,6 +40,7 @@ impl Role {
             Role::Count => "count",
             Role::Type => "type",
             Role::Position => "position",
+            Role::Value => "value",
             Role::Points => "points",
         }
     }
@@ -202,6 +206,7 @@ impl Evaluator {
                 self.from_expr(doc, path, &e.clone(), Role::Length, out)
             }
             Ty::Array { count, .. } => self.from_expr(doc, path, &count.clone(), Role::Count, out),
+            Ty::Computed(e) => self.from_expr(doc, path, &e.clone(), Role::Value, out),
             _ => Ok(()),
         }
     }

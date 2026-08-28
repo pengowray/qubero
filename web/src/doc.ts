@@ -202,7 +202,7 @@ export type SearchStep =
 /** What one other field decided about this one. `points` is the other way
  *  round: this field holds an offset, and that is where it points. */
 export type Origin = {
-  readonly role: "length" | "count" | "type" | "position" | "points";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "points";
   /** The field as the reader would name it: `len`, or `tensors[3].offset`. */
   readonly label: string;
   /** Where it is, so the reader can go there. Empty for a `points` entry. */

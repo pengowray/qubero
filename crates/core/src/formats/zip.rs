@@ -20,7 +20,7 @@ const MASKED32: i128 = 0xFFFF_FFFF;
 /// What a 16-bit one holds for the same reason.
 const MASKED16: i128 = 0xFFFF;
 const EXTRA_IDS: &[(i128, &str)] = &[
-    (0x0001, "ZIP64 sizes"),
+    (0x0001, "ZIP64 extended info"),
     (0x0007, "AV info"),
     (0x0008, "language"),
     (0x0009, "OS/2"),
@@ -530,6 +530,11 @@ mod tests {
             e.node(&d, &[0, 0, 1, 11, 0, 2, 1]).unwrap().value.as_int(),
             Some(4)
         );
+        // And the size says where it came from, so a reader can go and look.
+        let origins = e.origins(&d, &[0, 0, 1, 12]).unwrap();
+        let from = origins.iter().find(|o| o.label.starts_with("extra[")).expect("no extra field named");
+        assert_eq!(from.label, "extra[0].data.compressed_size");
+        assert_eq!(from.path, vec![0, 0, 1, 11, 0, 2, 1]);
     }
 
     /// Both at once: a ZIP64 entry written as a stream. Its extra field is
