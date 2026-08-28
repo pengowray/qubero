@@ -39,7 +39,7 @@ export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): Op
   const packed = n.size_bits / 8;
   const siblings = siblingNodes(doc, path);
 
-  if (doc.template === "zip" && n.name === "data") {
+  if (doc.isZip && n.name === "data") {
     const method = numberField(siblings, "compression");
     const entry = leafName(textField(doc, siblings, "name")) ?? n.name;
     // `unpacked_size` is the header's number once a ZIP64 entry's placeholder

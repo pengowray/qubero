@@ -697,6 +697,14 @@ export class Doc {
 
   template: string | null = null;
 
+  /** Whether the file is a ZIP archive, under whichever name it was opened:
+   * a Zarr store in a ZIP is read by a template of its own, and its records
+   * are an archive's records to the byte. Anything that works on entries has
+   * to ask this rather than the template's name. */
+  get isZip(): boolean {
+    return this.template === "zip" || this.template === "zarrzip";
+  }
+
   /** Best current projection for a variable-size array still being walked. */
   extentEstimate(): ExtentEstimate | null {
     const raw = this.editor.extent_estimate();

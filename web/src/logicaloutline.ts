@@ -1258,7 +1258,7 @@ function wavOutline(doc: Doc): TemplateReply<LogicalOutline> {
 const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "hdf5", read: (doc) => hdf5Outline(doc) },
   { matches: (doc) => doc.template === "gguf", read: ggufOutline },
-  { matches: (doc) => doc.template === "zip" || doc.template === "zarrzip", read: archiveOutline },
+  { matches: (doc) => doc.isZip, read: archiveOutline },
   { matches: (doc) => doc.template === "sqlite" || doc.template === "self", read: (doc) => sqliteOutline(doc) },
   { matches: (doc) => doc.template === "elf" || doc.template === "bpf", read: elfOutline },
   { matches: (doc) => doc.template === "iso9660", read: isoOutline },

@@ -653,7 +653,7 @@ export class Inspector {
       const parent = this.doc.templateNode(path.slice(0, -1));
       if (parent.status === "ok" && parent.node.name === "timestamps") return unixDate(raw, "UTC");
     }
-    if (this.doc.template === "zip" && (n.name === "modified_time" || n.name === "modified_date")) {
+    if (this.doc.isZip && (n.name === "modified_time" || n.name === "modified_date")) {
       const siblings = this.siblings(path);
       const time = siblings.find((x) => x.name === "modified_time");
       const date = siblings.find((x) => x.name === "modified_date");
@@ -696,7 +696,7 @@ export class Inspector {
         check: async () => ({ actual: hex32(crc32(await this.loadBytes(at, bytes))), expected: hex32(expected) }),
       };
     }
-    if (this.doc.template === "zip" && n.name === "crc32") {
+    if (this.doc.isZip && n.name === "crc32") {
       const numeric = Number(n.edit_text);
       if (!Number.isFinite(numeric)) return null;
       const expected = numeric >>> 0;
