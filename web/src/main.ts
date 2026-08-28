@@ -46,7 +46,8 @@ let say: (text: string, warn?: boolean) => void = () => {};
 
 const DROP_TITLE = "Drop to open";
 const DROP_HINT = "or drop a file anywhere on this page";
-const FOLDER_MSG = "Opening OME-Zarr folders is temporarily unavailable.";
+const FOLDER_MSG =
+  "Folders can't be opened. Zip the folder and drop the .zip; a Zarr store is read from inside the archive.";
 const manyFilesMsg = (name: string, ignored: number): string =>
   `Opened ${name}. Ignored ${ignored} other ${ignored === 1 ? "file" : "files"}.`;
 const discardMsg = (open: string, next: string): string =>

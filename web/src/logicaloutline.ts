@@ -657,12 +657,14 @@ function zarrOutline(
     const element = zarrElement(node.meta);
     const codecs = zarrCodecs(node.meta);
     const times = (dims: readonly number[]): string => dims.map((d) => d.toLocaleString()).join(" \u00d7 ");
+    // A scan that stopped short counted some of the chunks, not all of them,
+    // and every count taken from it has to say so.
+    const counted = `${partial ? "at least " : ""}${countText(node.chunks.length, "chunk")}`;
     const value = node.kind === "array"
       ? [
           shape.length > 0 ? times(shape) : "",
-          chunkShape.length > 0 ? `chunks ${times(chunkShape)}` : "",
+          chunkShape.length > 0 ? `${counted} of ${times(chunkShape)}` : counted,
           codecs.join(" then "),
-          countText(node.chunks.length, "chunk"),
         ].filter(Boolean).join(" \u00b7 ")
       : node.unreadMetadata
         ? "metadata not read"
@@ -695,11 +697,11 @@ function zarrOutline(
       sourcePath: node.chunks[0]?.path ?? node.metadataPath,
       sourceBits: node.chunks[0]?.offsetBits ?? null,
       sourceText: "multiple",
-      value: `${countText(node.chunks.length, "chunk")} \u00b7 ${formatBytes(stored)} in the archive`,
+      value: `${counted} \u00b7 ${formatBytes(stored)} in the archive`,
       type: "chunks",
       logicalBytes: chunkBytes === null ? null : chunkBytes * node.chunks.length,
-      logicalApproximate: false,
-      title: `${countText(node.chunks.length, "chunk file")}, ${formatBytes(stored)} of the archive`,
+      logicalApproximate: partial,
+      title: `${counted} in the archive, ${formatBytes(stored)}`,
     });
     if (!expanded.has(chunksId)) continue;
     const limit = Math.min(shown.get(chunksId) ?? LOGICAL_PAGE, node.chunks.length);

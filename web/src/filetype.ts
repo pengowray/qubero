@@ -37,6 +37,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   srw: "Samsung SRW",
   s3m: "Scream Tracker S3M",
   xm: "FastTracker XM",
+  zarrzip: "Zarr ZipStore",
   eps: "Encapsulated PostScript",
   elf: "ELF",
   com: "DOS .COM program",
