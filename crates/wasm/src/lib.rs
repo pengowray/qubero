@@ -1264,7 +1264,13 @@ impl Editor {
         }
         let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
         if self.bpf.is_none() {
+            // Reading the symbol table of a whole program is more than one
+            // screenful of work, and stopping halfway would mean starting
+            // again on every screenful after it. So this one runs to an
+            // answer, and what it costs is paid once.
+            e.set_slice(None);
             self.bpf = formats::ElfProgram::read(e, &self.doc).ok();
+            e.set_slice(Some(WORK_SLICE));
         }
         let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };
         found
@@ -1292,7 +1298,10 @@ impl Editor {
         }
         let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
         if self.ne.is_none() {
+            // The same as for a program's symbols: read once, in full.
+            e.set_slice(None);
             self.ne = formats::NeProgram::read(e, &self.doc).ok();
+            e.set_slice(Some(WORK_SLICE));
         }
         let Some(p) = &self.ne else { return found.into_iter().map(span_dto).collect() };
         found
