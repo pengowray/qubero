@@ -25,6 +25,9 @@ pub struct Editor {
     /// relocations say, so an instruction can name the map it loads and the
     /// helper it calls.
     bpf: Option<formats::ElfProgram>,
+    /// The same for a 16-bit Windows program, whose relocations say what its
+    /// calls into other modules are calls to.
+    ne: Option<formats::NeProgram>,
     /// The template in use, which decides whether a listing row goes through
     /// the disassembler.
     template: String,
@@ -836,7 +839,7 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store), eval: None, disasm: None, bpf: None, template: String::new(), scan: None, focus: None }
+        Editor { doc: Document::new(store), eval: None, disasm: None, bpf: None, ne: None, template: String::new(), scan: None, focus: None }
     }
 
     fn changed(&mut self) {
@@ -845,6 +848,7 @@ impl Editor {
         }
         self.disasm = None;
         self.bpf = None;
+        self.ne = None;
         self.scan = None;
         self.focus = None;
     }
@@ -857,6 +861,7 @@ impl Editor {
         }
         self.disasm = None;
         self.bpf = None;
+        self.ne = None;
         self.scan = None;
         self.focus = None;
     }
@@ -964,6 +969,7 @@ impl Editor {
     pub fn set_template(&mut self, name: &str) -> bool {
         self.disasm = None;
         self.bpf = None;
+        self.ne = None;
         self.template = name.to_string();
         if name.is_empty() {
             self.eval = None;
@@ -993,6 +999,7 @@ impl Editor {
         // full template was in use no longer applies.
         self.disasm = None;
         self.bpf = None;
+        self.ne = None;
         self.template = String::new();
         match magicrule::match_signature(rules, head) {
             Some(sig) => {
@@ -1194,6 +1201,7 @@ impl Editor {
             "wasm" => self.name_wasm(found),
             "bpf" => self.name_bpf(found),
             "elf" => self.name_machine(found),
+            "ne" => self.name_ne(found),
             _ => found.into_iter().map(span_dto).collect(),
         }
     }
@@ -1265,6 +1273,34 @@ impl Editor {
                 let named = match is_machine(&s.type_name) {
                     true => p.machine_line(e, &self.doc, &s.path).ok().flatten(),
                     false => None,
+                };
+                let mut dto = span_dto(s);
+                if let Some(line) = named {
+                    dto.line = Some(line);
+                }
+                dto
+            })
+            .collect()
+    }
+
+    /// Rewrite the instructions of a 16-bit Windows program through its
+    /// relocations, so a call into another module says which function of it
+    /// the loader will point the call at.
+    fn name_ne(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        if !found.iter().any(|s| is_machine(&s.type_name)) {
+            return found.into_iter().map(span_dto).collect();
+        }
+        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
+        if self.ne.is_none() {
+            self.ne = formats::NeProgram::read(e, &self.doc).ok();
+        }
+        let Some(p) = &self.ne else { return found.into_iter().map(span_dto).collect() };
+        found
+            .into_iter()
+            .map(|s| {
+                let named = match (is_machine(&s.type_name), formats::NeProgram::segment_of(&s.path)) {
+                    (true, Some(segment)) => p.instruction_line(e, &self.doc, &s.path, segment).ok().flatten(),
+                    _ => None,
                 };
                 let mut dto = span_dto(s);
                 if let Some(line) = named {
