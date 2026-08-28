@@ -21,6 +21,10 @@ pub struct Editor {
     /// Built on the first listing that needs it, and thrown away whenever the
     /// document changes, since it holds paths that the change may have moved.
     disasm: Option<formats::WasmModule>,
+    /// The same for an eBPF object: what its sections, symbols and
+    /// relocations say, so an instruction can name the map it loads and the
+    /// helper it calls.
+    bpf: Option<formats::BpfProgram>,
     /// The template in use, which decides whether a listing row goes through
     /// the disassembler.
     template: String,
@@ -826,7 +830,7 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store), eval: None, disasm: None, template: String::new(), scan: None, focus: None }
+        Editor { doc: Document::new(store), eval: None, disasm: None, bpf: None, template: String::new(), scan: None, focus: None }
     }
 
     fn changed(&mut self) {
@@ -834,6 +838,7 @@ impl Editor {
             e.invalidate();
         }
         self.disasm = None;
+        self.bpf = None;
         self.scan = None;
         self.focus = None;
     }
@@ -845,6 +850,7 @@ impl Editor {
             e.invalidate_from(bit);
         }
         self.disasm = None;
+        self.bpf = None;
         self.scan = None;
         self.focus = None;
     }
@@ -951,6 +957,7 @@ impl Editor {
     /// Select a built-in template by name; "" clears it. Returns false if unknown.
     pub fn set_template(&mut self, name: &str) -> bool {
         self.disasm = None;
+        self.bpf = None;
         self.template = name.to_string();
         if name.is_empty() {
             self.eval = None;
@@ -979,6 +986,7 @@ impl Editor {
         // A signature template covers a format's first bytes only, so whatever
         // full template was in use no longer applies.
         self.disasm = None;
+        self.bpf = None;
         self.template = String::new();
         match magicrule::match_signature(rules, head) {
             Some(sig) => {
@@ -1171,12 +1179,20 @@ impl Editor {
         }))
     }
 
-    /// Rewrite instruction rows through the wasm disassembler, so a call names
-    /// the function it calls. Anything that does not work out keeps the row the
+    /// Rewrite instruction rows through a disassembler, so a call names the
+    /// function it calls. Anything that does not work out keeps the row the
     /// template already produced: a name is an improvement on a number, not a
     /// requirement for reading the file.
     fn name_instructions(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
-        if self.template != "wasm" || !found.iter().any(|s| s.type_name == "Instr") {
+        match self.template.as_str() {
+            "wasm" => self.name_wasm(found),
+            "bpf" => self.name_bpf(found),
+            _ => found.into_iter().map(span_dto).collect(),
+        }
+    }
+
+    fn name_wasm(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        if !found.iter().any(|s| s.type_name == "Instr") {
             return found.into_iter().map(span_dto).collect();
         }
         let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
@@ -1190,6 +1206,30 @@ impl Editor {
             .into_iter()
             .map(|s| {
                 let named = if s.type_name == "Instr" { m.instruction_line(e, &self.doc, &s.path).ok() } else { None };
+                let mut dto = span_dto(s);
+                if let Some(line) = named {
+                    dto.line = Some(line);
+                }
+                dto
+            })
+            .collect()
+    }
+
+    /// The same for eBPF, where what a line needs is in the object's tables
+    /// rather than in the instruction.
+    fn name_bpf(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        if !found.iter().any(|s| s.type_name == "BpfInsn") {
+            return found.into_iter().map(span_dto).collect();
+        }
+        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
+        if self.bpf.is_none() {
+            self.bpf = formats::BpfProgram::read(e, &self.doc).ok();
+        }
+        let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };
+        found
+            .into_iter()
+            .map(|s| {
+                let named = if s.type_name == "BpfInsn" { p.instruction_line(e, &self.doc, &s.path).ok() } else { None };
                 let mut dto = span_dto(s);
                 if let Some(line) = named {
                     dto.line = Some(line);

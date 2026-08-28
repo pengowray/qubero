@@ -13,7 +13,17 @@ fn main() {
     println!("template: {name}");
     let doc = Document::new(MemSource(bytes));
     let mut ev = Evaluator::new(formats::builtin(name).unwrap());
-    walk(&mut ev, &doc, &[], 0);
+    if std::env::args().any(|a| a == "--tree") {
+        walk(&mut ev, &doc, &[], 0);
+    }
+    let p = formats::BpfProgram::read(&mut ev, &doc).unwrap();
+    for s in &p.sections {
+        println!("section {:16} type {:3} {:6} bytes at {}", s.name, s.kind, s.size, s.offset);
+    }
+    for s in &p.symbols {
+        println!("symbol  {:16} type {} in section {} at {}", s.name, s.kind, s.section, s.value);
+    }
+    println!("{}", p.listing(&mut ev, &doc).unwrap());
 }
 
 fn walk(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: usize) {
