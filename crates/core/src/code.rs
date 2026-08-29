@@ -41,6 +41,11 @@ pub enum Isa {
     /// instructions its designers added, which are read as themselves only
     /// here: elsewhere they are encodings the standard leaves undefined.
     Hazard3,
+    /// The ARM half of an RP2350: a Cortex-M33 in its two-byte encoding, plus
+    /// the coprocessor Raspberry Pi added for checking that a program is
+    /// running the way it was written. Coprocessor seven belongs to whoever
+    /// builds the chip, so those names are used only here.
+    Rp2350Arm,
 }
 
 impl Isa {
@@ -56,6 +61,7 @@ impl Isa {
             Isa::Riscv32 => "riscv32",
             Isa::Riscv64 => "riscv64",
             Isa::Hazard3 => "hazard3",
+            Isa::Rp2350Arm => "rp2350-arm",
         }
     }
 
@@ -72,6 +78,7 @@ impl Isa {
             Isa::Riscv32,
             Isa::Riscv64,
             Isa::Hazard3,
+            Isa::Rp2350Arm,
         ]
         .into_iter()
         .find(|isa| isa.name() == name)
@@ -83,7 +90,7 @@ impl Isa {
         match self {
             Isa::X86_64 | Isa::X86_32 | Isa::X86_16 => 1,
             Isa::Aarch64 | Isa::Arm => 4,
-            Isa::Thumb | Isa::Riscv32 | Isa::Riscv64 | Isa::Hazard3 => 2,
+            Isa::Thumb | Isa::Rp2350Arm | Isa::Riscv32 | Isa::Riscv64 | Isa::Hazard3 => 2,
         }
     }
 
@@ -122,7 +129,10 @@ pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
         Isa::X86_16 => x86_16(bytes),
         Isa::Aarch64 => aarch64(bytes),
         Isa::Arm => arm(bytes),
-        Isa::Thumb => thumb(bytes),
+        // The overlay goes first and answers only for what it knows; the
+        // general decoder reads everything else.
+        Isa::Thumb => crate::thumb::decode(bytes, false).or_else(|| thumb(bytes)),
+        Isa::Rp2350Arm => crate::thumb::decode(bytes, true).or_else(|| thumb(bytes)),
         Isa::Riscv32 => crate::riscv::decode(bytes, false),
         Isa::Hazard3 => crate::riscv::decode(bytes, true),
         Isa::Riscv64 => riscv(bytes, true),
@@ -168,7 +178,7 @@ pub fn relative_target(isa: Isa, text: &str, len: usize) -> Option<i64> {
     let end = digits.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(digits.len());
     let value = i64::from_str_radix(&digits[..end], 16).ok()?;
     let from_start = match isa {
-        Isa::X86_64 | Isa::X86_32 | Isa::X86_16 | Isa::Thumb => len as i64,
+        Isa::X86_64 | Isa::X86_32 | Isa::X86_16 | Isa::Thumb | Isa::Rp2350Arm => len as i64,
         _ => 0,
     };
     Some(from_start + sign * value)

@@ -27,6 +27,7 @@ pub mod search;
 pub mod source;
 pub mod template;
 pub mod text;
+pub mod thumb;
 
 pub use document::Document;
 pub use encode::EDIT_LIMIT_BYTES;

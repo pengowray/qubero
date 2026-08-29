@@ -101,6 +101,12 @@ fn report(title: &str, rows: &[(String, usize, String)], examples: &BTreeMap<Str
 /// 3. an alias the standard itself defines, like `zext.b` for `andi` of 255.
 fn same(want: &str, got: &str) -> bool {
     let norm = |s: &str| {
+        // The width suffix usually trails, but this decoder writes a wide
+        // conditional branch as `b.wge` where a listing writes `bge.w`.
+        let s = match s.strip_prefix("b.w") {
+            Some(condition) => format!("b{condition}"),
+            None => s.to_string(),
+        };
         let s = s.trim_end_matches(".w").trim_end_matches(".n");
         let s = s.strip_prefix("c.").unwrap_or(s);
         base(s).to_string()
@@ -176,7 +182,7 @@ fn values(text: &str, at: u64, target: Option<i64>) -> Vec<String> {
             out.push(format!("#{n}"));
             continue;
         }
-        out.push(register(token));
+        out.push(base(&register(token)).to_string());
     }
     out
 }
@@ -233,6 +239,26 @@ fn base(name: &str) -> &str {
         "csrsi" | "csrrsi" => "csrrsi",
         "csrci" | "csrrci" => "csrrci",
         "unimp" => "unimp",
+        // ARM. Several pairs are one encoding with two names, and which name
+        // a tool writes is a house style rather than a fact about the bytes:
+        // shifting a register by nothing is how the machine moves it, and
+        // subtracting it from zero is how it negates it.
+        "movs" | "lsls" => "movs",
+        "negs" | "rsbs" => "negs",
+        "bcc" | "blo" => "blo",
+        "bcs" | "bhs" => "bhs",
+        // The condition for "carry set" and for "unsigned higher or same" is
+        // the same condition under two names.
+        "cs" | "hs" => "hs",
+        "cc" | "lo" => "lo",
+        "ldmia" | "ldm" | "pop" => "ldm",
+        // Saving registers below the stack pointer is what a push is, and
+        // loading one back from above it is a pop.
+        "stmdb" | "push" | "stm" | "stmia" => "stm",
+        // The wide forms of add and subtract take a twelve-bit constant
+        // rather than a shifted one; a listing marks that in the name.
+        "subw" => "sub",
+        "addw" | "adr" | "add" => "add",
         other => other,
     }
 }
