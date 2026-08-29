@@ -8,6 +8,7 @@ mod assimp;
 mod appledouble;
 mod au;
 mod bmp;
+mod cab;
 mod braw;
 mod bards_tale;
 mod cbor;
@@ -92,6 +93,7 @@ pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
 pub use bmp::bmp;
+pub use cab::cab;
 pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use cbor::cbor;
@@ -180,7 +182,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
+        "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -256,6 +258,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "cpio" => Some(cpio()),
         "ar" => Some(ar()),
         "rpm" => Some(rpm()),
+        "cab" => Some(cab()),
         "deb" => Some(deb()),
         "gitindex" => Some(git_index()),
         "gitpackidx" => Some(git_pack_index()),
@@ -305,6 +308,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     // already asked whether this one is a package.
     (ar::MAGIC, "ar"),
     (rpm::MAGIC, "rpm"),
+    (cab::MAGIC, "cab"),
     // An initramfs, and every other cpio archive written this century.
     (b"070701", "cpio"),
     (b"070702", "cpio"),

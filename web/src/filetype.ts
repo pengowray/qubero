@@ -22,6 +22,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   arw: "Sony ARW",
   bardstale: "Bard's Tale I (DOS save)",
   cr2: "Canon CR2",
+  cab: "Windows cabinet",
   cdr: "CorelDRAW CDR",
   cmx: "Corel Presentation Exchange CMX",
   cpio: "cpio archive (initramfs)",

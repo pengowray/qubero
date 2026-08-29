@@ -659,24 +659,34 @@ export class Inspector {
       if (parent.status === "ok" && parent.node.name === "timestamps") return unixDate(raw, "UTC");
     }
     if (this.doc.isZip && (n.name === "modified_time" || n.name === "modified_date")) {
-      const siblings = this.siblings(path);
-      const time = siblings.find((x) => x.name === "modified_time");
-      const date = siblings.find((x) => x.name === "modified_date");
-      if (time === undefined || date === undefined) return null;
-      const t = Number(time.edit_text);
-      const d = Number(date.edit_text);
-      const year = 1980 + ((d >>> 9) & 0x7f);
-      const month = (d >>> 5) & 0x0f;
-      const day = d & 0x1f;
-      const hour = (t >>> 11) & 0x1f;
-      const minute = (t >>> 5) & 0x3f;
-      const second = (t & 0x1f) * 2;
-      if (month === 0 || day === 0 || month > 12 || day > 31 || hour > 23 || minute > 59 || second > 59) {
-        return "Invalid MS-DOS date/time";
-      }
-      return `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}:${pad(second)} (MS-DOS local time)`;
+      return this.dosDateText(path, "modified_date", "modified_time");
+    }
+    if (this.doc.template === "cab" && (n.name === "date" || n.name === "time")) {
+      return this.dosDateText(path, "date", "time");
     }
     return null;
+  }
+
+  /** The two halves of an MS-DOS timestamp, which a ZIP and a cabinet both
+   * keep as a packed date beside a packed time. Either field shows the whole
+   * moment, since neither says much alone. */
+  private dosDateText(path: readonly number[], dateField: string, timeField: string): string | null {
+    const siblings = this.siblings(path);
+    const time = siblings.find((x) => x.name === timeField);
+    const date = siblings.find((x) => x.name === dateField);
+    if (time === undefined || date === undefined) return null;
+    const t = Number(time.edit_text);
+    const d = Number(date.edit_text);
+    const year = 1980 + ((d >>> 9) & 0x7f);
+    const month = (d >>> 5) & 0x0f;
+    const day = d & 0x1f;
+    const hour = (t >>> 11) & 0x1f;
+    const minute = (t >>> 5) & 0x3f;
+    const second = (t & 0x1f) * 2;
+    if (month === 0 || day === 0 || month > 12 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+      return "Invalid MS-DOS date/time";
+    }
+    return `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}:${pad(second)} (MS-DOS local time)`;
   }
 
   private siblings(path: readonly number[]): TemplateNode[] {
