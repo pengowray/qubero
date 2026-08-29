@@ -18,7 +18,7 @@ fn main() {
     let (mut read, mut failed) = (0, 0);
     for path in files {
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        let Some(name) = formats::sniff(&bytes[..bytes.len().min(0x9000)], bytes.len() as u64) else { continue };
+        let Some(name) = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64) else { continue };
         if only.as_deref().is_some_and(|want| want != name) {
             continue;
         }

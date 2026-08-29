@@ -360,6 +360,14 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"{\"", "json"),
 ];
 
+/// How much of a file `sniff` wants. Most formats are decided by their first
+/// few bytes, and a handful are not: a MOD reads its signature at 1080, an
+/// Anvil region needs both its 8 KiB tables, and an ISO 9660 image keeps its
+/// first volume descriptor at sector 16, which is 32 KiB in. A caller that
+/// reads less than this gets a `None` for the deep formats rather than an
+/// error, so read this much and the answer is the whole answer.
+pub const SNIFF_WINDOW: usize = 0x9000;
+
 /// Pick a built-in template from the first bytes of a file. `len` is the
 /// length of the whole file, which a format whose header is a table of
 /// offsets needs in order to weigh what the table points at: the head alone
@@ -1644,6 +1652,27 @@ mod tests {
         thumbs[512..512 + catalog.len()].copy_from_slice(catalog);
         assert_eq!(sniff(&thumbs, thumbs.len() as u64), Some("thumbsdb"));
         assert_eq!(sniff(&thumbs[..512], 512), None, "an arbitrary compound file is not necessarily Thumbs.db");
+    }
+
+    /// The formats that hide what identifies them deep in the file are the
+    /// reason `SNIFF_WINDOW` is not a few hundred bytes. A caller reads that
+    /// much and no more, so each of them has to be decided inside it.
+    #[test]
+    fn the_deep_formats_are_decided_inside_the_sniff_window() {
+        let mut iso = vec![0; SNIFF_WINDOW];
+        iso[16 * 2048] = 1;
+        iso[16 * 2048 + 1..16 * 2048 + 6].copy_from_slice(b"CD001");
+        iso[16 * 2048 + 6] = 1;
+        assert_eq!(sniff(&iso[..SNIFF_WINDOW], 40 * 2048), Some("iso9660"));
+
+        let mut region = vec![0u8; SNIFF_WINDOW];
+        region[..4].copy_from_slice(&[0, 0, 2, 1]);
+        region[4096..4100].copy_from_slice(&1_700_000_000u32.to_be_bytes());
+        assert_eq!(sniff(&region[..SNIFF_WINDOW], 3 * 4096), Some("mca"));
+
+        let mut module = vec![0; SNIFF_WINDOW];
+        module[1080..1084].copy_from_slice(b"M.K.");
+        assert_eq!(sniff(&module[..SNIFF_WINDOW], 1 << 16), Some("mod"));
     }
 
     #[test]

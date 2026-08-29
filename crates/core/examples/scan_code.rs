@@ -17,7 +17,7 @@ fn main() {
     // say what it is.
     let name = match std::env::args().nth(2) {
         Some(name) => Box::leak(name.into_boxed_str()) as &str,
-        None => match formats::sniff(&bytes[..bytes.len().min(4096)], bytes.len() as u64) {
+        None => match formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64) {
             Some(name) => name,
             None => {
                 println!("no template");

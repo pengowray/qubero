@@ -1022,6 +1022,13 @@ impl Editor {
             .unwrap_or_default()
     }
 
+    /// How many leading bytes `sniff_template` wants. A few formats keep what
+    /// identifies them well past the start of the file, so a shorter head
+    /// silently misses them.
+    pub fn sniff_window(&self) -> f64 {
+        formats::SNIFF_WINDOW as f64
+    }
+
     /// Name of the built-in template matching these leading bytes, or "".
     /// `file_len` is the length of the whole file, which a format whose
     /// header is a table of offsets weighs its pointers against.

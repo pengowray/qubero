@@ -9,7 +9,7 @@ use qubero_core::source::MemSource;
 fn main() {
     let path = std::env::args().nth(1).expect("usage: scan_bpf <file>");
     let bytes = std::fs::read(&path).unwrap();
-    let name = formats::sniff(&bytes[..bytes.len().min(64)], bytes.len() as u64).unwrap_or("elf");
+    let name = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64).unwrap_or("elf");
     println!("template: {name}");
     let doc = Document::new(MemSource(bytes));
     let mut ev = Evaluator::new(formats::builtin(name).unwrap());

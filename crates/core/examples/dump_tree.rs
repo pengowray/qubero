@@ -11,7 +11,7 @@ fn main() {
     let bytes = std::fs::read(&path).unwrap();
     let name = match std::env::args().nth(2) {
         Some(name) => Box::leak(name.into_boxed_str()) as &str,
-        None => formats::sniff(&bytes[..bytes.len().min(0x9000)], bytes.len() as u64).expect("nothing sniffs it"),
+        None => formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64).expect("nothing sniffs it"),
     };
     let depth: usize = std::env::args().nth(3).and_then(|d| d.parse().ok()).unwrap_or(4);
     println!("template: {name}");

@@ -13,7 +13,7 @@ use qubero_core::eval::{EvalError, Evaluator};
 use qubero_core::source::MemSource;
 
 fn template_of(bytes: &[u8]) -> Option<&'static str> {
-    let head = &bytes[..bytes.len().min(0x9000)];
+    let head = &bytes[..bytes.len().min(qubero_core::formats::SNIFF_WINDOW)];
     qubero_core::formats::sniff(head, bytes.len() as u64)
 }
 

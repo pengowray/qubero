@@ -27,7 +27,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
         let Ok(bytes) = std::fs::read(&path) else { continue };
         // Enough of the file for the tests that read a header the front of the
         // file only points at: an ISO keeps its first descriptor at 0x8000.
-        let head = &bytes[..bytes.len().min(0x9000)];
+        let head = &bytes[..bytes.len().min(qubero_core::formats::SNIFF_WINDOW)];
         let name = qubero_core::formats::sniff(head, bytes.len() as u64).unwrap_or("-");
         let rel = path.strip_prefix(root).unwrap_or(&path).display().to_string().replace('\\', "/");
         out.push(format!("{rel}\t{}\t{name}", bytes.len()));
