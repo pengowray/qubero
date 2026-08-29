@@ -397,12 +397,12 @@ reach, how many byte values appear, and the commonest of them. That pair is
 the honest form: 7.9 out of 8 means dense, 7.9 out of 7.9 means only that
 there are few bytes here.
 
-The block view can also measure only the bytes no field describes, which is
-where the byte classes still have something to say about a file a template
-already covers. The stretches come from `spans`, whose gaps are exact, and
-that is affordable over one block where it would not be over a whole file;
-picking one measures it on its own rather than quoting the block's numbers for
-it.
+Below that, the block view lists the stretches of the block no field
+describes, which is where the byte classes still have something to say about a
+file a template already covers. The stretches come from `spans`, whose gaps
+are exact, and that is affordable over one block where it would not be over a
+whole file; picking one measures it on its own rather than quoting the block's
+numbers for it.
 
 The region list is the template's top-level children, with runs of three or
 more plain fields folded into one row so a header's bookkeeping does not

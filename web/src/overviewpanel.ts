@@ -96,11 +96,11 @@ const SMALL_FIELDS = (n: number): string => `${n} small fields`;
  *  which would jump everything below by a row. */
 const BLANK = " ";
 
-const ALL_DESCRIBED = "Every byte in this block belongs to a field.";
+const ALL_DESCRIBED = "Every byte in this block is covered by a field.";
 const GAPS_FOUND = (n: number, bytes: number): string =>
-  `${n === 1 ? "1 stretch" : `${n.toLocaleString()} stretches`} no field describes, ${formatBytes(bytes)} in all.`;
-const GAPS_MORE = (n: number): string => `${n.toLocaleString()} more not listed.`;
-const MEASURE_THIS = "Measure this stretch on its own";
+  `Not covered by any field: ${n === 1 ? "1 stretch" : `${n.toLocaleString()} stretches`}, ${formatBytes(bytes)} total.`;
+const GAPS_MORE = (n: number): string => `${n.toLocaleString()} more not shown.`;
+const MEASURE_THIS = "Measure only these bytes";
 
 /** One maximal run of buckets sharing a class. */
 type Run = { readonly cls: number; readonly start: number; readonly len: number };
