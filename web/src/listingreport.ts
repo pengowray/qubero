@@ -14,6 +14,8 @@ import type { Doc, TemplateNode } from "./doc.js";
 import { emptyState, flatten, PAGE } from "./flatten.js";
 import type { Item, ListingState, TreeSource } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
+import { fileMap } from "./filemap.js";
+import type { MapSegment } from "./filemap.js";
 import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
 
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
@@ -71,6 +73,9 @@ export class ListingReport {
    *  is always there. */
   private tops: number[] = [0];
   private drawn: { from: number; to: number } | null = null;
+  /** The file's top-level parts, which every strip of the map is drawn from.
+   *  Worked out once per flatten so that every strip has the same geometry. */
+  private segments: readonly MapSegment[] = [];
   private frame = 0;
   private selected: string | null = null;
 
@@ -122,6 +127,9 @@ export class ListingReport {
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
     for (const [i, item] of this.items.entries()) this.tops[i + 1] = (this.tops[i] ?? 0) + heightOf(item);
+    this.segments = this.items
+      .filter((i) => i.kind === "heading" && i.level === 0)
+      .map((i) => ({ offsetBits: i.offsetBits, sizeBits: i.sizeBits, color: sectionColor(i.section) }));
     this.canvas.style.height = `${this.tops[this.items.length] ?? 0}px`;
     this.drawn = null;
     if (anchor !== null) this.restore(anchor);
@@ -213,6 +221,7 @@ export class ListingReport {
     row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits)));
     const share = shareText(item.sizeBits, fileBits);
     row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
+    row.append(fileMap(this.segments, item.offsetBits, item.sizeBits, rangeText(item.offsetBits, item.sizeBits)));
     return row;
   }
 

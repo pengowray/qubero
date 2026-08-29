@@ -2291,3 +2291,18 @@ button.insp-xrow-where:hover {
   color: var(--muted);
   font-style: italic;
 }
+/* The repeated file map: the same segments in the same places on every strip,
+   with only the lit part changing. See `filemap.ts`. */
+.fmap {
+  display: inline-flex;
+  flex: none;
+  width: 96px;
+  height: 9px;
+  gap: 1px;
+  overflow: hidden;
+  border-radius: 2px;
+}
+.rp-h0 .fmap,
+.rp-h1 .fmap {
+  margin-inline-start: 8px;
+}
