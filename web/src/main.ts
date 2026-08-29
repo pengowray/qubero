@@ -5,7 +5,6 @@ import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingReport } from "./listingreport.js";
-import { ListingView } from "./listingview.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
@@ -176,17 +175,7 @@ function build(tab: Tab): void {
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
-  const listing = new ListingView(doc);
-  // The unified listing, still being built. Dev only, and behind a flag: it
-  // replaces the listing at the end of the work rather than standing beside it
-  // as a view of its own, so it has no name of its own to give the reader yet.
-  const report = import.meta.env.DEV && new URLSearchParams(location.search).get("view") === "report"
-    ? new ListingReport(doc)
-    : null;
-  // Whichever of the two is showing. They answer the same calls, so nothing
-  // else has to know which it is talking to; step 7 is where the older one
-  // stops existing and this goes back to being one name.
-  const structure = report ?? listing;
+  const structure = new ListingReport(doc);
   const overview = new OverviewPanel(doc);
   const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
@@ -486,15 +475,14 @@ function build(tab: Tab): void {
     const listingOn = which === "listing";
     listingShowing = listingOn;
     view.el.hidden = listingOn;
-    listing.el.hidden = !listingOn || report !== null;
-    if (report !== null) report.el.hidden = !listingOn;
+    structure.el.hidden = !listingOn;
     for (const c of hexOnly) c.hidden = listingOn;
     hexBtn.setAttribute("aria-pressed", String(!listingOn));
     listBtn.setAttribute("aria-pressed", String(listingOn));
     hexBtn.classList.toggle("is-on", !listingOn);
     listBtn.classList.toggle("is-on", listingOn);
     localStorage.setItem("qubero.view", which);
-    if (listingOn) (report ?? listing).relayout();
+    if (listingOn) structure.relayout();
     else view.relayout();
     (listingOn ? structure.el : view.el).focus();
     refresh();
@@ -623,7 +611,7 @@ function build(tab: Tab): void {
       "main",
       { className: "workspace" },
       overview.el,
-      el("div", { className: "left" }, search.el, view.el, listing.el, ...(report === null ? [] : [report.el]), bottom),
+      el("div", { className: "left" }, search.el, view.el, structure.el, bottom),
       right,
     ),
     statusbar,
@@ -647,7 +635,7 @@ function build(tab: Tab): void {
   // The next file dropped may be one no template covers. Fetch the rules while
   // nothing is waiting on them, so that file is named as soon as it opens.
   prefetchMagic();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, listing, overview, report } });
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, overview, structure } });
 }
 
 function pick(): void {

@@ -5,7 +5,7 @@
 // file's structure, opened it reads as one line per field. Both are the same
 // list, so this produces items rather than rows: a heading, a field, a run of
 // bytes nothing claimed, a fold hiding the machinery behind the field it
-// places. What each one looks like is `listingview`'s business; nothing here
+// places. What each one looks like is `listingreport`'s business; nothing here
 // writes a word the reader sees.
 //
 // Only what is open is walked. A collapsed structure is one item however many
