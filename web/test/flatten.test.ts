@@ -263,6 +263,48 @@ test("a fold serving two different fields names neither", () => {
   assert.equal(fold.owner, null);
 });
 
+test("asking for a part's bytes opens on its machinery, not on all of it", () => {
+  const page = run(SQLITE).items.find((i) => i.kind === "heading" && i.level === 0 && i.offsetBits === 4096 * 8);
+  assert.ok(page?.kind === "heading");
+  const strip = run(SQLITE, { ...emptyState, bytes: new Set([page.key]) }).items.find((i) => i.kind === "bytes");
+  assert.ok(strip?.kind === "bytes");
+  // The strip runs from the page's start to where its cells begin, which is
+  // less than the page. This fixture declares the cells at the back of the
+  // page, so that is 3,760 bytes of it; the real file declares them right
+  // after the header and covering the free space, where the same rule gives
+  // the fourteen bytes the mockup opens on.
+  assert.equal(strip.offsetBits, page.offsetBits);
+  assert.ok(strip.sizeBits < page.sizeBits);
+  assert.equal(strip.sizeBits / 8, 7856 - 4096);
+  assert.equal(strip.owner, page.key);
+});
+
+test("a row's bytes are its own, and a fold's are the run's", () => {
+  const rows = run(SQLITE).items;
+  const fold = rows.find((i) => i.kind === "fold");
+  assert.ok(fold?.kind === "fold");
+  const openFold = run(SQLITE, { ...emptyState, bytes: new Set([fold.key]) }).items.find((i) => i.kind === "bytes");
+  assert.ok(openFold?.kind === "bytes");
+  assert.equal(openFold.offsetBits, fold.offsetBits);
+  assert.equal(openFold.sizeBits, fold.sizeBits);
+
+  const row = rows.find((i) => i.kind === "row" && i.node.name === "page_size");
+  assert.ok(row?.kind === "row");
+  const openRow = run(SQLITE, { ...emptyState, bytes: new Set([row.key]) }).items.find((i) => i.kind === "bytes");
+  assert.equal(openRow?.sizeBits, 16);
+});
+
+test("a strip sits directly under the item it belongs to", () => {
+  const rows = run(SQLITE).items;
+  const row = rows.find((i) => i.kind === "row" && i.node.name === "page_size");
+  assert.ok(row !== undefined);
+  const items = run(SQLITE, { ...emptyState, bytes: new Set([row.key]) }).items;
+  const at = items.findIndex((i) => i.key === row.key);
+  assert.equal(items[at + 1]?.kind, "bytes");
+  // And nothing opens a strip nobody asked for.
+  assert.equal(run(SQLITE).items.some((i) => i.kind === "bytes"), false);
+});
+
 test("bytes no field covers are an item of their own", () => {
   const { items } = run(SQLITE);
   const gaps = items.filter((i) => i.kind === "gap");
