@@ -31,6 +31,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   dng: "Adobe DNG",
   dtb: "Device tree blob",
   grubenv: "GRUB environment block",
+  hackrffw: "HackRF firmware",
   it: "Impulse Tracker IT",
   journal: "systemd journal",
   ico: "Windows icon/cursor",

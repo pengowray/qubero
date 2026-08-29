@@ -33,6 +33,7 @@ mod git;
 mod gif;
 mod grubenv;
 mod gzip;
+mod hackrffw;
 mod hdf5;
 pub mod h5ad;
 pub mod hdf5_chunk;
@@ -115,6 +116,7 @@ pub use git::{git_index, git_pack_index};
 pub use gif::gif;
 pub use grubenv::grubenv;
 pub use gzip::gzip;
+pub use hackrffw::hackrffw;
 pub use hdf5::hdf5;
 pub use id3::id3;
 pub use ilbm::ilbm;
@@ -187,7 +189,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "xar", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
-        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
+        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho", "hackrffw",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -245,6 +247,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "nes" => Some(nes()),
         "grubenv" => Some(grubenv()),
         "gzip" => Some(gzip()),
+        "hackrffw" => Some(hackrffw()),
         "gif" => Some(gif()),
         "aiff" => Some(aiff()),
         "ilbm" => Some(ilbm()),
@@ -408,6 +411,8 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("whisper")
     } else if is_safetensors(head) {
         Some("safetensors")
+    } else if is_hackrf_firmware(head) {
+        Some("hackrffw")
     } else if let Some(raw) = camera_raw_format(head) {
         Some(raw)
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
@@ -1074,6 +1079,14 @@ fn is_pnm(head: &[u8]) -> bool {
     head.first() == Some(&b'P')
         && matches!(head.get(1), Some(b'1'..=b'6'))
         && matches!(head.get(2), Some(b' ' | b'\t' | b'\n' | b'\r'))
+}
+
+/// A HackRF firmware image, which is what a PortaPack build is. A flash image
+/// starts with the processor's vector table and has no magic number of its
+/// own, so what marks one is the record HackRF's build puts at a fixed offset
+/// to say which version it is.
+fn is_hackrf_firmware(head: &[u8]) -> bool {
+    head.get(hackrffw::MAGIC_AT..hackrffw::MAGIC_AT + hackrffw::MAGIC.len()) == Some(hackrffw::MAGIC)
 }
 
 /// Whether these leading bytes are a whisper.cpp model.
