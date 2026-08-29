@@ -236,13 +236,12 @@ wanted, and neither is in the seven steps:
    byte 0xee68 selects `names[3000]`, draws 3,000 to 3,200, and the listing stays
    at 816 items.
 
-2. **Give a long list somewhere of its own to live.** A side panel, or an embedded
-   pane, scrolling the list the way `hexview.ts` scrolls the file: unbounded, by
-   index, with no expectation that the whole thing is ever in the document. A quarter
-   of a million tokens is a document in its own right and reads badly as a fold
-   inside a report about the file that holds it.
+2. ~~**Give a long list somewhere of its own to live.**~~ Done, in "Read one long
+   list in a pane of its own": `web/src/listpane.ts`, opened from the control on a
+   long list's heading and on both ends of a drawn window. It scrolls by index with
+   no paging, since every element is one row of the same height, and it shares the
+   selection with everything else. Verified on a git pack index: 3,306 names, scroll
+   to the far end, click through to the hex view and back.
 
 Both are about the same thing: a list long enough to be its own subject stops being a
-row that opens. The first is built; the second is still open, and the window is what
-it would scroll. A pane scrolling by index does not need `flatten` at all: every
-element of a long list is one row of a known height, and the count is `child_count`.
+row that opens. Both are built.
