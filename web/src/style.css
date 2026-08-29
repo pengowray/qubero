@@ -2566,3 +2566,32 @@ table.rec tr:hover td {
 .rec-link:hover {
   color: var(--fg);
 }
+/* What is selected, marked on top of the map rather than mixed into it. */
+.fmap i {
+  position: relative;
+}
+.fmap-mark {
+  position: absolute;
+  inset-block: 0;
+  min-width: 2px;
+  background: var(--fg);
+  mix-blend-mode: difference;
+}
+/* The selected field, in the strip and in a record table: the same field the
+   rows and the maps are marking. */
+.bs-fld.is-on .bs-by {
+  outline: 1px solid var(--hue, var(--fg));
+  outline-offset: 1px;
+}
+.bs-chip.is-on {
+  background: color-mix(in srgb, var(--hue) 28%, transparent);
+}
+table.rec tr.is-on td {
+  background: var(--accent-soft);
+}
+.rp-empty {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-family: var(--sans);
+}

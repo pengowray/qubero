@@ -183,6 +183,10 @@ function build(tab: Tab): void {
   const report = import.meta.env.DEV && new URLSearchParams(location.search).get("view") === "report"
     ? new ListingReport(doc)
     : null;
+  // Whichever of the two is showing. They answer the same calls, so nothing
+  // else has to know which it is talking to; step 7 is where the older one
+  // stops existing and this goes back to being one name.
+  const structure = report ?? listing;
   const overview = new OverviewPanel(doc);
   const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
@@ -209,7 +213,7 @@ function build(tab: Tab): void {
       view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
     }
     table.reveal(at.node);
-    listing.setBit(bitOffset);
+    structure.setBit(bitOffset);
   };
 
   const goToField = (path: readonly number[]): void => {
@@ -228,9 +232,9 @@ function build(tab: Tab): void {
     view.setBitCursor(startBit, { pane: "hex" });
     picking = false;
     inspector.setPath(path);
-    listing.reveal(path);
+    structure.reveal(path);
   };
-  listing.onPick = ({ path, startBit, endBit }) => {
+  structure.onPick = ({ path, startBit, endBit }) => {
     view.setHighlight({ startBit, endBit });
     picking = true;
     view.setBitCursor(startBit, { pane: "hex" });
@@ -268,7 +272,7 @@ function build(tab: Tab): void {
     if (n.status === "ok") nav.recordJump(view.cursorState.bitOffset, n.node.offset_bits);
     goToField(path);
     table.reveal(path);
-    listing.reveal(path);
+    structure.reveal(path);
   };
   inspector.onOpenTab = openEmbedded;
   view.onPickField = (path) => {
@@ -278,7 +282,7 @@ function build(tab: Tab): void {
   view.onHighlightClear = () => {
     followedBit = null;
     table.clearSelection();
-    listing.clearSelection();
+    structure.clearSelection();
   };
 
   const kind = fileType();
@@ -302,7 +306,7 @@ function build(tab: Tab): void {
   });
   void doc.sniffTemplate().then(async (name) => {
     const templated = name !== null;
-    listing.setMatched(templated);
+    structure.setMatched(templated);
     if (name !== null) {
       tmpl.value = name;
       doc.setTemplate(name);
@@ -492,7 +496,7 @@ function build(tab: Tab): void {
     localStorage.setItem("qubero.view", which);
     if (listingOn) (report ?? listing).relayout();
     else view.relayout();
-    (listingOn ? (report?.el ?? listing.el) : view.el).focus();
+    (listingOn ? structure.el : view.el).focus();
     refresh();
   };
   hexBtn.addEventListener("click", () => setView("hex"));
@@ -583,13 +587,13 @@ function build(tab: Tab): void {
     picking = true;
     view.setHighlight({ startBit: at * 8, endBit: (at + len) * 8 });
     view.setCursor(at, { pane: "hex" });
-    listing.setBit(at * 8);
+    structure.setBit(at * 8);
     inspector.setOffset(at * 8);
     picking = false;
   };
   const relayout = (): void => {
     view.relayout();
-    listing.relayout();
+    structure.relayout();
     overview.pump();
   };
   // Picking a region moves the cursor everywhere, the same as picking a row in
@@ -601,7 +605,7 @@ function build(tab: Tab): void {
     picking = false;
     inspector.setPath(path);
     table.reveal(path);
-    listing.reveal(path);
+    structure.reveal(path);
   };
   // A cell of the map stands for a stretch of the file, so picking one marks
   // that stretch: the panel at the cursor then reads it as a number, which is

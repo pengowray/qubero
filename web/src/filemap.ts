@@ -94,17 +94,37 @@ function paint(segment: MapSegment, span: readonly [number, number] | null): str
  * `title` is what the strip says when pointed at, which the caller already has
  * in the words the rest of its row uses.
  */
-export function fileMap(segments: readonly MapSegment[], offsetBits: number, sizeBits: number, title: string): HTMLElement {
+export function fileMap(
+  segments: readonly MapSegment[],
+  offsetBits: number,
+  sizeBits: number,
+  title: string,
+  mark?: { readonly offsetBits: number; readonly sizeBits: number } | null,
+): HTMLElement {
   const strip = document.createElement("span");
   strip.className = "fmap";
   strip.title = title;
   strip.setAttribute("aria-hidden", "true");
   const widths = segmentWidths(segments);
   const to = offsetBits + Math.max(0, sizeBits);
+  const markTo = mark === undefined || mark === null ? null : mark.offsetBits + Math.max(0, mark.sizeBits);
   segments.forEach((segment, i) => {
     const cell = document.createElement("i");
     cell.style.flex = `0 0 ${(widths[i] ?? 0).toFixed(2)}px`;
     cell.style.background = paint(segment, litSpan(segment, offsetBits, to));
+    // What is selected, over the top of what this strip is about. Drawn rather
+    // than blended in, so a selection inside the lit part still reads: the two
+    // answer different questions and must not average into one colour.
+    if (mark !== undefined && mark !== null && markTo !== null) {
+      const at = litSpan(segment, mark.offsetBits, markTo);
+      if (at !== null) {
+        const pin = document.createElement("b");
+        pin.className = "fmap-mark";
+        pin.style.insetInlineStart = `${(at[0] * 100).toFixed(2)}%`;
+        pin.style.width = `${((at[1] - at[0]) * 100).toFixed(2)}%`;
+        cell.append(pin);
+      }
+    }
     strip.append(cell);
   });
   return strip;

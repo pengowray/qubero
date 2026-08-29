@@ -72,6 +72,9 @@ export function byteStrip(
   caption: string,
   map: HTMLElement,
   onClose: () => void,
+  /** The field the reader has selected elsewhere, so its column here is the
+   *  same field rather than a coincidence of position. */
+  selected?: { readonly offsetBits: number; readonly sizeBits: number } | null,
 ): HTMLElement {
   const strip = el("div", "bstrip");
   const cap = el("div", "bs-cap");
@@ -99,14 +102,16 @@ export function byteStrip(
     // A stretch nothing covers takes no hue: there is no field for it to be
     // the colour of, and tinting it would promise a chip that is not there.
     const hue = span.gap ? null : fieldHue(i);
-    const column = el("div", `bs-fld${span.gap ? " is-gap" : ""}`);
+    const isOn = selected !== undefined && selected !== null
+      && selected.offsetBits === span.offset_bits && selected.sizeBits === span.size_bits;
+    const column = el("div", `bs-fld${span.gap ? " is-gap" : ""}${isOn ? " is-on" : ""}`);
     if (hue !== null) column.style.setProperty("--hue", hue);
     const { text, cut } = digits(doc, span);
     column.append(el("span", "bs-by", cut ? `${text} â€¦` : text));
     column.append(el("span", "bs-lb", cut ? REPORT.moreBytes : span.name));
     fields.append(column);
     if (hue === null) return;
-    const chip = el("span", "bs-chip");
+    const chip = el("span", `bs-chip${isOn ? " is-on" : ""}`);
     chip.style.setProperty("--hue", hue);
     chip.append(el("span", "bs-k", span.name));
     const value = chipValue(span);

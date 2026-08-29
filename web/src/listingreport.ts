@@ -11,6 +11,7 @@
 
 import { formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
+import type { FieldPick } from "./listingview.js";
 import { emptyState, flatten, PAGE } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
@@ -20,7 +21,7 @@ import { checkGap } from "./gapcheck.js";
 import { isRecordList, recordTable } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
-import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
+import { bitSizeText, childWord, countText, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
 
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
@@ -105,15 +106,27 @@ export class ListingReport {
   private measuredAt = 0;
   /** True while a measurement's own redraw is running. */
   private measuring = false;
+  /** Whether the file's first bytes matched a template. */
+  private matched = true;
   /** What each gap turned out to hold. Checking one reads up to 64 KiB and can
    *  ask the file for chunks; without this that happens on every scroll tick
    *  for every gap on screen. Thrown away when the file changes, since that is
    *  when an answer can stop being true. */
   private verdicts = new Map<string, GapVerdict>();
   private frame = 0;
-  private selected: string | null = null;
+  /** What is selected, as the bits it covers rather than as the row showing
+   *  it. The same field appears as a row, as a line of a record table, as a
+   *  column of an open byte strip and as a mark on every file map; all four
+   *  are answered by the range, and only one of them by a row. */
+  private selected: { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number } | null = null;
+  /** True while a selection this view made is being sent out, so the cursor
+   *  move it causes does not come back and undo the scroll position. */
+  private picking = false;
+  /** The key of the row standing in for a selection with no row of its own,
+   *  worked out once a paint rather than once a row. */
+  private nearest: string | null = null;
 
-  onPick: (path: readonly number[]) => void = () => {};
+  onPick: (pick: FieldPick) => void = () => {};
 
   constructor(doc: Doc) {
     this.doc = doc;
@@ -229,7 +242,8 @@ export class ListingReport {
     // A file nothing has a template for flattens to nothing. Leaving the last
     // file's rows up would show one file's structure over another's bytes.
     if (this.items.length === 0) {
-      this.canvas.replaceChildren();
+      const note = el("p", "rp-empty", this.doc.template === null ? NO_TEMPLATE_HINT : this.matched ? REPORT.reading : NO_TEMPLATE_MATCH);
+      this.canvas.replaceChildren(note);
       this.drawn = null;
       return;
     }
@@ -237,6 +251,7 @@ export class ListingReport {
     const to = Math.min(this.items.length, this.indexAt(this.scroller.scrollTop + this.scroller.clientHeight) + 1 + OVERSCAN);
     if (this.drawn !== null && this.drawn.from === from && this.drawn.to === to) return;
     this.drawn = { from, to };
+    this.nearest = this.nearestToSelection();
     const fileBits = this.doc.lengthBits;
     const out: HTMLElement[] = [];
     for (let i = from; i < to; i++) {
@@ -374,6 +389,9 @@ export class ListingReport {
     grid.append(head);
     for (const row of table.rows) {
       const tr = document.createElement("tr");
+      // A table row is a range, not a field: the selection is usually one
+      // column inside it.
+      if (this.holdsSelection(row.offsetBits, row.sizeBits)) tr.className = "is-on";
       for (const cell of row.cells) tr.append(el("td", fieldClass(cell.kind), cell.text));
       const at = el("td", "rec-at");
       // The one way out of the table: the row's own bytes, which is where it
@@ -401,13 +419,13 @@ export class ListingReport {
     host.style.paddingLeft = `${8 + item.depth * 12}px`;
     const caption = `${item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
     host.append(
-      byteStrip(this.doc, item.offsetBits, item.sizeBits, caption, this.mapFor(item), () => this.toggleBytes(item.owner)),
+      byteStrip(this.doc, item.offsetBits, item.sizeBits, caption, this.mapFor(item), () => this.toggleBytes(item.owner), this.selected),
     );
     return host;
   }
 
   private mapFor(item: Item): HTMLElement {
-    return fileMap(this.segments, item.offsetBits, item.sizeBits, rangeText(item.offsetBits, item.sizeBits));
+    return fileMap(this.segments, item.offsetBits, item.sizeBits, rangeText(item.offsetBits, item.sizeBits), this.selected);
   }
 
   /** The control that shows an item's bytes, and takes them away again. */
@@ -428,10 +446,41 @@ export class ListingReport {
     this.rebuild();
   }
 
+  /** Whether a stretch of bytes is the selected one. Equality, not overlap: a
+   *  field sits inside its structure, and lighting everything the selection is
+   *  inside would light most of the screen. */
+  private isSelected(offsetBits: number, sizeBits: number): boolean {
+    return this.selected !== null && this.selected.offsetBits === offsetBits && this.selected.sizeBits === sizeBits;
+  }
+
+  /** Whether a stretch holds the selection. For the one row that is allowed
+   *  to say so: the nearest thing on screen that contains it, when the field
+   *  itself is not a row of its own. */
+  private holdsSelection(offsetBits: number, sizeBits: number): boolean {
+    const s = this.selected;
+    return s !== null && s.offsetBits >= offsetBits && s.offsetBits + s.sizeBits <= offsetBits + sizeBits;
+  }
+
+  /** The item to light when the selected field has no row of its own: the
+   *  smallest one on the list that contains it. A record shows its rows
+   *  itself and a long list stops at a page, so the field the cursor is in is
+   *  often not a row, and saying nothing at all would lose the reader. */
+  private nearestToSelection(): string | null {
+    const s = this.selected;
+    if (s === null) return null;
+    let best: { key: string; size: number } | null = null;
+    for (const item of this.items) {
+      if (item.kind !== "row" && item.kind !== "record") continue;
+      if (!this.holdsSelection(item.offsetBits, item.sizeBits)) continue;
+      if (best === null || item.sizeBits < best.size) best = { key: item.key, size: item.sizeBits };
+    }
+    return best?.key ?? null;
+  }
+
   private drawRow(item: Extract<Item, { kind: "row" }>): HTMLElement {
     const n = item.node;
     const row = el("div", "rp-item rp-row");
-    if (this.selected === item.key) row.classList.add("is-on");
+    if (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === item.key) row.classList.add("is-on");
     row.style.paddingLeft = `${8 + item.depth * 12}px`;
     row.append(el("span", "rp-at", formatOffset(n.offset_bits)));
     row.append(el("span", `rp-field ${fieldClass(n.kind)}`, n.name));
@@ -519,9 +568,10 @@ export class ListingReport {
       this.rebuild();
     }
     if (item.kind === "row") {
-      this.selected = item.key;
-      this.onPick(item.path);
-      this.paintAgain();
+      this.select(item.path, item.offsetBits, item.sizeBits);
+      this.picking = true;
+      this.onPick({ path: item.path, startBit: item.offsetBits, endBit: item.offsetBits + item.sizeBits });
+      this.picking = false;
     }
   }
 
@@ -531,8 +581,16 @@ export class ListingReport {
     this.paint();
   }
 
+  private select(path: readonly number[], offsetBits: number, sizeBits: number): void {
+    this.selected = { path, offsetBits, sizeBits };
+    this.paintAgain();
+  }
+
   /** Bring the field at `path` on screen and select it. */
   reveal(path: readonly number[]): void {
+    const node = this.doc.templateNode(path);
+    if (node.status !== "ok") return;
+    this.selected = { path, offsetBits: node.node.offset_bits, sizeBits: node.node.size_bits };
     const key = `r:${pathString(path)}`;
     let i = this.items.findIndex((item) => item.key === key);
     if (i < 0) {
@@ -542,10 +600,34 @@ export class ListingReport {
       this.state = { ...this.state, open };
       this.rebuild();
       i = this.items.findIndex((item) => item.key === key);
-      if (i < 0) return;
     }
-    this.selected = key;
+    // The row may not be there at all: a table shows its rows itself, and a
+    // list past its first page does not reach that far. Then the nearest thing
+    // that holds it is what to go to, since that is what will be lit.
+    if (i < 0) {
+      this.nearest = this.nearestToSelection();
+      i = this.nearest === null ? -1 : this.items.findIndex((item) => item.key === this.nearest);
+    }
+    if (i < 0) {
+      this.paintAgain();
+      return;
+    }
     this.scroller.scrollTop = Math.max(0, (this.tops[i] ?? 0) - this.scroller.clientHeight / 3);
+    this.paintAgain();
+  }
+
+  /** Follow the cursor: select whatever field covers this bit. */
+  setBit(bit: number): void {
+    if (this.picking || this.el.hidden) return;
+    const at = this.doc.locate(bit);
+    if (at.status !== "ok") return;
+    this.reveal(at.node);
+  }
+
+  /** Whether the file matched a template at all, which decides what an empty
+   *  listing has to say for itself. */
+  setMatched(matched: boolean): void {
+    this.matched = matched;
     this.paintAgain();
   }
 

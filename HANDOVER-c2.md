@@ -133,7 +133,11 @@ falls out of the flat item list. Do not build this as one giant DOM.
    and GGUF metadata. A row's "stored at" opens its bytes under the table, which is
    rule 7's link back to the fields. The other link rule 7 asks for, a schema row's
    root page pointing at that page, waits for the shared selection in step 6.
-6. Shared selection with the hex view cursor.
+6. ~~Shared selection with the hex view cursor.~~ **Done**: the selection is a bit
+   range rather than a row, so the same state lights the row, the record table's
+   line, the byte strip's column and every file map. `main.ts` drives whichever of
+   the two views is showing through one name, `structure`, which is what step 7
+   collapses back to one thing.
 7. Swap it in as the Listing mode; delete/absorb `listingview.ts`,
    `logicaloutline.ts`, and the Structure panel's tree duplication.
 
