@@ -308,6 +308,106 @@ vlldm r0
 vlstm r0
 """
 
+
+CORTEX_M0 = r"""
+.syntax unified
+.thumb
+.text
+
+@ The whole of ARMv6-M, which is what an original Pico runs: the two-byte
+@ encodings, and the handful of four-byte ones that would not fit in them.
+.Lhere:
+lsls r0, r1, #3
+lsrs r0, r1, #3
+asrs r0, r1, #3
+adds r0, r1, r2
+subs r0, r1, r2
+adds r0, r1, #3
+subs r0, r1, #3
+movs r0, #200
+cmp r0, #200
+adds r0, #200
+subs r0, #200
+ands r0, r1
+eors r0, r1
+lsls r0, r1
+lsrs r0, r1
+asrs r0, r1
+adcs r0, r1
+sbcs r0, r1
+rors r0, r1
+tst r0, r1
+rsbs r0, r1, #0
+cmp r0, r1
+cmn r0, r1
+orrs r0, r1
+muls r0, r1
+bics r0, r1
+mvns r0, r1
+add r8, r9
+cmp r8, r9
+mov r8, r9
+bx lr
+blx r0
+ldr r0, .Lpool
+str r0, [r1, r2]
+strh r0, [r1, r2]
+strb r0, [r1, r2]
+ldrsb r0, [r1, r2]
+ldr r0, [r1, r2]
+ldrh r0, [r1, r2]
+ldrb r0, [r1, r2]
+ldrsh r0, [r1, r2]
+str r0, [r1, #4]
+ldr r0, [r1, #4]
+strb r0, [r1, #1]
+ldrb r0, [r1, #1]
+strh r0, [r1, #2]
+ldrh r0, [r1, #2]
+str r0, [sp, #4]
+ldr r0, [sp, #4]
+adr r0, .Lpool
+add r0, sp, #8
+add sp, #8
+sub sp, #8
+sxth r0, r1
+sxtb r0, r1
+uxth r0, r1
+uxtb r0, r1
+push {r0, r1, lr}
+pop {r0, r1, pc}
+cpsid i
+cpsie i
+rev r0, r1
+rev16 r0, r1
+revsh r0, r1
+bkpt #0
+nop
+yield
+wfe
+wfi
+sev
+stm r0!, {r1, r2}
+ldm r0!, {r1, r2}
+beq .Lhere
+bne .Lhere
+bhi .Lhere
+svc #1
+b .Lhere
+bl .Lhere
+dsb sy
+dmb sy
+isb sy
+mrs r0, PRIMASK
+msr PRIMASK, r0
+udf #0
+@ A constant to load: on this machine a literal load only reaches forwards,
+@ so the pool has to sit after the instructions that read it.
+.p2align 2
+.Lpool:
+.word 0
+"""
+
 RISCV = r"""
 .option arch, rv32i2p1_m2p0_a2p1_zicsr2p0_zifencei2p0_zba1p0_zbb1p0_zbs1p0_zbkb1p0_zca1p0_zcb1p0_zcmp1p0
 .text
@@ -524,6 +624,14 @@ def main() -> None:
             ARM,
             ["-target", "thumbv8m.main-none-eabi", "-mcpu=cortex-m33", "-mfpu=fpv5-sp-d16", "-mfloat-abi=hard"],
             ["--triple=thumbv8m.main", "--mcpu=cortex-m33"],
+        )
+        sweep(
+            work,
+            args.out,
+            "cortex-m0plus-sweep",
+            CORTEX_M0,
+            ["-target", "thumbv6m-none-eabi", "-mcpu=cortex-m0plus"],
+            ["--triple=thumbv6m", "--mcpu=cortex-m0plus"],
         )
         sweep(
             work,
