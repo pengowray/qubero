@@ -759,8 +759,9 @@ export class Doc {
     // a Windows executable puts at an offset of its own choosing, usually
     // 0x80 to 0x100 but fixed nowhere, and for an Anvil region's two
     // tables, which are 8 KiB and whose entries only say anything all
-    // together.
-    const n = Math.min(8192, this.lengthBytes);
+    // together, and for the volume descriptor an ISO 9660 image writes at
+    // sector 16, which is 32 KiB in.
+    const n = Math.min(0x9000, this.lengthBytes);
     if (n === 0) return null;
     await this.ensureRange(0, n);
     const head = this.read(0, n).bytes;
