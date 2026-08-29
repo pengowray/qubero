@@ -32,12 +32,15 @@
 //! machine these bytes mean whatever that machine's designers decided, and the
 //! honest reading there is the generic one.
 
+mod dsp;
+mod float;
+
 use crate::code::Insn;
 
-const R: [&str; 16] =
+pub(crate) const R: [&str; 16] =
     ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "sl", "fp", "ip", "sp", "lr", "pc"];
 
-fn r(n: u32) -> &'static str {
+pub(crate) fn r(n: u32) -> &'static str {
     R[(n & 15) as usize]
 }
 
@@ -85,7 +88,16 @@ fn wide(hw1: u32, hw2: u32, rcp: bool) -> Option<String> {
     if let Some(text) = system_register(hw1, hw2) {
         return Some(text);
     }
+    if let Some(text) = barrier(hw1, hw2) {
+        return Some(text);
+    }
     if let Some(text) = store_immediate(hw1, hw2) {
+        return Some(text);
+    }
+    if let Some(text) = dsp::decode(hw1, hw2) {
+        return Some(text);
+    }
+    if let Some(text) = float::decode(hw1, hw2) {
         return Some(text);
     }
     if rcp { redundancy(hw1, hw2) } else { None }
@@ -145,6 +157,41 @@ fn expand(imm12: u32) -> u32 {
         };
     }
     (0x80 | (byte & 0x7f)).rotate_right(imm12 >> 7)
+}
+
+/// The instructions that make one core's writes visible to another, and the
+/// one that says how far the guarantee reaches. The general decoder writes the
+/// reach as the number in the encoding; every toolchain writes it as the name
+/// of a place, which is what a reader of the line wants to know.
+fn barrier(hw1: u32, hw2: u32) -> Option<String> {
+    if hw1 != 0xf3bf || hw2 & 0xff80 != 0x8f00 {
+        return None;
+    }
+    let name = match (hw2 >> 4) & 7 {
+        4 => "dsb",
+        5 => "dmb",
+        6 => "isb",
+        _ => return None,
+    };
+    // How far out the ordering holds: the whole system, everything that shares
+    // this core's inner or outer cache, and in each case either both reads and
+    // writes or only writes.
+    let reach = match hw2 & 15 {
+        15 => "sy",
+        14 => "st",
+        13 => "ld",
+        11 => "ish",
+        10 => "ishst",
+        9 => "ishld",
+        7 => "nsh",
+        6 => "nshst",
+        5 => "nshld",
+        3 => "osh",
+        2 => "oshst",
+        1 => "oshld",
+        n => return Some(format!("{name} #{n}")),
+    };
+    Some(format!("{name} {reach}"))
 }
 
 /// A store to a fixed distance from a register.

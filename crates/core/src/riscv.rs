@@ -170,6 +170,9 @@ fn op_imm(w: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32, funct7: u32) -> Opti
             (0b0110000, 2) => format!("cpop {d}, {s}"),
             (0b0110000, 4) => format!("sext.b {d}, {s}"),
             (0b0110000, 5) => format!("sext.h {d}, {s}"),
+            // Interleaving a register's two halves, and its inverse, which
+            // sit either side of the shift's `funct3`.
+            (0b0000100, 15) => format!("zip {d}, {s}"),
             _ => return None,
         },
         5 => match (funct7, shamt) {
@@ -183,7 +186,6 @@ fn op_imm(w: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32, funct7: u32) -> Opti
             // machine that is the whole register.
             (0b0110100, 24) => format!("rev8 {d}, {s}"),
             (0b0000100, 15) => format!("unzip {d}, {s}"),
-            (0b0000100, 30) => format!("zip {d}, {s}"),
             _ => return None,
         },
         _ => return None,

@@ -173,7 +173,7 @@ fn values(text: &str, at: u64, target: Option<i64>) -> Vec<String> {
         // The listing's branch target, which is already where the branch
         // lands rather than how far away it is.
         if !absolute.is_empty() && token == absolute {
-            if let Ok(address) = i64::from_str_radix(token, 16) {
+            if let Ok(address) = i64::from_str_radix(token.strip_prefix("0x").unwrap_or(token), 16) {
                 out.push(format!("@{address:x}"));
                 continue;
             }
@@ -266,10 +266,13 @@ fn base(name: &str) -> &str {
 /// The bytes and the text of one line of a listing, or nothing if the line is
 /// a heading, a symbol or blank.
 fn instruction(line: &str) -> Option<(u64, Vec<u8>, String)> {
-    let (addr, rest) = line.split_once(":\t")?;
+    // A listing writes the address, a colon, the bytes, and then a tab before
+    // the instruction. Which whitespace follows the colon is the difference
+    // between one toolchain's listing and another's.
+    let (addr, rest) = line.split_once(':')?;
     if !addr.trim().chars().all(|c| c.is_ascii_hexdigit()) || addr.trim().is_empty() { return None }
     let at = u64::from_str_radix(addr.trim(), 16).ok()?;
-    let (hex, text) = rest.split_once('\t')?;
+    let (hex, text) = rest.trim_start().split_once('\t')?;
     let mut bytes = Vec::new();
     for group in hex.split_whitespace() {
         if !group.chars().all(|c| c.is_ascii_hexdigit()) || group.len() % 2 != 0 { return None }
