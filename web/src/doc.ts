@@ -754,14 +754,13 @@ export class Doc {
 
   /** Built-in template name matching the file's first bytes, or null. */
   async sniffTemplate(): Promise<string | null> {
-    // Enough for a magic number, for the format tag inside a WAVE's first
-    // chunk (the only thing that tells a W4V from a WAV), for the PE header
-    // a Windows executable puts at an offset of its own choosing, usually
-    // 0x80 to 0x100 but fixed nowhere, and for an Anvil region's two
-    // tables, which are 8 KiB and whose entries only say anything all
-    // together, and for the volume descriptor an ISO 9660 image writes at
-    // sector 16, which is 32 KiB in.
-    const n = Math.min(0x9000, this.lengthBytes);
+    // The sniffer says how much it wants: enough for a magic number, for the
+    // format tag inside a WAVE's first chunk (the only thing that tells a W4V
+    // from a WAV), for the PE header a Windows executable puts at an offset of
+    // its own choosing, for an Anvil region's two 8 KiB tables, and for the
+    // volume descriptor an ISO 9660 image writes 32 KiB in. Read less and the
+    // deep formats come back unrecognised rather than wrong.
+    const n = Math.min(this.editor.sniff_window(), this.lengthBytes);
     if (n === 0) return null;
     await this.ensureRange(0, n);
     const head = this.read(0, n).bytes;
