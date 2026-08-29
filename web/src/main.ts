@@ -482,8 +482,13 @@ function build(tab: Tab): void {
     hexBtn.classList.toggle("is-on", !listingOn);
     listBtn.classList.toggle("is-on", listingOn);
     localStorage.setItem("qubero.view", which);
-    if (listingOn) structure.relayout();
-    else view.relayout();
+    // A hidden listing ignores the cursor, since scrolling something nobody is
+    // looking at only loses their place in it. So when it comes back it has
+    // wherever the cursor was left to catch up on.
+    if (listingOn) {
+      structure.relayout();
+      structure.setBit(view.cursorState.bitOffset);
+    } else view.relayout();
     (listingOn ? structure.el : view.el).focus();
     refresh();
   };
