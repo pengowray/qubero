@@ -2114,16 +2114,11 @@ button.insp-xrow-where:hover {
 .rp-gap .rp-size {
   font-style: normal;
 }
-/* The machinery behind the field it places: present, dim, and out of the way
-   of the payload's own row. One field on its own is not worth a fold, so it
-   keeps its place and takes the same dimming where it stands. */
-.rp-fold,
+/* A field whose job is placing another field: a length, a count, an array of
+   offsets. It sits where it was written, at the same size as everything else,
+   and says what it is by being quieter rather than by being hidden. */
 .rp-quiet {
   color: var(--muted);
-}
-.rp-twist {
-  flex: none;
-  width: 10px;
 }
 /* Either end of a list only partly drawn. Its label is a sentence rather than
    a field name, so it is not held to the field column's width: "Show more ·

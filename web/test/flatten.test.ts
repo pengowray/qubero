@@ -164,20 +164,19 @@ test("a header field that sizes something elsewhere stays a row", () => {
   assert.ok(names.includes("magic"));
 });
 
-test("a page header folds behind the cells it places", () => {
+test("a page header is rows, marked as what places the cells", () => {
   const { items } = run(SQLITE);
-  const folds = items.filter((i) => i.kind === "fold");
-  assert.equal(folds.length, 3);
-  const first = folds[0];
-  assert.ok(first?.kind === "fold");
-  assert.deepEqual(
-    first.nodes.map((n) => n.name),
-    ["page_type", "first_freeblock", "cell_count", "cell_content_start", "fragmented_free_bytes", "cell_pointers"],
-  );
-  // One item covering the whole header, so the payload keeps the reader's eye.
-  assert.equal(first.sizeBits, 14 * 8);
-  // Named by what it places, not by the last field in the run.
-  assert.equal(first.owner?.name, "cells");
+  const quiet = items.filter((i) => i.kind === "row" && i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
+  // Every field of the page header, in place and in order, three pages over.
+  assert.deepEqual(quiet.slice(0, 6), [
+    "page_type",
+    "first_freeblock",
+    "cell_count",
+    "cell_content_start",
+    "fragmented_free_bytes",
+    "cell_pointers",
+  ]);
+  assert.equal(quiet.length, 18);
 });
 
 test("the template's word beats what the shapes say, either way", () => {
@@ -196,26 +195,10 @@ test("the template's word beats what the shapes say, either way", () => {
     ],
   };
   const items = run(both, { ...emptyState, open: new Set(["0"]) }).items;
-  const rows = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
-  const folded = items.flatMap((i) => (i.kind === "fold" ? i.nodes.map((n) => n.name) : []));
-  assert.deepEqual(rows, ["width"]);
-  assert.deepEqual(folded, ["reserved", "height"]);
-});
-
-test("opening a fold lists the fields it stands for", () => {
-  const closed = run(SQLITE);
-  const fold = closed.items.find((i) => i.kind === "fold");
-  assert.ok(fold !== undefined);
-  const open = run(SQLITE, { ...emptyState, open: new Set([fold.key]) });
-  const under = open.items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
-  assert.deepEqual(under.slice(-6), [
-    "page_type",
-    "first_freeblock",
-    "cell_count",
-    "cell_content_start",
-    "fragmented_free_bytes",
-    "cell_pointers",
-  ]);
+  const loud = items.filter((i) => i.kind === "row" && !i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
+  const quiet = items.filter((i) => i.kind === "row" && i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
+  assert.deepEqual(loud, ["width"]);
+  assert.deepEqual(quiet, ["reserved", "height"]);
 });
 
 test("a field that is only its parent's contents spends no level on itself", () => {
@@ -246,9 +229,9 @@ test("a field that is only its parent's contents spends no level on itself", () 
   );
 });
 
-test("a fold serving two different fields names neither", () => {
-  // A ZIP entry: one length for the name, another for the extra field. Naming
-  // either would put the other's bytes under it.
+test("two lengths for two fields are two rows", () => {
+  // A ZIP entry: one length for the name, another for the extra field. They
+  // stay where they are, each next to what it measures.
   const two: Spec = {
     name: "file",
     bytes: 30,
@@ -261,10 +244,13 @@ test("a fold serving two different fields names neither", () => {
       ] },
     ],
   };
-  const fold = run(two).items.find((i) => i.kind === "fold");
-  assert.ok(fold?.kind === "fold");
-  assert.equal(fold.nodes.length, 2);
-  assert.equal(fold.owner, null);
+  const rows = run(two).items.filter((i) => i.kind === "row");
+  assert.deepEqual(rows.map((i) => (i.kind === "row" ? [i.node.name, i.quiet] : [])), [
+    ["name_len", true],
+    ["extra_len", true],
+    ["name", false],
+    ["extra", false],
+  ]);
 });
 
 test("asking for a part's bytes opens on its machinery, not on all of it", () => {
@@ -283,15 +269,8 @@ test("asking for a part's bytes opens on its machinery, not on all of it", () =>
   assert.equal(strip.owner, page.key);
 });
 
-test("a row's bytes are its own, and a fold's are the run's", () => {
+test("a row's bytes are its own", () => {
   const rows = run(SQLITE).items;
-  const fold = rows.find((i) => i.kind === "fold");
-  assert.ok(fold?.kind === "fold");
-  const openFold = run(SQLITE, { ...emptyState, bytes: new Set([fold.key]) }).items.find((i) => i.kind === "bytes");
-  assert.ok(openFold?.kind === "bytes");
-  assert.equal(openFold.offsetBits, fold.offsetBits);
-  assert.equal(openFold.sizeBits, fold.sizeBits);
-
   const row = rows.find((i) => i.kind === "row" && i.node.name === "page_size");
   assert.ok(row?.kind === "row");
   const openRow = run(SQLITE, { ...emptyState, bytes: new Set([row.key]) }).items.find((i) => i.kind === "bytes");
@@ -492,13 +471,13 @@ test("a value the template works out is never folded away", () => {
   const names = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
   assert.ok(names.includes("data_size"), names.join(", "));
   assert.ok(names.includes("unpacked_size"), names.join(", "));
-  // The two lengths still fold: they are bytes, and they place other bytes.
-  const folds = items.filter((i) => i.kind === "fold");
-  assert.equal(folds.length, 1);
-  assert.equal(folds[0]?.kind === "fold" ? folds[0].nodes.length : 0, 2);
+  // The two lengths are still marked: they are bytes, and they place other
+  // bytes. A computed value is neither.
+  const quiet = items.filter((i) => i.kind === "row" && i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
+  assert.deepEqual(quiet, ["name_length", "extra_length"]);
 });
 
-test("one field on its own is a quiet row, not a fold", () => {
+test("a field that places another is marked where it stands", () => {
   const one: Spec = {
     name: "file",
     bytes: 20,
@@ -508,7 +487,6 @@ test("one field on its own is a quiet row, not a fold", () => {
     ],
   };
   const { items } = run(one);
-  assert.deepEqual(items.filter((i) => i.kind === "fold"), []);
   const count = items.find((i) => i.kind === "row" && i.node.name === "count");
   assert.equal(count?.kind === "row" ? count.quiet : null, true);
   const rest = items.find((i) => i.kind === "row" && i.node.name === "items");

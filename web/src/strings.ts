@@ -103,16 +103,6 @@ export const REPORT = {
    *  anything: under one per cent, "0%" would read as absent. The number the
    *  reader wants at that size is the byte count beside it. */
   tinyShare: "<1%",
-  /** The fields that exist to manage another field, folded behind it: a
-   *  length prefix, a count, an array of offsets, a run of type codes.
-   *  "Bookkeeping" is the standing word for all four jobs; a verb like
-   *  "place" fits the offsets but not the types, and reads as a coinage.
-   *  `owner` is the field they manage, when it is a sibling; without one the
-   *  count stands alone rather than gesturing at an unnamed "what follows". */
-  fold: (count: number, owner: string | null): string => {
-    const fields = count === 1 ? "bookkeeping field" : "bookkeeping fields";
-    return owner === null ? `${count} ${fields}` : `${count} ${fields} for ${owner}`;
-  },
   /** The two ends of a list that is only partly drawn. `rest` is already
    *  counted and named: "249,800 items". A click draws the next page, not all
    *  of it, so both labels promise "more" and state the remainder instead of

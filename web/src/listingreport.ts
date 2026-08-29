@@ -175,8 +175,8 @@ export class ListingReport {
    *  file's first megabyte fires `onChange` far faster than a screen redraws.
    *
    *  Only for changes the file makes to itself. Something the reader did takes
-   *  effect there and then: waiting a frame to open a fold buys nothing, and
-   *  a hidden tab runs no frames at all. */
+   *  effect there and then: waiting a frame to open a structure buys nothing,
+   *  and a hidden tab runs no frames at all. */
   private schedule(): void {
     // Nothing is drawn while the hex view has the screen, and walking the tree
     // to draw nothing is not free: a file being streamed fires this once per
@@ -376,8 +376,6 @@ export class ListingReport {
         return this.drawRow(item);
       case "gap":
         return this.drawGap(item);
-      case "fold":
-        return this.drawFold(item);
       case "bytes":
         return this.drawStrip(item);
       case "record":
@@ -560,17 +558,6 @@ export class ListingReport {
     row.append(el("span", "rp-value", GAP_VERDICT[this.verdict(item)]));
     row.append(el("span", "rp-type", ""));
     row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
-    return row;
-  }
-
-  private drawFold(item: Extract<Item, { kind: "fold" }>): HTMLElement {
-    const row = el("div", "rp-item rp-row rp-fold");
-    row.style.paddingLeft = `${8 + item.depth * 12}px`;
-    row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
-    row.append(el("span", "rp-twist", item.open ? "▾" : "▸"));
-    row.append(el("span", "rp-value", REPORT.fold(item.nodes.length, item.owner?.name ?? null)));
-    row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
-    row.append(this.bytesButton(item.key));
     return row;
   }
 
@@ -792,7 +779,6 @@ function pathString(path: readonly number[]): string {
 /** The state key a click on this item turns on and off, or null for an item
  *  with nothing inside it. */
 function openKeyOf(item: Item): string | null {
-  if (item.kind === "fold") return item.key;
   if (item.kind === "heading") return item.node === null || item.level === 0 ? null : pathString(item.path);
   if (item.kind === "row") return itemOpens(item.node) ? pathString(item.path) : null;
   return null;

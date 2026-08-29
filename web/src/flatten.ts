@@ -4,9 +4,8 @@
 // The listing is one view at two zoom levels: collapsed it reads as the
 // file's structure, opened it reads as one line per field. Both are the same
 // list, so this produces items rather than rows: a heading, a field, a run of
-// bytes nothing claimed, a fold hiding the machinery behind the field it
-// places. What each one looks like is `listingreport`'s business; nothing here
-// writes a word the reader sees.
+// bytes nothing claimed. What each one looks like is `listingreport`'s
+// business; nothing here writes a word the reader sees.
 //
 // Only what is open is walked. A collapsed structure is one item however many
 // fields it has, and a list too long to draw stops at a page and says how many
@@ -91,28 +90,15 @@ export type Item = Common &
         readonly node: TemplateNode;
         /** True while this row's children are listed below it. */
         readonly open: boolean;
-        /** Machinery that was not worth folding: one field on its own. Drawn
-         *  where it is, in the fold's dim treatment, since hiding one row
-         *  behind another row is a click for nothing. */
+        /** A field whose job is placing another field: a length, a count, an
+         *  array of offsets. It is drawn where it is, like everything else;
+         *  this only says which it is. */
         readonly quiet: boolean;
       }
     | {
         /** Bytes inside a structure that none of its fields covers. */
         readonly kind: "gap";
         readonly path: readonly number[];
-      }
-    | {
-        /** The fields that place another field, hidden behind it. */
-        readonly kind: "fold";
-        readonly reason: "machinery";
-        readonly path: readonly number[];
-        readonly nodes: readonly TemplateNode[];
-        /** The field they place, when it is one of their siblings and is not
-         *  itself folded away. This is what the fold is folded behind, and
-         *  what names it: the machinery is "the six fields that place
-         *  `cells`", not six fields listed by their own names. */
-        readonly owner: TemplateNode | null;
-        readonly open: boolean;
       }
     | {
         /** A structure the format stores as a table of rows. */
@@ -219,9 +205,10 @@ export function sectionBreaks(kids: readonly TemplateNode[]): number[] {
 }
 
 /** Whether two siblings are in the same top-level part of the file. Machinery
- *  folds behind the field it places, and there is nothing to fold it behind
- *  when that field is somewhere else entirely: SQLite's `page_size` sizes
- *  pages that are not in the header it is written in. */
+ *  is only machinery in the reading where the field it places is beside it:
+ *  SQLite's `page_size` sizes pages that are not in the header it is written
+ *  in, and calling it plumbing there would be calling the file's own shape
+ *  plumbing. */
 function sameSection(breaks: readonly number[], a: number, b: number): boolean {
   const lo = Math.min(a, b);
   const hi = Math.max(a, b);
@@ -229,14 +216,14 @@ function sameSection(breaks: readonly number[], a: number, b: number): boolean {
 }
 
 /** Whether a field is this structure's machinery. What it places is the
- *  template's own answer; whether that counts as folding it away is this
- *  view's, and depends on where the two of them land. */
+ *  template's own answer; whether that counts as this structure's plumbing
+ *  is this view's, and depends on where the two of them land. */
 function isMachinery(node: TemplateNode, index: number, breaks: readonly number[]): boolean {
   // A computed value has no bytes, so it cannot be the bytes that place other
-  // bytes, which is the whole of what folding is for. What it is instead is
-  // the template working something out in the open: ZIP's `data_size` is the
+  // bytes, which is the whole of what this asks. What it is instead is the
+  // template working something out in the open: ZIP's `data_size` is the
   // answer to whether the size in the header or the one in the ZIP64 extra
-  // field is the real one, and folding it hides the one row that says so.
+  // field is the real one.
   if (node.type === "computed") return false;
   if (node.machinery !== null) return node.machinery;
   return node.consumed_by !== null && sameSection(breaks, index, node.consumed_by);
@@ -520,9 +507,8 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   if (after > 0) edge(w, "later", path, depth, after, slice.from, to, { start: end, end: endBits(node) });
 }
 
-/** A structure's children as items: gaps where nothing covers the bytes,
- *  machinery folded into one item per run, and everything else a row or a
- *  heading of its own.
+/** A structure's children as items: a row or a heading each, in the order
+ *  their bytes are, with a gap wherever nothing covers them.
  *
  *  `bounds` is the stretch the children have to account for between them,
  *  which is the parent's own. Free space in a b-tree page sits between the
@@ -543,79 +529,19 @@ function rows(
   const order = inFileOrder(kids);
   const indexOf = new Map(kids.map((k, i) => [k, base + i]));
   let cursor = bounds?.start ?? order[0]?.offset_bits ?? 0;
-  let fold: TemplateNode[] = [];
-  const flush = () => {
-    if (fold.length === 0) return;
-    // One field is not a fold. It would be the same row either way, with a
-    // click in front of it and its own name swapped for its category.
-    if (fold.length === 1) {
-      const only = fold[0];
-      if (only !== undefined) child(w, only, depth, true);
-      fold = [];
-      return;
-    }
-    const first = fold[0];
-    const last = fold[fold.length - 1];
-    if (first === undefined || last === undefined) return;
-    // What the run leads up to, which is the one field left standing at the
-    // end of it. A count places the pointer array and the pointer array places
-    // the cells: two owners, but the pointer array is inside the fold, so the
-    // chain ends at the cells and that is what the reader is looking at.
-    //
-    // A run that fans out instead of leading somewhere is given no name at
-    // all: a ZIP entry's name length and extra length measure a field each,
-    // and naming either would say the other's bytes belonged to it.
-    const owners = [...new Set(fold.map((n) => n.consumed_by).filter((c): c is number => c !== null))]
-      .map((i) => kids[i - base] ?? null)
-      // Not what the fold is named after: a field folded away with it, and a
-      // field that is only its parent's contents, which is spliced away and
-      // never seen.
-      .filter((n): n is TemplateNode => n !== null && !n.contents && !fold.includes(n));
-    const owner = owners.length === 1 ? (owners[0] ?? null) : null;
-    const key = `fold:${pathKey(first.path)}`;
-    const open = w.isOpen(key);
-    w.push({
-      kind: "fold",
-      key,
-      section: w.section,
-      depth,
-      offsetBits: first.offset_bits,
-      sizeBits: endBits(last) - first.offset_bits,
-      reason: "machinery",
-      path,
-      nodes: fold,
-      owner,
-      open,
-    });
-    // Folded, not hidden: opening one lists the fields it stands for, a step
-    // in from the payload they place.
-    w.strip(key, first.path, first.name, { start: first.offset_bits, end: endBits(last) }, depth);
-    if (open) for (const n of fold) child(w, n, depth + 1);
-    fold = [];
-  };
   for (const kid of order) {
-    if (kid.offset_bits > cursor) {
-      flush();
-      gap(w, path, cursor, kid.offset_bits, depth);
-    }
+    if (kid.offset_bits > cursor) gap(w, path, cursor, kid.offset_bits, depth);
     cursor = Math.max(cursor, endBits(kid));
-    const index = indexOf.get(kid) ?? 0;
-    if (isMachinery(kid, index, breaks)) {
-      fold.push(kid);
-      continue;
-    }
-    flush();
     // A field that is only its parent's contents has no name worth a level of
     // structure: its children stand in its place, at its depth.
-    if (kid.contents && kid.composite && kid.child_count > 0) {
-      const inner = w.kids(kid.path, kid.child_count);
-      if (inner === null) w.waiting(kid.path, depth, kid);
-      else drawn(w, kid.path, kid, inner, depth);
+    if (!kid.contents || !kid.composite || kid.child_count === 0) {
+      child(w, kid, depth, isMachinery(kid, indexOf.get(kid) ?? 0, breaks));
       continue;
     }
-    child(w, kid, depth);
+    const inner = w.kids(kid.path, kid.child_count);
+    if (inner === null) w.waiting(kid.path, depth, kid);
+    else drawn(w, kid.path, kid, inner, depth);
   }
-  flush();
   if (bounds !== null && cursor < bounds.end) gap(w, path, cursor, bounds.end, depth);
 }
 
@@ -636,7 +562,10 @@ function gap(w: Walk, path: readonly number[], from: number, to: number, depth: 
  *  more indentation. */
 function child(w: Walk, node: TemplateNode, depth: number, quiet = false): void {
   const key = pathKey(node.path);
-  if (node.composite && node.child_count > 0 && depth === 1) {
+  // A structure that places another field is not a division of the file, so it
+  // stays a row: an array of cell pointers belongs beside the fields it was
+  // written among, not as a heading over the page's contents.
+  if (node.composite && node.child_count > 0 && depth === 1 && !quiet) {
     // A short table opens itself, since the table is what it is for.
     const open = w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true);
     heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : { from: 0, nodes: [] });
