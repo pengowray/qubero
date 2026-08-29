@@ -78,10 +78,13 @@ pub fn wav() -> Template {
                 ("form", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
                 (
                     "chunks",
-                    T::switch(
-                        E::field("magic"),
-                        vec![(cc("RIFX"), T::repeat(T::Named("ChunkBE".into()), Until::End))],
-                        T::repeat(T::Named("Chunk".into()), Until::End),
+                    T::sized(
+                        chunk_room(),
+                        T::switch(
+                            E::field("magic"),
+                            vec![(cc("RIFX"), T::repeat(T::Named("ChunkBE".into()), Until::End))],
+                            T::repeat(T::Named("Chunk".into()), Until::End),
+                        ),
                     ),
                 ),
             ],
@@ -103,12 +106,26 @@ pub(super) fn riff(name: &str, body: T) -> Template {
                 ("magic", T::magic(b"RIFF")),
                 ("size", T::u32(Little)),
                 ("form", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
-                ("chunks", T::repeat(T::Named("Chunk".into()), Until::End)),
+                ("chunks", T::sized(chunk_room(), T::repeat(T::Named("Chunk".into()), Until::End))),
             ],
         ),
     )
     .with_type("Chunk", chunk(body, Little))
     .with_type("ListItem", list_item(Little))
+}
+
+/// How much room the chunks have. The RIFF size counts the form and
+/// everything after it, so the chunks themselves run for four bytes fewer.
+/// Bounding them matters because writers leave things after the form: a
+/// couple of zero bytes rounding the file up, a tag some other program
+/// appended. Those bytes are outside the RIFF, and reading them as one more
+/// chunk is what made a file that plays fine look broken.
+///
+/// A size slot that was never filled in is common in files written as they
+/// were recorded, so a zero, or one larger than the file, asks for the rest
+/// of the file rather than for nothing or for more than there is.
+fn chunk_room() -> E {
+    E::field("size").at_least(E::lit(4)).sub(E::lit(4)).or(E::Remaining).at_most(E::Remaining)
 }
 
 fn chunk(body: T, endian: Endian) -> T {
@@ -955,4 +972,54 @@ mod tests {
         assert_eq!(body.size_bits, 8 * 8);
     }
 
+    /// A little `fmt ` and a little `data`, and the RIFF size around them.
+    fn wave(extra: &[u8], size: Option<u32>) -> Vec<u8> {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&8000u32.to_le_bytes());
+        fmt.extend_from_slice(&16000u32.to_le_bytes());
+        fmt.extend_from_slice(&2u16.to_le_bytes());
+        fmt.extend_from_slice(&16u16.to_le_bytes());
+        let mut body = b"WAVE".to_vec();
+        body.extend(chunk_bytes(b"fmt ", &fmt));
+        body.extend(chunk_bytes(b"data", &[0, 1, 2, 3]));
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&size.unwrap_or(body.len() as u32).to_le_bytes());
+        out.extend(body);
+        out.extend_from_slice(extra);
+        out
+    }
+
+    /// Two bat recordings turned up with four zero bytes after the RIFF, and
+    /// were read as a fifth chunk whose id was four zeroes and whose size ran
+    /// off the end. Everything a player reads is inside the size the RIFF
+    /// declares; what a writer left after it is nobody's chunk.
+    #[test]
+    fn bytes_after_the_riff_are_left_out_of_it() {
+        let bytes = wave(&[0, 0, 0, 0], None);
+        let len = bytes.len() as u64;
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(wav());
+        let root = ev.node(&d, &[]).unwrap();
+        assert_eq!(root.size_bits, (len - 4) * 8);
+        assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[3, 1, 0]).unwrap().value, Value::Str("data".into()));
+    }
+
+    /// A file written as it was recorded never gets its size filled in, and
+    /// one that was cut off mid-recording keeps whatever the writer guessed.
+    /// Either way the chunks get the rest of the file rather than nothing at
+    /// all or more room than there is.
+    #[test]
+    fn a_size_slot_that_says_nothing_useful_gives_the_chunks_the_rest_of_the_file() {
+        for size in [0, u32::MAX] {
+            let bytes = wave(&[], Some(size));
+            let len = bytes.len() as u64;
+            let d = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(wav());
+            assert_eq!(ev.node(&d, &[]).unwrap().size_bits, len * 8, "size {size}");
+            assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 2, "size {size}");
+        }
+    }
 }
