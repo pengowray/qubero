@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Mockup B: hex view annotations (JPEG)</title>
+<style>
+  :root {
+    --bg: #14161b; --panel: #1b1e25; --panel2: #20242d; --line: #2b303b;
+    --fg: #cfd3dc; --dim: #7d8494; --faint: #565d6d;
+    --num: #6cb2ff; --str: #e0a35c; --typ: #b48ce0; --name: #d7dbe4;
+    --ok: #62c48b; --accent: #4c96e8;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    --sans: "Segoe UI", system-ui, sans-serif;
+    --c-dqt: #e0b04c; --c-dri: #62c48b; --c-app: #e07a7a; --c-sof: #6cb2ff; --c-dht: #b48ce0; --c-sos: #4cc8c8;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.5 var(--mono); padding: 18px 26px; }
+  h1 { font: 600 16px var(--sans); margin-bottom: 2px; }
+  .sub { color: var(--dim); font-family: var(--sans); font-size: 12.5px; margin-bottom: 16px; }
+
+  .hexpane { display: grid; grid-template-columns: auto auto 1fr; column-gap: 0; align-items: start; }
+
+  /* section band gutter */
+  .bands { display: flex; }
+  .band { width: 5px; margin-right: 3px; border-radius: 2px; }
+
+  .row { display: contents; }
+  .addr { color: var(--faint); padding-right: 14px; text-align: right; line-height: 22px; }
+  .cells { line-height: 22px; white-space: nowrap; letter-spacing: .02em; }
+  .cells span { padding: 1px 2px; border-radius: 2px; }
+  .anno { line-height: 22px; padding-left: 18px; white-space: nowrap; overflow: hidden; }
+
+  /* field chips */
+  .chip { display: inline-flex; gap: 6px; align-items: baseline; background: var(--panel2); border-radius: 4px; padding: 1px 7px; margin-right: 6px; font-size: 12px; border-left: 3px solid var(--faint); }
+  .chip .k { color: var(--dim); }
+  .chip .v { color: var(--fg); }
+  .chip .v.num { color: var(--num); } .chip .v.str { color: var(--str); }
+
+  /* section header rows interleaved in the hex flow */
+  .sechead { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 12px; margin: 14px 0 6px; padding: 5px 0 5px 0; border-bottom: 1px solid var(--line); }
+  .sechead .swatch { width: 9px; height: 9px; border-radius: 2px; align-self: center; }
+  .sechead h2 { font: 600 14.5px var(--sans); color: var(--name); }
+  .sechead .range { color: var(--faint); font-size: 12px; }
+  .sechead .note { color: var(--dim); font-family: var(--sans); font-size: 12px; margin-left: auto; }
+
+  /* inline expansion card (rendered array) */
+  .expand { grid-column: 1 / -1; margin: 4px 0 10px 120px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; max-width: 680px; }
+  .expand h3 { font: 600 12.5px var(--sans); color: var(--name); margin-bottom: 2px; }
+  .expand .cap { color: var(--dim); font-family: var(--sans); font-size: 12px; margin-bottom: 8px; }
+  .qgrid { display: grid; grid-template-columns: repeat(8, 30px); gap: 2px; }
+  .qgrid span { text-align: center; padding: 3px 0; border-radius: 3px; font-size: 12px; }
+  .qgrid.two { display: inline-grid; margin-right: 26px; vertical-align: top; }
+  .collapsed-note { grid-column: 1 / -1; margin: 0 0 8px 120px; color: var(--dim); font-size: 12px; }
+  .collapsed-note a { color: var(--accent); text-decoration: none; }
+
+  .skip { grid-column: 1 / -1; margin: 10px 0; color: var(--faint); font-size: 12px; display: flex; align-items: center; gap: 10px; }
+  .skip::before, .skip::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+
+  .legend { margin-top: 26px; color: var(--dim); font-family: var(--sans); font-size: 12.5px; max-width: 76ch; line-height: 1.6; }
+  .legend b { color: var(--fg); font-weight: 600; }
+</style></head><body>
+
+<h1>Hex view with section headings, full annotations, and folded arrays</h1>
+<div class="sub">img1.jpg · 611.8 KiB · JPEG, baseline, 1920 × 1200. What changed against today's view: annotations get a full column and wrap onto the next row instead of truncating; regular arrays fold into one rendered card; segment starts become headings inside the scroll.</div>
+
+<div class="hexpane">
+
+  <div class="sechead"><span class="swatch" style="background:#888"></span><h2>Start of image</h2><span class="range">0x0 · 2 bytes</span></div>
+  <div class="row">
+    <div class="addr">00000000</div>
+    <div class="cells"><span style="background:#3a3f2b">ff d8</span> <span style="background:#4a3b22">ff db 00 84 00</span> 02 02 02 02 02 02 02 02 02</div>
+    <div class="anno"><span class="chip" style="border-color:#888"><span class="k">soi</span><span class="v">✓ ff d8</span></span></div>
+  </div>
+
+  <div class="sechead"><span class="swatch" style="background:var(--c-dqt)"></span><h2>Quantisation tables</h2><span class="range">0x2 – 0x87 · 134 bytes</span><span class="note">DQT · 2 tables</span></div>
+  <div class="row">
+    <div class="addr">00000002</div>
+    <div class="cells"><span style="background:#4a3b22">ff db</span> <span style="background:#414141">00 84</span> <span style="background:#2e3b4d">00</span></div>
+    <div class="anno">
+      <span class="chip" style="border-color:var(--c-dqt)"><span class="k">marker</span><span class="v">dqt (0xffdb)</span></span>
+      <span class="chip"><span class="k">length</span><span class="v num">132</span></span>
+      <span class="chip"><span class="k">precision</span><span class="v">8-bit</span></span>
+      <span class="chip"><span class="k">id</span><span class="v num">0</span></span>
+    </div>
+  </div>
+  <div class="collapsed-note">values : u8[64] · 0x7 – 0x46 · shown as a table below (<a href="#">show as 64 hex cells instead</a>)</div>
+  <div class="expand">
+    <h3>Quantisation table 0 (luminance)</h3>
+    <div class="cap">64 values, stored in zig-zag order, shown here in the 8×8 grid the decoder uses. Darker = coarser quantisation of that frequency.</div>
+    <div class="qgrid two">
+      <span style="background:#2c3d52">2</span><span style="background:#2c3d52">2</span><span style="background:#2c3d52">2</span><span style="background:#2e4056">2</span><span style="background:#31445c">3</span><span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#48627f">6</span>
+      <span style="background:#2c3d52">2</span><span style="background:#2c3d52">2</span><span style="background:#2c3d52">2</span><span style="background:#2e4056">3</span><span style="background:#31445c">3</span><span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#48627f">6</span>
+      <span style="background:#2c3d52">2</span><span style="background:#2c3d52">2</span><span style="background:#2e4056">2</span><span style="background:#31445c">3</span><span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#48627f">6</span><span style="background:#50688a">7</span>
+      <span style="background:#2e4056">2</span><span style="background:#2e4056">3</span><span style="background:#31445c">3</span><span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#48627f">6</span><span style="background:#50688a">7</span><span style="background:#5c7396">8</span>
+      <span style="background:#31445c">3</span><span style="background:#31445c">3</span><span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#48627f">6</span><span style="background:#50688a">7</span><span style="background:#5c7396">9</span><span style="background:#68809f">9</span>
+      <span style="background:#374d67">4</span><span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#48627f">6</span><span style="background:#50688a">7</span><span style="background:#5c7396">9</span><span style="background:#68809f">10</span><span style="background:#7691ad">12</span>
+      <span style="background:#40597a">5</span><span style="background:#40597a">5</span><span style="background:#48627f">6</span><span style="background:#50688a">7</span><span style="background:#5c7396">9</span><span style="background:#68809f">10</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+      <span style="background:#48627f">6</span><span style="background:#48627f">6</span><span style="background:#50688a">7</span><span style="background:#5c7396">8</span><span style="background:#68809f">9</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+    </div>
+    <div class="qgrid two">
+      <span style="background:#31445c">3</span><span style="background:#31445c">3</span><span style="background:#374d67">4</span><span style="background:#48627f">6</span><span style="background:#68809f">10</span><span style="background:#7691ad">14</span><span style="background:#7691ad">14</span><span style="background:#7691ad">14</span>
+      <span style="background:#31445c">3</span><span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#5c7396">9</span><span style="background:#7691ad">13</span><span style="background:#7691ad">14</span><span style="background:#7691ad">15</span><span style="background:#7691ad">15</span>
+      <span style="background:#374d67">4</span><span style="background:#40597a">5</span><span style="background:#5c7396">9</span><span style="background:#68809f">10</span><span style="background:#7691ad">14</span><span style="background:#7691ad">15</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+      <span style="background:#48627f">6</span><span style="background:#5c7396">9</span><span style="background:#68809f">10</span><span style="background:#7691ad">13</span><span style="background:#7691ad">15</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+      <span style="background:#68809f">10</span><span style="background:#7691ad">13</span><span style="background:#7691ad">14</span><span style="background:#7691ad">15</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+      <span style="background:#7691ad">14</span><span style="background:#7691ad">14</span><span style="background:#7691ad">15</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+      <span style="background:#7691ad">14</span><span style="background:#7691ad">15</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+      <span style="background:#7691ad">14</span><span style="background:#7691ad">15</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span><span style="background:#7691ad">12</span>
+    </div>
+    <div class="cap" style="margin-top:6px">Table 0 (luminance, used by component Y) · Table 1 (chrominance, used by Cb and Cr, starts at 0x48)</div>
+  </div>
+
+  <div class="sechead"><span class="swatch" style="background:var(--c-dri)"></span><h2>Restart interval</h2><span class="range">0x88 – 0x8d · 6 bytes</span><span class="note">DRI</span></div>
+  <div class="row">
+    <div class="addr">00000088</div>
+    <div class="cells"><span style="background:#2b4534">ff dd</span> <span style="background:#414141">00 04</span> <span style="background:#2e3b4d">00 f0</span> <span style="background:#4d3232">ff ee 00 0e</span> <span style="background:#4a3b22">41 64 6f 62 65 00</span></div>
+    <div class="anno">
+      <span class="chip" style="border-color:var(--c-dri)"><span class="k">marker</span><span class="v">dri (0xffdd)</span></span>
+      <span class="chip"><span class="k">length</span><span class="v num">4</span></span>
+      <span class="chip"><span class="k">interval</span><span class="v num">240</span> <span class="k">MCUs per restart</span></span>
+    </div>
+  </div>
+
+  <div class="sechead"><span class="swatch" style="background:var(--c-app)"></span><h2>Adobe marker</h2><span class="range">0x8e – 0x9d · 16 bytes</span><span class="note">APP14</span></div>
+  <div class="row">
+    <div class="addr">0000008e</div>
+    <div class="cells"><span style="background:#4d3232">ff ee</span> <span style="background:#414141">00 0e</span> <span style="background:#4a3b22">41 64 6f 62 65</span> <span style="background:#2e3b4d">00 64 c0 00 00 00 01</span></div>
+    <div class="anno">
+      <span class="chip" style="border-color:var(--c-app)"><span class="k">marker</span><span class="v">app14 (0xffee)</span></span>
+      <span class="chip"><span class="k">tag</span><span class="v str">"Adobe"</span></span>
+      <span class="chip"><span class="k">transform</span><span class="v num">1</span> <span class="k">YCbCr</span></span>
+    </div>
+  </div>
+
+  <div class="sechead"><span class="swatch" style="background:var(--c-sof)"></span><h2>Frame header</h2><span class="range">0x9e – 0xb0 · 19 bytes</span><span class="note">SOF0 · baseline DCT</span></div>
+  <div class="row">
+    <div class="addr">0000009e</div>
+    <div class="cells"><span style="background:#26384f">ff c0</span> <span style="background:#414141">00 11</span> <span style="background:#2e3b4d">08</span> <span style="background:#33455e">04 b0</span> <span style="background:#33455e">07 80</span> <span style="background:#2e3b4d">03</span> <span style="background:#3b3350">00 11 00 01</span></div>
+    <div class="anno">
+      <span class="chip" style="border-color:var(--c-sof)"><span class="k">marker</span><span class="v">sof0 (0xffc0)</span></span>
+      <span class="chip"><span class="k">precision</span><span class="v num">8</span></span>
+      <span class="chip"><span class="k">height</span><span class="v num">1200</span></span>
+      <span class="chip"><span class="k">width</span><span class="v num">1920</span></span>
+    </div>
+  </div>
+  <div class="row">
+    <div class="addr">000000ae</div>
+    <div class="cells"><span style="background:#3b3350">11 01 02 11 01</span></div>
+    <div class="anno"><span class="chip"><span class="k">components</span><span class="v">Y 1×1 q0 · Cb 1×1 q1 · Cr 1×1 q1</span></span></div>
+  </div>
+
+  <div class="sechead"><span class="swatch" style="background:var(--c-dht)"></span><h2>Huffman tables</h2><span class="range">0xb1 – 0x17c · 204 bytes</span><span class="note">DHT · 4 tables</span></div>
+  <div class="collapsed-note">4 tables: dc0 (11 symbols) · dc1 (9) · ac0 (60 symbols) · ac1 (60) — each is counts u8[16] + symbols (<a href="#">expand</a>)</div>
+  <div class="expand" style="margin-left:120px">
+    <h3>Huffman table dc0</h3>
+    <div class="cap">Code lengths 1–16: how many codes exist at each bit length, then the symbols in code order.</div>
+    <div style="display:flex; gap:2px; align-items:flex-end; height:52px; margin:4px 0 2px">
+      <div style="width:22px;background:#2a2f39;height:2px" title="len 1: 0"></div>
+      <div style="width:22px;background:#4c96e8;height:12px" title="len 2: 1"></div>
+      <div style="width:22px;background:#4c96e8;height:48px" title="len 3: 5"></div>
+      <div style="width:22px;background:#4c96e8;height:12px" title="len 4: 1"></div>
+      <div style="width:22px;background:#4c96e8;height:12px" title="len 5: 1"></div>
+      <div style="width:22px;background:#4c96e8;height:12px" title="len 6: 1"></div>
+      <div style="width:22px;background:#4c96e8;height:12px" title="len 7: 1"></div>
+      <div style="width:22px;background:#4c96e8;height:12px" title="len 8: 1"></div>
+      <div style="width:22px;background:#2a2f39;height:2px"></div><div style="width:22px;background:#2a2f39;height:2px"></div>
+      <div style="width:22px;background:#2a2f39;height:2px"></div><div style="width:22px;background:#2a2f39;height:2px"></div>
+      <div style="width:22px;background:#2a2f39;height:2px"></div><div style="width:22px;background:#2a2f39;height:2px"></div>
+      <div style="width:22px;background:#2a2f39;height:2px"></div><div style="width:22px;background:#2a2f39;height:2px"></div>
+    </div>
+    <div class="cap">counts 0 1 5 1 1 1 1 1 0… · symbols 02 01 03 04 05 06 00 07 08 09 0a · <a href="#">decode to code table</a></div>
+  </div>
+
+  <div class="sechead"><span class="swatch" style="background:var(--c-sos)"></span><h2>Scan</h2><span class="range">0x17d – 0x98f00 · 611.4 KiB · 99.9% of the file</span><span class="note">SOS + entropy-coded data</span></div>
+  <div class="row">
+    <div class="addr">0000017d</div>
+    <div class="cells"><span style="background:#1f4444">ff da</span> <span style="background:#414141">00 0c</span> <span style="background:#2e3b4d">03</span> <span style="background:#3b3350">00 00 01 11 02 11</span> <span style="background:#2e3b4d">00 3f 00</span></div>
+    <div class="anno">
+      <span class="chip" style="border-color:var(--c-sos)"><span class="k">marker</span><span class="v">sos (0xffda)</span></span>
+      <span class="chip"><span class="k">components</span><span class="v">Y dc0/ac0 · Cb dc1/ac1 · Cr dc1/ac1</span></span>
+      <span class="chip"><span class="k">spectral</span><span class="v num">0–63</span></span>
+    </div>
+  </div>
+  <div class="row">
+    <div class="addr">0000018b</div>
+    <div class="cells"><span style="background:#1c2f2f; color:#7ea8a8">cb e3 f7 af e8 93 f0 99 b0 71 92 4f b5 31 25 6c</span></div>
+    <div class="anno"><span class="chip"><span class="k">entropy data</span><span class="v">626,038 bytes · decodes to the 1920 × 1200 image</span></span></div>
+  </div>
+
+  <div class="skip">entropy-coded data continues for 611.4 KiB · 39,121 rows · restart markers every 240 MCUs · <a href="#" style="color:var(--accent)">jump to end</a></div>
+
+  <div class="row">
+    <div class="addr">00098f01</div>
+    <div class="cells"><span style="background:#3a3f2b">ff d9</span></div>
+    <div class="anno"><span class="chip" style="border-color:#888"><span class="k">eoi</span><span class="v">end of image</span></span></div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <b>What this mockup changes:</b> ① Section headings live inside the hex scroll, so structure arrives while scrolling rather than only in a side panel. ② The annotation column wraps to extra rows when the fields on a line don't fit; nothing is truncated. ③ A regular array (u8[64], u8[16]) folds into one line plus a rendered card in the shape the format means: an 8×8 grid for a quantisation table, a bar-per-length for Huffman counts. ④ A huge opaque run (entropy data) collapses to one row, a summary line, and a jump link, instead of thousands of anonymous rows.
+</div>
+
+</body></html>

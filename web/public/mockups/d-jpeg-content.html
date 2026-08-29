@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Mockup D: content-first JPEG</title>
+<style>
+  :root {
+    --bg: #14161b; --panel: #1b1e25; --panel2: #20242d; --line: #2b303b;
+    --fg: #cfd3dc; --dim: #7d8494; --faint: #565d6d;
+    --num: #6cb2ff; --str: #e0a35c; --typ: #b48ce0; --name: #d7dbe4;
+    --ok: #62c48b; --accent: #4c96e8;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    --sans: "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.55 var(--mono); padding: 20px 32px 60px; max-width: 1040px; }
+  a { color: var(--accent); text-decoration: none; }
+  h1 { font: 600 16px var(--sans); margin-bottom: 2px; }
+  .sub { color: var(--dim); font-family: var(--sans); font-size: 12.5px; margin-bottom: 18px; max-width: 84ch; }
+
+  /* hero: the image is the top of the report */
+  .hero { display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: start; }
+  .imgbox { position: relative; }
+  .imgbox img { width: 384px; height: 240px; border-radius: 6px; display: block; image-rendering: auto; }
+  .mcu { position: absolute; left: 96px; top: 60px; width: 64px; height: 40px; border: 1.5px solid #ffd76a; border-radius: 2px; box-shadow: 0 0 0 2000px rgba(10,12,16,.35); }
+  .mcu-label { position: absolute; left: 96px; top: 102px; font-size: 11px; color: #ffd76a; }
+  .facts { font-family: var(--sans); font-size: 13px; }
+  .facts h2 { font: 600 18px var(--sans); margin-bottom: 2px; }
+  .facts .line { color: var(--dim); margin-bottom: 10px; }
+  .facts table td { padding: 2px 16px 2px 0; }
+  .facts td:first-child { color: var(--dim); }
+  .facts b { font-weight: 600; color: var(--fg); }
+
+  /* pipeline: bytes -> image, each stage a landmark */
+  .pipe { display: flex; align-items: stretch; gap: 0; margin: 26px 0 8px; }
+  .stage { flex: 1; background: var(--panel); border: 1px solid var(--line); padding: 8px 12px; position: relative; }
+  .stage:first-child { border-radius: 6px 0 0 6px; }
+  .stage:last-child { border-radius: 0 6px 6px 0; }
+  .stage + .stage { border-left: none; }
+  .stage h3 { font: 600 12.5px var(--sans); }
+  .stage .d { color: var(--dim); font-size: 11.5px; font-family: var(--sans); }
+  .stage::after { content: "→"; position: absolute; right: -7px; top: 40%; color: var(--faint); background: var(--bg); z-index: 2; }
+  .stage:last-child::after { content: none; }
+  .stage.sel { outline: 1.5px solid #ffd76a; z-index: 1; }
+  .pipenote { color: var(--dim); font-family: var(--sans); font-size: 12px; margin-bottom: 26px; }
+  .pipenote b { color: #ffd76a; font-weight: 600; }
+
+  section { margin: 26px 0; }
+  .shead { display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 5px; margin-bottom: 10px; }
+  .shead h2 { font: 600 16px var(--sans); }
+  .shead .range { color: var(--faint); font-size: 12px; }
+  .shead .sz { margin-left: auto; color: var(--dim); font-size: 12px; }
+
+  .stack { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; }
+  .card h3 { font: 600 13px var(--sans); margin-bottom: 4px; }
+  .card .d { color: var(--dim); font-size: 12px; font-family: var(--sans); }
+  .num { color: var(--num); } .str { color: var(--str); } .dimtxt { color: var(--dim); }
+
+  .layers { border-left: 2px solid var(--line); margin: 6px 0 0 4px; padding-left: 14px; display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; }
+  .layers .lr b { color: var(--fg); font-weight: 500; }
+  .layers .lr span { color: var(--dim); }
+  .hexline { background: #101318; border-radius: 4px; padding: 5px 9px; color: #7ea8a8; font-size: 12px; letter-spacing: .03em; overflow: hidden; white-space: nowrap; }
+  .hexline em { font-style: normal; background: #3a3f2b; color: #d7dbaa; padding: 1px 2px; border-radius: 2px; }
+
+  .coef { display: grid; grid-template-columns: repeat(8, 30px); gap: 2px; margin: 6px 0; }
+  .coef span { text-align: center; font-size: 11px; padding: 3px 0; border-radius: 2px; background: #232833; color: var(--faint); }
+  .coef .dc { background: #2c4a6e; color: #cfe2f5; }
+  .coef .acv { background: #31445c; color: #b7cfe8; }
+</style></head><body>
+
+<h1>Content first: the file opens as what it is</h1>
+<div class="sub">img1.jpg. The image is the top of the report; everything below it is the answer to "how did these bytes become that picture", one layer at a time. Click a spot on the image and every layer highlights the pieces that produced it; click bytes anywhere and the image shows where they land.</div>
+
+<div class="hero">
+  <div class="imgbox">
+    <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAB4AMADASIAAhEBAxEB/8QAGQABAQEBAQEAAAAAAAAAAAAAAwABAgQG/8QAFxABAQEBAAAAAAAAAAAAAAAAABIBAv/EABkBAQEBAQEBAAAAAAAAAAAAAAABAgMEBf/EABgRAQEBAQEAAAAAAAAAAAAAAAASEQEC/9oADAMBAAIRAxEAPwD5KVJpUvoU8eBlSaVJRgZUmlSUYGVJZUlGClSWVJRgpUllSUYKVJpUpRIZUmlSUSGVJpUlEhlSaVK0YGVJpUlGBlSaVJRhZUllS89OsilSWVJRgpZJZUrRgpUllklGDlSWVJRgpbJZUpRgpbBZbBSyGFBoUJRIYUGhQUSCVJoULRIZUmlklJIpUllSUSaVJZUuFO2BlSWWStGClkllStJgpUklSamDlsu5bnJS44zluckzl1nLNLzgs4bBc4dZwzSyGFB4UpSyCFB4ZBRIIZD0QyFpJBDJPDJWiQypLKlaTCypNLJcKdpDLJNLJWkwMsk0slaTAypLKlaTBS6zl3Lc5NMcZy7zlucusxnvWucZnLrOXWY6zljvWuccSpLnKlmmsFKk0skokMsg0sleekwMsk0slaSQyyTSpWkwsqSypcKdZDLJPDIWkkEsk8MhqkkEsk8MhaJDKk0NkpJFnLc5JnLrOUpZcZy6zl3nLc5Y76a5xznLZd5y2WdawcqSSpSlwUsk0slaTAyyTSyVpMFLJNLJWkw0qSypcKdpDCg0KCiQQyDwoWkkEMg8KFpJBCg8KCiQw3ODQoSlkWcus5JLZSlwecqSS2UpcHKkkqUowUqSyyVowUsk0slaTBSpLKkow0qSypeenbBSpLKkokMqDSpWkkMKDSpKJDCg0qSiQwpNKkokUqSypSlwUqSypKMFKksqSjBSpLKkowUqSypKMFKksqSjCypScddcUqUjTFKlI0xSpSNMUqUjTFKlI0xSpSNMUqUjTFKlI0xSpSNMUqUjTFKlI0x//9k=" alt="Decoded image (placeholder art for the mockup)">
+    <div class="mcu"></div>
+    <div class="mcu-label">selected: MCUs 3,612 – 3,619</div>
+  </div>
+  <div class="facts">
+    <h2>img1.jpg</h2>
+    <div class="line">JPEG, baseline DCT · 611.8 KiB</div>
+    <table>
+      <tr><td>Pixels</td><td><b>1920 × 1200</b>, 8-bit</td></tr>
+      <tr><td>Colour</td><td><b>YCbCr</b>, no subsampling (1×1,1×1,1×1) · Adobe transform 1</td></tr>
+      <tr><td>Compression</td><td><b>18.4 : 1</b> · 0.68 bits per pixel</td></tr>
+      <tr><td>Tables</td><td>2 quantisation · 4 Huffman · restart every 240 MCUs</td></tr>
+      <tr><td>Integrity</td><td style="color:var(--ok)">✓ markers well-formed, scan ends at EOI, no trailer</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="pipe">
+  <div class="stage"><h3>File bytes</h3><div class="d">626,435 B · 7 segments</div></div>
+  <div class="stage"><h3>Entropy data</h3><div class="d">626,038 B Huffman-coded</div></div>
+  <div class="stage sel"><h3>Coefficients</h3><div class="d">36,000 MCUs × 3 blocks</div></div>
+  <div class="stage"><h3>Dequantise + IDCT</h3><div class="d">using tables q0, q1</div></div>
+  <div class="stage"><h3>YCbCr → RGB</h3><div class="d">2.3M pixels</div></div>
+</div>
+<div class="pipenote">The decode pipeline. Each stage is a real address space you can scroll: file offsets on the left end, pixel coordinates on the right. <b>Yellow</b> follows the current selection through every stage.</div>
+
+<section>
+  <div class="shead"><h2>The selected 64 pixels, layer by layer</h2><span class="range">image (1216, 480) ↔ file 0x241c7</span></div>
+  <div class="layers">
+    <div class="lr"><b>Pixels</b> <span>· block at (1216, 480), 8×8, component Y</span></div>
+    <div class="lr"><b>Coefficients</b> <span>· MCU 3,615, block Y · DC −34 + 11 AC terms (of 63)</span>
+      <div class="coef">
+        <span class="dc">−34</span><span class="acv">18</span><span class="acv">−7</span><span class="acv">3</span><span>0</span><span>0</span><span>0</span><span>0</span>
+        <span class="acv">−12</span><span class="acv">6</span><span class="acv">2</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span>
+        <span class="acv">4</span><span class="acv">−2</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span>
+        <span class="acv">1</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span>
+        <span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span>
+        <span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span>
+        <span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span>
+        <span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span><span>0</span>
+      </div>
+      <span>DC is coded as the difference from the previous block's DC; dequantised with table q0 before the IDCT.</span>
+    </div>
+    <div class="lr"><b>Bitstream</b> <span>· 214 bits starting at bit 3 of 0x241c7 · Huffman tables dc0 + ac0</span>
+      <div class="hexline">0x241c0&nbsp;&nbsp;4e 91 07 3c 2f a8 55 <em>c6 b3 f0 4a 1d 88 92 e5 71 3a 0d 66 b8 24 77 c1 5e 93 08 3d</em> 2e a9 54</div>
+      <span>Highlight is the selected block's bits. This is the mapping the hex view cannot show today: one byte here can belong to two blocks, and a block starts mid-byte.</span>
+    </div>
+    <div class="lr"><b>File</b> <span>· inside <a href="#">scan segment</a> 0x17d – 0x98f00 · after restart marker RST₆ at 0x23f0a (MCU 3,600)</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>What the scan depends on</h2><span class="sz">everything above 0x17d · 381 B of tables for 611 KiB of data</span></div>
+  <div class="stack">
+    <div class="card">
+      <h3>Quantisation tables <span class="dimtxt">· DQT at 0x2</span></h3>
+      <div class="d">q0 for Y (fine, near-lossless: values 2–12) · q1 for Cb, Cr (coarser: 3–15). The coarse tail of both tables is a flat 12: high frequencies are heavily crushed, typical of a high-quality Adobe export. <a href="#">Open as 8×8 grids</a></div>
+    </div>
+    <div class="card">
+      <h3>Huffman tables <span class="dimtxt">· DHT at 0xb1</span></h3>
+      <div class="d">dc0 (11 symbols), dc1 (9), ac0 (60), ac1 (60). Shortest code 2 bits, longest 16. <a href="#">Code length histograms</a> · <a href="#">full code tables</a></div>
+    </div>
+    <div class="card">
+      <h3>Frame header <span class="dimtxt">· SOF0 at 0x9e</span></h3>
+      <div class="d">1920 × 1200, 3 components, no subsampling. Everything the pixel grid needs; the scan header at 0x17d then binds each component to its tables.</div>
+    </div>
+    <div class="card">
+      <h3>Restart markers <span class="dimtxt">· DRI at 0x88</span></h3>
+      <div class="d">Every 240 MCUs the coder resets: 149 RST markers split the scan into independently decodable stripes of 16 pixel rows. They are the only landmarks inside the 611 KiB — the view uses them as its row grid. <a href="#">List all 149</a></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Where the bytes go</h2><span class="sz">626,435 B total</span></div>
+  <div style="display:flex; height:26px; border-radius:5px; overflow:hidden; margin-bottom:6px">
+    <div style="width:4px; background:#e0b04c" title="tables + headers, 397 B"></div>
+    <div style="flex:1; background:#4cc8c8; color:#0e1013; font:600 11px var(--sans); display:flex; align-items:center; padding:0 8px">entropy-coded image data · 626,038 B · 99.9%</div>
+    <div style="width:3px; background:#888" title="EOI, 2 B"></div>
+  </div>
+  <div class="d" style="color:var(--dim); font-family:var(--sans); font-size:12px">Nearly the whole file is the coded image; the 397 bytes of headers and tables before it are what make those bytes decodable. Compare: the same pixels raw would be 6.9 MB.</div>
+</section>
+
+<div class="d" style="color:var(--dim); font-family:var(--sans); font-size:12.5px; border-top:1px solid var(--line); padding-top:12px; max-width:84ch">
+<b style="color:var(--fg)">What this mockup changes:</b> ① The decoded content is the top of the page, not a lens buried in a menu. ② A pipeline strip names each transformation and carries one selection through all of them, both directions. ③ The bit-level mapping (a block starting mid-byte) gets its own rendering instead of being unrepresentable. ④ Tables are explained by their role in the decode, next to a link to their raw form.
+</div>
+
+</body></html>

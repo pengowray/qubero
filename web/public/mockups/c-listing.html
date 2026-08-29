@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Mockup C: unified listing (SQLite)</title>
+<style>
+  :root {
+    --bg: #14161b; --panel: #1b1e25; --panel2: #20242d; --line: #2b303b;
+    --fg: #cfd3dc; --dim: #7d8494; --faint: #565d6d;
+    --num: #6cb2ff; --str: #e0a35c; --typ: #b48ce0; --name: #d7dbe4;
+    --ok: #62c48b; --accent: #4c96e8;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    --sans: "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 13px/1.55 var(--mono); padding: 18px 30px 60px; max-width: 1000px; }
+  h1.pagetitle { font: 600 16px var(--sans); margin-bottom: 2px; }
+  .sub { color: var(--dim); font-family: var(--sans); font-size: 12.5px; margin-bottom: 14px; max-width: 82ch; }
+  a { color: var(--accent); text-decoration: none; }
+
+  .modes { display: flex; gap: 6px; margin-bottom: 18px; font-family: var(--sans); font-size: 12px; }
+  .modes span { padding: 3px 10px; border-radius: 5px; border: 1px solid var(--line); color: var(--dim); cursor: pointer; }
+  .modes .on { background: var(--panel2); color: var(--fg); border-color: var(--accent); }
+
+  /* depth-scaled section headings */
+  .h0, .h1x, .h2x { display: flex; align-items: baseline; gap: 12px; }
+  .h0 { border-bottom: 1px solid var(--line); margin: 30px 0 10px; padding-bottom: 6px; }
+  .h0 b { font: 600 19px var(--sans); color: var(--name); }
+  .h1x { margin: 20px 0 6px; }
+  .h1x b { font: 600 15px var(--sans); color: var(--name); }
+  .h2x { margin: 12px 0 4px 0; }
+  .h2x b { font: 600 13px var(--sans); color: var(--dim); }
+  .range { color: var(--faint); font-size: 12px; }
+  .hsize { margin-left: auto; color: var(--dim); font-size: 12px; display: flex; align-items: center; gap: 8px; }
+  .hbar { width: 90px; height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+  .hbar div { height: 100%; background: var(--accent); }
+  .swatch { width: 9px; height: 9px; border-radius: 2px; align-self: center; }
+
+  table.rows { border-collapse: collapse; width: 100%; }
+  table.rows td { padding: 2.5px 12px 2.5px 0; border-bottom: 1px solid #1e222b; vertical-align: baseline; }
+  td.a { color: var(--faint); width: 70px; }
+  td.f { width: 220px; }
+  td.t { color: var(--typ); width: 100px; font-size: 12px; }
+  td.s { color: var(--faint); width: 70px; text-align: right; font-size: 12px; }
+  .num { color: var(--num); } .str { color: var(--str); } .dim { color: var(--dim); }
+  tr.gap td { color: var(--faint); font-style: italic; background: repeating-linear-gradient(45deg, transparent 0 8px, #1a1d24 8px 16px); }
+  tr.fold td.f::before { content: "▸ "; color: var(--faint); }
+  tr.unfold td.f::before { content: "▾ "; color: var(--faint); }
+
+  .inline-note { color: var(--dim); font-size: 12px; font-family: var(--sans); margin: 4px 0 4px 0; }
+  .record { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 6px 0 10px; max-width: 720px; }
+  .record table { border-collapse: collapse; }
+  .record th { font: 600 11px var(--sans); color: var(--faint); text-align: left; padding: 2px 18px 2px 0; text-transform: uppercase; letter-spacing: .05em; }
+  .record td { padding: 2px 18px 2px 0; }
+  .record td:last-child { white-space: nowrap; }
+  .arrow { color: var(--faint); }
+</style></head><body>
+
+<h1 class="pagetitle">One listing that is also the structure view</h1>
+<div class="sub">notes.sqlite · 12.0 KiB. Physical order, every byte accounted for: unused and zero runs are rows like any field, headings scale with structural depth, machinery rows (lengths, pointer arrays, serial types) fold behind the thing they describe, and a record can render as the row of a table.</div>
+
+<div class="modes"><span class="on">Physical order</span><span>Logical tree</span><span>Expand all</span><span title="Collapse to headings only">Headings only</span></div>
+
+<!-- ============ header ============ -->
+<div class="h0"><span class="swatch" style="background:#62c48b"></span><b>Header</b><span class="range">0x0 – 0x63</span>
+  <span class="hsize">100 B · &lt;1% <span class="hbar"><div style="width:2%"></div></span></span></div>
+<table class="rows">
+  <tr><td class="a">0x0</td><td class="f">magic</td><td><span class="str">"SQLite format 3\0"</span> <span style="color:var(--ok)">✓</span></td><td class="t">magic[16]</td><td class="s">16 B</td></tr>
+  <tr><td class="a">0x10</td><td class="f">page_size</td><td><span class="num">4096</span> <span class="dim">→ sizes every page below</span></td><td class="t">u16 be</td><td class="s">2 B</td></tr>
+  <tr><td class="a">0x1c</td><td class="f">page_count</td><td><span class="num">3</span> <span class="dim">= pages in this file</span></td><td class="t">u32 be</td><td class="s">4 B</td></tr>
+  <tr><td class="a">0x38</td><td class="f">text_encoding</td><td>utf8 <span class="dim">(1)</span></td><td class="t">TextEncoding</td><td class="s">4 B</td></tr>
+  <tr><td class="a">0x60</td><td class="f">sqlite_version</td><td><span class="num">3050004</span> <span class="dim">= 3.50.4</span></td><td class="t">u32 be</td><td class="s">4 B</td></tr>
+  <tr class="fold"><td class="a">0x12</td><td class="f dim">18 more fields, all default</td><td class="dim">write_version legacy · freelist empty · no vacuum · reserved zeros…</td><td class="t"></td><td class="s">70 B</td></tr>
+</table>
+
+<!-- ============ page 1 ============ -->
+<div class="h0"><span class="swatch" style="background:#e0b04c"></span><b>Page 1 · schema table</b><span class="range">0x64 – 0xfff</span>
+  <span class="hsize">3.9 KiB · 33% <span class="hbar"><div style="width:33%"></div></span></span></div>
+<div class="inline-note">Table b-tree leaf holding <b>sqlite_schema</b>: 2 objects. The page header sits first; cells are written from the end of the page backwards, so the middle is unused.</div>
+<table class="rows">
+  <tr class="fold"><td class="a">0x64</td><td class="f dim">page header + 2 cell pointers</td><td class="dim">table leaf · 2 cells · content starts at <span class="num">0xf60</span> <span class="arrow">↓</span></td><td class="t">TableLeaf</td><td class="s">12 B</td></tr>
+  <tr class="gap"><td class="a">0x70</td><td class="f">unused page space</td><td>3,824 B of zeros, room for more schema entries</td><td></td><td class="s">3.7 KiB</td></tr>
+</table>
+
+<div class="h1x"><b>Cell · CREATE INDEX notes_title</b><span class="range">0xf60 – 0xfa5</span><span class="hsize">70 B</span></div>
+<table class="rows">
+  <tr class="fold"><td class="a">0xf60</td><td class="f dim">cell machinery</td><td class="dim">payload 68 B · rowid 2 · record header: 5 columns</td><td class="t">Cell</td><td class="s">8 B</td></tr>
+  <tr><td class="a">0xf68</td><td class="f">type, name, table</td><td><span class="str">index "notes_title"</span> <span class="dim">on</span> <span class="str">"notes"</span> <span class="dim">· root page</span> <span class="num">3</span> <span class="arrow">→ <a href="#page3">Page 3</a></span></td><td class="t">SchemaRecord</td><td class="s">22 B</td></tr>
+  <tr><td class="a">0xf7e</td><td class="f">sql</td><td><span class="str">"CREATE INDEX notes_title on notes(title)"</span></td><td class="t">utf8[40]</td><td class="s">40 B</td></tr>
+</table>
+
+<div class="h1x"><b>Cell · CREATE TABLE notes</b><span class="range">0xfa6 – 0xfff</span><span class="hsize">90 B</span></div>
+<table class="rows">
+  <tr class="fold"><td class="a">0xfa6</td><td class="f dim">cell machinery</td><td class="dim">payload 88 B · rowid 1 · record header: 5 columns</td><td class="t">Cell</td><td class="s">9 B</td></tr>
+  <tr><td class="a">0xfaf</td><td class="f">type, name, table</td><td><span class="str">table "notes"</span> <span class="dim">· root page</span> <span class="num">2</span> <span class="arrow">→ <a href="#page2">Page 2</a></span></td><td class="t">SchemaRecord</td><td class="s">16 B</td></tr>
+  <tr><td class="a">0xfbf</td><td class="f">sql</td><td><span class="str">"CREATE TABLE notes(id integer primary key, title text, body text)"</span></td><td class="t">utf8[65]</td><td class="s">65 B</td></tr>
+</table>
+
+<!-- ============ page 2 ============ -->
+<div class="h0" id="page2"><span class="swatch" style="background:#6cb2ff"></span><b>Page 2 · table notes</b><span class="range">0x1000 – 0x1fff</span>
+  <span class="hsize">4.0 KiB · 33% <span class="hbar"><div style="width:33%"></div></span></span></div>
+<div class="inline-note">Table b-tree leaf, root of <b>notes</b> · 3 rows. Declared by the schema cell above (<span class="arrow">↑</span> root page 2).</div>
+<table class="rows">
+  <tr class="fold"><td class="a">0x1000</td><td class="f dim">page header + 3 cell pointers</td><td class="dim">table leaf · 3 cells · content starts at <span class="num">0x1eb0</span> <span class="arrow">↓</span></td><td class="t">TableLeaf</td><td class="s">14 B</td></tr>
+  <tr class="gap"><td class="a">0x100e</td><td class="f">unused page space</td><td>3,746 B of zeros</td><td></td><td class="s">3.7 KiB</td></tr>
+</table>
+
+<div class="h1x"><b>Rows of notes</b><span class="range">0x1eb0 – 0x1fff · stored last row first</span><span class="hsize">336 B</span></div>
+<div class="record">
+  <table>
+    <tr><th style="width:52px">rowid</th><th style="width:110px">title</th><th>body</th><th style="width:110px">stored at</th></tr>
+    <tr><td class="num">1</td><td class="str">"groceries"</td><td class="str">"milk, eggs"</td><td class="a" style="color:var(--faint)">0x1fea · 22 B</td></tr>
+    <tr><td class="num">2</td><td class="str">"meeting"</td><td class="str">"quarterly review notes: the roadmap slipped by…"</td><td class="a" style="color:var(--faint)">0x1ec4 · 294 B</td></tr>
+    <tr><td class="num">3</td><td class="str">"todo"</td><td class="str">"fix the gate"</td><td class="a" style="color:var(--faint)">0x1eb0 · 20 B</td></tr>
+  </table>
+  <div class="inline-note" style="margin:6px 0 0">Rendered from 3 cells; each cell is payload-size varint + rowid varint + record. <a href="#">Show the cells field by field</a></div>
+</div>
+
+<!-- ============ page 3 ============ -->
+<div class="h0" id="page3"><span class="swatch" style="background:#b48ce0"></span><b>Page 3 · index notes_title</b><span class="range">0x2000 – 0x2fff</span>
+  <span class="hsize">4.0 KiB · 33% <span class="hbar"><div style="width:33%"></div></span></span></div>
+<div class="inline-note">Index b-tree leaf, root of <b>notes_title</b> · 3 entries mapping title → rowid.</div>
+<table class="rows">
+  <tr class="fold"><td class="a">0x2000</td><td class="f dim">page header + 3 cell pointers</td><td class="dim">index leaf · 3 cells · content starts at <span class="num">0x2fe2</span> <span class="arrow">↓</span></td><td class="t">IndexLeaf</td><td class="s">14 B</td></tr>
+  <tr class="gap"><td class="a">0x200e</td><td class="f">unused page space</td><td>4,052 B of zeros</td><td></td><td class="s">4.0 KiB</td></tr>
+  <tr><td class="a">0x2fe2</td><td class="f">entries</td><td><span class="str">"groceries"</span><span class="arrow">→</span><span class="num">1</span> · <span class="str">"meeting"</span><span class="arrow">→</span><span class="num">2</span> · <span class="str">"todo"</span><span class="arrow">→</span><span class="num">3</span></td><td class="t">Cell[3]</td><td class="s">30 B</td></tr>
+</table>
+
+<div class="inline-note" style="margin-top:30px; border-top:1px solid var(--line); padding-top:12px; max-width:82ch">
+<b style="color:var(--fg)">What this mockup changes:</b> ① Listing and structure are one view; collapsing every heading gives today's overview, expanding gives today's listing. ② Unused and zero space gets a striped row with its size, instead of vanishing. ③ Machinery (lengths, cell pointers, serial-type headers) folds into one dim row per owner; the payload keeps its own name and value. ④ Cross-references (root page 2) are links, drawn with the arrow's direction. ⑤ Where the format stores a table, the view can show a table.
+</div>
+
+</body></html>
