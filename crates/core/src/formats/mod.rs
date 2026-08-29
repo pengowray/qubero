@@ -8,6 +8,7 @@ mod assimp;
 mod appledouble;
 mod au;
 mod bmp;
+mod bdb;
 mod c16;
 mod cab;
 mod braw;
@@ -33,6 +34,7 @@ mod gguf;
 mod git;
 mod gif;
 mod grubenv;
+mod gdbm;
 mod gzip;
 mod hackrffw;
 mod hdf5;
@@ -116,6 +118,7 @@ pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
 pub use gif::gif;
 pub use grubenv::grubenv;
+pub use gdbm::gdbm;
 pub use gzip::gzip;
 pub use hackrffw::hackrffw;
 pub use hdf5::hdf5;
@@ -140,6 +143,7 @@ pub use pcx::pcx;
 pub use pdf::pdf;
 pub use pi1::pi1;
 pub use psd::psd;
+pub use bdb::bdb;
 pub use c16::c16;
 pub use pnm::pnm;
 pub use qoi::qoi;
@@ -187,7 +191,7 @@ pub fn builtin_names() -> &'static [&'static str] {
     &[
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
-        "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "c16", "wad",
+        "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "c16", "bdb", "gdbm", "wad",
         "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "xar", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
@@ -255,6 +259,8 @@ pub fn builtin(name: &str) -> Option<Template> {
         "ilbm" => Some(ilbm()),
         "pnm" => Some(pnm()),
         "c16" => Some(c16()),
+        "bdb" => Some(bdb()),
+        "gdbm" => Some(gdbm()),
         "wad" => Some(wad()),
         "pak" => Some(pak()),
         "vpk" => Some(vpk()),
@@ -416,6 +422,10 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
         Some("safetensors")
     } else if is_hackrf_firmware(head) {
         Some("hackrffw")
+    } else if gdbm::is_gdbm(head) {
+        Some("gdbm")
+    } else if bdb::is_bdb(head) {
+        Some("bdb")
     } else if let Some(raw) = camera_raw_format(head) {
         Some(raw)
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
@@ -1856,5 +1866,35 @@ mod tests {
         // An IFF file holding something with no template here is left alone
         // rather than read as one of the two that do.
         assert_eq!(sniffed(b"FORM\0\0\0\x108SVX"), None);
+    }
+
+    /// Three unrelated formats have made themselves at home in `.db`, and the
+    /// extension says nothing about which. Each announces itself in a place of
+    /// its own: SQLite at the front, GDBM at the front, Berkeley DB twelve
+    /// bytes in, which is why one file cannot look like two of them.
+    #[test]
+    fn the_three_kinds_of_db_file_are_told_apart_by_their_bytes() {
+        let mut sqlite = b"SQLite format 3\0".to_vec();
+        sqlite.resize(32, 0);
+        assert_eq!(sniffed(&sqlite), Some("sqlite"));
+
+        let mut gdbm = 0x13579acdu32.to_le_bytes().to_vec();
+        gdbm.resize(64, 0);
+        assert_eq!(sniffed(&gdbm), Some("gdbm"));
+        // The same file written on a machine of the other byte order.
+        let mut swapped = 0xcd9a5713u32.to_le_bytes().to_vec();
+        swapped.resize(64, 0);
+        assert_eq!(sniffed(&swapped), Some("gdbm"));
+
+        // Berkeley DB keeps its magic behind a log sequence number and a page
+        // number, so the first twelve bytes say nothing.
+        let mut bdb = vec![0u8; 12];
+        bdb.extend_from_slice(&0x00053162u32.to_le_bytes());
+        bdb.resize(64, 0);
+        assert_eq!(sniffed(&bdb), Some("bdb"));
+        let mut big = vec![0u8; 12];
+        big.extend_from_slice(&0x00061561u32.to_be_bytes());
+        big.resize(64, 0);
+        assert_eq!(sniffed(&big), Some("bdb"));
     }
 }

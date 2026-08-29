@@ -13,7 +13,7 @@
 //! A file whose length is not a whole number of samples leaves its last bytes
 //! outside the run, where a gap is the honest reading.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
+use crate::template::{Endian::*, Template, Ty as T, Until};
 
 pub fn c16() -> Template {
     let pair = T::inline_structure(

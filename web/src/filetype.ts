@@ -19,6 +19,7 @@ const SIGNATURE_ONLY = "signature only";
 const TEMPLATE_LABEL: Record<string, string> = {
   ar: "Unix archive",
   aseprite: "Aseprite",
+  bdb: "Berkeley DB",
   braw: "Blackmagic RAW",
   arw: "Sony ARW",
   bardstale: "Bard's Tale I (DOS save)",
@@ -31,6 +32,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   deb: "Debian package",
   dng: "Adobe DNG",
   dtb: "Device tree blob",
+  gdbm: "GNU dbm",
   grubenv: "GRUB environment block",
   hackrffw: "HackRF firmware",
   it: "Impulse Tracker IT",
