@@ -32,7 +32,7 @@
   .sub { color: var(--dim); font-family: var(--sans); font-size: 12.5px; margin-bottom: 12px; max-width: 82ch; }
 
   /* sticky breadcrumb */
-  .crumbbar { position: sticky; top: 0; z-index: 6; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(3px); border-bottom: 1px solid var(--line); padding: 6px 0; margin-bottom: 14px; display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+  .crumbbar { position: sticky; top: 0; z-index: 6; background: var(--bg); border-bottom: 1px solid var(--line); padding: 6px 0; margin-bottom: 14px; display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
   .crumbbar .path b { color: var(--fg); font-weight: 600; }
   .crumbbar .path span { color: var(--dim); }
   .crumbbar .at { margin-left: auto; color: var(--faint); font-size: 12px; }
@@ -47,8 +47,11 @@
   .h1x b { font: 600 15px var(--sans); color: var(--name); }
   .range { color: var(--faint); font-size: 12px; }
   .hsize { margin-left: auto; color: var(--dim); font-size: 12px; display: flex; align-items: center; gap: 8px; }
-  .hbar { width: 90px; height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
-  .hbar div { height: 100%; background: var(--accent); }
+  /* the repeated map: the same whole-file strip in every heading, only the lit part changes */
+  .mini { display: inline-flex; width: 96px; height: 9px; border-radius: 2px; overflow: hidden; background: var(--panel2); gap: 1px; }
+  .mini i { background: #262b35; }
+  .mini i.lit { background: var(--litc, var(--accent)); }
+  .mini .m0 { width: 2px; } .mini .m1, .mini .m2, .mini .m3 { flex: 1; }
   .swatch { width: 9px; height: 9px; border-radius: 2px; align-self: center; }
   .hexbtn { font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px; cursor: pointer; font-family: var(--sans); }
   .hexbtn.on { color: var(--fg); border-color: var(--accent); background: var(--panel2); }
@@ -69,17 +72,26 @@
   .arrow { color: var(--faint); }
   .inline-note { color: var(--dim); font-size: 12px; font-family: var(--sans); margin: 4px 0; }
 
-  /* inline hex expansion (the B mechanic) */
-  .hexpand { background: #101318; border: 1px solid var(--line); border-radius: 6px; margin: 6px 0 12px; padding: 10px 14px; }
-  .hexpand .cap { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin-bottom: 6px; display: flex; gap: 10px; align-items: baseline; }
+  /* inline hex expansion (the B mechanic).
+     One palette: a field's bytes, its bracket, and its chip share exactly one hue.
+     The hex digits themselves are dimmed: their job is byte count and position. */
+  .hexpand { background: #101318; border: 1px solid var(--line); border-radius: 6px; margin: 6px 0 12px; padding: 10px 14px; overflow-x: auto; }
+  .hexpand .cap { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin-bottom: 8px; display: flex; gap: 10px; align-items: baseline; }
   .hexpand .cap .close { margin-left: auto; color: var(--faint); cursor: pointer; text-transform: none; letter-spacing: 0; }
-  .hxrow { display: grid; grid-template-columns: 78px 1fr 150px; gap: 16px; line-height: 22px; }
-  .hxrow .a { color: var(--faint); text-align: right; }
-  .hxrow .b { white-space: nowrap; letter-spacing: .02em; }
-  .hxrow .c { color: var(--dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; }
-  .hxrow .b span { padding: 1px 2px; border-radius: 2px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
-  .chip { display: inline-flex; gap: 6px; align-items: baseline; background: var(--panel2); border-radius: 4px; padding: 1px 7px; font-size: 12px; border-left: 3px solid var(--faint); }
+  .hxgrid { display: flex; gap: 16px; align-items: flex-start; }
+  .hxgrid .a { color: var(--faint); text-align: right; width: 78px; flex: none; line-height: 20px; }
+  .hxfields { display: flex; }
+  .fld { display: flex; flex-direction: column; padding: 0 4px; }
+  .fld .by { white-space: nowrap; letter-spacing: .02em; color: #b7bdc9; line-height: 20px; }
+  .fld .lb { width: 0; min-width: 100%; overflow: hidden; white-space: nowrap; font: 11px var(--sans); color: var(--dim); border-top: 2px solid transparent; padding-top: 2px; margin-top: 1px; }
+  /* five field hues; a field's bytes, bracket and chip share one hue */
+  .c1 { --h: #5b8dd6; } .c2 { --h: #62c48b; } .c3 { --h: #c9a45c; } .c4 { --h: #b48ce0; } .c5 { --h: #d98a9e; }
+  .fld.c1 .by, .fld.c2 .by, .fld.c3 .by, .fld.c4 .by, .fld.c5 .by { background: color-mix(in srgb, var(--h) 13%, transparent); border-radius: 2px; }
+  .fld.c1 .lb, .fld.c2 .lb, .fld.c3 .lb, .fld.c4 .lb, .fld.c5 .lb { border-top-color: var(--h); color: color-mix(in srgb, var(--h) 65%, var(--fg)); }
+  .fld.pad .by { color: var(--faint); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+  .chip { display: inline-flex; gap: 6px; align-items: baseline; border-radius: 4px; padding: 1px 8px; font-size: 12px; background: var(--panel2); }
+  .chip.c1, .chip.c2, .chip.c3, .chip.c4, .chip.c5 { background: color-mix(in srgb, var(--h) 13%, var(--panel2)); border-left: 3px solid var(--h); }
   .chip .k { color: var(--dim); }
   .chip .v { color: var(--fg); }
   .chip .v.num { color: var(--num); } .chip .v.str { color: var(--str); }
@@ -131,7 +143,7 @@
 <!-- ============ header ============ -->
 <div class="h0" id="hdr"><span class="swatch" style="background:#62c48b"></span><b>Header</b><span class="range">0x0 – 0x63</span>
   <span class="hexbtn">bytes</span>
-  <span class="hsize">100 B · &lt;1% <span class="hbar"><div style="width:2%"></div></span></span></div>
+  <span class="hsize">100 B · &lt;1% <span class="mini" title="0x0 - 0x63"><i class="m0 lit" style="--litc:#62c48b"></i><i class="m1"></i><i class="m2"></i><i class="m3"></i></span></span></div>
 <table class="rows">
   <tr><th style="width:70px">Offset</th><th style="width:210px">Field</th><th>Value</th><th style="width:105px">Type</th><th style="width:66px">Size</th></tr>
   <tr><td class="a">0x0</td><td class="f">magic</td><td><span class="str">"SQLite format 3\0"</span> <span style="color:var(--ok)">✓</span></td><td class="t">magic[16]</td><td class="s">16 B</td></tr>
@@ -143,28 +155,35 @@
 <!-- ============ page 1, condensed this round ============ -->
 <div class="h0" id="page1"><span class="swatch" style="background:#e0b04c"></span><b>Page 1 · schema table</b><span class="range">0x64 – 0xfff</span>
   <span class="hexbtn">bytes</span>
-  <span class="hsize">3.9 KiB · 33% <span class="hbar"><div style="width:33%"></div></span></span></div>
+  <span class="hsize">3.9 KiB · 33% <span class="mini" title="0x64 - 0xfff"><i class="m0"></i><i class="m1 lit" style="--litc:#e0b04c"></i><i class="m2"></i><i class="m3"></i></span></span></div>
 <div class="inline-note">2 schema objects, unchanged from <a href="c-listing.html">mockup C</a>: <b style="color:var(--fg)">CREATE TABLE notes</b> → <a href="#page2">Page 2</a> · <b style="color:var(--fg)">CREATE INDEX notes_title</b> → <a href="#page3">Page 3</a> · 3,824 B unused (zeros).</div>
 
 <!-- ============ page 2 ============ -->
 <div class="h0" id="page2"><span class="swatch" style="background:#6cb2ff"></span><b>Page 2 · table notes</b><span class="range">0x1000 – 0x1fff</span>
   <span class="hexbtn on">bytes</span>
-  <span class="hsize">4.0 KiB · 33% <span class="hbar"><div style="width:33%"></div></span></span></div>
+  <span class="hsize">4.0 KiB · 33% <span class="mini" title="0x1000 - 0x1fff"><i class="m0"></i><i class="m1"></i><i class="m2 lit" style="--litc:#6cb2ff"></i><i class="m3"></i></span></span></div>
 <div class="inline-note">Table b-tree leaf, root of <b style="color:var(--fg)">notes</b> · 3 rows. Heading's byte strip is open below: the 8-byte page header, then the cell pointer array.</div>
 
 <div class="hexpand">
-  <div class="cap">Page 2 header · 0x1000 – 0x100d <span class="close">hide bytes ✕</span></div>
-  <div class="hxrow">
+  <div class="cap">Page 2 header · 0x1000 – 0x100d <span class="mini" title="start of page 2"><i class="m0"></i><i class="m1"></i><i class="m2" style="background:linear-gradient(to right,#6cb2ff 8%,#262b35 8%)"></i><i class="m3"></i></span> <span class="close">hide bytes ✕</span></div>
+  <div class="hxgrid">
     <span class="a">00001000</span>
-    <span class="b"><span style="background:#2e3b4d">0d</span> <span style="background:#31445c">00 00</span> <span style="background:#33455e">00 03</span> <span style="background:#3b3350">0e b0</span> <span style="background:#31445c">00</span> <span style="background:#4a5a2e">0f ea</span> <span style="background:#4a5a2e">0e c4</span> <span style="background:#4a5a2e">0e b0</span> <span style="background:#20242d; color:var(--faint)">00 00</span></span>
-    <span class="c">page header + pointers</span>
+    <div class="hxfields">
+      <div class="fld c1"><span class="by">0d</span><span class="lb">type</span></div>
+      <div class="fld c2"><span class="by">00 00</span><span class="lb">freeblk</span></div>
+      <div class="fld c3"><span class="by">00 03</span><span class="lb">cells</span></div>
+      <div class="fld c4"><span class="by">0e b0</span><span class="lb">content</span></div>
+      <div class="fld pad"><span class="by">00</span><span class="lb">frag</span></div>
+      <div class="fld c5"><span class="by">0f ea 0e c4 0e b0</span><span class="lb">3 cell pointers</span></div>
+      <div class="fld pad"><span class="by">00 00</span><span class="lb">unused…</span></div>
+    </div>
   </div>
   <div class="chips">
-    <span class="chip" style="border-color:#6cb2ff"><span class="k">page_type</span><span class="v">table leaf (0x0d)</span></span>
-    <span class="chip"><span class="k">first_freeblock</span><span class="v num">0</span><span class="k">none</span></span>
-    <span class="chip"><span class="k">cell_count</span><span class="v num">3</span></span>
-    <span class="chip" style="border-color:#b0c46a"><span class="k">cell_pointers</span><span class="v num">0xfea</span><span class="arrow">→ row 1</span><span class="v num">·&nbsp;0xec4</span><span class="arrow">→ row 2</span><span class="v num">·&nbsp;0xeb0</span><span class="arrow">→ row 3</span></span>
-    <span class="chip"><span class="k">unused begins</span><span class="v num">0x100e</span></span>
+    <span class="chip c1"><span class="k">page_type</span><span class="v">table leaf (0x0d)</span></span>
+    <span class="chip c2"><span class="k">first_freeblock</span><span class="v num">0</span><span class="k">none</span></span>
+    <span class="chip c3"><span class="k">cell_count</span><span class="v num">3</span></span>
+    <span class="chip c4"><span class="k">content starts</span><span class="v num">0xeb0</span><span class="arrow">↓</span></span>
+    <span class="chip c5"><span class="k">cell_pointers</span><span class="v num">0xfea</span><span class="arrow">→ row 1</span><span class="v num">·&nbsp;0xec4</span><span class="arrow">→ row 2</span><span class="v num">·&nbsp;0xeb0</span><span class="arrow">→ row 3</span></span>
   </div>
 </div>
 
@@ -172,7 +191,7 @@
   <tr class="gap"><td class="a">0x100e</td><td class="f">unused page space</td><td>3,746 B, verified zeros · new rows grow into this from both ends</td><td></td><td class="s">3.7 KiB</td></tr>
 </table>
 
-<div class="h1x" id="rows2"><b>Rows of notes</b><span class="range">0x1eb0 – 0x1fff · stored last row first</span><span class="hsize">336 B</span></div>
+<div class="h1x" id="rows2"><b>Rows of notes</b><span class="range">0x1eb0 – 0x1fff · stored last row first</span><span class="hsize">336 B <span class="mini" title="tail of page 2"><i class="m0"></i><i class="m1"></i><i class="m2" style="background:linear-gradient(to right,#262b35 90%,#6cb2ff 90%)"></i><i class="m3"></i></span></span></div>
 <div class="record">
   <table>
     <tr><th style="width:52px">rowid</th><th style="width:100px">title</th><th>body</th><th style="width:110px">stored at</th></tr>
@@ -184,25 +203,30 @@
 </div>
 
 <div class="hexpand">
-  <div class="cap">Cell for row 3 · 0x1eb0 – 0x1ec3 · 20 bytes <span class="close">hide bytes ✕</span></div>
-  <div class="hxrow">
+  <div class="cap">Cell for row 3 · 0x1eb0 – 0x1ec3 · 20 bytes <span class="mini" title="near the end of page 2"><i class="m0"></i><i class="m1"></i><i class="m2" style="background:linear-gradient(to right,#262b35 92%,#6cb2ff 92%,#6cb2ff 97%,#262b35 97%)"></i><i class="m3"></i></span> <span class="close">hide bytes ✕</span></div>
+  <div class="hxgrid">
     <span class="a">00001eb0</span>
-    <span class="b"><span style="background:#2c4a6e">12</span> <span style="background:#3b3350">03</span> <span style="background:#31445c">04</span> <span style="background:#414141">00 17 1f</span> <span style="background:#4a3b22">74 68 69 72 64</span> <span style="background:#4a2f3b">c3 bc 6e c3 af 63 6f 64 65</span></span>
-    <span class="c">whole cell, one row</span>
+    <div class="hxfields">
+      <div class="fld c1"><span class="by">12</span><span class="lb">size</span></div>
+      <div class="fld c2"><span class="by">03</span><span class="lb">id</span></div>
+      <div class="fld c3"><span class="by">04 00 17 1f</span><span class="lb">header</span></div>
+      <div class="fld c4"><span class="by">74 68 69 72 64</span><span class="lb">title</span></div>
+      <div class="fld c5"><span class="by">c3 bc 6e c3 af 63 6f 64 65</span><span class="lb">body</span></div>
+    </div>
   </div>
   <div class="chips">
-    <span class="chip" style="border-color:#6cb2ff"><span class="k">payload_size</span><span class="v num">18</span><span class="bits"><i>0</i><i class="pay">0010010</i></span><span class="k">varint, 1 byte: high bit 0 ends it</span></span>
-    <span class="chip"><span class="k">rowid</span><span class="v num">3</span></span>
-    <span class="chip"><span class="k">record header</span><span class="v">4 B · columns: null (id from rowid) · text 5 B · text 9 B</span></span>
-    <span class="chip" style="border-color:#e0a35c"><span class="k">title</span><span class="v str">"third"</span></span>
-    <span class="chip" style="border-color:#c47a92"><span class="k">body</span><span class="v str">"ünïcode"</span><span class="k">9 B utf8, 7 chars</span></span>
+    <span class="chip c1"><span class="k">payload_size</span><span class="v num">18</span><span class="bits"><i>0</i><i class="pay">0010010</i></span><span class="k">varint, 1 byte: high bit 0 ends it</span></span>
+    <span class="chip c2"><span class="k">rowid</span><span class="v num">3</span></span>
+    <span class="chip c3"><span class="k">record header</span><span class="v">4 B · columns: null (id from rowid) · text 5 B · text 9 B</span></span>
+    <span class="chip c4"><span class="k">title</span><span class="v str">"third"</span></span>
+    <span class="chip c5"><span class="k">body</span><span class="v str">"ünïcode"</span><span class="k">9 B utf8, 7 chars</span></span>
   </div>
 </div>
 
 <!-- ============ page 3 ============ -->
 <div class="h0" id="page3"><span class="swatch" style="background:#b48ce0"></span><b>Page 3 · index notes_title</b><span class="range">0x2000 – 0x2fff</span>
   <span class="hexbtn">bytes</span>
-  <span class="hsize">4.0 KiB · 33% <span class="hbar"><div style="width:33%"></div></span></span></div>
+  <span class="hsize">4.0 KiB · 33% <span class="mini" title="0x2000 - 0x2fff"><i class="m0"></i><i class="m1"></i><i class="m2"></i><i class="m3 lit" style="--litc:#b48ce0"></i></span></span></div>
 <div class="inline-note">Index b-tree leaf, root of <b style="color:var(--fg)">notes_title</b> · 3 entries mapping title → rowid.</div>
 <table class="rows">
   <tr><th style="width:70px">Offset</th><th style="width:210px">Field</th><th>Value</th><th style="width:105px">Type</th><th style="width:66px">Size</th></tr>
@@ -212,7 +236,7 @@
 </table>
 
 <div class="footer">
-<b>New this round, mostly imported from mockup B:</b> ① Inline hex expansion: every heading and row gets a "bytes" button; the strip shows the real bytes field-shaded, with B's chips naming each run, at two granularities (a page header, a single cell). ② Chip vocabulary handles sub-byte detail: the varint chip shows its stop bit and payload bits. ③ Sticky breadcrumb keeps the current path while scrolled. ④ Contents rail with a proportional file map, borrowed from mockup A. ⑤ Selection is one state shared by table row, hex strip, and map. ⑥ Gap rows now state their verification ("verified zeros"), not just their size. Not mocked, deliberately: search/filter, and a side-by-side logical-tree pane — separate design questions.
+<b>New this round, mostly imported from mockup B:</b> (1) Inline hex expansion: every heading and row gets a "bytes" button; the strip shows the real bytes with a label bracket directly under each field's span, so the annotation is attached to its position and width. The hex digits are dimmed on purpose: in this view their job is to show how many bytes sit where. (2) One hue per field, used in exactly three places: its bytes, its bracket, and its chip. Two palettes total, one per scale: section colours (rail map, headings, heading minis) and the five field hues inside a strip. (3) The repeated map: the same whole-file strip appears in every heading and every byte-strip caption, with only the lit part changing, so physical location reads at a glance without a shared ruler. (4) Sticky breadcrumb, contents rail, shared selection, and gap rows with a verification verdict, as before. Not mocked, deliberately: search/filter, and a side-by-side logical-tree pane.
 </div>
 </main>
 </div>
