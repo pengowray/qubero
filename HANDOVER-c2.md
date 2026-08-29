@@ -1,9 +1,10 @@
 # Handover: implement the unified listing view (mockup C v2)
 
-Written 2026-08-29 for the implementing agent. The spec is `mockups/c2-listing.html`
-(open it in a browser, or via the dev server at `/mockups/c2-listing.html`; copies are
-served from `web/public/mockups/`). This document says what to build, where the pieces
-go, and which parts of the mockup are binding vs. illustrative.
+Written 2026-08-29 for the implementing agent. The spec is `c2-listing.html`, which
+lives with the other mockups outside this repository, in
+`../qubero2-extras/mockups/`. Open it in a browser directly; the dev server no longer
+serves a copy. This document says what to build, where the pieces go, and which parts
+of the mockup are binding vs. illustrative.
 
 ## Goal
 
@@ -170,7 +171,7 @@ falls out of the flat item list. Do not build this as one giant DOM.
   flattening of the same tree, cells in pointer order instead of physical order).
 - Whether the record-table rendering is declared per format in the template IR or in a
   TS registry keyed by template name. `flatten` emits a `record` item when the caller's
-  `isRecord` says so, and nothing supplies one yet. (Mockup E in `web/public/mockups/`
+  `isRecord` says so, and nothing supplies one yet. (Mockup E in `../qubero2-extras/mockups/`
   sketches the wider address-space question; it is context, not part of this task.)
 - Rule 3's *second* fold kind, "23 more fields, all default", is deferred. It is not
   the machinery fold and does not use `consumed_by`: it needs to know what a field's

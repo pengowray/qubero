@@ -54,9 +54,10 @@ function plural(noun: string): string {
 }
 
 /**
- * The report listing's own words. The mockup (`mockups/c2-listing.html`) has
- * the reviewed wording for the SQLite case; these are the general forms of
- * the same rows.
+ * The report listing's own words. The mockup that settled them,
+ * `c2-listing.html`, lives outside this repository in
+ * `../qubero2-extras/mockups/`; it has the reviewed wording for the SQLite
+ * case, and these are the general forms of the same rows.
  */
 export const REPORT = {
   /** A part of the file made of a run of a structure's plain fields, which
