@@ -1,0 +1,161 @@
+# Handover: implement the unified listing view (mockup C v2)
+
+Written 2026-08-29 for the implementing agent. The spec is `mockups/c2-listing.html`
+(open it in a browser, or via the dev server at `/mockups/c2-listing.html`; copies are
+served from `web/public/mockups/`). This document says what to build, where the pieces
+go, and which parts of the mockup are binding vs. illustrative.
+
+## Goal
+
+Merge today's three overlapping structure views — `web/src/listingview.ts`,
+`web/src/logicaloutline.ts`, and the bottom Structure panel driven by
+`web/src/typetable.ts` — into one scrollable view that is both the overview and the
+listing:
+
+- Collapsed to headings, it reads like the current structure/overview panel.
+- Expanded, it is the listing: one row per field, in physical file order.
+- Any heading or row can unfold its bytes in place as a field-shaded hex strip.
+
+The old views should end up as thin wrappers or be deleted; do not leave three parallel
+implementations alive.
+
+## The binding design rules
+
+These were the point of the mockup rounds; keep them even where convenient shortcuts
+exist:
+
+1. **Physical order, every byte accounted for.** Unused/zero/reserved runs are rows
+   like any field, styled as gaps (striped), with a size and a verification verdict
+   ("3,746 B, verified zeros"). Nothing silently vanishes. Unknown/undefined regions get
+   the same treatment as known ones (same columns, dim styling).
+
+2. **Headings scale with structural depth.** Top-level format divisions (pages,
+   segments, sections) are h0 headings with: color swatch, title, address range,
+   "bytes" toggle, size + share, and a mini file map. Sub-divisions are h1. Depth
+   beyond that is rows, not more indentation ladders.
+
+3. **Machinery folds behind its owner.** Length prefixes, cell-pointer arrays,
+   serial-type headers, "23 more fields, all default" — one dim collapsible row per
+   owner (`▸`), never interleaved with the payload rows at full loudness. The payload
+   keeps its own name and value at full strength.
+
+4. **The repeated map.** One small fixed-geometry strip of the whole file (the same
+   segments every time; a minimum lit width so tiny ranges stay visible) appears in
+   every heading and every open byte strip, with only the lit part changing. It shows
+   the *physical* location of that item's bytes. Sub-ranges light a sliver inside their
+   parent segment. This replaces per-row percentage bars.
+
+5. **Two palettes, one per scale, never mixed roles.**
+   - *Section palette*: colors the rail map, heading swatches, and lit mini-map
+     segments. Assigned per top-level division.
+   - *Field palette*: five hues (`#5b8dd6 #62c48b #c9a45c #b48ce0 #d98a9e` in the
+     mockup) cycled per field *within one open byte strip*. A field's hue appears in
+     exactly three places: its byte tint, its bracket label, its chip. Nowhere else.
+   - The existing `web/src/fieldstyle.ts` may already own field coloring; reconcile
+     rather than adding a third scheme.
+
+6. **The byte strip.** Column-per-field layout: dimmed hex digits on top, a colored
+   bracket label directly beneath, clipped to exactly the field's byte width (CSS in
+   the mockup: label `width: 0; min-width: 100%; overflow: hidden`). The digits are
+   deliberately dim — in this view their job is byte count and position; values live in
+   the chips below, same hues, same order. Sub-byte detail uses the bits chip pattern
+   (see the varint chip: stop bit + payload bits).
+
+7. **Records render as records.** Where the format stores a table (SQLite rows, GGUF
+   metadata), show an actual table with the format's own column names, plus a
+   "stored at" column and a link back to the field-by-field view. Cross-references
+   (root page N, cell pointers) are links with a direction arrow.
+
+8. **Shared selection.** Selecting a row highlights it in the record table, the open
+   byte strip, and the mini map. Same state object as the hex view cursor
+   (`Evaluator::locate` already maps bit → field path; the listing needs path → DOM
+   row, which the current listing partially has).
+
+## What is illustrative, not binding
+
+- Exact pixel values, the 210px rail width, specific chip wording layout.
+- The mockup's static "open" states — really everything toggles.
+- The mode buttons ("Logical tree", "Expand all", "Headings only") are real features
+  but "Logical tree" can land later; ship physical order first.
+- Search/filter and a side-by-side logical-tree pane: explicitly out of scope.
+
+## Where the data comes from
+
+- Tree: `doc.templateNode(path)` / `doc.templateChildren(path, from, to)` in
+  `web/src/doc.ts` (wasm surface over `crates/core/src/eval.rs`). Note
+  `templateChildren` returns `type` and `value`; `templateNode` does not carry
+  `type_name` — extend the wasm surface if the view needs it (bindings only in
+  `crates/wasm`; logic in core).
+- What counts as a "major section" / where headings go: this is a *view* decision, not
+  the IR's. Heuristic that matched the mockups: children of the root struct that are
+  containers (pages, segments, chunks) become h0; their named sub-composites h1; leaf
+  runs become rows. Expect per-format tuning; put the heuristic in one place.
+- Gap verification ("verified zeros") needs a byte-scan over the run — the overview
+  panel (`web/src/overviewpanel.ts`) already computes zero/text/data classes per cell;
+  reuse that machinery rather than rescanning.
+- Machinery-vs-payload classification (rule 3) has no IR flag today. Options: a
+  per-template hint, or a heuristic (fields consumed only by expressions of siblings =
+  machinery). Start with the heuristic; a `hint` on the IR node is acceptable if core
+  changes are needed — discuss in the PR/commit message.
+
+## Virtual scrolling constraint
+
+The current listing renders a window, not the whole tree, and large files (GGUF: 389
+tensors, 250k-string token arrays; h5ad) must stay usable. The report layout must
+therefore be virtualized like `hexview.ts` is: headings and rows are flat render items
+with computed heights. Sticky breadcrumb = the deepest heading scrolled past, which
+falls out of the flat item list. Do not build this as one giant DOM.
+
+## Suggested order of work
+
+1. Flatten the template tree into render items (heading/row/gap/fold/record) with the
+   section heuristic. Unit-test the flattener in TS against notes.sqlite and a GGUF
+   (structure only, no DOM).
+2. Render items virtualized; headings, rows, gaps, folds. Kill nothing yet — mount it
+   as a new mode next to the existing listing.
+3. Mini map component (one implementation, reused by rail, headings, strip captions).
+4. Byte strip on demand per item (bytes via existing chunk reads; colors per rule 5–6).
+5. Record rendering for formats that declare it (SQLite cells first).
+6. Shared selection with the hex view cursor.
+7. Swap it in as the Listing mode; delete/absorb `listingview.ts`,
+   `logicaloutline.ts`, and the Structure panel's tree duplication.
+
+## Test recipe
+
+- Dev server: `.claude/launch.json` name `web` (vite, port 5173). No file-open URL
+  param: fetch a sample from `web/public/samples/`, wrap in `File`, dispatch a
+  synthetic `drop` on `document`. `window.__qubero` exposes `{doc, view, inspector,
+  table, listing, overview}` for headless assertions.
+- Files to exercise, in order: `notes.sqlite` (the mockup's file — compare against the
+  mockup side by side), `tiny.png`, `D:/koboldcpp/bge-m3-q8_0.gguf` (scale + deep
+  length-prefixed metadata; needs the vite `fs.allow` trick in
+  `web/vite.config.ts`, revert after), an `.h5ad` from
+  `D:/datasets/zebrahub/figshare-2026-08-26/20510367` (depth), and
+  `C:/Windows/Web/Wallpaper/Theme1/img1.jpg` (huge opaque run).
+- Native-side checks without the browser:
+  `cargo run --release -p qubero-core --example dump_tree -- <file> [template] [depth]`.
+- Core changes need `npm run wasm` (~35 s) before they reach the app.
+- The in-app browser pane paints and screenshots fine at the top of a page, but
+  screenshots of *scrolled* positions come back garbled (pane capture bug). Verify
+  scroll behavior via `window.scrollTo` + DOM queries, or trust a real browser.
+
+## Repo conventions that will bite
+
+- **No `cargo fmt`** — the repo is hand-formatted wide; formatting churns 44 files.
+- Python scripted edits on Windows flip line endings: open with `newline=''` or check
+  `git diff --stat` before committing.
+- Commit to `main` as you go, plain subjects, no co-author byline.
+- **User-facing strings: reuse the mockup's wording verbatim.** The mockup copy has
+  been through review. If a state needs a string the mockup doesn't have, do not
+  invent one — collect the needed strings and ask, or hand the drafting to a
+  Fable-class model, then list all strings at the end of the turn (see the user's
+  global CLAUDE.md rules).
+
+## Known open questions (fine to defer, don't silently decide)
+
+- Where "Logical tree" mode gets its alternate ordering from (likely a second
+  flattening of the same tree, cells in pointer order instead of physical order).
+- The machinery classification hint: heuristic vs. IR flag.
+- Whether the record-table rendering is declared per format in the template IR or in a
+  TS registry keyed by template name. (Mockup E in `web/public/mockups/` sketches the
+  wider address-space question; it is context, not part of this task.)
