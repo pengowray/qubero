@@ -183,6 +183,26 @@ test("bytes no field covers are an item of their own", () => {
   assert.equal(inPage2?.sizeBits, (7856 - 4110) * 8);
 });
 
+test("free space at a structure's own edges is accounted for", () => {
+  // What a b-tree page does: pointers at the front, cells at the back, and
+  // the free space they grow into between them belongs to neither.
+  const spaced: Spec = {
+    name: "file",
+    bytes: 100,
+    kids: [
+      { name: "page", bytes: 100, kids: [{ name: "cell", bytes: 10, at: 40 }] },
+    ],
+  };
+  const gaps = run(spaced, { open: new Set(["0"]), shown: new Map() }).items.filter((i) => i.kind === "gap");
+  assert.deepEqual(
+    gaps.map((g) => [g.offsetBits / 8, g.sizeBits / 8]),
+    [
+      [0, 40],
+      [50, 50],
+    ],
+  );
+});
+
 test("the rows of a page are a part of it, not another indent", () => {
   const { items } = run(SQLITE);
   const subs = items.filter((i) => i.kind === "heading" && i.level === 1);
@@ -246,6 +266,25 @@ test("a list too long to be parts of the file is one part", () => {
   assert.deepEqual(
     headings.map((h) => (h.kind === "heading" ? (h.node?.name ?? "(run)") : "")),
     ["(run)", "tensors", "metadata"],
+  );
+});
+
+test("a short list of small things is one part, not one part each", () => {
+  // A GGUF's metadata: a handful of entries, all structures, and one per cent
+  // of the file. Three SQLite pages are two thirds of theirs and do divide it.
+  const meta: Spec = {
+    name: "file",
+    bytes: 100_000,
+    kids: [
+      { name: "magic", bytes: 4 },
+      { name: "metadata", bytes: 1_000, kids: [{ name: "kv0", bytes: 300, kids: [{ name: "k", bytes: 300 }] }, { name: "kv1", bytes: 700, kids: [{ name: "k", bytes: 700 }] }] },
+      { name: "weights", bytes: 98_996, kids: [{ name: "w", bytes: 98_996 }] },
+    ],
+  };
+  const headings = run(meta).items.filter((i) => i.kind === "heading" && i.level === 0);
+  assert.deepEqual(
+    headings.map((h) => (h.kind === "heading" ? (h.node?.name ?? "(run)") : "")),
+    ["(run)", "metadata", "weights"],
   );
 });
 

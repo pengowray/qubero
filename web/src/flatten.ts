@@ -17,10 +17,16 @@ import type { TemplateNode, TemplateReply } from "./doc.js";
 
 /** Children of one list drawn before the reader asks for more. */
 export const PAGE = 200;
-/** A list of this many or fewer composites has its elements as sections of
- *  their own: three SQLite pages are three parts of the file, and a hundred
+/** A list of this many or fewer composites can have its elements as sections
+ *  of their own: three SQLite pages are three parts of the file, and a hundred
  *  thousand tensors are one. */
 export const SECTION_LIST_MAX = 64;
+/** How much of the file a list has to cover before its elements count as
+ *  divisions of it. Three SQLite pages are two thirds of the database and are
+ *  what the file is made of; a GGUF's thirty-three metadata entries are one
+ *  per cent of it and are one part of a header, however many of them there
+ *  are. */
+export const SECTION_SHARE = 0.25;
 
 export type TreeSource = {
   node(path: readonly number[]): TemplateReply<TemplateNode>;
@@ -143,8 +149,10 @@ function inFileOrder(nodes: readonly TemplateNode[]): TemplateNode[] {
 
 /** True when a list's elements are parts of the file in their own right,
  *  rather than a run of values inside one part. */
-function elementsAreSections(node: TemplateNode, kids: readonly TemplateNode[], max: number): boolean {
-  return node.composite && kids.length > 0 && kids.length <= max && kids.every((k) => k.composite);
+function elementsAreSections(node: TemplateNode, kids: readonly TemplateNode[], max: number, fileBits: number): boolean {
+  if (!node.composite || kids.length === 0 || kids.length > max) return false;
+  if (!kids.every((k) => k.composite)) return false;
+  return fileBits > 0 && node.size_bits >= fileBits * SECTION_SHARE;
 }
 
 /**
@@ -197,6 +205,8 @@ class Walk {
   readonly page: number;
   readonly sectionListMax: number;
   section = -1;
+  /** The whole file, for deciding what counts as a division of it. */
+  fileBits = 0;
 
   readonly src: TreeSource;
   readonly state: ListingState;
@@ -257,6 +267,7 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
   const root = src.node([]);
   if (root.status === "error") return { items: [], pending: false, reachedBytes: 0 };
   if (root.status !== "ok") return { items: [], pending: true, reachedBytes: root.reachedBytes };
+  w.fileBits = root.node.size_bits;
   const kids = w.kids([], root.node.child_count);
   if (kids === null) {
     w.waiting([], 0, root.node);
@@ -279,7 +290,7 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
       const inner = w.kids(kidPath, first.child_count);
       // A list of a handful of structures is a handful of parts of the file,
       // not one part holding a list: three SQLite pages read as three.
-      if (inner !== null && elementsAreSections(first, inner, w.sectionListMax)) {
+      if (inner !== null && elementsAreSections(first, inner, w.sectionListMax, w.fileBits)) {
         w.section -= 1;
         sections(w, kidPath, first, inner);
         return;
@@ -354,7 +365,9 @@ function runHeading(
     to,
     open: true,
   });
-  rows(w, path, run, from, breaks, 1);
+  // The run's own edges are where the parts either side of it begin, so there
+  // is nothing unaccounted for at them.
+  rows(w, path, run, from, breaks, 1, null);
 }
 
 /** What is inside one heading. */
@@ -379,13 +392,21 @@ function body(
     });
     return;
   }
-  rows(w, path, kids, 0, sectionBreaks([]), depth);
+  rows(w, path, kids, 0, [], depth, { start: node.offset_bits, end: endBits(node) });
   more(w, path, node, kids.length, depth);
 }
 
 /** A structure's children as items: gaps where nothing covers the bytes,
  *  machinery folded into one item per run, and everything else a row or a
- *  heading of its own. */
+ *  heading of its own.
+ *
+ *  `bounds` is the stretch the children have to account for between them,
+ *  which is the parent's own. Free space in a b-tree page sits between the
+ *  cell pointers at the front and the cells at the back, and both edges are
+ *  the parent's rather than a child's: without the bounds, three and a half
+ *  thousand bytes of a four-thousand-byte page go unmentioned. Null for a run
+ *  of fields that is not a whole structure, where the edges belong to the
+ *  parts either side. */
 function rows(
   w: Walk,
   path: readonly number[],
@@ -393,10 +414,11 @@ function rows(
   base: number,
   breaks: readonly number[],
   depth: number,
+  bounds: { readonly start: number; readonly end: number } | null,
 ): void {
   const order = inFileOrder(kids);
   const indexOf = new Map(kids.map((k, i) => [k, base + i]));
-  let cursor = order[0]?.offset_bits ?? 0;
+  let cursor = bounds?.start ?? order[0]?.offset_bits ?? 0;
   let fold: TemplateNode[] = [];
   const flush = () => {
     if (fold.length === 0) return;
@@ -422,15 +444,7 @@ function rows(
   for (const kid of order) {
     if (kid.offset_bits > cursor) {
       flush();
-      w.push({
-        kind: "gap",
-        key: `gap:${pathKey(path)}@${cursor}`,
-        section: w.section,
-        depth,
-        offsetBits: cursor,
-        sizeBits: kid.offset_bits - cursor,
-        path,
-      });
+      gap(w, path, cursor, kid.offset_bits, depth);
     }
     cursor = Math.max(cursor, endBits(kid));
     const index = indexOf.get(kid) ?? 0;
@@ -442,6 +456,19 @@ function rows(
     child(w, kid, depth);
   }
   flush();
+  if (bounds !== null && cursor < bounds.end) gap(w, path, cursor, bounds.end, depth);
+}
+
+function gap(w: Walk, path: readonly number[], from: number, to: number, depth: number): void {
+  w.push({
+    kind: "gap",
+    key: `gap:${pathKey(path)}@${from}`,
+    section: w.section,
+    depth,
+    offsetBits: from,
+    sizeBits: to - from,
+    path,
+  });
 }
 
 /** One child of a structure: a heading when it is a named part with something
@@ -472,7 +499,7 @@ function child(w: Walk, node: TemplateNode, depth: number): void {
     w.waiting(node.path, depth + 1, node);
     return;
   }
-  rows(w, node.path, inner, 0, [], depth + 1);
+  rows(w, node.path, inner, 0, [], depth + 1, { start: node.offset_bits, end: endBits(node) });
   more(w, node.path, node, inner.length, depth + 1);
 }
 
