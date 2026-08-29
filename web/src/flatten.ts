@@ -91,6 +91,10 @@ export type Item = Common &
         readonly node: TemplateNode;
         /** True while this row's children are listed below it. */
         readonly open: boolean;
+        /** Machinery that was not worth folding: one field on its own. Drawn
+         *  where it is, in the fold's dim treatment, since hiding one row
+         *  behind another row is a click for nothing. */
+        readonly quiet: boolean;
       }
     | {
         /** Bytes inside a structure that none of its fields covers. */
@@ -228,6 +232,12 @@ function sameSection(breaks: readonly number[], a: number, b: number): boolean {
  *  template's own answer; whether that counts as folding it away is this
  *  view's, and depends on where the two of them land. */
 function isMachinery(node: TemplateNode, index: number, breaks: readonly number[]): boolean {
+  // A computed value has no bytes, so it cannot be the bytes that place other
+  // bytes, which is the whole of what folding is for. What it is instead is
+  // the template working something out in the open: ZIP's `data_size` is the
+  // answer to whether the size in the header or the one in the ZIP64 extra
+  // field is the real one, and folding it hides the one row that says so.
+  if (node.type === "computed") return false;
   if (node.machinery !== null) return node.machinery;
   return node.consumed_by !== null && sameSection(breaks, index, node.consumed_by);
 }
@@ -536,6 +546,14 @@ function rows(
   let fold: TemplateNode[] = [];
   const flush = () => {
     if (fold.length === 0) return;
+    // One field is not a fold. It would be the same row either way, with a
+    // click in front of it and its own name swapped for its category.
+    if (fold.length === 1) {
+      const only = fold[0];
+      if (only !== undefined) child(w, only, depth, true);
+      fold = [];
+      return;
+    }
     const first = fold[0];
     const last = fold[fold.length - 1];
     if (first === undefined || last === undefined) return;
@@ -616,7 +634,7 @@ function gap(w: Walk, path: readonly number[], from: number, to: number, depth: 
 /** One child of a structure: a heading when it is a named part with something
  *  inside it, a row otherwise. Rule 2: depth past a sub-heading is rows, not
  *  more indentation. */
-function child(w: Walk, node: TemplateNode, depth: number): void {
+function child(w: Walk, node: TemplateNode, depth: number, quiet = false): void {
   const key = pathKey(node.path);
   if (node.composite && node.child_count > 0 && depth === 1) {
     // A short table opens itself, since the table is what it is for.
@@ -635,6 +653,7 @@ function child(w: Walk, node: TemplateNode, depth: number): void {
     path: node.path,
     node,
     open,
+    quiet,
   });
   w.strip(`r:${key}`, node.path, node.name, { start: node.offset_bits, end: endBits(node) }, depth);
   if (!open) return;

@@ -526,15 +526,19 @@ export class ListingReport {
 
   private drawRow(item: Extract<Item, { kind: "row" }>): HTMLElement {
     const n = item.node;
-    const row = el("div", "rp-item rp-row");
+    const row = el("div", `rp-item rp-row${item.quiet ? " rp-quiet" : ""}`);
     if (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === item.key) row.classList.add("is-on");
     row.style.paddingLeft = `${8 + item.depth * 12}px`;
-    row.append(el("span", "rp-at", formatOffset(n.offset_bits)));
+    // A computed value is not written anywhere, so it has no address and no
+    // length. "0x101a7" and "0 bytes" would be answers to questions this row
+    // is not the answer to; the type column already says what it is.
+    const written = n.type !== "computed";
+    row.append(el("span", "rp-at", written ? formatOffset(n.offset_bits) : ""));
     row.append(el("span", `rp-field ${fieldClass(n.kind)}`, n.name));
     row.append(el("span", "rp-value", n.composite ? countText(n.child_count, childWord(n)) : n.value));
     row.append(el("span", "rp-type", n.type));
-    row.append(el("span", "rp-size", bitSizeText(n.size_bits)));
-    row.append(this.bytesButton(item.key));
+    row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : ""));
+    if (written) row.append(this.bytesButton(item.key));
     return row;
   }
 

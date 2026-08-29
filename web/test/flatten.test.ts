@@ -22,6 +22,9 @@ type Spec = {
   /** True when the field is only its parent's contents, as `StructDef::contents`
    *  says of a ZIP entry's `body`. */
   contents?: boolean;
+  /** The type name, where the rules turn on it: `computed` for a value the
+   *  template works out rather than reads. */
+  type?: string;
 };
 
 type Fixture = { node: TemplateNode; kids: Fixture[] };
@@ -39,7 +42,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
   const node: TemplateNode = {
     path,
     name: spec.name,
-    type: composite ? "struct" : "u8",
+    type: spec.type ?? (composite ? "struct" : "u8"),
     offset_bits: at * 8,
     size_bits: spec.bytes * 8,
     value: "",
@@ -234,11 +237,12 @@ test("a field that is only its parent's contents spends no level on itself", () 
   const items = run(zip).items;
   assert.deepEqual(
     items.map((i) => `${i.kind}:${i.kind === "heading" ? (i.node?.name ?? "(run)") : i.kind === "row" ? i.node.name : ""}`),
-    // The signature folds behind the body it picks, and the body's own length
-    // prefix folds behind the name it measures. Two dim rows, one per
-    // structure: they are not one run, and running them together would say
-    // the entry has a machinery section, which it has not.
-    ["heading:entry", "fold:", "fold:", "row:name"],
+    // The signature places the body and the length prefix measures the name,
+    // and each is alone where it stands. One field is not worth a fold, so
+    // both stay where they are and take the dimming instead. What the test is
+    // for is the depth: `body` spends no level on itself, so its length sits
+    // beside the signature rather than a step in from it.
+    ["heading:entry", "row:signature", "row:name_len", "row:name"],
   );
 });
 
@@ -464,4 +468,49 @@ test("a run of plain fields is one part and each composite its own", () => {
   const comp = (name: string): TemplateNode => build({ name, bytes: 1, kids: [{ name: "x", bytes: 1 }] }, [], 0).node;
   assert.deepEqual(sectionBreaks([leaf("a"), leaf("b"), comp("c"), leaf("d"), comp("e")]), [0, 2, 3, 4]);
   assert.deepEqual(sectionBreaks([]), []);
+});
+
+// A ZIP entry's tail, where the template stops reading and starts working
+// things out: two computed sizes that answer the ZIP64 question, and the data
+// one of them measures.
+const ZIP_TAIL: Spec = {
+  name: "file",
+  bytes: 140,
+  kids: [
+    { name: "name_length", bytes: 2, consumed_by: 3 },
+    { name: "extra_length", bytes: 2, consumed_by: 4 },
+    { name: "name", bytes: 10 },
+    { name: "extra", bytes: 0 },
+    { name: "data_size", bytes: 0, type: "computed", consumed_by: 6 },
+    { name: "unpacked_size", bytes: 0, type: "computed" },
+    { name: "data", bytes: 126 },
+  ],
+};
+
+test("a value the template works out is never folded away", () => {
+  const { items } = run(ZIP_TAIL);
+  const names = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
+  assert.ok(names.includes("data_size"), names.join(", "));
+  assert.ok(names.includes("unpacked_size"), names.join(", "));
+  // The two lengths still fold: they are bytes, and they place other bytes.
+  const folds = items.filter((i) => i.kind === "fold");
+  assert.equal(folds.length, 1);
+  assert.equal(folds[0]?.kind === "fold" ? folds[0].nodes.length : 0, 2);
+});
+
+test("one field on its own is a quiet row, not a fold", () => {
+  const one: Spec = {
+    name: "file",
+    bytes: 20,
+    kids: [
+      { name: "count", bytes: 2, consumed_by: 1 },
+      { name: "items", bytes: 18 },
+    ],
+  };
+  const { items } = run(one);
+  assert.deepEqual(items.filter((i) => i.kind === "fold"), []);
+  const count = items.find((i) => i.kind === "row" && i.node.name === "count");
+  assert.equal(count?.kind === "row" ? count.quiet : null, true);
+  const rest = items.find((i) => i.kind === "row" && i.node.name === "items");
+  assert.equal(rest?.kind === "row" ? rest.quiet : null, false);
 });

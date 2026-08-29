@@ -2115,8 +2115,10 @@ button.insp-xrow-where:hover {
   font-style: normal;
 }
 /* The machinery behind the field it places: present, dim, and out of the way
-   of the payload's own row. */
-.rp-fold {
+   of the payload's own row. One field on its own is not worth a fold, so it
+   keeps its place and takes the same dimming where it stands. */
+.rp-fold,
+.rp-quiet {
   color: var(--muted);
 }
 .rp-twist {
