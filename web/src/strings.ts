@@ -53,6 +53,39 @@ function plural(noun: string): string {
   return `${noun}s`;
 }
 
+/**
+ * The report listing's own words.
+ *
+ * TODO(copy): every string in here is a placeholder written to get the view
+ * on screen and has not been through review. The mockup
+ * (`mockups/c2-listing.html`) has the reviewed wording for the SQLite case;
+ * these are the general forms of the same rows and are what needs drafting.
+ */
+export const REPORT = {
+  /** A part of the file made of a run of a structure's plain fields, which
+   *  has no field of its own to name it. The mockup calls SQLite's "Header". */
+  unnamedPart: "Header",
+  /** Bytes inside a part that none of its fields covers. The mockup's SQLite
+   *  case reads "unused page space"; `GAP_LABEL` above says "unmapped", which
+   *  means something else: that the template describes nothing here. These
+   *  bytes are inside something the template does describe and are free. */
+  gap: "free space",
+  /** Where a part is too small a slice of the file for a percentage to say
+   *  anything. */
+  tinyShare: "<1%",
+  /** The fields that place another field, folded behind it. `owner` is what
+   *  they place, when it is one of their siblings. The mockup's SQLite case
+   *  reads "page header + 3 cell pointers". */
+  fold: (count: number, owner: string | null): string =>
+    owner === null ? `${count} fields that place what follows` : `${count} fields that place ${owner}`,
+  /** The tail of a list longer than what has been drawn so far. `rest` is
+   *  already counted and named: "249,800 items". */
+  more: (rest: string): string => `Show ${rest}`,
+  /** A stretch whose bytes have not arrived yet. Same situation as the older
+   *  listing's, and the same words. */
+  reading: "Loading bytes needed to map these fields…",
+} as const;
+
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the
  *  same panel writes `0x131+4b` for an address four bits into a byte, and one
  *  `b` there is bits and the other is bytes. */

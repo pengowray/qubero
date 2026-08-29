@@ -2161,3 +2161,133 @@ button.insp-xrow-where:hover {
   color: var(--muted);
   padding: 4px 0;
 }
+
+/* ---- report listing (mockup C v2) ---- */
+/* The heights here are the ones `listingreport.ts` adds up to place every
+   item, so they are fixed rather than content-driven: a row that grew a line
+   taller would sit over the one below it. */
+.report {
+  --rp-section: 40px;
+  --rp-part: 26px;
+  --rp-row: 22px;
+  position: relative;
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.report:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.rp-canvas {
+  position: relative;
+}
+.rp-item {
+  position: absolute;
+  inset-inline: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.rp-h0 {
+  height: var(--rp-section);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--sans);
+  font-size: 14px;
+}
+.rp-h1 {
+  height: var(--rp-part);
+  padding-inline-start: 20px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.rp-row {
+  height: var(--rp-row);
+}
+.rp-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.rp-row.is-on {
+  background: var(--accent-soft);
+}
+.rp-swatch {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 2px;
+}
+.rp-name {
+  flex: none;
+}
+.rp-range,
+.rp-at {
+  flex: none;
+  width: 74px;
+  color: var(--addr);
+}
+.rp-range {
+  width: auto;
+}
+.rp-field {
+  flex: none;
+  width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rp-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rp-type {
+  flex: none;
+  width: 105px;
+  color: var(--muted);
+}
+.rp-size {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--muted);
+}
+.rp-h0 .rp-size,
+.rp-h1 .rp-size {
+  font-family: var(--mono);
+}
+/* Bytes inside a structure that none of its fields covers. Striped, so a
+   stretch nothing describes cannot be mistaken for a field reading zero. */
+.rp-gap {
+  color: var(--muted);
+  font-style: italic;
+  background: repeating-linear-gradient(-45deg, transparent 0 7px, color-mix(in srgb, var(--muted) 5%, transparent) 7px 8px);
+}
+.rp-gap .rp-at,
+.rp-gap .rp-size {
+  font-style: normal;
+}
+/* The machinery behind the field it places: present, dim, and out of the way
+   of the payload's own row. */
+.rp-fold {
+  color: var(--muted);
+}
+.rp-twist {
+  flex: none;
+  width: 10px;
+}
+.rp-more {
+  color: var(--accent);
+  cursor: pointer;
+}
+.rp-pending {
+  height: var(--rp-row);
+  color: var(--muted);
+  font-style: italic;
+}

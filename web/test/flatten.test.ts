@@ -169,7 +169,8 @@ test("a page header folds behind the cells it places", () => {
   );
   // One item covering the whole header, so the payload keeps the reader's eye.
   assert.equal(first.sizeBits, 14 * 8);
-  assert.equal(first.owner, 6);
+  // Named by what it places, not by the last field in the run.
+  assert.equal(first.owner?.name, "cells");
 });
 
 test("the template's word beats what the shapes say, either way", () => {
@@ -192,6 +193,22 @@ test("the template's word beats what the shapes say, either way", () => {
   const folded = items.flatMap((i) => (i.kind === "fold" ? i.nodes.map((n) => n.name) : []));
   assert.deepEqual(rows, ["width"]);
   assert.deepEqual(folded, ["reserved", "height"]);
+});
+
+test("opening a fold lists the fields it stands for", () => {
+  const closed = run(SQLITE);
+  const fold = closed.items.find((i) => i.kind === "fold");
+  assert.ok(fold !== undefined);
+  const open = run(SQLITE, { open: new Set([fold.key]), shown: new Map() });
+  const under = open.items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
+  assert.deepEqual(under.slice(-6), [
+    "page_type",
+    "first_freeblock",
+    "cell_count",
+    "cell_content_start",
+    "fragmented_free_bytes",
+    "cell_pointers",
+  ]);
 });
 
 test("bytes no field covers are an item of their own", () => {

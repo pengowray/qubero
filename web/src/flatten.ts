@@ -88,8 +88,11 @@ export type Item = Common &
         readonly reason: "machinery";
         readonly path: readonly number[];
         readonly nodes: readonly TemplateNode[];
-        /** The field they place, when it is one of their siblings. */
-        readonly owner: number | null;
+        /** The field they place, when it is one of their siblings and is not
+         *  itself folded away. This is what the fold is folded behind, and
+         *  what names it: the machinery is "the six fields that place
+         *  `cells`", not six fields listed by their own names. */
+        readonly owner: TemplateNode | null;
         readonly open: boolean;
       }
     | {
@@ -425,10 +428,17 @@ function rows(
     const first = fold[0];
     const last = fold[fold.length - 1];
     if (first === undefined || last === undefined) return;
+    // The last owner named by the run, which is the field the run leads up
+    // to: a count places the pointer array and the pointer array places the
+    // cells, and it is the cells the reader is looking at.
     const owners = fold.map((n) => n.consumed_by).filter((c): c is number => c !== null);
+    const ownerIndex = owners[owners.length - 1];
+    const owner = ownerIndex === undefined ? null : (kids[ownerIndex - base] ?? null);
+    const key = `fold:${pathKey(first.path)}`;
+    const open = w.isOpen(key);
     w.push({
       kind: "fold",
-      key: `fold:${pathKey(first.path)}`,
+      key,
       section: w.section,
       depth,
       offsetBits: first.offset_bits,
@@ -436,9 +446,12 @@ function rows(
       reason: "machinery",
       path,
       nodes: fold,
-      owner: owners[owners.length - 1] ?? null,
-      open: w.isOpen(`fold:${pathKey(first.path)}`),
+      owner: owner === null || fold.includes(owner) ? null : owner,
+      open,
     });
+    // Folded, not hidden: opening one lists the fields it stands for, a step
+    // in from the payload they place.
+    if (open) for (const n of fold) child(w, n, depth + 1);
     fold = [];
   };
   for (const kid of order) {
