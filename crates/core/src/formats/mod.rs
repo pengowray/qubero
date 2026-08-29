@@ -36,6 +36,7 @@ mod gif;
 mod grubenv;
 mod gdbm;
 mod gzip;
+mod uf2;
 mod hackrffw;
 mod hdf5;
 pub mod h5ad;
@@ -121,6 +122,7 @@ pub use gif::gif;
 pub use grubenv::grubenv;
 pub use gdbm::gdbm;
 pub use gzip::gzip;
+pub use uf2::uf2;
 pub use hackrffw::hackrffw;
 pub use hdf5::hdf5;
 pub use id3::id3;
@@ -193,7 +195,7 @@ pub fn builtin_names() -> &'static [&'static str] {
     &[
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
-        "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "c16", "bdb", "gdbm", "wad",
+        "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "uf2", "gif", "aiff", "ilbm", "pnm", "c16", "bdb", "gdbm", "wad",
         "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "xar", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
@@ -255,6 +257,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "nes" => Some(nes()),
         "grubenv" => Some(grubenv()),
         "gzip" => Some(gzip()),
+        "uf2" => Some(uf2()),
         "hackrffw" => Some(hackrffw()),
         "gif" => Some(gif()),
         "aiff" => Some(aiff()),
@@ -341,6 +344,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"GGUF", "gguf"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
+    (uf2::MAGIC, "uf2"),
     (b"DIRC", "gitindex"),
     (b"\xfftOc", "gitpackidx"),
     (b"IWAD", "wad"),
