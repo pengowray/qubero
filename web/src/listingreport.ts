@@ -125,6 +125,10 @@ export class ListingReport {
   /** The key of the row standing in for a selection with no row of its own,
    *  worked out once a paint rather than once a row. */
   private nearest: string | null = null;
+  /** The item the keyboard is on, by key so that it survives a re-flatten.
+   *  Null until an arrow key is pressed, which starts it at the top of the
+   *  window rather than at the top of the file. */
+  private cursor: string | null = null;
 
   onPick: (pick: FieldPick) => void = () => {};
 
@@ -149,6 +153,7 @@ export class ListingReport {
     this.el.addEventListener("focus", () => this.scroller.focus());
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
     this.scroller.addEventListener("click", (e) => this.onClick(e));
+    this.scroller.addEventListener("keydown", (e) => this.onKey(e));
     new ResizeObserver(() => {
       if (this.scroller.clientWidth !== this.measuredAt) this.measured.clear();
       this.relayout();
@@ -260,6 +265,17 @@ export class ListingReport {
       const node = this.draw(item, fileBits);
       node.style.top = `${this.tops[i] ?? 0}px`;
       node.dataset["key"] = item.key;
+      node.id = `rp-${item.key}`;
+      // The scroller is the tree and keeps the focus; which item the keyboard
+      // is on is said by `aria-activedescendant`, so a screen reader hears the
+      // row without the focus ever leaving the one scrolling element.
+      node.setAttribute("role", "treeitem");
+      const opens = openKeyOf(item);
+      if (opens !== null) node.setAttribute("aria-expanded", String(this.state.open.has(opens)));
+      if (item.key === this.cursor) {
+        node.classList.add("is-cursor");
+        this.scroller.setAttribute("aria-activedescendant", node.id);
+      }
       out.push(node);
     }
     this.canvas.replaceChildren(...out);
@@ -551,6 +567,12 @@ export class ListingReport {
     // A click inside an open strip is for the strip, not for opening whatever
     // the strip is sitting under.
     if (item.kind === "bytes") return;
+    this.cursor = item.key;
+    this.activate(item);
+  }
+
+  /** What clicking an item does, which is also what Enter on it does. */
+  private activate(item: Item): void {
     if (item.kind === "more") {
       const shown = new Map(this.state.shown);
       const win = item.side === "later" ? { from: item.from, to: item.to + PAGE } : { from: Math.max(0, item.from - PAGE), to: item.to };
@@ -560,19 +582,79 @@ export class ListingReport {
       return;
     }
     const openKey = openKeyOf(item);
-    if (openKey !== null) {
-      const open = new Set(this.state.open);
-      if (open.has(openKey)) open.delete(openKey);
-      else open.add(openKey);
-      this.state = { ...this.state, open };
-      this.rebuild();
+    if (openKey !== null) this.setOpen(openKey, !this.state.open.has(openKey));
+    if (item.kind === "row") this.pick(item);
+  }
+
+  /** Say what is selected, both here and to everything else showing it. */
+  private pick(item: Extract<Item, { kind: "row" }>): void {
+    this.select(item.path, item.offsetBits, item.sizeBits);
+    this.picking = true;
+    this.onPick({ path: item.path, startBit: item.offsetBits, endBit: item.offsetBits + item.sizeBits });
+    this.picking = false;
+  }
+
+  private setOpen(key: string, want: boolean): void {
+    if (this.state.open.has(key) === want) return;
+    const open = new Set(this.state.open);
+    if (want) open.add(key);
+    else open.delete(key);
+    this.state = { ...this.state, open };
+    this.rebuild();
+  }
+
+  // ----- keyboard -----
+
+  /** Where the keyboard is. The top of the window until the reader moves it,
+   *  so the first arrow press starts from what they are looking at rather
+   *  than from the top of the file. */
+  private cursorAt(): number {
+    const i = this.cursor === null ? -1 : this.items.findIndex((item) => item.key === this.cursor);
+    return i < 0 ? this.indexAt(this.scroller.scrollTop) : i;
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    if (this.items.length === 0) return;
+    const at = this.cursorAt();
+    const item = this.items[at];
+    const page = Math.max(1, Math.floor(this.scroller.clientHeight / HEIGHT.row) - 1);
+    switch (e.key) {
+      case "ArrowDown": this.moveTo(at + 1); break;
+      case "ArrowUp": this.moveTo(at - 1); break;
+      case "PageDown": this.moveTo(at + page); break;
+      case "PageUp": this.moveTo(at - page); break;
+      case "Home": this.moveTo(0); break;
+      case "End": this.moveTo(this.items.length - 1); break;
+      // Sideways opens and closes, as in any tree. A row with nothing to open
+      // swallows the key rather than scrolling the view sideways under it.
+      case "ArrowRight": if (item !== undefined) this.reopen(item, true); break;
+      case "ArrowLeft": if (item !== undefined) this.reopen(item, false); break;
+      case "Enter":
+      case " ": if (item !== undefined) this.activate(item); break;
+      default: return;
     }
-    if (item.kind === "row") {
-      this.select(item.path, item.offsetBits, item.sizeBits);
-      this.picking = true;
-      this.onPick({ path: item.path, startBit: item.offsetBits, endBit: item.offsetBits + item.sizeBits });
-      this.picking = false;
-    }
+    e.preventDefault();
+  }
+
+  private reopen(item: Item, want: boolean): void {
+    const key = openKeyOf(item);
+    if (key !== null) this.setOpen(key, want);
+  }
+
+  /** Put the keyboard on an item, bring it on screen, and select it if it is
+   *  a field: arrowing down a list is reading it, and everything else showing
+   *  the file follows the same selection a click would make. */
+  private moveTo(i: number): void {
+    const at = Math.max(0, Math.min(this.items.length - 1, i));
+    const item = this.items[at];
+    if (item === undefined) return;
+    this.cursor = item.key;
+    const top = this.tops[at] ?? 0;
+    const bottom = this.tops[at + 1] ?? top;
+    if (top < this.scroller.scrollTop) this.scroller.scrollTop = top;
+    else if (bottom > this.scroller.scrollTop + this.scroller.clientHeight) this.scroller.scrollTop = bottom - this.scroller.clientHeight;
+    if (item.kind === "row") this.pick(item);
+    else this.paintAgain();
   }
 
   /** Redraw the window that is already up, for a change that moves nothing. */

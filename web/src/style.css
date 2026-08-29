@@ -2218,6 +2218,16 @@ button.insp-xrow-where:hover {
 .rp-row.is-on {
   background: var(--accent-soft);
 }
+/* Where the keyboard is, which is not the same as what is selected: arrowing
+   onto a heading moves the one and leaves the other where it was. An outline
+   rather than a fill, so a row that is both reads as both. */
+.rp-item.is-cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.rp-scroll:not(:focus) .rp-item.is-cursor {
+  outline-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
 .rp-swatch {
   width: 10px;
   height: 10px;
