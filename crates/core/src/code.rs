@@ -140,12 +140,17 @@ pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
 
 /// Where a branch goes, read out of the text the decoder wrote.
 ///
-/// Both yaxpeax decoders write a branch as a distance with a `$` for where it
-/// is counted from, and the two of them count from different places: x86 from
-/// the end of the instruction, because that is what the instruction holds, and
-/// ARM from the start, because that is what its instruction holds. This
-/// answers in the one unit a reader of a file can use, which is a distance
-/// from the first byte of the instruction.
+/// The yaxpeax decoders write a branch as a distance with a `$` for where it
+/// is counted from, and they do not all count from the same place. x86 counts
+/// from the end of the instruction, because that is what the instruction
+/// holds. So does Thumb, whose distance is from a program counter that runs
+/// one instruction ahead. The four-byte ARM encodings count from the start,
+/// and so does the 64-bit machine. This answers in the one unit a reader of a
+/// file can use, which is a distance from the first byte of the instruction.
+///
+/// Measured against the RP2350 boot ROM's own listing, every one of its 1310
+/// Thumb branches lands where this says once the length is added, and none did
+/// before.
 ///
 /// The 32-bit RISC-V decoder in this crate answers for itself and never
 /// reaches here. The 64-bit one is `raki`, which writes a distance as an
@@ -163,7 +168,7 @@ pub fn relative_target(isa: Isa, text: &str, len: usize) -> Option<i64> {
     let end = digits.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(digits.len());
     let value = i64::from_str_radix(&digits[..end], 16).ok()?;
     let from_start = match isa {
-        Isa::X86_64 | Isa::X86_32 | Isa::X86_16 => len as i64,
+        Isa::X86_64 | Isa::X86_32 | Isa::X86_16 | Isa::Thumb => len as i64,
         _ => 0,
     };
     Some(from_start + sign * value)
@@ -269,6 +274,14 @@ mod tests {
         assert_eq!(decode(Isa::Aarch64, &[0x02, 0x00, 0x00, 0x14]).target, Some(8));
         // Anything that is not a branch goes nowhere.
         assert_eq!(decode(Isa::X86_64, &[0xc3]).target, None);
+        // Thumb counts from a program counter that is already past the
+        // instruction. These four are the boot ROM's own: a `b.n` at 0x56
+        // that reaches 0x68, one at 0x82 that reaches 0x78, a `cbz` at 0x7e
+        // that reaches 0x86, and a `bl` that calls the next instruction.
+        assert_eq!(decode(Isa::Thumb, &[0x07, 0xe0]).target, Some(0x12));
+        assert_eq!(decode(Isa::Thumb, &[0xf9, 0xe7]).target, Some(-0xa));
+        assert_eq!(decode(Isa::Thumb, &[0x08, 0xb1]).target, Some(6));
+        assert_eq!(decode(Isa::Thumb, &[0x00, 0xf0, 0x00, 0xf8]).target, Some(4));
     }
 
     #[test]

@@ -358,7 +358,10 @@ fn quadrant0(w: u32, funct3: u32) -> Option<String> {
         // The byte and halfword accesses, which the base compressed set left
         // out and Zcb puts back.
         4 => {
-            let byte_off = ((w >> 5) & 2) | ((w >> 4) & 1);
+            // The two offset bits are stored the other way up from every
+            // other compressed offset: the high one is the lower bit of the
+            // instruction.
+            let byte_off = ((w >> 6) & 1) | ((w >> 4) & 2);
             let half_off = (w >> 4) & 2;
             match (w >> 10) & 7 {
                 0 => format!("c.lbu {rd}, {byte_off}({rs1})"),
