@@ -138,15 +138,24 @@ falls out of the flat item list. Do not build this as one giant DOM.
    line, the byte strip's column and every file map. `main.ts` drives whichever of
    the two views is showing through one name, `structure`, which is what step 7
    collapses back to one thing.
-7. Swap it in as the Listing mode; delete/absorb `listingview.ts`,
-   `logicaloutline.ts`, and the Structure panel's tree duplication.
+7. ~~Swap it in as the Listing mode; delete/absorb `listingview.ts`,
+   `logicaloutline.ts`, and the Structure panel's tree duplication.~~ **Done for the
+   listing**: the dev flag is gone, `listingview.ts` is deleted with the CSS only it
+   used, and the report gained the keyboard the old view had, as a row cursor rather
+   than as a scroll. Two of the three deletions were not made, and the reasons are
+   not "later":
+   - `logicaloutline.ts` is not another copy of this tree. It is per-format adapters
+     reading a file as its own domain objects, and the logical-tree mode that would
+     absorb them is deferred. It stays until that mode exists.
+   - The Structure panel (`typetable.ts`) edits values in place, which the report
+     cannot do. That is an absorb, not a delete, and the editing has to move first.
 
 ## Test recipe
 
 - Dev server: `.claude/launch.json` name `web` (vite, port 5173). No file-open URL
   param: fetch a sample from `web/public/samples/`, wrap in `File`, dispatch a
   synthetic `drop` on `document`. `window.__qubero` exposes `{doc, view, inspector,
-  table, listing, overview}` for headless assertions.
+  table, structure, overview}` for headless assertions.
 - Files to exercise, in order: `notes.sqlite` (the mockup's file, to compare against
   the mockup side by side), `tiny.png`, `D:/koboldcpp/bge-m3-q8_0.gguf` (scale + deep
   length-prefixed metadata), an `.h5ad` from
