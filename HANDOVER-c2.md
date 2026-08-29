@@ -218,14 +218,14 @@ A list of two hundred is a page. A list of two hundred thousand is a different
 problem, and the app already handles it in a way that feels clunky. Two things are
 wanted, and neither is in the seven steps:
 
-1. **Reach one item without unfolding the ones before it.** Clicking the 20,000th
-   element in the hex view has to select it and show it in the listing, and the
-   listing must not draw the 19,999 above it to get there. `flatten`'s `shown` map
-   counts from the start of a list, so the window can only grow forward from the
-   first element; reaching the middle needs a window with two ends, and rows at both
-   ends saying what is above and below it. `ListingReport.reveal` is written against
-   the counting-forward model and silently finds nothing past the first page, which
-   is a real limit rather than a bug to leave unremarked. Nothing calls it yet.
+1. ~~**Reach one item without unfolding the ones before it.**~~ Done, in
+   "Draw a window on a long list, not its first page". `shown` holds a
+   `{from, to}` per list rather than a count, both ends of it are rows, and
+   `reveal` moves the windows on the way to a field a page at a time, aligned to
+   pages. The ends own the bytes of the elements they stand for, which is what
+   keeps them from reading as gaps. Verified against a git pack index: clicking
+   byte 0xee68 selects `names[3000]`, draws 3,000 to 3,200, and the listing stays
+   at 816 items.
 
 2. **Give a long list somewhere of its own to live.** A side panel, or an embedded
    pane, scrolling the list the way `hexview.ts` scrolls the file: unbounded, by
@@ -234,4 +234,6 @@ wanted, and neither is in the seven steps:
    inside a report about the file that holds it.
 
 Both are about the same thing: a list long enough to be its own subject stops being a
-row that opens. Design them together.
+row that opens. The first is built; the second is still open, and the window is what
+it would scroll. A pane scrolling by index does not need `flatten` at all: every
+element of a long list is one row of a known height, and the count is `child_count`.
