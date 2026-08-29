@@ -107,9 +107,9 @@
 <div class="record">
   <table>
     <tr><th style="width:52px">rowid</th><th style="width:110px">title</th><th>body</th><th style="width:110px">stored at</th></tr>
-    <tr><td class="num">1</td><td class="str">"groceries"</td><td class="str">"milk, eggs"</td><td class="a" style="color:var(--faint)">0x1fea · 22 B</td></tr>
-    <tr><td class="num">2</td><td class="str">"meeting"</td><td class="str">"quarterly review notes: the roadmap slipped by…"</td><td class="a" style="color:var(--faint)">0x1ec4 · 294 B</td></tr>
-    <tr><td class="num">3</td><td class="str">"todo"</td><td class="str">"fix the gate"</td><td class="a" style="color:var(--faint)">0x1eb0 · 20 B</td></tr>
+    <tr><td class="num">1</td><td class="str">"first"</td><td class="str">"hello there"</td><td class="a" style="color:var(--faint)">0x1fea · 22 B</td></tr>
+    <tr><td class="num">2</td><td class="str">"second"</td><td class="str">"a longer note a longer note a longer no…" <span class="dim">280 chars</span></td><td class="a" style="color:var(--faint)">0x1ec4 · 294 B</td></tr>
+    <tr><td class="num">3</td><td class="str">"third"</td><td class="str">"ünïcode"</td><td class="a" style="color:var(--faint)">0x1eb0 · 20 B</td></tr>
   </table>
   <div class="inline-note" style="margin:6px 0 0">Rendered from 3 cells; each cell is payload-size varint + rowid varint + record. <a href="#">Show the cells field by field</a></div>
 </div>
@@ -121,7 +121,7 @@
 <table class="rows">
   <tr class="fold"><td class="a">0x2000</td><td class="f dim">page header + 3 cell pointers</td><td class="dim">index leaf · 3 cells · content starts at <span class="num">0x2fe2</span> <span class="arrow">↓</span></td><td class="t">IndexLeaf</td><td class="s">14 B</td></tr>
   <tr class="gap"><td class="a">0x200e</td><td class="f">unused page space</td><td>4,052 B of zeros</td><td></td><td class="s">4.0 KiB</td></tr>
-  <tr><td class="a">0x2fe2</td><td class="f">entries</td><td><span class="str">"groceries"</span><span class="arrow">→</span><span class="num">1</span> · <span class="str">"meeting"</span><span class="arrow">→</span><span class="num">2</span> · <span class="str">"todo"</span><span class="arrow">→</span><span class="num">3</span></td><td class="t">Cell[3]</td><td class="s">30 B</td></tr>
+  <tr><td class="a">0x2fe2</td><td class="f">entries</td><td><span class="str">"first"</span><span class="arrow">→</span><span class="num">1</span> · <span class="str">"second"</span><span class="arrow">→</span><span class="num">2</span> · <span class="str">"third"</span><span class="arrow">→</span><span class="num">3</span></td><td class="t">Cell[3]</td><td class="s">30 B</td></tr>
 </table>
 
 <div class="inline-note" style="margin-top:30px; border-top:1px solid var(--line); padding-top:12px; max-width:82ch">

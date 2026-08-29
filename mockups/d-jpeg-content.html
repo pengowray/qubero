@@ -82,7 +82,7 @@
     <table>
       <tr><td>Pixels</td><td><b>1920 × 1200</b>, 8-bit</td></tr>
       <tr><td>Colour</td><td><b>YCbCr</b>, no subsampling (1×1,1×1,1×1) · Adobe transform 1</td></tr>
-      <tr><td>Compression</td><td><b>18.4 : 1</b> · 0.68 bits per pixel</td></tr>
+      <tr><td>Compression</td><td><b>11.0 : 1</b> vs raw RGB · 2.2 bits per pixel</td></tr>
       <tr><td>Tables</td><td>2 quantisation · 4 Huffman · restart every 240 MCUs</td></tr>
       <tr><td>Integrity</td><td style="color:var(--ok)">✓ markers well-formed, scan ends at EOI, no trailer</td></tr>
     </table>
@@ -99,7 +99,7 @@
 <div class="pipenote">The decode pipeline. Each stage is a real address space you can scroll: file offsets on the left end, pixel coordinates on the right. <b>Yellow</b> follows the current selection through every stage.</div>
 
 <section>
-  <div class="shead"><h2>The selected 64 pixels, layer by layer</h2><span class="range">image (1216, 480) ↔ file 0x241c7</span></div>
+  <div class="shead"><h2>The selected 64 pixels, layer by layer</h2><span class="range">image (1216, 480) ↔ file 0x241c7 · illustrative values, not decoded from the file</span></div>
   <div class="layers">
     <div class="lr"><b>Pixels</b> <span>· block at (1216, 480), 8×8, component Y</span></div>
     <div class="lr"><b>Coefficients</b> <span>· MCU 3,615, block Y · DC −34 + 11 AC terms (of 63)</span>
