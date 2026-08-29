@@ -173,8 +173,35 @@ falls out of the flat item list. Do not build this as one giant DOM.
   TS registry keyed by template name. `flatten` emits a `record` item when the caller's
   `isRecord` says so, and nothing supplies one yet. (Mockup E in `../qubero2-extras/mockups/`
   sketches the wider address-space question; it is context, not part of this task.)
-- Rule 3's *second* fold kind, "23 more fields, all default", is deferred. It is not
-  the machinery fold and does not use `consumed_by`: it needs to know what a field's
-  default is, and the IR does not carry one. Options are a per-template default list,
-  or a proxy the reader can check (a run of leaf fields reading as zero or empty).
-  Decide before step 2 renders the SQLite header, which is where the mockup shows it.
+- Rule 3's *second* fold kind, "23 more fields, all default", is on the back burner
+  rather than deferred to a date. A long header is not a problem in itself, and it is
+  not clear the idea of a default even carries across formats: a SQLite header's
+  zeros are defaults, a PNG IHDR's are values. The IR has no notion of one either.
+  Explore it on its own terms before building anything: what would have to be true
+  of a format for "all default" to be an honest thing to say about a run of its
+  fields, and whether the answer is a per-template list or something a reader can
+  check for themselves.
+
+## Long lists (a task of its own, after the steps above)
+
+A list of two hundred is a page. A list of two hundred thousand is a different
+problem, and the app already handles it in a way that feels clunky. Two things are
+wanted, and neither is in the seven steps:
+
+1. **Reach one item without unfolding the ones before it.** Clicking the 20,000th
+   element in the hex view has to select it and show it in the listing, and the
+   listing must not draw the 19,999 above it to get there. `flatten`'s `shown` map
+   counts from the start of a list, so the window can only grow forward from the
+   first element; reaching the middle needs a window with two ends, and rows at both
+   ends saying what is above and below it. `ListingReport.reveal` is written against
+   the counting-forward model and silently finds nothing past the first page, which
+   is a real limit rather than a bug to leave unremarked. Nothing calls it yet.
+
+2. **Give a long list somewhere of its own to live.** A side panel, or an embedded
+   pane, scrolling the list the way `hexview.ts` scrolls the file: unbounded, by
+   index, with no expectation that the whole thing is ever in the document. A quarter
+   of a million tokens is a document in its own right and reads badly as a fold
+   inside a report about the file that holds it.
+
+Both are about the same thing: a list long enough to be its own subject stops being a
+row that opens. Design them together.
