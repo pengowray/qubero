@@ -96,15 +96,7 @@ const SMALL_FIELDS = (n: number): string => `${n} small fields`;
  *  which would jump everything below by a row. */
 const BLANK = " ";
 
-/** What the block view measures. */
-type FocusMode = "all" | "gaps";
-const MODE_LABEL = "Measure";
-const MODE_OPTIONS: readonly { readonly value: FocusMode; readonly label: string }[] = [
-  { value: "all", label: "All bytes in this block" },
-  { value: "gaps", label: "Only bytes no field describes" },
-];
 const ALL_DESCRIBED = "Every byte in this block belongs to a field.";
-const NO_TEMPLATE_GAPS = "No template, so no field describes any of it.";
 const GAPS_FOUND = (n: number, bytes: number): string =>
   `${n === 1 ? "1 stretch" : `${n.toLocaleString()} stretches`} no field describes, ${formatBytes(bytes)} in all.`;
 const GAPS_MORE = (n: number): string => `${n.toLocaleString()} more not listed.`;
@@ -209,7 +201,6 @@ export class OverviewPanel {
 
   private readonly focusEl: HTMLElement;
   private readonly focusHead: HTMLElement;
-  private readonly focusMode: HTMLSelectElement;
   private readonly focusCanvas: HTMLCanvasElement;
   private readonly focusReadout: HTMLElement;
   private readonly focusStats: HTMLElement;
@@ -222,7 +213,6 @@ export class OverviewPanel {
   /** Which cell of the block map was last picked, so it stays marked while the
    *  rest of the scan fills in around it. */
   private picked: number | null = null;
-  private mode: FocusMode = "all";
   /** Another step is already queued, so a burst of notifies runs one. */
   private stepQueued = false;
   private focusQueued = false;
@@ -275,19 +265,6 @@ export class OverviewPanel {
     this.focusEl = document.createElement("section");
     this.focusEl.className = "ov-focus";
     this.focusHead = document.createElement("h3");
-    this.focusMode = document.createElement("select");
-    this.focusMode.className = "ov-mode";
-    this.focusMode.setAttribute("aria-label", MODE_LABEL);
-    for (const o of MODE_OPTIONS) {
-      const opt = document.createElement("option");
-      opt.value = o.value;
-      opt.textContent = o.label;
-      this.focusMode.append(opt);
-    }
-    this.focusMode.addEventListener("change", () => {
-      this.mode = this.focusMode.value === "gaps" ? "gaps" : "all";
-      this.renderFocus();
-    });
     this.focusCanvas = document.createElement("canvas");
     this.focusCanvas.className = "ov-map";
     this.focusReadout = document.createElement("p");
@@ -299,7 +276,6 @@ export class OverviewPanel {
     this.focusGaps.className = "ov-gaps";
     this.focusEl.append(
       this.focusHead,
-      this.focusMode,
       this.focusCanvas,
       this.focusReadout,
       this.focusStats,
@@ -775,10 +751,8 @@ export class OverviewPanel {
       `${BLOCK_TITLE} ${formatOffset(block.from * 8)} · ${formatBytes(block.to - block.from)}`,
       close,
     );
-    this.focusMode.value = this.mode;
     this.focusEl.replaceChildren(
       this.focusHead,
-      this.focusMode,
       this.focusCanvas,
       this.focusReadout,
       this.focusStats,
@@ -833,12 +807,8 @@ export class OverviewPanel {
   }
 
   private drawGaps(block: { from: number; to: number }): void {
-    if (this.mode !== "gaps") {
-      this.focusGaps.replaceChildren();
-      return;
-    }
     if (this.doc.template === null) {
-      this.focusGaps.replaceChildren(this.noneLine(NO_TEMPLATE_GAPS));
+      this.focusGaps.replaceChildren();
       return;
     }
     const gaps = this.gapsIn(block);

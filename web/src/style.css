@@ -1781,12 +1781,6 @@ input.invalid {
   border-top: 1px solid var(--line);
   padding-top: 6px;
 }
-.ov-mode {
-  font: inherit;
-  min-height: 0;
-  padding: 3px 6px;
-  max-width: 100%;
-}
 .ov-close {
   font: inherit;
   line-height: 1;
