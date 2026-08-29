@@ -16,6 +16,7 @@ import type { Item, ListingState, TreeSource } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
 import { fileMap } from "./filemap.js";
+import { checkGap } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
 import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
 
@@ -67,6 +68,14 @@ function runPosition(item: Item, fileBits: number): "start" | "end" | "middle" {
   if (fileBits > 0 && item.offsetBits + item.sizeBits >= fileBits) return "end";
   return "middle";
 }
+
+/** What each answer from `checkGap` is called. */
+const GAP_VERDICT = {
+  zeros: REPORT.gapZeros,
+  something: REPORT.gapNonzero,
+  "too-large": REPORT.gapTooLarge,
+  unread: REPORT.gapUnread,
+} as const;
 
 export class ListingReport {
   readonly el: HTMLElement;
@@ -386,7 +395,7 @@ export class ListingReport {
     row.style.paddingLeft = `${8 + item.depth * 12}px`;
     row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
     row.append(el("span", "rp-field", REPORT.gap));
-    row.append(el("span", "rp-value", ""));
+    row.append(el("span", "rp-value", GAP_VERDICT[checkGap(this.doc, item.offsetBits, item.sizeBits)]));
     row.append(el("span", "rp-type", ""));
     row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
     return row;

@@ -25,16 +25,16 @@ test("one byte that is not zero is enough to say so", () => {
   assert.equal(checkGap(doc(b), 0, 64 * 8), "something");
 });
 
-test("bytes that have not arrived are not guessed at", () => {
-  assert.equal(checkGap(doc(new Uint8Array(64), true), 0, 64 * 8), "unchecked");
+test("bytes that have not arrived are not guessed at, and can still arrive", () => {
+  assert.equal(checkGap(doc(new Uint8Array(64), true), 0, 64 * 8), "unread");
 });
 
-test("a run too long to read is not read", () => {
+test("a run too long to read is not read, and never will be", () => {
   const big = (CHECK_LIMIT_BYTES + 1) * 8;
-  assert.equal(checkGap(doc(new Uint8Array(0)), 0, big), "unchecked");
+  assert.equal(checkGap(doc(new Uint8Array(0)), 0, big), "too-large");
 });
 
 test("a run that does not fill whole bytes is left alone", () => {
-  assert.equal(checkGap(doc(new Uint8Array(8)), 3, 8), "unchecked");
-  assert.equal(checkGap(doc(new Uint8Array(8)), 0, 0), "unchecked");
+  assert.equal(checkGap(doc(new Uint8Array(8)), 3, 8), "too-large");
+  assert.equal(checkGap(doc(new Uint8Array(8)), 0, 0), "too-large");
 });

@@ -18,16 +18,24 @@ import type { Doc } from "./doc.js";
  *  through memory to prove it is empty would cost more than the answer. */
 export const CHECK_LIMIT_BYTES = 64 * 1024;
 
-export type GapVerdict = "zeros" | "something" | "unchecked";
+/** Two ways of having no answer, which are not the same: one is settled and
+ *  one is waiting. A run past the cap will never be checked; a run whose bytes
+ *  have not arrived will be, when they do. */
+export type GapVerdict = "zeros" | "something" | "too-large" | "unread";
 
-/** Whether a run of bytes is all zero, something else, or too long or not yet
- *  read to say. */
+/**
+ * Whether a run of bytes is all zero, something else, or unanswered.
+ *
+ * `zeros` is only ever returned after reading the whole run. Reading the first
+ * part of a long one and finding zeros says nothing about the rest, and a
+ * verdict that claims otherwise is worse than no verdict at all.
+ */
 export function checkGap(doc: Doc, offsetBits: number, sizeBits: number): GapVerdict {
-  if (sizeBits <= 0 || offsetBits % 8 !== 0 || sizeBits % 8 !== 0) return "unchecked";
+  if (sizeBits <= 0 || offsetBits % 8 !== 0 || sizeBits % 8 !== 0) return "too-large";
   const bytes = sizeBits / 8;
-  if (bytes > CHECK_LIMIT_BYTES) return "unchecked";
+  if (bytes > CHECK_LIMIT_BYTES) return "too-large";
   const { bytes: data, complete } = doc.read(offsetBits / 8, bytes);
-  if (!complete) return "unchecked";
+  if (!complete) return "unread";
   for (const b of data) if (b !== 0) return "something";
   return "zeros";
 }

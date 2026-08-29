@@ -76,6 +76,29 @@ export const REPORT = {
    *  may suggest the other. The mockup's "unused page space" is this row with
    *  the part's own name in it, which the general form cannot know. */
   gap: "unused space",
+  /** The verdict beside a gap row: every byte of it was read and each one is
+   *  zero. "verified" is doing the work: it says the bytes were looked at,
+   *  where a bare "zeros" could pass as a guess about padding. Only a whole
+   *  read earns it. A gap past the check's size cap never gets this string,
+   *  however many of its bytes were zero so far. */
+  gapZeros: "verified zeros",
+  /** The same check found at least one byte that is not zero. The exact
+   *  negation of `gapZeros` and nothing more: the classifier that sorts runs
+   *  into text or high entropy does not run on gaps, so no stronger word is
+   *  honest here. The row cannot stay silent instead. With the other verdicts
+   *  speaking, a blank cell would mean "checked, nonzero" only to a reader
+   *  who has already learned the scheme. */
+  gapNonzero: "not all zeros",
+  /** No verdict, and none coming: the gap is past the size cap on the check.
+   *  Opens the same way as `gapUnread` so the two no-verdict rows read as one
+   *  pattern at a scan, with the tail carrying the difference: this one does
+   *  not resolve. */
+  gapTooLarge: "not checked, too large",
+  /** No verdict yet: the gap's bytes have not been read from the file. Not
+   *  the situation `reading` below describes; nothing is being fetched. This
+   *  is the verdict column saying the read has not happened, and "yet" says
+   *  it can. */
+  gapUnread: "not checked yet",
   /** Where a part is too small a slice of the file for a percentage to say
    *  anything: under one per cent, "0%" would read as absent. The number the
    *  reader wants at that size is the byte count beside it. */
