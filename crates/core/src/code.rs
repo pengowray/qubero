@@ -36,6 +36,11 @@ pub enum Isa {
     Thumb,
     Riscv32,
     Riscv64,
+    /// The RISC-V half of an RP2350, the chip in a Raspberry Pi Pico 2. The
+    /// same 32-bit machine with the extensions that core implements and the
+    /// instructions its designers added, which are read as themselves only
+    /// here: elsewhere they are encodings the standard leaves undefined.
+    Hazard3,
 }
 
 impl Isa {
@@ -50,6 +55,7 @@ impl Isa {
             Isa::Thumb => "thumb",
             Isa::Riscv32 => "riscv32",
             Isa::Riscv64 => "riscv64",
+            Isa::Hazard3 => "hazard3",
         }
     }
 
@@ -65,6 +71,7 @@ impl Isa {
             Isa::Thumb,
             Isa::Riscv32,
             Isa::Riscv64,
+            Isa::Hazard3,
         ]
         .into_iter()
         .find(|isa| isa.name() == name)
@@ -76,7 +83,7 @@ impl Isa {
         match self {
             Isa::X86_64 | Isa::X86_32 | Isa::X86_16 => 1,
             Isa::Aarch64 | Isa::Arm => 4,
-            Isa::Thumb | Isa::Riscv32 | Isa::Riscv64 => 2,
+            Isa::Thumb | Isa::Riscv32 | Isa::Riscv64 | Isa::Hazard3 => 2,
         }
     }
 
@@ -85,7 +92,7 @@ impl Isa {
     pub fn longest(self) -> usize {
         match self {
             Isa::X86_64 | Isa::X86_32 | Isa::X86_16 => 15,
-            Isa::Riscv32 | Isa::Riscv64 => 4,
+            Isa::Riscv32 | Isa::Riscv64 | Isa::Hazard3 => 4,
             _ => 4,
         }
     }
@@ -116,12 +123,18 @@ pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
         Isa::Aarch64 => aarch64(bytes),
         Isa::Arm => arm(bytes),
         Isa::Thumb => thumb(bytes),
-        Isa::Riscv32 => riscv(bytes, false),
+        Isa::Riscv32 => crate::riscv::decode(bytes, false),
+        Isa::Hazard3 => crate::riscv::decode(bytes, true),
         Isa::Riscv64 => riscv(bytes, true),
     };
     let mut insn =
         decoded.unwrap_or_else(|| Insn { len: isa.step().min(bytes.len()), text: "(bad)".into(), target: None });
-    insn.target = relative_target(isa, &insn.text, insn.len);
+    // A decoder that knows which of its operands is an address has already
+    // said so, exactly. Reading the distance back out of the text is for the
+    // ones that only write it down.
+    if insn.target.is_none() {
+        insn.target = relative_target(isa, &insn.text, insn.len);
+    }
     insn
 }
 
@@ -134,10 +147,10 @@ pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
 /// answers in the one unit a reader of a file can use, which is a distance
 /// from the first byte of the instruction.
 ///
-/// RISC-V is not here. Its decoder writes the distance as an operand like any
-/// other number, with nothing to say that this one is an address, and guessing
-/// which operand of which instruction is a target is how a disassembler starts
-/// making things up.
+/// The 32-bit RISC-V decoder in this crate answers for itself and never
+/// reaches here. The 64-bit one is `raki`, which writes a distance as an
+/// operand like any other number with nothing to say that this one is an
+/// address, so its branches go unmarked rather than guessed at.
 pub fn relative_target(isa: Isa, text: &str, len: usize) -> Option<i64> {
     let at = text.find('$')?;
     let rest = &text[at + 1..];

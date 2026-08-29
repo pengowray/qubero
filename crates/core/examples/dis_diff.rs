@@ -95,7 +95,14 @@ fn base(name: &str) -> &str {
         "bgez" | "blez" => "bge",
         "j" | "jal" => "jal",
         "jr" | "ret" | "jalr" => "jalr",
-        "mv" | "li" | "nop" | "zext.b" => "addi",
+        "mv" | "li" | "nop" => "addi",
+        "zext.b" => "andi",
+        "sltz" | "sgtz" => "slt",
+        // The compressed stack forms name the stack in the mnemonic; the
+        // decoder here names it in an operand instead.
+        "swsp" => "sw",
+        "lwsp" => "lw",
+        "addi16sp" | "addi4spn" => "addi",
         "not" => "xori",
         "neg" => "sub",
         "seqz" => "sltiu",
