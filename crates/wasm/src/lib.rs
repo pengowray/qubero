@@ -71,6 +71,13 @@ struct NodeDto {
     value_offset_bits: f64,
     /// How the encoding was settled, or that the bytes do not fit it.
     read_as: Option<String>,
+    /// Which sibling's length, count, type or position this field settles, as
+    /// an index among the parent's children. Null for a field no sibling
+    /// reads, which is most of them.
+    consumed_by: Option<f64>,
+    /// What the template says about this field over the top of that: true for
+    /// machinery, false for payload, null when it has no opinion.
+    machinery: Option<bool>,
 }
 
 /// What the byte-class scan has found so far. `classes` is one digit per
@@ -821,6 +828,8 @@ fn dto(n: NodeInfo) -> NodeDto {
         value_bytes: n.value_bytes as f64,
         value_offset_bits: n.value_offset_bits as f64,
         read_as: n.read_as,
+        consumed_by: n.consumed_by.map(|i| i as f64),
+        machinery: n.machinery,
     }
 }
 

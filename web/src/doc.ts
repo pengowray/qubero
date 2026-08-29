@@ -135,6 +135,15 @@ export type TemplateNode = {
   readonly value_offset_bits: number;
   /** How the encoding was settled, or that the bytes do not fit it. */
   readonly read_as: string | null;
+  /** Which sibling this field settles the length, count, type or position of,
+   * as an index among the parent's children. Null for a field no sibling
+   * reads, which is most of them. This is the fact the listing folds a
+   * structure's machinery on; whether to fold is the view's decision, since
+   * a field and the field it places can end up in different sections. */
+  readonly consumed_by: number | null;
+  /** What the template says over the top of that: true for machinery, false
+   * for payload, null when it has no opinion. */
+  readonly machinery: boolean | null;
 };
 
 /** The bit range a successful `writeNode` replaced. */
