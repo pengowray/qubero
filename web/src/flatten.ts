@@ -27,6 +27,10 @@ export const SECTION_LIST_MAX = 64;
  *  per cent of it and are one part of a header, however many of them there
  *  are. */
 export const SECTION_SHARE = 0.25;
+/** Rows a table shows without being asked. A table read as a table is the
+ *  point of rule 7, and a reader who has to know to open it will not find it;
+ *  a table of a hundred thousand rows is a different problem, and waits. */
+export const RECORD_OPEN_MAX = 200;
 
 export type TreeSource = {
   node(path: readonly number[]): TemplateReply<TemplateNode>;
@@ -346,7 +350,7 @@ function heading(
   inner: readonly TemplateNode[] | null,
 ): void {
   const key = pathKey(path);
-  const open = level === 0 || w.isOpen(key);
+  const open = level === 0 || w.isOpen(key) || (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX);
   w.push({
     kind: "heading",
     key: `h:${key}`,
@@ -437,6 +441,21 @@ function body(
       node,
       count: node.child_count,
     });
+    // A table is a view of its rows, so the rows themselves are not listed and
+    // nothing here answers "how is that row written". Asking for one row's
+    // bytes puts its strip under the table, which is the way back to the
+    // fields. Only rows already asked for are looked up, so a table of a
+    // million costs nothing until one of them is.
+    for (const key of w.state.bytes) {
+      const prefix = `r:${pathKey(path)}.`;
+      if (!key.startsWith(prefix)) continue;
+      const rowPath = key.slice(prefix.length).split(".").map(Number);
+      if (rowPath.some((n) => !Number.isInteger(n))) continue;
+      const full = [...path, ...rowPath];
+      const reply = w.src.node(full);
+      if (reply.status !== "ok") continue;
+      w.strip(key, full, reply.node.name, { start: reply.node.offset_bits, end: endBits(reply.node) }, depth + 1);
+    }
     return;
   }
   rows(w, path, kids, 0, [], depth, { start: node.offset_bits, end: endBits(node) });
@@ -555,7 +574,8 @@ function gap(w: Walk, path: readonly number[], from: number, to: number, depth: 
 function child(w: Walk, node: TemplateNode, depth: number): void {
   const key = pathKey(node.path);
   if (node.composite && node.child_count > 0 && depth === 1) {
-    const open = w.isOpen(key);
+    // A short table opens itself, since the table is what it is for.
+    const open = w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true);
     heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : []);
     return;
   }

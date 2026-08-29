@@ -126,7 +126,13 @@ falls out of the flat item list. Do not build this as one giant DOM.
 4. ~~Byte strip on demand per item.~~ **Done**: `web/src/bytestrip.ts`, over
    `Doc.spans` and `chipfit`'s chip vocabulary, plus gap verdicts in
    `web/src/gapcheck.ts`. **One part of rule 6 is not built**: see the open questions.
-5. Record rendering for formats that declare it (SQLite cells first).
+5. ~~Record rendering for formats that declare it (SQLite cells first).~~ **Done for
+   table leaves**: `web/src/records.ts`, a registry keyed by template name. Left for
+   its next entries: index pages and b-tree interior pages, which are not tables of
+   rows; the schema page itself, whose columns SQLite fixes rather than declares;
+   and GGUF metadata. A row's "stored at" opens its bytes under the table, which is
+   rule 7's link back to the fields. The other link rule 7 asks for, a schema row's
+   root page pointing at that page, waits for the shared selection in step 6.
 6. Shared selection with the hex view cursor.
 7. Swap it in as the Listing mode; delete/absorb `listingview.ts`,
    `logicaloutline.ts`, and the Structure panel's tree duplication.
@@ -174,8 +180,9 @@ falls out of the flat item list. Do not build this as one giant DOM.
 - Where "Logical tree" mode gets its alternate ordering from (likely a second
   flattening of the same tree, cells in pointer order instead of physical order).
 - Whether the record-table rendering is declared per format in the template IR or in a
-  TS registry keyed by template name. `flatten` emits a `record` item when the caller's
-  `isRecord` says so, and nothing supplies one yet. (Mockup E in `../qubero2-extras/mockups/`
+  TS registry keyed by template name. **Answered for now: the registry**, in
+  `web/src/records.ts`, on the grounds that one format is not evidence for changing
+  the IR and a second or third would be. Revisit when GGUF metadata joins it. (Mockup E in `../qubero2-extras/mockups/`
   sketches the wider address-space question; it is context, not part of this task.)
 - Rule 6's **bits chip is not built**. The rule says sub-byte detail uses the bits
   pattern, and the mockup's row 3 cell shows it: `payload_size 18 [0|0010010]

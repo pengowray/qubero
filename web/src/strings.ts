@@ -128,6 +128,10 @@ export const REPORT = {
   /** A run of bytes shown short, because a strip is for seeing where fields
    *  are rather than for reading every byte of one. The mockup's word. */
   moreBytes: "unused…",
+  /** The last column of a table of records: where in the file the row it just
+   *  showed is actually written. The mockup's own heading, and the one thing
+   *  in the table that is about the file rather than about the data. */
+  storedAt: "stored at",
 } as const;
 
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the

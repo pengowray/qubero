@@ -12,11 +12,12 @@
 import { formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 import { emptyState, flatten, PAGE } from "./flatten.js";
-import type { Item, ListingState, TreeSource } from "./flatten.js";
+import type { FlatOptions, Item, ListingState, TreeSource } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
 import { fileMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
+import { isRecordList, recordTable } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
 import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
@@ -34,7 +35,7 @@ const OVERSCAN = 6;
  *  in the document; this is the guess the first layout uses, and `measured`
  *  replaces it. */
 function heightOf(item: Item): number {
-  if (item.kind === "bytes") return HEIGHT.strip;
+  if (item.kind === "bytes" || item.kind === "record") return HEIGHT.strip;
   if (item.kind !== "heading") return HEIGHT.row;
   return item.level === 0 ? HEIGHT.section : HEIGHT.part;
 }
@@ -86,6 +87,7 @@ export class ListingReport {
   private readonly canvas: HTMLElement;
   private readonly doc: Doc;
   private readonly src: TreeSource;
+  private readonly opts: FlatOptions;
   private state: ListingState = emptyState;
   private items: readonly Item[] = [];
   /** Where each item starts, in pixels, and one past the last: `tops[i + 1]`
@@ -119,6 +121,7 @@ export class ListingReport {
       node: (path) => doc.templateNode(path),
       children: (path, from, to) => doc.templateChildren(path, from, to),
     };
+    this.opts = { isRecord: (node) => isRecordList(doc, node) };
     this.el = el("div", "report");
     this.crumbs = el("div", "rp-crumbs");
     this.scroller = el("div", "rp-scroll");
@@ -168,7 +171,7 @@ export class ListingReport {
    *  above it would otherwise push the whole file down under the cursor. */
   private rebuild(): void {
     const anchor = this.anchor();
-    this.items = flatten(this.src, this.state).items;
+    this.items = flatten(this.src, this.state, this.opts).items;
     this.segments = this.items
       .filter((i) => i.kind === "heading" && i.level === 0)
       .map((i) => ({ offsetBits: i.offsetBits, sizeBits: i.sizeBits, color: sectionColor(i.section) }));
@@ -265,7 +268,7 @@ export class ListingReport {
     let changed = false;
     for (let i = from; i < to; i++) {
       const item = this.items[i];
-      if (item === undefined || item.kind !== "bytes") continue;
+      if (item === undefined || (item.kind !== "bytes" && item.kind !== "record")) continue;
       const node = this.canvas.querySelector<HTMLElement>(`[data-key="${CSS.escape(item.key)}"]`);
       if (node === null) continue;
       const height = Math.ceil(node.getBoundingClientRect().height);
@@ -329,7 +332,7 @@ export class ListingReport {
       case "bytes":
         return this.drawStrip(item);
       case "record":
-        return el("div", "rp-item rp-record", item.node.name);
+        return this.drawRecord(item);
       case "more":
         return this.drawMore(item);
       case "pending":
@@ -351,6 +354,46 @@ export class ListingReport {
     row.append(this.bytesButton(item.key));
     row.append(this.mapFor(item));
     return row;
+  }
+
+  /** A structure the format keeps as a table, drawn as one: the format's own
+   *  column names, and where each row is written. */
+  private drawRecord(item: Extract<Item, { kind: "record" }>): HTMLElement {
+    const host = el("div", "rp-item rp-record");
+    host.style.paddingLeft = `${8 + item.depth * 12}px`;
+    const table = recordTable(this.doc, item.node);
+    if (table === null) {
+      host.append(el("div", "bs-wait", REPORT.reading));
+      return host;
+    }
+    const grid = document.createElement("table");
+    grid.className = "rec";
+    const head = document.createElement("tr");
+    for (const name of table.columns) head.append(el("th", "", name));
+    head.append(el("th", "rec-at", REPORT.storedAt));
+    grid.append(head);
+    for (const row of table.rows) {
+      const tr = document.createElement("tr");
+      for (const cell of row.cells) tr.append(el("td", fieldClass(cell.kind), cell.text));
+      const at = el("td", "rec-at");
+      // The one way out of the table: the row's own bytes, which is where it
+      // was read from and where the reader goes to see how.
+      const link = el("button", "rec-link", `${formatOffset(row.offsetBits)} \u00b7 ${formatBytes(row.sizeBits / 8)}`);
+      link.type = "button";
+      // Back to the fields: the row's own bytes, under the table it came from.
+      const rowKey = `r:${row.path.join(".")}`;
+      if (this.state.bytes.has(rowKey)) link.classList.add("is-on");
+      link.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleBytes(rowKey);
+      });
+      at.append(link);
+      tr.append(at);
+      grid.append(tr);
+    }
+    host.append(grid);
+    if (table.pending) host.append(el("div", "bs-wait", REPORT.reading));
+    return host;
   }
 
   private drawStrip(item: Extract<Item, { kind: "bytes" }>): HTMLElement {

@@ -2506,3 +2506,63 @@ button.insp-xrow-where:hover {
   border-color: var(--line);
   background: var(--panel);
 }
+
+/* ---- records (rule 7) ---- */
+/* A structure the format keeps as a table, shown as one, under the format's
+   own column names. The last column is the only one about the file rather
+   than about the data. */
+.rp-record {
+  inset-inline: 0;
+  display: block;
+  padding-block: 4px 10px;
+  padding-inline-end: 8px;
+  overflow-x: auto;
+}
+table.rec {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+table.rec th,
+table.rec td {
+  /* A fixed line height for every cell, including the one holding a button:
+     a button brings its own and the rows come out unevenly spaced. */
+  line-height: 18px;
+  padding: 2px 10px 2px 0;
+  text-align: start;
+  vertical-align: top;
+  white-space: nowrap;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.rec th {
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+table.rec tr:hover td {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.rec-at {
+  color: var(--addr);
+}
+.rec-link {
+  display: inline;
+  padding: 0;
+  /* Buttons in this app are sized for a finger. This one is a word inside a
+     line of a table, and the row is as tall as its tallest cell, so the
+     32px floor would space every row of every table out to fit it. */
+  min-height: 0;
+  line-height: inherit;
+  vertical-align: baseline;
+  border: 0;
+  background: none;
+  color: var(--addr);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.rec-link:hover {
+  color: var(--fg);
+}
