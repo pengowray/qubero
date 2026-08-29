@@ -94,7 +94,10 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
             // The repository's own files: the collection is versioned by its
             // lists, and those are not samples.
             continue;
-        } else if path.extension().is_none_or(|e| e != "md" && e != "tsv" && e != "py") {
+        } else if path.extension().is_none_or(|e| e != "md" && e != "tsv" && e != "py" && e != "dis") {
+            // A `.dis` beside a binary is that binary's own toolchain reading
+            // it, kept as the answer key `examples/dis_diff.rs` measures a
+            // decoder against. It is a listing about a sample, not a sample.
             out.push(path);
         }
     }
