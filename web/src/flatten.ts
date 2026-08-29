@@ -90,10 +90,11 @@ export type Item = Common &
         readonly node: TemplateNode;
         /** True while this row's children are listed below it. */
         readonly open: boolean;
-        /** A field whose job is placing another field: a length, a count, an
-         *  array of offsets. It is drawn where it is, like everything else;
-         *  this only says which it is. */
-        readonly quiet: boolean;
+        /** The sibling that reads this field for a length, a count, a type
+         *  or a position, when there is one and it is drawn. The row says so:
+         *  a field exists because something uses it, and that is the answer
+         *  to what a length prefix is for. */
+        readonly reads: { readonly name: string; readonly path: readonly number[] } | null;
       }
     | {
         /** Bytes inside a structure that none of its fields covers. */
@@ -330,12 +331,12 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
     w.waiting([], 0, root.node);
     return { items: w.items, pending: true, reachedBytes: w.reachedBytes };
   }
-  sections(w, [], root.node, kids.nodes);
+  sections(w, [], root.node, kids.nodes, kids.from);
   return { items: w.items, pending: w.pending, reachedBytes: w.reachedBytes };
 }
 
 /** The top-level parts of the file, and what is in each. */
-function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[]): void {
+function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0): void {
   const breaks = sectionBreaks(kids);
   breaks.forEach((from, b) => {
     const to = breaks[b + 1] ?? kids.length;
@@ -351,13 +352,13 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
       // a list is not a part of the file.
       if (inner !== null && inner.from === 0 && inner.nodes.length === first.child_count && elementsAreSections(first, inner.nodes, w.sectionListMax, w.fileBits)) {
         w.section -= 1;
-        sections(w, kidPath, first, inner.nodes);
+        sections(w, kidPath, first, inner.nodes, inner.from);
         return;
       }
       heading(w, kidPath, first, 0, from, to, inner);
       return;
     }
-    runHeading(w, path, kids, from, to, breaks);
+    runHeading(w, path, kids, from, to, breaks, base);
   });
 }
 
@@ -421,6 +422,7 @@ function runHeading(
   from: number,
   to: number,
   breaks: readonly number[],
+  base: number,
 ): void {
   const run = kids.slice(from, to);
   const first = run[0];
@@ -442,7 +444,10 @@ function runHeading(
   });
   // The run's own edges are where the parts either side of it begin, so there
   // is nothing unaccounted for at them.
-  rows(w, path, run, from, breaks, 1, null);
+  // The run is a slice of a slice, so what reads one of its fields may be a
+  // sibling outside it: SQLite's `page_size` is written in the header and read
+  // by a page. The whole of the parent's children go along for that lookup.
+  rows(w, path, run, base + from, breaks, 1, null, kids, base);
 }
 
 /** What is inside one heading. */
@@ -525,9 +530,10 @@ function rows(
   breaks: readonly number[],
   depth: number,
   bounds: { readonly start: number; readonly end: number } | null,
+  siblings: readonly TemplateNode[] = kids,
+  sibBase: number = base,
 ): void {
   const order = inFileOrder(kids);
-  const indexOf = new Map(kids.map((k, i) => [k, base + i]));
   let cursor = bounds?.start ?? order[0]?.offset_bits ?? 0;
   for (const kid of order) {
     if (kid.offset_bits > cursor) gap(w, path, cursor, kid.offset_bits, depth);
@@ -535,7 +541,7 @@ function rows(
     // A field that is only its parent's contents has no name worth a level of
     // structure: its children stand in its place, at its depth.
     if (!kid.contents || !kid.composite || kid.child_count === 0) {
-      child(w, kid, depth, isMachinery(kid, indexOf.get(kid) ?? 0, breaks));
+      child(w, kid, depth, consumerOf(kid, siblings, sibBase));
       continue;
     }
     const inner = w.kids(kid.path, kid.child_count);
@@ -560,12 +566,23 @@ function gap(w: Walk, path: readonly number[], from: number, to: number, depth: 
 /** One child of a structure: a heading when it is a named part with something
  *  inside it, a row otherwise. Rule 2: depth past a sub-heading is rows, not
  *  more indentation. */
-function child(w: Walk, node: TemplateNode, depth: number, quiet = false): void {
+/** The sibling that reads this field, when it is one of the children in hand
+ *  and is a row the reader can be sent to. A field that is only its parent's
+ *  contents is spliced away and never drawn, so pointing at it would point at
+ *  nothing. */
+function consumerOf(node: TemplateNode, kids: readonly TemplateNode[], base: number): { readonly name: string; readonly path: readonly number[] } | null {
+  if (node.consumed_by === null) return null;
+  const owner = kids[node.consumed_by - base];
+  if (owner === undefined || owner.contents) return null;
+  return { name: owner.name, path: owner.path };
+}
+
+function child(w: Walk, node: TemplateNode, depth: number, reads: { readonly name: string; readonly path: readonly number[] } | null = null): void {
   const key = pathKey(node.path);
   // A structure that places another field is not a division of the file, so it
   // stays a row: an array of cell pointers belongs beside the fields it was
   // written among, not as a heading over the page's contents.
-  if (node.composite && node.child_count > 0 && depth === 1 && !quiet) {
+  if (node.composite && node.child_count > 0 && depth === 1 && reads === null) {
     // A short table opens itself, since the table is what it is for.
     const open = w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true);
     heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : { from: 0, nodes: [] });
@@ -582,7 +599,7 @@ function child(w: Walk, node: TemplateNode, depth: number, quiet = false): void 
     path: node.path,
     node,
     open,
-    quiet,
+    reads,
   });
   w.strip(`r:${key}`, node.path, node.name, { start: node.offset_bits, end: endBits(node) }, depth);
   if (!open) return;

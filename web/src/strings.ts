@@ -103,6 +103,22 @@ export const REPORT = {
    *  anything: under one per cent, "0%" would read as absent. The number the
    *  reader wants at that size is the byte count beside it. */
   tinyShare: "<1%",
+  /** What reads this field, said on the field's own row: `\u2192 cells` after
+   *  a cell count. A field exists because something uses it, and that is the
+   *  answer to what a length prefix is doing in the middle of a header.
+   *
+   *  The arrow is already this listing's mark for the relationship: a list
+   *  placed by an earlier array of offsets has the type `offsets \u2192 X`.
+   *  Same relationship, same glyph, on purpose. */
+  reads: (name: string): string => `\u2192 ${name}`,
+  /** The same link, spelled out for a tooltip and for a reader who cannot see
+   *  the arrow. The inspector's panel says DEPENDS ON, so this says depends
+   *  rather than coining a second word for one relationship. */
+  readsLabel: (name: string): string => `${name} depends on this field`,
+  /** The length of a value the template works out rather than reads. Not
+   *  blank: with the address blank too, two empty cells read as something
+   *  broken rather than as a value that is nowhere in the file. */
+  notStored: "not stored",
   /** The two ends of a list that is only partly drawn. `rest` is already
    *  counted and named: "249,800 items". A click draws the next page, not all
    *  of it, so both labels promise "more" and state the remainder instead of

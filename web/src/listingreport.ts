@@ -524,20 +524,36 @@ export class ListingReport {
 
   private drawRow(item: Extract<Item, { kind: "row" }>): HTMLElement {
     const n = item.node;
-    const row = el("div", `rp-item rp-row${item.quiet ? " rp-quiet" : ""}`);
+    // A field of no bytes is grey: whether it is a value the template worked
+    // out or a list that turned out to be empty, there is nothing of it in the
+    // file, and a row the reader can skip should look like one.
+    const row = el("div", `rp-item rp-row${n.size_bits === 0 ? " rp-nobytes" : ""}`);
     if (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === item.key) row.classList.add("is-on");
     row.style.paddingLeft = `${8 + item.depth * 12}px`;
-    // A computed value is not written anywhere, so it has no address and no
-    // length. "0x101a7" and "0 bytes" would be answers to questions this row
-    // is not the answer to; the type column already says what it is.
+    // A computed value is not written anywhere, so it has no address, and its
+    // length says so in words: "0x101a7" and "0 bytes" would be answers to
+    // questions this row is not the answer to.
     const written = n.type !== "computed";
     row.append(el("span", "rp-at", written ? formatOffset(n.offset_bits) : ""));
     row.append(el("span", `rp-field ${fieldClass(n.kind)}`, n.name));
-    row.append(el("span", "rp-value", n.composite ? countText(n.child_count, childWord(n)) : n.value));
+    const value = el("span", "rp-value", n.composite ? countText(n.child_count, childWord(n)) : n.value);
+    if (item.reads !== null) value.append(this.readsLink(item.reads));
+    row.append(value);
     row.append(el("span", "rp-type", n.type));
-    row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : ""));
-    if (written) row.append(this.bytesButton(item.key));
+    row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : REPORT.notStored));
+    // A toggle that opens a strip of nothing is a dead control.
+    if (n.size_bits > 0) row.append(this.bytesButton(item.key));
     return row;
+  }
+
+  /** What reads this field, as a link to it. */
+  private readsLink(reads: { readonly name: string; readonly path: readonly number[] }): HTMLElement {
+    const link = el("button", "rp-reads", REPORT.reads(reads.name));
+    link.type = "button";
+    link.title = REPORT.readsLabel(reads.name);
+    link.setAttribute("aria-label", REPORT.readsLabel(reads.name));
+    link.dataset["reads"] = pathString(reads.path);
+    return link;
   }
 
   private verdict(item: Extract<Item, { kind: "gap" }>): GapVerdict {
@@ -582,6 +598,11 @@ export class ListingReport {
     if (key === undefined) return;
     const item = this.items.find((i) => i.key === key);
     if (item === undefined) return;
+    const reads = target.closest<HTMLElement>("[data-reads]")?.dataset["reads"];
+    if (reads !== undefined) {
+      this.reveal(reads === "" ? [] : reads.split(".").map(Number));
+      return;
+    }
     const list = target.closest<HTMLElement>("[data-list]")?.dataset["list"];
     if (list !== undefined) {
       this.onOpenList(list === "" ? [] : list.split(".").map(Number));

@@ -2114,11 +2114,28 @@ button.insp-xrow-where:hover {
 .rp-gap .rp-size {
   font-style: normal;
 }
-/* A field whose job is placing another field: a length, a count, an array of
-   offsets. It sits where it was written, at the same size as everything else,
-   and says what it is by being quieter rather than by being hidden. */
-.rp-quiet {
+/* A field with no bytes in the file: a value the template works out, or a list
+   that turned out to be empty. Nothing of it is in front of the reader, so it
+   is grey. */
+.rp-nobytes {
   color: var(--muted);
+}
+
+/* What reads this field, on the field's own row and pointing at it. Small and
+   muted: the row's own name and value are what the reader is scanning, and
+   this answers the question they ask when one of them looks pointless. */
+.rp-reads {
+  min-height: 0;
+  margin-inline-start: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.rp-reads:hover {
+  color: var(--accent);
 }
 /* Either end of a list only partly drawn. Its label is a sentence rather than
    a field name, so it is not held to the field column's width: "Show more ·
@@ -2451,6 +2468,17 @@ button.insp-xrow-where:hover {
   font-size: 11px;
   cursor: pointer;
   opacity: 0;
+}
+/* Two hundred repetitions of the word down the right edge carry no
+   information. The control appears on the row under the pointer or under the
+   keyboard, and stays put wherever a strip is actually open. */
+.rp-bytes:not(.is-on) {
+  visibility: hidden;
+}
+.rp-item:hover .rp-bytes,
+.rp-item.is-cursor .rp-bytes,
+.rp-bytes:focus-visible {
+  visibility: visible;
 }
 .rp-item:hover .rp-bytes,
 .rp-bytes.is-on,

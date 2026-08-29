@@ -164,19 +164,23 @@ test("a header field that sizes something elsewhere stays a row", () => {
   assert.ok(names.includes("magic"));
 });
 
-test("a page header is rows, marked as what places the cells", () => {
+test("a page header is rows, each saying what reads it", () => {
   const { items } = run(SQLITE);
-  const quiet = items.filter((i) => i.kind === "row" && i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
-  // Every field of the page header, in place and in order, three pages over.
-  assert.deepEqual(quiet.slice(0, 6), [
-    "page_type",
-    "first_freeblock",
-    "cell_count",
-    "cell_content_start",
-    "fragmented_free_bytes",
-    "cell_pointers",
+  const rows = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? [i.node.name, i.reads?.name ?? null] : []));
+  // Every field of the page header, in place and in order, and the two of
+  // them that something reads say what: a chain, not one lump.
+  assert.deepEqual(rows.slice(4, 10), [
+    ["page_type", null],
+    ["first_freeblock", null],
+    ["cell_count", "cell_pointers"],
+    ["cell_content_start", null],
+    ["fragmented_free_bytes", null],
+    ["cell_pointers", "cells"],
   ]);
-  assert.equal(quiet.length, 18);
+  // `page_size` sizes pages that are nowhere near it, and says so from the
+  // header: a link works at any distance, where hiding it behind the field it
+  // places only worked when the two were side by side.
+  assert.deepEqual(rows[1], ["page_size", "page1"]);
 });
 
 test("the template's word beats what the shapes say, either way", () => {
@@ -195,10 +199,12 @@ test("the template's word beats what the shapes say, either way", () => {
     ],
   };
   const items = run(both, { ...emptyState, open: new Set(["0"]) }).items;
-  const loud = items.filter((i) => i.kind === "row" && !i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
-  const quiet = items.filter((i) => i.kind === "row" && i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
-  assert.deepEqual(loud, ["width"]);
-  assert.deepEqual(quiet, ["reserved", "height"]);
+  const rows = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? [i.node.name, i.reads?.name ?? null] : []));
+  assert.deepEqual(rows, [
+    ["width", "rows"],
+    ["reserved", null],
+    ["height", "rows"],
+  ]);
 });
 
 test("a field that is only its parent's contents spends no level on itself", () => {
@@ -245,11 +251,11 @@ test("two lengths for two fields are two rows", () => {
     ],
   };
   const rows = run(two).items.filter((i) => i.kind === "row");
-  assert.deepEqual(rows.map((i) => (i.kind === "row" ? [i.node.name, i.quiet] : [])), [
-    ["name_len", true],
-    ["extra_len", true],
-    ["name", false],
-    ["extra", false],
+  assert.deepEqual(rows.map((i) => (i.kind === "row" ? [i.node.name, i.reads?.name ?? null] : [])), [
+    ["name_len", "name"],
+    ["extra_len", "extra"],
+    ["name", null],
+    ["extra", null],
   ]);
 });
 
@@ -456,8 +462,8 @@ const ZIP_TAIL: Spec = {
   name: "file",
   bytes: 140,
   kids: [
-    { name: "name_length", bytes: 2, consumed_by: 3 },
-    { name: "extra_length", bytes: 2, consumed_by: 4 },
+    { name: "name_length", bytes: 2, consumed_by: 2 },
+    { name: "extra_length", bytes: 2, consumed_by: 3 },
     { name: "name", bytes: 10 },
     { name: "extra", bytes: 0 },
     { name: "data_size", bytes: 0, type: "computed", consumed_by: 6 },
@@ -471,13 +477,16 @@ test("a value the template works out is never folded away", () => {
   const names = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
   assert.ok(names.includes("data_size"), names.join(", "));
   assert.ok(names.includes("unpacked_size"), names.join(", "));
-  // The two lengths are still marked: they are bytes, and they place other
-  // bytes. A computed value is neither.
-  const quiet = items.filter((i) => i.kind === "row" && i.quiet).map((i) => (i.kind === "row" ? i.node.name : ""));
-  assert.deepEqual(quiet, ["name_length", "extra_length"]);
+  // A computed value says what reads it like any other field.
+  const links = items.filter((i) => i.kind === "row" && i.reads !== null).map((i) => (i.kind === "row" ? [i.node.name, i.reads?.name] : []));
+  assert.deepEqual(links, [
+    ["name_length", "name"],
+    ["extra_length", "extra"],
+    ["data_size", "data"],
+  ]);
 });
 
-test("a field that places another is marked where it stands", () => {
+test("a field that places another says what reads it", () => {
   const one: Spec = {
     name: "file",
     bytes: 20,
@@ -488,7 +497,7 @@ test("a field that places another is marked where it stands", () => {
   };
   const { items } = run(one);
   const count = items.find((i) => i.kind === "row" && i.node.name === "count");
-  assert.equal(count?.kind === "row" ? count.quiet : null, true);
+  assert.equal(count?.kind === "row" ? count.reads?.name : null, "items");
   const rest = items.find((i) => i.kind === "row" && i.node.name === "items");
-  assert.equal(rest?.kind === "row" ? rest.quiet : null, false);
+  assert.equal(rest?.kind === "row" ? rest.reads : null, null);
 });
