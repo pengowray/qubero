@@ -172,6 +172,28 @@ test("a page header folds behind the cells it places", () => {
   assert.equal(first.owner, 6);
 });
 
+test("the template's word beats what the shapes say, either way", () => {
+  const both: Spec = {
+    name: "file",
+    bytes: 40,
+    kids: [
+      { name: "page", bytes: 40, kids: [
+        // Reads as machinery and is the point: a field the reader came for.
+        { name: "width", bytes: 2, consumed_by: 3, machinery: false },
+        // Reads as nothing in particular and is plumbing all the same.
+        { name: "reserved", bytes: 2, machinery: true },
+        { name: "height", bytes: 2, consumed_by: 3 },
+        { name: "rows", bytes: 34, kids: [{ name: "r", bytes: 34 }] },
+      ] },
+    ],
+  };
+  const items = run(both, { open: new Set(["0"]), shown: new Map() }).items;
+  const rows = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
+  const folded = items.flatMap((i) => (i.kind === "fold" ? i.nodes.map((n) => n.name) : []));
+  assert.deepEqual(rows, ["width"]);
+  assert.deepEqual(folded, ["reserved", "height"]);
+});
+
 test("bytes no field covers are an item of their own", () => {
   const { items } = run(SQLITE);
   const gaps = items.filter((i) => i.kind === "gap");

@@ -93,10 +93,15 @@ exist:
 - Gap verification ("verified zeros") needs a byte-scan over the run — the overview
   panel (`web/src/overviewpanel.ts`) already computes zero/text/data classes per cell;
   reuse that machinery rather than rescanning.
-- Machinery-vs-payload classification (rule 3) has no IR flag today. Options: a
-  per-template hint, or a heuristic (fields consumed only by expressions of siblings =
-  machinery). Start with the heuristic; a `hint` on the IR node is acceptable if core
-  changes are needed — discuss in the PR/commit message.
+- Machinery-vs-payload classification (rule 3) is **done**, as both. `crates/core/src/
+  machinery.rs` reads the template's own expressions and answers, per field, which
+  sibling reads it for a length, a count, a type or a position; that reaches the app as
+  `TemplateNode.consumed_by`. `StructDef::machinery` and `StructDef::payload` name
+  fields either way and win, arriving as the tri-state `TemplateNode.machinery`.
+  Whether a field is *folded* is the view's call, not core's: see `isMachinery` in
+  `web/src/flatten.ts`. SQLite's root structure is flat, so `page_size` is a sibling of
+  the pages it sizes and would fold away on the shapes alone; it stays a header row
+  because the pages are a different part of the file.
 
 ## Virtual scrolling constraint
 
@@ -108,9 +113,10 @@ falls out of the flat item list. Do not build this as one giant DOM.
 
 ## Suggested order of work
 
-1. Flatten the template tree into render items (heading/row/gap/fold/record) with the
-   section heuristic. Unit-test the flattener in TS against notes.sqlite and a GGUF
-   (structure only, no DOM).
+1. ~~Flatten the template tree into render items (heading/row/gap/fold/record) with the
+   section heuristic.~~ **Done**: `web/src/flatten.ts`, tested by `npm test` in `web`
+   (Node's own runner over fixture trees, no framework and no wasm). The section rule
+   lives in `sectionBreaks` and `elementsAreSections`, and expects per-format tuning.
 2. Render items virtualized; headings, rows, gaps, folds. Kill nothing yet — mount it
    as a new mode next to the existing listing.
 3. Mini map component (one implementation, reused by rail, headings, strip captions).
@@ -126,12 +132,19 @@ falls out of the flat item list. Do not build this as one giant DOM.
   param: fetch a sample from `web/public/samples/`, wrap in `File`, dispatch a
   synthetic `drop` on `document`. `window.__qubero` exposes `{doc, view, inspector,
   table, listing, overview}` for headless assertions.
-- Files to exercise, in order: `notes.sqlite` (the mockup's file — compare against the
-  mockup side by side), `tiny.png`, `D:/koboldcpp/bge-m3-q8_0.gguf` (scale + deep
-  length-prefixed metadata; needs the vite `fs.allow` trick in
-  `web/vite.config.ts`, revert after), an `.h5ad` from
+- Files to exercise, in order: `notes.sqlite` (the mockup's file, to compare against
+  the mockup side by side), `tiny.png`, `D:/koboldcpp/bge-m3-q8_0.gguf` (scale + deep
+  length-prefixed metadata), an `.h5ad` from
   `D:/datasets/zebrahub/figshare-2026-08-26/20510367` (depth), and
   `C:/Windows/Web/Wallpaper/Theme1/img1.jpg` (huge opaque run).
+- **Correction: the vite `fs.allow` trick does not work.** Adding the directory to
+  `server.fs.allow` and fetching `/@fs/D:/koboldcpp/...` returns `index.html`, restart
+  or no; vite will not hand out an arbitrary binary that way. Two routes that do work:
+  a dev-only middleware plugin in `web/vite.config.ts` serving a configured directory
+  with `Range` support (about fifteen lines, and it covers the `.h5ad` too), or a
+  range-fetching `ByteSource` passed straight to `Doc.open`, which takes that shape
+  already (`web/src/doc.ts`), so nothing has to be held in memory. Step 1 got by on
+  `dump_tree` for the GGUF; steps 4 to 6 will not.
 - Native-side checks without the browser:
   `cargo run --release -p qubero-core --example dump_tree -- <file> [template] [depth]`.
 - Core changes need `npm run wasm` (~35 s) before they reach the app.
@@ -155,7 +168,12 @@ falls out of the flat item list. Do not build this as one giant DOM.
 
 - Where "Logical tree" mode gets its alternate ordering from (likely a second
   flattening of the same tree, cells in pointer order instead of physical order).
-- The machinery classification hint: heuristic vs. IR flag.
 - Whether the record-table rendering is declared per format in the template IR or in a
-  TS registry keyed by template name. (Mockup E in `web/public/mockups/` sketches the
-  wider address-space question; it is context, not part of this task.)
+  TS registry keyed by template name. `flatten` emits a `record` item when the caller's
+  `isRecord` says so, and nothing supplies one yet. (Mockup E in `web/public/mockups/`
+  sketches the wider address-space question; it is context, not part of this task.)
+- Rule 3's *second* fold kind, "23 more fields, all default", is deferred. It is not
+  the machinery fold and does not use `consumed_by`: it needs to know what a field's
+  default is, and the IR does not carry one. Options are a per-template default list,
+  or a proxy the reader can check (a run of leaf fields reading as zero or empty).
+  Decide before step 2 renders the SQLite header, which is where the mockup shows it.
