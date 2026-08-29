@@ -94,6 +94,29 @@ impl Isa {
         }
     }
 
+    /// How far to step over bytes that did not decode.
+    ///
+    /// Stepping by the smallest instruction is right for a machine whose
+    /// lengths are only known by decoding, and wrong for one that writes the
+    /// length down. RISC-V says it in the low bits of the first byte and Thumb
+    /// in the top bits of the first halfword, so an instruction this cannot
+    /// name is still an instruction this can measure — and stepping two bytes
+    /// into a four-byte one would leave everything after it misread.
+    fn unreadable(self, bytes: &[u8]) -> usize {
+        let len = match self {
+            Isa::Riscv32 | Isa::Riscv64 | Isa::Hazard3 => match bytes[0] & 3 == 3 {
+                true => 4,
+                false => 2,
+            },
+            Isa::Thumb | Isa::Rp2350Arm => match bytes.get(1).is_some_and(|b| b >> 3 >= 0b11101) {
+                true => 4,
+                false => 2,
+            },
+            _ => self.step(),
+        };
+        len.min(bytes.len())
+    }
+
     /// The most it can be, which is how many bytes are worth reading to decode
     /// one.
     pub fn longest(self) -> usize {
@@ -138,7 +161,7 @@ pub fn decode(isa: Isa, bytes: &[u8]) -> Insn {
         Isa::Riscv64 => riscv(bytes, true),
     };
     let mut insn =
-        decoded.unwrap_or_else(|| Insn { len: isa.step().min(bytes.len()), text: "(bad)".into(), target: None });
+        decoded.unwrap_or_else(|| Insn { len: isa.unreadable(bytes), text: "(bad)".into(), target: None });
     // A decoder that knows which of its operands is an address has already
     // said so, exactly. Reading the distance back out of the text is for the
     // ones that only write it down.
@@ -301,6 +324,19 @@ mod tests {
         assert_eq!(decode(Isa::Thumb, &[0xf9, 0xe7]).target, Some(-0xa));
         assert_eq!(decode(Isa::Thumb, &[0x08, 0xb1]).target, Some(6));
         assert_eq!(decode(Isa::Thumb, &[0x00, 0xf0, 0x00, 0xf8]).target, Some(4));
+    }
+
+    /// A machine that writes down how long its instructions are says so even
+    /// for one this cannot name, and the step follows what the bytes said.
+    #[test]
+    fn bytes_that_are_not_an_instruction_step_by_what_they_claim_to_be() {
+        // A four-byte RISC-V word in an opcode nobody standard has defined.
+        let unknown = decode(Isa::Riscv32, &[0x0b, 0x85, 0xc5, 0x00]);
+        assert_eq!(unknown, Insn { len: 4, text: "(bad)".into(), target: None });
+        // The same word where the machine is known, which reads it.
+        assert_eq!(decode(Isa::Hazard3, &[0x0b, 0x85, 0xc5, 0x00]).len, 4);
+        // A two-byte one steps two.
+        assert_eq!(decode(Isa::Riscv32, &[0x02, 0x00]).len, 2);
     }
 
     #[test]

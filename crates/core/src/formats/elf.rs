@@ -164,19 +164,35 @@ const BPF_RELOCATIONS: &[(i128, &str)] =
 /// writes. A file for anything else keeps its code as bytes, which is honest:
 /// a decoder that does not know the machine would make words up.
 ///
-/// 32-bit ARM is read as the four-byte encoding. A real ARM program mixes that
-/// with the two-byte one and marks which is which with `$a` and `$t` symbols;
-/// following those is work for later.
+/// 32-bit ARM is not here, because one number covers two encodings and the
+/// header says which; see [`arm_code`].
 fn decoded(bits: u32) -> Vec<(i128, Isa)> {
     vec![
         (3, Isa::X86_32),
-        (40, Isa::Arm),
         (62, Isa::X86_64),
         (183, Isa::Aarch64),
         // One number for the machine either way: how wide its registers are
         // is what the class already said.
         (243, if bits == 64 { Isa::Riscv64 } else { Isa::Riscv32 }),
     ]
+}
+
+/// 32-bit ARM code, in whichever of the machine's two encodings this file
+/// uses.
+///
+/// One machine number covers both, and the entry point says which: the address
+/// a program starts at has its lowest bit set when it starts in the two-byte
+/// encoding, because that bit is not part of the address but the machine's
+/// note to itself about which mode to enter. A microcontroller has only the
+/// two-byte encoding and so always sets it.
+///
+/// A program can hold both and mark the boundaries with `$a` and `$t` symbols.
+/// Following those is work for later; taking the entry point's word for it is
+/// right for every file that is all one or all the other, which a
+/// microcontroller's is.
+fn arm_code(size: &impl Fn() -> E) -> T {
+    let whole = |isa| T::sized(size(), T::repeat(T::insn(isa), Until::End));
+    T::switch(E::field("entry").bit(0), vec![(1, whole(Isa::Thumb))], whole(Isa::Arm))
 }
 
 /// Any ELF file, with the code in it read as instructions when the machine is
@@ -363,6 +379,7 @@ fn section_body(bits: u32, e: Endian) -> T {
     for (machine, isa) in decoded(bits) {
         machines.push((machine, T::sized(size(), T::repeat(T::insn(isa), Until::End))));
     }
+    machines.push((40, arm_code(&size)));
     let progbits = T::switch(
         // The bit that says the section holds instructions. The rest of the
         // word says whether it is written to, aligned or grouped, and a
