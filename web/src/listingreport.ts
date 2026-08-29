@@ -64,6 +64,9 @@ function runPosition(item: Item, fileBits: number): "start" | "end" | "middle" {
 
 export class ListingReport {
   readonly el: HTMLElement;
+  /** The bar above the rows saying what the top of the window is inside. */
+  private readonly crumbs: HTMLElement;
+  private readonly scroller: HTMLElement;
   private readonly canvas: HTMLElement;
   private readonly doc: Doc;
   private readonly src: TreeSource;
@@ -88,13 +91,20 @@ export class ListingReport {
       children: (path, from, to) => doc.templateChildren(path, from, to),
     };
     this.el = el("div", "report");
-    this.el.tabIndex = 0;
-    this.el.setAttribute("role", "tree");
+    this.crumbs = el("div", "rp-crumbs");
+    this.scroller = el("div", "rp-scroll");
+    this.scroller.tabIndex = 0;
+    this.scroller.setAttribute("role", "tree");
     this.canvas = el("div", "rp-canvas");
-    this.el.append(this.canvas);
-    this.el.addEventListener("scroll", () => this.paint(), { passive: true });
-    this.el.addEventListener("click", (e) => this.onClick(e));
-    new ResizeObserver(() => this.paint()).observe(this.el);
+    this.scroller.append(this.canvas);
+    this.el.append(this.crumbs, this.scroller);
+    // The rows are what the keyboard drives, so focus given to the view as a
+    // whole lands on them.
+    this.el.tabIndex = -1;
+    this.el.addEventListener("focus", () => this.scroller.focus());
+    this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
+    this.scroller.addEventListener("click", (e) => this.onClick(e));
+    new ResizeObserver(() => this.paint()).observe(this.scroller);
     // Chunks arriving turn a pending stretch into rows; so does an edit.
     doc.onChange(() => this.schedule());
   }
@@ -140,16 +150,16 @@ export class ListingReport {
   }
 
   private anchor(): { readonly key: string; readonly delta: number } | null {
-    const i = this.indexAt(this.el.scrollTop);
+    const i = this.indexAt(this.scroller.scrollTop);
     const item = this.items[i];
     if (item === undefined) return null;
-    return { key: item.key, delta: (this.tops[i] ?? 0) - this.el.scrollTop };
+    return { key: item.key, delta: (this.tops[i] ?? 0) - this.scroller.scrollTop };
   }
 
   private restore(anchor: { readonly key: string; readonly delta: number }): void {
     const i = this.items.findIndex((item) => item.key === anchor.key);
     if (i < 0) return;
-    this.el.scrollTop = (this.tops[i] ?? 0) - anchor.delta;
+    this.scroller.scrollTop = (this.tops[i] ?? 0) - anchor.delta;
   }
 
   /** The item covering a pixel, by bisection over the running totals. */
@@ -174,8 +184,8 @@ export class ListingReport {
       this.drawn = null;
       return;
     }
-    const from = Math.max(0, this.indexAt(this.el.scrollTop) - OVERSCAN);
-    const to = Math.min(this.items.length, this.indexAt(this.el.scrollTop + this.el.clientHeight) + 1 + OVERSCAN);
+    const from = Math.max(0, this.indexAt(this.scroller.scrollTop) - OVERSCAN);
+    const to = Math.min(this.items.length, this.indexAt(this.scroller.scrollTop + this.scroller.clientHeight) + 1 + OVERSCAN);
     if (this.drawn !== null && this.drawn.from === from && this.drawn.to === to) return;
     this.drawn = { from, to };
     const fileBits = this.doc.lengthBits;
@@ -189,6 +199,38 @@ export class ListingReport {
       out.push(node);
     }
     this.canvas.replaceChildren(...out);
+    // Taken from the top of the window rather than from `from`, which reaches
+    // a few rows above it and would name the heading before this one.
+    this.trail();
+  }
+
+  /** What the top of the window is inside, which is the headings it has
+   *  scrolled past. Sticky, because a listing scrolled far enough that its
+   *  heading is gone stops saying which part of the file it is showing. */
+  private trail(): void {
+    const at = this.indexAt(this.scroller.scrollTop);
+    const parts: string[] = [this.doc.name];
+    const fileBits = this.doc.lengthBits;
+    let section: string | null = null;
+    let part: string | null = null;
+    for (let i = Math.min(at, this.items.length - 1); i >= 0; i--) {
+      const item = this.items[i];
+      if (item === undefined || item.kind !== "heading") continue;
+      const name = item.node?.name ?? REPORT.unnamedPart(runPosition(item, fileBits));
+      if (item.level === 1 && part === null && section === null) part = name;
+      if (item.level === 0) {
+        section = name;
+        break;
+      }
+    }
+    if (section !== null) parts.push(section);
+    if (part !== null) parts.push(part);
+    this.crumbs.replaceChildren(
+      ...parts.flatMap((text, i) => {
+        const span = el("span", i === parts.length - 1 ? "rp-crumb is-here" : "rp-crumb", text);
+        return i === 0 ? [span] : [el("span", "rp-crumb-sep", "\u203a"), span];
+      }),
+    );
   }
 
   private draw(item: Item, fileBits: number): HTMLElement {
@@ -322,7 +364,7 @@ export class ListingReport {
       if (i < 0) return;
     }
     this.selected = key;
-    this.el.scrollTop = Math.max(0, (this.tops[i] ?? 0) - this.el.clientHeight / 3);
+    this.scroller.scrollTop = Math.max(0, (this.tops[i] ?? 0) - this.scroller.clientHeight / 3);
     this.paintAgain();
   }
 
