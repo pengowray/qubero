@@ -3,3 +3,7 @@
 
 # The sample files are the point: not one byte of them is ours to normalise.
 web/public/samples/** -text
+
+# Batch files are read by cmd.exe, which wants CRLF: a label or a parenthesised
+# block with LF endings can be misparsed.
+*.bat text eol=crlf
