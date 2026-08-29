@@ -118,10 +118,14 @@ falls out of the flat item list. Do not build this as one giant DOM.
    section heuristic.~~ **Done**: `web/src/flatten.ts`, tested by `npm test` in `web`
    (Node's own runner over fixture trees, no framework and no wasm). The section rule
    lives in `sectionBreaks` and `elementsAreSections`, and expects per-format tuning.
-2. Render items virtualized; headings, rows, gaps, folds. Kill nothing yet — mount it
-   as a new mode next to the existing listing.
-3. Mini map component (one implementation, reused by rail, headings, strip captions).
-4. Byte strip on demand per item (bytes via existing chunk reads; colors per rule 5–6).
+2. ~~Render items virtualized; headings, rows, gaps, folds.~~ **Done**:
+   `web/src/listingreport.ts`, mounted dev-only behind `?view=report`. Includes the
+   sticky trail, which the virtualization note asks for.
+3. ~~Mini map component.~~ **Done**: `web/src/filemap.ts`, used by the headings. The
+   rail and the strip captions take it as they land.
+4. ~~Byte strip on demand per item.~~ **Done**: `web/src/bytestrip.ts`, over
+   `Doc.spans` and `chipfit`'s chip vocabulary, plus gap verdicts in
+   `web/src/gapcheck.ts`. **One part of rule 6 is not built**: see the open questions.
 5. Record rendering for formats that declare it (SQLite cells first).
 6. Shared selection with the hex view cursor.
 7. Swap it in as the Listing mode; delete/absorb `listingview.ts`,
@@ -173,6 +177,21 @@ falls out of the flat item list. Do not build this as one giant DOM.
   TS registry keyed by template name. `flatten` emits a `record` item when the caller's
   `isRecord` says so, and nothing supplies one yet. (Mockup E in `../qubero2-extras/mockups/`
   sketches the wider address-space question; it is context, not part of this task.)
+- Rule 6's **bits chip is not built**. The rule says sub-byte detail uses the bits
+  pattern, and the mockup's row 3 cell shows it: `payload_size 18 [0|0010010]
+  varint, 1 byte: high bit 0 ends it`, with the stop bit and the payload bits drawn
+  apart. The strip today writes `payload_size 18 1 byte` and stops. It was left out
+  because it is not a rendering job: which bits are marker and which are payload is
+  decode knowledge, held by `SqliteVarint`, `Leb128`, `EbmlVint` and `Vlq` in core.
+  Drawing it in TS means either writing those decoders a second time in the view or
+  exposing bit roles from core the way `consumed_by` was exposed, which is the
+  better answer. The chip's tail ("high bit 0 ends it") is per-type copy and needs
+  a drafting pass of its own. A commit series, not a patch.
+- A gap's label and its verdict can disagree, and that is deliberate. `board.dtb`
+  reads `unused space` beside `not all zeros`, because the label is what the shape
+  of the template implies and the verdict is what the bytes actually say. A template
+  that does not cover everything it should is exactly the case the verdict exists to
+  catch, so the row is meant to look odd there.
 - Rule 3's *second* fold kind, "23 more fields, all default", is on the back burner
   rather than deferred to a date. A long header is not a problem in itself, and it is
   not clear the idea of a default even carries across formats: a SQLite header's

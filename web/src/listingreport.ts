@@ -17,6 +17,7 @@ import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
 import { fileMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
+import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
 import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
 
@@ -102,6 +103,11 @@ export class ListingReport {
   private measuredAt = 0;
   /** True while a measurement's own redraw is running. */
   private measuring = false;
+  /** What each gap turned out to hold. Checking one reads up to 64 KiB and can
+   *  ask the file for chunks; without this that happens on every scroll tick
+   *  for every gap on screen. Thrown away when the file changes, since that is
+   *  when an answer can stop being true. */
+  private verdicts = new Map<string, GapVerdict>();
   private frame = 0;
   private selected: string | null = null;
 
@@ -132,7 +138,10 @@ export class ListingReport {
       this.relayout();
     }).observe(this.scroller);
     // Chunks arriving turn a pending stretch into rows; so does an edit.
-    doc.onChange(() => this.schedule());
+    doc.onChange(() => {
+      this.verdicts.clear();
+      this.schedule();
+    });
   }
 
   /** Draw again once the frame is over, however many things asked. Streaming a
@@ -390,12 +399,22 @@ export class ListingReport {
     return row;
   }
 
+  private verdict(item: Extract<Item, { kind: "gap" }>): GapVerdict {
+    const known = this.verdicts.get(item.key);
+    if (known !== undefined) return known;
+    const found = checkGap(this.doc, item.offsetBits, item.sizeBits);
+    // A run whose bytes have not arrived is not an answer, so it is not kept:
+    // the next draw after they land asks again.
+    if (found !== "unread") this.verdicts.set(item.key, found);
+    return found;
+  }
+
   private drawGap(item: Extract<Item, { kind: "gap" }>): HTMLElement {
     const row = el("div", "rp-item rp-row rp-gap");
     row.style.paddingLeft = `${8 + item.depth * 12}px`;
     row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
     row.append(el("span", "rp-field", REPORT.gap));
-    row.append(el("span", "rp-value", GAP_VERDICT[checkGap(this.doc, item.offsetBits, item.sizeBits)]));
+    row.append(el("span", "rp-value", GAP_VERDICT[this.verdict(item)]));
     row.append(el("span", "rp-type", ""));
     row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
     return row;
