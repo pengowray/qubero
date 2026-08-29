@@ -41,7 +41,7 @@ fn main() {
             // The right instruction is not yet the right answer: an immediate
             // off by a shift reads as a plausible line and means a different
             // program. Compare what it does as well as what it is called.
-            if operands_agree(&want, &got.text, at) {
+            if operands_agree(&want, &got.text, at, got.target) {
                 agree += 1;
             } else {
                 operands += 1;
@@ -120,9 +120,12 @@ fn same(want: &str, got: &str) -> bool {
 ///
 /// What it cannot check, it does not count against the decoder: a line whose
 /// operands do not reduce to a comparable list on both sides is passed.
-fn operands_agree(want: &str, got: &str, at: u64) -> bool {
-    let a = values(after_mnemonic(want), at);
-    let b = values(after_mnemonic(got), at);
+fn operands_agree(want: &str, got: &str, at: u64, target: Option<i64>) -> bool {
+    let a = values(after_mnemonic(want), at, None);
+    // Where a branch goes is the decoder's answer, not its text: the text
+    // carries whatever the underlying decoder wrote, and `code::decode` has
+    // already corrected that into a distance from the first byte.
+    let b = values(after_mnemonic(got), at, target);
     // A register list or an addressing mode neither side writes the same way
     // leaves nothing to compare, and a false alarm is worse than no check.
     if a.is_empty() || b.is_empty() || a.len() != b.len() { return true }
@@ -139,7 +142,7 @@ fn after_mnemonic(line: &str) -> &str {
 /// The operands of one line as comparable tokens: numbers as numbers,
 /// registers under one spelling, and everything a listing adds for the
 /// reader's benefit thrown away.
-fn values(text: &str, at: u64) -> Vec<String> {
+fn values(text: &str, at: u64, target: Option<i64>) -> Vec<String> {
     // A listing names the symbol a branch lands in and repeats an immediate
     // in decimal; both are commentary on what the bytes already said. The
     // name is worth one thing on the way past: whatever it follows is the
@@ -156,7 +159,7 @@ fn values(text: &str, at: u64) -> Vec<String> {
         if token.is_empty() { continue }
         // A distance from here and the address it reaches are the same fact.
         if let Some(rest) = token.strip_prefix('$') {
-            if let Ok(offset) = parse_signed(rest) {
+            if let Some(offset) = target.or_else(|| parse_signed(rest).ok()) {
                 out.push(format!("@{:x}", at.wrapping_add_signed(offset)));
                 continue;
             }

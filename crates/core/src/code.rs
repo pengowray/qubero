@@ -208,7 +208,16 @@ fn thumb(bytes: &[u8]) -> Option<Insn> {
     let mut reader = U8Reader::new(bytes);
     let insn = yaxpeax_arm::armv7::InstDecoder::default_thumb().decode(&mut reader).ok()?;
     let len = if insn.wide { 4 } else { 2 };
-    Some(Insn { len, text: insn.to_string(), target: None })
+    // Every Thumb branch this decoder writes is a distance from the end of the
+    // instruction, save one. The two-byte unconditional branch comes back as
+    // the raw number the instruction holds, without the two bytes by which the
+    // program counter leads it, so it is counted here instead.
+    let word = u16::from_le_bytes([bytes[0], *bytes.get(1)?]);
+    let target = match len == 2 && (0xe000..0xe800).contains(&word) {
+        true => Some(((((word as i32) << 21) >> 20) + 4) as i64),
+        false => None,
+    };
+    Some(Insn { len, text: insn.to_string(), target })
 }
 
 /// RISC-V, where the low two bits of the first byte say whether the
