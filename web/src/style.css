@@ -2092,6 +2092,15 @@ button.insp-xrow-where:hover {
 .rp-type {
   flex: none;
   width: 105px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+/* The mark on a row that has something under it. A fixed width whether or not
+   there is a mark, so the names below a heading still line up. */
+.rp-twist {
+  flex: none;
+  width: 10px;
   color: var(--muted);
 }
 .rp-size {

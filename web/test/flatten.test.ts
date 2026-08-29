@@ -501,3 +501,43 @@ test("a field that places another says what reads it", () => {
   const rest = items.find((i) => i.kind === "row" && i.node.name === "items");
   assert.equal(rest?.kind === "row" ? rest.reads : null, null);
 });
+
+test("bytes past the last part of the file are not lost", () => {
+  // An HDF5 file: the template describes ninety-six bytes and reaches the rest
+  // through addresses. The listing has to say so rather than stopping.
+  const h5: Spec = {
+    name: "file",
+    bytes: 471_863_054,
+    kids: [
+      { name: "signature", bytes: 8 },
+      { name: "superblock", bytes: 88, kids: [{ name: "offset_size", bytes: 1 }] },
+    ],
+  };
+  const { items } = run(h5);
+  const gaps = items.filter((i) => i.kind === "gap");
+  assert.deepEqual(
+    gaps.map((g) => (g.kind === "gap" ? [g.offsetBits / 8, g.sizeBits / 8, g.unmapped] : [])),
+    [
+      // Free space the template left inside the superblock, and then the rest
+      // of the file, which is a different claim and says so.
+      [9, 87, false],
+      [96, 471_862_958, true],
+    ],
+  );
+});
+
+test("a hole between two parts of the file is a row of its own", () => {
+  const split: Spec = {
+    name: "file",
+    bytes: 300,
+    kids: [
+      { name: "head", bytes: 100, kids: [{ name: "a", bytes: 100 }] },
+      { name: "tail", bytes: 100, at: 200, kids: [{ name: "b", bytes: 100 }] },
+    ],
+  };
+  const gaps = run(split).items.filter((i) => i.kind === "gap");
+  assert.deepEqual(
+    gaps.map((g) => (g.kind === "gap" ? [g.offsetBits / 8, g.sizeBits / 8] : [])),
+    [[100, 100]],
+  );
+});

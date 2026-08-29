@@ -97,9 +97,13 @@ export type Item = Common &
         readonly reads: { readonly name: string; readonly path: readonly number[] } | null;
       }
     | {
-        /** Bytes inside a structure that none of its fields covers. */
+        /** Bytes no row of the listing covers. Inside a structure that is the
+         *  format leaving space; between or after the file's own parts it is
+         *  the template not reaching them, which is a different claim and a
+         *  different word. */
         readonly kind: "gap";
         readonly path: readonly number[];
+        readonly unmapped: boolean;
       }
     | {
         /** A structure the format stores as a table of rows. */
@@ -338,10 +342,20 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
 /** The top-level parts of the file, and what is in each. */
 function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0): void {
   const breaks = sectionBreaks(kids);
+  // Rule 1 is about the file, not only about the insides of a structure. The
+  // parts of a 450 MiB HDF5 file that its template describes are its first
+  // ninety-six bytes; everything after that is reached through addresses
+  // rather than by lying next to them, and a listing that simply stops at
+  // 0x60 has lost four hundred and fifty megabytes without a word.
+  let cursor = parent.offset_bits;
   breaks.forEach((from, b) => {
     const to = breaks[b + 1] ?? kids.length;
     const first = kids[from];
     if (first === undefined) return;
+    const run = kids.slice(from, to);
+    const start = Math.min(...run.map((k) => k.offset_bits));
+    if (start > cursor) gap(w, path, cursor, start, 0, true);
+    cursor = Math.max(cursor, ...run.map(endBits));
     w.section += 1;
     if (to - from === 1 && first.composite) {
       const kidPath = [...path, from];
@@ -360,6 +374,7 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
     }
     runHeading(w, path, kids, from, to, breaks, base);
   });
+  if (cursor < endBits(parent)) gap(w, path, cursor, endBits(parent), 0, true);
 }
 
 /** One part of the file with a field of its own to name it. */
@@ -562,7 +577,7 @@ function rows(
   if (bounds !== null && cursor < bounds.end) gap(w, path, cursor, bounds.end, depth);
 }
 
-function gap(w: Walk, path: readonly number[], from: number, to: number, depth: number): void {
+function gap(w: Walk, path: readonly number[], from: number, to: number, depth: number, unmapped = false): void {
   w.push({
     kind: "gap",
     key: `gap:${pathKey(path)}@${from}`,
@@ -571,6 +586,7 @@ function gap(w: Walk, path: readonly number[], from: number, to: number, depth: 
     offsetBits: from,
     sizeBits: to - from,
     path,
+    unmapped,
   });
 }
 

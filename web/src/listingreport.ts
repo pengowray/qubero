@@ -21,7 +21,7 @@ import { checkGap } from "./gapcheck.js";
 import { isRecordList, recordTable } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
-import { bitSizeText, childWord, countText, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
+import { bitSizeText, childWord, countText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
 
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
@@ -557,6 +557,9 @@ export class ListingReport {
     // questions this row is not the answer to.
     const written = n.type !== "computed";
     row.append(el("span", "rp-at", written ? formatOffset(n.offset_bits) : ""));
+    // A row that opens says so. Without it the only way to find out which
+    // rows have anything under them is to click every one of them.
+    row.append(el("span", "rp-twist", itemOpens(n) ? (item.open ? "\u25be" : "\u25b8") : ""));
     row.append(el("span", `rp-field ${fieldClass(n.kind)}`, n.name));
     const value = el("span", "rp-value", n.composite ? countText(n.child_count, childWord(n)) : n.value);
     if (item.reads !== null) value.append(this.readsLink(item.reads));
@@ -592,7 +595,8 @@ export class ListingReport {
     const row = el("div", "rp-item rp-row rp-gap");
     row.style.paddingLeft = `${8 + item.depth * 12}px`;
     row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
-    row.append(el("span", "rp-field", REPORT.gap));
+    row.append(el("span", "rp-twist", ""));
+    row.append(el("span", "rp-field", item.unmapped ? GAP_LABEL : REPORT.gap));
     row.append(el("span", "rp-value", GAP_VERDICT[this.verdict(item)]));
     row.append(el("span", "rp-type", ""));
     row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
