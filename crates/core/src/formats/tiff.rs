@@ -324,6 +324,18 @@ pub fn tiff_part() -> Part {
     part
 }
 
+/// The same for a JPEG XR, which is this directory read against another set of
+/// names. Only the little-endian copies, because the format writes `II` and
+/// never anything else; the camera's directory and the satellite's are the
+/// same ones a TIFF points at, and travel with it.
+pub fn jxr_part() -> Part {
+    let mut part = Part::new(super::jxr::jxr_file());
+    for space in [Space::Jxr, Space::Exif, Space::Gps] {
+        part = part.with_type(space.named(Little), ifd(Little, space));
+    }
+    part
+}
+
 /// The whole of a TIFF, in a window of its own so that every offset inside it
 /// counts from where it begins. On its own that is the start of the file and
 /// the window changes nothing; written into an EXIF block partway through a
@@ -381,10 +393,13 @@ fn file(e: Endian) -> T {
 /// one, and reading a photograph's latitude as a subfile type would be worse
 /// than not reading it at all.
 #[derive(Clone, Copy, PartialEq)]
-enum Space {
+pub enum Space {
     Tiff,
     Exif,
     Gps,
+    /// A JPEG XR's directory, which is this layout exactly and almost none of
+    /// these numbers. See [`super::jxr`].
+    Jxr,
 }
 
 impl Space {
@@ -393,6 +408,7 @@ impl Space {
             Space::Tiff => TAG,
             Space::Exif => EXIF_TAG,
             Space::Gps => GPS_TAG,
+            Space::Jxr => super::jxr::TAG,
         }
     }
     /// What a reader sees the directory called.
@@ -401,12 +417,13 @@ impl Space {
             Space::Tiff => "Ifd",
             Space::Exif => "ExifIfd",
             Space::Gps => "GpsIfd",
+            Space::Jxr => "JxrIfd",
         }
     }
     /// What it is called in the type table. A directory that holds directories
     /// has to name the one it is written like, and the whole layout is a
     /// function of the byte order, so each space is in the table twice.
-    fn named(self, e: Endian) -> &'static str {
+    pub fn named(self, e: Endian) -> &'static str {
         match (self, e) {
             (Space::Tiff, Little) => "tiff.Ifd.le",
             (Space::Tiff, Big) => "tiff.Ifd.be",
@@ -414,6 +431,17 @@ impl Space {
             (Space::Exif, Big) => "tiff.ExifIfd.be",
             (Space::Gps, Little) => "tiff.GpsIfd.le",
             (Space::Gps, Big) => "tiff.GpsIfd.be",
+            (Space::Jxr, Little) => "jxr.Ifd.le",
+            (Space::Jxr, Big) => "jxr.Ifd.be",
+        }
+    }
+    /// The tags in this space whose four bytes are the place another directory
+    /// begins rather than a value.
+    fn subs(self) -> &'static [(i128, Space)] {
+        match self {
+            Space::Tiff => SUB_IFD,
+            Space::Jxr => super::jxr::SUB_IFD,
+            Space::Exif | Space::Gps => &[],
         }
     }
 }
@@ -425,16 +453,22 @@ fn ifd_name(e: Endian) -> &'static str {
 }
 
 /// One directory: how many entries, the entries, and where the next one is.
+///
+/// A JPEG XR's directory carries more than that. Where the picture is, is
+/// spread across four entries of it, so the codestreams are placed here, after
+/// the entries that say where they are and beside them rather than inside
+/// them. See [`super::jxr::codestreams`].
 fn ifd(e: Endian, space: Space) -> T {
-    T::structure(
-        space.shown(),
-        vec![
-            ("count", T::u16(e)),
-            ("entries", T::array(entry(e, space), E::field("count"))),
-            // Zero when this is the last one, which is almost always.
-            ("next_ifd_offset", T::u32(e)),
-        ],
-    )
+    let mut fields = vec![
+        ("count", T::u16(e)),
+        ("entries", T::array(entry(e, space), E::field("count"))),
+        // Zero when this is the last one, which is almost always.
+        ("next_ifd_offset", T::u32(e)),
+    ];
+    if space == Space::Jxr {
+        fields.extend(super::jxr::codestreams());
+    }
+    T::structure(space.shown(), fields)
 }
 
 /// One entry: what it is, what kind of thing it holds, how many, and then four
@@ -485,10 +519,11 @@ const SUB_IFD: &[(i128, Space)] = &[
 /// because those four bytes are a window of their own and an offset counted
 /// from inside it would land four bytes into nowhere.
 fn sub_ifd(e: Endian, space: Space, otherwise: T) -> T {
-    if space != Space::Tiff {
+    if space.subs().is_empty() {
         return otherwise;
     }
-    let cases = SUB_IFD
+    let mut cases = space
+        .subs()
         .iter()
         .map(|(tag, to)| {
             let one = T::inline_structure(
@@ -500,7 +535,13 @@ fn sub_ifd(e: Endian, space: Space, otherwise: T) -> T {
             );
             (*tag, T::switch(E::field("count"), vec![(1, one)], otherwise.clone()))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // A JPEG XR names its pixel format with a GUID rather than a number, and
+    // sixteen bytes never fit in four, so what the entry holds is an offset
+    // and the GUID is read where it points.
+    if space == Space::Jxr {
+        cases.extend(super::jxr::guid_values(e));
+    }
     T::switch(E::field("tag"), cases, otherwise)
 }
 

@@ -45,6 +45,7 @@ mod iff;
 mod ilbm;
 mod iso9660;
 mod journal;
+mod jxr;
 mod jpeg;
 mod ico;
 mod lha;
@@ -127,6 +128,7 @@ pub use ilbm::ilbm;
 pub use iso9660::iso9660;
 pub use jpeg::jpeg;
 pub use journal::journal;
+pub use jxr::jxr;
 pub use ico::ico;
 pub use lha::lha;
 pub use lnk::lnk;
@@ -195,7 +197,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "xar", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
-        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho", "hackrffw",
+        "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho", "hackrffw", "jxr",
         // Assimp importer families. Aliased extensions (AC/ACC/AC3D,
         // MD5MESH/MD5ANIM, STEP/STP, and so on) deliberately share one entry.
         "3ds", "3mf", "ac3d", "amf", "ase", "assbin", "b3d", "blend", "bvh", "c4d", "cob", "collada",
@@ -279,6 +281,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "gitpackidx" => Some(git_pack_index()),
         "qoi" => Some(qoi()),
         "tiff" => Some(tiff()),
+        "jxr" => Some(jxr()),
         "dng" | "nef" | "cr2" | "arw" | "orf" | "rw2" | "pef" | "srw" => Some(camera_raw(name)),
         "jpeg" => Some(jpeg()),
         "journal" => Some(journal()),
@@ -350,6 +353,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     // the first segment, and every JPEG has one.
     (b"\xff\xd8\xff", "jpeg"),
     (b"II*\x00", "tiff"),
+    // `II` and then the byte where a TIFF writes 42: a JPEG XR is a TIFF
+    // directory the whole way down and says so three bytes in.
+    (b"II\xbc", "jxr"),
     (b"MM\x00*", "tiff"),
     (b".snd", "au"),
     (b"%PDF-", "pdf"),

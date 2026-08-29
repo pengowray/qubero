@@ -30,6 +30,14 @@ pub enum Expr {
     /// Size in bytes of an earlier field. Needed when a field runs to the end
     /// of a container and what came before it was variable length.
     SizeOf(Arc<str>),
+    /// Size in bits of an earlier field, which is not the same question once a
+    /// format stops counting in bytes. A JPEG XR image plane header is a run
+    /// of fields a bit and three bits and four bits wide, some of them there
+    /// only because an earlier one said so, and it ends by rounding up to the
+    /// next byte so that what follows starts on one. Nothing can say how wide
+    /// that rounding is without knowing how many bits the run came to, and
+    /// `SizeOf` rounds the answer off before it can be asked.
+    BitsOf(Arc<str>),
     /// This element's index in the nearest list it sits in. Zero outside one.
     Idx,
     /// The value of one element of an earlier array, by index. `Ref` names a
@@ -218,6 +226,11 @@ impl Expr {
     /// The byte size of an earlier field.
     pub fn size_of(name: &str) -> Expr {
         Expr::SizeOf(name.into())
+    }
+    /// The bit size of an earlier field, for a format that packs them tighter
+    /// than a byte.
+    pub fn bits_of(name: &str) -> Expr {
+        Expr::BitsOf(name.into())
     }
     /// This element's index in the nearest enclosing list.
     pub fn idx() -> Expr {

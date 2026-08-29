@@ -228,7 +228,7 @@ impl Evaluator {
                     out.push(o);
                 }
             }
-            Expr::SizeOf(name) => {
+            Expr::SizeOf(name) | Expr::BitsOf(name) => {
                 if let Some(p) = self.find_field(at, name) {
                     let o = self.origin(doc, role, format!("size of {name}"), p);
                     out.push(o);

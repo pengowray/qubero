@@ -37,6 +37,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   hackrffw: "HackRF firmware",
   it: "Impulse Tracker IT",
   journal: "systemd journal",
+  jxr: "JPEG XR",
   ico: "Windows icon/cursor",
   lnk: "Windows shortcut",
   mod: "ProTracker MOD",

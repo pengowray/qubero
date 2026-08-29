@@ -95,6 +95,7 @@ impl Evaluator {
                 (None, _) => return fail(format!("{name} is not a number")),
             },
             Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
+            Expr::BitsOf(name) => self.lookup_bits(doc, at, name)?.1,
             // Read where this field starts without taking the bits: what a
             // field that exists only when the byte says so has to ask.
             Expr::Peek { bits, endian } => {
@@ -466,6 +467,13 @@ impl Evaluator {
     /// Find `name` among the fields before `at` in its struct, then in
     /// enclosing structs. Returns its value and its size in bytes.
     pub(super) fn lookup<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<(Option<i128>, i128)> {
+        let (v, bits) = self.lookup_bits(doc, at, name)?;
+        Ok((v, bits / 8))
+    }
+
+    /// The same, measured in bits, which is what a field packed tighter than a
+    /// byte has to be measured in.
+    pub(super) fn lookup_bits<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<(Option<i128>, i128)> {
         let mut cur = at.to_vec();
         while !cur.is_empty() {
             let idx = cur.pop().expect("non-empty");
@@ -481,7 +489,7 @@ impl Evaluator {
                     }
                     let info = self.node(doc, &p)?;
                     // A field with no numeric reading can still be measured.
-                    return Ok((info.value.as_int(), (info.size_bits / 8) as i128));
+                    return Ok((info.value.as_int(), info.size_bits as i128));
                 }
             }
         }
