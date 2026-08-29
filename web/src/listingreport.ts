@@ -14,6 +14,7 @@ import type { Doc, TemplateNode } from "./doc.js";
 import { emptyState, flatten, PAGE } from "./flatten.js";
 import type { Item, ListingState, TreeSource } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
+import { byteStrip } from "./bytestrip.js";
 import { fileMap } from "./filemap.js";
 import type { MapSegment } from "./filemap.js";
 import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
@@ -21,12 +22,17 @@ import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
  *  measured at would slide out from under its own place. */
-const HEIGHT = { section: 40, part: 26, row: 22 } as const;
+const HEIGHT = { section: 40, part: 26, row: 22, strip: 96 } as const;
 /** Items drawn above and below the window, so a wheel notch has somewhere to
  *  go before the next paint. */
 const OVERSCAN = 6;
 
+/** What an item is worth before it has been drawn. A byte strip's chips wrap
+ *  to the width they are given, so its real height is only known once it is
+ *  in the document; this is the guess the first layout uses, and `measured`
+ *  replaces it. */
 function heightOf(item: Item): number {
+  if (item.kind === "bytes") return HEIGHT.strip;
   if (item.kind !== "heading") return HEIGHT.row;
   return item.level === 0 ? HEIGHT.section : HEIGHT.part;
 }
@@ -79,6 +85,14 @@ export class ListingReport {
   /** The file's top-level parts, which every strip of the map is drawn from.
    *  Worked out once per flatten so that every strip has the same geometry. */
   private segments: readonly MapSegment[] = [];
+  /** Heights of items whose real one had to be measured, by key. Only byte
+   *  strips are in here; everything else is the height its kind says. */
+  private measured = new Map<string, number>();
+  /** Width the strips were measured at. Chips wrap, so a narrower view makes
+   *  every one of them taller and the measurements have to go. */
+  private measuredAt = 0;
+  /** True while a measurement's own redraw is running. */
+  private measuring = false;
   private frame = 0;
   private selected: string | null = null;
 
@@ -104,7 +118,10 @@ export class ListingReport {
     this.el.addEventListener("focus", () => this.scroller.focus());
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
     this.scroller.addEventListener("click", (e) => this.onClick(e));
-    new ResizeObserver(() => this.paint()).observe(this.scroller);
+    new ResizeObserver(() => {
+      if (this.scroller.clientWidth !== this.measuredAt) this.measured.clear();
+      this.relayout();
+    }).observe(this.scroller);
     // Chunks arriving turn a pending stretch into rows; so does an edit.
     doc.onChange(() => this.schedule());
   }
@@ -134,19 +151,30 @@ export class ListingReport {
   private rebuild(): void {
     const anchor = this.anchor();
     this.items = flatten(this.src, this.state).items;
-    this.tops = new Array(this.items.length + 1);
-    this.tops[0] = 0;
-    for (const [i, item] of this.items.entries()) this.tops[i + 1] = (this.tops[i] ?? 0) + heightOf(item);
     this.segments = this.items
       .filter((i) => i.kind === "heading" && i.level === 0)
       .map((i) => ({ offsetBits: i.offsetBits, sizeBits: i.sizeBits, color: sectionColor(i.section) }));
-    this.canvas.style.height = `${this.tops[this.items.length] ?? 0}px`;
-    this.drawn = null;
+    // A strip that is no longer in the list keeps no height.
+    const live = new Set(this.items.map((i) => i.key));
+    for (const key of [...this.measured.keys()]) if (!live.has(key)) this.measured.delete(key);
+    this.layout();
     if (anchor !== null) this.restore(anchor);
     this.paint();
-    // A stretch still being read comes back as a pending item. `Doc` has
-    // already asked for the chunks behind it and will say when they land, so
-    // there is nothing to do here but draw what there is.
+    // A stretch still being read comes back as a pending item, so this runs
+    // again when its chunks land: `Doc` has already asked for them.
+  }
+
+  /** Where every item starts. Anchoring and drawing are the caller's, since
+   *  what to hold on to differs between walking the tree again and finding a
+   *  strip was not the height it was taken for. */
+  private layout(): void {
+    this.tops = new Array(this.items.length + 1);
+    this.tops[0] = 0;
+    for (const [i, item] of this.items.entries()) {
+      this.tops[i + 1] = (this.tops[i] ?? 0) + (this.measured.get(item.key) ?? heightOf(item));
+    }
+    this.canvas.style.height = `${this.tops[this.items.length] ?? 0}px`;
+    this.drawn = null;
   }
 
   private anchor(): { readonly key: string; readonly delta: number } | null {
@@ -202,6 +230,43 @@ export class ListingReport {
     // Taken from the top of the window rather than from `from`, which reaches
     // a few rows above it and would name the heading before this one.
     this.trail();
+    this.remeasure(from, to);
+  }
+
+  /** Take the height of anything that had to be guessed, and lay out again if
+   *  the guess was wrong. Writing back only a changed height is what stops
+   *  this and `paint` calling each other for ever. */
+  private remeasure(from: number, to: number): void {
+    if (this.measuring) return;
+    // A hidden view has no width, and chips measured against no width wrap one
+    // to a line and come out three times too tall. That height would then be
+    // kept and used once the view was shown.
+    const width = this.scroller.clientWidth;
+    if (width === 0) return;
+    this.measuredAt = width;
+    let changed = false;
+    for (let i = from; i < to; i++) {
+      const item = this.items[i];
+      if (item === undefined || item.kind !== "bytes") continue;
+      const node = this.canvas.querySelector<HTMLElement>(`[data-key="${CSS.escape(item.key)}"]`);
+      if (node === null) continue;
+      const height = Math.ceil(node.getBoundingClientRect().height);
+      if (height > 0 && this.measured.get(item.key) !== height) {
+        this.measured.set(item.key, height);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    // Laying out again draws again, which measures again. The heights are
+    // written back only when they differ, so the second pass finds nothing to
+    // change and it stops; the flag is there in case a strip is ever drawn at
+    // a height that depends on where it is.
+    this.measuring = true;
+    const anchor = this.anchor();
+    this.layout();
+    if (anchor !== null) this.restore(anchor);
+    this.paint();
+    this.measuring = false;
   }
 
   /** What the top of the window is inside, which is the headings it has
@@ -243,6 +308,8 @@ export class ListingReport {
         return this.drawGap(item);
       case "fold":
         return this.drawFold(item);
+      case "bytes":
+        return this.drawStrip(item);
       case "record":
         return el("div", "rp-item rp-record", item.node.name);
       case "more":
@@ -263,8 +330,41 @@ export class ListingReport {
     row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits)));
     const share = shareText(item.sizeBits, fileBits);
     row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
-    row.append(fileMap(this.segments, item.offsetBits, item.sizeBits, rangeText(item.offsetBits, item.sizeBits)));
+    row.append(this.bytesButton(item.key));
+    row.append(this.mapFor(item));
     return row;
+  }
+
+  private drawStrip(item: Extract<Item, { kind: "bytes" }>): HTMLElement {
+    const host = el("div", "rp-item rp-strip");
+    host.style.paddingLeft = `${8 + item.depth * 12}px`;
+    const caption = `${item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
+    host.append(
+      byteStrip(this.doc, item.offsetBits, item.sizeBits, caption, this.mapFor(item), () => this.toggleBytes(item.owner)),
+    );
+    return host;
+  }
+
+  private mapFor(item: Item): HTMLElement {
+    return fileMap(this.segments, item.offsetBits, item.sizeBits, rangeText(item.offsetBits, item.sizeBits));
+  }
+
+  /** The control that shows an item's bytes, and takes them away again. */
+  private bytesButton(key: string): HTMLElement {
+    const on = this.state.bytes.has(key);
+    const b = el("button", `rp-bytes${on ? " is-on" : ""}`, REPORT.showBytes);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(on));
+    b.dataset["bytes"] = key;
+    return b;
+  }
+
+  private toggleBytes(key: string): void {
+    const bytes = new Set(this.state.bytes);
+    if (bytes.has(key)) bytes.delete(key);
+    else bytes.add(key);
+    this.state = { ...this.state, bytes };
+    this.rebuild();
   }
 
   private drawRow(item: Extract<Item, { kind: "row" }>): HTMLElement {
@@ -277,6 +377,7 @@ export class ListingReport {
     row.append(el("span", "rp-value", n.composite ? countText(n.child_count, childWord(n)) : n.value));
     row.append(el("span", "rp-type", n.type));
     row.append(el("span", "rp-size", bitSizeText(n.size_bits)));
+    row.append(this.bytesButton(item.key));
     return row;
   }
 
@@ -298,6 +399,7 @@ export class ListingReport {
     row.append(el("span", "rp-twist", item.open ? "▾" : "▸"));
     row.append(el("span", "rp-value", REPORT.fold(item.nodes.length, item.owner?.name ?? null)));
     row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
+    row.append(this.bytesButton(item.key));
     return row;
   }
 
@@ -321,11 +423,19 @@ export class ListingReport {
     if (key === undefined) return;
     const item = this.items.find((i) => i.key === key);
     if (item === undefined) return;
+    const wants = target.closest<HTMLElement>("[data-bytes]")?.dataset["bytes"];
+    if (wants !== undefined) {
+      this.toggleBytes(wants);
+      return;
+    }
+    // A click inside an open strip is for the strip, not for opening whatever
+    // the strip is sitting under.
+    if (item.kind === "bytes") return;
     if (item.kind === "more") {
       const at = pathString(item.path);
       const shown = new Map(this.state.shown);
       shown.set(at, item.shown + PAGE);
-      this.state = { open: this.state.open, shown };
+      this.state = { ...this.state, shown };
       this.rebuild();
       return;
     }
@@ -334,7 +444,7 @@ export class ListingReport {
       const open = new Set(this.state.open);
       if (open.has(openKey)) open.delete(openKey);
       else open.add(openKey);
-      this.state = { open, shown: this.state.shown };
+      this.state = { ...this.state, open };
       this.rebuild();
     }
     if (item.kind === "row") {
@@ -358,7 +468,7 @@ export class ListingReport {
       // The field is inside something still closed: open every step down to it.
       const open = new Set(this.state.open);
       for (let n = 1; n <= path.length; n++) open.add(pathString(path.slice(0, n)));
-      this.state = { open, shown: this.state.shown };
+      this.state = { ...this.state, open };
       this.rebuild();
       i = this.items.findIndex((item) => item.key === key);
       if (i < 0) return;

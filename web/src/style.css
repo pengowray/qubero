@@ -2346,3 +2346,163 @@ button.insp-xrow-where:hover {
      colour and disappears against the bar in the light theme. */
   color: color-mix(in srgb, var(--muted) 60%, transparent);
 }
+
+/* ---- the byte strip (rules 5 and 6) ---- */
+/* One column per field: dim hex digits, a coloured bracket clipped to the
+   field's own width, and a chip in the same hue below. The digits are dim on
+   purpose: here their job is how many bytes there are and where they sit. */
+.rp-strip {
+  inset-inline: 0;
+  display: block;
+  padding-block: 4px 10px;
+  padding-inline-end: 8px;
+}
+.bstrip {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+  padding: 8px 12px;
+  overflow-x: auto;
+}
+.bs-cap {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 11px;
+  /* Not upper-cased, though the mockup's caption is: it carries an address,
+     and `0X100D` is not how a hex number is written. */
+  letter-spacing: 0.02em;
+}
+.bs-cap-text {
+  white-space: nowrap;
+}
+.bs-close {
+  margin-inline-start: auto;
+  padding: 1px 6px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.bs-close:hover {
+  color: var(--fg);
+}
+.bs-grid {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.bs-addr {
+  flex: none;
+  color: var(--addr);
+  line-height: 20px;
+}
+.bs-fields {
+  display: flex;
+}
+.bs-fld {
+  display: flex;
+  flex-direction: column;
+  padding-inline: 4px;
+}
+.bs-by {
+  white-space: nowrap;
+  line-height: 20px;
+  color: color-mix(in srgb, var(--fg) 62%, var(--bg));
+  border-radius: 2px;
+}
+.bs-fld[style*="--hue"] .bs-by {
+  background: color-mix(in srgb, var(--hue) 15%, transparent);
+}
+/* Clipped to exactly the field's byte width: the label says which bytes it is
+   about by being no wider than they are. */
+.bs-lb {
+  width: 0;
+  min-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  margin-top: 1px;
+  padding-top: 2px;
+  border-top: 2px solid transparent;
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--muted);
+  /* A name wider than its field is cut off, and a cut-off name can read as a
+     different one: `cell_content_start` clipped is `cell_cor`. Fading the last
+     few pixels says it is cut rather than spelling something else. The chip
+     below carries the whole name in the same hue. A name that fits ends before
+     the fade and is untouched by it. */
+  mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
+}
+.bs-fld[style*="--hue"] .bs-lb {
+  border-top-color: var(--hue);
+  color: color-mix(in srgb, var(--hue) 60%, var(--fg));
+}
+.bs-fld.is-gap .bs-by {
+  color: var(--muted);
+  background: repeating-linear-gradient(-45deg, transparent 0 7px, color-mix(in srgb, var(--muted) 6%, transparent) 7px 8px);
+}
+.bs-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+.bs-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border-inline-start: 3px solid var(--hue);
+  background: color-mix(in srgb, var(--hue) 13%, transparent);
+  font-size: 12px;
+  max-width: 100%;
+}
+.bs-k {
+  color: var(--muted);
+}
+.bs-v {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bs-wait {
+  color: var(--muted);
+  font-style: italic;
+}
+/* The control that opens a strip. Quiet until it is on, because most rows are
+   not the one the reader is opening. */
+.rp-bytes {
+  flex: none;
+  margin-inline-start: 8px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+}
+.rp-item:hover .rp-bytes,
+.rp-bytes.is-on,
+.rp-bytes:focus-visible {
+  opacity: 1;
+}
+.rp-bytes:hover {
+  color: var(--fg);
+  border-color: var(--line);
+}
+.rp-bytes.is-on {
+  color: var(--fg);
+  border-color: var(--line);
+  background: var(--panel);
+}

@@ -192,7 +192,7 @@ test("the template's word beats what the shapes say, either way", () => {
       ] },
     ],
   };
-  const items = run(both, { open: new Set(["0"]), shown: new Map() }).items;
+  const items = run(both, { ...emptyState, open: new Set(["0"]) }).items;
   const rows = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
   const folded = items.flatMap((i) => (i.kind === "fold" ? i.nodes.map((n) => n.name) : []));
   assert.deepEqual(rows, ["width"]);
@@ -203,7 +203,7 @@ test("opening a fold lists the fields it stands for", () => {
   const closed = run(SQLITE);
   const fold = closed.items.find((i) => i.kind === "fold");
   assert.ok(fold !== undefined);
-  const open = run(SQLITE, { open: new Set([fold.key]), shown: new Map() });
+  const open = run(SQLITE, { ...emptyState, open: new Set([fold.key]) });
   const under = open.items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
   assert.deepEqual(under.slice(-6), [
     "page_type",
@@ -284,7 +284,7 @@ test("free space at a structure's own edges is accounted for", () => {
       { name: "page", bytes: 100, kids: [{ name: "cell", bytes: 10, at: 40 }] },
     ],
   };
-  const gaps = run(spaced, { open: new Set(["0"]), shown: new Map() }).items.filter((i) => i.kind === "gap");
+  const gaps = run(spaced, { ...emptyState, open: new Set(["0"]) }).items.filter((i) => i.kind === "gap");
   assert.deepEqual(
     gaps.map((g) => [g.offsetBits / 8, g.sizeBits / 8]),
     [
@@ -303,7 +303,7 @@ test("the rows of a page are a part of it, not another indent", () => {
 
 test("opening a part lists what is in it", () => {
   const closed = run(SQLITE);
-  const open = run(SQLITE, { open: new Set(["4.6"]), shown: new Map() });
+  const open = run(SQLITE, { ...emptyState, open: new Set(["4.6"]) });
   assert.ok(open.items.length > closed.items.length);
   const names = open.items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
   assert.ok(names.includes("[0]"));

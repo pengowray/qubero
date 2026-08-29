@@ -41,3 +41,18 @@ const SECTION_HUES = ["#62c48b", "#e0b04c", "#6cb2ff", "#b48ce0", "#d98a9e", "#7
 export function sectionColor(section: number): string {
   return SECTION_HUES[((section % SECTION_HUES.length) + SECTION_HUES.length) % SECTION_HUES.length] ?? SECTION_HUES[0] ?? "#888";
 }
+
+/**
+ * The hues cycled through the fields of one open byte strip.
+ *
+ * A third question again, and the narrowest: inside one strip, which bytes
+ * belong to which field. The colours mean nothing outside that strip and are
+ * not the section colours, which say which part of the file something is in.
+ * Rule 5 of the mockups: a field's hue appears in exactly three places, its
+ * bytes, its bracket and its chip, and nowhere else.
+ */
+const FIELD_HUES = ["#5b8dd6", "#62c48b", "#c9a45c", "#b48ce0", "#d98a9e"];
+
+export function fieldHue(index: number): string {
+  return FIELD_HUES[((index % FIELD_HUES.length) + FIELD_HUES.length) % FIELD_HUES.length] ?? FIELD_HUES[0] ?? "#888";
+}

@@ -40,9 +40,11 @@ export type ListingState = {
   readonly open: ReadonlySet<string>;
   /** Children of a long list asked for so far, over the first page. */
   readonly shown: ReadonlyMap<string, number>;
+  /** Items showing their bytes, by the key of the item the strip belongs to. */
+  readonly bytes: ReadonlySet<string>;
 };
 
-export const emptyState: ListingState = { open: new Set(), shown: new Map() };
+export const emptyState: ListingState = { open: new Set(), shown: new Map(), bytes: new Set() };
 
 type Common = {
   readonly key: string;
@@ -108,6 +110,16 @@ export type Item = Common &
         readonly path: readonly number[];
         readonly shown: number;
         readonly remaining: number;
+      }
+    | {
+        /** The bytes behind an item, shown under it. Its own extent is what
+         *  the strip covers, which is not always the whole of the item: a
+         *  four-kilobyte page opens on its header, not on four kilobytes. */
+        readonly kind: "bytes";
+        readonly path: readonly number[];
+        /** The item the strip belongs to, so closing it finds its own key. */
+        readonly owner: string;
+        readonly name: string;
       }
     | {
         /** The bytes behind this stretch have not been read yet. */
@@ -227,6 +239,24 @@ class Walk {
     return this.state.open.has(key);
   }
 
+  /** The strip under an item, when the reader has asked for its bytes.
+   *  `over` is the stretch it covers, which the caller works out: an item and
+   *  the bytes worth opening it on are not always the same. */
+  strip(owner: string, path: readonly number[], name: string, over: { readonly start: number; readonly end: number }, depth: number): void {
+    if (!this.state.bytes.has(owner)) return;
+    this.push({
+      kind: "bytes",
+      key: `bytes:${owner}`,
+      section: this.section,
+      depth,
+      offsetBits: over.start,
+      sizeBits: Math.max(0, over.end - over.start),
+      path,
+      owner,
+      name,
+    });
+  }
+
   /** Children of `path`, up to what the reader has asked to see. Returns null
    *  once, having recorded a pending item, when the bytes are not there yet. */
   kids(path: readonly number[], count: number): TemplateNode[] | null {
@@ -331,12 +361,26 @@ function heading(
     to,
     open,
   });
+  w.strip(`h:${key}`, path, node?.name ?? "", frontOf(node, inner), level + 1);
   if (!open) return;
   if (inner === null) {
     w.waiting(path, level + 1, node);
     return;
   }
   body(w, path, node, inner, level + 1);
+}
+
+/** What a heading opens on. A four-kilobyte page is not four kilobytes of hex:
+ *  what a reader wants from it is the machinery at its front, which is where
+ *  its first payload field begins. A part with no machinery opens on itself. */
+function frontOf(node: TemplateNode, kids: readonly TemplateNode[] | null): { readonly start: number; readonly end: number } {
+  const start = node.offset_bits;
+  const whole = { start, end: start + node.size_bits };
+  if (kids === null) return whole;
+  const order = inFileOrder(kids);
+  const first = order.find((k, i) => !isMachinery(k, i, []));
+  if (first === undefined || first.offset_bits <= start) return whole;
+  return { start, end: first.offset_bits };
 }
 
 /** A part of the file made of a run of a structure's plain fields, which has
@@ -460,6 +504,7 @@ function rows(
     });
     // Folded, not hidden: opening one lists the fields it stands for, a step
     // in from the payload they place.
+    w.strip(key, first.path, first.name, { start: first.offset_bits, end: endBits(last) }, depth);
     if (open) for (const n of fold) child(w, n, depth + 1);
     fold = [];
   };
@@ -526,6 +571,7 @@ function child(w: Walk, node: TemplateNode, depth: number): void {
     node,
     open,
   });
+  w.strip(`r:${key}`, node.path, node.name, { start: node.offset_bits, end: endBits(node) }, depth);
   if (!open) return;
   const inner = w.kids(node.path, node.child_count);
   if (inner === null) {

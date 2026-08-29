@@ -98,6 +98,13 @@ export const REPORT = {
   /** A stretch whose bytes have not arrived yet. Same situation as the older
    *  listing's, and the same words. */
   reading: "Loading bytes needed to map these fields…",
+  /** The control on a heading or a row that shows the bytes behind it, and
+   *  the one that puts them away again. Both are the mockup's own. */
+  showBytes: "bytes",
+  hideBytes: "hide bytes ✕",
+  /** A run of bytes shown short, because a strip is for seeing where fields
+   *  are rather than for reading every byte of one. The mockup's word. */
+  moreBytes: "unused…",
 } as const;
 
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the
