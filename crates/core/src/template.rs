@@ -747,6 +747,16 @@ pub struct StructDef {
     /// template can describe; this is the hook the format's own unpacker is
     /// found by.
     pub packed: Option<Arc<str>>,
+    /// Fields that are this structure's own machinery, whatever the shapes
+    /// say. What a field decides is worked out from the template itself (see
+    /// [`crate::machinery`]), and a field nothing reads still ends up here
+    /// when it is plumbing all the same: a fragment counter, a free-block
+    /// chain, a reserved word.
+    pub machinery: Vec<Arc<str>>,
+    /// Fields that are the point, whatever the shapes say. A bitmap's width
+    /// settles the stride of every row and is also the first thing a reader
+    /// wants to know, and folding it behind the pixels would hide it.
+    pub payload: Vec<Arc<str>>,
 }
 
 impl Ty {
@@ -845,6 +855,8 @@ impl Ty {
             unit: None,
             inline: false,
             packed: None,
+            machinery: Vec::new(),
+            payload: Vec::new(),
         }))
     }
     /// A structure that one of its own fields names, and one field that is
@@ -874,6 +886,24 @@ impl Ty {
     pub fn packed_as(self, packing: &str) -> Ty {
         match self {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { packed: Some(packing.into()), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// Names fields that are this structure's machinery however its shapes
+    /// read. See [`StructDef::machinery`].
+    pub fn machinery(self, names: &[&str]) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { machinery: names.iter().map(|n| Arc::from(*n)).collect(), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// Names fields the machinery rules must leave at full strength. See
+    /// [`StructDef::payload`].
+    pub fn payload(self, names: &[&str]) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { payload: names.iter().map(|n| Arc::from(*n)).collect(), ..(*s).clone() })),
             other => other,
         }
     }

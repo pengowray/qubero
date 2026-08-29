@@ -11,6 +11,7 @@ use crate::bits::bytes_for;
 use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, narrow_bf16, narrow_f16, narrow_f32, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
+use crate::machinery;
 use crate::source::{Missing, Source};
 use crate::template::{Anchor, Encoding, Expr, StrLen, Template, Ty, Until};
 use crate::text::{self, Settled};
@@ -138,6 +139,16 @@ pub struct NodeInfo {
     /// run of numbers, whatever the format calls them for a run it has a word
     /// for, and nothing at all when the honest answer is `item`.
     pub unit: Option<String>,
+    /// The sibling whose length, count, type or position this field settles,
+    /// as an index among the parent's children. This is the fact behind
+    /// folding a structure's machinery away: what a field is machinery *for*.
+    /// Whether it is folded is the view's to decide, since that depends on
+    /// where the two of them end up on screen. See [`crate::machinery`].
+    pub consumed_by: Option<usize>,
+    /// What the template says about this field regardless of the shapes:
+    /// `Some(true)` for machinery, `Some(false)` for payload, `None` when it
+    /// has no opinion.
+    pub machinery: Option<bool>,
 }
 
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
@@ -488,6 +499,7 @@ impl Evaluator {
             _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
+        let (consumed_by, machinery) = self.owner_of(path);
         Ok(NodeInfo {
             path: path.to_vec(),
             editable: !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
@@ -502,7 +514,25 @@ impl Evaluator {
             value,
             child_count,
             composite,
+            consumed_by,
+            machinery,
         })
+    }
+
+    /// What the field at `path` is machinery for, and what its structure says
+    /// about it. Both are properties of the parent structure's declaration, so
+    /// a child of a list has neither: the elements of a list are all the same
+    /// shape and none of them places another.
+    ///
+    /// Worked out afresh for each child rather than once for the structure.
+    /// Listing a structure's children makes that quadratic, in a walk of a
+    /// handful of type enums over the few dozen fields a structure has; a run
+    /// long enough to care about is a list, and lists stop at the first line
+    /// here.
+    fn owner_of(&self, path: &[usize]) -> (Option<usize>, Option<bool>) {
+        let Some((&last, parent)) = path.split_last() else { return (None, None) };
+        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { return (None, None) };
+        (machinery::consumers(s).get(last).copied().flatten(), machinery::hint(s, last))
     }
 
     /// The whole text of a text field, decoded in its own encoding, up to the

@@ -17,6 +17,7 @@ pub mod encode;
 pub mod eval;
 pub mod formats;
 pub mod json;
+pub mod machinery;
 pub mod magicrule;
 pub mod overview;
 pub mod piece;

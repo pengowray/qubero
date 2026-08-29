@@ -31,8 +31,25 @@ fn walk(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: us
             return;
         }
     };
+    // What this field is machinery for, and what the template says about it,
+    // so the listing's folding can be checked without a browser.
+    let owner = match (n.consumed_by, n.machinery) {
+        (None, None) => String::new(),
+        (c, m) => {
+            let mut parts = Vec::new();
+            if let Some(i) = c {
+                parts.push(format!("places #{i}"));
+            }
+            match m {
+                Some(true) => parts.push("hint:machinery".to_string()),
+                Some(false) => parts.push("hint:payload".to_string()),
+                None => {}
+            }
+            format!(" [{}]", parts.join(" "))
+        }
+    };
     println!(
-        "{:indent$}{path:?} {} : {} = {:?} ({} bits at {:x})",
+        "{:indent$}{path:?} {} : {} = {:?} ({} bits at {:x}){owner}",
         "",
         n.name,
         n.type_name,

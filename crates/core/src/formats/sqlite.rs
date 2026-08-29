@@ -218,7 +218,11 @@ fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, usable: E,
         "cells",
         T::pointer_list("cell_pointers", Anchor::Window, adjust, cell(page_type, usable, rec)),
     ));
-    T::structure(name, fields)
+    // The rest of the page header is bookkeeping for the free space between
+    // the cell pointers and the cells. Nothing else in the template reads any
+    // of it, so the shapes cannot tell it apart from a field worth reading;
+    // the listing folds it behind the page all the same.
+    T::structure(name, fields).machinery(&["page_type", "first_freeblock", "cell_content_start", "fragmented_free_bytes"])
 }
 
 /// A page that is not a b-tree, which is a page whose first byte was never a
