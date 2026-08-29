@@ -2282,9 +2282,15 @@ button.insp-xrow-where:hover {
   flex: none;
   width: 10px;
 }
+/* Either end of a list only partly drawn. Its label is a sentence rather than
+   a field name, so it is not held to the field column's width: "Show more ·
+   249,800 entries above" is longer than any field name and clips in it. */
 .rp-more {
   color: var(--accent);
   cursor: pointer;
+}
+.rp-more .rp-field {
+  width: auto;
 }
 .rp-pending {
   height: var(--rp-row);

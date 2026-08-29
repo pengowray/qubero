@@ -13,7 +13,7 @@ import { formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 import type { FieldPick } from "./listingview.js";
 import { emptyState, flatten, PAGE } from "./flatten.js";
-import type { FlatOptions, Item, ListingState, TreeSource } from "./flatten.js";
+import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
 import { fileMap } from "./filemap.js";
@@ -529,7 +529,7 @@ export class ListingReport {
     const reply = this.doc.templateNode(item.path);
     const noun = reply.status === "ok" ? childWord(reply.node) : "item";
     row.append(el("span", "rp-at", ""));
-    row.append(el("span", "rp-field", REPORT.more(countText(item.remaining, noun))));
+    row.append(el("span", "rp-field", REPORT.more(countText(item.remaining, noun), item.side)));
     return row;
   }
 
@@ -552,9 +552,9 @@ export class ListingReport {
     // the strip is sitting under.
     if (item.kind === "bytes") return;
     if (item.kind === "more") {
-      const at = pathString(item.path);
       const shown = new Map(this.state.shown);
-      shown.set(at, item.shown + PAGE);
+      const win = item.side === "later" ? { from: item.from, to: item.to + PAGE } : { from: Math.max(0, item.from - PAGE), to: item.to };
+      shown.set(pathString(item.path), win);
       this.state = { ...this.state, shown };
       this.rebuild();
       return;
@@ -586,6 +586,29 @@ export class ListingReport {
     this.paintAgain();
   }
 
+  /**
+   * The windows on the long lists between the root and `path`, moved so that
+   * each step through one is drawn.
+   *
+   * A page at a time, aligned to page boundaries, so that arriving at element
+   * 19,974 draws elements 19,800 to 20,000 rather than one lone row: the
+   * reader clicked bytes in the middle of a run and what they want to see is
+   * the run. A window already holding the step is left where it is, so
+   * following the cursor along a list does not keep jumping it.
+   */
+  private framed(path: readonly number[]): Map<string, Window> {
+    const shown = new Map(this.state.shown);
+    for (let n = 0; n < path.length; n++) {
+      const at = pathString(path.slice(0, n));
+      const i = path[n] ?? 0;
+      const win = shown.get(at) ?? { from: 0, to: PAGE };
+      if (i >= win.from && i < win.to) continue;
+      const from = Math.floor(i / PAGE) * PAGE;
+      shown.set(at, { from, to: from + PAGE });
+    }
+    return shown;
+  }
+
   /** Bring the field at `path` on screen and select it. */
   reveal(path: readonly number[]): void {
     const node = this.doc.templateNode(path);
@@ -594,10 +617,12 @@ export class ListingReport {
     const key = `r:${pathString(path)}`;
     let i = this.items.findIndex((item) => item.key === key);
     if (i < 0) {
-      // The field is inside something still closed: open every step down to it.
+      // The field is inside something still closed: open every step down to it,
+      // and move the window of every long list on the way so that the step
+      // through it is one of the elements drawn.
       const open = new Set(this.state.open);
       for (let n = 1; n <= path.length; n++) open.add(pathString(path.slice(0, n)));
-      this.state = { ...this.state, open };
+      this.state = { ...this.state, open, shown: this.framed(path) };
       this.rebuild();
       i = this.items.findIndex((item) => item.key === key);
     }

@@ -37,18 +37,27 @@ export type TreeSource = {
   children(path: readonly number[], from: number, to: number): TemplateReply<TemplateNode[]>;
 };
 
+/** Which elements of a long list are drawn. A window rather than a count,
+ *  because the reader can arrive at element 19,974 by clicking its bytes, and
+ *  drawing the 19,973 before it to reach it is the thing this avoids. */
+export type Window = { readonly from: number; readonly to: number };
+
 /** What the reader has opened. Keys are `pathKey` strings so that the state
  *  survives a re-flatten, which happens on every scroll and every chunk. */
 export type ListingState = {
   /** Structures showing their children, and headings showing their bytes. */
   readonly open: ReadonlySet<string>;
-  /** Children of a long list asked for so far, over the first page. */
-  readonly shown: ReadonlyMap<string, number>;
+  /** Which stretch of a long list is drawn, for the lists that have been
+   *  moved off their first page. */
+  readonly shown: ReadonlyMap<string, Window>;
   /** Items showing their bytes, by the key of the item the strip belongs to. */
   readonly bytes: ReadonlySet<string>;
 };
 
 export const emptyState: ListingState = { open: new Set(), shown: new Map(), bytes: new Set() };
+
+/** The children of a list that are drawn, and where in it they start. */
+export type Slice = { readonly from: number; readonly nodes: readonly TemplateNode[] };
 
 type Common = {
   readonly key: string;
@@ -109,10 +118,16 @@ export type Item = Common &
         readonly count: number;
       }
     | {
-        /** The tail of a list longer than the page drawn so far. */
+        /** One end of a list that is only partly drawn: the elements before
+         *  the drawn ones, or the ones after them. Its own extent is the
+         *  bytes of the elements it stands for, so the two of them and the
+         *  drawn rows between them account for the whole list. */
         readonly kind: "more";
+        readonly side: "earlier" | "later";
         readonly path: readonly number[];
-        readonly shown: number;
+        /** The window it is an end of, so a click can move that end. */
+        readonly from: number;
+        readonly to: number;
         readonly remaining: number;
       }
     | {
@@ -261,14 +276,22 @@ class Walk {
     });
   }
 
-  /** Children of `path`, up to what the reader has asked to see. Returns null
-   *  once, having recorded a pending item, when the bytes are not there yet. */
-  kids(path: readonly number[], count: number): TemplateNode[] | null {
-    const key = pathKey(path);
-    const want = Math.min(count, Math.max(this.page, this.state.shown.get(key) ?? 0));
-    const reply = this.src.children(path, 0, want);
-    if (reply.status === "ok") return reply.node;
-    if (reply.status === "error") return [];
+  /** Which children of `path` are drawn: the reader's window on it, or the
+   *  first page when they have not moved one. */
+  window(path: readonly number[], count: number): Window {
+    const win = this.state.shown.get(pathKey(path));
+    if (count <= 0) return { from: 0, to: 0 };
+    const from = Math.min(Math.max(0, win?.from ?? 0), count - 1);
+    return { from, to: Math.min(count, Math.max(from + 1, win?.to ?? this.page)) };
+  }
+
+  /** Children of `path` the reader has asked to see. Returns null once, having
+   *  recorded a pending item, when the bytes are not there yet. */
+  kids(path: readonly number[], count: number): Slice | null {
+    const { from, to } = this.window(path, count);
+    const reply = this.src.children(path, from, to);
+    if (reply.status === "ok") return { from, nodes: reply.node };
+    if (reply.status === "error") return { from, nodes: [] };
     this.pending = true;
     this.reachedBytes = Math.max(this.reachedBytes, reply.reachedBytes);
     return null;
@@ -310,7 +333,7 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
     w.waiting([], 0, root.node);
     return { items: w.items, pending: true, reachedBytes: w.reachedBytes };
   }
-  sections(w, [], root.node, kids);
+  sections(w, [], root.node, kids.nodes);
   return { items: w.items, pending: w.pending, reachedBytes: w.reachedBytes };
 }
 
@@ -326,10 +349,12 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
       const kidPath = [...path, from];
       const inner = w.kids(kidPath, first.child_count);
       // A list of a handful of structures is a handful of parts of the file,
-      // not one part holding a list: three SQLite pages read as three.
-      if (inner !== null && elementsAreSections(first, inner, w.sectionListMax, w.fileBits)) {
+      // not one part holding a list: three SQLite pages read as three. Only a
+      // list drawn whole can be, since a part of the file that is only some of
+      // a list is not a part of the file.
+      if (inner !== null && inner.from === 0 && inner.nodes.length === first.child_count && elementsAreSections(first, inner.nodes, w.sectionListMax, w.fileBits)) {
         w.section -= 1;
-        sections(w, kidPath, first, inner);
+        sections(w, kidPath, first, inner.nodes);
         return;
       }
       heading(w, kidPath, first, 0, from, to, inner);
@@ -347,7 +372,7 @@ function heading(
   level: 0 | 1,
   from: number,
   to: number,
-  inner: readonly TemplateNode[] | null,
+  inner: Slice | null,
 ): void {
   const key = pathKey(path);
   const open = level === 0 || w.isOpen(key) || (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX);
@@ -376,12 +401,14 @@ function heading(
 
 /** What a heading opens on. A four-kilobyte page is not four kilobytes of hex:
  *  what a reader wants from it is the machinery at its front, which is where
- *  its first payload field begins. A part with no machinery opens on itself. */
-function frontOf(node: TemplateNode, kids: readonly TemplateNode[] | null): { readonly start: number; readonly end: number } {
+ *  its first payload field begins. A part with no machinery opens on itself,
+ *  and so does a list whose drawn elements do not include its first: the front
+ *  of what is drawn is the middle of the part. */
+function frontOf(node: TemplateNode, kids: Slice | null): { readonly start: number; readonly end: number } {
   const start = node.offset_bits;
   const whole = { start, end: start + node.size_bits };
-  if (kids === null) return whole;
-  const order = inFileOrder(kids);
+  if (kids === null || kids.from > 0) return whole;
+  const order = inFileOrder(kids.nodes);
   const first = order.find((k, i) => !isMachinery(k, i, []));
   if (first === undefined || first.offset_bits <= start) return whole;
   return { start, end: first.offset_bits };
@@ -426,7 +453,7 @@ function body(
   w: Walk,
   path: readonly number[],
   node: TemplateNode,
-  kids: readonly TemplateNode[],
+  kids: Slice,
   depth: number,
 ): void {
   if (w.opts.isRecord?.(node) === true) {
@@ -458,8 +485,29 @@ function body(
     }
     return;
   }
-  rows(w, path, kids, 0, [], depth, { start: node.offset_bits, end: endBits(node) });
-  more(w, path, node, kids.length, depth);
+  drawn(w, path, node, kids, depth);
+}
+
+/**
+ * A structure's children, with the ends of a list that is only partly drawn
+ * standing for the elements that are not.
+ *
+ * The rows either side own the bytes of what they stand for, so the window's
+ * edges are not holes: without that, jumping to element 19,974 would put
+ * nineteen thousand elements' worth of "unused space" above it.
+ */
+function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slice, depth: number): void {
+  const before = slice.from;
+  const after = node.child_count - (slice.from + slice.nodes.length);
+  const order = inFileOrder(slice.nodes);
+  const first = order[0];
+  const last = order[order.length - 1];
+  const start = before > 0 && first !== undefined ? first.offset_bits : node.offset_bits;
+  const end = after > 0 && last !== undefined ? endBits(last) : endBits(node);
+  const to = slice.from + slice.nodes.length;
+  if (before > 0) edge(w, "earlier", path, depth, before, slice.from, to, { start: node.offset_bits, end: start });
+  rows(w, path, slice.nodes, slice.from, [], depth, { start, end });
+  if (after > 0) edge(w, "later", path, depth, after, slice.from, to, { start: end, end: endBits(node) });
 }
 
 /** A structure's children as items: gaps where nothing covers the bytes,
@@ -544,10 +592,7 @@ function rows(
     if (kid.contents && kid.composite && kid.child_count > 0) {
       const inner = w.kids(kid.path, kid.child_count);
       if (inner === null) w.waiting(kid.path, depth, kid);
-      else {
-        rows(w, kid.path, inner, 0, [], depth, { start: kid.offset_bits, end: endBits(kid) });
-        more(w, kid.path, kid, inner.length, depth);
-      }
+      else drawn(w, kid.path, kid, inner, depth);
       continue;
     }
     child(w, kid, depth);
@@ -576,7 +621,7 @@ function child(w: Walk, node: TemplateNode, depth: number): void {
   if (node.composite && node.child_count > 0 && depth === 1) {
     // A short table opens itself, since the table is what it is for.
     const open = w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true);
-    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : []);
+    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : { from: 0, nodes: [] });
     return;
   }
   const open = node.composite && node.child_count > 0 && w.isOpen(key);
@@ -598,23 +643,31 @@ function child(w: Walk, node: TemplateNode, depth: number): void {
     w.waiting(node.path, depth + 1, node);
     return;
   }
-  rows(w, node.path, inner, 0, [], depth + 1, { start: node.offset_bits, end: endBits(node) });
-  more(w, node.path, node, inner.length, depth + 1);
+  drawn(w, node.path, node, inner, depth + 1);
 }
 
-/** How much of a long list is still not drawn. */
-function more(w: Walk, path: readonly number[], node: TemplateNode, drawn: number, depth: number): void {
-  const remaining = node.child_count - drawn;
-  if (remaining <= 0) return;
+/** One end of a list that is only partly drawn. */
+function edge(
+  w: Walk,
+  side: "earlier" | "later",
+  path: readonly number[],
+  depth: number,
+  remaining: number,
+  from: number,
+  to: number,
+  over: { readonly start: number; readonly end: number },
+): void {
   w.push({
     kind: "more",
-    key: `more:${pathKey(path)}`,
+    side,
+    key: `more:${side}:${pathKey(path)}`,
     section: w.section,
     depth,
-    offsetBits: node.offset_bits,
-    sizeBits: node.size_bits,
+    offsetBits: over.start,
+    sizeBits: Math.max(0, over.end - over.start),
     path,
-    shown: drawn,
+    from,
+    to,
     remaining,
   });
 }

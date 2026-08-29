@@ -113,11 +113,16 @@ export const REPORT = {
     const fields = count === 1 ? "bookkeeping field" : "bookkeeping fields";
     return owner === null ? `${count} ${fields}` : `${count} ${fields} for ${owner}`;
   },
-  /** The tail of a list longer than what has been drawn so far. `rest` is
-   *  already counted and named: "249,800 items". A click draws the next page,
-   *  not all of it, so the label promises "more" and states the remainder
-   *  instead of promising the whole tail. */
-  more: (rest: string): string => `Show more · ${rest} left`,
+  /** The two ends of a list that is only partly drawn. `rest` is already
+   *  counted and named: "249,800 items". A click draws the next page, not all
+   *  of it, so both labels promise "more" and state the remainder instead of
+   *  promising the whole of that end.
+   *
+   *  Mirrored tails rather than one row's "left", which means "remaining after
+   *  this point" and is wrong above the window. The rows are often both on
+   *  screen, one at each end of two hundred drawn ones, and the pair has to
+   *  read as two edges of one window rather than two unrelated controls. */
+  more: (rest: string, side: "earlier" | "later"): string => `Show more · ${rest} ${side === "earlier" ? "above" : "below"}`,
   /** A stretch whose bytes have not arrived yet. Same situation as the older
    *  listing's, and the same words. */
   reading: "Loading bytes needed to map these fields…",

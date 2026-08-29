@@ -382,15 +382,44 @@ test("a long list stops at a page and says how much is left", () => {
   const { items } = run(GGUF);
   const more = items.filter((i) => i.kind === "more");
   assert.deepEqual(
-    more.map((m) => (m.kind === "more" ? [m.shown, m.remaining] : [])),
+    more.map((m) => (m.kind === "more" ? [m.side, m.from, m.to, m.remaining] : [])),
     [
-      [200, 189],
-      [200, 249_800],
+      ["later", 0, 200, 189],
+      ["later", 0, 200, 249_800],
     ],
   );
   // 389 tensors and a quarter of a million metadata entries, and the list
   // stays in the hundreds.
   assert.ok(items.length < 900, `${items.length} items`);
+});
+
+test("a window partway into a list draws that stretch and both its ends", () => {
+  const state: ListingState = { ...emptyState, shown: new Map([["4", { from: 200, to: 389 }]]) };
+  const { items } = run(GGUF, state);
+  const rows = items.filter((i) => i.kind === "heading" && i.level === 1);
+  assert.equal(rows.length, 189);
+  assert.equal(rows[0]?.kind === "heading" ? rows[0].node?.name : "", "t200");
+  const more = items.filter((i) => i.kind === "more" && pathKey(i.path) === "4");
+  assert.deepEqual(
+    more.map((m) => (m.kind === "more" ? [m.side, m.remaining] : [])),
+    [["earlier", 200]],
+  );
+});
+
+test("the elements a window leaves out are not a gap in the file", () => {
+  const state: ListingState = { ...emptyState, shown: new Map([["4", { from: 100, to: 200 }]]) };
+  const { items } = run(GGUF, state);
+  // The two ends stand for 100 tensors before and 189 after, and their bytes
+  // are the ones those tensors cover. Nothing in the list is unaccounted for.
+  const ends = items.filter((i) => i.kind === "more" && pathKey(i.path) === "4");
+  assert.deepEqual(
+    ends.map((m) => (m.kind === "more" ? [m.side, m.offsetBits / 8, m.sizeBits / 8] : [])),
+    [
+      ["earlier", 24, 100 * 100],
+      ["later", 24 + 200 * 100, 40_000 - 200 * 100],
+    ],
+  );
+  assert.deepEqual(items.filter((i) => i.kind === "gap" && pathKey(i.path) === "4"), []);
 });
 
 test("a list too long to be parts of the file is one part", () => {
