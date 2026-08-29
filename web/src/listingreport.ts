@@ -51,6 +51,15 @@ function shareText(sizeBits: number, fileBits: number): string {
   return share < 0.01 ? REPORT.tinyShare : `${Math.round(share * 100)}%`;
 }
 
+/** Where a run of plain fields sits in the file, which is all there is to
+ *  name it by. A run at the front is a header; the same fields at the back
+ *  are not. */
+function runPosition(item: Item, fileBits: number): "start" | "end" | "middle" {
+  if (item.offsetBits === 0) return "start";
+  if (fileBits > 0 && item.offsetBits + item.sizeBits >= fileBits) return "end";
+  return "middle";
+}
+
 export class ListingReport {
   readonly el: HTMLElement;
   private readonly canvas: HTMLElement;
@@ -150,7 +159,13 @@ export class ListingReport {
   // ----- drawing -----
 
   private paint(): void {
-    if (this.items.length === 0) return;
+    // A file nothing has a template for flattens to nothing. Leaving the last
+    // file's rows up would show one file's structure over another's bytes.
+    if (this.items.length === 0) {
+      this.canvas.replaceChildren();
+      this.drawn = null;
+      return;
+    }
     const from = Math.max(0, this.indexAt(this.el.scrollTop) - OVERSCAN);
     const to = Math.min(this.items.length, this.indexAt(this.el.scrollTop + this.el.clientHeight) + 1 + OVERSCAN);
     if (this.drawn !== null && this.drawn.from === from && this.drawn.to === to) return;
@@ -194,7 +209,7 @@ export class ListingReport {
       swatch.style.background = sectionColor(item.section);
       row.append(swatch);
     }
-    row.append(el("b", "rp-name", item.node?.name ?? REPORT.unnamedPart));
+    row.append(el("b", "rp-name", item.node?.name ?? REPORT.unnamedPart(runPosition(item, fileBits))));
     row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits)));
     const share = shareText(item.sizeBits, fileBits);
     row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));

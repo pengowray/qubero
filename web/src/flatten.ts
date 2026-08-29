@@ -428,12 +428,21 @@ function rows(
     const first = fold[0];
     const last = fold[fold.length - 1];
     if (first === undefined || last === undefined) return;
-    // The last owner named by the run, which is the field the run leads up
-    // to: a count places the pointer array and the pointer array places the
-    // cells, and it is the cells the reader is looking at.
-    const owners = fold.map((n) => n.consumed_by).filter((c): c is number => c !== null);
-    const ownerIndex = owners[owners.length - 1];
-    const owner = ownerIndex === undefined ? null : (kids[ownerIndex - base] ?? null);
+    // What the run leads up to, which is the one field left standing at the
+    // end of it. A count places the pointer array and the pointer array places
+    // the cells: two owners, but the pointer array is inside the fold, so the
+    // chain ends at the cells and that is what the reader is looking at.
+    //
+    // A run that fans out instead of leading somewhere is given no name at
+    // all: a ZIP entry's name length and extra length measure a field each,
+    // and naming either would say the other's bytes belonged to it.
+    const owners = [...new Set(fold.map((n) => n.consumed_by).filter((c): c is number => c !== null))]
+      .map((i) => kids[i - base] ?? null)
+      // Not what the fold is named after: a field folded away with it, and a
+      // field that is only its parent's contents, which is spliced away and
+      // never seen.
+      .filter((n): n is TemplateNode => n !== null && !n.contents && !fold.includes(n));
+    const owner = owners.length === 1 ? (owners[0] ?? null) : null;
     const key = `fold:${pathKey(first.path)}`;
     const open = w.isOpen(key);
     w.push({
@@ -446,7 +455,7 @@ function rows(
       reason: "machinery",
       path,
       nodes: fold,
-      owner: owner === null || fold.includes(owner) ? null : owner,
+      owner,
       open,
     });
     // Folded, not hidden: opening one lists the fields it stands for, a step
@@ -466,6 +475,17 @@ function rows(
       continue;
     }
     flush();
+    // A field that is only its parent's contents has no name worth a level of
+    // structure: its children stand in its place, at its depth.
+    if (kid.contents && kid.composite && kid.child_count > 0) {
+      const inner = w.kids(kid.path, kid.child_count);
+      if (inner === null) w.waiting(kid.path, depth, kid);
+      else {
+        rows(w, kid.path, inner, 0, [], depth, { start: kid.offset_bits, end: endBits(kid) });
+        more(w, kid.path, kid, inner.length, depth);
+      }
+      continue;
+    }
     child(w, kid, depth);
   }
   flush();

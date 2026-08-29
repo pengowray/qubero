@@ -149,6 +149,11 @@ pub struct NodeInfo {
     /// `Some(true)` for machinery, `Some(false)` for payload, `None` when it
     /// has no opinion.
     pub machinery: Option<bool>,
+    /// True when this field is only its parent's contents: a name that says
+    /// nothing the parent has not already said. A ZIP entry is a signature and
+    /// a `body`, and a view that gives `body` a heading of its own has spent a
+    /// level of structure on the word "body". See `StructDef::contents`.
+    pub contents: bool,
 }
 
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
@@ -499,7 +504,7 @@ impl Evaluator {
             _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
-        let (consumed_by, machinery) = self.owner_of(path);
+        let (consumed_by, machinery, contents) = self.in_parent(path);
         Ok(NodeInfo {
             path: path.to_vec(),
             editable: !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
@@ -516,23 +521,30 @@ impl Evaluator {
             composite,
             consumed_by,
             machinery,
+            contents,
         })
     }
 
-    /// What the field at `path` is machinery for, and what its structure says
-    /// about it. Both are properties of the parent structure's declaration, so
-    /// a child of a list has neither: the elements of a list are all the same
-    /// shape and none of them places another.
+    /// What the field at `path` is machinery for, what its structure says about
+    /// it, and whether it is only that structure's contents. All three are
+    /// properties of the parent structure's declaration, so a child of a list
+    /// has none of them: the elements of a list are all the same shape and none
+    /// of them places another.
     ///
     /// Worked out afresh for each child rather than once for the structure.
     /// Listing a structure's children makes that quadratic, in a walk of a
     /// handful of type enums over the few dozen fields a structure has; a run
     /// long enough to care about is a list, and lists stop at the first line
     /// here.
-    fn owner_of(&self, path: &[usize]) -> (Option<usize>, Option<bool>) {
-        let Some((&last, parent)) = path.split_last() else { return (None, None) };
-        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { return (None, None) };
-        (machinery::consumers(s).get(last).copied().flatten(), machinery::hint(s, last))
+    fn in_parent(&self, path: &[usize]) -> (Option<usize>, Option<bool>, bool) {
+        let Some((&last, parent)) = path.split_last() else { return (None, None, false) };
+        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { return (None, None, false) };
+        let name = s.fields.get(last).map(|f| &f.name);
+        let contents = match (&s.contents, name) {
+            (Some(c), Some(n)) => **n == **c,
+            _ => false,
+        };
+        (machinery::consumers(s).get(last).copied().flatten(), machinery::hint(s, last), contents)
     }
 
     /// The whole text of a text field, decoded in its own encoding, up to the

@@ -19,6 +19,9 @@ type Spec = {
   count?: number;
   consumed_by?: number;
   machinery?: boolean;
+  /** True when the field is only its parent's contents, as `StructDef::contents`
+   *  says of a ZIP entry's `body`. */
+  contents?: boolean;
 };
 
 type Fixture = { node: TemplateNode; kids: Fixture[] };
@@ -51,6 +54,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     read_as: null,
     consumed_by: spec.consumed_by ?? null,
     machinery: spec.machinery ?? null,
+    contents: spec.contents ?? false,
   };
   return { node, kids };
 }
@@ -209,6 +213,54 @@ test("opening a fold lists the fields it stands for", () => {
     "fragmented_free_bytes",
     "cell_pointers",
   ]);
+});
+
+test("a field that is only its parent's contents spends no level on itself", () => {
+  // A ZIP entry: a signature that picks the record type, and a `body` holding
+  // the record. Reading "body" as a heading of its own says nothing.
+  const zip: Spec = {
+    name: "file",
+    bytes: 40,
+    kids: [
+      { name: "entry", bytes: 40, kids: [
+        { name: "signature", bytes: 4, consumed_by: 1 },
+        { name: "body", bytes: 36, contents: true, kids: [
+          { name: "name_len", bytes: 2, consumed_by: 1 },
+          { name: "name", bytes: 34 },
+        ] },
+      ] },
+    ],
+  };
+  const items = run(zip).items;
+  assert.deepEqual(
+    items.map((i) => `${i.kind}:${i.kind === "heading" ? (i.node?.name ?? "(run)") : i.kind === "row" ? i.node.name : ""}`),
+    // The signature folds behind the body it picks, and the body's own length
+    // prefix folds behind the name it measures. Two dim rows, one per
+    // structure: they are not one run, and running them together would say
+    // the entry has a machinery section, which it has not.
+    ["heading:entry", "fold:", "fold:", "row:name"],
+  );
+});
+
+test("a fold serving two different fields names neither", () => {
+  // A ZIP entry: one length for the name, another for the extra field. Naming
+  // either would put the other's bytes under it.
+  const two: Spec = {
+    name: "file",
+    bytes: 30,
+    kids: [
+      { name: "entry", bytes: 30, kids: [
+        { name: "name_len", bytes: 2, consumed_by: 2 },
+        { name: "extra_len", bytes: 2, consumed_by: 3 },
+        { name: "name", bytes: 13 },
+        { name: "extra", bytes: 13 },
+      ] },
+    ],
+  };
+  const fold = run(two).items.find((i) => i.kind === "fold");
+  assert.ok(fold?.kind === "fold");
+  assert.equal(fold.nodes.length, 2);
+  assert.equal(fold.owner, null);
 });
 
 test("bytes no field covers are an item of their own", () => {

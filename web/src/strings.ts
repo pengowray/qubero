@@ -54,33 +54,46 @@ function plural(noun: string): string {
 }
 
 /**
- * The report listing's own words.
- *
- * TODO(copy): every string in here is a placeholder written to get the view
- * on screen and has not been through review. The mockup
- * (`mockups/c2-listing.html`) has the reviewed wording for the SQLite case;
- * these are the general forms of the same rows and are what needs drafting.
+ * The report listing's own words. The mockup (`mockups/c2-listing.html`) has
+ * the reviewed wording for the SQLite case; these are the general forms of
+ * the same rows.
  */
 export const REPORT = {
   /** A part of the file made of a run of a structure's plain fields, which
-   *  has no field of its own to name it. The mockup calls SQLite's "Header". */
-  unnamedPart: "Header",
-  /** Bytes inside a part that none of its fields covers. The mockup's SQLite
-   *  case reads "unused page space"; `GAP_LABEL` above says "unmapped", which
-   *  means something else: that the template describes nothing here. These
-   *  bytes are inside something the template does describe and are free. */
-  gap: "free space",
+   *  has no field of its own to name it. Where it sits is the whole of what
+   *  can be said about it: a run that opens the file is a header, and the
+   *  same words at the end of one would be a lie. A git pack ends with its
+   *  checksums at the root, which is exactly that case. In the middle,
+   *  nothing more specific than the fields themselves can be claimed, and the
+   *  rows one line below already carry their names. */
+  unnamedPart: (where: "start" | "end" | "middle"): string =>
+    where === "start" ? "Header" : where === "end" ? "Trailer" : "Fields",
+  /** Bytes inside a part that none of its fields covers, which the format has
+   *  left free: the empty middle of a b-tree page. `GAP_LABEL` above says
+   *  "unmapped" for the opposite claim, that the template says nothing about
+   *  the bytes at all; both rows can appear in one listing, so neither word
+   *  may suggest the other. The mockup's "unused page space" is this row with
+   *  the part's own name in it, which the general form cannot know. */
+  gap: "unused space",
   /** Where a part is too small a slice of the file for a percentage to say
-   *  anything. */
+   *  anything: under one per cent, "0%" would read as absent. The number the
+   *  reader wants at that size is the byte count beside it. */
   tinyShare: "<1%",
-  /** The fields that place another field, folded behind it. `owner` is what
-   *  they place, when it is one of their siblings. The mockup's SQLite case
-   *  reads "page header + 3 cell pointers". */
-  fold: (count: number, owner: string | null): string =>
-    owner === null ? `${count} fields that place what follows` : `${count} fields that place ${owner}`,
+  /** The fields that exist to manage another field, folded behind it: a
+   *  length prefix, a count, an array of offsets, a run of type codes.
+   *  "Bookkeeping" is the standing word for all four jobs; a verb like
+   *  "place" fits the offsets but not the types, and reads as a coinage.
+   *  `owner` is the field they manage, when it is a sibling; without one the
+   *  count stands alone rather than gesturing at an unnamed "what follows". */
+  fold: (count: number, owner: string | null): string => {
+    const fields = count === 1 ? "bookkeeping field" : "bookkeeping fields";
+    return owner === null ? `${count} ${fields}` : `${count} ${fields} for ${owner}`;
+  },
   /** The tail of a list longer than what has been drawn so far. `rest` is
-   *  already counted and named: "249,800 items". */
-  more: (rest: string): string => `Show ${rest}`,
+   *  already counted and named: "249,800 items". A click draws the next page,
+   *  not all of it, so the label promises "more" and states the remainder
+   *  instead of promising the whole tail. */
+  more: (rest: string): string => `Show more · ${rest} left`,
   /** A stretch whose bytes have not arrived yet. Same situation as the older
    *  listing's, and the same words. */
   reading: "Loading bytes needed to map these fields…",

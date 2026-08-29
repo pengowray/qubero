@@ -78,6 +78,9 @@ struct NodeDto {
     /// What the template says about this field over the top of that: true for
     /// machinery, false for payload, null when it has no opinion.
     machinery: Option<bool>,
+    /// True when this field is only its parent's contents, and so has no name
+    /// of its own worth a level of structure.
+    contents: bool,
 }
 
 /// What the byte-class scan has found so far. `classes` is one digit per
@@ -830,6 +833,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         read_as: n.read_as,
         consumed_by: n.consumed_by.map(|i| i as f64),
         machinery: n.machinery,
+        contents: n.contents,
     }
 }
 

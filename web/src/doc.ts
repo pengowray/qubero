@@ -144,6 +144,10 @@ export type TemplateNode = {
   /** What the template says over the top of that: true for machinery, false
    * for payload, null when it has no opinion. */
   readonly machinery: boolean | null;
+  /** True when this field is only its parent's contents. A ZIP entry is a
+   * signature and a `body`; giving `body` a heading of its own spends a level
+   * of structure on the word "body". */
+  readonly contents: boolean;
 };
 
 /** The bit range a successful `writeNode` replaced. */
