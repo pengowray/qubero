@@ -1298,6 +1298,17 @@ mod tests {
         sniff(head, head.len() as u64)
     }
 
+    /// A name in the signature table with no template behind it would send a
+    /// file to a template that does not exist, and nothing else here would
+    /// notice: the table is data, and a name misspelt in it still compiles.
+    #[test]
+    fn every_name_a_signature_gives_has_a_template_and_is_listed() {
+        for (_, name) in MAGIC {
+            assert!(builtin(name).is_some(), "no template named {name}");
+            assert!(builtin_names().contains(name), "{name} is not in the list of built-ins");
+        }
+    }
+
     /// Both start with the same eight bytes, and only the name of the first
     /// member says which of the two a file is.
     #[test]
