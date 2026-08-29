@@ -5,6 +5,7 @@ import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingReport } from "./listingreport.js";
+import { ListPane } from "./listpane.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
@@ -176,6 +177,12 @@ function build(tab: Tab): void {
   const inspector = new Inspector(doc);
   const table = new TypeTable(doc);
   const structure = new ListingReport(doc);
+  // One long list, read on its own beside the listing. Empty and hidden until
+  // a list is opened in it.
+  const listPane = new ListPane(doc);
+  // The listing and the pane share a row: the pane takes its half only while
+  // a list is open in it, so the listing has the whole width until then.
+  const listRow = el("div", { className: "listrow" }, structure.el, listPane.el);
   const overview = new OverviewPanel(doc);
   const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
@@ -203,6 +210,7 @@ function build(tab: Tab): void {
     }
     table.reveal(at.node);
     structure.setBit(bitOffset);
+    listPane.setBit(bitOffset);
   };
 
   const goToField = (path: readonly number[]): void => {
@@ -476,6 +484,7 @@ function build(tab: Tab): void {
     listingShowing = listingOn;
     view.el.hidden = listingOn;
     structure.el.hidden = !listingOn;
+    listRow.hidden = !listingOn;
     for (const c of hexOnly) c.hidden = listingOn;
     hexBtn.setAttribute("aria-pressed", String(!listingOn));
     listBtn.setAttribute("aria-pressed", String(listingOn));
@@ -487,6 +496,7 @@ function build(tab: Tab): void {
     // wherever the cursor was left to catch up on.
     if (listingOn) {
       structure.relayout();
+      listPane.relayout();
       structure.setBit(view.cursorState.bitOffset);
     } else view.relayout();
     (listingOn ? structure.el : view.el).focus();
@@ -587,6 +597,8 @@ function build(tab: Tab): void {
   const relayout = (): void => {
     view.relayout();
     structure.relayout();
+    table.catchUp();
+    listPane.relayout();
     overview.pump();
   };
   // Picking a region moves the cursor everywhere, the same as picking a row in
@@ -607,6 +619,15 @@ function build(tab: Tab): void {
     jumpToBit(startBit);
     view.selectRange(startBit, endBit);
   };
+  structure.onOpenList = (path) => {
+    listPane.open(path);
+    listPane.setBit(view.cursorState.bitOffset);
+    relayout();
+  };
+  listPane.onPick = ({ path, startBit, endBit }) => {
+    structure.onPick({ path, startBit, endBit });
+  };
+  listPane.onClose = () => relayout();
   const bottom = panel("Structure", "bottom", table.el, relayout);
   const right = panel("At cursor", "right", inspector.el, relayout);
   app.replaceChildren(
@@ -616,7 +637,7 @@ function build(tab: Tab): void {
       "main",
       { className: "workspace" },
       overview.el,
-      el("div", { className: "left" }, search.el, view.el, structure.el, bottom),
+      el("div", { className: "left" }, search.el, view.el, listRow, bottom),
       right,
     ),
     statusbar,
@@ -640,7 +661,7 @@ function build(tab: Tab): void {
   // The next file dropped may be one no template covers. Fetch the rules while
   // nothing is waiting on them, so that file is named as soon as it opens.
   prefetchMagic();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, overview, structure } });
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, overview, structure, listPane } });
 }
 
 function pick(): void {

@@ -133,6 +133,31 @@ export const REPORT = {
   /** A run of bytes shown short, because a strip is for seeing where fields
    *  are rather than for reading every byte of one. The mockup's word. */
   moreBytes: "unused…",
+  /** The control that opens a long list in a pane of its own, on the list’s
+   *  heading and on both ends of a drawn window. Not a bare "Show all": next
+   *  to "Show more · 249,800 values below" that reads as drawing a quarter of
+   *  a million rows where they stand, which either stops the click or makes
+   *  the pane a surprise. Verb first and capitalized, like the row it sits
+   *  beside. */
+  paneOpen: "Show all in pane",
+  /** What the pane calls the list it is showing: its name, and how big it is,
+   *  which is the thing the reader opened it to face. The count drops its noun
+   *  when the list’s own name already is that noun, since "tensors · 100,000
+   *  tensors" says it twice. */
+  paneTitle: (name: string, count: number, unit: string): string =>
+    `${name} · ${plural(unit) === name ? count.toLocaleString() : countText(count, unit)}`,
+  /** Closing the pane. The byte strip spells itself out as "hide bytes ✕"
+   *  because an inline strip has no frame to say what the glyph would close;
+   *  a pane has a title bar saying what it is, so the glyph is enough and the
+   *  word goes to the label. */
+  paneClose: "✕",
+  paneCloseLabel: "Close",
+  /** One row of the pane whose bytes are still being fetched. `gapUnread`
+   *  above is the other state, where nothing is coming; this is `reading` cut
+   *  down to one cell of one row. Unquoted, where a real string value in the
+   *  list would be quoted, so a token list that happens to hold the text
+   *  "loading…" is still telling the truth. */
+  paneWaiting: "loading…",
   /** The last column of a table of records: where in the file the row it just
    *  showed is actually written. The mockup's own heading, and the one thing
    *  in the table that is about the file rather than about the data. */

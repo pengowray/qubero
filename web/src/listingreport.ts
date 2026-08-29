@@ -114,6 +114,9 @@ export class ListingReport {
    *  when an answer can stop being true. */
   private verdicts = new Map<string, GapVerdict>();
   private frame = 0;
+  /** True when the file changed while this was hidden, so the rows on screen
+   *  are of a file that has moved on. Walked again when it comes back. */
+  private stale = false;
   /** What is selected, as the bits it covers rather than as the row showing
    *  it. The same field appears as a row, as a line of a record table, as a
    *  column of an open byte strip and as a mark on every file map; all four
@@ -131,6 +134,9 @@ export class ListingReport {
   private cursor: string | null = null;
 
   onPick: (pick: FieldPick) => void = () => {};
+  /** A long list was asked for on its own. The pane is the caller's, since
+   *  where it goes on the screen is not this view's business. */
+  onOpenList: (path: readonly number[]) => void = () => {};
 
   constructor(doc: Doc) {
     this.doc = doc;
@@ -172,6 +178,14 @@ export class ListingReport {
    *  effect there and then: waiting a frame to open a fold buys nothing, and
    *  a hidden tab runs no frames at all. */
   private schedule(): void {
+    // Nothing is drawn while the hex view has the screen, and walking the tree
+    // to draw nothing is not free: a file being streamed fires this once per
+    // chunk, and flattening a whole SQLite database on each of them is a cost
+    // the reader pays in the view they are actually looking at.
+    if (this.el.hidden) {
+      this.stale = true;
+      return;
+    }
     if (this.frame !== 0) return;
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
@@ -180,8 +194,12 @@ export class ListingReport {
   }
 
   relayout(): void {
-    if (this.items.length === 0) this.rebuild();
-    else this.paint();
+    if (this.el.hidden) return;
+    // Everything the file did while this was hidden lands in one walk here.
+    if (this.stale || this.items.length === 0) {
+      this.stale = false;
+      this.rebuild();
+    } else this.paint();
   }
 
   /** Walk the tree again and lay the items out, keeping the reader where they
@@ -383,6 +401,9 @@ export class ListingReport {
     const share = shareText(item.sizeBits, fileBits);
     row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
     row.append(this.bytesButton(item.key));
+    // Only a list too long to draw: for anything the window already holds
+    // whole, a pane of its own would be the same rows somewhere else.
+    if (item.node !== null && item.node.child_count > PAGE) row.append(this.listButton(item.path));
     row.append(this.mapFor(item));
     return row;
   }
@@ -451,6 +472,16 @@ export class ListingReport {
     b.type = "button";
     b.setAttribute("aria-pressed", String(on));
     b.dataset["bytes"] = key;
+    return b;
+  }
+
+  /** The way out of a window and into the whole list. It sits on the list's
+   *  own heading and on both ends of the drawn window, which is where a reader
+   *  finds out the list is longer than what is in front of them. */
+  private listButton(path: readonly number[]): HTMLElement {
+    const b = el("button", "rp-bytes rp-list", REPORT.paneOpen);
+    b.type = "button";
+    b.dataset["list"] = pathString(path);
     return b;
   }
 
@@ -546,6 +577,7 @@ export class ListingReport {
     const noun = reply.status === "ok" ? childWord(reply.node) : "item";
     row.append(el("span", "rp-at", ""));
     row.append(el("span", "rp-field", REPORT.more(countText(item.remaining, noun), item.side)));
+    row.append(this.listButton(item.path));
     return row;
   }
 
@@ -559,6 +591,11 @@ export class ListingReport {
     if (key === undefined) return;
     const item = this.items.find((i) => i.key === key);
     if (item === undefined) return;
+    const list = target.closest<HTMLElement>("[data-list]")?.dataset["list"];
+    if (list !== undefined) {
+      this.onOpenList(list === "" ? [] : list.split(".").map(Number));
+      return;
+    }
     const wants = target.closest<HTMLElement>("[data-bytes]")?.dataset["bytes"];
     if (wants !== undefined) {
       this.toggleBytes(wants);

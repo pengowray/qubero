@@ -2194,6 +2194,122 @@ button.insp-xrow-where:hover {
   color: color-mix(in srgb, var(--muted) 60%, transparent);
 }
 
+/* ---- one long list, on its own ---- */
+/* The listing and the pane share the row. The pane takes its share only
+   while a list is open in it; the rest of the time the listing has the
+   whole width, which is the shape every other file has. */
+.listrow {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.listpane {
+  --lp-row: 22px;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 38%;
+  min-width: 15rem;
+  min-height: 0;
+  border-inline-start: 1px solid var(--line);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+/* `display: flex` above would otherwise win over the hidden attribute. */
+.listpane[hidden] {
+  display: none;
+}
+.lp-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 24px;
+  padding-inline: 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.lp-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-close {
+  flex: none;
+  min-height: 0;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.lp-close:hover {
+  color: var(--fg);
+}
+.lp-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.lp-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.lp-canvas {
+  position: relative;
+}
+.lp-row {
+  position: absolute;
+  inset-inline: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--lp-row);
+  padding-inline: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lp-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.lp-row.is-on {
+  background: var(--accent-soft);
+}
+.lp-at {
+  flex: none;
+  width: 9ch;
+  color: var(--addr);
+}
+.lp-name {
+  flex: none;
+  width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lp-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lp-size {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--muted);
+}
+/* A row still being fetched. Dim and italic, the same treatment every other
+   view gives a stretch it cannot speak for yet. */
+.lp-waiting .lp-value {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* ---- the byte strip (rules 5 and 6) ---- */
 /* One column per field: dim hex digits, a coloured bracket clipped to the
    field's own width, and a chip in the same hue below. The digits are dim on
