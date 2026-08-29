@@ -43,6 +43,12 @@ const MAGIC: &[(i128, &str)] = &[
 /// reversed, which is what picks the other layout below.
 const LITTLE_MAGICS: &[i128] = &[0x053162, 0x061561, 0x042253, 0x074582];
 
+/// Each magic and the page type the meta page carries with it. Four bytes on
+/// their own are not much of a signature, and they sit twelve bytes into the
+/// file where an MS-DOS header keeps numbers of its own; asking for the page
+/// type as well is what keeps a program from being read as a database.
+const MAGIC_AND_TYPE: &[(u32, u8)] = &[(0x053162, 9), (0x061561, 8), (0x042253, 10), (0x074582, 14)];
+
 /// What a page holds, from `db_page.h`.
 const PAGE_TYPE: &[(i128, &str)] = &[
     (0, "invalid"),
@@ -218,13 +224,15 @@ fn page(e: Endian) -> T {
 }
 
 /// Whether these bytes open a Berkeley DB of the modern layout: one of the
-/// four access-method magics twelve bytes in, either way round.
+/// four access-method magics twelve bytes in, either way round, with the meta
+/// page type that goes with it thirteen bytes after that.
 pub fn is_bdb(head: &[u8]) -> bool {
     let Some(bytes) = head.get(12..16) else { return false };
+    let Some(&page_type) = head.get(25) else { return false };
     let word: [u8; 4] = bytes.try_into().expect("four bytes");
-    let le = u32::from_le_bytes(word) as i128;
-    let be = u32::from_be_bytes(word) as i128;
-    LITTLE_MAGICS.contains(&le) || LITTLE_MAGICS.contains(&be)
+    let le = u32::from_le_bytes(word);
+    let be = u32::from_be_bytes(word);
+    MAGIC_AND_TYPE.iter().any(|(magic, ty)| (*magic == le || *magic == be) && *ty == page_type)
 }
 
 #[cfg(test)]
@@ -350,5 +358,19 @@ mod tests {
     fn a_file_with_no_magic_where_one_belongs_is_not_one_of_these() {
         assert!(!is_bdb(b"SQLite format 3\0"));
         assert!(!is_bdb(&[0; 8]));
+    }
+
+    /// A magic on its own is four bytes in the middle of a header, which any
+    /// number of files have. An MS-DOS program keeps its stack there, and one
+    /// that happens to keep the btree number must not be read as a database.
+    #[test]
+    fn a_magic_without_the_page_type_that_goes_with_it_is_a_coincidence() {
+        let mut mz = b"MZ".to_vec();
+        mz.resize(64, 0);
+        mz[12..16].copy_from_slice(&0x00053162u32.to_le_bytes());
+        assert!(!is_bdb(&mz));
+        // The same bytes, with the page type a btree meta page would have.
+        mz[25] = 9;
+        assert!(is_bdb(&mz));
     }
 }

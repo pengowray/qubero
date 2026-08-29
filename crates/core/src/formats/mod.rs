@@ -1887,14 +1887,18 @@ mod tests {
         assert_eq!(sniffed(&swapped), Some("gdbm"));
 
         // Berkeley DB keeps its magic behind a log sequence number and a page
-        // number, so the first twelve bytes say nothing.
+        // number, so the first twelve bytes say nothing. The page type at 25
+        // has to agree with the magic, or four bytes in the middle of some
+        // other header would be enough to claim the file.
         let mut bdb = vec![0u8; 12];
         bdb.extend_from_slice(&0x00053162u32.to_le_bytes());
         bdb.resize(64, 0);
+        bdb[25] = 9;
         assert_eq!(sniffed(&bdb), Some("bdb"));
         let mut big = vec![0u8; 12];
         big.extend_from_slice(&0x00061561u32.to_be_bytes());
         big.resize(64, 0);
+        big[25] = 8;
         assert_eq!(sniffed(&big), Some("bdb"));
     }
 }

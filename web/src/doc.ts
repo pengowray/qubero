@@ -30,8 +30,10 @@ function isOmeZarrMetadata(name: string, bytes: Uint8Array): boolean {
 
 /** Formats with nothing in the bytes to recognise them by, where the file name
  * is the only evidence there is. A `.c16` capture is raw samples from the first
- * byte: no header, no magic number, nothing but the extension to go on. */
-const BY_EXTENSION: Record<string, string> = { c16: "c16" };
+ * byte: no header, no magic number, nothing but the extension to go on. A
+ * `.ppma` does open with `P3` and is usually recognised by that; the mapping is
+ * here for one written without the newline the check expects. */
+const BY_EXTENSION: Record<string, string> = { c16: "c16", ppma: "pnm" };
 
 function templateByExtension(name: string): string | null {
   const ext = name.toLowerCase().split(".").pop() ?? "";
