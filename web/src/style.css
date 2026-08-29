@@ -2444,85 +2444,55 @@ button.insp-xrow-where:hover {
 .bs-close:hover {
   color: var(--fg);
 }
-.bs-grid {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-.bs-addr {
-  flex: none;
-  color: var(--addr);
-  line-height: 20px;
-}
 .bs-fields {
   display: flex;
+  align-items: flex-start;
 }
 .bs-fld {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   padding-inline: 4px;
+}
+/* Where a column's bytes are, said only when they are not a continuation of
+   the column before: the addresses mark exactly the places where reading left
+   to right stops being the truth. Empty otherwise, so the rows line up. */
+.bs-at {
+  min-height: 14px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--addr);
 }
 .bs-by {
   white-space: nowrap;
   line-height: 20px;
   color: color-mix(in srgb, var(--fg) 62%, var(--bg));
   border-radius: 2px;
+  /* The hue bar under the digits, not under the label: the label may run
+     wider than its field, and what marks the field's extent must be exactly
+     its bytes. */
+  border-bottom: 2px solid transparent;
 }
 .bs-fld[style*="--hue"] .bs-by {
   background: color-mix(in srgb, var(--hue) 15%, transparent);
+  border-bottom-color: var(--hue);
 }
-/* Clipped to exactly the field's byte width: the label says which bytes it is
-   about by being no wider than they are. */
+/* Whole, never clipped: with no chip anywhere else, this is the only place
+   the name is said, and a name cut to its bytes' width reads as a different
+   name. The hue bar under the hex is what marks the field's extent. */
 .bs-lb {
-  width: 0;
-  min-width: 100%;
-  overflow: hidden;
   white-space: nowrap;
-  margin-top: 1px;
-  padding-top: 2px;
-  border-top: 2px solid transparent;
+  margin-top: 3px;
   font-family: var(--sans);
   font-size: 11px;
   color: var(--muted);
-  /* A name wider than its field is cut off, and a cut-off name can read as a
-     different one: `cell_content_start` clipped is `cell_cor`. Fading the last
-     few pixels says it is cut rather than spelling something else. The chip
-     below carries the whole name in the same hue. A name that fits ends before
-     the fade and is untouched by it. */
-  mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
 }
 .bs-fld[style*="--hue"] .bs-lb {
-  border-top-color: var(--hue);
   color: color-mix(in srgb, var(--hue) 60%, var(--fg));
 }
 .bs-fld.is-gap .bs-by {
   color: var(--muted);
   background: repeating-linear-gradient(-45deg, transparent 0 7px, color-mix(in srgb, var(--muted) 6%, transparent) 7px 8px);
-}
-.bs-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 9px;
-}
-.bs-chip {
-  display: inline-flex;
-  gap: 6px;
-  align-items: baseline;
-  padding: 1px 8px;
-  border-radius: 4px;
-  border-inline-start: 3px solid var(--hue);
-  background: color-mix(in srgb, var(--hue) 13%, transparent);
-  font-size: 12px;
-  max-width: 100%;
-}
-.bs-k {
-  color: var(--muted);
-}
-.bs-v {
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .bs-wait {
   color: var(--muted);
@@ -2644,9 +2614,6 @@ table.rec tr:hover td {
 .bs-fld.is-on .bs-by {
   outline: 1px solid var(--hue, var(--fg));
   outline-offset: 1px;
-}
-.bs-chip.is-on {
-  background: color-mix(in srgb, var(--hue) 28%, transparent);
 }
 table.rec tr.is-on td {
   background: var(--accent-soft);

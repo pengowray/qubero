@@ -507,10 +507,34 @@ export class ListingReport {
 
   private toggleBytes(key: string): void {
     const bytes = new Set(this.state.bytes);
-    if (bytes.has(key)) bytes.delete(key);
-    else bytes.add(key);
-    this.state = { ...this.state, bytes };
+    let open = this.state.open;
+    if (bytes.has(key)) {
+      bytes.delete(key);
+      this.pruneDumps(key);
+    } else {
+      bytes.add(key);
+      // A strip is part of what its item opens into, not a second expansion
+      // beside it: asking a closed item for its bytes opens the item, so a
+      // strip never stands over rows that are hidden.
+      const at = openTargetOf(key);
+      if (at !== null && !open.has(at)) open = new Set([...open, at]);
+    }
+    this.state = { ...this.state, bytes, open };
     this.rebuild();
+  }
+
+  /** The dumps open inside one strip go with it. Without this, a dump closed
+   *  along with its strip would be standing open again when the strip came
+   *  back, which is state the reader put away coming back on its own. */
+  private pruneDumps(bytesKey: string): void {
+    const strip = this.items.find((i) => i.key === `bytes:${bytesKey}`);
+    if (strip === undefined) return;
+    for (const at of [...this.dumps]) {
+      if (at >= strip.offsetBits && at < strip.offsetBits + strip.sizeBits) {
+        this.dumps.delete(at);
+        this.dumpTops.delete(at);
+      }
+    }
   }
 
   /** Whether a stretch of bytes is the selected one. Equality, not overlap: a
@@ -672,9 +696,23 @@ export class ListingReport {
   private setOpen(key: string, want: boolean): void {
     if (this.state.open.has(key) === want) return;
     const open = new Set(this.state.open);
+    let bytes = this.state.bytes;
     if (want) open.add(key);
-    else open.delete(key);
-    this.state = { ...this.state, open };
+    else {
+      open.delete(key);
+      // Closing an item takes its strip with it: closed, open, and open with
+      // bytes are the only states there are.
+      const owned = [`h:${key}`, `r:${key}`].filter((k) => bytes.has(k));
+      if (owned.length > 0) {
+        const next = new Set(bytes);
+        for (const k of owned) {
+          next.delete(k);
+          this.pruneDumps(k);
+        }
+        bytes = next;
+      }
+    }
+    this.state = { ...this.state, open, bytes };
     this.rebuild();
   }
 
@@ -828,6 +866,18 @@ function pathString(path: readonly number[]): string {
 function openKeyOf(item: Item): string | null {
   if (item.kind === "heading") return item.node === null || item.level === 0 ? null : pathString(item.path);
   if (item.kind === "row") return itemOpens(item.node) ? pathString(item.path) : null;
+  return null;
+}
+
+/** The open-state key behind a bytes key, for the items that have one. A run
+ *  heading (`h:path[a-b]`) is always open and has no key; a leaf row's or a
+ *  record row's path lands in `open` unread, which costs nothing. */
+function openTargetOf(bytesKey: string): string | null {
+  if (bytesKey.startsWith("h:")) {
+    const path = bytesKey.slice(2);
+    return path.includes("[") ? null : path;
+  }
+  if (bytesKey.startsWith("r:")) return bytesKey.slice(2);
   return null;
 }
 

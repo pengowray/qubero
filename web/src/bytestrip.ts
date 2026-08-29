@@ -1,23 +1,21 @@
 // The bytes behind one item, laid out under it.
 //
-// A column per field: its hex digits on top, a coloured bracket beneath them
-// clipped to exactly the field's width, and a chip below carrying what the
-// field says. The digits are deliberately dim. Their job here is how many
-// bytes there are and where they sit; the value is in the chip, in the same
-// hue, in the same order, so the eye goes from a stretch of bytes to its
-// meaning without a legend in between.
+// A column per field: an address wherever the bytes are not a continuation of
+// the column before, the hex digits, and the field's name beneath them in the
+// field's hue. The digits are deliberately dim: their job here is how many
+// bytes there are and where they sit. What a field means lives in the item's
+// own rows, in the same order; the hue is the link between the two, so the
+// strip never restates a value the row already carries.
 //
 // The fields come from `Doc.spans`, which answers "what covers these bytes"
 // including the stretches nothing covers. That is the same question the hex
-// view's annotation column asks, so the chips are built on `chipfit`'s
-// vocabulary rather than a third one.
+// view's annotation column asks.
 
 import { formatOffset } from "./doc.js";
 import type { Doc, Span } from "./doc.js";
 import { byteDump } from "./bytedump.js";
-import { chipDetail } from "./chipfit.js";
 import { fieldHue } from "./fieldstyle.js";
-import { bitSizeText, REPORT } from "./strings.js";
+import { REPORT } from "./strings.js";
 
 /** Fields asked for in one strip. Past this the strip is not the thing to be
  *  reading, and the item's own rows are. */
@@ -54,15 +52,8 @@ function digits(doc: Doc, span: Span): { readonly text: string; readonly rest: n
   return { text: hex, rest: len - take };
 }
 
-/** What the chip says about a field, beyond its name. `chipDetail` is the hex
- *  view's answer to the same question, so a field reads the same in both. */
-function chipValue(span: Span): string {
-  const detail = chipDetail(span);
-  return detail === "" ? span.value : detail;
-}
-
 /**
- * The strip: a caption the caller supplies, the fields' bytes, and a chip each.
+ * The strip: a caption the caller supplies, and the fields' bytes.
  *
  * `map` is the file map for this stretch, made by the caller so that every
  * strip's is the same picture as every heading's.
@@ -105,19 +96,26 @@ export function byteStrip(
     return strip;
   }
   const spans = reply.node.filter((s) => s.size_bits > 0);
-  const grid = el("div", "bs-grid");
-  grid.append(el("span", "bs-addr", formatOffset(offsetBits)));
   const fields = el("div", "bs-fields");
-  const chips = el("div", "bs-chips");
+  /** One past the last bit the previous column drew, and whether it stopped
+   *  short of its field's end. A column that does not pick up exactly where
+   *  the drawn bytes left off says its own address; the rest stay quiet, so
+   *  the addresses mark exactly the places where left-to-right stops being
+   *  the truth. */
+  let prevEnd = -1;
+  let prevCut = false;
   spans.forEach((span, i) => {
     // A stretch nothing covers takes no hue: there is no field for it to be
-    // the colour of, and tinting it would promise a chip that is not there.
+    // the colour of.
     const hue = span.gap ? null : fieldHue(i);
     const isOn = selected !== undefined && selected !== null
       && selected.offsetBits === span.offset_bits && selected.sizeBits === span.size_bits;
     const column = el("div", `bs-fld${span.gap ? " is-gap" : ""}${isOn ? " is-on" : ""}`);
     if (hue !== null) column.style.setProperty("--hue", hue);
     const { text, rest } = digits(doc, span);
+    const jump = prevCut || span.offset_bits !== prevEnd;
+    // The slot is there either way so every column's rows line up.
+    column.append(el("span", "bs-at", jump ? formatOffset(span.offset_bits) : ""));
     const hex = el("span", "bs-by", text);
     if (rest > 0 && dumps !== undefined) {
       // The count is the way in to the rest of them: the reader has just been
@@ -138,25 +136,18 @@ export function byteStrip(
       hex.append(` ${REPORT.bytesCut(rest)}`);
     }
     column.append(hex);
-    // The label is the field's name whether or not its bytes fitted. Putting
-    // the cut mark here instead cost a 3,970-byte run of free space and a
-    // 40-byte SQL string the same name, which was neither of theirs. A
-    // stretch no field covers is named for what it is, not for the structure
-    // it happens to sit inside.
+    // The label is the field's name whether or not its bytes fitted, whole:
+    // with no chip to carry the full name, the label is the only place it is
+    // said, and a name clipped to its bytes' width reads as a different name.
+    // The hue bar sits under the hex, not under the label, so what marks the
+    // field's extent is still exactly its bytes. A stretch no field covers is
+    // named for what it is, not for the structure it happens to sit inside.
     column.append(el("span", "bs-lb", span.gap ? REPORT.gap : span.name));
     fields.append(column);
-    if (hue === null) return;
-    const chip = el("span", `bs-chip${isOn ? " is-on" : ""}`);
-    chip.style.setProperty("--hue", hue);
-    chip.append(el("span", "bs-k", span.name));
-    const value = chipValue(span);
-    if (value !== "") chip.append(el("span", "bs-v", value));
-    chip.append(el("span", "bs-k", bitSizeText(span.size_bits)));
-    chips.append(chip);
+    prevEnd = span.offset_bits + span.size_bits;
+    prevCut = rest > 0;
   });
-  grid.append(fields);
-  strip.append(grid);
-  if (chips.childElementCount > 0) strip.append(chips);
+  strip.append(fields);
   // Every field the reader has opened out, under the map that named it, in the
   // order the strip drew them.
   if (dumps !== undefined) {
