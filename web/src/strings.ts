@@ -173,6 +173,22 @@ export const REPORT = {
    *  list would be quoted, so a token list that happens to hold the text
    *  "loading…" is still telling the truth. */
   paneWaiting: "loading…",
+  /** The same count, spoken, now that it is a control. The total rather than
+   *  the remainder: the visible `+3,812 bytes` already gives what is missing,
+   *  and what the click delivers is the field. "as a hex dump" is doing work:
+   *  a bare "Show all" beside a byte count reads as a promise to draw 3,824
+   *  hex pairs into a column a dozen wide. */
+  bytesCutOpen: (size: number): string => `Show all ${bitSizeText(size)} as a hex dump`,
+  /** The same control with the dump open. It names the thing the click takes
+   *  away, and cannot be read as `hideBytes`, which closes the whole strip.
+   *  The visible text does not change either way: "3,812 bytes are not drawn
+   *  in this column" stays true while the dump is open, and a minus form
+   *  would claim the bytes had gone somewhere. */
+  bytesCutClose: "Hide the hex dump",
+  /** What the dump calls the field it is showing. The same shape as the list
+   *  pane's title, since it is the same question: which one, and how far does
+   *  it go. No address, because the first line of the dump begins with one. */
+  dumpHead: (name: string, size: number): string => `${name} \u00b7 ${bitSizeText(size)}`,
   /** The last column of a table of records: where in the file the row it just
    *  showed is actually written. The mockup's own heading, and the one thing
    *  in the table that is about the file rather than about the data. */

@@ -14,6 +14,7 @@
 
 import { formatOffset } from "./doc.js";
 import type { Doc, Span } from "./doc.js";
+import { byteDump } from "./bytedump.js";
 import { chipDetail } from "./chipfit.js";
 import { fieldHue } from "./fieldstyle.js";
 import { bitSizeText, REPORT } from "./strings.js";
@@ -76,6 +77,15 @@ export function byteStrip(
   /** The field the reader has selected elsewhere, so its column here is the
    *  same field rather than a coincidence of position. */
   selected?: { readonly offsetBits: number; readonly sizeBits: number } | null,
+  /** Which fields have been opened out into a dump of all their bytes, by the
+   *  bit they start at, and where the reader has each one scrolled to. The
+   *  strip is redrawn from scratch on every change, so neither can live in
+   *  it. */
+  dumps?: {
+    readonly open: ReadonlySet<number>;
+    readonly toggle: (offsetBits: number) => void;
+    readonly scroll: (offsetBits: number) => { get: () => number; set: (top: number) => void };
+  },
 ): HTMLElement {
   const strip = el("div", "bstrip");
   const cap = el("div", "bs-cap");
@@ -108,7 +118,26 @@ export function byteStrip(
     const column = el("div", `bs-fld${span.gap ? " is-gap" : ""}${isOn ? " is-on" : ""}`);
     if (hue !== null) column.style.setProperty("--hue", hue);
     const { text, rest } = digits(doc, span);
-    column.append(el("span", "bs-by", rest > 0 ? `${text} ${REPORT.bytesCut(rest)}` : text));
+    const hex = el("span", "bs-by", text);
+    if (rest > 0 && dumps !== undefined) {
+      // The count is the way in to the rest of them: the reader has just been
+      // told bytes exist that are not here, and this is where they are.
+      const more = el("button", "bs-more", REPORT.bytesCut(rest));
+      more.type = "button";
+      const shown = dumps.open.has(span.offset_bits);
+      const label = shown ? REPORT.bytesCutClose : REPORT.bytesCutOpen(span.size_bits);
+      more.title = label;
+      more.setAttribute("aria-label", label);
+      more.setAttribute("aria-expanded", String(shown));
+      more.addEventListener("click", (e) => {
+        e.stopPropagation();
+        dumps.toggle(span.offset_bits);
+      });
+      hex.append(" ", more);
+    } else if (rest > 0) {
+      hex.append(` ${REPORT.bytesCut(rest)}`);
+    }
+    column.append(hex);
     // The label is the field's name whether or not its bytes fitted. Putting
     // the cut mark here instead cost a 3,970-byte run of free space and a
     // 40-byte SQL string the same name, which was neither of theirs. A
@@ -128,5 +157,14 @@ export function byteStrip(
   grid.append(fields);
   strip.append(grid);
   if (chips.childElementCount > 0) strip.append(chips);
+  // Every field the reader has opened out, under the map that named it, in the
+  // order the strip drew them.
+  if (dumps !== undefined) {
+    for (const span of spans) {
+      if (!dumps.open.has(span.offset_bits)) continue;
+      if (span.offset_bits % 8 !== 0 || span.size_bits % 8 !== 0) continue;
+      strip.append(byteDump(doc, span.offset_bits / 8, span.size_bits / 8, span.gap ? REPORT.gap : span.name, dumps.scroll(span.offset_bits)));
+    }
+  }
   return strip;
 }

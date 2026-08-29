@@ -132,6 +132,11 @@ export class ListingReport {
    *  Null until an arrow key is pressed, which starts it at the top of the
    *  window rather than at the top of the file. */
   private cursor: string | null = null;
+  /** Fields opened out into a dump of all their bytes, by the bit they start
+   *  at, and where each dump is scrolled to. Neither can live in the strip:
+   *  it is built again from nothing every time anything on screen changes. */
+  private dumps = new Set<number>();
+  private dumpTops = new Map<number, number>();
 
   onPick: (pick: FieldPick) => void = () => {};
   /** A long list was asked for on its own. The pane is the caller's, since
@@ -454,7 +459,11 @@ export class ListingReport {
     host.style.paddingLeft = `${8 + item.depth * 12}px`;
     const caption = `${item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
     host.append(
-      byteStrip(this.doc, item.offsetBits, item.sizeBits, caption, this.mapFor(item), () => this.toggleBytes(item.owner), this.selected),
+      byteStrip(this.doc, item.offsetBits, item.sizeBits, caption, this.mapFor(item), () => this.toggleBytes(item.owner), this.selected, {
+        open: this.dumps,
+        toggle: (at) => this.toggleDump(at),
+        scroll: (at) => ({ get: () => this.dumpTops.get(at) ?? 0, set: (top) => this.dumpTops.set(at, top) }),
+      }),
     );
     return host;
   }
@@ -481,6 +490,19 @@ export class ListingReport {
     b.type = "button";
     b.dataset["list"] = pathString(path);
     return b;
+  }
+
+  /** Open one field out into all of its bytes, or put it away. */
+  private toggleDump(offsetBits: number): void {
+    if (this.dumps.has(offsetBits)) {
+      this.dumps.delete(offsetBits);
+      this.dumpTops.delete(offsetBits);
+    } else this.dumps.add(offsetBits);
+    // The strip is taller or shorter now, and its height is measured rather
+    // than declared, so the measurement goes and the list is laid out again.
+    for (const k of [...this.measured.keys()]) if (k.startsWith("bytes:")) this.measured.delete(k);
+    this.layout();
+    this.paint();
   }
 
   private toggleBytes(key: string): void {
