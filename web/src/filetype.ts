@@ -13,8 +13,9 @@ const UNKNOWN_TYPE_MSG = "Unknown file type";
 const INFO_LABEL = "File type details";
 const DIALOG_TITLE = "File type";
 const DIALOG_CLOSE = "Close";
-const IDENTIFIED_FROM = `Identified from the file's first bytes, using the rule database of the Unix "file" command.`;
 const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
+const TEMPLATE_KEY = "Template";
+const SIGNATURE_ONLY = "signature only";
 const TEMPLATE_LABEL: Record<string, string> = {
   ar: "Unix archive",
   aseprite: "Aseprite",
@@ -78,8 +79,12 @@ export const templateTypeName = (name: string): string => {
   return label.endsWith("s") && label.includes(" ") ? label : `${label} file`;
 };
 
-export const fullTemplateLine = (name: string): string =>
-  `The Fields table uses Qubero's full ${templateLabel(name)} template.`;
+/** Which template the Fields table is being read with: a built-in by name, the
+ *  one field the identification rule's own signature makes, or neither. */
+export type TemplateNote = { readonly kind: "builtin"; readonly name: string } | { readonly kind: "signature" } | null;
+
+export const builtinTemplate = (name: string): TemplateNote => ({ kind: "builtin", name });
+export const SIGNATURE_TEMPLATE: TemplateNote = { kind: "signature" };
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
 
@@ -172,7 +177,7 @@ export type FileType = {
   /** The rule's own sentence. */
   named(message: string): void;
   /** Fill the dialog for one outcome, and show the button that opens it. */
-  details(id: Identification | null, templateLine: string): void;
+  details(id: Identification | null, template: TemplateNote): void;
   /** Ask the signature database as well, and fold in what it makes of the file. */
   addTools(doc: Doc, id: Identification | null, template: string | null): Promise<void>;
 };
@@ -207,9 +212,9 @@ dialog.addEventListener("click", (e) => {
 // Filled in once the signature rules have answered, so reopening the
 // dialog shows them without asking again.
 let tools: ToolMatch[] | null = null;
-const showDetails = (id: Identification | null, templateLine: string): void => {
+const showDetails = (id: Identification | null, template: TemplateNote): void => {
   const rows: HTMLElement[] = [];
-  const row = (label: string, value: string): void => {
+  const row = (label: string, value: Node | string): void => {
     rows.push(el("div", { className: "dlg-row" }, el("span", { className: "dlg-key", textContent: label }), value));
   };
   if (id === null) {
@@ -219,7 +224,13 @@ const showDetails = (id: Identification | null, templateLine: string): void => {
     if (id.mime !== "") row("Media type", id.mime);
     if (id.ext.length > 0) row("Extensions", id.ext.join(", "));
     if (id.source !== "") row("Rule file", id.source);
-    rows.push(el("p", { className: "dlg-muted", textContent: IDENTIFIED_FROM }));
+  }
+  // Which template the Fields table is reading with, next to what the file is
+  // rather than under the credits: it is an answer about this file too.
+  if (template !== null) {
+    const value =
+      template.kind === "builtin" ? templateLabel(template.name) : el("em", { textContent: SIGNATURE_ONLY });
+    row(TEMPLATE_KEY, value);
   }
   // What made the file, when anything knows. Its own block after the file
   // type's, so each muted credit line sits under the answers it covers.
@@ -239,7 +250,6 @@ const showDetails = (id: Identification | null, templateLine: string): void => {
       rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
     }
   }
-  if (templateLine !== "") rows.push(el("p", { className: "dlg-muted", textContent: templateLine }));
   dlgBody.replaceChildren(...rows);
   kindInfo.hidden = false;
 };
@@ -258,8 +268,8 @@ const addToolMatches = async (doc: Doc, id: Identification | null, template: str
     return;
   }
   tools = found;
-  const templateLine = template === null ? "" : fullTemplateLine(template);
-  showDetails(id, id === null && found.length > 0 ? "" : templateLine);
+  const note = template === null ? null : builtinTemplate(template);
+  showDetails(id, id === null && found.length > 0 ? null : note);
   if (found.length === 0) return;
   if (id === null) {
     // Nothing else knew anything, so this is the answer rather than a note

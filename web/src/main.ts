@@ -8,7 +8,7 @@ import { ListingView } from "./listingview.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
-import { fileType, fullTemplateLine, templateLabel, templateTypeName } from "./filetype.js";
+import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
 import { TypeTable } from "./typetable.js";
 
 const appEl = document.getElementById("app");
@@ -62,8 +62,6 @@ const closesMsg = (): string => {
 };
 const selectedBytes = (n: number): string => (n === 1 ? "1 byte" : `${n.toLocaleString()} bytes`);
 
-const SIGNATURE_LINE =
-  "The Fields table shows only the format's signature, generated from this rule. Qubero has no full template for this format.";
 const SIGNATURE_NOTE = "Signature only.";
 
 
@@ -329,11 +327,11 @@ function build(tab: Tab): void {
           const identity = templateTypeName(name);
           kind.named(identity);
           overview.setIdentity(identity);
-          kind.details(null, fullTemplateLine(name));
+          kind.details(null, builtinTemplate(name));
           void kind.addTools(doc, null, name);
         } else {
           kind.unknown();
-          kind.details(null, "");
+          kind.details(null, null);
           void kind.addTools(doc, null, name);
         }
         return;
@@ -342,21 +340,21 @@ function build(tab: Tab): void {
       overview.setIdentity(id.message);
       void kind.addTools(doc, id, name);
       if (name !== null) {
-        kind.details(id, fullTemplateLine(name));
+        kind.details(id, builtinTemplate(name));
         return;
       }
       // The rule that named the format also says where its signature is. That
       // is one field, but it is a field: clickable, highlighted, and true.
       const signature = await doc.signatureTemplate(id);
       if (signature === null) {
-        kind.details(id, "");
+        kind.details(id, null);
         return;
       }
       const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
       tmpl.append(option);
       tmpl.value = SIGNATURE_VALUE;
       table.setNote(SIGNATURE_NOTE);
-      kind.details(id, SIGNATURE_LINE);
+      kind.details(id, SIGNATURE_TEMPLATE);
       reapplySignature = async (): Promise<void> => {
         await doc.signatureTemplate(id);
         table.setNote(SIGNATURE_NOTE);
