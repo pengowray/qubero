@@ -8,7 +8,7 @@
 
 import { formatBytes, formatOffset } from "./doc.js";
 import { bitSizeText, childWord, countText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH } from "./strings.js";
-import type { Doc, Span } from "./doc.js";
+import type { Doc, FieldPick, Span } from "./doc.js";
 import { fieldClass } from "./fieldstyle.js";
 import { appendAnatomy } from "./anatomy.js";
 
@@ -31,8 +31,6 @@ const MAX_INDENT = 4;
 /** Preserve the useful tail of a deep parser path. The full path remains in
  * the heading tooltip. */
 const BREADCRUMB_PARTS = 5;
-
-export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
 type Row =
   | { readonly kind: "heading"; readonly depth: number; readonly text: string; readonly fullText: string; readonly key: string }

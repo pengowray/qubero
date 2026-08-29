@@ -11,7 +11,7 @@
 
 import { formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
-import type { FieldPick } from "./listingview.js";
+import type { FieldPick } from "./doc.js";
 import { emptyState, flatten, PAGE } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";

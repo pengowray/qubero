@@ -5,7 +5,7 @@
 
 import { formatBytes, formatOffset } from "./doc.js";
 import { bitSizeText, childWord, countText, GAP_LABEL } from "./strings.js";
-import type { Doc, TemplateNode } from "./doc.js";
+import type { Doc, FieldPick, TemplateNode } from "./doc.js";
 import { fieldClass } from "./fieldstyle.js";
 import { appendAnatomy } from "./anatomy.js";
 import type { AnatomyPart } from "./anatomy.js";
@@ -40,7 +40,6 @@ function treeIndent(depth: number, extra: number): string {
   return `${Math.min(depth, MAX_INDENT_DEPTH) * 16 + extra}px`;
 }
 
-export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
 type Editing = {
   readonly key: string;

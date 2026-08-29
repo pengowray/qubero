@@ -111,6 +111,12 @@ export type ByteSource = {
   slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> } | Blob;
 };
 
+/** A field picked in one of the structure views: which node, and the bits
+ *  it covers. Every view that lists fields hands one out and the rest of
+ *  the app follows it, so it belongs beside the tree the views read rather
+ *  than in whichever of them happens to be showing. */
+export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
+
 export type TemplateNode = {
   readonly path: readonly number[];
   readonly name: string;

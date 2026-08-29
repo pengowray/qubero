@@ -16,7 +16,7 @@
 import { formatBytes, formatOffset } from "./doc.js";
 import { NO_TEMPLATE } from "./strings.js";
 import type { ContentObject, Doc, FocusState, OverviewState, Span, TemplateNode } from "./doc.js";
-import type { FieldPick } from "./listingview.js";
+import type { FieldPick } from "./doc.js";
 
 /** Where an object's bytes are, in a phrase: one run, one chunk at a time, or
  *  inside the object's own header. */
