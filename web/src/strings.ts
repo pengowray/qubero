@@ -136,9 +136,18 @@ export const REPORT = {
    *  the one that puts them away again. Both are the mockup's own. */
   showBytes: "bytes",
   hideBytes: "hide bytes ✕",
-  /** A run of bytes shown short, because a strip is for seeing where fields
-   *  are rather than for reading every byte of one. The mockup's word. */
-  moreBytes: "unused…",
+  /** The tail of a field the strip did not draw, at the end of the bytes it
+   *  did: a strip is for seeing where fields are rather than for reading a
+   *  kilobyte of one. The count is what is missing, not the field's size,
+   *  which the row above and the chip below both already give.
+   *
+   *  It replaced a label. The cut mark used to go under the column in place
+   *  of the field's name, so a run of free space and a forty-byte SQL string
+   *  were both called "unused…"; the name stays put now and the tail carries
+   *  the cut. No ellipsis with it: the plus already says the run goes on.
+   *  "bytes" stays, or a bare "+3,958" after a row of hex pairs reads as one
+   *  more value. */
+  bytesCut: (rest: number): string => `+${bitSizeText(rest * 8)}`,
   /** The control that opens a long list in a pane of its own, on the list’s
    *  heading and on both ends of a drawn window. Not a bare "Show all": next
    *  to "Show more · 249,800 values below" that reads as drawing a quarter of

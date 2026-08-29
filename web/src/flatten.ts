@@ -388,7 +388,13 @@ function heading(
     to,
     open,
   });
-  w.strip(`h:${key}`, path, node?.name ?? "", frontOf(node, inner), level + 1);
+  // What the strip covers must not depend on whether the reader has opened
+  // the heading: the same bytes button gave two different stretches before and
+  // after a click. So when the strip is up, the children are read for it
+  // whether or not they are being listed.
+  const stripKey = `h:${key}`;
+  const seen = inner ?? (w.state.bytes.has(stripKey) ? w.kids(path, node.child_count) : null);
+  w.strip(stripKey, path, node?.name ?? "", frontOf(node, seen), level + 1);
   if (!open) return;
   if (inner === null) {
     w.waiting(path, level + 1, node);
@@ -409,6 +415,11 @@ function frontOf(node: TemplateNode, kids: Slice | null): { readonly start: numb
   const order = inFileOrder(kids.nodes);
   const first = order.find((k, i) => !isMachinery(k, i, []));
   if (first === undefined || first.offset_bits <= start) return whole;
+  // Only when there is something in that front to look at. A list whose
+  // elements sit at the back of a page has three and a half thousand bytes of
+  // free space before its first element, and opening on that shows a strip
+  // with nothing in it.
+  if (!order.some((k) => k.offset_bits >= start && k.offset_bits < first.offset_bits)) return whole;
   return { start, end: first.offset_bits };
 }
 
@@ -585,7 +596,9 @@ function child(w: Walk, node: TemplateNode, depth: number, reads: { readonly nam
   if (node.composite && node.child_count > 0 && depth === 1 && reads === null) {
     // A short table opens itself, since the table is what it is for.
     const open = w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true);
-    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : { from: 0, nodes: [] });
+    // Null rather than an empty slice: "not read" and "read, and empty" are
+    // different answers, and the strip's extent turns on which it is.
+    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null);
     return;
   }
   const open = node.composite && node.child_count > 0 && w.isOpen(key);

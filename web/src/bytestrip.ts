@@ -32,24 +32,25 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   return node;
 }
 
-/** A field's bytes as hex, cut short with the mockup's own word when the field
- *  runs longer than a strip should show. Bits when it does not fill bytes. */
-function digits(doc: Doc, span: Span): { readonly text: string; readonly cut: boolean } {
+/** A field's bytes as hex, cut short when the field runs longer than a strip
+ *  should show, with how many bytes are not drawn. Bits when it does not fill
+ *  bytes. */
+function digits(doc: Doc, span: Span): { readonly text: string; readonly rest: number } {
   const whole = span.offset_bits % 8 === 0 && span.size_bits % 8 === 0;
   if (!whole && span.size_bits <= BYTES_SHOWN * 8) {
     const { bytes, complete } = doc.readBits(span.offset_bits, span.size_bits);
-    if (!complete) return { text: "", cut: false };
+    if (!complete) return { text: "", rest: 0 };
     let bits = "";
     for (let i = 0; i < span.size_bits; i++) bits += ((bytes[i >> 3] ?? 0) >> (7 - (i % 8))) & 1 ? "1" : "0";
-    return { text: bits, cut: false };
+    return { text: bits, rest: 0 };
   }
   const at = Math.floor(span.offset_bits / 8);
   const len = Math.ceil(((span.offset_bits % 8) + span.size_bits) / 8);
   const take = Math.min(len, BYTES_SHOWN);
   const { bytes, complete } = doc.read(at, take);
-  if (!complete) return { text: "", cut: false };
+  if (!complete) return { text: "", rest: 0 };
   const hex = Array.from(bytes.subarray(0, take), (b) => b.toString(16).padStart(2, "0")).join(" ");
-  return { text: hex, cut: len > take };
+  return { text: hex, rest: len - take };
 }
 
 /** What the chip says about a field, beyond its name. `chipDetail` is the hex
@@ -106,9 +107,14 @@ export function byteStrip(
       && selected.offsetBits === span.offset_bits && selected.sizeBits === span.size_bits;
     const column = el("div", `bs-fld${span.gap ? " is-gap" : ""}${isOn ? " is-on" : ""}`);
     if (hue !== null) column.style.setProperty("--hue", hue);
-    const { text, cut } = digits(doc, span);
-    column.append(el("span", "bs-by", cut ? `${text} â€¦` : text));
-    column.append(el("span", "bs-lb", cut ? REPORT.moreBytes : span.name));
+    const { text, rest } = digits(doc, span);
+    column.append(el("span", "bs-by", rest > 0 ? `${text} ${REPORT.bytesCut(rest)}` : text));
+    // The label is the field's name whether or not its bytes fitted. Putting
+    // the cut mark here instead cost a 3,970-byte run of free space and a
+    // 40-byte SQL string the same name, which was neither of theirs. A
+    // stretch no field covers is named for what it is, not for the structure
+    // it happens to sit inside.
+    column.append(el("span", "bs-lb", span.gap ? REPORT.gap : span.name));
     fields.append(column);
     if (hue === null) return;
     const chip = el("span", `bs-chip${isOn ? " is-on" : ""}`);
