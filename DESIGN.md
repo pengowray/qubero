@@ -1118,10 +1118,10 @@ the mission rather than with CCSDS, and that a packet whose APID is all ones
 is an idle packet sent to keep a downlink busy. A capture is mostly those: of
 the 242,725 packets in the one this was tested against, 229,231 are idle.
 
-### Two ways to write a package
-A Debian package and an RPM hold the same thing and agree on nothing about how
-to write it. Both went in together, and between them they cost the IR one
-constructor.
+### Four ways to write a package
+A Debian package, an RPM, a Windows cabinet and a macOS installer hold the same
+thing and agree on nothing about how to write it. They went in together, and
+between them they cost the IR one constructor.
 
 A `.deb` is an `ar` archive, which is the oldest archive format Unix still
 uses: a magic line and then members, each with sixty bytes of header written as
@@ -1153,10 +1153,32 @@ package's name. One asymmetry has a test of its own, since a file read a byte
 late is unreadable from there on: the signature section is padded to a multiple
 of eight bytes and the header after it is not.
 
-Both stop in the same place. A `.deb` carries two tar archives and an RPM
-carries a cpio archive, and all three are compressed. Naming which compressor
-wrote one from its first bytes is as far as this goes, which is where the
-initramfs stopped as well.
+A cabinet is Microsoft's, and it is the only one of the four that lays its own
+files out rather than wrapping an archive someone else wrote. Folders say where
+a run of compressed blocks starts, files say where in a folder's decompressed
+stream they begin, and the blocks are that stream cut into pieces of at most 32
+KiB. So a file's bytes are in no one place, and the offset in an entry counts in
+a stream this template does not produce. The header is the interesting part:
+three of its fields are written only when a flag says so, and everything below
+measures its reserved space against them. A field that is not there is not a
+field holding zero, but the format says the reserve is empty when the flag is
+clear, so those three are a `Switch` whose other case is `Ty::computed(0)`: no
+bytes, and a number the folders and the blocks can still be sized against.
+`Ty::present_if` would have left them as no bytes at all, which is right for the
+two strings beside them and wrong for a size.
+
+A macOS `.pkg` is a xar, and it is the one that gets away. Its table of contents
+is XML and it is compressed, so which files are in the package, what they are
+called and where in the heap each one sits are all behind an inflate. What is
+readable is the header, and it earns its place twice over: it measures the table
+both ways round, which is what makes the heap findable without inflating
+anything, and it says how long it is itself, so a longer header from a newer
+writer moves the table rather than breaking it.
+
+They stop in the same place. A `.deb` carries two tar archives, an RPM carries a
+cpio archive, a cabinet carries MSZIP, LZX or Quantum, and a xar carries a
+deflated table. Naming what wrote a compressed run from its first bytes is as
+far as this goes, which is where the initramfs stopped as well.
 
 ## Roadmap (not yet built)
 

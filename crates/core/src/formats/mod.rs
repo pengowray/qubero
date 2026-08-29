@@ -80,6 +80,7 @@ mod utmp;
 mod vpk;
 mod w4v;
 mod wad;
+mod xar;
 mod wav;
 mod whisper;
 mod zip;
@@ -155,6 +156,7 @@ pub use utmp::utmp;
 pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
+pub use xar::xar;
 pub use wav::wav;
 pub use whisper::whisper;
 pub use zip::{zarrzip, zip};
@@ -182,7 +184,7 @@ pub fn builtin_names() -> &'static [&'static str] {
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
         "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
-        "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
+        "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "xar", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
         "unityassets", "unitybundle", "thumbsdb", "ico", "elf", "bpf", "com", "ne", "le", "macho",
@@ -259,6 +261,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "ar" => Some(ar()),
         "rpm" => Some(rpm()),
         "cab" => Some(cab()),
+        "xar" => Some(xar()),
         "deb" => Some(deb()),
         "gitindex" => Some(git_index()),
         "gitpackidx" => Some(git_pack_index()),
@@ -309,6 +312,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (ar::MAGIC, "ar"),
     (rpm::MAGIC, "rpm"),
     (cab::MAGIC, "cab"),
+    (xar::MAGIC, "xar"),
     // An initramfs, and every other cpio archive written this century.
     (b"070701", "cpio"),
     (b"070702", "cpio"),

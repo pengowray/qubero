@@ -45,6 +45,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   srw: "Samsung SRW",
   s3m: "Scream Tracker S3M",
   spp: "CCSDS space packets",
+  xar: "xar archive (macOS .pkg)",
   xm: "FastTracker XM",
   zarrzip: "Zarr ZipStore",
   eps: "Encapsulated PostScript",
