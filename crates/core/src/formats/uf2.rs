@@ -71,10 +71,11 @@ fn block() -> T {
     T::structure(
         "Block",
         vec![
-            ("magic", T::magic(MAGIC)),
+            ("magic_start0", T::magic(MAGIC)),
             // The second magic number, which is here because one is not enough
             // to tell this from a file that happens to start with the word.
-            ("magic2", T::magic(b"\x57\x51\x5d\x9e")),
+            // Both keep the names the format's own description gives them.
+            ("magic_start1", T::magic(b"\x57\x51\x5d\x9e")),
             ("flags", T::flags("Flags", T::u32(Little), FLAGS)),
             // Where in the chip's memory this payload goes. This is the column
             // to read down: it is the program's own map.
@@ -82,8 +83,10 @@ fn block() -> T {
             // How much of the 476 bytes below is program and how much is
             // padding. A Raspberry Pi's tools write 256.
             ("payload_size", T::u32(Little)),
-            ("block", T::u32(Little)),
-            ("blocks", T::u32(Little)),
+            // Which block this is, and how many there are. A reader knows
+            // it has the whole program when it has seen every number once.
+            ("block_number", T::u32(Little)),
+            ("block_count", T::u32(Little)),
             // One field, two meanings, and the flags say which: the chip this
             // is for, or the size of the file being carried.
             ("family", T::enumeration_hex("Family", T::u32(Little), FAMILIES)),
