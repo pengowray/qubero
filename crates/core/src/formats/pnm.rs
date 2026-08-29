@@ -18,7 +18,7 @@
 //! whitespace in front of it, which the format allows and nothing writes: that
 //! `#` and the rest of the line read as part of the number before it.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// The six variants, told apart by the digit after the P.
 const KIND: &[(i128, &str)] = &[
@@ -48,7 +48,7 @@ pub fn pnm() -> Template {
                     "max_value",
                     T::switch(E::field("magic"), vec![(0x5031, nothing()), (0x5034, nothing())], number()),
                 ),
-                ("pixels", T::bytes(E::Remaining)),
+                ("pixels", pixels()),
             ],
         ),
     )
@@ -58,6 +58,28 @@ pub fn pnm() -> Template {
 /// digits, and the one whitespace byte that ends it.
 fn number() -> T {
     T::text(StrLen::token_past_comments(SPACE, SPACE, (b'#', b'\n')), Encoding::Ascii)
+}
+
+/// The picture. In the three binary variants it is packed bytes and there is
+/// nothing to read in them without knowing the width; in the three text ones
+/// it is the same numbers the header is written in, separated the same way, so
+/// each one is a field.
+///
+/// A colour file writes three numbers per pixel, red then green then blue, so
+/// they are read as a pixel rather than as a run of numbers three times too
+/// long. A greyscale or bitmap file writes one.
+fn pixels() -> T {
+    let value = || T::decimal(StrLen::token_past_comments(SPACE, SPACE, (b'#', b'\n')));
+    let rgb = T::inline_structure("Pixel", vec![("red", value()), ("green", value()), ("blue", value())]);
+    T::switch(
+        E::field("magic"),
+        vec![
+            (0x5031, T::repeat(value().counted_as("pixel"), Until::End)),
+            (0x5032, T::repeat(value().counted_as("pixel"), Until::End)),
+            (0x5033, T::repeat(rgb.counted_as("pixel"), Until::End)),
+        ],
+        T::bytes(E::Remaining),
+    )
 }
 
 fn nothing() -> T {
@@ -135,6 +157,31 @@ mod tests {
         assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Str("1".into()));
         assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Str("255".into()));
         assert_eq!(ev.node(&d, &[4]).unwrap().size_bits, 8);
+    }
+
+    /// The colour text variant, which is what a `.ppma` holds: three numbers
+    /// a pixel, laid out however the writer felt like laying them out.
+    #[test]
+    fn a_text_ppm_reads_its_pixels_as_numbers() {
+        let d = Document::new(MemSource(b"P3\n2 1\n255\n255 0 0\n  0 128\n64\n".to_vec()));
+        let mut ev = Evaluator::new(pnm());
+        let pixels = ev.node(&d, &[4]).unwrap();
+        assert_eq!(pixels.child_count, 2);
+        assert_eq!(pixels.unit.as_deref(), Some("pixel"));
+        assert_eq!(ev.node(&d, &[4, 0, 0]).unwrap().value, Value::Int(255));
+        assert_eq!(ev.node(&d, &[4, 0, 1]).unwrap().value, Value::Int(0));
+        assert_eq!(ev.node(&d, &[4, 1, 1]).unwrap().value, Value::Int(128));
+        assert_eq!(ev.node(&d, &[4, 1, 2]).unwrap().value, Value::Int(64));
+    }
+
+    /// The greyscale text variant writes one number a pixel, so a pixel is a
+    /// number rather than a group of three.
+    #[test]
+    fn a_text_pgm_reads_one_number_per_pixel() {
+        let d = Document::new(MemSource(b"P2\n3 1\n255\n0 128 255\n".to_vec()));
+        let mut ev = Evaluator::new(pnm());
+        assert_eq!(ev.node(&d, &[4]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[4, 1]).unwrap().value, Value::Int(128));
     }
 
     #[test]

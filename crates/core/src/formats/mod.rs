@@ -8,6 +8,7 @@ mod assimp;
 mod appledouble;
 mod au;
 mod bmp;
+mod c16;
 mod cab;
 mod braw;
 mod bards_tale;
@@ -139,6 +140,7 @@ pub use pcx::pcx;
 pub use pdf::pdf;
 pub use pi1::pi1;
 pub use psd::psd;
+pub use c16::c16;
 pub use pnm::pnm;
 pub use qoi::qoi;
 pub use rpm::rpm;
@@ -185,7 +187,7 @@ pub fn builtin_names() -> &'static [&'static str] {
     &[
         "png", "aseprite", "braw", "swf", "zip", "wasm", "mp4", "mkv", "dv", "iso9660", "id3", "wav", "w4v", "midi", "mod",
         "s3m", "xm", "it", "sqlite", "self", "pe", "coff", "omf", "msdos", "gguf", "whisper", "safetensors", "json",
-        "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "wad",
+        "omezarr", "zarrzip", "bmp", "pcx", "tga", "au", "pi1", "nes", "gzip", "gif", "aiff", "ilbm", "pnm", "c16", "wad",
         "pak", "vpk", "mca", "tap", "lha", "ar", "deb", "rpm", "cab", "xar", "lnk", "cbor", "gitindex", "gitpackidx", "qoi", "tiff", "dng", "dtb", "grubenv", "utmp", "cpio", "journal", "spp",
         "nef", "cr2", "arw", "orf", "rw2", "pef", "srw", "jpeg", "pdf", "hdf5", "appledouble", "applesingle",
         "macbinary", "binhex", "stuffit", "compactpro", "bardstale", "cdr", "cmx", "psd", "eps",
@@ -252,6 +254,7 @@ pub fn builtin(name: &str) -> Option<Template> {
         "aiff" => Some(aiff()),
         "ilbm" => Some(ilbm()),
         "pnm" => Some(pnm()),
+        "c16" => Some(c16()),
         "wad" => Some(wad()),
         "pak" => Some(pak()),
         "vpk" => Some(vpk()),

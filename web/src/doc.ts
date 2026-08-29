@@ -28,6 +28,16 @@ function isOmeZarrMetadata(name: string, bytes: Uint8Array): boolean {
   return /"(?:multiscales|ome)"\s*:/.test(text);
 }
 
+/** Formats with nothing in the bytes to recognise them by, where the file name
+ * is the only evidence there is. A `.c16` capture is raw samples from the first
+ * byte: no header, no magic number, nothing but the extension to go on. */
+const BY_EXTENSION: Record<string, string> = { c16: "c16" };
+
+function templateByExtension(name: string): string | null {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  return BY_EXTENSION[ext] ?? null;
+}
+
 type MagicModule = typeof import("./pkg-magic/qubero_magic.js");
 let magic: Promise<MagicModule> | null = null;
 
@@ -768,7 +778,9 @@ export class Doc {
     // metadata rather than a byte signature.
     if (isOmeZarrMetadata(this.name, head)) return "omezarr";
     const name = this.editor.sniff_template(head, this.lengthBytes);
-    return name === "" ? null : name;
+    // Only once the bytes have had their say: a file that announces what it is
+    // is that, whatever it happens to be called.
+    return name === "" ? templateByExtension(this.name) : name;
   }
 
   /**
