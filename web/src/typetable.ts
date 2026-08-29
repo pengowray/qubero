@@ -79,6 +79,12 @@ function label(n: TemplateNode): (Node | string)[] {
 
 export class TypeTable {
   readonly el: HTMLElement;
+  /** A revealed row waiting to be drawn, and the frame that will draw it. */
+  private wanted: string | null = null;
+  private frame: ReturnType<typeof setTimeout> | 0 = 0;
+  /** True when a reveal was skipped because the panel was folded away, so the
+   *  table on screen is of a cursor that has since moved. */
+  private stale = false;
   private readonly body: HTMLElement;
   private readonly empty: HTMLElement;
   private readonly status: HTMLElement;
@@ -248,8 +254,44 @@ export class TypeTable {
     for (let i = 0; i < path.length; i++) this.expanded.add(key(path.slice(0, i)));
     this.selected = k;
     this.editing = null;
+    this.reveal_(k);
+  }
+
+  /**
+   * Draw the table again for a revealed row, once a frame.
+   *
+   * Every row is real DOM here, so a table opened onto a long list is hundreds
+   * of them and drawing it again is not cheap. The cursor moves once a
+   * keystroke and a held arrow key moves it far faster than the screen
+   * redraws, so a render per move is a render nobody sees. A panel folded away
+   * is cheaper still: it draws nothing until it is opened, and the reader who
+   * closed it should not go on paying for it.
+   */
+  private reveal_(k: string): void {
+    if (this.el.clientHeight === 0) {
+      this.stale = true;
+      return;
+    }
+    this.wanted = k;
+    if (this.frame !== 0) return;
+    // A timeout rather than an animation frame: a page in a background tab
+    // paints no frames, and a panel that stops following the cursor until the
+    // window is looked at again is worse than one that draws unseen.
+    this.frame = setTimeout(() => {
+      this.frame = 0;
+      this.stale = false;
+      const want = this.wanted;
+      this.wanted = null;
+      this.render();
+      if (want !== null) this.body.querySelector(`tr[data-path="${CSS.escape(want)}"]`)?.scrollIntoView({ block: "nearest" });
+    }, 0);
+  }
+
+  /** Draw what was skipped while the panel was folded away. */
+  catchUp(): void {
+    if (!this.stale || this.el.clientHeight === 0) return;
+    this.stale = false;
     this.render();
-    this.body.querySelector(`tr[data-path="${CSS.escape(k)}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
   /** Drop the selection and any half-typed value. */
