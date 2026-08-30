@@ -76,24 +76,38 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 /// and ten of the second: deeper than a file means anything by, and nowhere
 /// near what one can be made to say.
 ///
-/// Measured rather than picked. What costs the most per component is a run
-/// that stops on what it reads, which is how bencode nests; a list of lists
-/// costs a third of that. A debug build's frames are several times a release
-/// build's, so the tightest place either shape runs is a debug build on the
-/// two megabytes a test thread starts with, where the dear shape affords 310
-/// components and the cheap one 800. This is under half of the 310. In a
-/// release build there is several times the room, and the wasm build read a
-/// list of lists 3000 components deep before this was measured at all.
+/// Measured rather than picked, in a debug build, whose frames are several
+/// times a release build's. A megabyte of stack, which is what wasm is given
+/// and what a thread on Windows starts with, carries about 300 components of
+/// a run that stops on what it reads (how bencode nests) and about 400 of a
+/// list of lists. So this is under half of the smaller of those, on the
+/// smallest stack any of it runs on, and there is several times the room in
+/// the build that ships.
 ///
-/// A megabyte, which is what a thread on Windows starts with, would leave the
-/// dear shape only 150. Nothing ships on a thread that size in a debug build,
-/// and the two examples that read a whole tree take a thread of their own so
-/// that they do not either.
+/// Per component, not per level: the two shapes are much further apart per
+/// level than they are here, because a level of the first is four or five
+/// components and a level of the second is two.
 ///
 /// This is also the ceiling on `no_ring`'s `DEEPEST`, which it will now never
 /// reach: following a pointer adds components too, so a chain of them stops
 /// here first. Real nesting stops at three.
+///
+/// `cargo run --example stack_probe -- <levels> <array|repeat> <MiB>` is where
+/// these numbers come from, and is how to take them again after a change.
 const DEEPEST_PATH: usize = 128;
+
+/// How much of the stack one read may spend, in bytes.
+///
+/// `DEEPEST_PATH` is a promise made from two measured shapes. This keeps the
+/// promise when a third shape costs more per component than either of them:
+/// the read stops and says so, rather than the process going down under it.
+/// For everything measured the count is reached first and this never fires,
+/// which is what makes it a backstop rather than the limit.
+///
+/// 640 KiB fits in the megabyte wasm is given with room left for whoever
+/// called in, and carries about 185 components of the dearest measured shape
+/// in a debug build, which is comfortably past the 128 the count allows.
+const STACK_BUDGET: usize = 640 << 10;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -319,6 +333,10 @@ pub struct Evaluator {
     frontier: Vec<placed::Frame>,
     /// How many nodes that walk has opened, over all its goes.
     placed_opened: usize,
+    /// How many reads are open, and where the stack was when the outermost of
+    /// them started. Only the depth guard reads these; see `STACK_BUDGET`.
+    nest: usize,
+    stack_base: usize,
 }
 
 impl Evaluator {
@@ -338,6 +356,8 @@ impl Evaluator {
             placements_done: false,
             frontier: Vec::new(),
             placed_opened: 0,
+            nest: 0,
+            stack_base: 0,
         }
     }
 
@@ -495,6 +515,9 @@ impl Evaluator {
         self.journals.clear();
         self.left = self.slice;
         self.reached_bits = 0;
+        // Nothing is being read at the moment this is called, whatever a
+        // panic part way through a read may have left behind.
+        self.nest = 0;
     }
 
     /// What the list at `path` has learned about itself. A node that is not
@@ -751,6 +774,31 @@ impl Evaluator {
         let r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit)?;
         self.remember(path, r);
         Ok(())
+    }
+
+    /// Note that one more read is open, and refuse it if the stack this go has
+    /// spent is past what a read may. `depth` is only for what it says.
+    ///
+    /// The first read of a go is where the stack was when the reading started,
+    /// and every read under it is that far down from there. Which call this
+    /// belongs to is the point: placing a node returns before what it placed
+    /// is measured, so `size_of` is the one that stays open the whole way
+    /// down, and `resolve` on its own goes no deeper than the path is long.
+    pub(super) fn enter(&mut self, depth: usize) -> R<()> {
+        let probe = 0u8;
+        let here = &probe as *const u8 as usize;
+        if self.nest == 0 {
+            self.stack_base = here;
+        } else if self.stack_base.saturating_sub(here) > STACK_BUDGET {
+            return fail(format!("nested too deep to read: no room left {depth} fields down"));
+        }
+        self.nest += 1;
+        Ok(())
+    }
+
+    /// That read is over. Only ever called where `enter` said yes.
+    pub(super) fn leave(&mut self) {
+        self.nest -= 1;
     }
 
     /// Where child `idx` of the node at `parent` goes: what it is called, what

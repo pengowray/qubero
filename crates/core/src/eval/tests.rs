@@ -1753,3 +1753,20 @@ fn a_run_that_holds_a_run_is_refused_at_the_same_depth() {
     };
     assert!(msg.contains("nested more than"), "{msg}");
 }
+
+#[test]
+fn a_read_with_no_stack_left_stops_rather_than_the_process() {
+    // The backstop behind the depth count, which nothing measured reaches:
+    // both known shapes are stopped by the count first. It is reached here by
+    // telling the evaluator the stack started further up than it did, which is
+    // what a shape costing more per field than any measured one would do.
+    let t = crate::formats::builtin("cbor").expect("cbor is built in");
+    let d = doc(&[0x81, 0x81, 0x01]);
+    let mut ev = Evaluator::new(t);
+    ev.nest = 1;
+    ev.stack_base = usize::MAX;
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[]) else {
+        panic!("a read with no room left should say so");
+    };
+    assert!(msg.contains("too deep to read"), "{msg}");
+}

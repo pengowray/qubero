@@ -15,13 +15,6 @@ use qubero_core::source::MemSource;
 const REFUSED: &str = "does-not-read";
 
 fn main() {
-    // A thread of its own: the main one on Windows starts with a megabyte,
-    // and a debug build's frames are fat enough that a deeply nested file
-    // would run it out. See `DEEPEST_PATH` in `eval/mod.rs`.
-    std::thread::Builder::new().stack_size(8 << 20).spawn(run).unwrap().join().unwrap();
-}
-
-fn run() {
     let root = std::env::args().nth(1).expect("usage: check_tree <dir> [template]");
     let only = std::env::args().nth(2).filter(|a| a != "-");
     let depth: usize = std::env::args().nth(3).and_then(|d| d.parse().ok()).unwrap_or(5);

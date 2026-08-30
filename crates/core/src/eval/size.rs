@@ -47,6 +47,16 @@ impl Evaluator {
     }
 
     pub(super) fn size_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
+        self.enter(path.len())?;
+        let out = self.size_within(doc, path);
+        self.leave();
+        out
+    }
+
+    /// How much room the node at `path` takes. Apart from `size_of` only so
+    /// that the count of open reads there is kept by one pair of statements
+    /// with nothing between them that can return.
+    fn size_within<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
         self.resolve(doc, path)?;
         let r = self.memo[path].clone();
         if let Some(s) = r.size {
