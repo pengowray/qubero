@@ -1050,6 +1050,18 @@ mod tests {
         }
     }
 
+    /// A name written twice in the table would shadow the first quietly. The
+    /// match this replaced made that a compile error; a list makes it data, so
+    /// the guarantee has to be asked for.
+    #[test]
+    fn no_template_name_is_listed_twice() {
+        let mut names = builtin_names();
+        names.sort_unstable();
+        let mut seen = names.clone();
+        seen.dedup();
+        assert_eq!(names, seen, "a name is listed more than once");
+    }
+
     /// Both start with the same eight bytes, and only the name of the first
     /// member says which of the two a file is.
     #[test]

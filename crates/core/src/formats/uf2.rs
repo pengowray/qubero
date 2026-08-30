@@ -170,9 +170,12 @@ pub fn image<S: Source>(source: &S) -> Image {
     if family.is_some() {
         headers.retain(|h| !h.named_family || is_processor(h.family));
     }
-    headers.sort_by_key(|h| h.address);
-    // The same address twice is a file written that way; the last block to
-    // claim an address is the one the chip is left holding.
+    // By address, and within one address by where the block is in the file,
+    // latest first. The same address twice is a file written that way, and the
+    // chip is left holding whatever was written last, so that is the block to
+    // keep: sorting the latest to the front is what makes the dedup below,
+    // which keeps the first of each run, keep the right one.
+    headers.sort_by(|a, b| a.address.cmp(&b.address).then(b.payload.at.cmp(&a.payload.at)));
     headers.dedup_by_key(|h| h.address);
 
     // Cut the blocks into runs wherever the addresses stop being consecutive.
@@ -347,6 +350,21 @@ mod tests {
         assert!(insn.text.starts_with("bl"), "{}", insn.text);
         // And it is in two places, which is the truth about where it is.
         assert_eq!(code.origin(254, 4).len(), 2);
+    }
+
+    /// One address written twice keeps what the chip would be left holding,
+    /// which is the block written last.
+    #[test]
+    fn the_last_block_to_claim_an_address_is_the_one_kept() {
+        let mut file = block_at(0xe48bff59, 4, 0x10000000, 0, 2, &[1, 2, 3, 4]);
+        file.extend(block_at(0xe48bff59, 4, 0x10000000, 1, 2, &[5, 6, 7, 8]));
+        let source = MemSource(file);
+        let program = image(&source);
+        assert_eq!(program.runs.len(), 1);
+        let code = Gathered::new(&source, program.runs[0].extents.iter().copied());
+        let mut bytes = [0u8; 4];
+        code.read_bytes(0, &mut bytes);
+        assert_eq!(bytes, [5, 6, 7, 8]);
     }
 
     /// Addresses that are not consecutive are not one stretch of memory.
