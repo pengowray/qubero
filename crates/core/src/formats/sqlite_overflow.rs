@@ -79,7 +79,7 @@ pub fn read<S: Source>(doc: &Document<S>, found: &Payload, encoding: i128) -> Ro
     if size > ROW_LIMIT {
         let mb = ROW_LIMIT / (1 << 20);
         return Row {
-            problem: Some(format!("Not assembled: the row is over this viewer's {mb} MB limit.")),
+            problem: Some(format!("Row not assembled: it is larger than the {mb} MB limit.")),
             ..Row::default()
         };
     }
@@ -209,24 +209,21 @@ pub fn payload<S: Source>(ev: &mut Evaluator, doc: &Document<S>, cell: &[usize])
 
     while out.found < declared {
         if next == 0 {
-            out.problem = Some(format!(
-                "The chain ended after {} of the {declared} bytes the row claims.",
-                out.found
-            ));
+            out.problem =
+                Some(format!("Only {} of the {declared} bytes were found: the page chain ended early.", out.found));
             break;
         }
         if next < 1 || next as u64 > page_count {
-            out.problem =
-                Some(format!("Page {next} is not a page of this file, which has {page_count}."));
+            out.problem = Some(format!("Page {next} is out of range: the file has {page_count} pages."));
             break;
         }
         let page = next as u32;
         if !seen.insert(page) {
-            out.problem = Some(format!("Page {page} is already in this chain, which loops."));
+            out.problem = Some(format!("Page {page} repeats: the page chain loops."));
             break;
         }
         if out.pages.len() >= LONGEST_CHAIN {
-            out.problem = Some("The chain is longer than any file could hold.".into());
+            out.problem = Some("The page chain is longer than the file could hold.".into());
             break;
         }
         let start = (page as u64 - 1) * page_size;
@@ -497,7 +494,7 @@ mod tests {
         bytes[at..at + 4].copy_from_slice(&4u32.to_be_bytes());
         let (_, found) = follow(bytes);
         assert_eq!(found.pages, vec![4, 6]);
-        assert!(found.problem.as_deref().is_some_and(|p| p.contains("loops")), "{found:?}");
+        assert!(found.problem.as_deref().is_some_and(|p| p.contains("chain loops")), "{found:?}");
         assert!(!found.complete());
     }
 
@@ -507,7 +504,7 @@ mod tests {
     fn a_chain_that_ends_early_says_how_far_it_got() {
         let (_, found) = follow(spilled(2000, &[4], 8));
         assert_eq!(found.pages, vec![4]);
-        assert!(found.problem.as_deref().is_some_and(|p| p.contains("ended after")), "{found:?}");
+        assert!(found.problem.as_deref().is_some_and(|p| p.contains("chain ended early")), "{found:?}");
         assert_eq!(found.found, stays(2000) as u64 + 508);
     }
 
@@ -534,7 +531,7 @@ mod tests {
     fn a_page_that_is_not_in_the_file_stops_the_walk() {
         let (_, found) = follow(spilled(1200, &[400], 8));
         assert!(!found.complete());
-        assert!(found.problem.as_deref().is_some_and(|p| p.contains("not a page of this file")));
+        assert!(found.problem.as_deref().is_some_and(|p| p.contains("out of range")));
         assert_eq!(found.found, 184);
         assert_eq!(found.extents.len(), 1);
     }

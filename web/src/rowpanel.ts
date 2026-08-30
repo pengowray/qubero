@@ -52,9 +52,11 @@ export function rowBody(info: TypeInfo): DocumentFragment {
 
   const sizes = document.createElement("div");
   sizes.className = "insp-qcount";
+  // "Claims", because the two parts add up to what was found rather than to
+  // what the cell declared, and those differ when the chain broke.
   const elsewhere = info.row_found - info.row_on_page;
   sizes.textContent =
-    `${countText(info.row_declared, "byte")}: ` +
+    `Claims ${countText(info.row_declared, "byte")}: ` +
     `${info.row_on_page.toLocaleString()} on this page, ` +
     `${elsewhere.toLocaleString()} on ${countText(info.row_chain, "page")} elsewhere.`;
   frag.append(sizes);
