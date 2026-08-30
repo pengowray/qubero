@@ -127,6 +127,15 @@ pub fn verify(bytes: &[u8], base: u64, mark: usize, layout: &Layout) -> Option<R
             }
             _ => {
                 if let Some((run, _)) = open.take() {
+                    // A new run may start further on, where a dump skipped a
+                    // stretch, but never back inside what has already been
+                    // read. Two dumps of overlapping ranges pasted together
+                    // are a real thing to be handed and not a thing to answer
+                    // by arithmetic, since which of them holds an address is
+                    // no longer a division.
+                    if address < run.end() {
+                        return None;
+                    }
                     runs.push(run);
                 }
                 let per_line = count.max(1);
@@ -283,6 +292,34 @@ mod tests {
         let d = read(text.as_bytes(), 0).unwrap();
         assert_eq!(d.tier(), Tier::Regular);
         assert_eq!(d.byte_count(), 52);
+    }
+
+    /// Two dumps of overlapping stretches, pasted one after the other, which
+    /// is what happens when someone runs the same command twice into the same
+    /// mail. Which of them holds an address is no longer a division, so the
+    /// fast path refuses it and the slow one, which places its rows by
+    /// address, reads it.
+    #[test]
+    fn a_dump_pasted_twice_is_not_regular() {
+        let text = format!("{PLAIN}{PLAIN}");
+        let d = read(text.as_bytes(), 0).unwrap();
+        assert_eq!(d.tier(), Tier::Irregular);
+        assert_eq!(d.byte_count(), 104, "every line is still read, overlap and all");
+        assert_eq!(d.span(), Some((0, 52)), "and they describe the same 52 bytes twice over");
+        let mut got = [0u8; 4];
+        assert_eq!(d.read_at(0x20, &mut got), 4);
+        assert_eq!(got, [0x20, 0x21, 0x22, 0x23]);
+    }
+
+    /// A dump that skips a stretch is still regular: a new run may start
+    /// further on, just not back inside what has been read.
+    #[test]
+    fn a_gap_between_two_stretches_is_still_regular() {
+        let text = format!("{PLAIN}00001000: 4142 4344 4546 4748 494a 4b4c 4d4e 4f50  ABCDEFGHIJKLMNOP\n");
+        let d = read(text.as_bytes(), 0).unwrap();
+        assert_eq!(d.tier(), Tier::Regular);
+        assert_eq!(d.extents().len(), 2);
+        assert_eq!(d.byte_count(), 68);
     }
 
     #[test]
