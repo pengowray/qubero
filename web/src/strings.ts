@@ -234,6 +234,40 @@ export const SEARCH_PLACEHOLDER = {
   hex: { find: "89 50 4e 47", replace: "00 ff" },
 } as const;
 
+/** The plain text view: the file read as the text it is. Everything here is a
+ *  mark in the margin rather than a sentence, because the text is what the
+ *  reader came for and the marks are the exceptions. */
+export const TEXTVIEW = {
+  /** The main view's button, beside Hex and Listing. */
+  viewButton: "Text",
+  regionLabel: "File as text",
+  /** A line too long to draw across the screen; the rest of it is there, the
+   *  view is not drawing it. */
+  lineClipped: "…",
+  /** The core stopped the line at its own limit: what follows is the same line
+   *  carrying on. */
+  lineCut: "line continues",
+  /** Bytes on this line do not fit the encoding it is being read in. */
+  lineLossy: "not this encoding",
+  /** Beside the encoding, when nothing in the file said which it was. */
+  guessed: "guessed",
+  /** The encoding chooser's first entry: let the file decide. */
+  encodingAuto: "From the file",
+} as const;
+
+/** The offer to open the file a hex dump describes. */
+export const DUMP = {
+  heading: "This file is a hex dump",
+  /** What was found, in one line. */
+  summary: (tool: string, bytes: number): string =>
+    `${tool === "" ? "A dump" : tool} of ${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"}`,
+  open: "Open those bytes",
+  /** Stretches the dump did not describe, which read as zeros. */
+  holes: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "stretch" : "stretches"} not in the dump`,
+  /** Bytes whose two columns disagree. */
+  conflicts: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"} where the columns disagree`,
+} as const;
+
 export const NO_MATCH = "No match.";
 export const WRAPPED_ON = "Wrapped to the start of the file.";
 export const WRAPPED_BACK = "Wrapped to the end of the file.";

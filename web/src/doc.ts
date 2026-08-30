@@ -213,6 +213,41 @@ export type FocusState = OverviewState & {
 };
 
 /** How the text in the search bar is read. */
+/** How the file reads as text: what encoding, whether that was a guess, and
+ *  how many bytes of byte-order mark sit in front of the first line. */
+export type TextReading = {
+  readonly encoding: string;
+  readonly mark: number;
+  readonly guessed: boolean;
+  /** Bytes one character takes at least, which is what an offset in the text
+   *  is a multiple of. */
+  readonly unit: number;
+};
+
+/** One line of the file. `escapes` is flat pairs of character index and
+ *  length: the escape sequences are left in the text rather than removed, so
+ *  the view decides whether to show them, dim them or act on them. */
+export type TextLine = {
+  readonly at: number;
+  readonly len: number;
+  readonly ending: string;
+  readonly text: string;
+  readonly escapes: readonly number[];
+  readonly lossy: boolean;
+};
+
+export type TextWindow = {
+  readonly lines: readonly TextLine[];
+  readonly missing: readonly number[];
+  readonly next: number;
+};
+
+export type TextBack = {
+  readonly start: number;
+  readonly back: number;
+  readonly missing: readonly number[];
+};
+
 export type NeedleKind = "hex" | "text" | "regex";
 
 /** Everything a search needs to know, which is everything the bar holds. */
@@ -1144,6 +1179,37 @@ export class Doc {
         this.inflight.delete(chunk);
         this.notify();
       });
+  }
+
+  /** How the file reads as text. Pass "" to let the file decide. */
+  async textReading(encoding: string): Promise<TextReading> {
+    await this.ensureRange(0, Math.min(64, this.lengthBytes));
+    return JSON.parse(this.editor.text_reading(encoding)) as TextReading;
+  }
+
+  /**
+   * Lines starting at `from`, which must be where a line starts. A window
+   * needing chunks that are not here yet asks for them and tries again, twice
+   * at most: a read that keeps coming back short is a read to give up on
+   * rather than one to spin over.
+   */
+  async textWindow(encoding: string, from: number, want: number): Promise<TextWindow> {
+    for (let go = 0; go < 3; go++) {
+      const w = JSON.parse(this.editor.text_window(encoding, from, want)) as TextWindow;
+      if (w.missing.length === 0) return w;
+      await Promise.all(w.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+    }
+    return { lines: [], missing: [], next: from };
+  }
+
+  /** Where the line holding `at` starts, and `lines` line starts back from it. */
+  async textBack(encoding: string, at: number, lines: number): Promise<TextBack> {
+    for (let go = 0; go < 3; go++) {
+      const b = JSON.parse(this.editor.text_back(encoding, at, lines)) as TextBack;
+      if (b.missing.length === 0) return b;
+      await Promise.all(b.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+    }
+    return { start: at, back: at, missing: [] };
   }
 
   /** Resolve once every chunk covering [at, at+len) is loaded. */

@@ -6,11 +6,13 @@ import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingReport } from "./listingreport.js";
 import { ListPane } from "./listpane.js";
+import { TextView } from "./textview.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
 import { TypeTable } from "./typetable.js";
+import { TEXTVIEW } from "./strings.js";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -183,6 +185,8 @@ function build(tab: Tab): void {
   // The listing and the pane share a row: the pane takes its half only while
   // a list is open in it, so the listing has the whole width until then.
   const listRow = el("div", { className: "listrow" }, structure.el, listPane.el);
+  // The file as the text it is, for the files that were written to be read.
+  const text = new TextView(doc);
   const overview = new OverviewPanel(doc);
   const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
@@ -471,7 +475,8 @@ function build(tab: Tab): void {
   // listing carries its own bytes, so showing both would say it twice.
   const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
   const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
-  const views = el("div", { className: "tb-views" }, hexBtn, listBtn);
+  const textBtn = el("button", { type: "button", textContent: TEXTVIEW.viewButton, className: "tb-view" });
+  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn);
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
@@ -479,31 +484,45 @@ function build(tab: Tab): void {
   /** True while the listing is showing, which is also while the hex grid's
    *  editing state is not the user's to act on. */
   let listingShowing = false;
-  const setView = (which: "hex" | "listing"): void => {
+  const setView = (which: "hex" | "listing" | "text"): void => {
     const listingOn = which === "listing";
+    const textOn = which === "text";
     listingShowing = listingOn;
-    view.el.hidden = listingOn;
+    view.el.hidden = which !== "hex";
     structure.el.hidden = !listingOn;
     listRow.hidden = !listingOn;
-    for (const c of hexOnly) c.hidden = listingOn;
-    hexBtn.setAttribute("aria-pressed", String(!listingOn));
-    listBtn.setAttribute("aria-pressed", String(listingOn));
-    hexBtn.classList.toggle("is-on", !listingOn);
-    listBtn.classList.toggle("is-on", listingOn);
+    text.el.hidden = !textOn;
+    for (const c of hexOnly) c.hidden = which !== "hex";
+    for (const [btn, on] of [
+      [hexBtn, which === "hex"],
+      [listBtn, listingOn],
+      [textBtn, textOn],
+    ] as const) {
+      btn.setAttribute("aria-pressed", String(on));
+      btn.classList.toggle("is-on", on);
+    }
     localStorage.setItem("qubero.view", which);
-    // A hidden listing ignores the cursor, since scrolling something nobody is
+    // A hidden view ignores the cursor, since scrolling something nobody is
     // looking at only loses their place in it. So when it comes back it has
     // wherever the cursor was left to catch up on.
     if (listingOn) {
       structure.relayout();
       listPane.relayout();
       structure.setBit(view.cursorState.bitOffset);
+    } else if (textOn) {
+      void text.setByte(Math.floor(view.cursorState.bitOffset / 8));
     } else view.relayout();
-    (listingOn ? structure.el : view.el).focus();
+    (listingOn ? structure.el : textOn ? text.el : view.el).focus();
     refresh();
   };
   hexBtn.addEventListener("click", () => setView("hex"));
   listBtn.addEventListener("click", () => setView("listing"));
+  textBtn.addEventListener("click", () => setView("text"));
+  // Picking a character in the text is the same as putting the cursor on its
+  // first byte, which is what every other view is looking at.
+  text.onPick = (at) => {
+    view.setBitCursor(at * 8);
+  };
 
   const openBtn = el("button", { type: "button", textContent: "Open" });
   openBtn.addEventListener("click", () => pick());
@@ -561,6 +580,7 @@ function build(tab: Tab): void {
   };
   view.onCursorChange = (c) => {
     inspector.setOffset(c.bitOffset);
+    if (!text.el.hidden) void text.setByte(Math.floor(c.bitOffset / 8));
     if (!picking) {
       followCursor(c.bitOffset);
       // Moving the cursor by hand starts the next search from there rather
@@ -637,13 +657,14 @@ function build(tab: Tab): void {
       "main",
       { className: "workspace" },
       overview.el,
-      el("div", { className: "left" }, search.el, view.el, listRow, bottom),
+      el("div", { className: "left" }, search.el, view.el, text.el, listRow, bottom),
       right,
     ),
     statusbar,
     kind.dialog,
   );
-  setView(localStorage.getItem("qubero.view") === "listing" ? "listing" : "hex");
+  const saved = localStorage.getItem("qubero.view");
+  setView(saved === "listing" || saved === "text" ? saved : "hex");
   document.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     const key = e.key.toLowerCase();
