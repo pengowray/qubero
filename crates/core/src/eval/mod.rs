@@ -77,8 +77,8 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 ///
 /// The number is what the stack affords, less a third. Measured against a
 /// 1 MiB stack, which is what wasm is given and what a thread on Windows
-/// starts with: a debug build runs out at 195 components, a release build with
-/// this workspace's settings at about 1400. The debug build is the one that
+/// starts with: a debug build runs out at 195 components, a release build at
+/// about 1400, and the wasm build past 3000. The debug build is the one that
 /// binds, and shrinking what a frame holds is what would raise this.
 ///
 /// This is also the ceiling on `no_ring`'s `DEEPEST`, which it will now never
