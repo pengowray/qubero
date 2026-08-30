@@ -72,19 +72,23 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 
 /// How far down a node may be before reading it is refused, counted in path
 /// components. Components, not levels of the format: one level of CBOR is two
-/// of these, one level of bencode about six, so this is sixty-odd of the first
-/// and twenty of the second, which is past anything a file means by nesting.
+/// of these, one level of bencode about six, so this is thirty of the first
+/// and ten of the second: deeper than a file means anything by, and nowhere
+/// near what one can be made to say.
 ///
-/// The number is what the stack affords, less a third. Measured against a
-/// 1 MiB stack, which is what wasm is given and what a thread on Windows
-/// starts with: a debug build runs out at 195 components, a release build at
-/// about 1400, and the wasm build past 3000. The debug build is the one that
-/// binds, and shrinking what a frame holds is what would raise this.
+/// Measured rather than picked, against a 1 MiB stack, which is what wasm is
+/// given and what a thread on Windows starts with. A debug build is what
+/// binds, its frames being several times a release build's, and the shape
+/// that costs the most per component is a run that stops on what it reads,
+/// which is how bencode nests: that one runs out at 150 components, where a
+/// list of lists reaches 455 and the wasm build passes 3000. Half of the
+/// worst of those is the limit, which leaves room for a shape nobody has
+/// measured to be twice as dear as the worst one measured.
 ///
 /// This is also the ceiling on `no_ring`'s `DEEPEST`, which it will now never
 /// reach: following a pointer adds components too, so a chain of them stops
 /// here first. Real nesting stops at three.
-const DEEPEST_PATH: usize = 128;
+const DEEPEST_PATH: usize = 64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -262,6 +266,15 @@ struct Resolved {
     /// element `n - 1` for its value, so without this a track of ten thousand
     /// events is ten thousand deep rather than one.
     computed: Option<i128>,
+}
+
+/// Where a child sits before its type is unwrapped: what it is called, what
+/// the template says it is, and the stretch of the file it may read.
+struct Place {
+    name: Name,
+    ty: Ty,
+    offset: u64,
+    limit: u64,
 }
 
 pub struct Evaluator {
@@ -482,8 +495,23 @@ impl Evaluator {
     /// What the list at `path` has learned about itself. A node that is not
     /// a list, or one nothing has been learned about yet, has learned
     /// nothing, which is what the default says.
-    fn list(&self, path: &[usize]) -> ListState {
-        self.lists.get(path).cloned().unwrap_or_default()
+    ///
+    /// Lent rather than handed over. The walk asks this once an element, and
+    /// a list it has walked a million elements into holds a thousand
+    /// checkpoints: a copy an element is the crawl this type was split out of
+    /// `Resolved` to avoid.
+    fn list(&self, path: &[usize]) -> &ListState {
+        static NOTHING: ListState = ListState {
+            repeat_len: 0,
+            repeat_end: None,
+            repeat_done: false,
+            walk_at: None,
+            expected_count: None,
+            checkpoints: Vec::new(),
+            pointer_starts: None,
+            seq_end: 0,
+        };
+        self.lists.get(path).unwrap_or(&NOTHING)
     }
 
     fn list_mut(&mut self, path: &[usize]) -> &mut ListState {
@@ -710,11 +738,29 @@ impl Evaluator {
         }
         let (parent, idx) = (&path[..path.len() - 1], path[path.len() - 1]);
         self.resolve(doc, parent)?;
+        // Where the child goes is worked out in a call of its own, so that
+        // what it took to work out is off the stack before the child is read.
+        // Reading the child is what goes deeper, and a file that nests pays
+        // for every frame still open above it.
+        let Some(place) = self.place_child(doc, path, parent, idx)? else { return Ok(()) };
+        let r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit)?;
+        self.remember(path, r);
+        Ok(())
+    }
+
+    /// Where child `idx` of the node at `parent` goes: what it is called, what
+    /// the template says it is, and the stretch of the file it may read.
+    ///
+    /// `None` when the child has been settled here and there is nothing left
+    /// to read: a value inside JSON, whose place the parse already knows, or
+    /// an entry in a pointer list that points at nothing.
+    fn place_child<S: Source>(&mut self, doc: &Document<S>, path: &[usize], parent: &[usize], idx: usize) -> R<Option<Place>> {
         let pr = self.memo.get(parent).expect("parent resolved").clone();
         // A value inside JSON is placed where its text is, which the parse
         // already knows. Nothing below applies to it.
         if matches!(pr.ty, Ty::Json(_)) {
-            return self.resolve_json_child(doc, path);
+            self.resolve_json_child(doc, path)?;
+            return Ok(None);
         }
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
@@ -754,7 +800,7 @@ impl Evaluator {
                         computed: None,
                     };
                     self.remember(path, r);
-                    return Ok(());
+                    return Ok(None);
                 }
             }
         } else if let Ty::At { anchor, at, inner } = &pr.ty {
@@ -796,9 +842,7 @@ impl Evaluator {
                 limit = limit.min(*next);
             }
         }
-        let r = self.effective(doc, path, name, ty, offset, limit)?;
-        self.remember(path, r);
-        Ok(())
+        Ok(Some(Place { name, ty, offset, limit }))
     }
 
     /// Refuse an offset that points back at something already open above it.
