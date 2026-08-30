@@ -1941,6 +1941,37 @@ impl Editor {
         .unwrap_or_default()
     }
 
+    /// What a selected run of bytes says, read every way text can be read.
+    ///
+    /// Only a run of whole bytes lying together: a selection made over the bits
+    /// in binary mode is not characters, which is the same reason the panel's
+    /// byte-reversed rows only appear for whole bytes. `first` names the
+    /// encoding to put at the front, which is whatever the text view is
+    /// reading the file in.
+    pub fn selection_text(&self, at_byte: f64, len: f64, first: &str) -> String {
+        let want = (len as u64).min(SELECTION_TEXT_LIMIT) as usize;
+        let mut buf = vec![0u8; want];
+        let missing = self.doc.read_bytes(at_byte as u64, &mut buf);
+        if !missing.is_empty() {
+            return String::new();
+        }
+        let r = qubero_core::text::readings(&buf, named_encoding(first));
+        serde_json::to_string(&SelectionTextDto {
+            readings: r
+                .agreed
+                .iter()
+                .map(|(who, text)| ReadingDto {
+                    encodings: who.iter().map(|s| s.name().to_string()).collect(),
+                    text: text.clone(),
+                })
+                .collect(),
+            refused: r.refused.iter().map(|s| s.name().to_string()).collect(),
+            read: want as f64,
+            all: want as u64 >= len as u64,
+        })
+        .unwrap_or_default()
+    }
+
     /// The first `n` bytes, for questions that only the front of the file
     /// answers. A chunk that is not here yet reads as zeros, which settles the
     /// encoding as Latin-1 until it arrives.
@@ -1969,6 +2000,28 @@ pub fn text_encode(encoding: &str, settled: &str, text: &str) -> String {
         Err(c) => serde_json::to_string(&TextEncodeDto { bytes: Vec::new(), refused: c.to_string() }),
     }
     .unwrap_or_default()
+}
+
+/// How much of a selection is read as text. Long enough to hold a paragraph,
+/// which is what someone selecting a stretch to read is after; past it the
+/// rows say how much they are showing.
+const SELECTION_TEXT_LIMIT: u64 = 4096;
+
+#[derive(Serialize)]
+struct SelectionTextDto {
+    readings: Vec<ReadingDto>,
+    /// Encodings the bytes do not fit, named rather than shown.
+    refused: Vec<String>,
+    /// Bytes actually read, which is short of the selection when it is long.
+    read: f64,
+    all: bool,
+}
+
+#[derive(Serialize)]
+struct ReadingDto {
+    /// The encodings that agree on this reading, the likeliest first.
+    encodings: Vec<String>,
+    text: String,
 }
 
 #[derive(Serialize)]

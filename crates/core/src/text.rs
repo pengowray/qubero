@@ -237,9 +237,94 @@ pub fn unit_bytes(settled: Settled, byte: u8) -> Vec<u8> {
     }
 }
 
+/// Every way a run of bytes reads as text.
+///
+/// A hex editor's reader picks out some bytes and wants to know what they say.
+/// Answering with six rows, one per encoding, is answering with noise: most
+/// runs are printable ASCII, and every encoding here agrees on that range, so
+/// five of the six rows would be the same sentence. So the readings that agree
+/// are gathered together and the encodings that agree on one are named beside
+/// it, which is a fact worth having on its own: bytes that read the same
+/// whatever you assume are bytes nobody can misread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Readings {
+    /// One entry per distinct reading, with the encodings giving it. In the
+    /// order the encodings are tried, so the first entry is the first
+    /// encoding that produced it.
+    pub agreed: Vec<(Vec<Settled>, String)>,
+    /// Encodings the bytes do not fit: a high byte where ASCII has none, half
+    /// a code unit at the end of a UTF-16 run, a byte sequence UTF-8 does not
+    /// allow. Named rather than shown, since what they produce is a row of
+    /// replacement characters that says nothing.
+    pub refused: Vec<Settled>,
+}
+
+/// The encodings a run of bytes is offered as, in the order they are tried.
+/// The same six the text view offers, so a reading found here can be turned on
+/// there.
+pub const OFFERED: [Settled; 6] = [
+    Settled::Utf8,
+    Settled::Ascii,
+    Settled::Latin1,
+    Settled::Cp437,
+    Settled::Utf16(Endian::Little),
+    Settled::Utf16(Endian::Big),
+];
+
+/// Read `bytes` every offered way, gathering the encodings that agree.
+///
+/// `first` puts one encoding at the front of the order, which is what the
+/// reader is most likely reading the file in. It changes which encoding gets
+/// named first on a shared row and nothing else.
+pub fn readings(bytes: &[u8], first: Option<Settled>) -> Readings {
+    let mut order: Vec<Settled> = first.into_iter().collect();
+    order.extend(OFFERED.iter().copied().filter(|s| Some(*s) != first));
+    let mut agreed: Vec<(Vec<Settled>, String)> = Vec::new();
+    let mut refused = Vec::new();
+    for enc in order {
+        let (text, lossy) = decode_settled(enc, bytes);
+        if lossy {
+            refused.push(enc);
+            continue;
+        }
+        match agreed.iter_mut().find(|(_, t)| *t == text) {
+            Some((who, _)) => who.push(enc),
+            None => agreed.push((vec![enc], text)),
+        }
+    }
+    Readings { agreed, refused }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printable_bytes_read_the_same_whatever_you_assume() {
+        let r = readings(b"hello", None);
+        assert_eq!(r.agreed.len(), 1, "one reading, four encodings agreeing on it");
+        let (who, text) = &r.agreed[0];
+        assert_eq!(text, "hello");
+        assert_eq!(who, &[Settled::Utf8, Settled::Ascii, Settled::Latin1, Settled::Cp437]);
+        // Five bytes is not a whole number of UTF-16 code units.
+        assert_eq!(r.refused, vec![Settled::Utf16(Endian::Little), Settled::Utf16(Endian::Big)]);
+    }
+
+    #[test]
+    fn a_high_byte_is_where_the_encodings_part() {
+        let r = readings(&[0xb0, 0xb1], None);
+        let texts: Vec<&str> = r.agreed.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(texts.contains(&"\u{b0}\u{b1}"), "Latin-1 reads them as its own characters");
+        assert!(texts.contains(&"\u{2591}\u{2592}"), "CP437 reads them as shading");
+        assert!(r.refused.contains(&Settled::Ascii), "ASCII has no room for either");
+        assert!(r.refused.contains(&Settled::Utf8), "and they are not valid UTF-8");
+    }
+
+    #[test]
+    fn the_encoding_asked_for_first_is_named_first() {
+        let r = readings(b"hi", Some(Settled::Cp437));
+        assert_eq!(r.agreed[0].0[0], Settled::Cp437);
+    }
 
     #[test]
     fn bytes_read_as_c_writes_them() {

@@ -61,6 +61,11 @@ export class Inspector {
   private readonly selTable: HTMLElement;
   private readonly selLength: HTMLElement;
   private readonly selStatus: HTMLElement;
+  /** The selection read as text, every way it can be. */
+  private readonly selText: HTMLElement;
+  /** What the text view is reading the file in, so the likeliest reading of a
+   *  selection is the one at the top. Empty when it settled for itself. */
+  textEncoding = "";
   private readonly selRows = new Map<SelKind, SelRow>();
   /** Which reading of the selection is open for typing into. Only one is, so
    *  the rest go on showing what the file says while it is being changed. */
@@ -264,7 +269,9 @@ export class Inspector {
     this.selStatus = document.createElement("div");
     this.selStatus.className = "insp-selstatus";
     this.selStatus.setAttribute("role", "status");
-    this.selectionEl.append(subhead(SEL_TITLE), this.selWhere, this.selTable, this.selStatus);
+    this.selText = document.createElement("div");
+    this.selText.className = "insp-seltext";
+    this.selectionEl.append(subhead(SEL_TITLE), this.selWhere, this.selTable, this.selText, this.selStatus);
 
     // The address sits above every tab: the field reading and the two raw
     // readings all start at the same place, and that place is the first thing
@@ -483,6 +490,59 @@ export class Inspector {
       if (open && document.activeElement !== row.input) row.input.value = value;
       if (!open) row.input.classList.remove("invalid");
     }
+    this.renderSelectionText(ranges, bits, whole);
+  }
+
+  /**
+   * The selection read as text. Only for a run of whole bytes lying together:
+   * a selection made over the bits is not characters, which is the same reason
+   * the byte-reversed number rows only appear for whole bytes.
+   *
+   * One row per distinct reading rather than one per encoding. Most runs are
+   * printable and every encoding here agrees on that range, so six rows would
+   * be the same sentence five times over; the encodings that agree are named
+   * beside the reading instead, which is a fact of its own.
+   */
+  private renderSelectionText(ranges: readonly BitRange[], bits: number, whole: boolean): void {
+    const one = ranges[0];
+    if (!whole || one === undefined || bits === 0) {
+      this.selText.hidden = true;
+      this.selText.replaceChildren();
+      return;
+    }
+    const got = this.doc.selectionText(one.startBit / 8, bits / 8, this.textEncoding);
+    if (got === null || (got.readings.length === 0 && got.refused.length === 0)) {
+      this.selText.hidden = true;
+      return;
+    }
+    const parts: Node[] = [subhead(SEL_TEXT_TITLE)];
+    for (const r of got.readings) {
+      const row = document.createElement("div");
+      row.className = "insp-reading";
+      const who = document.createElement("span");
+      who.className = "insp-reading-enc";
+      who.textContent = r.encodings.join(" · ");
+      const text = document.createElement("span");
+      text.className = "insp-reading-text";
+      text.textContent = r.text;
+      text.title = r.text;
+      row.append(who, text);
+      parts.push(row);
+    }
+    if (got.refused.length > 0) {
+      const miss = document.createElement("div");
+      miss.className = "insp-reading-miss";
+      miss.textContent = SEL_TEXT_REFUSED(got.refused);
+      parts.push(miss);
+    }
+    if (!got.all) {
+      const cut = document.createElement("div");
+      cut.className = "insp-reading-miss";
+      cut.textContent = SEL_TEXT_PARTIAL(got.read);
+      parts.push(cut);
+    }
+    this.selText.replaceChildren(...parts);
+    this.selText.hidden = false;
   }
 
   render(): void {
@@ -1101,6 +1161,11 @@ const SELECTION_LIMIT_BYTES = 1024;
 const SELECTION_LIMIT_BITS = SELECTION_LIMIT_BYTES * 8;
 
 const SEL_TITLE = "Selection";
+const SEL_TEXT_TITLE = "As text";
+/** Encodings the bytes do not fit. Named rather than shown: what they produce
+ *  is a row of replacement characters that says nothing. */
+const SEL_TEXT_REFUSED = (who: readonly string[]): string => `Not ${who.join(", ")}`;
+const SEL_TEXT_PARTIAL = (n: number): string => `First ${n.toLocaleString()} bytes`;
 const SEL_LENGTH = "Length";
 const LOADING = "Loading…";
 const COPY = "Copy";

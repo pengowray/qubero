@@ -275,6 +275,8 @@ export const TEXTVIEW = {
    *  file", which would claim the file said, and only a byte-order mark does. */
   encodingAuto: "Auto-detect",
   encodingLabel: "Encoding",
+  /** The clipboard would not take it. */
+  copyFailed: "Couldn't copy to the clipboard.",
   /** What the file was read as, beside the chooser. */
   readAs: (encoding: string, guessed: boolean): string => (guessed ? `${encoding}, guessed` : encoding),
 } as const;

@@ -33,6 +33,9 @@ const MAX_CANVAS = 20_000_000;
 /** Characters drawn on one line before the rest is left off. The core cuts a
  *  line at 4 KiB; this is what fits across a screen with room to spare. */
 const MAX_CHARS = 2000;
+/** How much of a selection one copy carries. A selection can be the whole
+ *  file, and the clipboard is not where a gigabyte belongs. */
+const COPY_LIMIT = 1 << 20;
 
 /** Line endings named the way the core names them. */
 const ENDINGS = new Set(["LF", "CRLF", "CR", "no ending", "cut"]);
@@ -58,6 +61,9 @@ export class TextView {
   private usualEnding = "";
   private drawing = false;
   private pending = false;
+  /** True while a movement key is extending a selection rather than moving
+   *  away from one. */
+  private extending = false;
 
   /** Called when the reader picks a character, with the byte it starts at. */
   onPick: (at: number) => void = () => {};
@@ -67,6 +73,19 @@ export class TextView {
   onEdit: () => void = () => {};
   /** Called when the encoding has no room for a character that was typed. */
   onRefuse: (char: string, encoding: string) => void = () => {};
+  /** Called with something to tell the reader, which the toolbar shows. */
+  onMessage: (text: string) => void = () => {};
+  /** Called when the reader selects a stretch, in bytes. An empty stretch
+   *  clears the selection, so one callback covers both. */
+  onSelect: (startByte: number, endByte: number, caretByte: number) => void = () => {};
+
+  /** The selected bytes, as the rest of the app has them. Held rather than
+   *  owned: the hex view is where a selection lives, and this renders what it
+   *  says and writes back through it, so the two can never drift apart. */
+  private selection: { start: number; end: number } | null = null;
+  /** Where a keyboard or pointer selection is being extended from. */
+  private anchor: number | null = null;
+  private dragging = false;
 
   constructor(private doc: Doc) {
     this.gutter = el("div", { className: "tv-gutter" });
@@ -79,7 +98,11 @@ export class TextView {
 
     this.scroll.addEventListener("scroll", () => this.onScroll());
     this.scroll.addEventListener("keydown", (e) => this.onKey(e));
-    this.rows.addEventListener("click", (e) => this.onClick(e));
+    this.rows.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+    this.rows.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    window.addEventListener("pointerup", () => {
+      this.dragging = false;
+    });
     new ResizeObserver(() => void this.draw()).observe(this.scroll);
   }
 
@@ -109,6 +132,13 @@ export class TextView {
       this.syncScrollbar();
     }
     await this.draw();
+  }
+
+  /** Show the selection the rest of the app is holding. */
+  setSelection(startByte: number | null, endByte: number): void {
+    this.selection = startByte === null || endByte <= startByte ? null : { start: startByte, end: endByte };
+    if (this.selection === null) this.anchor = null;
+    this.render();
   }
 
   relayout(): void {
@@ -177,7 +207,21 @@ export class TextView {
       e.preventDefault();
       void f();
     };
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        void this.copySelection();
+      }
+      return;
+    }
+    if (e.altKey) return;
+    // Shift with a movement key extends a selection from wherever the caret
+    // was when the first of them was pressed. Anything else drops it, which is
+    // what every other text view does.
+    const extending = e.shiftKey && SELECTING.has(e.key);
+    if (extending && this.anchor === null) this.anchor = this.cursor;
+    else if (!extending && !e.shiftKey) this.anchor = null;
+    this.extending = extending;
     switch (e.key) {
       case "ArrowRight":
         return move(() => this.moveChar(1));
@@ -262,11 +306,19 @@ export class TextView {
   private async place(at: number): Promise<void> {
     const clamped = Math.max(0, Math.min(at, this.doc.lengthBytes));
     this.cursor = clamped;
-    this.onPick(clamped);
+    // While a selection is being extended the cursor moves with it, so it is
+    // the selection that carries the caret. Announcing the caret on its own as
+    // well would clear the selection, which is what putting the cursor
+    // somewhere means everywhere else.
+    if (this.extending) this.extendTo(clamped);
+    else {
+      if (this.selection !== null) this.selection = null;
+      this.onPick(clamped);
+    }
     await this.draw();
   }
 
-  /** Type text in at the caret. */
+  /** Type text in at the caret, over whatever is selected. */
   private async insert(text: string): Promise<void> {
     const got = this.doc.encodeText(this.chosen, this.reading.encoding, text);
     if (got.refused !== "") {
@@ -274,19 +326,32 @@ export class TextView {
       return;
     }
     const bytes = Uint8Array.from(got.bytes);
-    this.doc.replaceAt(this.cursor, 0, bytes);
-    await this.after(this.cursor + bytes.length);
+    // What was selected goes and what was typed takes its place, in one write
+    // and so in one undo step. The selection is replaced byte for byte, since
+    // it may have been made over the bytes elsewhere and half a character is
+    // still the bytes somebody picked.
+    const sel = this.selRange();
+    const at = sel === null ? this.cursor : sel.start;
+    this.write(() => this.doc.replaceAt(at, sel === null ? 0 : sel.end - sel.start, bytes));
+    if (sel !== null) {
+      this.selection = null;
+      this.anchor = null;
+      this.onSelect(at, at, at);
+    }
+    await this.after(at + bytes.length);
   }
 
   /** Take out the character before the caret, or the one after it. */
   private async erase(dir: 1 | -1): Promise<void> {
+    const gone = this.removeSelection();
+    if (gone !== null) return this.after(gone);
     const here = this.caretLine();
     if (here === null) return;
     const cells = this.charsOf(here.line);
     if (dir === -1) {
       const prev = [...cells].reverse().find((c) => c.at < this.cursor);
       if (prev !== undefined) {
-        this.doc.replaceAt(prev.at, prev.width, new Uint8Array());
+        this.write(() => this.doc.replaceAt(prev.at, prev.width, new Uint8Array()));
         return this.after(prev.at);
       }
       // At the front of a line, what is behind the caret is the line ending
@@ -295,17 +360,17 @@ export class TextView {
       const b = await this.doc.textBack(this.chosen, here.line.at - 1, 0);
       const above = this.lines.find((l) => l.at === b.start);
       const end = above === undefined ? here.line.at - 1 : this.textEnd(above);
-      this.doc.replaceAt(end, here.line.at - end, new Uint8Array());
+      this.write(() => this.doc.replaceAt(end, here.line.at - end, new Uint8Array()));
       return this.after(end);
     }
     const next = cells.find((c) => c.at === this.cursor);
     if (next !== undefined) {
-      this.doc.replaceAt(next.at, next.width, new Uint8Array());
+      this.write(() => this.doc.replaceAt(next.at, next.width, new Uint8Array()));
       return this.after(next.at);
     }
     // At the end of a line, what is in front of the caret is its ending.
-    const gone = here.line.at + here.line.len - this.cursor;
-    if (gone > 0) this.doc.replaceAt(this.cursor, gone, new Uint8Array());
+    const ending = here.line.at + here.line.len - this.cursor;
+    if (ending > 0) this.write(() => this.doc.replaceAt(this.cursor, ending, new Uint8Array()));
     return this.after(this.cursor);
   }
 
@@ -332,11 +397,57 @@ export class TextView {
     await this.draw();
   }
 
-  private onClick(e: MouseEvent): void {
+  /** The byte a pointer is over, or null when it is not over a character. */
+  private byteUnder(e: PointerEvent): number | null {
     const target = (e.target as HTMLElement).closest<HTMLElement>("[data-at]");
-    if (target === null) return;
+    if (target === null) return null;
     const at = Number(target.dataset.at);
-    if (Number.isFinite(at)) this.onPick(at);
+    if (!Number.isFinite(at)) return null;
+    // Past the middle of a character the caret belongs after it, which is what
+    // makes selecting the last character of a run possible.
+    const box = target.getBoundingClientRect();
+    const after = e.clientX > box.left + box.width / 2;
+    const width = this.widthAt(at);
+    return after ? at + width : at;
+  }
+
+  /** How many bytes the character starting at a byte takes. */
+  private widthAt(at: number): number {
+    for (const line of this.lines) {
+      const cell = this.charsOf(line).find((c) => c.at === at);
+      if (cell !== undefined) return cell.width;
+    }
+    return 1;
+  }
+
+  private onPointerDown(e: PointerEvent): void {
+    const at = this.byteUnder(e);
+    if (at === null) return;
+    e.preventDefault();
+    this.scroll.focus();
+    if (e.shiftKey) {
+      this.anchor ??= this.cursor;
+      this.cursor = at;
+      this.extendTo(at);
+      this.render();
+      return;
+    }
+    this.dragging = true;
+    this.anchor = at;
+    this.cursor = at;
+    this.selection = null;
+    this.onSelect(at, at, at);
+    this.onPick(at);
+    this.render();
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (!this.dragging) return;
+    const at = this.byteUnder(e);
+    if (at === null) return;
+    this.cursor = at;
+    this.extendTo(at);
+    this.render();
   }
 
   /** Draw what fits, reading only that. */
@@ -396,34 +507,35 @@ export class TextView {
     if (line.lossy) row.classList.add("is-lossy");
     const cells = this.charsOf(line);
     const escapes = escapeMask(cells.length, line.escapes);
-    let run: HTMLElement | null = null;
-    let runKind = "";
+    const sel = this.selection;
     const shown = Math.min(cells.length, MAX_CHARS);
-    // The caret sits between bytes, so it is drawn before the character it is
-    // in front of rather than on one. A caret at the end of a line has no
-    // character to sit before, which is what the last check is for.
-    const caretHere = (at: number): boolean => this.cursor === at;
+    // One span per character rather than one per run of them. A selection and
+    // a caret both land between characters, and finding which one a pointer is
+    // over is what the spans are for.
     for (let i = 0; i < shown; i++) {
       const cell = cells[i];
       if (cell === undefined) continue;
       const { char: c, at, width } = cell;
-      const kind = escapes[i] === true ? "tv-esc" : control(c) !== null ? "tv-ctl" : "";
-      const onCursor = this.cursor >= at && this.cursor < at + width;
-      if (caretHere(at)) row.append(el("span", { className: "tv-caret" }));
-      if (run === null || runKind !== kind || onCursor) {
-        run = el("span", { className: kind === "" ? "tv-text" : `tv-text ${kind}` });
-        run.dataset.at = String(at);
-        runKind = kind;
-        row.append(run);
-      }
-      if (onCursor) run.classList.add("is-cursor");
-      run.append(control(c) ?? c);
-      if (onCursor) {
-        run = null;
-        runKind = "";
-      }
+      if (this.cursor === at) row.append(el("span", { className: "tv-caret" }));
+      const span = el("span", { className: "tv-text" });
+      span.dataset.at = String(at);
+      if (escapes[i] === true) span.classList.add("tv-esc");
+      else if (control(c) !== null) span.classList.add("tv-ctl");
+      // The cursor may sit inside a character rather than on its front, which
+      // is what a selection made over the bytes elsewhere can do.
+      if (this.cursor >= at && this.cursor < at + width) span.classList.add("is-cursor");
+      if (sel !== null && at < sel.end && at + width > sel.start) span.classList.add("is-sel");
+      span.append(control(c) ?? c);
+      row.append(span);
     }
-    if (caretHere(this.textEnd(line))) row.append(el("span", { className: "tv-caret" }));
+    const end = this.textEnd(line);
+    if (this.cursor === end) row.append(el("span", { className: "tv-caret" }));
+    // A line ending inside the selection is shown as a selected space at the
+    // end of the line, so a selection across lines does not look like it stops
+    // at each of them.
+    if (sel !== null && end < sel.end && line.at + line.len > sel.start && line.ending !== "no ending" && line.ending !== "cut") {
+      row.append(el("span", { className: "tv-text is-sel tv-eol", textContent: " " }));
+    }
     if (cells.length > shown) row.append(el("span", { className: "tv-more", textContent: TEXTVIEW.lineClipped }));
     if (line.ending === "cut") row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineCut }));
     else if (ENDINGS.has(line.ending) && line.ending !== this.usualEnding && this.usualEnding !== "") {
@@ -432,7 +544,66 @@ export class TextView {
     if (line.lossy) row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineLossy(this.reading.encoding) }));
     return row;
   }
+
+  /** The selection as bytes, or null. */
+  private selRange(): { start: number; end: number } | null {
+    return this.selection;
+  }
+
+  /** Put the selection where a move left it, and tell the rest of the app. */
+  private extendTo(at: number): void {
+    if (this.anchor === null) return;
+    const start = Math.min(this.anchor, at);
+    const end = Math.max(this.anchor, at);
+    this.selection = end > start ? { start, end } : null;
+    this.onSelect(start, end, at);
+  }
+
+  /** One change to the file, however many writes it takes.
+   *
+   *  A replacement that changes length is a delete and an insert underneath,
+   *  so without this a keystroke over a selection would take two presses of
+   *  undo to put back and the file would sit in a state nobody typed. */
+  private write(f: () => void): void {
+    this.doc.beginBatch();
+    try {
+      f();
+    } finally {
+      this.doc.endBatch();
+    }
+  }
+
+  /** Take out whatever is selected, leaving the caret where it was. */
+  private removeSelection(): number | null {
+    const sel = this.selRange();
+    if (sel === null) return null;
+    this.write(() => this.doc.replaceAt(sel.start, sel.end - sel.start, new Uint8Array()));
+    this.selection = null;
+    this.anchor = null;
+    this.onSelect(sel.start, sel.start, sel.start);
+    return sel.start;
+  }
+
+  /** The selected text, for the clipboard. Read from the document rather than
+   *  from the screen, so a selection reaching past what is drawn copies whole
+   *  rather than copying what happens to be visible. */
+  private async copySelection(): Promise<void> {
+    const sel = this.selRange();
+    if (sel === null) return;
+    const len = Math.min(sel.end - sel.start, COPY_LIMIT);
+    const got = this.doc.selectionText(sel.start, len, this.chosen === "" ? this.reading.encoding : this.chosen);
+    const text = got?.readings[0]?.text;
+    if (text === undefined) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      this.onMessage(TEXTVIEW.copyFailed);
+    }
+  }
 }
+
+/** Movement keys that extend a selection when Shift is down. */
+const SELECTING = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
 
 /** The characters a line ending is made of, so Enter writes what the rest of
  *  the file writes. A file that has not settled on one gets a line feed, which
