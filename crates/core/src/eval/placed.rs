@@ -85,6 +85,37 @@ const BUDGET: usize = 2_000_000;
 /// it names was indexed a while ago.
 const SAME_ANSWER: usize = 64;
 
+/// The stretches of the file that fields placed away from where they were
+/// declared, and how far the walk that finds them has got.
+///
+/// One thing rather than five loose fields, so that throwing it away cannot
+/// throw away four fifths of it: `forget` puts back every part of it at once,
+/// and `done` can never be left saying the walk finished over a frontier that
+/// was cleared under it.
+#[derive(Default)]
+pub(super) struct Index {
+    /// What has been found, sorted by where it starts.
+    pub(super) stretches: Vec<Placement>,
+    /// The stretches already in it, so the same one reached from a hundred
+    /// thousand places is walked into once.
+    pub(super) ranges: rustc_hash::FxHashSet<(u64, u64)>,
+    /// Whether it is everything there is, or as far as the walk got.
+    pub(super) done: bool,
+    /// The walk's own stack, so it can stop after a bounded number of nodes
+    /// and carry on from where it was when the next question comes.
+    pub(super) frontier: Vec<Frame>,
+    /// How many nodes that walk has opened, over all its goes.
+    pub(super) opened: usize,
+}
+
+impl Index {
+    /// Start again from nothing. Called when what the index was built from has
+    /// been dropped, which is any change to the document or the template.
+    pub(super) fn forget(&mut self) {
+        *self = Index::default();
+    }
+}
+
 impl Evaluator {
     /// The narrowest placed stretch covering `bit`, and the field that placed
     /// it. Narrowest because placements nest: a link's name sits inside the
@@ -92,7 +123,8 @@ impl Evaluator {
     pub(super) fn placement_at<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Option<Vec<usize>>> {
         self.index_placements(doc)?;
         Ok(self
-            .placements
+            .placed
+            .stretches
             .iter()
             .filter(|p| p.start <= bit && bit < p.end)
             .min_by_key(|p| p.end - p.start)
@@ -103,35 +135,35 @@ impl Evaluator {
     /// stretch nothing covers runs.
     pub(super) fn placement_after<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Option<u64>> {
         self.index_placements(doc)?;
-        Ok(self.placements.iter().map(|p| p.start).filter(|&s| s > bit).min())
+        Ok(self.placed.stretches.iter().map(|p| p.start).filter(|&s| s > bit).min())
     }
 
     /// Carry the walk on for one go.
     fn index_placements<S: Source>(&mut self, doc: &Document<S>) -> R<()> {
-        if self.placements_done {
+        if self.placed.done {
             return Ok(());
         }
-        if self.frontier.is_empty() && self.placed_opened == 0 {
+        if self.placed.frontier.is_empty() && self.placed.opened == 0 {
             match self.frame(doc, Vec::new())? {
-                Some(frame) => self.frontier.push(frame),
+                Some(frame) => self.placed.frontier.push(frame),
                 None => {
-                    self.placements_done = true;
+                    self.placed.done = true;
                     return Ok(());
                 }
             }
         }
-        let stop = self.placed_opened + STEP;
-        while self.placed_opened < stop {
-            if self.placed_opened >= BUDGET {
-                self.placements_done = true;
+        let stop = self.placed.opened + STEP;
+        while self.placed.opened < stop {
+            if self.placed.opened >= BUDGET {
+                self.placed.done = true;
                 break;
             }
-            let Some(top) = self.frontier.last_mut() else {
-                self.placements_done = true;
+            let Some(top) = self.placed.frontier.last_mut() else {
+                self.placed.done = true;
                 break;
             };
             if top.next >= top.count || top.stale >= SAME_ANSWER {
-                self.frontier.pop();
+                self.placed.frontier.pop();
                 continue;
             }
             let i = top.next;
@@ -141,25 +173,25 @@ impl Evaluator {
             if top.fields.as_ref().is_some_and(|keep| !keep.contains(&(i as usize))) {
                 continue;
             }
-            let mut child = self.frontier[self.frontier.len() - 1].path.clone();
+            let mut child = self.placed.frontier[self.placed.frontier.len() - 1].path.clone();
             child.push(i as usize);
-            self.placed_opened += 1;
-            let before = self.placements.len();
+            self.placed.opened += 1;
+            let before = self.placed.stretches.len();
             // Charged against this go's allowance like any other element, so
             // a caller drawing frames gets `Busy` and its screen back rather
             // than a walk that holds the thread. The stack below is what makes
             // coming back cheap.
             let charge = self.spend(0).and_then(|()| self.open(doc, child));
             match charge {
-                Ok(Some(frame)) => self.frontier.push(frame),
+                Ok(Some(frame)) => self.placed.frontier.push(frame),
                 Ok(None) => {}
                 Err(e) if e.interrupted() => {
                     // Not read yet, or this go is over. Put the child back, so
                     // the next go opens it rather than stepping over it.
-                    if let Some(f) = self.frontier.iter_mut().rev().find(|f| f.path.len() == depth) {
+                    if let Some(f) = self.placed.frontier.iter_mut().rev().find(|f| f.path.len() == depth) {
                         f.next -= 1;
                     }
-                    self.placements.sort_by_key(|p| (p.start, p.end));
+                    self.placed.stretches.sort_by_key(|p| (p.start, p.end));
                     return Err(e);
                 }
                 // A branch that will not parse says nothing about the rest of
@@ -167,13 +199,13 @@ impl Evaluator {
                 Err(_) => {}
             }
             if listy {
-                let grew = self.placements.len() > before;
-                if let Some(f) = self.frontier.iter_mut().rev().find(|f| f.path.len() == depth) {
+                let grew = self.placed.stretches.len() > before;
+                if let Some(f) = self.placed.frontier.iter_mut().rev().find(|f| f.path.len() == depth) {
                     f.stale = if grew { 0 } else { f.stale + 1 };
                 }
             }
         }
-        self.placements.sort_by_key(|p| (p.start, p.end));
+        self.placed.stretches.sort_by_key(|p| (p.start, p.end));
         Ok(())
     }
 
@@ -193,10 +225,10 @@ impl Evaluator {
         if size == 0 {
             return Ok(None);
         }
-        if !self.placed_ranges.insert((start, start + size)) {
+        if !self.placed.ranges.insert((start, start + size)) {
             return Ok(None);
         }
-        self.placements.push(Placement { start, end: start + size, path });
+        self.placed.stretches.push(Placement { start, end: start + size, path });
         self.frame(doc, inner)
     }
 

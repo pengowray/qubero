@@ -301,19 +301,9 @@ pub struct Evaluator {
     /// thing here that does not outlive the answer being asked for.
     go: go::Go,
     /// Every stretch of the file a field placed somewhere other than where it
-    /// was declared, so a bit outside what the root covers can still be named.
-    /// See [`placed`].
-    placements: Vec<placed::Placement>,
-    /// The stretches already in that index, so the same one reached from a
-    /// hundred thousand places is walked into once.
-    placed_ranges: rustc_hash::FxHashSet<(u64, u64)>,
-    /// Whether that index is everything there is, or as far as the walk got.
-    placements_done: bool,
-    /// The walk's own stack, so it can stop after a bounded number of nodes
-    /// and carry on from where it was when the next question comes.
-    frontier: Vec<placed::Frame>,
-    /// How many nodes that walk has opened, over all its goes.
-    placed_opened: usize,
+    /// was declared, so a bit outside what the root covers can still be named,
+    /// and how far the walk that finds them has got. See [`placed`].
+    placed: placed::Index,
 }
 
 impl Evaluator {
@@ -325,11 +315,7 @@ impl Evaluator {
             json: FxHashMap::default(),
             journals: Vec::new(),
             go: go::Go::default(),
-            placements: Vec::new(),
-            placed_ranges: rustc_hash::FxHashSet::default(),
-            placements_done: false,
-            frontier: Vec::new(),
-            placed_opened: 0,
+            placed: placed::Index::default(),
         }
     }
 
@@ -441,11 +427,7 @@ impl Evaluator {
         // Every placement is where a resolved node turned out to be, and this
         // is about to drop some of those nodes. Coarse, like the memo's own
         // invalidation, and cheap to build again.
-        self.placements.clear();
-        self.placed_ranges.clear();
-        self.placements_done = false;
-        self.frontier.clear();
-        self.placed_opened = 0;
+        self.placed.forget();
         // A node with no size worked out yet is dropped: nothing says where it
         // ends, so nothing says it ended before the edit.
         self.memo.retain(|_, r| r.size.is_some_and(|size| r.offset + size <= bit));
@@ -479,11 +461,7 @@ impl Evaluator {
     /// not an overwrite, and whenever the template changes.
     pub fn invalidate(&mut self) {
         self.memo.clear();
-        self.placements.clear();
-        self.placed_ranges.clear();
-        self.placements_done = false;
-        self.frontier.clear();
-        self.placed_opened = 0;
+        self.placed.forget();
         self.lists.clear();
         self.json.clear();
         self.journals.clear();
