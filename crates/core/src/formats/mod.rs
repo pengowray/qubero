@@ -411,130 +411,127 @@ pub const SNIFF_WINDOW: usize = 0x9000;
 /// weighs them, so the tests get first refusal. `{"` is a JSON file and it is
 /// also the size and checksum an LHA archive could open with, and only one of
 /// the two knows enough to say so.
-pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
-    if is_braw(head) {
-        Some("braw")
-    } else if head.get(4..6) == Some(&[0xe0, 0xa5]) {
-        Some("aseprite")
-    } else if head.starts_with(b"Extended Module: ") {
-        Some("xm")
-    } else if head.starts_with(b"IMPM") {
-        Some("it")
-    } else if is_s3m(head) {
-        Some("s3m")
-    } else if is_mod(head) {
-        Some("mod")
-    } else if is_mca(head, len) {
-        Some("mca")
-    } else if is_macbinary(head, len) {
-        Some("macbinary")
-    } else if is_binhex(head) {
-        Some("binhex")
-    } else if is_stuffit(head) {
-        Some("stuffit")
-    } else if is_compactpro(head, len) {
-        Some("compactpro")
-    } else if is_bards_tale(head, len) {
-        Some("bardstale")
-    } else if is_whisper(head) {
-        Some("whisper")
-    } else if is_safetensors(head) {
-        Some("safetensors")
-    } else if is_hackrf_firmware(head) {
-        Some("hackrffw")
-    } else if gdbm::is_gdbm(head) {
-        Some("gdbm")
-    } else if bdb::is_bdb(head) {
-        Some("bdb")
-    } else if let Some(raw) = camera_raw_format(head) {
-        Some(raw)
-    } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
-        Some("mp4")
-    } else if is_mkv(head) {
-        Some("mkv")
-    } else if is_iso9660(head) {
-        Some("iso9660")
-    } else if is_dv(head, len) {
-        Some("dv")
-    } else if let Some(name) = elf_format(head) {
-        Some(name)
-    } else if is_universal(head, len) {
-        Some("macho")
-    } else if is_self(head) {
-        Some("self")
-    } else if is_pak(head, len) {
-        Some("pak")
-    } else if is_ne(head) {
-        Some("ne")
-    } else if is_le(head) {
-        Some("le")
-    } else if is_pe(head) {
-        Some("pe")
-    } else if is_coff(head, len) {
-        Some("coff")
-    } else if is_omf(head) {
-        Some("omf")
-    } else if is_dos(head, len) {
-        Some("msdos")
-    } else if is_zarr_zip(head) {
-        Some("zarrzip")
-    } else if is_lha(head) {
-        Some("lha")
-    } else if is_lnk(head) {
-        Some("lnk")
-    } else if is_bmp(head) {
-        Some("bmp")
-    } else if is_pnm(head) {
-        Some("pnm")
-    } else if is_pcx(head) {
-        Some("pcx")
-    } else if is_ico(head, len) {
-        Some("ico")
-    } else if is_unity_assets(head, len) {
-        Some("unityassets")
-    } else if is_thumbs_db(head) {
-        Some("thumbsdb")
-    } else if is_deb(head) {
-        Some("deb")
-    } else if let Some(model) = assimp_format(head, len) {
-        Some(model)
-    } else if let Some((_, name)) = MAGIC.iter().find(|(magic, _)| head.starts_with(magic)) {
-        Some(name)
-    } else if head.starts_with(b"FORM") && head.len() >= 12 {
-        // The Amiga container, whose form type says which format it holds.
-        match &head[8..12] {
+/// One question asked of a file, and what it answers.
+enum Probe {
+    /// A test written for one format, which answers yes or no.
+    Is(&'static str, fn(&[u8], u64) -> bool),
+    /// A test that says which of several formats it found, because telling
+    /// those apart is the same piece of work as recognising any of them: a
+    /// camera raw file and the ELF of a particular machine are each one test
+    /// with several answers.
+    Which(fn(&[u8], u64) -> Option<&'static str>),
+    /// The table of leading signatures, asked at the point it reaches in the
+    /// order below rather than first or last.
+    Signatures,
+}
+
+/// The questions, in the order they are asked, which is the whole of what this
+/// list says. Order is the meaning here, so it is written down as order rather
+/// than left implicit in the shape of a chain of `else`.
+///
+/// Three bands, and a format belongs to the band that matches how strong its
+/// evidence is:
+///
+/// 1. tests that weigh several things about a file. A prefix of two or three
+///    bytes is weaker evidence than a test that looks at a header and checks
+///    it against the file's length, so these get first refusal. `{"` is a JSON
+///    file and it is also the size and checksum an LHA archive could open
+///    with, and only one of the two knows enough to say so.
+/// 2. the signatures, for the formats that announce themselves and are done.
+/// 3. tests that recognise a file by the shape of everything in it rather than
+///    by its front. A file with no header of its own gets to be identified
+///    only after everything that does have one has spoken.
+const PROBES: &[Probe] = &[
+    Probe::Is("braw", |h, _| is_braw(h)),
+    Probe::Is("aseprite", |h, _| h.get(4..6) == Some(&[0xe0, 0xa5])),
+    Probe::Is("xm", |h, _| h.starts_with(b"Extended Module: ")),
+    Probe::Is("it", |h, _| h.starts_with(b"IMPM")),
+    Probe::Is("s3m", |h, _| is_s3m(h)),
+    Probe::Is("mod", |h, _| is_mod(h)),
+    Probe::Is("mca", is_mca),
+    Probe::Is("macbinary", is_macbinary),
+    Probe::Is("binhex", |h, _| is_binhex(h)),
+    Probe::Is("stuffit", |h, _| is_stuffit(h)),
+    Probe::Is("compactpro", is_compactpro),
+    Probe::Is("bardstale", is_bards_tale),
+    Probe::Is("whisper", |h, _| is_whisper(h)),
+    Probe::Is("safetensors", |h, _| is_safetensors(h)),
+    Probe::Is("hackrffw", |h, _| is_hackrf_firmware(h)),
+    Probe::Is("gdbm", |h, _| gdbm::is_gdbm(h)),
+    Probe::Is("bdb", |h, _| bdb::is_bdb(h)),
+    Probe::Which(|h, _| camera_raw_format(h)),
+    Probe::Is("mp4", |h, _| h.len() >= 8 && &h[4..8] == b"ftyp"),
+    Probe::Is("mkv", |h, _| is_mkv(h)),
+    Probe::Is("iso9660", |h, _| is_iso9660(h)),
+    Probe::Is("dv", is_dv),
+    Probe::Which(|h, _| elf_format(h)),
+    Probe::Is("macho", is_universal),
+    Probe::Is("self", |h, _| is_self(h)),
+    Probe::Is("pak", is_pak),
+    Probe::Is("ne", |h, _| is_ne(h)),
+    Probe::Is("le", |h, _| is_le(h)),
+    Probe::Is("pe", |h, _| is_pe(h)),
+    Probe::Is("coff", is_coff),
+    Probe::Is("omf", |h, _| is_omf(h)),
+    Probe::Is("msdos", is_dos),
+    Probe::Is("zarrzip", |h, _| is_zarr_zip(h)),
+    Probe::Is("lha", |h, _| is_lha(h)),
+    Probe::Is("lnk", |h, _| is_lnk(h)),
+    Probe::Is("bmp", |h, _| is_bmp(h)),
+    Probe::Is("pnm", |h, _| is_pnm(h)),
+    Probe::Is("pcx", |h, _| is_pcx(h)),
+    Probe::Is("ico", is_ico),
+    Probe::Is("unityassets", is_unity_assets),
+    Probe::Is("thumbsdb", |h, _| is_thumbs_db(h)),
+    Probe::Is("deb", |h, _| is_deb(h)),
+    Probe::Which(assimp_format),
+    Probe::Signatures,
+    // The Amiga container, whose form type says which format it holds.
+    Probe::Which(|h, _| match h.len() >= 12 && h.starts_with(b"FORM") {
+        false => None,
+        true => match &h[8..12] {
             b"AIFF" | b"AIFC" => Some("aiff"),
             b"ILBM" | b"PBM " => Some("ilbm"),
             _ => None,
+        },
+    }),
+    // A record of who logged in, which has no header at all: it is recognised
+    // by every record in it being the right size and shape.
+    Probe::Is("utmp", utmp::is_utmp),
+    // The same, and for the same reason: a stream of space packets is
+    // recognised by one packet's length landing on the next one's header,
+    // which is evidence about the whole file rather than about its front.
+    Probe::Is("spp", spp::is_spp),
+    Probe::Is("cdr", |h, _| h.starts_with(b"RIFF") && h.len() >= 12 && h[8..11] == *b"CDR"),
+    Probe::Is("cmx", |h, _| h.starts_with(b"RIFF") && h.get(8..12) == Some(b"CMX1")),
+    // A sound file, and the one variant of it that is marked by a tag inside
+    // the first chunk rather than by anything in the first twelve bytes.
+    Probe::Which(|h, _| {
+        let riff = h.starts_with(b"RIFF") || h.starts_with(b"RF64") || h.starts_with(b"RIFX");
+        if !riff || h.len() < 12 || &h[8..12] != b"WAVE" {
+            return None;
         }
-    } else if utmp::is_utmp(head, len) {
-        // Last of the careful tests, and last for a reason: a file with no
-        // header of its own is recognised by the shape of what is in it, so
-        // anything that says what it is gets to say so first.
-        Some("utmp")
-    } else if spp::is_spp(head, len) {
-        // The same, and for the same reason: a stream of space packets is
-        // recognised by one packet's length landing on the next one's header,
-        // which is evidence about the whole file rather than about its front.
-        Some("spp")
-    } else if head.starts_with(b"RIFF") && head.len() >= 12 && head[8..11] == *b"CDR" {
-        Some("cdr")
-    } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"CMX1") {
-        Some("cmx")
-    } else if (head.starts_with(b"RIFF") || head.starts_with(b"RF64") || head.starts_with(b"RIFX"))
-        && head.len() >= 12
-        && &head[8..12] == b"WAVE"
-    {
-        // The only thing that marks a W4V is the format tag inside `fmt `, so
-        // this needs a few more bytes than a magic number would.
-        if head.len() >= 22 && &head[12..16] == b"fmt " && &head[20..22] == b"AW" {
-            Some("w4v")
-        } else {
-            Some("wav")
+        match h.len() >= 22 && &h[12..16] == b"fmt " && &h[20..22] == b"AW" {
+            true => Some("w4v"),
+            false => Some("wav"),
         }
-    } else {
-        None
-    }
+    }),
+];
+
+/// Pick a built-in template from the first bytes of a file. `len` is the
+/// length of the whole file, which a format whose header is a table of
+/// offsets needs in order to weigh what the table points at: the head alone
+/// cannot say whether the offsets reach past the end.
+///
+/// The order the questions are asked in is [`PROBES`], which says why.
+pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
+    PROBES.iter().find_map(|probe| match probe {
+        Probe::Is(name, test) => test(head, len).then_some(*name),
+        Probe::Which(test) => test(head, len),
+        Probe::Signatures => {
+            MAGIC.iter().find(|(magic, _)| head.starts_with(magic)).map(|(_, name)| *name)
+        }
+    })
 }
 
 /// A SELF file: a SQLite database whose application id is the four letters
