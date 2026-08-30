@@ -27,8 +27,12 @@ fn every_sample_still_reads() {
     let mut files = Vec::new();
     collect(&root, &mut files);
     assert!(!files.is_empty(), "no files under {}", root.display());
-    let mut read_count = 0;
+    let (mut read_count, mut refused_count) = (0, 0);
     for path in files {
+        // A file under a folder of this name is kept because Qubero refuses
+        // it: nested deeper than anything can read, or ending in the middle
+        // of itself. One of those that reads is the failure worth catching.
+        let meant_to_fail = path.components().any(|c| c.as_os_str() == "does-not-read");
         let bytes = std::fs::read(&path).unwrap();
         let head = &bytes[..bytes.len().min(0x9000)];
         // A `.COM` file has no header to say what it is, so the extension is
@@ -37,6 +41,7 @@ fn every_sample_still_reads() {
             true => "com",
             false => match formats::sniff(head, bytes.len() as u64) {
                 Some(name) => name,
+                None if meant_to_fail => panic!("no template matches {}, so nothing tested it", path.display()),
                 None => panic!("nothing reads {}", path.display()),
             },
         };
@@ -44,23 +49,34 @@ fn every_sample_still_reads() {
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);
         eprintln!("--- {} as {name}", path.display());
-        read(&mut ev, &doc, &[], 0);
+        let out = read(&mut ev, &doc, &[], 0);
+        if meant_to_fail {
+            assert!(out.is_err(), "{} as {name} reads, but files in does-not-read should not read", path.display());
+            refused_count += 1;
+            continue;
+        }
+        if let Err(why) = out {
+            panic!("{why}");
+        }
         read_count += 1;
     }
-    eprintln!("{read_count} samples read");
+    eprintln!("{read_count} samples read, {refused_count} refused as they should be");
 }
 
 /// Resolve a node and enough of what is under it to prove the file reads. A
 /// long list is read at both ends rather than throughout: what breaks is the
 /// first element or the last, and reading a million rows would make this test
 /// something nobody runs.
-fn read(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: usize) {
+///
+/// The first node that does not read is the answer, said rather than thrown,
+/// since a file kept to be refused is one this is supposed to find.
+fn read(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: usize) -> Result<(), String> {
     if depth > 4 {
-        return;
+        return Ok(());
     }
     let node = match ev.node(doc, path) {
         Ok(n) => n,
-        Err(e) => panic!("{path:?} does not read: {e:?}"),
+        Err(e) => return Err(format!("{path:?} does not read: {e:?}")),
     };
     let count = node.child_count as usize;
     let ends: Vec<usize> = if count > 8 {
@@ -71,8 +87,9 @@ fn read(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: us
     for i in ends {
         let mut child = path.to_vec();
         child.push(i);
-        read(ev, doc, &child, depth + 1);
+        read(ev, doc, &child, depth + 1)?;
     }
+    Ok(())
 }
 
 fn samples() -> Option<PathBuf> {
