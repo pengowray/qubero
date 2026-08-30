@@ -5,6 +5,7 @@
 
 use qubero_core::eval::{Explain, Origin};
 use qubero_core::hexdump;
+use qubero_core::textview;
 use qubero_core::source::Source;
 use qubero_core::{diescript, dosbasic};
 use qubero_core::search::{self, Needle, Search, Step};
@@ -1884,6 +1885,119 @@ impl Editor {
     pub fn piece_count(&self) -> u32 {
         self.doc.piece_count() as u32
     }
+
+    /// How the file reads as text: the encoding, whether that was a guess, and
+    /// how many bytes of byte-order mark sit in front of the first line.
+    /// `encoding` names one to use instead, or is empty to let the file decide.
+    pub fn text_reading(&self, encoding: &str) -> String {
+        let head = self.head(64);
+        let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
+        serde_json::to_string(&TextReadingDto {
+            encoding: r.settled.name().to_string(),
+            mark: r.mark as u32,
+            guessed: r.guessed,
+            unit: r.settled.unit() as u32,
+        })
+        .unwrap_or_default()
+    }
+
+    /// Lines starting at `from`, which must be where a line starts.
+    pub fn text_window(&self, encoding: &str, from: f64, want: u32) -> String {
+        let head = self.head(64);
+        let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
+        let w = textview::window(&self.doc, r, from as u64, want as usize);
+        serde_json::to_string(&TextWindowDto {
+            next: w.next as f64,
+            missing: w.missing.iter().map(|m| m.chunk as f64).collect(),
+            lines: w
+                .lines
+                .iter()
+                .map(|l| TextLineDto {
+                    at: l.at as f64,
+                    len: l.len as f64,
+                    ending: l.ending.name().to_string(),
+                    text: l.text.clone(),
+                    escapes: l.escapes.iter().flat_map(|(a, n)| [*a, *n]).collect(),
+                    lossy: l.lossy,
+                })
+                .collect(),
+        })
+        .unwrap_or_default()
+    }
+
+    /// Where the line holding `at` starts, and where `lines` line starts back
+    /// from there is. Both in one call, because scrolling text upwards wants
+    /// the second and clicking in it wants the first.
+    pub fn text_back(&self, encoding: &str, at: f64, lines: u32) -> String {
+        let head = self.head(64);
+        let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
+        let (start, missing) = textview::line_start(&self.doc, r, at as u64);
+        let (back, more) = textview::back(&self.doc, r, at as u64, lines as usize);
+        serde_json::to_string(&TextBackDto {
+            start: start as f64,
+            back: back as f64,
+            missing: missing.iter().chain(more.iter()).map(|m| m.chunk as f64).collect(),
+        })
+        .unwrap_or_default()
+    }
+
+    /// The first `n` bytes, for questions that only the front of the file
+    /// answers. A chunk that is not here yet reads as zeros, which settles the
+    /// encoding as Latin-1 until it arrives.
+    fn head(&self, n: u64) -> Vec<u8> {
+        let n = n.min(self.doc.len_bytes());
+        let mut out = vec![0u8; n as usize];
+        self.doc.read_bytes(0, &mut out);
+        out
+    }
+}
+
+/// An encoding named across the boundary, or nothing to let the file decide.
+fn named_encoding(name: &str) -> Option<qubero_core::text::Settled> {
+    use qubero_core::text::Settled;
+    use qubero_core::Endian;
+    Some(match name {
+        "UTF-8" => Settled::Utf8,
+        "ASCII" => Settled::Ascii,
+        "Latin-1" => Settled::Latin1,
+        "CP437" => Settled::Cp437,
+        "UTF-16 LE" => Settled::Utf16(Endian::Little),
+        "UTF-16 BE" => Settled::Utf16(Endian::Big),
+        _ => return None,
+    })
+}
+
+#[derive(Serialize)]
+struct TextReadingDto {
+    encoding: String,
+    mark: u32,
+    guessed: bool,
+    unit: u32,
+}
+
+#[derive(Serialize)]
+struct TextWindowDto {
+    lines: Vec<TextLineDto>,
+    missing: Vec<f64>,
+    next: f64,
+}
+
+#[derive(Serialize)]
+struct TextLineDto {
+    at: f64,
+    len: f64,
+    ending: String,
+    text: String,
+    /// Escape sequences as flat pairs of character index and length.
+    escapes: Vec<u32>,
+    lossy: bool,
+}
+
+#[derive(Serialize)]
+struct TextBackDto {
+    start: f64,
+    back: f64,
+    missing: Vec<f64>,
 }
 
 /// What a text file turned out to be a dump of, if anything.

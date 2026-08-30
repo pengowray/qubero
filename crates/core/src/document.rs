@@ -178,6 +178,24 @@ impl<S: Source> Document<S> {
     }
 }
 
+/// A document is a source of bytes like any other, and reading it this way
+/// reads what it says now rather than what the file on disk says. That is the
+/// difference that matters to anything reading over the top of it: the text
+/// view showing a line, or a template placed on the bytes an edit produced.
+///
+/// A document whose length is not a whole number of bytes reads its last byte
+/// with the bits it does not have set to zero, which is what `read_bytes`
+/// already does at the end of the file.
+impl<S: Source> Source for Document<S> {
+    fn len_bytes(&self) -> u64 {
+        Document::len_bytes(self)
+    }
+
+    fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
+        Document::read_bytes(self, offset, out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
