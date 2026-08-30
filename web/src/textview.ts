@@ -602,6 +602,11 @@ export class TextView {
   }
 }
 
+/** A string with its control characters shown as their pictures. */
+export function withPictures(text: string): string {
+  return [...text].map((c) => control(c) ?? c).join("");
+}
+
 /** Movement keys that extend a selection when Shift is down. */
 const SELECTING = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
 
@@ -624,8 +629,10 @@ function escapeMask(len: number, flat: readonly number[]): boolean[] {
 }
 
 /** The picture Unicode gives a control character, so a stray byte is visible
- *  rather than moving the text around. */
-function control(c: string): string | null {
+ *  rather than moving the text around. Shared with the inspector's readings of
+ *  a selection: a selected line feed shown as a line feed is a row that looks
+ *  empty. */
+export function control(c: string): string | null {
   const code = c.codePointAt(0) ?? 0;
   if (code < 0x20) return String.fromCodePoint(0x2400 + code);
   if (code === 0x7f) return "\u{2421}";

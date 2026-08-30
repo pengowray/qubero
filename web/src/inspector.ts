@@ -10,6 +10,7 @@ import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { bitSizeText, childWord, countText } from "./strings.js";
+import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
 import { extraction } from "./bitextract.js";
@@ -490,7 +491,11 @@ export class Inspector {
       if (open && document.activeElement !== row.input) row.input.value = value;
       if (!open) row.input.classList.remove("invalid");
     }
-    this.renderSelectionText(ranges, bits, whole);
+    // Whole bytes lying together, which is what characters are made of. Not
+    // the `whole` above: that also wants more than one byte, because reversing
+    // the bytes of a single one says nothing. One byte is a character.
+    const readable = ranges.length === 1 && one !== undefined && one.startBit % 8 === 0 && bits % 8 === 0 && bits >= 8;
+    this.renderSelectionText(ranges, bits, readable);
   }
 
   /**
@@ -503,9 +508,9 @@ export class Inspector {
    * be the same sentence five times over; the encodings that agree are named
    * beside the reading instead, which is a fact of its own.
    */
-  private renderSelectionText(ranges: readonly BitRange[], bits: number, whole: boolean): void {
+  private renderSelectionText(ranges: readonly BitRange[], bits: number, readable: boolean): void {
     const one = ranges[0];
-    if (!whole || one === undefined || bits === 0) {
+    if (!readable || one === undefined || bits === 0) {
       this.selText.hidden = true;
       this.selText.replaceChildren();
       return;
@@ -524,7 +529,10 @@ export class Inspector {
       who.textContent = r.encodings.join(" · ");
       const text = document.createElement("span");
       text.className = "insp-reading-text";
-      text.textContent = r.text;
+      // Control characters as their pictures, the way the text view shows
+      // them: a selected line feed drawn as a line feed is a row that looks
+      // empty, and empty is what "these bytes say nothing" would look like.
+      text.textContent = withPictures(r.text);
       text.title = r.text;
       row.append(who, text);
       parts.push(row);
@@ -1163,8 +1171,15 @@ const SELECTION_LIMIT_BITS = SELECTION_LIMIT_BYTES * 8;
 const SEL_TITLE = "Selection";
 const SEL_TEXT_TITLE = "As text";
 /** Encodings the bytes do not fit. Named rather than shown: what they produce
- *  is a row of replacement characters that says nothing. */
-const SEL_TEXT_REFUSED = (who: readonly string[]): string => `Not ${who.join(", ")}`;
+ *  is a row of replacement characters that says nothing.
+ *
+ *  Joined with "or" rather than a comma, since "Not A, B" leaves the second
+ *  one ambiguously negated at a skim and both of them are excluded. */
+const SEL_TEXT_REFUSED = (who: readonly string[]): string => {
+  if (who.length <= 1) return `Not ${who[0] ?? ""}`;
+  if (who.length === 2) return `Not ${who[0]} or ${who[1]}`;
+  return `Not ${who.slice(0, -1).join(", ")}, or ${who[who.length - 1]}`;
+};
 const SEL_TEXT_PARTIAL = (n: number): string => `First ${n.toLocaleString()} bytes`;
 const SEL_LENGTH = "Length";
 const LOADING = "Loading…";
