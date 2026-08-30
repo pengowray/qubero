@@ -192,6 +192,10 @@ const PROBES: &[Probe] = &[
     // recognised by one packet's length landing on the next one's header,
     // which is evidence about the whole file rather than about its front.
     Probe::Is("spp", spp::is_spp),
+    // A torrent, and any other bencoded file: a dictionary of byte strings
+    // whose parse covers the whole file. Nothing marks the front of one, so
+    // what recognises it is reading all of it.
+    Probe::Is("bencode", bencode::is_bencode),
     Probe::Is("cdr", |h, _| h.starts_with(b"RIFF") && h.len() >= 12 && h[8..11] == *b"CDR"),
     Probe::Is("cmx", |h, _| h.starts_with(b"RIFF") && h.get(8..12) == Some(b"CMX1")),
     // A sound file, and the one variant of it that is marked by a tag inside
