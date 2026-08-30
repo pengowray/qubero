@@ -70,6 +70,22 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
 }
 
+/// How far down a node may be before reading it is refused, counted in path
+/// components. Components, not levels of the format: one level of CBOR is two
+/// of these, one level of bencode about six, so this is sixty-odd of the first
+/// and twenty of the second, which is past anything a file means by nesting.
+///
+/// The number is what the stack affords, less a third. Measured against a
+/// 1 MiB stack, which is what wasm is given and what a thread on Windows
+/// starts with: a debug build runs out at 195 components, a release build with
+/// this workspace's settings at about 1400. The debug build is the one that
+/// binds, and shrinking what a frame holds is what would raise this.
+///
+/// This is also the ceiling on `no_ring`'s `DEEPEST`, which it will now never
+/// reach: following a pointer adds components too, so a chain of them stops
+/// here first. Real nesting stops at three.
+const DEEPEST_PATH: usize = 128;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     UInt(u128),
@@ -675,6 +691,15 @@ impl Evaluator {
     fn resolve<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<()> {
         if self.memo.contains_key(path) {
             return Ok(());
+        }
+        // Placing a node opens the line of ancestors above it, one call deep
+        // for each, and measuring a list opens its elements the same way. So
+        // the length of the path is how deep the stack goes, and a format that
+        // can hold itself has no length it stops at: bencode nested 908 deep
+        // is a real file someone has written down. Past this the answer is an
+        // error rather than the stack running out under it.
+        if path.len() > DEEPEST_PATH {
+            return fail(format!("nested more than {DEEPEST_PATH} fields deep"));
         }
         if path.is_empty() {
             let limit = doc.len_bits();

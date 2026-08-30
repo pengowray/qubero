@@ -1699,3 +1699,32 @@ fn a_field_with_no_room_left_is_not_read_at_all() {
     assert_eq!(ev.node(&d, &[1, 1]).unwrap().size_bits, 0);
     assert_eq!(ev.node(&d, &[1, 2]).unwrap().size_bits, 0);
 }
+
+#[test]
+fn nesting_past_the_limit_is_an_error_rather_than_a_crash() {
+    // A CBOR array holding an array holding an array, three hundred times over.
+    // Every one of them is well formed, and the file is 301 bytes: nothing
+    // about it is large except how far down its last value is.
+    let t = crate::formats::builtin("cbor").expect("cbor is built in");
+    let mut bytes = vec![0x81; 300];
+    bytes.push(0x01);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t.clone());
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[]) else {
+        panic!("a file nested past the limit should say so");
+    };
+    assert!(msg.contains("nested more than"), "{msg}");
+
+    // Nesting a file does reach is read to the bottom: twenty arrays, and the
+    // number they hold is the number that was put there.
+    let mut bytes = vec![0x81; 20];
+    bytes.push(0x07);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let mut path = Vec::new();
+    for _ in 0..20 {
+        path.extend_from_slice(&[3, 0]);
+    }
+    path.push(0);
+    assert_eq!(ev.node(&d, &path).unwrap().value, Value::Enum { raw: 7, name: None, hex: true });
+}
