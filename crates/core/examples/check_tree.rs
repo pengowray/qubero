@@ -30,7 +30,9 @@ fn run() {
     let (mut read, mut failed) = (0, 0);
     let (mut kept, mut refused) = (0, 0);
     for path in files {
-        let meant_to_fail = path.components().any(|c| c.as_os_str() == REFUSED);
+        // The folder's own notes are notes, not a sample kept to be refused.
+        let notes = path.extension().is_some_and(|e| e == "md");
+        let meant_to_fail = !notes && path.components().any(|c| c.as_os_str() == REFUSED);
         let Ok(bytes) = std::fs::read(&path) else { continue };
         if meant_to_fail {
             kept += 1;
