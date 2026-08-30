@@ -14,8 +14,8 @@
 //! columns are placed from the same fields the reader settled.
 
 use super::layout::{Base, Layout, Order};
-use super::printable;
-use crate::text::Settled;
+
+
 
 /// Write `bytes` as a dump, with the first of them at `address`.
 ///
@@ -101,9 +101,9 @@ fn line(out: &mut String, layout: &Layout, chunk: &[u8], at: u64) {
         out.push(c);
     }
     for b in chunk {
-        out.push(match printable(t.encoding, *b) {
+        out.push(match t.glyphs.of(*b) {
             Some(c) => c,
-            None => stand_in(t.encoding, *b, &t.placeholders),
+            None => stand_in(*b, &t.placeholders),
         });
     }
     if let Some(c) = t.close {
@@ -114,7 +114,7 @@ fn line(out: &mut String, layout: &Layout, chunk: &[u8], at: u64) {
 /// What to write for a byte with no character of its own. A tool that uses two
 /// stand-ins uses the first for a zero, which is the only such rule seen here;
 /// a tool with one uses it for everything.
-fn stand_in(_enc: Settled, b: u8, placeholders: &[char]) -> char {
+fn stand_in(b: u8, placeholders: &[char]) -> char {
     match placeholders {
         [] => '.',
         [one] => *one,

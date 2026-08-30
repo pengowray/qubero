@@ -19,6 +19,11 @@ use qubero_core::hexdump::{self, Note};
 /// between them are in neither.
 const PARTIAL: &str = "session-bash-prompt.txt";
 
+/// XTree Gold's hex view is a screen rather than a stream. Nineteen lines fit,
+/// so a capture of it covers the first 0x130 bytes and stops, and the file goes
+/// on for another 158.
+const SCREEN: usize = 0x130;
+
 #[test]
 fn every_dump_reads_back_as_the_bytes_it_describes() {
     let Some(dir) = folder() else {
@@ -46,6 +51,12 @@ fn every_dump_reads_back_as_the_bytes_it_describes() {
             assert!(
                 dump.notes.contains(&Note::Named("source-bytes.bin".into())),
                 "{name}: the transcript names the file on the command line"
+            );
+        } else if name.starts_with("xtreegold") {
+            assert_eq!(dump.byte_count(), SCREEN as u64, "{name}: a screen holds nineteen lines and no more");
+            assert!(
+                dump.notes.contains(&Note::Named("C:\\SAMPLE.BIN".into())),
+                "{name}: the header across the top names the file, and only the file"
             );
         } else {
             assert_eq!(dump.byte_count(), want.len() as u64, "{name}: did not cover the whole file");

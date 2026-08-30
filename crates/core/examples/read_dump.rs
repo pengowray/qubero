@@ -23,7 +23,7 @@ fn main() {
     println!("  line       : {} bytes in groups of {}, {}", l.bytes_per_line, l.group, if l.upper { "upper case" } else { "lower case" });
     println!("  order      : {:?}", l.order);
     match &l.text {
-        Some(t) => println!("  characters : {}, standing in with {:?}{}", t.encoding.name(), t.placeholders, t.open.map_or(String::new(), |c| format!(", wrapped in {c:?}"))),
+        Some(t) => println!("  characters : {}, standing in with {:?}{}", t.glyphs.name(), t.placeholders, t.open.map_or(String::new(), |c| format!(", wrapped in {c:?}"))),
         None => println!("  characters : none"),
     }
     if !l.assumed.is_empty() {

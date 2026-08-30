@@ -40,12 +40,14 @@
 //! nothing of the sort, since the line holding an address is arithmetic on the
 //! line length; that is the upgrade when a dump arrives too big to hold.
 
+pub mod glyphs;
 pub mod layout;
 pub mod lines;
 pub mod write;
 
 use crate::gather::Extent;
-use crate::text::{cp437_char, Settled};
+use crate::text::Settled;
+use glyphs::Glyphs;
 use layout::{Assumed, Layout, Order};
 use lines::Line;
 
@@ -182,11 +184,23 @@ impl Dump {
 ///
 /// `base` is where `bytes` starts in the file, which is zero for a whole file
 /// and something else for a dump found inside one.
+/// A dump captured off a DOS screen may arrive either as the bytes it was
+/// drawn in or as the Unicode something translated them to, and the file does
+/// not say which. So both are read and the one whose two columns agree better
+/// is kept. A dump that is plainly UTF-8, or carries a byte-order mark, reads
+/// the same either way and costs a second pass over a small file.
 pub fn read(bytes: &[u8], base: u64) -> Option<Dump> {
     let bytes = &bytes[..bytes.len().min(LIMIT)];
     let (settled, mark) = lines::reading(bytes);
-    let text = lines::split(settled, mark, bytes, base);
-    read_lines(&text)
+    let first = read_lines(&lines::split(settled, mark, bytes, base));
+    if settled == Settled::Cp437 || mark > 0 {
+        return first;
+    }
+    let other = read_lines(&lines::split(Settled::Cp437, 0, bytes, base));
+    match (first, other) {
+        (Some(a), Some(b)) => Some(if b.conflicts().len() < a.conflicts().len() { b } else { a }),
+        (a, b) => a.or(b),
+    }
 }
 
 /// Read a dump out of lines that have already been decoded.
@@ -364,63 +378,56 @@ fn column<'a>(layout: &Layout, row: &'a Row) -> Option<&'a str> {
     })
 }
 
-/// How many bytes the character column contradicts, under one encoding and one
-/// group order, and what it wrote for the bytes it would not print.
-fn disagreement(layout: &Layout, rows: &[Row], enc: Settled) -> (usize, Vec<char>) {
-    let mut wrote_for_unprintable: Vec<char> = Vec::new();
+/// How many bytes the character column contradicts, under one set of glyphs
+/// and one group order, and what it wrote for the bytes it had none for.
+fn disagreement(layout: &Layout, rows: &[Row], glyphs: Glyphs) -> (usize, Vec<char>) {
+    let mut stand_ins: Vec<char> = Vec::new();
     let mut pairs: Vec<(u8, char)> = Vec::new();
     for r in rows {
         let Some(col) = column(layout, r) else { continue };
         for (b, c) in r.bytes.iter().zip(col.chars()) {
-            match printable(enc, *b) {
+            match glyphs.of(*b) {
                 None => {
-                    if !wrote_for_unprintable.contains(&c) {
-                        wrote_for_unprintable.push(c);
+                    if !stand_ins.contains(&c) {
+                        stand_ins.push(c);
                     }
                 }
                 Some(_) => pairs.push((*b, c)),
             }
         }
     }
-    // A tool with more than a handful of stand-ins is not using stand-ins; it
-    // is being read in the wrong encoding.
-    if wrote_for_unprintable.len() > 4 {
+    // A column with more than a handful of stand-ins is not using stand-ins;
+    // it is being read the wrong way.
+    if stand_ins.len() > 4 {
         return (usize::MAX, Vec::new());
     }
-    let bad = pairs
-        .iter()
-        .filter(|(b, c)| printable(enc, *b) != Some(*c) && !wrote_for_unprintable.contains(c))
-        .count();
-    wrote_for_unprintable.sort_unstable();
-    (bad, wrote_for_unprintable)
+    let bad = pairs.iter().filter(|(b, c)| glyphs.of(*b) != Some(*c) && !stand_ins.contains(c)).count();
+    stand_ins.sort_unstable();
+    (bad, stand_ins)
 }
 
-/// Which encoding the character column is in, decided by which one it
-/// contradicts least.
+/// How the character column turned bytes into characters, decided by which way
+/// of doing it the column contradicts least.
 fn settle_text(layout: &mut Layout, rows: &[Row]) {
     if layout.text.is_none() {
         return;
     }
-    let mut best: Option<(usize, Settled, Vec<char>)> = None;
-    for enc in [Settled::Ascii, Settled::Latin1, Settled::Cp437] {
-        let (bad, holes) = disagreement(layout, rows, enc);
+    let mut best: Option<(usize, Glyphs, Vec<char>)> = None;
+    for g in Glyphs::EVERY {
+        let (bad, holes) = disagreement(layout, rows, g);
         if best.as_ref().is_none_or(|(n, _, _)| bad < *n) {
-            best = Some((bad, enc, holes));
+            best = Some((bad, g, holes));
         }
     }
-    let Some((bad, enc, holes)) = best else { return };
-    // Every encoding agrees on the printable ASCII range, so a column holding
-    // nothing else does not choose between them.
-    let decided = [Settled::Ascii, Settled::Latin1, Settled::Cp437]
-        .iter()
-        .filter(|e| disagreement(layout, rows, **e).0 == bad)
-        .count()
-        == 1;
+    let Some((bad, glyphs, holes)) = best else { return };
+    // They all agree on the printable ASCII range, so a column holding nothing
+    // else does not choose between them.
+    let decided = Glyphs::EVERY.iter().filter(|g| disagreement(layout, rows, **g).0 == bad).count() == 1;
     if !decided {
         layout.assumed.push(Assumed::TextEncoding);
     }
     if let Some(t) = layout.text.as_mut() {
-        t.encoding = enc;
+        t.glyphs = glyphs;
         if !holes.is_empty() {
             t.placeholders = holes;
         }
@@ -440,12 +447,12 @@ fn settle_order(layout: &mut Layout, rows: &mut [Row]) {
         }
         return;
     }
-    let forward = disagreement(layout, rows, Settled::Ascii).0;
+    let forward = disagreement(layout, rows, Glyphs::Printable(Settled::Ascii)).0;
     let mut flipped = rows.to_vec();
     for r in &mut flipped {
         reverse_groups(&mut r.bytes, &mut r.digits_at, layout.group);
     }
-    let backward = disagreement(layout, &flipped, Settled::Ascii).0;
+    let backward = disagreement(layout, &flipped, Glyphs::Printable(Settled::Ascii)).0;
     if backward < forward {
         layout.order = Order::ReversedInGroup;
         rows.clone_from_slice(&flipped);
@@ -463,7 +470,7 @@ fn agree(layout: &Layout, rows: &mut [Row]) {
             .bytes
             .iter()
             .zip(col.chars())
-            .map(|(b, c)| match printable(t.encoding, *b) {
+            .map(|(b, c)| match t.glyphs.of(*b) {
                 _ if t.placeholders.contains(&c) => Agreement::Unverifiable,
                 Some(want) if want == c => Agreement::Confirmed,
                 Some(_) | None => Agreement::Conflict { wrote: c, digits: *b },
@@ -482,8 +489,14 @@ fn notes(text: &[Line], skipped: &[u64], end: u64) -> Vec<Note> {
     let mut out = Vec::new();
     for line in text.iter().filter(|l| skipped.binary_search(&l.at).is_ok()) {
         let t = line.text.trim();
-        if let Some(rest) = t.strip_prefix("Label:") {
-            let name = rest.trim();
+        // `Format-Hex` writes "Label:" above its dump and XTree writes "File:"
+        // across the top of the screen. Both name what is being looked at.
+        if let Some(rest) = t.strip_prefix("Label:").or_else(|| t.strip_prefix("File:")) {
+            // XTree writes the mode across the same line, far to the right, so
+            // the name stops where the run of spaces after it begins. A path
+            // with a space in it survives; two spaces in a row are a column
+            // gap rather than part of a name.
+            let name = rest.trim().split("  ").next().unwrap_or("").trim();
             if !name.is_empty() {
                 out.push(Note::Named(name.to_string()));
             }
@@ -538,13 +551,4 @@ fn command(line: &str) -> Option<&str> {
     TOOLS.contains(&name).then_some(body)
 }
 
-/// The character a tool would write for a byte, or nothing when it would write
-/// its placeholder instead.
-pub fn printable(enc: Settled, b: u8) -> Option<char> {
-    match enc {
-        Settled::Latin1 => ((0x20..=0x7e).contains(&b) || b >= 0xa0).then(|| b as char),
-        Settled::Cp437 => (b >= 0x20 && b != 0x7f).then(|| cp437_char(b)),
-        _ => (0x20..=0x7e).contains(&b).then(|| b as char),
-    }
-}
 

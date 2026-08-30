@@ -20,6 +20,7 @@
 //! route to it, so a tool nobody here has heard of reads the same as one that
 //! ships with every system.
 
+use super::glyphs::Glyphs;
 use crate::text::Settled;
 
 /// What base a line's address is written in.
@@ -68,8 +69,8 @@ pub struct TextColumn {
     /// Characters around the column, which are od's angle brackets.
     pub open: Option<char>,
     pub close: Option<char>,
-    /// Which encoding the characters were written in.
-    pub encoding: Settled,
+    /// How the column turned a byte into a character.
+    pub glyphs: Glyphs,
     /// What a byte with no character of its own was written as, which is
     /// What the tool wrote for a byte that has no character of its own. It is
     /// almost always a full stop, and it is the reason the column can confirm
@@ -452,7 +453,7 @@ fn text_column(rows: &[(&Vec<Tok<'_>>, Candidate)], bytes_per_line: usize, group
     // bare. Only a character opening every line counts as a wrapper.
     let open = opens[0].0.filter(|c| *c == '>' || *c == '|').filter(|c| opens.iter().all(|o| o.0 == Some(*c)));
     let close = open.map(|c| if c == '>' { '<' } else { '|' });
-    (Some(TextColumn { open, close, encoding: Settled::Ascii, placeholders: vec!['.'] }), Some(start))
+    (Some(TextColumn { open, close, glyphs: Glyphs::Printable(Settled::Ascii), placeholders: vec!['.'] }), Some(start))
 }
 
 #[cfg(test)]
