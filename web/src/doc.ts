@@ -276,6 +276,18 @@ export type DumpScan = {
   readonly conflicts: readonly { at: number; wrote: string; digits: number }[];
 };
 
+/** One reading of a run of bytes, and the encodings that agree on it. */
+export type Reading = { readonly encodings: readonly string[]; readonly text: string };
+
+/** Every way a selection reads as text. `refused` names the encodings the
+ *  bytes do not fit, which is worth saying and not worth showing. */
+export type SelectionText = {
+  readonly readings: readonly Reading[];
+  readonly refused: readonly string[];
+  readonly read: number;
+  readonly all: boolean;
+};
+
 /** Typed text turned back into bytes, or the character that stopped it. */
 export type TextEncoded = { readonly bytes: readonly number[]; readonly refused: string };
 
@@ -1240,6 +1252,15 @@ export class Doc {
    */
   encodeText(chosen: string, settled: string, text: string): TextEncoded {
     return JSON.parse(text_encode(chosen, settled, text)) as TextEncoded;
+  }
+
+  /**
+   * What a run of bytes says, read every way text can be read. Empty while the
+   * bytes are still being fetched, in which case ask again once they are.
+   */
+  selectionText(atByte: number, len: number, first: string): SelectionText | null {
+    const got = this.editor.selection_text(atByte, len, first);
+    return got === "" ? null : (JSON.parse(got) as SelectionText);
   }
 
   /** How the file reads as text. Pass "" to let the file decide. */

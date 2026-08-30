@@ -513,12 +513,21 @@ function build(tab: Tab): void {
   for (const name of ["UTF-8", "ASCII", "Latin-1", "CP437", "UTF-16 LE", "UTF-16 BE"]) {
     encoding.append(el("option", { value: name, textContent: name }));
   }
-  encoding.addEventListener("change", () => void text.setEncoding(encoding.value));
+  encoding.addEventListener("change", () => {
+    // The panel reads a selection every way text can be read; which way the
+    // reader is reading the file decides only which one it names first.
+    inspector.textEncoding = encoding.value;
+    void text.setEncoding(encoding.value);
+    inspector.render();
+  });
   // What the file was read as, beside the chooser, so a guess is never passed
   // off as a fact.
   const reading = el("span", { className: "tb-reading" });
   text.onReading = (r) => {
     reading.textContent = encoding.value === "" ? TEXTVIEW.readAs(r.encoding, r.guessed) : "";
+    // Which reading of a selection the panel names first is whichever the file
+    // is being read in, chosen or settled.
+    inspector.textEncoding = encoding.value === "" ? r.encoding : encoding.value;
   };
 
   const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
@@ -578,6 +587,10 @@ function build(tab: Tab): void {
   // the way it does after any other edit.
   text.onEdit = () => refresh();
   text.onRefuse = (char, encodingName) => say(TEXTVIEW.refused(char, encodingName), true);
+  text.onMessage = (msg) => say(msg, true);
+  // The hex view owns the selection, so the text view writes through it and
+  // reads it back. One selection, the way there is one cursor.
+  text.onSelect = (from, to, caret) => view.selectRange(from * 8, to * 8, caret * 8);
 
   const openBtn = el("button", { type: "button", textContent: "Open" });
   openBtn.addEventListener("click", () => pick());
@@ -636,6 +649,7 @@ function build(tab: Tab): void {
     posLabel.replaceChildren("Offset ", at, ` ${decimal}${listingShowing ? "" : editing}${selected}`);
   };
   view.onSelectionChange = (r) => {
+    text.setSelection(r === null ? null : r.startBit / 8, r === null ? 0 : r.endBit / 8);
     refresh();
     inspector.setSelection(r === null ? [] : [r]);
   };

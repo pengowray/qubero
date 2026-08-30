@@ -9,6 +9,7 @@ mod appledouble;
 mod au;
 mod bmp;
 mod bdb;
+mod bencode;
 mod c16;
 mod cab;
 mod braw;
@@ -105,6 +106,7 @@ pub use bmp::bmp;
 pub use cab::cab;
 pub use braw::braw;
 pub use bards_tale::bards_tale;
+pub use bencode::bencode;
 pub use cbor::cbor;
 pub use coff::coff;
 pub use corel::{cdr, cmx};
@@ -269,6 +271,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("lha", |_| lha()),
     ("lnk", |_| lnk()),
     ("cbor", |_| cbor()),
+    ("bencode", |_| bencode()),
     ("cpio", |_| cpio()),
     ("ar", |_| ar()),
     ("rpm", |_| rpm()),

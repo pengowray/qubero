@@ -324,8 +324,12 @@ export class HexView {
    * pick out a stretch of the file rather than a place in it. An empty run
    * clears the selection, so one call covers both.
    */
-  selectRange(startBit: number, endBit: number): void {
-    this.setBitCursor(startBit, { select: "keep" });
+  selectRange(startBit: number, endBit: number, cursorBit?: number): void {
+    // The cursor lands at the front of the run unless the caller says
+    // otherwise. A selection dragged out in the text view has its caret at the
+    // end it is being dragged from, and moving it to the front would collapse
+    // the selection the next time it grew.
+    this.setBitCursor(cursorBit ?? startBit, { select: "keep" });
     this.setSelection(endBit > startBit ? startBit : null, endBit);
     this.render();
   }

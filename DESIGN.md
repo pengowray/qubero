@@ -1401,12 +1401,47 @@ four. Enter writes whichever ending the rest of the file uses, since a file
 that has settled on one should not be given the other. One keystroke is one
 undo step.
 
-Two things are deliberately not here. There is no selection, so nothing is
-typed over: replacing a stretch through the encoding is its own feature and the
-hex view's selection is what it should hook into. And editing a document opened
-out of a dump changes those bytes and not the digits in the dump that spell
-them; making the two agree is the redundant-editing work below, and it is the
-first real client of it.
+There is one selection, the way there is one cursor. It lives in the hex view,
+which is where it always lived; the text view renders what that says and writes
+back through `selectRange`, so the two cannot drift apart. Shift with a
+movement key extends one, a drag pulls one out, typing or backspace replaces
+it, and Ctrl+C copies what it says rather than the hex pairs the grid copies,
+which is the difference between the two views in one keystroke.
+
+Two details that only showed up once it was built. `selectRange` grew a third
+argument for where the cursor goes, because a selection dragged out in the text
+has its caret at the end being dragged and putting it back at the front
+collapsed the selection on the next keypress. And every text edit is wrapped in
+a batch: a replacement that changes length is a delete and an insert
+underneath, so without one a keystroke over a selection took two presses of
+undo to put back, leaving the file in a state nobody typed.
+
+Editing a document opened out of a dump changes those bytes and not the digits
+in the dump that spell them. Making the two agree is the redundant-editing work
+below, and this is the first real client of it.
+
+### What a selection says
+The panel beside the cursor reads a selection as a number. It now reads it as
+text as well, which is the question a hex editor's reader asks about a stretch
+of bytes at least as often.
+
+Six encodings and six rows would be five rows of the same sentence: most runs
+are printable and every encoding here agrees on that range. So `text::readings`
+gathers the encodings that agree and the panel shows one row per distinct
+reading, with the encodings that produced it as the row's label. That the four
+of them agree is worth knowing on its own: bytes that read the same whatever
+you assume are bytes nobody can misread. Which encoding is named first is
+whichever the text view is reading the file in.
+
+An encoding the bytes do not fit is named rather than shown, since what it
+produces is a row of replacement characters that says nothing, and leaving it
+out silently would read as the panel having forgotten it. A reading's control
+characters get the pictures the text view gives them, because a selected line
+feed drawn as a line feed is a row that looks empty. One byte is enough to
+read: that is a character, unlike the byte-reversed number rows, which want two
+before reversing means anything. A selection made over the bits is not
+characters at all and says nothing here, which is the same rule those rows
+already follow.
 
 ### A file that describes another file, opened as one
 `hexdump/source.rs` makes a dump's bytes readable like any other file, and the
