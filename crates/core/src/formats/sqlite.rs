@@ -11,10 +11,16 @@
 //! with something else, so the byte is peeked rather than read and the page
 //! that is not a b-tree keeps all of its bytes.
 //!
-//! Where this stops: a payload too big for its page reads as the bytes that
-//! stayed and the number of the page the rest went to, and stops there. The
-//! rest is on a chain of pages elsewhere in the file, and a record cut across
-//! a page break is not something a field placed at an offset can read.
+//! Where the template stops: a payload too big for its page reads as the bytes
+//! that stayed and the number of the page the rest went to, and stops there.
+//! The rest is on a chain of pages elsewhere in the file, and a record cut
+//! across a page break is not something a field placed at an offset can read.
+//!
+//! [`sqlite_overflow`](super::sqlite_overflow) is the rest of the answer. It
+//! follows that chain and says which runs of the file the row is made of, which
+//! [`Gathered`](crate::gather::Gathered) reads as one stream. The template
+//! still stops where it stops, because that is what a template can honestly
+//! say; the walk is a separate thing a reader asks for.
 
 use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
