@@ -76,7 +76,7 @@ mod png;
 mod safetensors;
 mod le;
 mod spp;
-mod sqlite;
+pub(crate) mod sqlite;
 mod swf;
 mod tap;
 mod tga;

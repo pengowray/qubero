@@ -27,8 +27,108 @@ use std::collections::HashSet;
 
 use crate::document::Document;
 use crate::eval::{EvalError, Evaluator, R, Value};
-use crate::gather::Extent;
-use crate::source::Source;
+use crate::gather::{Extent, Gathered};
+use crate::source::{MemSource, Source};
+
+/// What [`StructDef::packed`](crate::template::StructDef::packed) calls this,
+/// so that a payload the template had to stop at is marked as a thing with
+/// more behind it, and the panel can find its way back here.
+pub const PACKING: &str = "sqlite_overflow";
+
+/// The largest row this will assemble for a panel. A row is usually a few
+/// hundred bytes and can be a gigabyte, and a viewer that is redrawn as the
+/// cursor moves cannot join a gigabyte each time.
+pub const ROW_LIMIT: u64 = 64 << 20;
+
+/// How many of a row's columns a panel shows.
+pub const COLUMNS_SHOWN: usize = 64;
+
+/// One column of an assembled row, as the record's own header says to read it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Column {
+    /// What the serial type is called: `i32`, `f64`, `text, 8189 bytes`.
+    pub type_name: String,
+    /// The value itself, left as a value rather than as text so that whatever
+    /// shows it renders it the way it renders every other value.
+    pub value: Value,
+    /// Where it sits in the assembled row, which is not where it sits in the
+    /// file: use [`Payload::extents`] to get back to the file.
+    pub at: u64,
+    pub len: u64,
+}
+
+/// A row assembled and read as the columns it holds.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Row {
+    pub columns: Vec<Column>,
+    /// How many columns there are, of which `columns` holds the first few.
+    pub total: usize,
+    /// Why the columns could not be read, where they could not.
+    pub problem: Option<String>,
+}
+
+/// Assemble a row and read it as a record.
+///
+/// The bytes are joined into a stream of their own and the ordinary record
+/// template is run over it, so a row that spilled reads by exactly the same
+/// rules as a row that did not. The one thing that has to be handed over is the
+/// text encoding: the record template normally reads it from the database
+/// header, and an assembled row has no header above it.
+pub fn read<S: Source>(doc: &Document<S>, found: &Payload, encoding: i128) -> Row {
+    let size: u64 = found.extents.iter().map(|e| e.len).sum();
+    if size > ROW_LIMIT {
+        let mb = ROW_LIMIT / (1 << 20);
+        return Row {
+            problem: Some(format!("Not assembled: the row is over this viewer's {mb} MB limit.")),
+            ..Row::default()
+        };
+    }
+    let gathered = Gathered::new(doc.source(), found.extents.iter().copied());
+    let mut bytes = vec![0u8; gathered.len_bytes() as usize];
+    gathered.read_bytes(0, &mut bytes);
+
+    let row = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(crate::template::Template::new(
+        "row",
+        crate::formats::sqlite::record_encoded(encoding),
+    ));
+    let columns = match ev.child_named(&row, &[], "columns") {
+        Ok(Some(p)) => p,
+        _ => {
+            return Row {
+                problem: Some("The assembled bytes do not read as a record.".into()),
+                ..Row::default()
+            };
+        }
+    };
+    let Ok(node) = ev.node(&row, &columns) else {
+        return Row { problem: Some("The record header does not say how many columns.".into()), ..Row::default() };
+    };
+    let total = node.child_count as usize;
+    // The record's own header, which is where a column's type is written. The
+    // field's type says how the bytes were read; the serial type says what
+    // SQLite calls it, which is the more useful of the two to show.
+    let types = ev.child_named(&row, &[], "types").ok().flatten();
+    let mut out = Vec::new();
+    for i in 0..total.min(COLUMNS_SHOWN) {
+        let at = [columns.as_slice(), &[i]].concat();
+        let Ok(column) = ev.node(&row, &at) else { break };
+        let serial = types
+            .as_ref()
+            .and_then(|t| ev.node(&row, &[t.as_slice(), &[i]].concat()).ok())
+            .and_then(|n| match n.value {
+                Value::Enum { name: Some(name), .. } => Some(name),
+                _ => None,
+            });
+        out.push(Column {
+            type_name: serial.unwrap_or_else(|| column.type_name.clone()),
+            value: column.value.clone(),
+            at: column.offset_bits / 8,
+            len: column.size_bits / 8,
+        });
+    }
+    Row { columns: out, total, problem: None }
+}
 
 /// A row, and where the file keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -308,6 +408,69 @@ mod tests {
         assert_eq!(&bytes[..184], &[b'A'; 184]);
         assert_eq!(&bytes[184..184 + 508], &[b'a'; 508]);
         assert_eq!(&bytes[184 + 508..], &[b'b'; 508]);
+    }
+
+    /// Standing on a spilled payload opens the row into its columns, which is
+    /// what the panel shows. They are read by the ordinary record template
+    /// over the assembled bytes, so a row that spilled reads by the same rules
+    /// as a row that did not.
+    #[test]
+    fn standing_on_a_spilled_row_opens_its_columns() {
+        // Two columns: a small integer, and a text long enough that the row
+        // does not fit on its page.
+        let text = "z".repeat(1000);
+        let mut header_bytes = vec![1u8]; // the integer's serial type
+        header_bytes.extend(varint(13 + text.len() * 2));
+        let mut record = varint(header_bytes.len() + 1);
+        record.extend(header_bytes);
+        record.push(42);
+        record.extend(text.as_bytes());
+
+        let total = record.len();
+        let local = stays(total);
+        let chain = [4u32, 6];
+        let mut cell = varint(total);
+        cell.push(1); // the row id
+        cell.extend_from_slice(&record[..local]);
+        cell.extend_from_slice(&chain[0].to_be_bytes());
+
+        let mut b = header(PAGE);
+        b.extend_from_slice(&leaf_page(&[], PAGE - 100, 100));
+        b.extend_from_slice(&leaf_page(&[cell], PAGE, 0));
+        b.resize(8 * PAGE, 0);
+        // The rest of the record, cut across the pages the chain names, each
+        // holding the next page's number and then its share.
+        for (i, page) in chain.iter().enumerate() {
+            let at = (*page as usize - 1) * PAGE;
+            let from = local + i * (PAGE - 4);
+            let take = (record.len() - from).min(PAGE - 4);
+            let next = chain.get(i + 1).copied().unwrap_or(0);
+            b[at..at + 4].copy_from_slice(&next.to_be_bytes());
+            b[at + 4..at + 4 + take].copy_from_slice(&record[from..from + take]);
+        }
+
+        let doc = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(sqlite());
+        // The cursor on the payload, which is the structure marked as packed.
+        let explained = ev.explain(&doc, &[PAGES, 0, CELLS, 0, 2], None).expect("an explanation");
+        let crate::eval::Explain::SqliteRow { declared, found, columns, total_columns, problem, .. } =
+            explained
+        else {
+            panic!("not a row: {explained:?}");
+        };
+        assert_eq!(problem, None);
+        assert_eq!(declared, total as u64);
+        assert_eq!(found, total as u64);
+        assert_eq!(total_columns, 2);
+        // The integer that stayed on the page, and the text that did not: the
+        // second column begins on the page and ends on the pages the chain
+        // named. Its value shows as far as the tree shows any long string, so
+        // what is checked is its length and that it reads as the text it is.
+        assert_eq!(columns[0].value, Value::Int(42));
+        assert_eq!(columns[1].type_name, format!("text, {} bytes", text.len()));
+        assert_eq!(columns[1].len, text.len() as u64);
+        let Value::Str(shown) = &columns[1].value else { panic!("not text: {:?}", columns[1].value) };
+        assert!(shown.starts_with("zzzz"), "{shown}");
     }
 
     /// The chain is followed in the order it gives, not in the order the pages

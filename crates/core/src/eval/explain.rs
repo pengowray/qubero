@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{hdf5_chunk, pdf_objstm, pdf_xref};
+use crate::formats::{hdf5_chunk, pdf_objstm, pdf_xref, sqlite_overflow};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -114,6 +114,28 @@ pub enum Explain {
         /// Why there are no objects, where there are none.
         problem: Option<String>,
     },
+    /// A row too big for its page, joined back together and read.
+    ///
+    /// Shown for the cursor anywhere in the payload, because what is under the
+    /// cursor is the part of the row that stayed: the rest is on a chain of
+    /// pages elsewhere, and the columns are not at any one place in the file.
+    SqliteRow {
+        /// How many bytes the row claims, and how many the chain reached.
+        /// Equal for a row that is whole.
+        declared: u64,
+        found: u64,
+        /// How many bytes stayed on the row's own page.
+        on_page: u64,
+        /// The overflow pages, in the order the chain names them, and how many
+        /// there are when that is more than [`CHAIN_SHOWN`].
+        pages: Vec<u32>,
+        chain_length: usize,
+        /// The columns, as the record's own header says to read them.
+        columns: Vec<sqlite_overflow::Column>,
+        total_columns: usize,
+        /// Why the walk stopped or the columns would not read.
+        problem: Option<String>,
+    },
     /// A chunk of a dataset, taken back through the filters it was written
     /// through. Shown for the cursor anywhere in the chunk, because what is
     /// under the cursor is the last filter's output and the elements are not
@@ -143,6 +165,11 @@ pub enum Explain {
 
 /// How many objects of an object stream are handed to a reader at once.
 pub const OBJSTM_SHOWN: usize = 256;
+
+/// How many of a chain's pages a panel names. A chain of three hundred is a
+/// fact about the file worth stating as a number rather than as three hundred
+/// page numbers nobody will read.
+pub const CHAIN_SHOWN: usize = 32;
 
 /// How much of an object is read to find out whether it is an object stream.
 /// Its dictionary comes first and no real one runs longer than this, so an
@@ -257,12 +284,48 @@ impl Evaluator {
             if &*packing == hdf5_chunk::PACKING {
                 return self.explain_hdf5_chunk(doc, at, &r);
             }
+            if &*packing == sqlite_overflow::PACKING {
+                return self.explain_sqlite_row(doc, at);
+            }
             let Some(kind) = ggml_quant::by_name(&packing) else { continue };
             let bytes = self.read(doc, &r, r.offset, kind.block_bytes() as u64 * 8)?;
             let Some(block) = ggml_quant::unpack(kind, &bytes) else { continue };
             return Ok(quant_of(kind, block, r.offset, at_bits));
         }
         Ok(Explain::Plain)
+    }
+
+    /// A row that spilled, followed onto the pages it spilled onto and read as
+    /// the columns it holds.
+    ///
+    /// `at` is the payload, whose parent is the cell the row belongs to: the
+    /// cell is where the row's declared length is written, and the length is
+    /// what says when the chain has given up everything it owes.
+    fn explain_sqlite_row<S: Source>(&mut self, doc: &Document<S>, at: &[usize]) -> R<Explain> {
+        let Some((_, cell)) = at.split_last() else { return Ok(Explain::Plain) };
+        let found = sqlite_overflow::payload(self, doc, cell)?;
+        // The encoding the database header names, which an assembled row has
+        // no way to look up for itself. A file that does not say reads as
+        // UTF-8, which is what SQLite itself assumes.
+        let encoding = self
+            .child_named(doc, &[], "text_encoding")?
+            .and_then(|p| self.node(doc, &p).ok())
+            .and_then(|n| n.value.as_int())
+            .unwrap_or(1);
+        let row = sqlite_overflow::read(doc, &found, encoding);
+        let on_page = found.extents.first().map(|e| e.len).unwrap_or(0);
+        Ok(Explain::SqliteRow {
+            declared: found.declared,
+            found: found.found,
+            on_page,
+            chain_length: found.pages.len(),
+            pages: found.pages.into_iter().take(CHAIN_SHOWN).collect(),
+            columns: row.columns,
+            total_columns: row.total,
+            // The walk's own trouble first: columns that would not read are
+            // usually a consequence of a chain that did not finish.
+            problem: found.problem.or(row.problem),
+        })
     }
 
     /// A chunk of a dataset, undone.

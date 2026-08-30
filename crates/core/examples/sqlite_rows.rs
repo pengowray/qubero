@@ -61,8 +61,17 @@ fn main() {
                 found.found,
                 found.pages.len(),
                 checksum(&bytes),
-                found.problem.map(|p| format!("  {p}")).unwrap_or_default(),
+                found.problem.clone().map(|p| format!("  {p}")).unwrap_or_default(),
             );
+            // The row read as the columns it holds, which is what the panel
+            // shows when the cursor is on a payload that spilled.
+            let row = qubero_core::formats::sqlite_overflow::read(&doc, &found, 1);
+            for (i, column) in row.columns.iter().enumerate() {
+                println!("    column {i}: {:<20} {:?}", column.type_name, column.value);
+            }
+            if let Some(problem) = row.problem {
+                println!("    {problem}");
+            }
         }
     }
     println!("{spilled} rows spilled, {broken} of them incomplete");

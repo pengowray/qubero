@@ -64,11 +64,25 @@ const SERIAL_TYPE: &[(i128, &str)] = &[
 /// a blob and every odd one from 13 up is text, and how far up says how long.
 const SERIAL_RUN: &[(i128, i128, &str)] = &[(12, 2, "blob, {n} bytes"), (13, 2, "text, {n} bytes")];
 
+/// Which text encoding a column reads in.
+///
+/// Normally the database header's own field, which every record can see by
+/// looking outwards. A record read on its own cannot: a row assembled from the
+/// pages it spilled onto is a stream of its own, with no header above it for a
+/// field to reach, so the encoding is handed to it as the number the header
+/// held. See [`record_encoded`].
+fn encoding_of(encoding: Option<i128>) -> E {
+    match encoding {
+        Some(n) => E::lit(n),
+        None => E::field("text_encoding"),
+    }
+}
+
 /// What a column holds, by its serial type. The types from 12 up are lengths
 /// rather than names: even is a blob, odd is text, and both count from the
 /// same place. There is no remainder operator, so the parity is worked out the
 /// long way round.
-fn column(serial: impl Fn() -> E) -> T {
+fn column(encoding: Option<i128>, serial: impl Fn() -> E) -> T {
     let blob_len = serial().sub(E::lit(12)).div(E::lit(2));
     let text_len = serial().sub(E::lit(13)).div(E::lit(2));
     let text = |enc| T::text(StrLen::Fixed(text_len.clone()), enc);
@@ -80,7 +94,7 @@ fn column(serial: impl Fn() -> E) -> T {
             (
                 1,
                 T::switch(
-                    E::field("text_encoding"),
+                    encoding_of(encoding),
                     vec![(2, text(Encoding::Utf16(Little))), (3, text(Encoding::Utf16(Big)))],
                     text(Encoding::Utf8),
                 ),
@@ -114,14 +128,27 @@ fn column(serial: impl Fn() -> E) -> T {
 /// A row: a header of serial types, one per column, then the columns
 /// themselves. The header counts its own length in its first number.
 fn record() -> T {
-    T::structure("Record", header_fields(vec![("columns", T::array(column(|| E::elem("types", E::idx())), E::field("types")))]))
+    columns_of(None)
+}
+
+/// A record read on its own, with the text encoding given rather than looked
+/// up. This is what a row assembled from the pages it spilled onto is parsed
+/// with: those bytes are a stream of their own, and nothing above them holds
+/// the database header for a field to reach.
+pub(crate) fn record_encoded(encoding: i128) -> T {
+    columns_of(Some(encoding))
+}
+
+fn columns_of(encoding: Option<i128>) -> T {
+    let column = column(encoding, || E::elem("types", E::idx()));
+    T::structure("Record", header_fields(vec![("columns", T::array(column, E::field("types")))]))
 }
 
 /// The row of `sqlite_master` that every schema entry is. Page 1 holds these
 /// and nothing else, and their five columns have names worth more than
 /// `columns[4]`: the last of them is the CREATE statement as typed.
 fn schema_record() -> T {
-    let at = |i: i128| column(move || E::elem("types", E::lit(i)));
+    let at = |i: i128| column(None, move || E::elem("types", E::lit(i)));
     T::structure_named(
         "SchemaRecord",
         "name",
@@ -181,8 +208,11 @@ fn payload(page_type: i128, usable: E, rec: T) -> T {
     // one that is allowed when it does not fit either.
     let k = || min().add(past().sub(past().div(four()).mul(four())));
     let on_page = T::switch(k().div(max().add(E::lit(1))), vec![(0, T::bytes(k()))], T::bytes(min()));
-    let spilled =
-        T::inline_structure("Spilled", vec![("on_page", on_page), ("overflow_page", T::u32(Big))]);
+    // Marked as packed so that standing on it opens the row: the rest of it is
+    // on a chain of pages this field can only name, and
+    // [`sqlite_overflow`](super::sqlite_overflow) is what follows the chain.
+    let spilled = T::inline_structure("Spilled", vec![("on_page", on_page), ("overflow_page", T::u32(Big))])
+        .packed_as(super::sqlite_overflow::PACKING);
     T::switch(p().div(max().add(E::lit(1))), vec![(0, T::sized(p(), rec))], spilled)
 }
 
