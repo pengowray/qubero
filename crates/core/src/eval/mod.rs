@@ -17,6 +17,7 @@ use crate::template::{Anchor, Encoding, Expr, StrLen, Template, Ty, Until};
 use crate::text::{self, Settled};
 
 mod explain;
+mod go;
 mod jsontree;
 mod listing;
 mod origin;
@@ -78,8 +79,8 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 ///
 /// Measured rather than picked, in a debug build, whose frames are several
 /// times a release build's. A megabyte of stack, which is what wasm is given
-/// and what a thread on Windows starts with, carries about 300 components of
-/// a run that stops on what it reads (how bencode nests) and about 400 of a
+/// and what a thread on Windows starts with, carries about 280 components of
+/// a run that stops on what it reads (how bencode nests) and about 390 of a
 /// list of lists. So this is under half of the smaller of those, on the
 /// smallest stack any of it runs on, and there is several times the room in
 /// the build that ships.
@@ -95,19 +96,6 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 /// `cargo run --example stack_probe -- <levels> <array|repeat> <MiB>` is where
 /// these numbers come from, and is how to take them again after a change.
 const DEEPEST_PATH: usize = 128;
-
-/// How much of the stack one read may spend, in bytes.
-///
-/// `DEEPEST_PATH` is a promise made from two measured shapes. This keeps the
-/// promise when a third shape costs more per component than either of them:
-/// the read stops and says so, rather than the process going down under it.
-/// For everything measured the count is reached first and this never fires,
-/// which is what makes it a backstop rather than the limit.
-///
-/// 640 KiB fits in the megabyte wasm is given with room left for whoever
-/// called in, and carries about 185 components of the dearest measured shape
-/// in a debug build, which is comfortably past the 128 the count allows.
-const STACK_BUDGET: usize = 640 << 10;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -309,16 +297,9 @@ pub struct Evaluator {
     /// What each guarded walk has added to the memo, so it can drop the nodes
     /// it has moved past. One entry per walk, since a list can hold a list.
     journals: Vec<walk::WalkJournal>,
-    /// Elements left before this go has to hand back, and how many each go is
-    /// allowed. None works to the end, which is what a caller with nothing to
-    /// draw meanwhile wants.
-    left: Option<u64>,
-    slice: Option<u64>,
-    /// How far into the file the reading has got, at its furthest.
-    reached_bits: u64,
-    /// Bytes an answer was given without: previews that have not arrived. The
-    /// caller fetches them and asks again, and meanwhile has its rows.
-    wanted: Vec<Missing>,
+    /// What this go of reading may spend and has spent, which is the one
+    /// thing here that does not outlive the answer being asked for.
+    go: go::Go,
     /// Every stretch of the file a field placed somewhere other than where it
     /// was declared, so a bit outside what the root covers can still be named.
     /// See [`placed`].
@@ -333,10 +314,6 @@ pub struct Evaluator {
     frontier: Vec<placed::Frame>,
     /// How many nodes that walk has opened, over all its goes.
     placed_opened: usize,
-    /// How many reads are open, and where the stack was when the outermost of
-    /// them started. Only the depth guard reads these; see `STACK_BUDGET`.
-    nest: usize,
-    stack_base: usize,
 }
 
 impl Evaluator {
@@ -347,17 +324,12 @@ impl Evaluator {
             lists: FxHashMap::default(),
             json: FxHashMap::default(),
             journals: Vec::new(),
-            left: None,
-            slice: None,
-            reached_bits: 0,
-            wanted: Vec::new(),
+            go: go::Go::default(),
             placements: Vec::new(),
             placed_ranges: rustc_hash::FxHashSet::default(),
             placements_done: false,
             frontier: Vec::new(),
             placed_opened: 0,
-            nest: 0,
-            stack_base: 0,
         }
     }
 
@@ -370,33 +342,28 @@ impl Evaluator {
     /// None, the default, works until the answer is ready however long that
     /// takes.
     pub fn set_slice(&mut self, elements: Option<u64>) {
-        self.slice = elements;
-        self.left = elements;
+        self.go.set_slice(elements);
     }
 
     /// Start another go. What was worked out already is kept; only the
     /// allowance is refilled.
     pub fn begin_slice(&mut self) {
-        self.left = self.slice;
-        self.wanted.clear();
+        self.go.begin();
     }
 
     /// Bytes wanted for previews that were answered without them, since the
     /// last `begin_slice`. Fetching these and asking again fills them in.
     pub fn wanted(&self) -> Vec<Missing> {
-        let mut out = self.wanted.clone();
-        out.sort_by_key(|m| m.chunk);
-        out.dedup();
-        out
+        self.go.wanted()
     }
 
     pub(super) fn want(&mut self, missing: Vec<Missing>) {
-        self.wanted.extend(missing);
+        self.go.want(missing);
     }
 
     /// How far into the file the reading has got, at its furthest.
     pub fn reached_bits(&self) -> u64 {
-        self.reached_bits
+        self.go.reached_bits()
     }
 
     /// The most advanced unfinished variable-size array walk. Its average
@@ -433,13 +400,20 @@ impl Evaluator {
     /// Charge one element against this go's allowance, and note how far the
     /// reading has reached.
     pub(super) fn spend(&mut self, at_bits: u64) -> R<()> {
-        self.reached_bits = self.reached_bits.max(at_bits);
-        let Some(left) = self.left.as_mut() else { return Ok(()) };
-        if *left == 0 {
-            return Err(EvalError::Busy { reached_bits: self.reached_bits });
-        }
-        *left -= 1;
-        Ok(())
+        self.go.spend(at_bits)
+    }
+
+    /// Read something with one more read open, and close it again afterwards.
+    ///
+    /// The pair has to be kept exactly: a read left open would have the next
+    /// one think the stack was further down than it is. So this is the only
+    /// place that keeps it, and whatever `f` does or answers, the read is
+    /// closed on the way out.
+    pub(super) fn deeper<T>(&mut self, depth: usize, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        self.go.enter(depth)?;
+        let out = f(self);
+        self.go.leave();
+        out
     }
 
     /// How many nodes are currently memoised. What a walk over a long list
@@ -513,11 +487,7 @@ impl Evaluator {
         self.lists.clear();
         self.json.clear();
         self.journals.clear();
-        self.left = self.slice;
-        self.reached_bits = 0;
-        // Nothing is being read at the moment this is called, whatever a
-        // panic part way through a read may have left behind.
-        self.nest = 0;
+        self.go.restart();
     }
 
     /// What the list at `path` has learned about itself. A node that is not
@@ -774,31 +744,6 @@ impl Evaluator {
         let r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit)?;
         self.remember(path, r);
         Ok(())
-    }
-
-    /// Note that one more read is open, and refuse it if the stack this go has
-    /// spent is past what a read may. `depth` is only for what it says.
-    ///
-    /// The first read of a go is where the stack was when the reading started,
-    /// and every read under it is that far down from there. Which call this
-    /// belongs to is the point: placing a node returns before what it placed
-    /// is measured, so `size_of` is the one that stays open the whole way
-    /// down, and `resolve` on its own goes no deeper than the path is long.
-    pub(super) fn enter(&mut self, depth: usize) -> R<()> {
-        let probe = 0u8;
-        let here = &probe as *const u8 as usize;
-        if self.nest == 0 {
-            self.stack_base = here;
-        } else if self.stack_base.saturating_sub(here) > STACK_BUDGET {
-            return fail(format!("nested too deep to read: ran out of stack {depth} fields down"));
-        }
-        self.nest += 1;
-        Ok(())
-    }
-
-    /// That read is over. Only ever called where `enter` said yes.
-    pub(super) fn leave(&mut self) {
-        self.nest -= 1;
     }
 
     /// Where child `idx` of the node at `parent` goes: what it is called, what

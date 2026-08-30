@@ -1763,8 +1763,7 @@ fn a_read_with_no_stack_left_stops_rather_than_the_process() {
     let t = crate::formats::builtin("cbor").expect("cbor is built in");
     let d = doc(&[0x81, 0x81, 0x01]);
     let mut ev = Evaluator::new(t);
-    ev.nest = 1;
-    ev.stack_base = usize::MAX;
+    ev.go.pretend_out_of_room();
     let Err(EvalError::Failed(msg)) = ev.node(&d, &[]) else {
         panic!("a read with no room left should say so");
     };
