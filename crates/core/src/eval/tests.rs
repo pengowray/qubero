@@ -1699,3 +1699,73 @@ fn a_field_with_no_room_left_is_not_read_at_all() {
     assert_eq!(ev.node(&d, &[1, 1]).unwrap().size_bits, 0);
     assert_eq!(ev.node(&d, &[1, 2]).unwrap().size_bits, 0);
 }
+
+#[test]
+fn nesting_past_the_limit_is_an_error_rather_than_a_crash() {
+    // A CBOR array holding an array holding an array, three hundred times over.
+    // Every one of them is well formed, and the file is 301 bytes: nothing
+    // about it is large except how far down its last value is.
+    let t = crate::formats::builtin("cbor").expect("cbor is built in");
+    let mut bytes = vec![0x81; 300];
+    bytes.push(0x01);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t.clone());
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[]) else {
+        panic!("a file nested past the limit should say so");
+    };
+    assert!(msg.contains("nested more than"), "{msg}");
+
+    // Nesting a file does reach is read to the bottom: twenty arrays, and the
+    // number they hold is the number that was put there.
+    let mut bytes = vec![0x81; 20];
+    bytes.push(0x07);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let mut path = Vec::new();
+    for _ in 0..20 {
+        path.extend_from_slice(&[3, 0]);
+    }
+    path.push(0);
+    assert_eq!(ev.node(&d, &path).unwrap().value, Value::Enum { raw: 7, name: None, hex: true });
+}
+
+
+#[test]
+fn a_run_that_holds_a_run_is_refused_at_the_same_depth() {
+    // The other shape a file nests in: not a list of lists, whose length is
+    // arithmetic, but a run that stops on what it reads and so is walked. This
+    // is how bencode nests, and it costs the stack three times as much per
+    // level, so it is the shape the limit is set by.
+    let item = T::structure(
+        "Item",
+        vec![
+            ("tag", T::u8()),
+            ("kids", T::repeat(T::Named("Item".into()), Until::FieldBytes { field: "tag".into(), bytes: vec![b'e'] })),
+        ],
+    );
+    let t = Template::new("nest", T::Named("Item".into())).with_type("Item", item);
+    let mut bytes = vec![b'd'; 300];
+    bytes.extend(std::iter::repeat_n(b'e', 301));
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[]) else {
+        panic!("a run nested past the limit should say so");
+    };
+    assert!(msg.contains("nested more than"), "{msg}");
+}
+
+#[test]
+fn a_read_with_no_stack_left_stops_rather_than_the_process() {
+    // The backstop behind the depth count, which nothing measured reaches:
+    // both known shapes are stopped by the count first. It is reached here by
+    // telling the evaluator the stack started further up than it did, which is
+    // what a shape costing more per field than any measured one would do.
+    let t = crate::formats::builtin("cbor").expect("cbor is built in");
+    let d = doc(&[0x81, 0x81, 0x01]);
+    let mut ev = Evaluator::new(t);
+    ev.go.pretend_out_of_room();
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[]) else {
+        panic!("a read with no room left should say so");
+    };
+    assert!(msg.contains("too deep to read"), "{msg}");
+}

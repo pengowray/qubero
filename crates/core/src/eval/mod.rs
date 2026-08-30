@@ -5,8 +5,6 @@
 //! touches an unloaded chunk yields `EvalError::Pending` rather than a value, so
 //! zero-filled bytes can never be mistaken for data.
 
-use rustc_hash::FxHashMap;
-
 use crate::bits::bytes_for;
 use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, narrow_bf16, narrow_f16, narrow_f32, read_int, read_uint};
 use crate::document::Document;
@@ -17,8 +15,10 @@ use crate::template::{Anchor, Encoding, Expr, StrLen, Template, Ty, Until};
 use crate::text::{self, Settled};
 
 mod explain;
+mod go;
 mod jsontree;
 mod listing;
+mod memo;
 mod origin;
 mod placed;
 mod expr;
@@ -69,6 +69,32 @@ pub type R<T> = Result<T, EvalError>;
 fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
 }
+
+/// How far down a node may be before reading it is refused, counted in path
+/// components. Components, not levels of the format: one level of CBOR is two
+/// of these, one level of bencode about six, so this is thirty of the first
+/// and ten of the second: deeper than a file means anything by, and nowhere
+/// near what one can be made to say.
+///
+/// Measured rather than picked, in a debug build, whose frames are several
+/// times a release build's. A megabyte of stack, which is what wasm is given
+/// and what a thread on Windows starts with, carries about 280 components of
+/// a run that stops on what it reads (how bencode nests) and about 390 of a
+/// list of lists. So this is under half of the smaller of those, on the
+/// smallest stack any of it runs on, and there is several times the room in
+/// the build that ships.
+///
+/// Per component, not per level: the two shapes are much further apart per
+/// level than they are here, because a level of the first is four or five
+/// components and a level of the second is two.
+///
+/// This is also the ceiling on `no_ring`'s `DEEPEST`, which it will now never
+/// reach: following a pointer adds components too, so a chain of them stops
+/// here first. Real nesting stops at three.
+///
+/// `cargo run --example stack_probe -- <levels> <array|repeat> <MiB>` is where
+/// these numbers come from, and is how to take them again after a change.
+const DEEPEST_PATH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -248,62 +274,38 @@ struct Resolved {
     computed: Option<i128>,
 }
 
+/// Where a child sits before its type is unwrapped: what it is called, what
+/// the template says it is, and the stretch of the file it may read.
+struct Place {
+    name: Name,
+    ty: Ty,
+    offset: u64,
+    limit: u64,
+}
+
 pub struct Evaluator {
     template: Template,
-    memo: FxHashMap<Vec<usize>, Resolved>,
-    /// What each list has learned about itself, for the few nodes that are
-    /// lists. Kept apart from `memo` so resolving a child stays cheap.
-    lists: FxHashMap<Vec<usize>, ListState>,
-    /// The text of each `Ty::Json` field, parsed, kept beside the memo. Read
-    /// once however many values are asked for, and thrown away with the memo
-    /// entry it belongs to.
-    json: FxHashMap<Vec<usize>, std::sync::Arc<crate::json::Val>>,
+    memo: memo::Memo,
     /// What each guarded walk has added to the memo, so it can drop the nodes
     /// it has moved past. One entry per walk, since a list can hold a list.
     journals: Vec<walk::WalkJournal>,
-    /// Elements left before this go has to hand back, and how many each go is
-    /// allowed. None works to the end, which is what a caller with nothing to
-    /// draw meanwhile wants.
-    left: Option<u64>,
-    slice: Option<u64>,
-    /// How far into the file the reading has got, at its furthest.
-    reached_bits: u64,
-    /// Bytes an answer was given without: previews that have not arrived. The
-    /// caller fetches them and asks again, and meanwhile has its rows.
-    wanted: Vec<Missing>,
+    /// What this go of reading may spend and has spent, which is the one
+    /// thing here that does not outlive the answer being asked for.
+    go: go::Go,
     /// Every stretch of the file a field placed somewhere other than where it
-    /// was declared, so a bit outside what the root covers can still be named.
-    /// See [`placed`].
-    placements: Vec<placed::Placement>,
-    /// The stretches already in that index, so the same one reached from a
-    /// hundred thousand places is walked into once.
-    placed_ranges: rustc_hash::FxHashSet<(u64, u64)>,
-    /// Whether that index is everything there is, or as far as the walk got.
-    placements_done: bool,
-    /// The walk's own stack, so it can stop after a bounded number of nodes
-    /// and carry on from where it was when the next question comes.
-    frontier: Vec<placed::Frame>,
-    /// How many nodes that walk has opened, over all its goes.
-    placed_opened: usize,
+    /// was declared, so a bit outside what the root covers can still be named,
+    /// and how far the walk that finds them has got. See [`placed`].
+    placed: placed::Index,
 }
 
 impl Evaluator {
     pub fn new(template: Template) -> Self {
         Self {
             template,
-            memo: FxHashMap::default(),
-            lists: FxHashMap::default(),
-            json: FxHashMap::default(),
+            memo: memo::Memo::default(),
             journals: Vec::new(),
-            left: None,
-            slice: None,
-            reached_bits: 0,
-            wanted: Vec::new(),
-            placements: Vec::new(),
-            placed_ranges: rustc_hash::FxHashSet::default(),
-            placements_done: false,
-            frontier: Vec::new(),
-            placed_opened: 0,
+            go: go::Go::default(),
+            placed: placed::Index::default(),
         }
     }
 
@@ -316,41 +318,36 @@ impl Evaluator {
     /// None, the default, works until the answer is ready however long that
     /// takes.
     pub fn set_slice(&mut self, elements: Option<u64>) {
-        self.slice = elements;
-        self.left = elements;
+        self.go.set_slice(elements);
     }
 
     /// Start another go. What was worked out already is kept; only the
     /// allowance is refilled.
     pub fn begin_slice(&mut self) {
-        self.left = self.slice;
-        self.wanted.clear();
+        self.go.begin();
     }
 
     /// Bytes wanted for previews that were answered without them, since the
     /// last `begin_slice`. Fetching these and asking again fills them in.
     pub fn wanted(&self) -> Vec<Missing> {
-        let mut out = self.wanted.clone();
-        out.sort_by_key(|m| m.chunk);
-        out.dedup();
-        out
+        self.go.wanted()
     }
 
     pub(super) fn want(&mut self, missing: Vec<Missing>) {
-        self.wanted.extend(missing);
+        self.go.want(missing);
     }
 
     /// How far into the file the reading has got, at its furthest.
     pub fn reached_bits(&self) -> u64 {
-        self.reached_bits
+        self.go.reached_bits()
     }
 
     /// The most advanced unfinished variable-size array walk. Its average
     /// element extent is projected over the declared count; callers mark the
     /// result approximate until the ordinary node succeeds.
     pub fn extent_estimate(&self) -> Option<ExtentEstimate> {
-        self.lists
-            .iter()
+        self.memo
+            .lists()
             .filter_map(|(path, state)| {
                 let total = state.expected_count?;
                 let (measured, at) = state.walk_at?;
@@ -379,13 +376,20 @@ impl Evaluator {
     /// Charge one element against this go's allowance, and note how far the
     /// reading has reached.
     pub(super) fn spend(&mut self, at_bits: u64) -> R<()> {
-        self.reached_bits = self.reached_bits.max(at_bits);
-        let Some(left) = self.left.as_mut() else { return Ok(()) };
-        if *left == 0 {
-            return Err(EvalError::Busy { reached_bits: self.reached_bits });
-        }
-        *left -= 1;
-        Ok(())
+        self.go.spend(at_bits)
+    }
+
+    /// Read something with one more read open, and close it again afterwards.
+    ///
+    /// The pair has to be kept exactly: a read left open would have the next
+    /// one think the stack was further down than it is. So this is the only
+    /// place that keeps it, and whatever `f` does or answers, the read is
+    /// closed on the way out.
+    pub(super) fn deeper<T>(&mut self, depth: usize, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        self.go.enter(depth)?;
+        let out = f(self);
+        self.go.leave();
+        out
     }
 
     /// How many nodes are currently memoised. What a walk over a long list
@@ -413,65 +417,33 @@ impl Evaluator {
         // Every placement is where a resolved node turned out to be, and this
         // is about to drop some of those nodes. Coarse, like the memo's own
         // invalidation, and cheap to build again.
-        self.placements.clear();
-        self.placed_ranges.clear();
-        self.placements_done = false;
-        self.frontier.clear();
-        self.placed_opened = 0;
-        // A node with no size worked out yet is dropped: nothing says where it
-        // ends, so nothing says it ended before the edit.
-        self.memo.retain(|_, r| r.size.is_some_and(|size| r.offset + size <= bit));
-        // The parsed text of a JSON field goes when the field itself does.
-        self.json.retain(|path, _| self.memo.contains_key(path));
-        self.lists.retain(|path, l| {
-            l.checkpoints.retain(|(_, at)| *at <= bit);
-            if l.walk_at.is_some_and(|(_, at)| at > bit) {
-                l.walk_at = None;
-            }
-            // A repeat's count is only as good as the walk that reached it.
-            if l.repeat_end.is_none_or(|end| end > bit) {
-                l.repeat_len = 0;
-                l.repeat_end = None;
-                l.repeat_done = false;
-            }
-            // Where a pointer list's children start was read from a field that
-            // may be anywhere, and where a sequential walk had got to counts
-            // children some of which have just gone. Both are cheap to redo.
-            l.pointer_starts = None;
-            l.seq_end = 0;
-            let empty = l.checkpoints.is_empty()
-                && l.walk_at.is_none()
-                && l.repeat_len == 0
-                && !l.repeat_done;
-            !empty || self.memo.contains_key(path)
-        });
+        self.placed.forget();
+        self.memo.forget_after(bit);
     }
 
     /// Drop every cached offset/size. Call after any document change that is
     /// not an overwrite, and whenever the template changes.
     pub fn invalidate(&mut self) {
-        self.memo.clear();
-        self.placements.clear();
-        self.placed_ranges.clear();
-        self.placements_done = false;
-        self.frontier.clear();
-        self.placed_opened = 0;
-        self.lists.clear();
-        self.json.clear();
+        self.memo.forget();
+        self.placed.forget();
         self.journals.clear();
-        self.left = self.slice;
-        self.reached_bits = 0;
+        self.go.restart();
     }
 
     /// What the list at `path` has learned about itself. A node that is not
     /// a list, or one nothing has been learned about yet, has learned
     /// nothing, which is what the default says.
-    fn list(&self, path: &[usize]) -> ListState {
-        self.lists.get(path).cloned().unwrap_or_default()
+    ///
+    /// Lent rather than handed over. The walk asks this once an element, and
+    /// a list it has walked a million elements into holds a thousand
+    /// checkpoints: a copy an element is the crawl this type was split out of
+    /// `Resolved` to avoid.
+    fn list(&self, path: &[usize]) -> &ListState {
+        self.memo.list(path)
     }
 
     fn list_mut(&mut self, path: &[usize]) -> &mut ListState {
-        self.lists.entry(path.to_vec()).or_default()
+        self.memo.list_mut(path)
     }
 
     /// The child of `path` that a structure calls `name`, if it has one.
@@ -647,7 +619,7 @@ impl Evaluator {
         // be, which is known once it has been read.
         if let Ty::Json(shape) = ty {
             let shape = match shape {
-                crate::json::Shape::Doc => self.json.get(path)?.kind.shape(),
+                crate::json::Shape::Doc => self.memo.json(path)?.kind.shape(),
                 other => *other,
             };
             return match shape {
@@ -676,6 +648,15 @@ impl Evaluator {
         if self.memo.contains_key(path) {
             return Ok(());
         }
+        // Placing a node opens the line of ancestors above it, one call deep
+        // for each, and measuring a list opens its elements the same way. So
+        // the length of the path is how deep the stack goes, and a format that
+        // can hold itself has no length it stops at: bencode nested 908 deep
+        // is a real file someone has written down. Past this the answer is an
+        // error rather than the stack running out under it.
+        if path.len() > DEEPEST_PATH {
+            return fail(format!("nested more than {DEEPEST_PATH} fields deep"));
+        }
         if path.is_empty() {
             let limit = doc.len_bits();
             let root = self.template.root.clone();
@@ -685,11 +666,29 @@ impl Evaluator {
         }
         let (parent, idx) = (&path[..path.len() - 1], path[path.len() - 1]);
         self.resolve(doc, parent)?;
+        // Where the child goes is worked out in a call of its own, so that
+        // what it took to work out is off the stack before the child is read.
+        // Reading the child is what goes deeper, and a file that nests pays
+        // for every frame still open above it.
+        let Some(place) = self.place_child(doc, path, parent, idx)? else { return Ok(()) };
+        let r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit)?;
+        self.remember(path, r);
+        Ok(())
+    }
+
+    /// Where child `idx` of the node at `parent` goes: what it is called, what
+    /// the template says it is, and the stretch of the file it may read.
+    ///
+    /// `None` when the child has been settled here and there is nothing left
+    /// to read: a value inside JSON, whose place the parse already knows, or
+    /// an entry in a pointer list that points at nothing.
+    fn place_child<S: Source>(&mut self, doc: &Document<S>, path: &[usize], parent: &[usize], idx: usize) -> R<Option<Place>> {
         let pr = self.memo.get(parent).expect("parent resolved").clone();
         // A value inside JSON is placed where its text is, which the parse
         // already knows. Nothing below applies to it.
         if matches!(pr.ty, Ty::Json(_)) {
-            return self.resolve_json_child(doc, path);
+            self.resolve_json_child(doc, path)?;
+            return Ok(None);
         }
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
@@ -729,7 +728,7 @@ impl Evaluator {
                         computed: None,
                     };
                     self.remember(path, r);
-                    return Ok(());
+                    return Ok(None);
                 }
             }
         } else if let Ty::At { anchor, at, inner } = &pr.ty {
@@ -771,9 +770,7 @@ impl Evaluator {
                 limit = limit.min(*next);
             }
         }
-        let r = self.effective(doc, path, name, ty, offset, limit)?;
-        self.remember(path, r);
-        Ok(())
+        Ok(Some(Place { name, ty, offset, limit }))
     }
 
     /// Refuse an offset that points back at something already open above it.
@@ -895,7 +892,7 @@ impl Evaluator {
     /// list with it; a child whose bytes are not loaded yet is still an answer
     /// the caller has to wait for.
     fn pointer_starts<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved) -> R<Vec<(u64, usize)>> {
-        if let Some(starts) = self.lists.get(list).and_then(|l| l.pointer_starts.clone()) {
+        if let Some(starts) = self.list(list).pointer_starts.clone() {
             return Ok(starts);
         }
         let n = self.child_count(doc, list)?;

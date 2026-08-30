@@ -47,6 +47,13 @@ impl Evaluator {
     }
 
     pub(super) fn size_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
+        self.deeper(path.len(), |ev| ev.size_within(doc, path))
+    }
+
+    /// How much room the node at `path` takes. Apart from `size_of` only so
+    /// that the count of open reads there is kept by one pair of statements
+    /// with nothing between them that can return.
+    fn size_within<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
         self.resolve(doc, path)?;
         let r = self.memo[path].clone();
         if let Some(s) = r.size {
@@ -58,6 +65,62 @@ impl Evaluator {
             f
         } else {
             match &r.ty {
+                Ty::Struct(s) => {
+                    if s.fields.is_empty() {
+                        0
+                    } else {
+                        let mut last = path.to_vec();
+                        last.push(s.fields.len() - 1);
+                        self.resolve_upto(doc, path, s.fields.len() - 1)?;
+                        self.resolve(doc, &last)?;
+                        let end = self.memo[&last].offset + self.size_of(doc, &last)?;
+                        end - r.offset
+                    }
+                }
+                Ty::Array { .. } | Ty::Repeat { .. } => {
+                    // Same-sized elements: the whole list is count × stride,
+                    // with no element resolved. An array of a billion samples,
+                    // or a database of a million pages, is sized by arithmetic.
+                    // A run that stops on what it reads cannot be, since the
+                    // element that ends it could be anywhere.
+                    let stride = match &r.ty {
+                        Ty::Array { .. } | Ty::Repeat { until: Until::End, .. } => self.stride(doc, path, &r.ty)?,
+                        _ => None,
+                    };
+                    if let Some(stride) = stride {
+                        self.child_count(doc, path)? * stride
+                    } else {
+                        let n = self.child_count(doc, path)?;
+                        if n == 0 {
+                            0
+                        } else {
+                            let mut last = path.to_vec();
+                            last.push(n as usize - 1);
+                            self.resolve(doc, &last)?;
+                            let end = self.memo[&last].offset + self.size_of(doc, &last)?;
+                            end - r.offset
+                        }
+                    }
+                }
+                // Everything else is as long as its own bytes say, and finding
+                // that out opens nothing below this node. Kept to a call of its
+                // own so that what the reading takes is off the stack while
+                // whatever this node holds is being measured.
+                _ => self.read_size(doc, path, &r)?,
+            }
+        };
+        if r.offset + size > r.limit {
+            return fail("runs past the end of its container");
+        }
+        self.memo.get_mut(path).expect("resolved").size = Some(size);
+        Ok(size)
+    }
+
+    /// How long a node is when its length is written in its own bytes: a
+    /// length field, a terminator, a variable-length integer, an instruction.
+    /// Never a structure or a list, which are as long as what they hold.
+    fn read_size<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<u64> {
+        Ok(match &r.ty {
                 Ty::Bytes(e) => {
                     let n = self.eval_expr(doc, path, e)?;
                     if n < 0 {
@@ -136,47 +199,8 @@ impl Evaluator {
                 // which runs to the end of its container.
                 Ty::PointerList { .. } => r.limit - r.offset,
                 Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,
-                Ty::Struct(s) => {
-                    if s.fields.is_empty() {
-                        0
-                    } else {
-                        let mut last = path.to_vec();
-                        last.push(s.fields.len() - 1);
-                        self.resolve_upto(doc, path, s.fields.len() - 1)?;
-                        self.resolve(doc, &last)?;
-                        let end = self.memo[&last].offset + self.size_of(doc, &last)?;
-                        end - r.offset
-                    }
-                }
-                // Same-sized elements: the whole list is count × stride,
-                // with no element resolved. An array of a billion samples, or
-                // a database of a million pages, is sized by arithmetic.
-                Ty::Array { .. } | Ty::Repeat { until: Until::End, .. }
-                    if self.stride(doc, path, &r.ty)?.is_some() =>
-                {
-                    let stride = self.stride(doc, path, &r.ty)?.expect("checked");
-                    self.child_count(doc, path)? * stride
-                }
-                Ty::Array { .. } | Ty::Repeat { .. } => {
-                    let n = self.child_count(doc, path)?;
-                    if n == 0 {
-                        0
-                    } else {
-                        let mut last = path.to_vec();
-                        last.push(n as usize - 1);
-                        self.resolve(doc, &last)?;
-                        let end = self.memo[&last].offset + self.size_of(doc, &last)?;
-                        end - r.offset
-                    }
-                }
-                _ => unreachable!("fixed-size types handled above"),
-            }
-        };
-        if r.offset + size > r.limit {
-            return fail("runs past the end of its container");
-        }
-        self.memo.get_mut(path).expect("resolved").size = Some(size);
-        Ok(size)
+                _ => unreachable!("fixed-size and composite types are the caller's"),
+        })
     }
 
     pub(super) fn child_count<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {

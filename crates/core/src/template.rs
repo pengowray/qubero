@@ -56,7 +56,12 @@ pub enum Expr {
     ///
     /// Zero when nothing in the list is tagged that way, or when the element
     /// found has no such field, so `Or` can name what to do without one.
-    Tagged { array: Arc<str>, key: Arc<[String]>, tag: i128, field: Arc<[String]> },
+    ///
+    /// Held behind a pointer because of what it costs the rest: the tag is a
+    /// 128-bit number, which would make every expression in every template as
+    /// wide and as strictly aligned as this one variant. One format in ninety
+    /// uses it.
+    Tagged(Arc<TaggedRef>),
     /// The numbers of one earlier array multiplied together: what a shape
     /// describes. A GGUF tensor says it is 2560 by 5120 and never says it is
     /// 13,107,200 numbers, and the room between one tensor and the next is not
@@ -216,6 +221,21 @@ pub enum Expr {
     Bit(Box<Expr>, u32),
 }
 
+/// Which element of a labelled list to read, and what to read from it. The
+/// body of [`Expr::Tagged`], kept out of the enum so that its 128-bit tag does
+/// not set the width of every expression there is.
+#[derive(Debug, Clone)]
+pub struct TaggedRef {
+    /// The list to look in.
+    pub array: Arc<str>,
+    /// The path to the field of an element that holds its label.
+    pub key: Arc<[String]>,
+    /// The label to look for.
+    pub tag: i128,
+    /// The path to the field to read, in the element that has it.
+    pub field: Arc<[String]>,
+}
+
 impl Expr {
     pub fn lit(v: impl Into<i128>) -> Expr {
         Expr::Lit(v.into())
@@ -251,12 +271,12 @@ impl Expr {
     }
     /// Field `field` of the first element of `array` whose `key` holds `tag`.
     pub fn tagged(array: &str, key: &[&str], tag: i128, field: &[&str]) -> Expr {
-        Expr::Tagged {
+        Expr::Tagged(Arc::new(TaggedRef {
             array: array.into(),
             key: key.iter().map(|s| s.to_string()).collect(),
             tag,
             field: field.iter().map(|s| s.to_string()).collect(),
-        }
+        }))
     }
     /// The numbers of the array at `field` inside `array[index]`, multiplied
     /// together.

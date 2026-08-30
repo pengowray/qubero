@@ -9,6 +9,11 @@ use qubero_core::eval::{EvalError, Evaluator};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
+/// A file in a folder of this name is here to be refused: a file the reader
+/// is meant to say no to rather than read. It does not count against the
+/// sweep, and one of them that reads is what the sweep should say.
+const REFUSED: &str = "does-not-read";
+
 fn main() {
     let root = std::env::args().nth(1).expect("usage: check_tree <dir> [template]");
     let only = std::env::args().nth(2).filter(|a| a != "-");
@@ -16,17 +21,52 @@ fn main() {
     let mut files = Vec::new();
     collect(Path::new(&root), &mut files);
     let (mut read, mut failed) = (0, 0);
+    // Files under the folder, and the two ways one of them can leave the
+    // sweep without having been turned away: it read, or nothing read it.
+    let (mut kept, mut read_anyway, mut not_checked) = (0, 0, 0);
     for path in files {
+        // The folder's own notes are notes, not a sample kept to be refused.
+        let notes = path.extension().is_some_and(|e| e == "md");
+        let meant_to_fail = !notes && path.components().any(|c| c.as_os_str() == REFUSED);
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        let Some(name) = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64) else { continue };
+        if meant_to_fail {
+            kept += 1;
+        }
+        let sniffed = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64);
+        let Some(name) = sniffed else {
+            // Silence is right for the collection at large, where a file no
+            // template matches is one waiting for a template. A file kept to
+            // be refused says so, since a file nothing read is a file the
+            // sweep has not tested.
+            if meant_to_fail {
+                not_checked += 1;
+                println!("{}: not checked, no template matches it", path.display());
+            }
+            continue;
+        };
         if only.as_deref().is_some_and(|want| want != name) {
+            if meant_to_fail {
+                not_checked += 1;
+            }
             continue;
         }
-        let Some(template) = formats::builtin(name) else { continue };
+        let Some(template) = formats::builtin(name) else {
+            if meant_to_fail {
+                not_checked += 1;
+            }
+            continue;
+        };
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);
         let mut errors = Vec::new();
         walk(&mut ev, &doc, &[], 0, depth, &mut errors);
+        if meant_to_fail {
+            if errors.is_empty() {
+                read_anyway += 1;
+                println!("{} as {name} reads, but files in {REFUSED} should not read", path.display());
+            }
+            continue;
+        }
         read += 1;
         if !errors.is_empty() {
             failed += 1;
@@ -37,6 +77,10 @@ fn main() {
         }
     }
     println!("{read} files read, {failed} with something that does not read");
+    if kept > 0 {
+        let s = if kept == 1 { "" } else { "s" };
+        println!("{kept} file{s} in {REFUSED}, {read_anyway} read anyway, {not_checked} not checked");
+    }
 }
 
 fn walk(

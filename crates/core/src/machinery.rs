@@ -141,7 +141,7 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             out.push(array.clone());
             expr_refs(index, out);
         }
-        Expr::Tagged { array, .. } => out.push(array.clone()),
+        Expr::Tagged(t) => out.push(t.array.clone()),
         // A path starting at a sibling and going down into it. Only its first
         // step names something in this structure.
         Expr::Sibling(path) | Expr::Within(path) => {

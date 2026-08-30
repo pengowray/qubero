@@ -60,10 +60,7 @@ impl Evaluator {
         // element before the target stays, since the one about to be placed may
         // ask it for a value. Without this, reading a long list a screen at a
         // time would leave a window behind at every screen.
-        let mut keep = parent.to_vec();
-        keep.push(idx.saturating_sub(1));
-        let journal = self.journals.pop().expect("pushed above");
-        self.drop_nodes(journal.added, &keep);
+        self.close_journal(parent, idx.saturating_sub(1));
         walked
     }
 
@@ -96,14 +93,25 @@ impl Evaluator {
         }
         let out = self.count_from(doc, path, r, until);
         if self.journals.len() > depth {
-            let journal = self.journals.pop().expect("opened during the count");
             // The last element counted stays: the caller has just been told how
             // many there are, and usually asks for one of them next.
-            let mut keep = path.to_vec();
-            keep.push(self.list(path).repeat_len.saturating_sub(1));
-            self.drop_nodes(journal.added, &keep);
+            let keep = self.list(path).repeat_len.saturating_sub(1);
+            self.close_journal(path, keep);
         }
         out
+    }
+
+    /// Give back the window a walk kept behind it, now that the walk is over,
+    /// except for element `keep` of the list at `path`.
+    ///
+    /// Kept to a call of its own for the sake of the stack: a list can hold a
+    /// list, so a walk can be open inside a walk, and what it takes to close
+    /// one has no business sitting under the next.
+    fn close_journal(&mut self, path: &[usize], keep: usize) {
+        let journal = self.journals.pop().expect("opened by the walk that is ending");
+        let mut kept = path.to_vec();
+        kept.push(keep);
+        self.drop_nodes(journal.added, &kept);
     }
 
     /// The counting walk itself, one element per turn.
@@ -144,32 +152,50 @@ impl Evaluator {
             if size == 0 {
                 return fail("repeated element has zero size");
             }
-            let stop = match until {
-                Until::End => false,
-                Until::FieldBytes { field, bytes } => {
-                    let want = bytes.clone();
-                    let got = self.child_raw_bytes(doc, &p, field)?;
-                    got == want
-                }
-            };
+            self.note_element(doc, path, &p, end, until, before)?;
             p.pop();
+        }
+    }
+
+    /// What the count records once an element has been read: whether that
+    /// element is the one that ends the run, where the next one starts, and
+    /// what the window behind the walk may now let go of.
+    ///
+    /// Apart from the walk for the sake of the stack, again: a run of
+    /// something that holds a run reads an element while an element is being
+    /// read, and none of this belongs underneath that.
+    fn note_element<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        elem: &[usize],
+        end: u64,
+        until: &Until,
+        before: usize,
+    ) -> R<()> {
+        let stop = match until {
+            Until::End => false,
+            Until::FieldBytes { field, bytes } => self.child_raw_bytes(doc, elem, field)? == *bytes,
+        };
+        let n = {
             let m = self.list_mut(path);
             m.repeat_len += 1;
             m.repeat_end = Some(end);
             if stop {
                 m.repeat_done = true;
             }
-            // Where the count has got to is where a later reader starts from,
-            // so the walk that counted a list is not walked again to read it.
-            let n = ends + 1;
-            self.list_mut(path).walk_at = Some((n, end));
-            if n % CHECKPOINT == 0 {
-                self.checkpoint(path, n, end);
-            }
-            if n > GUARD_ABOVE {
-                self.close_step(before);
-            }
+            m.repeat_len
+        };
+        // Where the count has got to is where a later reader starts from, so
+        // the walk that counted a list is not walked again to read it.
+        self.list_mut(path).walk_at = Some((n, end));
+        if n % CHECKPOINT == 0 {
+            self.checkpoint(path, n, end);
         }
+        if n > GUARD_ABOVE {
+            self.close_step(before);
+        }
+        Ok(())
     }
 
     /// The walk itself, from element `j` at offset `at` up to element `idx`.
@@ -223,8 +249,7 @@ impl Evaluator {
             w.added.drain(..oldest).collect()
         };
         for path in dropped {
-            self.memo.remove(&path);
-            self.lists.remove(&path);
+            self.memo.forget_node(&path);
         }
     }
 
@@ -234,8 +259,7 @@ impl Evaluator {
             if path.starts_with(keep) {
                 continue;
             }
-            self.memo.remove(&path);
-            self.lists.remove(&path);
+            self.memo.forget_node(&path);
         }
     }
 
@@ -335,7 +359,7 @@ impl Evaluator {
     /// element index and its offset. Checkpoints rise in both index and offset,
     /// so the one to start from can be found by halving rather than scanning.
     fn nearest_start_before(&self, parent: &[usize], bit: u64) -> (usize, u64) {
-        let Some(state) = self.lists.get(parent) else { return (0, self.memo[parent].offset) };
+        let state = self.list(parent);
         let mut best = (0, self.memo[parent].offset);
         let k = state.checkpoints.partition_point(|(_, at)| *at <= bit);
         if k > 0 {
@@ -366,12 +390,12 @@ impl Evaluator {
     /// `idx`, else the nearest kept offset, else the list's own start. Reading
     /// a list in order then starts each step where the last one ended.
     fn nearest_start(&self, parent: &[usize], idx: usize) -> (usize, u64) {
-        let state = self.lists.get(parent);
+        let state = self.list(parent);
         let mut best = (0, self.memo[parent].offset);
-        if let Some(&(j, at)) = state.and_then(|l| l.checkpoints.iter().rev().find(|(j, _)| *j <= idx)) {
+        if let Some(&(j, at)) = state.checkpoints.iter().rev().find(|(j, _)| *j <= idx) {
             best = (j, at);
         }
-        match state.and_then(|l| l.walk_at) {
+        match state.walk_at {
             Some((j, at)) if j <= idx && j >= best.0 => (j, at),
             _ => best,
         }

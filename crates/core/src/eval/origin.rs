@@ -269,7 +269,8 @@ impl Evaluator {
             // The element that says what it is, rather than one at a known
             // place: the answer came from wherever in the list the tag was,
             // and that is the element to point at.
-            Expr::Tagged { array, key, tag, field } => {
+            Expr::Tagged(t) => {
+                let (array, key, tag, field) = (&t.array, &t.key, &t.tag, &t.field);
                 let Some(list) = self.find_field(at, array) else { return Ok(()) };
                 let n = self.child_count(doc, &list)?;
                 for i in 0..n as usize {
