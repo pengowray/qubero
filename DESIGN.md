@@ -1282,18 +1282,39 @@ run of 0xC4 in one and U+2500 in the other. Both are read and the one whose two
 columns agree better is kept, which is the same rule as everywhere else here
 rather than a new one.
 
-What is not here yet is a lazy index, and with it the second half of a shape
-this should have: a fast strict path and a slow lenient one, the way a browser
-has a parser for well-formed markup and a parser for what people write. The
-strict tier is a verifier rather than a second grammar. It confirms that a
-stretch of lines is regular, the same length and the addresses stepping by the
-same amount, and keeps it as a run rather than as materialised rows, so finding
-the line an address is on is arithmetic and the line is parsed only when it is
-read. Lines that fail that check fall through to the per-line path that is here
-now, which is what a shell prompt, a column heading, a wrapped line or a screen
-of box drawing needs. Both tiers share one line parser, so there stays one place
-where the format is understood. For now the dump is read in one go, up to
-`hexdump::LIMIT`, and every line costs a row. A dump laid out regularly needs
+**There are two ways through, and the dump picks.** Almost everything anyone
+opens is a machine's output, unedited: the same layout on every line, every
+line the same length, every address one line's worth past the one above.
+`hexdump/strict.rs` checks exactly that, once, and keeps the answer as a
+handful of runs. Where line `n` starts is `at + n * stride`, which line an
+address is on is a division, and the line is read when it is asked for and not
+before, so a dump of a gigabyte costs an index and a screenful. Everything else
+falls to the path that reads a line at a time and keeps every one, which is
+what a shell prompt between two dumps, a column heading, a line wrapped by a
+mail client, a screen of box drawing, or a `*` standing for a run of identical
+lines needs.
+
+That is the same division a browser makes between a parser for well-formed
+markup and a parser for what people write, and for the same reason: the strict
+one is fast because it is allowed to refuse. What it refuses is written down:
+a byte-order mark, an escape sequence, any byte outside ASCII, a `*`, an
+address that does not follow the one above it, lines of differing length in the
+middle, and more than a few lines of heading or footing around the outside.
+
+It is a verifier and not a second grammar. Deciding how to read a line is
+`parse_row`, the one the slow path uses, so there is one place where the format
+is understood; the fast path only decides *where* the lines are. What keeps
+them honest is `read_irregular`, which reads a dump the slow way whether or not
+it deserves it, and a test that reads every capture in the collection both ways
+and compares the layout, the stretches covered, the notes, the column conflicts
+and the bytes. Seven of the nineteen take the fast path, which is the seven
+that are nothing but a tool's output.
+
+Two things are settled from a bounded sample of rows rather than from all of
+them, on both paths so that both answer alike: which way round a group reads,
+and how the characters were written. A dump is still read in one go, up to
+`hexdump::LIMIT`, because the text arrives as bytes; reading it through a
+`Source` instead is what the run index was built for. A dump laid out regularly needs
 nothing of the sort, since the line holding an address is arithmetic on the
 line length, and that is the upgrade when a dump arrives too big to hold. Nor
 is the recovered binary a document yet: it is a `Dump` that answers reads by

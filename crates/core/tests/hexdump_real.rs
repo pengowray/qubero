@@ -101,6 +101,41 @@ fn a_dump_written_out_again_is_the_same_text() {
     }
 }
 
+/// The fast path and the slow path are the same reader, so they have to say
+/// the same things about the same file. This is the check that keeps them one
+/// reader rather than two: every dump here is read both ways and compared,
+/// including the seven that would normally take the fast path.
+#[test]
+fn both_paths_read_a_dump_the_same_way() {
+    let Some(dir) = folder() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let mut fast = 0;
+    for path in dumps(&dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let text = std::fs::read(&path).unwrap();
+        let quick = hexdump::read(&text, 0).unwrap_or_else(|| panic!("no dump in {name}"));
+        let slow = hexdump::read_irregular(&text, 0).unwrap();
+        if quick.tier() == hexdump::Tier::Regular {
+            fast += 1;
+        }
+
+        assert_eq!(quick.layout, slow.layout, "{name}: the two paths settled on different layouts");
+        assert_eq!(quick.extents(), slow.extents(), "{name}: the two paths cover different stretches");
+        assert_eq!(quick.byte_count(), slow.byte_count(), "{name}: the two paths found different amounts");
+        assert_eq!(quick.notes, slow.notes, "{name}: the two paths read different notes");
+        assert_eq!(quick.conflicts(), slow.conflicts(), "{name}: the two paths disagree about the columns");
+
+        let Some((from, to)) = quick.span() else { continue };
+        let mut a = vec![0u8; (to - from) as usize];
+        let mut b = vec![0u8; (to - from) as usize];
+        assert_eq!(quick.read_at(from, &mut a), slow.read_at(from, &mut b), "{name}: different reads");
+        assert_eq!(a, b, "{name}: the two paths recovered different bytes");
+    }
+    assert!(fast >= 5, "only {fast} dumps took the fast path; something stopped verifying");
+}
+
 fn folder() -> Option<PathBuf> {
     let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
     let beside = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples");

@@ -15,6 +15,7 @@ fn main() {
     };
     let l = &dump.layout;
     println!("{path}");
+    println!("  read as    : {:?}", dump.tier());
     println!("  looks like : {}", l.looks_like().unwrap_or("nothing named here"));
     match &l.address {
         Some(a) => println!("  address    : {}, {} digits{}", a.base.name(), a.digits.map_or(0, |d| d), a.suffix.map_or(String::new(), |c| format!(", closed by {c:?}"))),
@@ -40,8 +41,9 @@ fn main() {
     for e in dump.extents() {
         println!("               {:#x}..{:#x}", e.at, e.end());
     }
-    let confirmed = dump.rows.iter().flat_map(|r| &r.agreement).filter(|a| **a == Agreement::Confirmed).count();
-    let unverifiable = dump.rows.iter().flat_map(|r| &r.agreement).filter(|a| **a == Agreement::Unverifiable).count();
+    let all = dump.span().map_or(Vec::new(), |(a, b)| dump.rows(a, b));
+    let confirmed = all.iter().flat_map(|r| &r.agreement).filter(|a| **a == Agreement::Confirmed).count();
+    let unverifiable = all.iter().flat_map(|r| &r.agreement).filter(|a| **a == Agreement::Unverifiable).count();
     let conflicts = dump.conflicts();
     println!("  columns    : {confirmed} confirmed, {unverifiable} unverifiable, {} in conflict", conflicts.len());
     for (at, wrote, digits) in conflicts.iter().take(5) {
