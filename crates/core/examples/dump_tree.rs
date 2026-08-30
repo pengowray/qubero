@@ -7,6 +7,14 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn main() {
+    // A thread of its own, because the main one on Windows starts with a
+    // megabyte and a debug build's frames are fat. A file nested as deep as
+    // the evaluator allows should come back with an error, not take the tool
+    // down on the way to one.
+    std::thread::Builder::new().stack_size(8 << 20).spawn(run).unwrap().join().unwrap();
+}
+
+fn run() {
     let path = std::env::args().nth(1).expect("usage: dump_tree <file> [template] [depth]");
     let bytes = std::fs::read(&path).unwrap();
     let name = match std::env::args().nth(2) {

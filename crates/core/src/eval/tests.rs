@@ -1728,3 +1728,28 @@ fn nesting_past_the_limit_is_an_error_rather_than_a_crash() {
     path.push(0);
     assert_eq!(ev.node(&d, &path).unwrap().value, Value::Enum { raw: 7, name: None, hex: true });
 }
+
+
+#[test]
+fn a_run_that_holds_a_run_is_refused_at_the_same_depth() {
+    // The other shape a file nests in: not a list of lists, whose length is
+    // arithmetic, but a run that stops on what it reads and so is walked. This
+    // is how bencode nests, and it costs the stack three times as much per
+    // level, so it is the shape the limit is set by.
+    let item = T::structure(
+        "Item",
+        vec![
+            ("tag", T::u8()),
+            ("kids", T::repeat(T::Named("Item".into()), Until::FieldBytes { field: "tag".into(), bytes: vec![b'e'] })),
+        ],
+    );
+    let t = Template::new("nest", T::Named("Item".into())).with_type("Item", item);
+    let mut bytes = vec![b'd'; 300];
+    bytes.extend(std::iter::repeat_n(b'e', 301));
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[]) else {
+        panic!("a run nested past the limit should say so");
+    };
+    assert!(msg.contains("nested more than"), "{msg}");
+}

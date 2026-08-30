@@ -76,19 +76,24 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 /// and ten of the second: deeper than a file means anything by, and nowhere
 /// near what one can be made to say.
 ///
-/// Measured rather than picked, against a 1 MiB stack, which is what wasm is
-/// given and what a thread on Windows starts with. A debug build is what
-/// binds, its frames being several times a release build's, and the shape
-/// that costs the most per component is a run that stops on what it reads,
-/// which is how bencode nests: that one runs out at 150 components, where a
-/// list of lists reaches 455 and the wasm build passes 3000. Half of the
-/// worst of those is the limit, which leaves room for a shape nobody has
-/// measured to be twice as dear as the worst one measured.
+/// Measured rather than picked. What costs the most per component is a run
+/// that stops on what it reads, which is how bencode nests; a list of lists
+/// costs a third of that. A debug build's frames are several times a release
+/// build's, so the tightest place either shape runs is a debug build on the
+/// two megabytes a test thread starts with, where the dear shape affords 310
+/// components and the cheap one 800. This is under half of the 310. In a
+/// release build there is several times the room, and the wasm build read a
+/// list of lists 3000 components deep before this was measured at all.
+///
+/// A megabyte, which is what a thread on Windows starts with, would leave the
+/// dear shape only 150. Nothing ships on a thread that size in a debug build,
+/// and the two examples that read a whole tree take a thread of their own so
+/// that they do not either.
 ///
 /// This is also the ceiling on `no_ring`'s `DEEPEST`, which it will now never
 /// reach: following a pointer adds components too, so a chain of them stops
 /// here first. Real nesting stops at three.
-const DEEPEST_PATH: usize = 64;
+const DEEPEST_PATH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {

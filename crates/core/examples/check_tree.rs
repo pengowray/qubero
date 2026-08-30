@@ -9,16 +9,43 @@ use qubero_core::eval::{EvalError, Evaluator};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
+/// A file in a folder of this name is here to be refused: a file the reader
+/// is meant to say no to rather than read. It does not count against the
+/// sweep, and one of them that reads is what the sweep should say.
+const REFUSED: &str = "does-not-read";
+
 fn main() {
+    // A thread of its own: the main one on Windows starts with a megabyte,
+    // and a debug build's frames are fat enough that a deeply nested file
+    // would run it out. See `DEEPEST_PATH` in `eval/mod.rs`.
+    std::thread::Builder::new().stack_size(8 << 20).spawn(run).unwrap().join().unwrap();
+}
+
+fn run() {
     let root = std::env::args().nth(1).expect("usage: check_tree <dir> [template]");
     let only = std::env::args().nth(2).filter(|a| a != "-");
     let depth: usize = std::env::args().nth(3).and_then(|d| d.parse().ok()).unwrap_or(5);
     let mut files = Vec::new();
     collect(Path::new(&root), &mut files);
     let (mut read, mut failed) = (0, 0);
+    let (mut kept, mut refused) = (0, 0);
     for path in files {
+        let meant_to_fail = path.components().any(|c| c.as_os_str() == REFUSED);
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        let Some(name) = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64) else { continue };
+        if meant_to_fail {
+            kept += 1;
+        }
+        let sniffed = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64);
+        let Some(name) = sniffed else {
+            // Silence is right for the collection at large, where a file
+            // nothing sniffs is one waiting for a template. A file kept to be
+            // refused says so, since nothing sniffing it means nothing has
+            // tried to read it either.
+            if meant_to_fail {
+                println!("{}: nothing sniffs it, so nothing has refused it", path.display());
+            }
+            continue;
+        };
         if only.as_deref().is_some_and(|want| want != name) {
             continue;
         }
@@ -27,6 +54,14 @@ fn main() {
         let mut ev = Evaluator::new(template);
         let mut errors = Vec::new();
         walk(&mut ev, &doc, &[], 0, depth, &mut errors);
+        if meant_to_fail {
+            if errors.is_empty() {
+                println!("{} as {name} reads, and the folder it is in says it should not", path.display());
+            } else {
+                refused += 1;
+            }
+            continue;
+        }
         read += 1;
         if !errors.is_empty() {
             failed += 1;
@@ -37,6 +72,9 @@ fn main() {
         }
     }
     println!("{read} files read, {failed} with something that does not read");
+    if kept > 0 {
+        println!("{kept} kept to be refused, {refused} refused");
+    }
 }
 
 fn walk(
