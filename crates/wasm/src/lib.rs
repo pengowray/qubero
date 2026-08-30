@@ -4,6 +4,8 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::eval::{Explain, Origin};
+use qubero_core::hexdump;
+use qubero_core::source::Source;
 use qubero_core::{diescript, dosbasic};
 use qubero_core::search::{self, Needle, Search, Step};
 use qubero_core::{
@@ -1882,4 +1884,126 @@ impl Editor {
     pub fn piece_count(&self) -> u32 {
         self.doc.piece_count() as u32
     }
+}
+
+/// What a text file turned out to be a dump of, if anything.
+///
+/// Standalone rather than a method on [`Editor`], because a dump is text the
+/// host already has in hand and the file it describes is not the file that is
+/// open. The host reads this, offers what it says, and opens the recovered
+/// bytes as a document of their own.
+#[derive(Serialize, Default)]
+struct DumpScanDto {
+    /// Empty when the layout matches no tool that is recognised here, which
+    /// changes nothing about how it was read.
+    tool: String,
+    /// "regular" when the lines were regular enough to be read by arithmetic.
+    tier: String,
+    /// The first address described and the end of the last.
+    from: f64,
+    to: f64,
+    /// Bytes the dump actually spells out, which is fewer than `to - from`
+    /// when it skips stretches.
+    covered: f64,
+    address_base: String,
+    address_digits: u32,
+    bytes_per_line: u32,
+    group: u32,
+    upper: bool,
+    reversed_groups: bool,
+    characters: String,
+    /// What the dump did not settle, which was taken as the usual thing.
+    assumed: Vec<String>,
+    /// Stretches of the described file the dump covers, as start/end pairs.
+    extents: Vec<f64>,
+    /// Stretches inside that span nobody described, as start/end pairs.
+    holes: Vec<f64>,
+    /// Paths or file names the dump gave.
+    names: Vec<String>,
+    /// A length the dump stated, or -1. Not the same as what it went on to
+    /// write, which is the point of keeping it.
+    stated_length: f64,
+    /// Command lines a transcript kept.
+    commands: Vec<String>,
+    /// Lines that were not part of the dump.
+    skipped_lines: u32,
+    /// Bytes whose two spellings disagree, capped: a dump read the wrong way
+    /// disagrees everywhere, and the first few say so as well as all of them.
+    conflicts: Vec<DumpConflictDto>,
+}
+
+#[derive(Serialize)]
+struct DumpConflictDto {
+    at: f64,
+    wrote: String,
+    digits: u8,
+}
+
+/// Read `text` as a hex dump and say what it holds. Returns "" when it is not
+/// one, or when it is too big to read in one go.
+#[wasm_bindgen]
+pub fn dump_scan(text: &[u8]) -> String {
+    if text.len() > hexdump::LIMIT {
+        return String::new();
+    }
+    let Some(dump) = hexdump::read(text, 0) else { return String::new() };
+    let Some((from, to)) = dump.span() else { return String::new() };
+    let l = &dump.layout;
+    let mut dto = DumpScanDto {
+        tool: l.looks_like().unwrap_or("").to_string(),
+        tier: match dump.tier() {
+            hexdump::Tier::Regular => "regular",
+            hexdump::Tier::Irregular => "irregular",
+        }
+        .to_string(),
+        from: from as f64,
+        to: to as f64,
+        covered: dump.byte_count() as f64,
+        address_base: l.address.as_ref().map_or("", |a| a.base.name()).to_string(),
+        address_digits: l.address.as_ref().and_then(|a| a.digits).unwrap_or(0) as u32,
+        bytes_per_line: l.bytes_per_line as u32,
+        group: l.group as u32,
+        upper: l.upper,
+        reversed_groups: l.order == hexdump::layout::Order::ReversedInGroup,
+        characters: l.text.as_ref().map_or(String::new(), |t| t.glyphs.name().to_string()),
+        assumed: l.assumed.iter().map(|a| format!("{a:?}")).collect(),
+        stated_length: -1.0,
+        skipped_lines: dump.skipped.len() as u32,
+        ..Default::default()
+    };
+    let mut at = from;
+    for e in dump.extents() {
+        dto.extents.push(e.at as f64);
+        dto.extents.push(e.end() as f64);
+        if e.at > at {
+            dto.holes.push(at as f64);
+            dto.holes.push(e.at as f64);
+        }
+        at = e.end().max(at);
+    }
+    for n in &dump.notes {
+        match n {
+            hexdump::Note::Named(s) => dto.names.push(s.clone()),
+            hexdump::Note::Length(v) => dto.stated_length = *v as f64,
+            hexdump::Note::Command(s) => dto.commands.push(s.clone()),
+        }
+    }
+    dto.conflicts = dump
+        .conflicts()
+        .into_iter()
+        .take(64)
+        .map(|(at, wrote, digits)| DumpConflictDto { at: at as f64, wrote: wrote.to_string(), digits })
+        .collect();
+    serde_json::to_string(&dto).unwrap_or_default()
+}
+
+/// The bytes a dump describes, from its first address to the end of its last.
+/// A stretch the dump skipped reads as zeros; `dump_scan` says where those
+/// are, so a reader is never left to guess which zeros were written down.
+#[wasm_bindgen]
+pub fn dump_bytes(text: &[u8]) -> Vec<u8> {
+    let Some(source) = hexdump::source::DumpSource::new(text.to_vec()) else { return Vec::new() };
+    let mut out = vec![0u8; source.len_bytes() as usize];
+    source.read_bytes(0, &mut out);
+    out
 }
