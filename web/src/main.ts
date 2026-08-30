@@ -574,6 +574,10 @@ function build(tab: Tab): void {
   text.onPick = (at) => {
     view.setBitCursor(at * 8);
   };
+  // Typing in the text writes bytes, so the rest of the page has to catch up
+  // the way it does after any other edit.
+  text.onEdit = () => refresh();
+  text.onRefuse = (char, encodingName) => say(TEXTVIEW.refused(char, encodingName), true);
 
   const openBtn = el("button", { type: "button", textContent: "Open" });
   openBtn.addEventListener("click", () => pick());
@@ -603,6 +607,10 @@ function build(tab: Tab): void {
   const statusbar = el("footer", { className: "statusbar" }, posLabel);
 
   const refresh = (): void => {
+    // What the dump said was read off the file as it was opened. Once it has
+    // been edited that reading is about bytes that are no longer there, so the
+    // offer goes rather than saying something that stopped being true.
+    if (doc.modified) dumpBar.hidden = true;
     fileLabel.textContent = `${doc.name}${doc.modified ? " (edited)" : ""}  ${formatSize(doc.lengthBytes)}`;
     app.querySelector(".tab.is-active")?.classList.toggle("is-edited", doc.modified);
     undoBtn.disabled = !doc.canUndo;

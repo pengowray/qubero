@@ -1,7 +1,7 @@
 // Document facade: owns the wasm Editor and streams chunks in from a File/Blob.
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
-import init, { Editor, dump_scan, dump_bytes } from "./pkg/qubero_wasm.js";
+import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
 
 const CHUNK_SIZE = 64 * 1024;
 /** Chunks to fetch past one the template asked for and did not have. Placing
@@ -275,6 +275,9 @@ export type DumpScan = {
   readonly skipped_lines: number;
   readonly conflicts: readonly { at: number; wrote: string; digits: number }[];
 };
+
+/** Typed text turned back into bytes, or the character that stopped it. */
+export type TextEncoded = { readonly bytes: readonly number[]; readonly refused: string };
 
 export type NeedleKind = "hex" | "text" | "regex";
 
@@ -1228,6 +1231,15 @@ export class Doc {
     await this.ensureRange(0, this.lengthBytes);
     const got = this.read(0, this.lengthBytes);
     return got.complete ? dump_bytes(got.bytes) : new Uint8Array();
+  }
+
+  /**
+   * Typed text as the bytes it is in the file's encoding, or the character the
+   * encoding has no room for. `chosen` is what the reader picked, `settled` is
+   * what the file was read as when they picked nothing.
+   */
+  encodeText(chosen: string, settled: string, text: string): TextEncoded {
+    return JSON.parse(text_encode(chosen, settled, text)) as TextEncoded;
   }
 
   /** How the file reads as text. Pass "" to let the file decide. */

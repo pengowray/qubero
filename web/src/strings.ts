@@ -254,6 +254,10 @@ export const TEXTVIEW = {
   lineLossy: (encoding: string): string => `not ${encoding}`,
   /** Beside the encoding, when nothing in the file said which it was. */
   guessed: "guessed",
+  /** Typing a character the encoding has no room for. The encoding is named
+   *  because it may have been a guess, and this is where a wrong guess is
+   *  found out. */
+  refused: (char: string, encoding: string): string => `${char} isn't in ${encoding}`,
   /** The encoding chooser's first entry. "Auto-detect" rather than "from the
    *  file", which would claim the file said, and only a byte-order mark does. */
   encodingAuto: "Auto-detect",

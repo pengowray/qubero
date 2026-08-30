@@ -2786,3 +2786,24 @@ table.rec tr.is-on td {
   font-family: var(--sans);
   font-size: 12px;
 }
+
+/* The caret sits between bytes, so it is a line between characters rather than
+   a box on one. The character the cursor is inside keeps its highlight: the
+   two say different things, and after an insert they are next to each other. */
+.tv-caret {
+  display: inline-block;
+  width: 0;
+  border-left: 2px solid var(--accent);
+  margin-left: -1px;
+  margin-right: -1px;
+  animation: tv-blink 1.1s step-end infinite;
+}
+.tv-scroll:not(:focus-within) .tv-caret {
+  animation: none;
+  opacity: 0.45;
+}
+@keyframes tv-blink {
+  50% {
+    opacity: 0;
+  }
+}

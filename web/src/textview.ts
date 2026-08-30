@@ -63,6 +63,10 @@ export class TextView {
   onPick: (at: number) => void = () => {};
   /** Called when the reading is settled, so the toolbar can say what it is. */
   onReading: (r: TextReading, usualEnding: string) => void = () => {};
+  /** Called when the file changed, so the rest of the page catches up. */
+  onEdit: () => void = () => {};
+  /** Called when the encoding has no room for a character that was typed. */
+  onRefuse: (char: string, encoding: string) => void = () => {};
 
   constructor(private doc: Doc) {
     this.gutter = el("div", { className: "tv-gutter" });
@@ -149,31 +153,170 @@ export class TextView {
     await this.draw();
   }
 
+  /** Where a line's text stops, which is where its ending starts. */
+  private textEnd(line: TextLine): number {
+    const u = this.reading.unit;
+    const ending = line.ending === "CRLF" ? 2 * u : line.ending === "LF" || line.ending === "CR" ? u : 0;
+    return line.at + line.len - ending;
+  }
+
+  /** The line on screen holding the caret, and where it is in that list. */
+  private caretLine(): { line: TextLine; index: number } | null {
+    const index = this.lines.findIndex((l) => this.cursor >= l.at && this.cursor <= this.textEnd(l));
+    const line = this.lines[index];
+    return line === undefined ? null : { line, index };
+  }
+
   private onKey(e: KeyboardEvent): void {
     const page = this.visible() - 1;
-    const step = (n: number): void => {
+    const scroll = (n: number): void => {
       e.preventDefault();
       void this.scrollLines(n);
     };
+    const move = (f: () => Promise<void>): void => {
+      e.preventDefault();
+      void f();
+    };
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     switch (e.key) {
+      case "ArrowRight":
+        return move(() => this.moveChar(1));
+      case "ArrowLeft":
+        return move(() => this.moveChar(-1));
       case "ArrowDown":
-        return step(1);
+        return move(() => this.moveLine(1));
       case "ArrowUp":
-        return step(-1);
+        return move(() => this.moveLine(-1));
       case "PageDown":
-        return step(page);
+        return scroll(page);
       case "PageUp":
-        return step(-page);
+        return scroll(-page);
       case "Home":
-        e.preventDefault();
-        void this.jump(0);
-        return;
+        return move(() => this.moveToLineEdge("start"));
       case "End":
-        e.preventDefault();
-        void this.jump(this.doc.lengthBytes);
-        return;
+        return move(() => this.moveToLineEdge("end"));
+      case "Backspace":
+        return move(() => this.erase(-1));
+      case "Delete":
+        return move(() => this.erase(1));
+      case "Enter":
+        return move(() => this.insert(endingText(this.usualEnding)));
       default:
     }
+    // One printable character. A key name longer than a character is a key and
+    // not something to type: "Shift", "F5", "Escape".
+    if ([...e.key].length === 1) move(() => this.insert(e.key));
+  }
+
+  /** Move the caret a character left or right, following it onto the line
+   *  above or below when it runs off the end of this one. */
+  private async moveChar(dir: 1 | -1): Promise<void> {
+    const here = this.caretLine();
+    if (here === null) return;
+    const cells = this.charsOf(here.line);
+    if (dir === 1) {
+      const next = cells.find((c) => c.at >= this.cursor);
+      if (next !== undefined && next.at === this.cursor) return this.place(this.cursor + next.width);
+      return this.place(here.line.at + here.line.len);
+    }
+    const prev = [...cells].reverse().find((c) => c.at < this.cursor);
+    if (prev !== undefined) return this.place(prev.at);
+    if (here.line.at === 0) return;
+    const b = await this.doc.textBack(this.chosen, here.line.at - 1, 0);
+    await this.place(b.start);
+    const above = this.caretLine();
+    if (above !== null) await this.place(this.textEnd(above.line));
+  }
+
+  /** Move the caret a line up or down, keeping the character it was on. */
+  private async moveLine(dir: 1 | -1): Promise<void> {
+    const here = this.caretLine();
+    if (here === null) return;
+    const column = this.charsOf(here.line).filter((c) => c.at < this.cursor).length;
+    const target = this.lines[here.index + dir];
+    if (target === undefined) {
+      await this.scrollLines(dir);
+      const after = this.caretLine();
+      if (after === null) return;
+      const next = this.lines[after.index + dir];
+      if (next === undefined) return;
+      return this.place(this.columnAt(next, column));
+    }
+    return this.place(this.columnAt(target, column));
+  }
+
+  /** The byte a column lands on in a line, clamped to its end. */
+  private columnAt(line: TextLine, column: number): number {
+    const cells = this.charsOf(line);
+    return cells[column]?.at ?? this.textEnd(line);
+  }
+
+  private async moveToLineEdge(edge: "start" | "end"): Promise<void> {
+    const here = this.caretLine();
+    if (here === null) return;
+    await this.place(edge === "start" ? here.line.at : this.textEnd(here.line));
+  }
+
+  /** Put the caret on a byte and tell the rest of the app, which is what moves
+   *  every other view: the caret is the cursor, not a second position. */
+  private async place(at: number): Promise<void> {
+    const clamped = Math.max(0, Math.min(at, this.doc.lengthBytes));
+    this.cursor = clamped;
+    this.onPick(clamped);
+    await this.draw();
+  }
+
+  /** Type text in at the caret. */
+  private async insert(text: string): Promise<void> {
+    const got = this.doc.encodeText(this.chosen, this.reading.encoding, text);
+    if (got.refused !== "") {
+      this.onRefuse(got.refused, this.chosen === "" ? this.reading.encoding : this.chosen);
+      return;
+    }
+    const bytes = Uint8Array.from(got.bytes);
+    this.doc.replaceAt(this.cursor, 0, bytes);
+    await this.after(this.cursor + bytes.length);
+  }
+
+  /** Take out the character before the caret, or the one after it. */
+  private async erase(dir: 1 | -1): Promise<void> {
+    const here = this.caretLine();
+    if (here === null) return;
+    const cells = this.charsOf(here.line);
+    if (dir === -1) {
+      const prev = [...cells].reverse().find((c) => c.at < this.cursor);
+      if (prev !== undefined) {
+        this.doc.replaceAt(prev.at, prev.width, new Uint8Array());
+        return this.after(prev.at);
+      }
+      // At the front of a line, what is behind the caret is the line ending
+      // above it, however many bytes that turned out to be.
+      if (here.line.at === 0) return;
+      const b = await this.doc.textBack(this.chosen, here.line.at - 1, 0);
+      const above = this.lines.find((l) => l.at === b.start);
+      const end = above === undefined ? here.line.at - 1 : this.textEnd(above);
+      this.doc.replaceAt(end, here.line.at - end, new Uint8Array());
+      return this.after(end);
+    }
+    const next = cells.find((c) => c.at === this.cursor);
+    if (next !== undefined) {
+      this.doc.replaceAt(next.at, next.width, new Uint8Array());
+      return this.after(next.at);
+    }
+    // At the end of a line, what is in front of the caret is its ending.
+    const gone = here.line.at + here.line.len - this.cursor;
+    if (gone > 0) this.doc.replaceAt(this.cursor, gone, new Uint8Array());
+    return this.after(this.cursor);
+  }
+
+  /** After an edit: the caret lands where the change left it, the encoding is
+   *  settled again in case the change was to the front of the file, and every
+   *  other view is told. */
+  private async after(at: number): Promise<void> {
+    this.cursor = Math.max(0, Math.min(at, this.doc.lengthBytes));
+    await this.draw(true);
+    this.onPick(this.cursor);
+    this.onEdit();
   }
 
   private async scrollLines(n: number): Promise<void> {
@@ -234,22 +377,39 @@ export class TextView {
     this.rows.replaceChildren(...rows);
   }
 
+  /** Where each character of a line sits and how many bytes it takes. The
+   *  write path asks this as much as the drawing does: what backspace removes
+   *  is the width of the character before the caret, not one byte. */
+  private charsOf(line: TextLine): { char: string; at: number; width: number }[] {
+    const out: { char: string; at: number; width: number }[] = [];
+    let at = line.at;
+    for (const c of line.text) {
+      const width = charWidth(c, this.reading.encoding, this.reading.unit);
+      out.push({ char: c, at, width });
+      at += width;
+    }
+    return out;
+  }
+
   private row(line: TextLine): HTMLElement {
     const row = el("div", { className: "tv-row" });
     if (line.lossy) row.classList.add("is-lossy");
-    const chars = [...line.text];
-    const escapes = escapeMask(chars.length, line.escapes);
-    const unit = this.reading.unit;
-    const utf8 = this.reading.encoding === "UTF-8";
-    let at = line.at;
+    const cells = this.charsOf(line);
+    const escapes = escapeMask(cells.length, line.escapes);
     let run: HTMLElement | null = null;
     let runKind = "";
-    const shown = Math.min(chars.length, MAX_CHARS);
+    const shown = Math.min(cells.length, MAX_CHARS);
+    // The caret sits between bytes, so it is drawn before the character it is
+    // in front of rather than on one. A caret at the end of a line has no
+    // character to sit before, which is what the last check is for.
+    const caretHere = (at: number): boolean => this.cursor === at;
     for (let i = 0; i < shown; i++) {
-      const c = chars[i] ?? "";
-      const width = utf8 ? utf8Width(c) : unit;
+      const cell = cells[i];
+      if (cell === undefined) continue;
+      const { char: c, at, width } = cell;
       const kind = escapes[i] === true ? "tv-esc" : control(c) !== null ? "tv-ctl" : "";
       const onCursor = this.cursor >= at && this.cursor < at + width;
+      if (caretHere(at)) row.append(el("span", { className: "tv-caret" }));
       if (run === null || runKind !== kind || onCursor) {
         run = el("span", { className: kind === "" ? "tv-text" : `tv-text ${kind}` });
         run.dataset.at = String(at);
@@ -258,13 +418,13 @@ export class TextView {
       }
       if (onCursor) run.classList.add("is-cursor");
       run.append(control(c) ?? c);
-      at += width;
       if (onCursor) {
         run = null;
         runKind = "";
       }
     }
-    if (chars.length > shown) row.append(el("span", { className: "tv-more", textContent: TEXTVIEW.lineClipped }));
+    if (caretHere(this.textEnd(line))) row.append(el("span", { className: "tv-caret" }));
+    if (cells.length > shown) row.append(el("span", { className: "tv-more", textContent: TEXTVIEW.lineClipped }));
     if (line.ending === "cut") row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineCut }));
     else if (ENDINGS.has(line.ending) && line.ending !== this.usualEnding && this.usualEnding !== "") {
       row.append(el("span", { className: "tv-mark", textContent: line.ending }));
@@ -272,6 +432,13 @@ export class TextView {
     if (line.lossy) row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineLossy(this.reading.encoding) }));
     return row;
   }
+}
+
+/** The characters a line ending is made of, so Enter writes what the rest of
+ *  the file writes. A file that has not settled on one gets a line feed, which
+ *  is what a file with no endings at all would be given by anything else. */
+function endingText(usual: string): string {
+  return usual === "CRLF" ? "\r\n" : usual === "CR" ? "\r" : "\n";
 }
 
 /** Which characters of a line are inside an escape sequence. */
@@ -294,12 +461,14 @@ function control(c: string): string | null {
   return null;
 }
 
-function utf8Width(c: string): number {
+/** How many bytes one character takes in an encoding. This is a write path as
+ *  much as a display one: a character above the basic plane is two UTF-16 code
+ *  units, so backspacing over one has to take four bytes and not two. */
+function charWidth(c: string, encoding: string, unit: number): number {
   const code = c.codePointAt(0) ?? 0;
-  if (code < 0x80) return 1;
-  if (code < 0x800) return 2;
-  if (code < 0x10000) return 3;
-  return 4;
+  if (encoding === "UTF-8") return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  if (unit === 2) return code < 0x10000 ? 2 : 4;
+  return 1;
 }
 
 /** The ending most lines used, so the odd one out can be the one that is

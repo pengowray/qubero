@@ -1952,6 +1952,32 @@ impl Editor {
     }
 }
 
+/// Text typed into the text view, as the bytes it is in the file's encoding.
+///
+/// The answer is a refusal or a run of bytes, never both and never a guess: an
+/// encoding that has no room for a character says which character, since the
+/// reader is owed the difference between "this file cannot hold that" and
+/// "this file was read as the wrong thing". A file read as CP437 that is
+/// really Latin-1 will take a character the other would refuse, and the
+/// refusal is where that is found out.
+#[wasm_bindgen]
+pub fn text_encode(encoding: &str, settled: &str, text: &str) -> String {
+    use qubero_core::text::{encode_settled, Settled};
+    let enc = named_encoding(encoding).or_else(|| named_encoding(settled)).unwrap_or(Settled::Utf8);
+    match encode_settled(enc, text) {
+        Ok(bytes) => serde_json::to_string(&TextEncodeDto { bytes, refused: String::new() }),
+        Err(c) => serde_json::to_string(&TextEncodeDto { bytes: Vec::new(), refused: c.to_string() }),
+    }
+    .unwrap_or_default()
+}
+
+#[derive(Serialize)]
+struct TextEncodeDto {
+    bytes: Vec<u8>,
+    /// The character the encoding has no room for, or empty.
+    refused: String,
+}
+
 /// An encoding named across the boundary, or nothing to let the file decide.
 fn named_encoding(name: &str) -> Option<qubero_core::text::Settled> {
     use qubero_core::text::Settled;
