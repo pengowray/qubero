@@ -1350,6 +1350,50 @@ Ctrl+F5 is "Copy all text on the DOS screen", which is the text screenshot, and
 through the guest's own code page, which is how the same screen is captured
 both ways. The steps are in the sample folder's own README.
 
+### The file as the text it is
+The hex grid answers "what is at this address" and the listing answers "how is
+this file put together". Neither reads a file the way it was written to be
+read, and plenty of files were: a log, a manifest, a terminal captured to disk,
+a hex dump somebody pasted. `crates/core/src/textview.rs` is the model and
+`web/src/textview.ts` is the third main view.
+
+It scrolls by byte offset rather than by line number, for the reason the
+listing already has: nothing can say how many lines a file has without reading
+all of it. So the scrollbar stands for a place in the file, exactly as the hex
+grid's does, and the gutter carries each line's offset rather than a line
+number that would only be right if the file had been read from the top. Going
+backwards is a search for endings in a window before the position, which is the
+only way back through lines that are not a fixed length.
+
+Four things a text file does not write down are each answered rather than
+assumed, and all four turned up in the dump reader first. Which encoding: a
+byte-order mark settles it, and where there is none the bytes decide and the
+view says it was a guess, with a chooser beside it because nothing in a capture
+of a DOS screen says it is CP437. Which line ending: per line, since a file may
+use all of them, and a line whose ending is not the one the rest of the screen
+used is marked. Where a line stops when it never does: a minified file is one
+line of two gigabytes, so a line is cut at 4 KiB and says it was cut. And where
+the escape sequences are: a capture of a coloured terminal is full of them, and
+they are neither dropped nor shown as gibberish. Each line says which stretches
+of it are escapes; the view dims them and shows control characters as their
+Unicode pictures, so nothing moves the text around and nothing is hidden.
+
+A document is now a `Source`, so what the view reads is what the document says
+rather than what the file on disk says.
+
+### A file that describes another file, opened as one
+`hexdump/source.rs` makes a dump's bytes readable like any other file, and the
+app offers them. A text file that turns out to be a dump says so in a row above
+the views, with what was found and the two things that would mislead someone
+opening it blind: gaps nobody wrote down, which read as zeros, and bytes the
+hex column and the character column disagree about. Opening it makes a document
+of its own with all four views, named after the file the dump named where it
+named one, which is what `Format-Hex`'s label and XTree's header line carry.
+
+Nothing new was needed to hold it: opening bytes lifted out of a document as a
+tab of their own is what a zip entry already does. What is new is that the
+bytes were never in the file, only written out in digits.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
