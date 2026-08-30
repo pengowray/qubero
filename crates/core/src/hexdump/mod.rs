@@ -195,8 +195,10 @@ pub fn read_lines(text: &[Line]) -> Option<Dump> {
     let mut layout = layout::infer(&sample)?;
     let mut rows = Vec::new();
     let mut skipped = Vec::new();
+    let mut squeezed = false;
     for line in text {
-        if layout.squeeze.is_some_and(|c| line.text.trim() == c.to_string()) {
+        if line.text.trim() == "*" {
+            squeezed = true;
             rows.push(Row { at: line.at, address: 0, bytes: Vec::new(), digits_at: Vec::new(), chars: None, agreement: Vec::new(), implied: true });
             continue;
         }
@@ -205,6 +207,8 @@ pub fn read_lines(text: &[Line]) -> Option<Dump> {
             None => skipped.push(line.at),
         }
     }
+
+    layout.squeeze = squeezed.then_some('*');
 
     // A run of identical lines has its length only in the addresses either side
     // of the `*`, so it is filled in once every real line has been read.
@@ -231,6 +235,13 @@ pub fn read_lines(text: &[Line]) -> Option<Dump> {
 
     let end = rows.last().map_or(0, |r| r.address + r.bytes.len() as u64);
     skipped.sort_unstable();
+    // A last line that is nothing but the address after the last byte, which is
+    // how `od` says how long the file was.
+    layout.end_address = text
+        .iter()
+        .rev()
+        .find(|l| !l.text.trim().is_empty())
+        .is_some_and(|l| skipped.binary_search(&l.at).is_ok() && lone_address(&l.text, &layout) == Some(end));
     let notes = notes(text, &skipped, end);
     Some(Dump { layout, rows, notes, skipped })
 }
@@ -499,6 +510,18 @@ fn notes(text: &[Line], skipped: &[u64], end: u64) -> Vec<Note> {
     }
     out.dedup();
     out
+}
+
+/// The value of a line that is one address and nothing else.
+fn lone_address(line: &str, layout: &Layout) -> Option<u64> {
+    let a = layout.address.as_ref()?;
+    let toks = layout::tokens(line.trim());
+    let [t] = toks[..] else { return None };
+    let digits = match a.suffix {
+        Some(c) => t.s.strip_suffix(c).unwrap_or(t.s),
+        None => t.s,
+    };
+    u64::from_str_radix(digits, a.base.radix()).ok()
 }
 
 /// The dumping command on a transcript's line, with the prompt in front of it

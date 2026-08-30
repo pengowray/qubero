@@ -89,6 +89,13 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
             if path.file_name().is_some_and(|n| n == "tools" || n == ".git") {
                 continue;
             }
+            // `hexdump/` is not a folder of formats. It holds one file of
+            // bytes that are deliberately no format at all and a dozen text
+            // captures describing it, which `hexdump_real.rs` reads as what
+            // they describe rather than as what they are.
+            if path.file_name().is_some_and(|n| n == "hexdump") {
+                continue;
+            }
             collect(&path, out);
         } else if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
             // The repository's own files: the collection is versioned by its
@@ -98,6 +105,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
             // A `.dis` beside a binary is that binary's own toolchain reading
             // it, kept as the answer key `examples/dis_diff.rs` measures a
             // decoder against. It is a listing about a sample, not a sample.
+
             out.push(path);
         }
     }

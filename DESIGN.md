@@ -1180,6 +1180,107 @@ cpio archive, a cabinet carries MSZIP, LZX or Quantum, and a xar carries a
 deflated table. Naming what wrote a compressed run from its first bytes is as
 far as this goes, which is where the initramfs stopped as well.
 
+### A file that is a dump of another file
+A hex dump is the oldest view of a file there is, and a capture of one is the
+file written out in digits. People send them in bug reports, paste them into
+issues, print them in manuals, and take them off machines that have no other
+way to get a file out. What arrives is text that describes a binary, and the
+binary is what the reader wanted. `crates/core/src/hexdump/` reads it back.
+
+Nothing in a dump says how to read it. `xxd` writes an eight-digit hex address,
+a colon, eight groups of two bytes and a text column; `od` writes six digits,
+no colon, sixteen groups of one and a text column inside angle brackets;
+`certutil` indents, splits the digits in half and writes no text column;
+PowerShell writes sixteen digits, a label naming the file and a column heading;
+and every one of them writes something else if it is asked to. A reader that
+knows one of them knows one of them.
+
+So the layout is read off the lines. The one thing a dump cannot lie about is
+arithmetic: the address of a line plus the bytes on it is the address of the
+next. Every hypothesis about which token is the address and what base it is
+written in is checked against that sum, and how many bytes are on a line is
+taken from the difference of two addresses rather than from counting digits.
+That last point is what makes it work at all, because counting digits is what
+goes wrong: a line reading `3031 3233 3435 3637  01234567` has a text column
+that is itself eight hex digits, and its addresses say the line holds eight
+bytes rather than twelve.
+
+Two things are settled the same way, by being checked rather than assumed. An
+octal address is not a hex one because subtracting two of them gives sixteen
+one way and thirty-two the other. And a dump with no address column at all
+survives nothing, which is how `certutil -encodehex` is told apart from a dump
+whose bytes happen to climb evenly: `00 01 .. 0f` over `10 11 .. 1f` gives a
+first token that steps by eight in octal, and the hypothesis that believes it
+has left half a line of digits sitting where the characters should be. A
+hypothesis that does that on more lines than it explains is the wrong one.
+
+The names (`xxd`, `od -Ax -tx1z`, `Format-Hex`) are attached afterwards, to a
+layout already settled. They are a label on the answer and never a route to it,
+so a tool nobody here has heard of reads the same as one that ships with every
+system.
+
+**The two columns check each other.** Most dumps write the bytes twice, once as
+digits and once as characters, and that is redundancy sitting unused in nearly
+every dump ever pasted anywhere. Read both and a mistyped digit, a line wrapped
+by a mail client, or a group written backwards stops being invisible. The
+answer per byte has three cases rather than two, because a full stop stands for
+so many bytes that most of the column can only ever confirm: agreed, not
+checkable, or in conflict. Which encoding the characters are in is decided by
+which one the digits contradict least, so `Format-Hex` is read as Latin-1 and a
+DOS tool's column as CP437, and when the column holds nothing but printable
+ASCII, which every encoding agrees on, the layout says it assumed.
+
+That check is what reads `xxd -e`. It writes each group as a little-endian
+number, so the digits run backwards inside the group, and nothing on the line
+says so except the text column, which still reads in file order. Both orders
+are tried and the one the characters agree with wins. With no text column the
+digits are taken at their word and the layout says that too.
+
+**What is missing is not filled in.** A dump of part of a file is ordinary, and
+so is a terminal transcript holding two runs of `xxd` over different stretches
+with a shell prompt and the output of `ls` between them. The result says which
+addresses it covers and leaves the rest as a hole. A run of identical lines
+collapsed to a `*` is the same problem from the other end: the length of the
+run is written nowhere, and is the difference between the address before the
+marker and the address after it.
+
+**The file says things about itself.** `Format-Hex` writes the path it dumped,
+`od` and `certutil` write the length, and a transcript keeps the command with
+its arguments on the line above. That is metadata a hex parser throws away and
+a reader wants, since it is how a dump of a stretch in the middle of a file
+knows that is what it is. Only the few shapes that actually carry something are
+read; anything looser reads a sentence out of a shell prompt.
+
+`hexdump/write.rs` is the other direction, and it is the plain text view: a
+file, or a stretch of one, written out as a dump in a layout. It is here
+because the dump is sometimes the deliverable, and because it is how the reader
+is tested. Seven of the captures in the sample collection come back character
+for character after being read and written again, squeezed runs and ragged last
+lines included, and anything the reader failed to notice about a layout turns
+up as a column in the wrong place.
+
+The samples are in `qubero-samples/hexdump/`: one small file made for the
+purpose and a dozen captures of it, from `xxd` with five sets of options
+(including one that keeps the ANSI colour and one that reverses its groups),
+`od` with three address bases, `certutil` two ways, `Format-Hex` in UTF-8 and
+UTF-16, and a bash transcript. A dump reproduces the file it dumps, so nothing
+that is not redistributable can be dumped into that collection.
+
+What is not here yet is a lazy index. The dump is read in one go, up to
+`hexdump::LIMIT`, and every line costs a row. A dump laid out regularly needs
+nothing of the sort, since the line holding an address is arithmetic on the
+line length, and that is the upgrade when a dump arrives too big to hold. Nor
+is the recovered binary a document yet: it is a `Dump` that answers reads by
+address, which is the shape a `Source` needs, but which of the four views it
+should appear in is a question for the app rather than the core. Editing
+through it is further off still, and it is the first real client of the
+redundant-editing work below: changing a byte in the binary has to rewrite a
+pair of digits and a character, and the two have to keep agreeing.
+
+XTree Gold is the capture still missing. Its hex view is a screen rather than a
+stream, so a text capture of it needs DOSBox-X, and the header carries the path
+and the mode the way `Format-Hex` carries its label.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing

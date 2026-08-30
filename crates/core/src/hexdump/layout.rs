@@ -56,6 +56,10 @@ pub struct Address {
     pub digits: Option<usize>,
     /// A character closing the address, which is xxd's colon.
     pub suffix: Option<char>,
+    /// Whether its digits are upper case, which is a separate question from
+    /// the digits of the bytes: `xxd -u` writes the bytes in upper case and
+    /// the address in lower.
+    pub upper: bool,
 }
 
 /// The column of characters down the right.
@@ -111,14 +115,27 @@ pub struct Layout {
     pub upper: bool,
     pub order: Order,
     pub text: Option<TextColumn>,
+    /// Spaces before the address, which `certutil` indents by.
+    pub indent: usize,
+    /// Where the digits start, counted in characters from the front of the
+    /// line. A short last line keeps its columns by being padded to it.
+    pub hex_at: usize,
+    /// Whether an extra space falls halfway along the digits, which is how
+    /// `certutil` and `hexdump -C` split a line into two halves.
+    pub half_gap: bool,
     /// Where the character column starts, counted in characters from the front
     /// of the line. It cannot be found by splitting on spaces, because a space
     /// is a byte and one at the front of the column would be eaten with the
     /// separator.
     pub text_at: Option<usize>,
-    /// The character standing for a line the same as the one before it, which
-    /// is `*` in every tool that does this.
+    /// The character the dump collapsed a run of identical lines to, where it
+    /// did. `*` is what every tool that does this writes, but a dump with no
+    /// such run in it is not one that would have written the marker, and a
+    /// dump written from this layout should not invent one.
     pub squeeze: Option<char>,
+    /// Whether the dump ends with the address after its last byte on a line of
+    /// its own, which is how `od` says how long the file was.
+    pub end_address: bool,
     pub assumed: Vec<Assumed>,
 }
 
@@ -361,6 +378,8 @@ pub fn infer(sample: &[String]) -> Option<Layout> {
         return None;
     }
 
+    let indent = rows.iter().map(|(t, _)| t[0].at).min().unwrap_or(0);
+    let hex_at = rows.iter().filter_map(|(t, c)| t.get(c.skipped).map(|g| g.at)).min().unwrap_or(indent);
     let address = base.map(|b| {
         let widths: Vec<usize> = rows.iter().map(|(t, _)| t[0].s.chars().count() - usize::from(t[0].s.ends_with(':'))).collect();
         // The usual width rather than a width every line shares, because a
@@ -369,7 +388,8 @@ pub fn infer(sample: &[String]) -> Option<Layout> {
         // is then refused when the dump is read.
         let digits = modal(&widths).filter(|d| widths.iter().filter(|w| *w == d).count() * 5 >= widths.len() * 4);
         let suffix = rows[0].0[0].s.ends_with(':').then_some(':');
-        Address { base: b, digits, suffix }
+        let upper = rows.iter().any(|(t, _)| t[0].s.bytes().any(|c| c.is_ascii_uppercase()));
+        Address { base: b, digits, suffix, upper }
     });
 
     let group = rows
@@ -384,12 +404,23 @@ pub fn infer(sample: &[String]) -> Option<Layout> {
         .any(|g| g.s.bytes().any(|b| b.is_ascii_uppercase()))
         ;
 
+    // A wider space halfway along the digits, which is a line split into two
+    // halves rather than a group boundary.
+    let half = bytes_per_line / 2;
+    let half_gap = rows.iter().filter(|(_, c)| c.bytes >= bytes_per_line).any(|(t, c)| {
+        let before = taken_tokens(&t[c.skipped..], half);
+        match (t.get(c.skipped + before - 1), t.get(c.skipped + before)) {
+            (Some(a), Some(b)) => b.at > a.at + a.s.chars().count() + 1,
+            _ => false,
+        }
+    });
+
     let (text, text_at) = text_column(&rows, bytes_per_line, group);
     if text.is_none() {
         assumed.push(Assumed::TextEncoding);
     }
 
-    Some(Layout { address, bytes_per_line, group, upper, order: Order::Forward, text, text_at, squeeze: Some('*'), assumed })
+    Some(Layout { address, bytes_per_line, group, upper, order: Order::Forward, indent, hex_at, half_gap, text, text_at, squeeze: None, end_address: false, assumed })
 }
 
 /// What is left on a line after the bytes, if anything, and where it starts.
