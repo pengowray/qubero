@@ -790,7 +790,7 @@ impl Evaluator {
         if self.nest == 0 {
             self.stack_base = here;
         } else if self.stack_base.saturating_sub(here) > STACK_BUDGET {
-            return fail(format!("nested too deep to read: no room left {depth} fields down"));
+            return fail(format!("nested too deep to read: ran out of stack {depth} fields down"));
         }
         self.nest += 1;
         Ok(())
