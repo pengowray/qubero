@@ -1266,7 +1266,33 @@ purpose and a dozen captures of it, from `xxd` with five sets of options
 UTF-16, and a bash transcript. A dump reproduces the file it dumps, so nothing
 that is not redistributable can be dumped into that collection.
 
-What is not here yet is a lazy index. The dump is read in one go, up to
+A hex viewer that draws on a screen instead of writing to a pipe does not need
+a stand-in at all, and that turned out to be a second rule rather than a second
+encoding. The hardware has a glyph for all 256 values, so XTree Gold with its
+mask off shows a smiling face for 0x01 and a musical note for 0x0D, and the
+character column then says something about every byte rather than about the
+printable ninety-five. `hexdump/glyphs.rs` holds both rules and the column is
+read as whichever it contradicts least: CP437 the encoding has nothing to say
+about 0x01, and CP437 the screen says it is U+263A.
+
+Such a capture then arrives one of two ways, and the file does not say which. A
+DOS screen is CP437, so it can be taken as the bytes it was drawn in or as the
+Unicode a modern clipboard turns those into: the rule under XTree's header is a
+run of 0xC4 in one and U+2500 in the other. Both are read and the one whose two
+columns agree better is kept, which is the same rule as everywhere else here
+rather than a new one.
+
+What is not here yet is a lazy index, and with it the second half of a shape
+this should have: a fast strict path and a slow lenient one, the way a browser
+has a parser for well-formed markup and a parser for what people write. The
+strict tier is a verifier rather than a second grammar. It confirms that a
+stretch of lines is regular, the same length and the addresses stepping by the
+same amount, and keeps it as a run rather than as materialised rows, so finding
+the line an address is on is arithmetic and the line is parsed only when it is
+read. Lines that fail that check fall through to the per-line path that is here
+now, which is what a shell prompt, a column heading, a wrapped line or a screen
+of box drawing needs. Both tiers share one line parser, so there stays one place
+where the format is understood. For now the dump is read in one go, up to
 `hexdump::LIMIT`, and every line costs a row. A dump laid out regularly needs
 nothing of the sort, since the line holding an address is arithmetic on the
 line length, and that is the upgrade when a dump arrives too big to hold. Nor
@@ -1284,9 +1310,24 @@ Editing through it is further off still, and it is the first real client of
 the redundant-editing work below: changing a byte in the binary has to
 rewrite a pair of digits and a character, and the two have to keep agreeing.
 
-XTree Gold is the capture still missing. Its hex view is a screen rather than a
-stream, so a text capture of it needs DOSBox-X, and the header carries the path
-and the mode the way `Format-Hex` carries its label.
+XTree Gold is in the collection now, four ways: masked and not, as CP437 bytes
+and as Unicode. Its hex view is a screen rather than a stream, which is a
+different thing to read. Nineteen lines fit, so a capture covers the first 0x130
+bytes and the rest of the file is simply not there; the header across the top
+names the file and the mode rather than being anything a hex parser would look
+at; and one of the four is damaged on purpose, because unmasked the glyphs for
+0x0A and 0x0D went through a clipboard as a real line ending and split a line of
+the dump in two.
+
+Getting it needs DOSBox-X, and the way through is worth writing down since none
+of it is obvious. The program files are inside ZIPs on the floppy images, so
+7-Zip unpacks them and no installer runs. Keystrokes have to be injected as
+scancodes rather than as virtual keys, which is what SDL reads; DOSBox-X's own
+`AUTOTYPE` does the same job for anything typed before the program starts.
+Ctrl+F5 is "Copy all text on the DOS screen", which is the text screenshot, and
+`COPY CLIP$ FILE.TXT` inside the guest writes what the clipboard holds back
+through the guest's own code page, which is how the same screen is captured
+both ways. The steps are in the sample folder's own README.
 
 ## Roadmap (not yet built)
 
