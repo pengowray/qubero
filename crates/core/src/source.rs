@@ -16,6 +16,19 @@ pub trait Source {
     fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing>;
 }
 
+/// A borrowed source is a source. This is what lets one file be read both as
+/// itself and as the parts of it something else assembles: see
+/// [`Gathered`](crate::gather::Gathered), which holds the source it gathers
+/// from and would otherwise have to own it.
+impl<S: Source> Source for &S {
+    fn len_bytes(&self) -> u64 {
+        (*self).len_bytes()
+    }
+    fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
+        (*self).read_bytes(offset, out)
+    }
+}
+
 /// In-memory source, for tests and small files.
 pub struct MemSource(pub Vec<u8>);
 

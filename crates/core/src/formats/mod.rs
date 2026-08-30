@@ -123,7 +123,7 @@ pub use gif::gif;
 pub use grubenv::grubenv;
 pub use gdbm::gdbm;
 pub use gzip::gzip;
-pub use uf2::uf2;
+pub use uf2::{image as uf2_image, uf2, Image as Uf2Image};
 pub use hackrffw::hackrffw;
 pub use hdf5::hdf5;
 pub use id3::id3;
