@@ -1379,7 +1379,34 @@ of it are escapes; the view dims them and shows control characters as their
 Unicode pictures, so nothing moves the text around and nothing is hidden.
 
 A document is now a `Source`, so what the view reads is what the document says
-rather than what the file on disk says.
+rather than what the file on disk says. That is what makes the view editable:
+typing writes through the piece table and the next window read comes back
+changed.
+
+The caret is the cursor rather than a second position, which is the same rule
+the other three views follow. It sits between bytes and is drawn as a line
+before the character it is in front of, while the character the cursor is
+inside keeps its highlight; the two say different things and after an insert
+they are next to each other. Typing inserts at the cursor, and every other view
+follows it as it already did.
+
+What is typed goes back through `text::encode_settled` in whichever encoding
+the file is being read in, so a box-drawing character typed into a CP437
+capture is one byte and an accent typed into a file read as ASCII is refused.
+The refusal names the character and the encoding, because the encoding may have
+been a guess and this is where a wrong one is found out. Backspace takes a
+character rather than a byte, so an accent in UTF-8 goes in one press and both
+of its bytes go with it, and a character above the basic plane in UTF-16 takes
+four. Enter writes whichever ending the rest of the file uses, since a file
+that has settled on one should not be given the other. One keystroke is one
+undo step.
+
+Two things are deliberately not here. There is no selection, so nothing is
+typed over: replacing a stretch through the encoding is its own feature and the
+hex view's selection is what it should hook into. And editing a document opened
+out of a dump changes those bytes and not the digits in the dump that spell
+them; making the two agree is the redundant-editing work below, and it is the
+first real client of it.
 
 ### A file that describes another file, opened as one
 `hexdump/source.rs` makes a dump's bytes readable like any other file, and the
