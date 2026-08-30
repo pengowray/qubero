@@ -272,18 +272,13 @@ fn fit(lines: &[Vec<Tok<'_>>], base: Option<Base>) -> Option<Fit> {
         return Some(Fit { agreed: 0, hexy: 0, width: modal(&counts).unwrap_or(widest) });
     }
 
-    // How far apart two lines' addresses are is how many bytes are on a line.
-    // This is the one measurement the dump itself makes, and taking it from the
-    // addresses rather than from the digits is what stops a character column of
-    // hex digits being counted as more bytes.
-    let deltas: Vec<usize> = cands
-        .windows(2)
-        .filter_map(|p| match (p[0].as_ref()?.address?, p[1].as_ref()?.address?) {
-            (x, y) if y > x && y - x <= 256 => Some((y - x) as usize),
-            _ => None,
-        })
-        .collect();
-    let width = modal(&deltas).filter(|w| *w > 0 && *w <= widest)?;
+    // How many bytes a line holds is the usual number of them on a line, and
+    // what says the hypothesis is right is that two lines' addresses are that
+    // far apart. Taking the width from the addresses instead would be undone by
+    // a dump with a gap in it: two stretches an unrelated distance apart give a
+    // difference that is no line's length, and with only a line or two either
+    // side of the gap it wins the vote.
+    let width = modal(&counts).filter(|w| *w > 0).unwrap_or(widest);
 
     let agreed = cands
         .windows(2)

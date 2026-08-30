@@ -54,6 +54,7 @@
 pub mod glyphs;
 pub mod layout;
 pub mod lines;
+pub mod source;
 pub mod strict;
 pub mod write;
 
