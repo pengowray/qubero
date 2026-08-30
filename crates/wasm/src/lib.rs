@@ -169,6 +169,22 @@ struct ObjStmObjectDto {
     cut: bool,
 }
 
+/// One column of a row that was joined back together from the pages it spilled
+/// onto.
+#[derive(Serialize)]
+struct SqliteColumnDto {
+    /// What SQLite calls the type: `i32`, `text, 8189 bytes`, `null`.
+    #[serde(rename = "type")]
+    type_name: String,
+    /// The value, shown the way every other value in the tree is shown.
+    value: String,
+    /// Which of the shapes a value takes, so it can be styled like its kind.
+    value_kind: &'static str,
+    /// Where it sits in the joined row, which is not where it sits in the file.
+    at: f64,
+    len: f64,
+}
+
 /// One filter undone on the way back to a chunk's elements.
 #[derive(Serialize)]
 struct ChunkStepDto {
@@ -182,7 +198,7 @@ struct ChunkStepDto {
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "chunk" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -250,6 +266,19 @@ struct ExplainDto {
     /// more than `objstm_objects` holds says so with `objstm_total`.
     objstm_objects: Vec<ObjStmObjectDto>,
     objstm_total: f64,
+    /// Row: how many bytes the row claims, how many the chain reached, and how
+    /// many of them stayed on the row's own page. A row that is whole has the
+    /// first two equal.
+    row_declared: f64,
+    row_found: f64,
+    row_on_page: f64,
+    /// Row: the overflow pages in the order the chain names them, and how many
+    /// there are when that is more than the few listed.
+    row_pages: Vec<f64>,
+    row_chain: f64,
+    /// Row: the columns, and how many there are altogether.
+    row_columns: Vec<SqliteColumnDto>,
+    row_total_columns: f64,
     /// Chunk: how many bytes the chunk is in the file, and how many its
     /// elements came to once the filters were undone.
     chunk_packed: f64,
@@ -385,6 +414,13 @@ fn explain_dto(e: Explain) -> ExplainDto {
         xref_unknown: 0.0,
         xref_rows: Vec::new(),
         xref_total: 0.0,
+        row_declared: 0.0,
+        row_found: 0.0,
+        row_on_page: 0.0,
+        row_pages: Vec::new(),
+        row_chain: 0.0,
+        row_columns: Vec::new(),
+        row_total_columns: 0.0,
         objstm_packed: 0.0,
         objstm_decoded: 0.0,
         objstm_extends: -1.0,
@@ -500,6 +536,32 @@ fn explain_dto(e: Explain) -> ExplainDto {
                     len: o.len as f64,
                     text: o.text,
                     cut: o.cut,
+                })
+                .collect();
+        }
+        Explain::SqliteRow {
+            declared,
+            found,
+            on_page,
+            pages,
+            chain_length,
+            columns,
+            total_columns,
+            problem,
+        } => {
+            dto.kind = "sqliterow";
+            dto.row_declared = declared as f64;
+            dto.row_found = found as f64;
+            dto.row_on_page = on_page as f64;
+            dto.row_pages = pages.into_iter().map(|p| p as f64).collect();
+            dto.row_chain = chain_length as f64;
+            dto.row_total_columns = total_columns as f64;
+            dto.problem = problem.unwrap_or_default();
+            dto.row_columns = columns
+                .into_iter()
+                .map(|c| {
+                    let (value_kind, value, _, _) = shown(&c.value);
+                    SqliteColumnDto { type_name: c.type_name, value, value_kind, at: c.at as f64, len: c.len as f64 }
                 })
                 .collect();
         }

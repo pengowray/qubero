@@ -1993,6 +1993,41 @@ button.insp-xrow-where:hover {
   padding: 4px 0;
 }
 
+/* One column of a SQLite row that was joined back together. The value is the
+   wide part, since that is what the reader came for; the type is narrow but
+   fixed, so the values line up down the panel. */
+.insp-crow {
+  display: grid;
+  grid-template-columns: 2em 10em 1fr;
+  gap: 6px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 0;
+}
+.insp-crow.is-head {
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  position: sticky;
+  top: 0;
+}
+.insp-crow-index {
+  text-align: right;
+  color: var(--muted);
+}
+.insp-crow-type {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+/* A text or blob column can be long, and wrapping keeps it in the panel
+   rather than pushing a horizontal scrollbar under every row. */
+.insp-crow-value {
+  overflow-wrap: anywhere;
+}
+
 /* ---- report listing (mockup C v2) ---- */
 /* The heights here are the ones `listingreport.ts` adds up to place every
    item, so they are fixed rather than content-driven: a row that grew a line

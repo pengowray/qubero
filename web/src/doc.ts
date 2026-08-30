@@ -258,6 +258,18 @@ export type ObjStmObject = {
   readonly cut: boolean;
 };
 
+/** One column of a row that was put back together from the pages it spilled
+ *  onto. `at` counts in the joined row, not in the file: a column can cross a
+ *  page break, so there is no single file offset for it. */
+export type SqliteColumn = {
+  /** What SQLite calls the type: `i32`, `text, 8189 bytes`, `null`. */
+  readonly type: string;
+  readonly value: string;
+  readonly value_kind: string;
+  readonly at: number;
+  readonly len: number;
+};
+
 /** One filter undone on the way back to a chunk's elements. */
 export type ChunkStep = {
   readonly filter: string;
@@ -359,7 +371,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "chunk" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -434,6 +446,18 @@ export type TypeInfo = {
   /** ObjStm: the objects, and how many there are altogether. */
   readonly objstm_objects: readonly ObjStmObject[];
   readonly objstm_total: number;
+  /** Row: how many bytes the row claims, how many were found, and how many of
+   *  them stayed on the row's own page. A whole row has the first two equal. */
+  readonly row_declared: number;
+  readonly row_found: number;
+  readonly row_on_page: number;
+  /** Row: the pages the rest of it is on, in chain order, and how many there
+   *  are when that is more than the few listed. */
+  readonly row_pages: readonly number[];
+  readonly row_chain: number;
+  /** Row: the columns, and how many there are altogether. */
+  readonly row_columns: readonly SqliteColumn[];
+  readonly row_total_columns: number;
   /** Chunk: how many bytes it is in the file, and how many its elements came
    *  to once the filters were undone. */
   readonly chunk_packed: number;
