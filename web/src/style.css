@@ -2748,3 +2748,41 @@ table.rec tr.is-on td {
 .tv-row.is-lossy .tv-mark {
   background: var(--warn-soft, var(--accent-soft));
 }
+
+/* A text file that turns out to describe another file. One row above the
+   views: what was found on the left, the way to it on the right, and the two
+   things that would mislead a reader who opened it blind (stretches nobody
+   wrote down, bytes the two columns disagree about) marked rather than
+   buried. */
+.dumpbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-soft);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.dumpbar-facts {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.dumpbar-facts .is-warn {
+  font-weight: 600;
+}
+.dumpbar-facts .is-warn::before {
+  content: "\26a0\fe0f\a0";
+}
+.dumpbar-open {
+  flex: 0 0 auto;
+}
+.tb-reading {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+}

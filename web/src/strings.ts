@@ -253,6 +253,9 @@ export const TEXTVIEW = {
   guessed: "guessed",
   /** The encoding chooser's first entry: let the file decide. */
   encodingAuto: "From the file",
+  encodingLabel: "Read the text as",
+  /** What the file was read as, beside the chooser. */
+  readAs: (encoding: string, guessed: boolean): string => (guessed ? `${encoding}, guessed` : encoding),
 } as const;
 
 /** The offer to open the file a hex dump describes. */
@@ -262,6 +265,17 @@ export const DUMP = {
   summary: (tool: string, bytes: number): string =>
     `${tool === "" ? "A dump" : tool} of ${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"}`,
   open: "Open those bytes",
+  /** What to call the opened bytes when the dump did not name the file it
+   *  dumped. Two tabs called the same thing is worse than a made-up name. */
+  fallbackName: (file: string): string => {
+    const cut = file.replace(/\.(txt|log|prn|asc|out|dump)$/i, "");
+    return cut === file ? `${file} (bytes)` : cut;
+  },
+  /** Where the dump starts, when it is not the front of a file. */
+  startsAt: (at: number): string => `from 0x${at.toString(16)}`,
+  /** The tab's tooltip: where these bytes came from. */
+  origin: (file: string, tool: string): string =>
+    tool === "" ? `Read out of the hex dump in ${file}` : `Read out of the ${tool} dump in ${file}`,
   /** Stretches the dump did not describe, which read as zeros. */
   holes: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "stretch" : "stretches"} not in the dump`,
   /** Bytes whose two columns disagree. */

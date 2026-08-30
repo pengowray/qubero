@@ -1,7 +1,7 @@
 // Document facade: owns the wasm Editor and streams chunks in from a File/Blob.
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
-import init, { Editor } from "./pkg/qubero_wasm.js";
+import init, { Editor, dump_scan, dump_bytes } from "./pkg/qubero_wasm.js";
 
 const CHUNK_SIZE = 64 * 1024;
 /** Chunks to fetch past one the template asked for and did not have. Placing
@@ -246,6 +246,34 @@ export type TextBack = {
   readonly start: number;
   readonly back: number;
   readonly missing: readonly number[];
+};
+
+/** The most text this will read as a dump in one go. A dump is four times the
+ *  size of what it describes, so this is a file of a few megabytes. */
+export const DUMP_LIMIT = 64 * 1024 * 1024;
+
+/** What a text file turned out to be a dump of. */
+export type DumpScan = {
+  readonly tool: string;
+  readonly tier: string;
+  readonly from: number;
+  readonly to: number;
+  readonly covered: number;
+  readonly address_base: string;
+  readonly address_digits: number;
+  readonly bytes_per_line: number;
+  readonly group: number;
+  readonly upper: boolean;
+  readonly reversed_groups: boolean;
+  readonly characters: string;
+  readonly assumed: readonly string[];
+  readonly extents: readonly number[];
+  readonly holes: readonly number[];
+  readonly names: readonly string[];
+  readonly stated_length: number;
+  readonly commands: readonly string[];
+  readonly skipped_lines: number;
+  readonly conflicts: readonly { at: number; wrote: string; digits: number }[];
 };
 
 export type NeedleKind = "hex" | "text" | "regex";
@@ -1179,6 +1207,27 @@ export class Doc {
         this.inflight.delete(chunk);
         this.notify();
       });
+  }
+
+  /**
+   * What this file turned out to be a dump of, or null. Only asked of a file
+   * small enough to read in one go: a dump is text, and text that is a dump of
+   * anything worth opening is a few times the size of what it describes.
+   */
+  async dumpScan(): Promise<DumpScan | null> {
+    if (this.lengthBytes === 0 || this.lengthBytes > DUMP_LIMIT) return null;
+    await this.ensureRange(0, this.lengthBytes);
+    const got = this.read(0, this.lengthBytes);
+    if (!got.complete) return null;
+    const text = dump_scan(got.bytes);
+    return text === "" ? null : (JSON.parse(text) as DumpScan);
+  }
+
+  /** The bytes a dump describes, ready to open as a document of their own. */
+  async dumpBytes(): Promise<Uint8Array> {
+    await this.ensureRange(0, this.lengthBytes);
+    const got = this.read(0, this.lengthBytes);
+    return got.complete ? dump_bytes(got.bytes) : new Uint8Array();
   }
 
   /** How the file reads as text. Pass "" to let the file decide. */

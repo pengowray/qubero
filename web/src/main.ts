@@ -12,7 +12,7 @@ import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
 import { TypeTable } from "./typetable.js";
-import { TEXTVIEW } from "./strings.js";
+import { DUMP, TEXTVIEW } from "./strings.js";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -187,6 +187,33 @@ function build(tab: Tab): void {
   const listRow = el("div", { className: "listrow" }, structure.el, listPane.el);
   // The file as the text it is, for the files that were written to be read.
   const text = new TextView(doc);
+  // A text file that turns out to be a dump of another file. The offer sits
+  // above the views rather than inside one, because it is a fact about the
+  // whole file and not about a field or a place in it.
+  const dumpBar = el("div", { className: "dumpbar" });
+  dumpBar.hidden = true;
+  void doc.dumpScan().then((scan) => {
+    if (scan === null) return;
+    const open = el("button", { type: "button", className: "dumpbar-open", textContent: DUMP.open });
+    open.addEventListener("click", () => {
+      open.disabled = true;
+      void doc.dumpBytes().then((bytes) => {
+        open.disabled = false;
+        if (bytes.length === 0) return;
+        const named = scan.names[0];
+        const name = named === undefined ? DUMP.fallbackName(doc.name) : named.replace(/^.*[\\/]/, "");
+        openEmbedded(bytes, name, DUMP.origin(doc.name, scan.tool));
+      });
+    });
+    const facts: HTMLElement[] = [el("strong", { textContent: DUMP.heading })];
+    facts.push(el("span", { textContent: DUMP.summary(scan.tool, scan.covered) }));
+    if (scan.from > 0) facts.push(el("span", { textContent: DUMP.startsAt(scan.from) }));
+    if (scan.holes.length > 0) facts.push(el("span", { className: "is-warn", textContent: DUMP.holes(scan.holes.length / 2) }));
+    if (scan.conflicts.length > 0)
+      facts.push(el("span", { className: "is-warn", textContent: DUMP.conflicts(scan.conflicts.length) }));
+    dumpBar.replaceChildren(el("div", { className: "dumpbar-facts" }, ...facts), open);
+    dumpBar.hidden = false;
+  });
   const overview = new OverviewPanel(doc);
   const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
@@ -473,6 +500,23 @@ function build(tab: Tab): void {
   // Hex and Listing are two readings of the same file, so they share the
   // cursor and swap in the same place rather than sitting side by side. The
   // listing carries its own bytes, so showing both would say it twice.
+  // Which encoding the text view reads in. First entry lets the file decide,
+  // which is right nearly always; the rest are for the files where nothing in
+  // the file says, which is every capture of a DOS screen.
+  const encoding = el("select", { className: "tb-enc" });
+  encoding.setAttribute("aria-label", TEXTVIEW.encodingLabel);
+  encoding.append(el("option", { value: "", textContent: TEXTVIEW.encodingAuto }));
+  for (const name of ["UTF-8", "ASCII", "Latin-1", "CP437", "UTF-16 LE", "UTF-16 BE"]) {
+    encoding.append(el("option", { value: name, textContent: name }));
+  }
+  encoding.addEventListener("change", () => void text.setEncoding(encoding.value));
+  // What the file was read as, beside the chooser, so a guess is never passed
+  // off as a fact.
+  const reading = el("span", { className: "tb-reading" });
+  text.onReading = (r) => {
+    reading.textContent = encoding.value === "" ? TEXTVIEW.readAs(r.encoding, r.guessed) : "";
+  };
+
   const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
   const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
   const textBtn = el("button", { type: "button", textContent: TEXTVIEW.viewButton, className: "tb-view" });
@@ -481,6 +525,8 @@ function build(tab: Tab): void {
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
   const hexOnly = [width, mode, column];
+  /** Controls that only mean anything over the text. */
+  const textOnly = [encoding, reading];
   /** True while the listing is showing, which is also while the hex grid's
    *  editing state is not the user's to act on. */
   let listingShowing = false;
@@ -493,6 +539,7 @@ function build(tab: Tab): void {
     listRow.hidden = !listingOn;
     text.el.hidden = !textOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
+    for (const c of textOnly) c.hidden = !textOn;
     for (const [btn, on] of [
       [hexBtn, which === "hex"],
       [listBtn, listingOn],
@@ -535,6 +582,8 @@ function build(tab: Tab): void {
     fileLabel,
     kind.label,
     kind.info,
+    encoding,
+    reading,
     saveMsg,
     el("span", { className: "tb-spacer" }),
     views,
@@ -657,7 +706,7 @@ function build(tab: Tab): void {
       "main",
       { className: "workspace" },
       overview.el,
-      el("div", { className: "left" }, search.el, view.el, text.el, listRow, bottom),
+      el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, listRow, bottom),
       right,
     ),
     statusbar,
@@ -682,7 +731,7 @@ function build(tab: Tab): void {
   // The next file dropped may be one no template covers. Fetch the rules while
   // nothing is waiting on them, so that file is named as soon as it opens.
   prefetchMagic();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, overview, structure, listPane } });
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, overview, structure, listPane, text, setView } });
 }
 
 function pick(): void {
