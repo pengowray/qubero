@@ -120,9 +120,28 @@ enum Parsed {
     No,
 }
 
-/// A list of lists of lists is a file that would walk the scan below off the
-/// stack. Real files nest four or five deep.
-const MAX_DEPTH: u32 = 64;
+/// How deep a file may nest and still be claimed.
+///
+/// This is not a limit on bencode, which has none, and it is not there to
+/// stop the scan below running away: it is where the reader gives out. An
+/// evaluator walking a structure inside a structure recurses once per level,
+/// and a debug build of it overflows its stack at 32 levels of bencode, which
+/// is a crash rather than an error. So the number here is under that, and a
+/// file nested deeper is left unrecognised rather than handed to a reader
+/// that would die on it. Real torrents nest five deep, or a dozen when a v2
+/// file tree carries a long path.
+///
+/// It belongs in the reader rather than here. See the note in
+/// `eval::Evaluator::resolve`, which is where a depth this arbitrary should
+/// turn into an error that says so.
+const MAX_DEPTH: u32 = 30;
+
+/// What may follow the dictionary and the file still be one bencoded
+/// dictionary: nothing, or the newline a tool that wrote the file through a
+/// text mode put there. Five of libtorrent's own test torrents end that way.
+fn only_space(b: &[u8]) -> bool {
+    b.iter().all(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n'))
+}
 
 /// Whether the file is one bencoded dictionary and nothing else.
 ///
@@ -138,10 +157,14 @@ pub(super) fn is_bencode(head: &[u8], len: u64) -> bool {
         return false;
     }
     match scan(head, 0, 0) {
-        // The dictionary covers the file exactly. A dictionary that stops
-        // short is a file with something else on the end of it, and that is
-        // not this.
-        Parsed::Ends(end) => end as u64 == len,
+        // The dictionary covers the file, give or take the newline a tool
+        // that saved it through a text mode left on the end. Anything else
+        // after it is a file with something else on the end, and that is not
+        // this. The trailing byte is still not part of the dictionary: the
+        // template reads one value, and what follows it stays a gap.
+        Parsed::Ends(end) => {
+            end as u64 <= len && (end as u64 == len || (head.len() as u64 == len && only_space(&head[end..])))
+        }
         // The window ran out before the dictionary did, which is what a
         // torrent bigger than the window looks like. With the whole file in
         // hand it means the file itself was cut off, and then there is no
@@ -319,7 +342,8 @@ mod tests {
         assert!(whole(b"d8:announce5:where4:infod6:lengthi12eee"));
         assert!(whole(b"d0:0:e"));
         // A dictionary that stops short of the end, and one that runs past it.
-        assert!(!whole(b"d3:cow3:mooe "));
+        // White space on the end is its own case, tested below.
+        assert!(!whole(b"d3:cow3:mooe4:spam"));
         assert!(!whole(b"d3:cow4:mooe"));
         // Not a dictionary, and a dictionary whose first key is not a string.
         assert!(!whole(b"l3:cowe"));
@@ -331,6 +355,36 @@ mod tests {
         let torrent = b"d8:announce5:where6:pieces20:";
         assert!(is_bencode(torrent, 1 << 20));
         assert!(!is_bencode(torrent, torrent.len() as u64));
+    }
+
+    #[test]
+    fn a_newline_left_on_the_end_does_not_stop_it_being_bencode() {
+        let whole = |b: &[u8]| is_bencode(b, b.len() as u64);
+        // Five of libtorrent's own test torrents end with one of these,
+        // which is what a tool that wrote the file through a text mode does.
+        assert!(whole(b"d3:cow3:mooe\n"));
+        assert!(whole(b"d3:cow3:mooe\r\n"));
+        assert!(whole(b"d3:cow3:mooe  \n"));
+        // Anything that is not white space still is something else on the end.
+        assert!(!whole(b"d3:cow3:mooe0"));
+        assert!(!whole(b"d3:cow3:mooe\nd3:cow3:mooe"));
+    }
+
+    #[test]
+    fn a_file_nested_deeper_than_the_reader_goes_is_not_claimed() {
+        // The cap is where the evaluator gives out, not where bencode does.
+        // A file past it reads as nothing rather than as a file that would
+        // take the reader's stack with it.
+        let nest = |n: usize| {
+            let mut b = b"d1:a".to_vec();
+            b.extend(std::iter::repeat(b'l').take(n));
+            b.extend(std::iter::repeat(b'e').take(n + 1));
+            b
+        };
+        let ok = nest(MAX_DEPTH as usize - 4);
+        assert!(is_bencode(&ok, ok.len() as u64));
+        let deep = nest(MAX_DEPTH as usize + 4);
+        assert!(!is_bencode(&deep, deep.len() as u64));
     }
 
     #[test]
