@@ -1271,11 +1271,18 @@ What is not here yet is a lazy index. The dump is read in one go, up to
 nothing of the sort, since the line holding an address is arithmetic on the
 line length, and that is the upgrade when a dump arrives too big to hold. Nor
 is the recovered binary a document yet: it is a `Dump` that answers reads by
-address, which is the shape a `Source` needs, but which of the four views it
-should appear in is a question for the app rather than the core. Editing
-through it is further off still, and it is the first real client of the
-redundant-editing work below: changing a byte in the binary has to rewrite a
-pair of digits and a character, and the two have to keep agreeing.
+address, which is the shape a `Source` needs. Where it goes is decided: a
+document of its own beside the text, rather than a view the text file swaps
+into. The two cannot share a cursor, since an offset in the dump and an
+address in what it describes are different numbers, and a document with its
+own four views is what makes the recovered bytes an ordinary file with a
+template, a listing and an overview. What keeps the pair connected is
+provenance: every byte knows the digits that wrote it, so a byte in one can
+still point at a place in the other.
+
+Editing through it is further off still, and it is the first real client of
+the redundant-editing work below: changing a byte in the binary has to
+rewrite a pair of digits and a character, and the two have to keep agreeing.
 
 XTree Gold is the capture still missing. Its hex view is a screen rather than a
 stream, so a text capture of it needs DOSBox-X, and the header carries the path
