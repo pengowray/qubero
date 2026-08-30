@@ -58,8 +58,9 @@ impl Evaluator {
             // Search a list for the element that says what it is. The whole
             // list is read to find it, which is what a handful of tagged
             // records costs; nothing that carries thousands of them asks.
-            Expr::Tagged { array, key, tag, field } => {
-                let (key, tag, field) = (key.clone(), *tag, field.clone());
+            Expr::Tagged(t) => {
+                let (key, tag, field) = (t.key.clone(), t.tag, t.field.clone());
+                let array = &t.array;
                 let Some(list) = self.find_field(at, array) else { return fail(format!("unknown field {array}")) };
                 let n = self.child_count(doc, &list)?;
                 let mut found = 0;
