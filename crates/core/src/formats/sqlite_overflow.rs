@@ -54,9 +54,13 @@ impl Payload {
     }
 }
 
-/// A chain longer than this is not a chain. The longest honest one fills the
-/// file, so this is the file's own page count, and the guard below uses that;
-/// this is the backstop for a file claiming a page count it does not have.
+/// A backstop on how many pages one row may be spread over.
+///
+/// The walk is already bounded twice over: it stops when it has as many bytes
+/// as the row claims, and it refuses a page it has already been to, so it
+/// cannot take more steps than the file has pages. This is here for the case
+/// those two arguments rest on, which is that the numbers in the file mean
+/// what they say.
 const LONGEST_CHAIN: usize = 1 << 24;
 
 /// Follow a cell's payload, on its page and wherever else it went.
