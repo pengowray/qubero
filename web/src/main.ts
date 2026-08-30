@@ -208,7 +208,11 @@ function build(tab: Tab): void {
     const facts: HTMLElement[] = [el("strong", { textContent: DUMP.heading })];
     facts.push(el("span", { textContent: DUMP.summary(scan.tool, scan.covered) }));
     if (scan.from > 0) facts.push(el("span", { textContent: DUMP.startsAt(scan.from) }));
-    if (scan.holes.length > 0) facts.push(el("span", { className: "is-warn", textContent: DUMP.holes(scan.holes.length / 2) }));
+    if (scan.holes.length > 0) {
+      const mark = el("span", { className: "is-warn", textContent: DUMP.holes(scan.holes.length / 2) });
+      mark.title = DUMP.holesTitle;
+      facts.push(mark);
+    }
     if (scan.conflicts.length > 0)
       facts.push(el("span", { className: "is-warn", textContent: DUMP.conflicts(scan.conflicts.length) }));
     dumpBar.replaceChildren(el("div", { className: "dumpbar-facts" }, ...facts), open);

@@ -247,13 +247,17 @@ export const TEXTVIEW = {
   /** The core stopped the line at its own limit: what follows is the same line
    *  carrying on. */
   lineCut: "line continues",
-  /** Bytes on this line do not fit the encoding it is being read in. */
-  lineLossy: "not this encoding",
+  /** Bytes on this line do not fit the encoding it is being read in. Named
+   *  rather than "not this encoding", so the mark says what it means without
+   *  the reader looking up at the chooser. Takes the encoding the file was
+   *  settled as, never the chooser's own label. */
+  lineLossy: (encoding: string): string => `not ${encoding}`,
   /** Beside the encoding, when nothing in the file said which it was. */
   guessed: "guessed",
-  /** The encoding chooser's first entry: let the file decide. */
-  encodingAuto: "From the file",
-  encodingLabel: "Read the text as",
+  /** The encoding chooser's first entry. "Auto-detect" rather than "from the
+   *  file", which would claim the file said, and only a byte-order mark does. */
+  encodingAuto: "Auto-detect",
+  encodingLabel: "Encoding",
   /** What the file was read as, beside the chooser. */
   readAs: (encoding: string, guessed: boolean): string => (guessed ? `${encoding}, guessed` : encoding),
 } as const;
@@ -263,7 +267,7 @@ export const DUMP = {
   heading: "This file is a hex dump",
   /** What was found, in one line. */
   summary: (tool: string, bytes: number): string =>
-    `${tool === "" ? "A dump" : tool} of ${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"}`,
+    `${tool === "" ? "A" : tool} dump of ${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"}`,
   open: "Open those bytes",
   /** What to call the opened bytes when the dump did not name the file it
    *  dumped. Two tabs called the same thing is worse than a made-up name. */
@@ -274,12 +278,15 @@ export const DUMP = {
   /** Where the dump starts, when it is not the front of a file. */
   startsAt: (at: number): string => `from 0x${at.toString(16)}`,
   /** The tab's tooltip: where these bytes came from. */
-  origin: (file: string, tool: string): string =>
-    tool === "" ? `Read out of the hex dump in ${file}` : `Read out of the ${tool} dump in ${file}`,
-  /** Stretches the dump did not describe, which read as zeros. */
-  holes: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "stretch" : "stretches"} not in the dump`,
-  /** Bytes whose two columns disagree. */
-  conflicts: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"} where the columns disagree`,
+  origin: (file: string, tool: string): string => `Decoded from the ${tool === "" ? "hex" : tool} dump in ${file}`,
+  /** Stretches the dump did not describe. They read as zeros; where that
+   *  belongs is the mark's own tooltip, not the row. */
+  holes: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "gap" : "gaps"} in the dump`,
+  holesTitle: "Not in the dump; reads as zeros",
+  /** Bytes the two spellings disagree about. The columns are named, since a
+   *  bare "hex and text disagree" would read as this app's own two views. */
+  conflicts: (n: number): string =>
+    `hex and text columns disagree on ${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"}`,
 } as const;
 
 export const NO_MATCH = "No match.";

@@ -269,7 +269,7 @@ export class TextView {
     else if (ENDINGS.has(line.ending) && line.ending !== this.usualEnding && this.usualEnding !== "") {
       row.append(el("span", { className: "tv-mark", textContent: line.ending }));
     }
-    if (line.lossy) row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineLossy }));
+    if (line.lossy) row.append(el("span", { className: "tv-mark", textContent: TEXTVIEW.lineLossy(this.reading.encoding) }));
     return row;
   }
 }
