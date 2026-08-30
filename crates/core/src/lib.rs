@@ -29,6 +29,7 @@ pub mod search;
 pub mod source;
 pub mod template;
 pub mod text;
+pub mod textview;
 pub mod thumb;
 
 pub use document::Document;
