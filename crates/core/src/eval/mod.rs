@@ -5,8 +5,6 @@
 //! touches an unloaded chunk yields `EvalError::Pending` rather than a value, so
 //! zero-filled bytes can never be mistaken for data.
 
-use rustc_hash::FxHashMap;
-
 use crate::bits::bytes_for;
 use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, narrow_bf16, narrow_f16, narrow_f32, read_int, read_uint};
 use crate::document::Document;
@@ -20,6 +18,7 @@ mod explain;
 mod go;
 mod jsontree;
 mod listing;
+mod memo;
 mod origin;
 mod placed;
 mod expr;
@@ -286,14 +285,7 @@ struct Place {
 
 pub struct Evaluator {
     template: Template,
-    memo: FxHashMap<Vec<usize>, Resolved>,
-    /// What each list has learned about itself, for the few nodes that are
-    /// lists. Kept apart from `memo` so resolving a child stays cheap.
-    lists: FxHashMap<Vec<usize>, ListState>,
-    /// The text of each `Ty::Json` field, parsed, kept beside the memo. Read
-    /// once however many values are asked for, and thrown away with the memo
-    /// entry it belongs to.
-    json: FxHashMap<Vec<usize>, std::sync::Arc<crate::json::Val>>,
+    memo: memo::Memo,
     /// What each guarded walk has added to the memo, so it can drop the nodes
     /// it has moved past. One entry per walk, since a list can hold a list.
     journals: Vec<walk::WalkJournal>,
@@ -310,9 +302,7 @@ impl Evaluator {
     pub fn new(template: Template) -> Self {
         Self {
             template,
-            memo: FxHashMap::default(),
-            lists: FxHashMap::default(),
-            json: FxHashMap::default(),
+            memo: memo::Memo::default(),
             journals: Vec::new(),
             go: go::Go::default(),
             placed: placed::Index::default(),
@@ -356,8 +346,8 @@ impl Evaluator {
     /// element extent is projected over the declared count; callers mark the
     /// result approximate until the ordinary node succeeds.
     pub fn extent_estimate(&self) -> Option<ExtentEstimate> {
-        self.lists
-            .iter()
+        self.memo
+            .lists()
             .filter_map(|(path, state)| {
                 let total = state.expected_count?;
                 let (measured, at) = state.walk_at?;
@@ -428,42 +418,14 @@ impl Evaluator {
         // is about to drop some of those nodes. Coarse, like the memo's own
         // invalidation, and cheap to build again.
         self.placed.forget();
-        // A node with no size worked out yet is dropped: nothing says where it
-        // ends, so nothing says it ended before the edit.
-        self.memo.retain(|_, r| r.size.is_some_and(|size| r.offset + size <= bit));
-        // The parsed text of a JSON field goes when the field itself does.
-        self.json.retain(|path, _| self.memo.contains_key(path));
-        self.lists.retain(|path, l| {
-            l.checkpoints.retain(|(_, at)| *at <= bit);
-            if l.walk_at.is_some_and(|(_, at)| at > bit) {
-                l.walk_at = None;
-            }
-            // A repeat's count is only as good as the walk that reached it.
-            if l.repeat_end.is_none_or(|end| end > bit) {
-                l.repeat_len = 0;
-                l.repeat_end = None;
-                l.repeat_done = false;
-            }
-            // Where a pointer list's children start was read from a field that
-            // may be anywhere, and where a sequential walk had got to counts
-            // children some of which have just gone. Both are cheap to redo.
-            l.pointer_starts = None;
-            l.seq_end = 0;
-            let empty = l.checkpoints.is_empty()
-                && l.walk_at.is_none()
-                && l.repeat_len == 0
-                && !l.repeat_done;
-            !empty || self.memo.contains_key(path)
-        });
+        self.memo.forget_after(bit);
     }
 
     /// Drop every cached offset/size. Call after any document change that is
     /// not an overwrite, and whenever the template changes.
     pub fn invalidate(&mut self) {
-        self.memo.clear();
+        self.memo.forget();
         self.placed.forget();
-        self.lists.clear();
-        self.json.clear();
         self.journals.clear();
         self.go.restart();
     }
@@ -477,21 +439,11 @@ impl Evaluator {
     /// checkpoints: a copy an element is the crawl this type was split out of
     /// `Resolved` to avoid.
     fn list(&self, path: &[usize]) -> &ListState {
-        static NOTHING: ListState = ListState {
-            repeat_len: 0,
-            repeat_end: None,
-            repeat_done: false,
-            walk_at: None,
-            expected_count: None,
-            checkpoints: Vec::new(),
-            pointer_starts: None,
-            seq_end: 0,
-        };
-        self.lists.get(path).unwrap_or(&NOTHING)
+        self.memo.list(path)
     }
 
     fn list_mut(&mut self, path: &[usize]) -> &mut ListState {
-        self.lists.entry(path.to_vec()).or_default()
+        self.memo.list_mut(path)
     }
 
     /// The child of `path` that a structure calls `name`, if it has one.
@@ -667,7 +619,7 @@ impl Evaluator {
         // be, which is known once it has been read.
         if let Ty::Json(shape) = ty {
             let shape = match shape {
-                crate::json::Shape::Doc => self.json.get(path)?.kind.shape(),
+                crate::json::Shape::Doc => self.memo.json(path)?.kind.shape(),
                 other => *other,
             };
             return match shape {
@@ -940,7 +892,7 @@ impl Evaluator {
     /// list with it; a child whose bytes are not loaded yet is still an answer
     /// the caller has to wait for.
     fn pointer_starts<S: Source>(&mut self, doc: &Document<S>, list: &[usize], lr: &Resolved) -> R<Vec<(u64, usize)>> {
-        if let Some(starts) = self.lists.get(list).and_then(|l| l.pointer_starts.clone()) {
+        if let Some(starts) = self.list(list).pointer_starts.clone() {
             return Ok(starts);
         }
         let n = self.child_count(doc, list)?;

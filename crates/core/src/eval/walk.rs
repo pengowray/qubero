@@ -249,8 +249,7 @@ impl Evaluator {
             w.added.drain(..oldest).collect()
         };
         for path in dropped {
-            self.memo.remove(&path);
-            self.lists.remove(&path);
+            self.memo.forget_node(&path);
         }
     }
 
@@ -260,8 +259,7 @@ impl Evaluator {
             if path.starts_with(keep) {
                 continue;
             }
-            self.memo.remove(&path);
-            self.lists.remove(&path);
+            self.memo.forget_node(&path);
         }
     }
 
@@ -361,7 +359,7 @@ impl Evaluator {
     /// element index and its offset. Checkpoints rise in both index and offset,
     /// so the one to start from can be found by halving rather than scanning.
     fn nearest_start_before(&self, parent: &[usize], bit: u64) -> (usize, u64) {
-        let Some(state) = self.lists.get(parent) else { return (0, self.memo[parent].offset) };
+        let state = self.list(parent);
         let mut best = (0, self.memo[parent].offset);
         let k = state.checkpoints.partition_point(|(_, at)| *at <= bit);
         if k > 0 {
@@ -392,12 +390,12 @@ impl Evaluator {
     /// `idx`, else the nearest kept offset, else the list's own start. Reading
     /// a list in order then starts each step where the last one ended.
     fn nearest_start(&self, parent: &[usize], idx: usize) -> (usize, u64) {
-        let state = self.lists.get(parent);
+        let state = self.list(parent);
         let mut best = (0, self.memo[parent].offset);
-        if let Some(&(j, at)) = state.and_then(|l| l.checkpoints.iter().rev().find(|(j, _)| *j <= idx)) {
+        if let Some(&(j, at)) = state.checkpoints.iter().rev().find(|(j, _)| *j <= idx) {
             best = (j, at);
         }
-        match state.and_then(|l| l.walk_at) {
+        match state.walk_at {
             Some((j, at)) if j <= idx && j >= best.0 => (j, at),
             _ => best,
         }

@@ -22,7 +22,7 @@ impl Evaluator {
             .find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Json(Shape::Doc))));
         let Some(k) = root else { return fail("not inside a JSON field") };
         let root = path[..k].to_vec();
-        if let Some(v) = self.json.get(&root) {
+        if let Some(v) = self.memo.json(&root) {
             return Ok((root, v.clone()));
         }
         let r = self.memo[&root].clone();
@@ -32,7 +32,7 @@ impl Evaluator {
             Ok(v) => Arc::new(v),
             Err(e) => return fail(format!("this isn't JSON: {e}")),
         };
-        self.json.insert(root.clone(), val.clone());
+        self.memo.remember_json(root.clone(), val.clone());
         Ok((root, val))
     }
 
