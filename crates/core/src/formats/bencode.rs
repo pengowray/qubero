@@ -122,19 +122,19 @@ enum Parsed {
 
 /// How deep a file may nest and still be claimed.
 ///
-/// This is not a limit on bencode, which has none, and it is not there to
-/// stop the scan below running away: it is where the reader gives out. An
-/// evaluator walking a structure inside a structure recurses once per level,
-/// and a debug build of it overflows its stack at 32 levels of bencode, which
-/// is a crash rather than an error. So the number here is under that, and a
-/// file nested deeper is left unrecognised rather than handed to a reader
-/// that would die on it. Real torrents nest five deep, or a dozen when a v2
-/// file tree carries a long path.
+/// This is not a limit on bencode, which has none. It is where the scan below
+/// gives out: it calls itself once a level, and a debug build runs a megabyte
+/// of stack out at about 2500 of them. A quarter of that leaves room to spare
+/// and still covers the deepest bencode anyone has published, which is
+/// libtorrent's 908-level `v2_deep_recursion.torrent`. Real torrents nest five
+/// deep, or a dozen when a v2 file tree carries a long path.
 ///
-/// It belongs in the reader rather than here. See the note in
-/// `eval::Evaluator::resolve`, which is where a depth this arbitrary should
-/// turn into an error that says so.
-const MAX_DEPTH: u32 = 30;
+/// Whether such a file can be *read* is a separate question and no longer this
+/// one's business. The evaluator refuses a node past `DEEPEST_PATH`, which is
+/// about twenty levels of bencode, and says so in an error. A file between
+/// that and this is recognised as bencode and reads as an error saying it
+/// nests too deep, which is more use than not recognising it at all.
+const MAX_DEPTH: u32 = 1024;
 
 /// What may follow the dictionary and the file still be one bencoded
 /// dictionary: nothing, or the newline a tool that wrote the file through a
@@ -371,10 +371,10 @@ mod tests {
     }
 
     #[test]
-    fn a_file_nested_deeper_than_the_reader_goes_is_not_claimed() {
-        // The cap is where the evaluator gives out, not where bencode does.
-        // A file past it reads as nothing rather than as a file that would
-        // take the reader's stack with it.
+    fn a_file_nested_deeper_than_the_scan_goes_is_not_claimed() {
+        // The cap is where this scan gives out, not where bencode does, and
+        // not where reading one gives out either. A file past it reads as
+        // nothing rather than as a file that would take the scan's stack.
         let nest = |n: usize| {
             let mut b = b"d1:a".to_vec();
             b.extend(std::iter::repeat(b'l').take(n));
@@ -395,7 +395,7 @@ mod tests {
 
         // Nesting deep enough to walk the scan off the stack is not bencode
         // as far as this is concerned.
-        let deep = 200;
+        let deep = MAX_DEPTH as usize + 4;
         bytes = b"d1:a".to_vec();
         bytes.extend(std::iter::repeat(b'l').take(deep));
         bytes.extend(std::iter::repeat(b'e').take(deep + 1));
