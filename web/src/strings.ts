@@ -256,8 +256,21 @@ export const TEXTVIEW = {
   guessed: "guessed",
   /** Typing a character the encoding has no room for. The encoding is named
    *  because it may have been a guess, and this is where a wrong guess is
-   *  found out. */
-  refused: (char: string, encoding: string): string => `${char} isn't in ${encoding}`,
+   *  found out, so the way to act on it is in the sentence. "to type it" keeps
+   *  that conditional: a file that really is ASCII and a mistyped key need no
+   *  encoding changed.
+   *
+   *  The character is quoted, since a refused dash or middle dot reads as
+   *  stray punctuation bare. One that has no glyph to show is written as its
+   *  code point instead: empty quotes say nothing, and a combining mark would
+   *  attach itself to the quote. Every encoding offered here holds ASCII, so
+   *  the quote character can never be the refused one. */
+  refused: (char: string, encoding: string): string => {
+    const shown = /[\p{C}\p{Z}\p{M}]/u.test(char)
+      ? `U+${(char.codePointAt(0) ?? 0).toString(16).padStart(4, "0").toUpperCase()}`
+      : `"${char}"`;
+    return `${shown} isn't in ${encoding}. Pick another encoding to type it.`;
+  },
   /** The encoding chooser's first entry. "Auto-detect" rather than "from the
    *  file", which would claim the file said, and only a byte-order mark does. */
   encodingAuto: "Auto-detect",
