@@ -505,16 +505,14 @@ export class TextView {
         // A window that ran out of file leaves the screen short, or empty: a
         // file ending in a line ending puts the start of the "line" holding
         // the last byte at the very end, and a scrollbar dragged to its floor
-        // asks for exactly that. Back the top up until the screen is full.
-        // Backed up by twice the shortfall rather than by it, because a CRLF
-        // costs the core's walk two steps and an ask can come back short of
-        // the lines it names. What came back over is trimmed off the front,
-        // so the screen ends up exactly full.
+        // asks for exactly that. Back the top up until the screen is full,
+        // trimming off the front anything the walk to the file's front came
+        // back over, so the screen ends up exactly full.
         const fit = this.visible();
         if (w.lines.length < fit && this.top > 0) {
-          const b = await this.doc.textBack(this.chosen, this.top, 2 * (fit - w.lines.length));
+          const b = await this.doc.textBack(this.chosen, this.top, fit - w.lines.length);
           if (b.back < this.top) {
-            const whole = await this.doc.textWindow(this.chosen, b.back, 3 * fit + OVERSCAN);
+            const whole = await this.doc.textWindow(this.chosen, b.back, fit + OVERSCAN);
             const over = whole.lines.length - fit;
             const from = over > 0 ? whole.lines[over] : undefined;
             this.top = from === undefined ? b.back : from.at;

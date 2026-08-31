@@ -172,7 +172,10 @@ pub fn window<S: Source>(src: &S, reading: Reading, from: u64, want: usize) -> W
     let mut at = reading.align(from).min(len);
     while out.lines.len() < want && at < len {
         let take = WINDOW.min(len - at);
-        let mut buf = vec![0u8; take as usize];
+        // One unit of lookahead past the window, so a CRLF straddling its edge
+        // is read as the one ending it is and not as a CR then an LF.
+        let read = (take + unit).min(len - at);
+        let mut buf = vec![0u8; read as usize];
         let missing = src.read_bytes(at, &mut buf);
         if !missing.is_empty() {
             out.missing = missing;
@@ -180,7 +183,7 @@ pub fn window<S: Source>(src: &S, reading: Reading, from: u64, want: usize) -> W
         }
         let mut used = 0u64;
         while out.lines.len() < want && used < take {
-            let line = one_line(reading, &buf[used as usize..], at + used, at + take >= len);
+            let line = one_line(reading, &buf[used as usize..], at + used, at + read >= len);
             let step = line.len;
             used += step;
             out.next = line.at + line.len;
@@ -210,7 +213,11 @@ pub fn line_start<S: Source>(src: &S, reading: Reading, at: u64) -> (u64, Vec<Mi
     }
     let from = at.saturating_sub(MAX_LINE).max(base);
     let n = at - from;
-    let mut buf = vec![0u8; n as usize];
+    // One unit of lookahead past `at`, so a CR right before it is told apart
+    // from the front half of a CRLF. A CRLF is one ending, and the place
+    // between its bytes is not a line start.
+    let read = (n + unit).min(src.len_bytes() - from);
+    let mut buf = vec![0u8; read as usize];
     let missing = src.read_bytes(from, &mut buf);
     if !missing.is_empty() {
         return (at, missing);
@@ -461,6 +468,31 @@ mod tests {
         assert_eq!(back(&s, r, 14, 1).0, 8);
         assert_eq!(back(&s, r, 14, 2).0, 4);
         assert_eq!(back(&s, r, 14, 99).0, 0, "the front of the file and no further");
+    }
+
+    #[test]
+    fn the_way_back_steps_a_crlf_in_one() {
+        let s = src("one\r\ntwo\r\nthree\r\nfour");
+        let r = reading(&s.0);
+        assert_eq!(line_start(&s, r, 16).0, 10, "between the bytes of a CRLF is not a line start");
+        assert_eq!(back(&s, r, 17, 1).0, 10);
+        assert_eq!(back(&s, r, 17, 2).0, 5);
+        assert_eq!(back(&s, r, 17, 3).0, 0);
+        assert_eq!(back(&s, r, 21, 4).0, 0, "from the end of the file, four steps is the front");
+    }
+
+    #[test]
+    fn a_crlf_straddling_the_read_window_is_one_ending() {
+        // Lines of "a\n" up to two bytes short of the window, then "z\r\n" so
+        // the CR is the window's last byte and the LF the first byte past it.
+        let mut bytes = b"a\n".repeat((WINDOW as usize - 2) / 2);
+        bytes.extend_from_slice(b"z\r\nend");
+        let s = MemSource(bytes);
+        let r = reading(&s.0);
+        let w = window(&s, r, 0, usize::MAX);
+        let last = &w.lines[w.lines.len() - 2..];
+        let got: Vec<(&str, Ending)> = last.iter().map(|l| (l.text.as_str(), l.ending)).collect();
+        assert_eq!(got, vec![("z", Ending::CrLf), ("end", Ending::None)]);
     }
 
     #[test]
