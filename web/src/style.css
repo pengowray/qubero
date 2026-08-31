@@ -2680,13 +2680,22 @@ table.rec tr.is-on td {
 }
 .tv-canvas {
   position: relative;
+  overflow: hidden;
+}
+/* The drawn lines ride the scroll position by a transform rather than by
+   position: sticky. Sticky is clamped to its containing block, and the block
+   of drawn rows is taller than the viewport, so near the end of the file the
+   clamp shifted the rows and clipped what should have been on screen. */
+.tv-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: flex-start;
+  will-change: transform;
 }
 .tv-gutter {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   flex: 0 0 auto;
   padding: 0 10px 0 8px;
   border-right: 1px solid var(--line);
@@ -2697,8 +2706,6 @@ table.rec tr.is-on td {
   user-select: none;
 }
 .tv-rows {
-  position: sticky;
-  top: 0;
   flex: 1 1 auto;
   min-width: 0;
   padding-left: 10px;

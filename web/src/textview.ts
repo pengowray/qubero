@@ -44,6 +44,7 @@ export class TextView {
   readonly el: HTMLElement;
   private readonly gutter: HTMLElement;
   private readonly rows: HTMLElement;
+  private readonly view: HTMLElement;
   private readonly canvas: HTMLElement;
   private readonly scroll: HTMLElement;
 
@@ -61,6 +62,10 @@ export class TextView {
   private usualEnding = "";
   private drawing = false;
   private pending = false;
+  /** Whether the reading has been asked of the file at all: the one above is a
+   *  stand-in until the first draw, and is held rather than asked again after,
+   *  since settling it is a trip through the core on every redraw otherwise. */
+  private readingSettled = false;
   /** True while a movement key is extending a selection rather than moving
    *  away from one. */
   private extending = false;
@@ -90,7 +95,8 @@ export class TextView {
   constructor(private doc: Doc) {
     this.gutter = el("div", { className: "tv-gutter" });
     this.rows = el("div", { className: "tv-rows" });
-    this.canvas = el("div", { className: "tv-canvas" }, this.gutter, this.rows);
+    this.view = el("div", { className: "tv-view" }, this.gutter, this.rows);
+    this.canvas = el("div", { className: "tv-canvas" }, this.view);
     this.scroll = el("div", { className: "tv-scroll", tabIndex: 0 }, this.canvas);
     this.scroll.setAttribute("role", "region");
     this.scroll.setAttribute("aria-label", TEXTVIEW.regionLabel);
@@ -159,21 +165,39 @@ export class TextView {
     if (Math.abs(this.scroll.scrollTop - y) > 1) {
       this.ignoreScroll = true;
       this.scroll.scrollTop = y;
+      this.pin();
     }
   }
 
   private ignoreScroll = false;
+  private scrollFrame = 0;
+
+  /** Keep the drawn lines where the scrollbar is. This is what sticky
+   *  positioning did, without its clamp to the canvas: the block of drawn rows
+   *  is taller than the viewport, so the clamp used to shift the rows near the
+   *  end of the file and cut off lines that should have been on screen. */
+  private pin(): void {
+    this.view.style.transform = `translateY(${this.scroll.scrollTop}px)`;
+  }
 
   private onScroll(): void {
+    this.pin();
     if (this.ignoreScroll) {
       this.ignoreScroll = false;
       return;
     }
-    const len = Math.max(1, this.doc.lengthBytes);
-    const h = this.canvasHeight();
-    const span = Math.max(1, h - this.scroll.clientHeight);
-    const want = Math.round((this.scroll.scrollTop / span) * len);
-    void this.jump(want);
+    // One jump per frame, from wherever the scrollbar is by then. Scroll
+    // events come faster than frames, and each jump is a trip through the
+    // core; the intermediate positions are not worth drawing.
+    if (this.scrollFrame !== 0) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = 0;
+      const len = Math.max(1, this.doc.lengthBytes);
+      const h = this.canvasHeight();
+      const span = Math.max(1, h - this.scroll.clientHeight);
+      const want = Math.round((this.scroll.scrollTop / span) * len);
+      void this.jump(want);
+    });
   }
 
   /** Move to the line holding a byte, without moving the cursor. */
@@ -441,13 +465,25 @@ export class TextView {
     this.render();
   }
 
+  private moveFrame = 0;
+  private lastMove: PointerEvent | null = null;
+
   private onPointerMove(e: PointerEvent): void {
     if (!this.dragging) return;
-    const at = this.byteUnder(e);
-    if (at === null) return;
-    this.cursor = at;
-    this.extendTo(at);
-    this.render();
+    // One redraw per frame, from wherever the pointer is by then. Pointer
+    // moves come faster than frames, and each redraw walks the window.
+    this.lastMove = e;
+    if (this.moveFrame !== 0) return;
+    this.moveFrame = requestAnimationFrame(() => {
+      this.moveFrame = 0;
+      const ev = this.lastMove;
+      if (ev === null || !this.dragging) return;
+      const at = this.byteUnder(ev);
+      if (at === null) return;
+      this.cursor = at;
+      this.extendTo(at);
+      this.render();
+    });
   }
 
   /** Draw what fits, reading only that. */
@@ -460,11 +496,31 @@ export class TextView {
     try {
       do {
         this.pending = false;
-        if (force || this.reading.encoding === "") {
+        if (force || !this.readingSettled || this.reading.encoding === "") {
           this.reading = await this.doc.textReading(this.chosen);
+          this.readingSettled = true;
         }
         const want = this.visible() + OVERSCAN;
-        const w = await this.doc.textWindow(this.chosen, this.top, want);
+        let w = await this.doc.textWindow(this.chosen, this.top, want);
+        // A window that ran out of file leaves the screen short, or empty: a
+        // file ending in a line ending puts the start of the "line" holding
+        // the last byte at the very end, and a scrollbar dragged to its floor
+        // asks for exactly that. Back the top up until the screen is full.
+        // Backed up by twice the shortfall rather than by it, because a CRLF
+        // costs the core's walk two steps and an ask can come back short of
+        // the lines it names. What came back over is trimmed off the front,
+        // so the screen ends up exactly full.
+        const fit = this.visible();
+        if (w.lines.length < fit && this.top > 0) {
+          const b = await this.doc.textBack(this.chosen, this.top, 2 * (fit - w.lines.length));
+          if (b.back < this.top) {
+            const whole = await this.doc.textWindow(this.chosen, b.back, 3 * fit + OVERSCAN);
+            const over = whole.lines.length - fit;
+            const from = over > 0 ? whole.lines[over] : undefined;
+            this.top = from === undefined ? b.back : from.at;
+            w = from === undefined ? whole : { ...whole, lines: whole.lines.slice(over) };
+          }
+        }
         this.lines = w.lines;
         this.usualEnding = commonEnding(w.lines);
         this.render();
@@ -475,15 +531,43 @@ export class TextView {
     }
   }
 
+  /** The rows as last drawn, keyed by everything that shaped them, so a redraw
+   *  that changes nothing about a row keeps its element rather than building a
+   *  thousand spans again. A scroll keeps every row that stayed on screen; a
+   *  drag rebuilds only the rows the selection moved through. */
+  private rowCache = new Map<string, HTMLElement>();
+  private gutterCache = new Map<number, HTMLElement>();
+
+  /** Everything a row's appearance depends on. */
+  private rowKey(line: TextLine): string {
+    const end = line.at + line.len;
+    const sel = this.selection;
+    const a = sel === null ? 0 : Math.max(sel.start, line.at);
+    const b = sel === null ? 0 : Math.min(sel.end, end);
+    const selPart = b > a ? `${a}:${b}` : "";
+    const cur = this.cursor >= line.at && this.cursor <= end ? this.cursor : -1;
+    const S = "\u0000";
+    return line.at + S + line.len + S + line.ending + S + String(line.lossy) + S + line.text + S + line.escapes.join(",") + S + cur + S + selPart + S + this.usualEnding + S + this.reading.encoding;
+  }
+
   private render(): void {
     this.canvas.style.height = `${this.canvasHeight()}px`;
+    this.pin();
+    const keptRows = new Map<string, HTMLElement>();
+    const keptGutter = new Map<number, HTMLElement>();
     const gutter: HTMLElement[] = [];
     const rows: HTMLElement[] = [];
     for (const line of this.lines) {
-      const g = el("div", { className: "tv-off", textContent: formatOffset(line.at * 8) });
+      const g = this.gutterCache.get(line.at) ?? el("div", { className: "tv-off", textContent: formatOffset(line.at * 8) });
+      keptGutter.set(line.at, g);
       gutter.push(g);
-      rows.push(this.row(line));
+      const key = this.rowKey(line);
+      const r = this.rowCache.get(key) ?? this.row(line);
+      keptRows.set(key, r);
+      rows.push(r);
     }
+    this.rowCache = keptRows;
+    this.gutterCache = keptGutter;
     this.gutter.replaceChildren(...gutter);
     this.rows.replaceChildren(...rows);
   }
@@ -492,6 +576,13 @@ export class TextView {
    *  write path asks this as much as the drawing does: what backspace removes
    *  is the width of the character before the caret, not one byte. */
   private charsOf(line: TextLine): { char: string; at: number; width: number }[] {
+    const key = `${this.reading.encoding}\u0000${this.reading.unit}`;
+    if (key !== this.charCacheKey) {
+      this.charCache = new WeakMap();
+      this.charCacheKey = key;
+    }
+    const hit = this.charCache.get(line);
+    if (hit !== undefined) return hit;
     const out: { char: string; at: number; width: number }[] = [];
     let at = line.at;
     for (const c of line.text) {
@@ -499,8 +590,16 @@ export class TextView {
       out.push({ char: c, at, width });
       at += width;
     }
+    this.charCache.set(line, out);
     return out;
   }
+
+  /** The cells of each line, held for as long as the line is. Every window is
+   *  a fresh set of line objects, so keying on the object is what invalidates
+   *  the cache when the file changes; keying the map itself on the reading is
+   *  what invalidates it when the encoding does. */
+  private charCache = new WeakMap<TextLine, { char: string; at: number; width: number }[]>();
+  private charCacheKey = "";
 
   private row(line: TextLine): HTMLElement {
     const row = el("div", { className: "tv-row" });
