@@ -20,6 +20,7 @@ mod corel;
 mod cpio;
 mod dos;
 mod dtb;
+mod draco;
 mod dv;
 mod elf;
 mod machine;
@@ -113,6 +114,7 @@ pub use corel::{cdr, cmx};
 pub use cpio::cpio;
 pub use dos::{com, dos};
 pub use dtb::dtb;
+pub use draco::draco;
 pub use dv::dv;
 pub use eps::eps;
 pub use elf::{bpf, elf};
@@ -220,6 +222,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("mp4", |_| mp4()),
     ("mkv", |_| mkv()),
     ("dtb", |_| dtb()),
+    ("draco", |_| draco()),
     ("dv", |_| dv()),
     ("iso9660", |_| iso9660()),
     ("id3", |_| id3()),

@@ -42,6 +42,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"PK\x05\x06", "zip"),
     (b"\0asm", "wasm"),
     (b"GGUF", "gguf"),
+    (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
     (uf2::MAGIC, "uf2"),
