@@ -11,6 +11,18 @@
       "cwd": "web",
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "web-local",
+      "runtimeExecutable": "pwsh",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:QUBERO_FILES='D:/'; $env:PORT='17273'; npm run dev"
+      ],
+      "cwd": "web",
+      "port": 17273,
+      "autoPort": true
     }
   ]
 }

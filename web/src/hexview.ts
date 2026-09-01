@@ -5,6 +5,7 @@
 // only the rows that fit, with its own scrollbar mapped row <-> file offset.
 
 import type { Doc, Span } from "./doc.js";
+import type { OutlineHeading, Viewport } from "./outline.js";
 import { GAP_LABEL, NO_TEMPLATE } from "./strings.js";
 import { fieldClass } from "./fieldstyle.js";
 import { chipDetail, chipsThatFit } from "./chipfit.js";
@@ -201,6 +202,12 @@ export class HexView {
   onPickField: (path: readonly number[]) => void = () => {};
   /** The selection after it changed, or null when there is none. */
   onSelectionChange: (r: BitRange | null) => void = () => {};
+  /** The stretch of the file on screen, after every draw. The rail marks the
+   *  part of the file it falls in. */
+  onViewport: (v: Viewport) => void = () => {};
+  /** The parts of the file, as the listing names them. Drawn as heading lines
+   *  before the row each one starts in. */
+  sections: readonly OutlineHeading[] = [];
 
   /** Where a one-off message goes. The grid has no status bar of its own, and
    *  a copy that did not happen has to say so where the user is looking. */
@@ -266,6 +273,12 @@ export class HexView {
   }
   private get maxTopRow(): number {
     return Math.max(0, this.totalRows - this.visibleRows);
+  }
+
+  /** Take the parts of the file to draw headings for. */
+  setSections(sections: readonly OutlineHeading[]): void {
+    this.sections = sections;
+    this.render();
   }
 
   setBytesPerRow(n: number): void {
@@ -1375,5 +1388,6 @@ export class HexView {
     const top = this.maxTopRow === 0 ? 0 : Math.round((this.topRow / this.maxTopRow) * (trackH - thumbH));
     this.thumb.style.height = `${thumbH}px`;
     this.thumb.style.transform = `translateY(${top}px)`;
+    this.onViewport({ startBit: start * 8, endBit: Math.min(len, start + windowBytes) * 8 });
   }
 }

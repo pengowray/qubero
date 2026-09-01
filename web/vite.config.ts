@@ -23,7 +23,9 @@ function localFiles(): Plugin {
     apply: "serve",
     configureServer(server) {
       if (root === undefined || root === "") return;
-      const base = resolve(root);
+      // A drive root resolves with its own trailing separator, which would double
+      // it below. Strip it, so `D:/` serves the whole drive.
+      const base = resolve(root).replace(/[\\/]+$/, "");
       server.middlewares.use("/local", (req, res, next) => {
         const rel = decodeURIComponent((req.url ?? "/").split("?")[0] ?? "/").replace(/^\/+/, "");
         const path = normalize(join(base, rel));

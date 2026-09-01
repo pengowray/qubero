@@ -24,6 +24,7 @@ import { drawItem, el, holdsSelection, isSelected, itemOpens, runPosition } from
 import type { DrawContext, Selected } from "./listingdraw.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
+import type { OutlineHeading, Viewport } from "./outline.js";
 import { NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
 
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
@@ -123,6 +124,32 @@ export class ListingReport {
   /** A long list was asked for on its own. The pane is the caller's, since
    *  where it goes on the screen is not this view's business. */
   onOpenList: (path: readonly number[]) => void = () => {};
+  /** The parts of the file changed: the tree was walked again. The rail and
+   *  the hex view take their headings from `outline()` when this fires. */
+  onOutline: (headings: readonly OutlineHeading[]) => void = () => {};
+  /** The stretch of the file on screen, after every paint, from the first
+   *  drawn item to the end of the last. */
+  onViewport: (v: Viewport) => void = () => {};
+
+  /** The headings the listing draws, in file order: the parts of the file as
+   *  every surface names them. */
+  outline(): OutlineHeading[] {
+    const out: OutlineHeading[] = [];
+    for (const i of this.items) {
+      if (i.kind !== "heading") continue;
+      out.push({
+        key: i.key,
+        section: i.section,
+        level: i.level,
+        path: i.path,
+        name: i.node?.name ?? "",
+        offsetBits: i.offsetBits,
+        sizeBits: i.sizeBits,
+        color: sectionColor(i.section),
+      });
+    }
+    return out;
+  }
 
   constructor(doc: Doc) {
     this.doc = doc;
@@ -203,6 +230,7 @@ export class ListingReport {
     this.layout();
     if (anchor !== null) this.restore(anchor);
     this.paint();
+    this.onOutline(this.outline());
     // A stretch still being read comes back as a pending item, so this runs
     // again when its chunks land: `Doc` has already asked for them.
   }
@@ -378,6 +406,11 @@ export class ListingReport {
     // a few rows above it and would name the heading before this one.
     this.trail(top);
     this.remeasure(from, to);
+    const first = this.items[this.indexAt(top)];
+    const last = this.items[Math.min(this.items.length - 1, this.indexAt(top + height))];
+    if (first !== undefined && last !== undefined) {
+      this.onViewport({ startBit: first.offsetBits, endBit: Math.max(first.offsetBits, last.offsetBits + last.sizeBits) });
+    }
   }
 
   /** Take the height of anything that had to be guessed, and lay out again if
