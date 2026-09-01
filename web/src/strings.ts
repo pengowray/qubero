@@ -217,6 +217,29 @@ export const REPORT = {
    *  showed is actually written. The mockup's own heading, and the one thing
    *  in the table that is about the file rather than about the data. */
   storedAt: "stored at",
+  /** A cell of a record table whose value is a page number pointing at another
+   *  page of the same file: a SQLite schema row's `rootpage`, and a b-tree
+   *  interior page's `left_child_page`. Clicking it goes there.
+   *
+   *  The number comes first because it is the stored value and the column is
+   *  a numeric one; the trailing arrow is the same "goes to" mark the mockup
+   *  writes cross-references with, and `reads` above uses for the other
+   *  direction. Lowercase, because it is a value and not a heading. */
+  pageLink: (n: number): string => `page ${n} →`,
+  /** The same link spelled out, for a tooltip and for a reader who cannot see
+   *  the arrow. Verb first, like `readsLabel`. */
+  pageLinkLabel: (n: number): string => `go to page ${n}`,
+  /** The last row of a b-tree interior page. Its child pointer is stored in
+   *  the page header rather than in a cell, and it has no key because it has
+   *  no upper bound: every key above the last one in the table is on it.
+   *
+   *  Says what the row covers rather than that something is absent, so it
+   *  cannot be taken for an unread or missing value; those have styling and
+   *  words of their own. A table b-tree keys on the rowid and says so; an
+   *  index b-tree's keys are the indexed columns, which have no one word
+   *  between them. */
+  rightMostRowids: "all higher rowids",
+  rightMostKeys: "all higher keys",
 } as const;
 
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the

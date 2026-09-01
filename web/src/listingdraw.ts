@@ -16,6 +16,7 @@ import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
 import { fileMap } from "./filemap.js";
 import { recordTable } from "./records.js";
+import type { RecordCell } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
 import { bitSizeText, childWord, countText, GAP_LABEL, REPORT } from "./strings.js";
@@ -198,7 +199,7 @@ function drawRecord(c: DrawContext, item: Extract<Item, { kind: "record" }>): HT
     tr.dataset["at"] = String(row.offsetBits);
     tr.dataset["size"] = String(row.sizeBits);
     if (holdsSelection(c.selected, row.offsetBits, row.sizeBits)) tr.className = "is-on";
-    for (const cell of row.cells) tr.append(el("td", fieldClass(cell.kind), cell.text));
+    for (const cell of row.cells) tr.append(drawCell(cell));
     const at = el("td", "rec-at");
     // The one way out of the table: the row's own bytes, which is where it
     // was read from and where the reader goes to see how.
@@ -218,6 +219,24 @@ function drawRecord(c: DrawContext, item: Extract<Item, { kind: "record" }>): HT
   host.append(grid);
   if (table.pending) host.append(el("div", "bs-wait", REPORT.reading));
   return host;
+}
+
+/** One cell of a record table. A value that names another part of the file
+ *  is a link there, which is rule 7's cross-reference: `data-reads` is the
+ *  same route the rows' "→ cells" links already take. */
+function drawCell(cell: RecordCell): HTMLElement {
+  const td = el("td", fieldClass(cell.kind));
+  if (cell.link === undefined) {
+    td.textContent = cell.text;
+    return td;
+  }
+  const link = el("button", "rec-link", cell.link.text);
+  link.type = "button";
+  link.title = cell.link.label;
+  link.setAttribute("aria-label", cell.link.label);
+  link.dataset["reads"] = pathKey(cell.link.path);
+  td.append(link);
+  return td;
 }
 
 function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTMLElement {

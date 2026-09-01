@@ -114,8 +114,12 @@ fn column(encoding: Option<i128>, serial: impl Fn() -> E) -> T {
             (5, T::Int { bits: 48, endian: Big }),
             (6, T::Int { bits: 64, endian: Big }),
             (7, T::F64(Big)),
-            (8, T::bytes(E::lit(0))),
-            (9, T::bytes(E::lit(0))),
+            // These two are values, not absences. Read as no bytes they come
+            // out blank, which in a table of rows is indistinguishable from a
+            // null and is wrong for every boolean column in every database.
+            // Computed says the value without inventing a byte for it.
+            (8, T::computed(E::lit(0))),
+            (9, T::computed(E::lit(1))),
             // Reserved: no bytes rather than a length worked out from a number
             // that was never a length.
             (10, T::bytes(E::lit(0))),

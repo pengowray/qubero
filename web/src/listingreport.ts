@@ -795,6 +795,10 @@ export class ListingReport {
       this.rebuild();
       i = this.items.findIndex((item) => item.key === key);
     }
+    // A part big enough for a heading has no row: a SQLite page reached from
+    // a schema row's `rootpage` is a section of the file, and its heading is
+    // where the reader is being sent.
+    if (i < 0) i = this.items.findIndex((item) => item.key === `h:${pathString(path)}`);
     // The row may not be there at all: a table shows its rows itself, and a
     // list past its first page does not reach that far. Then the nearest thing
     // that holds it is what to go to, since that is what will be lit.

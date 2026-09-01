@@ -448,6 +448,14 @@ input.invalid {
 .field-binary {
   --field-color: var(--muted);
 }
+/* Not a value the format wrote: a table cell saying what the row covers.
+   Italic so that it cannot be mistaken for one at a glance, whichever
+   column it lands in. */
+.field-note {
+  --field-color: var(--muted);
+  color: var(--muted);
+  font-style: italic;
+}
 @media (prefers-color-scheme: dark) {
   .field-number {
     --field-color: #67ace6;
