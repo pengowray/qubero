@@ -11,7 +11,6 @@ import { OverviewPanel } from "./overviewpanel.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
-import { TypeTable } from "./typetable.js";
 import { DUMP, TEXTVIEW } from "./strings.js";
 
 const appEl = document.getElementById("app");
@@ -65,7 +64,9 @@ const closesMsg = (): string => {
 };
 const selectedBytes = (n: number): string => (n === 1 ? "1 byte" : `${n.toLocaleString()} bytes`);
 
-const SIGNATURE_NOTE = "Signature only.";
+/** Above the parts in the rail, for the generated template: it marks the
+ *  bytes that name the format and describes nothing else. */
+const SIGNATURE_NOTE = "Signature only. This template marks the bytes that identify the format and nothing else.";
 
 
 /** The select value that stands for the generated template. Not a built-in
@@ -145,14 +146,14 @@ function show(): void {
 
 /** A section that can be folded down to its title bar, and remembers whether
  *  it was. */
-function panel(title: string, side: "bottom" | "right", content: HTMLElement, onToggle: () => void): HTMLElement {
-  const key = `qubero.panel.${side}`;
+function panel(title: string, content: HTMLElement, onToggle: () => void): HTMLElement {
+  const key = "qubero.panel.right";
   const chevron = el("span", { className: "panel-chevron" });
   const toggle = el("button", { type: "button", className: "panel-toggle" }, chevron, title);
-  const section = el("section", { className: `panel panel-${side}` }, el("header", { className: "panel-bar" }, toggle), content);
+  const section = el("section", { className: "panel panel-right" }, el("header", { className: "panel-bar" }, toggle), content);
   const apply = (collapsed: boolean): void => {
     section.classList.toggle("is-collapsed", collapsed);
-    chevron.textContent = collapsed ? (side === "right" ? "\u25c2" : "\u25b8") : "\u25be";
+    chevron.textContent = collapsed ? "\u25c2" : "\u25be";
     toggle.setAttribute("aria-expanded", String(!collapsed));
     toggle.title = collapsed ? "Expand" : "Collapse";
   };
@@ -177,7 +178,6 @@ function build(tab: Tab): void {
   const doc = tab.doc;
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
-  const table = new TypeTable(doc);
   const structure = new ListingReport(doc);
   // One long list, read on its own beside the listing. Empty and hidden until
   // a list is opened in it.
@@ -243,7 +243,7 @@ function build(tab: Tab): void {
     if (n.status === "ok") {
       view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
     }
-    table.reveal(at.node);
+    overview.reveal(at.node);
     structure.setBit(bitOffset);
     listPane.setBit(bitOffset);
   };
@@ -258,21 +258,13 @@ function build(tab: Tab): void {
     inspector.setPath(path);
   };
 
-  table.onPick = ({ path, startBit, endBit }) => {
-    view.setHighlight({ startBit, endBit });
-    picking = true;
-    view.setBitCursor(startBit, { pane: "hex" });
-    picking = false;
-    inspector.setPath(path);
-    structure.reveal(path);
-  };
   structure.onPick = ({ path, startBit, endBit }) => {
     view.setHighlight({ startBit, endBit });
     picking = true;
     view.setBitCursor(startBit, { pane: "hex" });
     picking = false;
     inspector.setPath(path);
-    table.reveal(path);
+    overview.reveal(path);
   };
   // Following an offset: put the cursor where it points, and let the views
   // catch up the same way they do for a search hit.
@@ -297,23 +289,23 @@ function build(tab: Tab): void {
   };
   nav.startFile(view.cursorState.bitOffset);
   nav.onGo(showBits);
-  table.onJump = jumpToBit;
+  overview.onGoTo = jumpToBit;
   inspector.onGoTo = jumpToBit;
   inspector.onPick = (path) => {
     const n = doc.templateNode(path);
     if (n.status === "ok") nav.recordJump(view.cursorState.bitOffset, n.node.offset_bits);
     goToField(path);
-    table.reveal(path);
+    overview.reveal(path);
     structure.reveal(path);
   };
   inspector.onOpenTab = openEmbedded;
   view.onPickField = (path) => {
     goToField(path);
-    table.reveal(path);
+    overview.reveal(path);
   };
   view.onHighlightClear = () => {
     followedBit = null;
-    table.clearSelection();
+    overview.clearSelection();
     structure.clearSelection();
   };
 
@@ -326,7 +318,7 @@ function build(tab: Tab): void {
   // rebuilds it rather than looking it up by name.
   let reapplySignature: (() => Promise<void>) | null = null;
   tmpl.addEventListener("change", () => {
-    table.setNote("");
+    overview.setNote("");
     if (tmpl.value === SIGNATURE_VALUE) {
       void reapplySignature?.();
       return;
@@ -396,11 +388,11 @@ function build(tab: Tab): void {
       const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
       tmpl.append(option);
       tmpl.value = SIGNATURE_VALUE;
-      table.setNote(SIGNATURE_NOTE);
+      overview.setNote(SIGNATURE_NOTE);
       kind.details(id, SIGNATURE_TEMPLATE);
       reapplySignature = async (): Promise<void> => {
         await doc.signatureTemplate(id);
-        table.setNote(SIGNATURE_NOTE);
+        overview.setNote(SIGNATURE_NOTE);
       };
     } catch (e) {
       console.error("identify", e);
@@ -692,20 +684,33 @@ function build(tab: Tab): void {
   const relayout = (): void => {
     view.relayout();
     structure.relayout();
-    table.catchUp();
     listPane.relayout();
     overview.pump();
   };
-  // Picking a region moves the cursor everywhere, the same as picking a row in
-  // the listing, and brings the listing to it: a region is usually off screen.
+  // Picking a part moves the cursor everywhere, the same as picking a row in
+  // the listing, and brings the listing to it: a part is usually off screen.
   overview.onPick = ({ path, startBit, endBit }) => {
     view.setHighlight({ startBit, endBit });
     picking = true;
     view.setBitCursor(startBit, { pane: "hex" });
     picking = false;
     inspector.setPath(path);
-    table.reveal(path);
     structure.reveal(path);
+  };
+  // The listing works out what the parts of the file are; the rail lists them
+  // and the hex view draws their headings. The rail says whether they changed,
+  // so a walk that named the same parts again redraws nothing.
+  structure.onOutline = (headings) => {
+    if (overview.setOutline(headings)) view.setSections(headings);
+  };
+  // Only the view on screen says where the reader is. A hidden listing still
+  // walks the file and would otherwise drag the rail's mark to wherever it
+  // happened to be left.
+  view.onViewport = (v) => {
+    if (!view.el.hidden) overview.setViewport(v);
+  };
+  structure.onViewport = (v) => {
+    if (!structure.el.hidden) overview.setViewport(v);
   };
   // A cell of the map stands for a stretch of the file, so picking one marks
   // that stretch: the panel at the cursor then reads it as a number, which is
@@ -723,8 +728,7 @@ function build(tab: Tab): void {
     structure.onPick({ path, startBit, endBit });
   };
   listPane.onClose = () => relayout();
-  const bottom = panel("Structure", "bottom", table.el, relayout);
-  const right = panel("At cursor", "right", inspector.el, relayout);
+  const right = panel("At cursor", inspector.el, relayout);
   app.replaceChildren(
     ...(tabs.length > 1 ? [tabStrip()] : []),
     toolbar,
@@ -732,7 +736,7 @@ function build(tab: Tab): void {
       "main",
       { className: "workspace" },
       overview.el,
-      el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, listRow, bottom),
+      el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, listRow),
       right,
     ),
     statusbar,
@@ -757,7 +761,7 @@ function build(tab: Tab): void {
   // The next file dropped may be one no template covers. Fetch the rules while
   // nothing is waiting on them, so that file is named as soon as it opens.
   prefetchMagic();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, table, overview, structure, listPane, text, setView } });
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, overview, structure, listPane, text, setView } });
 }
 
 function pick(): void {

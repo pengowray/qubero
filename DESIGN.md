@@ -394,14 +394,17 @@ bytes or more, and mostly printable. A one-byte count of 65 beside an `A`
 invites reading a number as a letter.
 
 ### The overview
-A sidebar down the left of both the hex grid and the listing, describing the
-file before either of them is read: its size, what the identification made of
-it, a map of the whole file, the top-level regions, and a sentence for
-anything that stands out. The aim is that what a reader would find by paging
-through the whole file (the last half being zeros, a compressed middle) is on
-screen before they page anywhere. It belongs to neither view because "what is
-in this file" is the same question from both, and it starts folded away
-because filling it in reads the whole file.
+A rail down the left of the hex grid, the listing and the text view,
+describing the file before any of them is read and saying where in it the
+reader is: its size, what the identification made of it, a map of the whole
+file, the parts a template divides it into, and a sentence for anything that
+stands out. The aim is that what a reader would find by paging through the
+whole file (the last half being zeros, a compressed middle) is on screen
+before they page anywhere. It belongs to no one view because "what is in this
+file" is the same question from all of them, and it starts folded away
+because filling it in reads the whole file. It is the one surface whose job is
+navigation; the main view reads and the inspector edits, and the bottom
+Structure panel that used to repeat the listing's tree is gone.
 
 The map divides the file into equal buckets, each a power of two of bytes so a
 cell stands for a round number, and classifies each bucket's bytes: all zero,
@@ -440,14 +443,40 @@ are exact, and that is affordable over one block where it would not be over a
 whole file; picking one measures it on its own rather than quoting the block's
 numbers for it.
 
-The region list is the template's top-level children, with runs of three or
-more plain fields folded into one row so a header's bookkeeping does not
-outnumber the parts with any size to them; structures keep their rows however
-small. Hovering a region shows where it sits on the map; picking one moves the
-cursor the way picking a row does. Next, per the roadmap: carrying each
-format's own units upward (pages, tensors, tables, functions) so the regions
-read in the document's terms rather than the template's, and coverage at
-whole-file resolution so the map itself can show what no field describes.
+The Contents are the listing's headings, taken from `ListingReport.outline()`
+rather than worked out again: one source for what the parts of the file are,
+so the rail, the listing and the hex view's heading lines never disagree about
+their names, extents or colours. A level-0 heading is a row with its section
+colour, name, size and share of the file; the level-1 headings inside it are
+listed under it only while the main view is in it, so a file of a hundred
+thousand pages does not carry a hundred thousand lists of cells. The first two
+hundred parts are listed and the rest counted, except the part the view is in,
+which is always listed wherever it falls. Under the class map sits a layout
+strip, the same `fileMap` the headings carry drawn at the rail's width with
+every part lit in its own colour: the class map says what the bytes are like
+and the strip says which part they belong to, and side by side they let the
+reader see that the zeros are the unused half of a page. The listing fires
+`onOutline` on every walk of the tree, and a streamed file walks once per batch
+of chunks, so the rail compares the new headings with the old and redraws
+nothing when they are the same.
+
+The mark follows the main view, not the cursor: whichever view is showing
+reports the stretch of the file it has on screen (`onViewport`), and the part
+whose bytes hold the top of that stretch is marked and scrolled into view in
+the rail, the way a document's outline follows its scroll. `main.ts` passes on
+only the showing view's reports, since a hidden listing still walks the file
+and paints. Hovering a part lights its bytes on the class map and the strip;
+picking one moves the cursor to its first bit, which brings the hex view to
+that row and the listing to that heading.
+
+Beside Contents, a Logical tab for the formats `logicaloutline.ts` has an
+adapter for (HDF5, GGUF, zip, SQLite, ELF, ISO 9660, WAV): the file as its own
+objects, tables and entries rather than as the stretches they are stored in,
+drawn as a tree because that is what it is. It is the tree the bottom panel's
+Logical mode drew, moved here with its fold state; picking an object goes to
+the field it is stored in, and Ctrl+click on one whose field holds an offset
+goes where the offset points. The tree is drawn only while it is on screen and
+once per timeout however many changes asked, since reading it walks the file.
 
 ### The field column
 The hex view's right-hand column shows either the bytes as text or, with a
