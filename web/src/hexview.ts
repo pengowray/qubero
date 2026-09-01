@@ -5,10 +5,12 @@
 // only the rows that fit, with its own scrollbar mapped row <-> file offset.
 
 import type { Doc, Span } from "./doc.js";
+import { formatBytes } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
-import { GAP_LABEL, NO_TEMPLATE } from "./strings.js";
+import { GAP_LABEL, NO_TEMPLATE, REPORT } from "./strings.js";
 import { fieldClass } from "./fieldstyle.js";
-import { chipDetail, chipsThatFit } from "./chipfit.js";
+import { chipDetail, chipLayout, chipWidth, runDetail } from "./chipfit.js";
+import { rangeText, shareText } from "./listingdraw.js";
 
 export type Pane = "hex" | "ascii";
 /** What sits to the right of the bytes: their text, or what the template says
@@ -75,8 +77,45 @@ const COPY_DONE = (bytes: number, asText: boolean): string =>
  *  which is the one thing a plain "keep" cannot say. */
 type Select = "keep" | "clear" | { readonly anchor: number };
 
-/** A span named on a row, and whether it started above the view. */
-type Chip = { span: Span; carried: boolean };
+/** A span named on a row, whether it started above the view, and the elements
+ *  of its list it stands for when a run of them is drawn as one chip: empty
+ *  for a chip that is one field. */
+type Chip = { span: Span; carried: boolean; run: Span[] };
+
+/** What a chip says: the name in bold and the value after it. */
+type ChipText = { readonly name: string; readonly detail: string };
+
+/** The name a list gives its elements. */
+const ELEMENT = /^\[\d+\]$/;
+
+/** Whether a span is an element of a list that reads as one of many, so that
+ *  a run of its siblings on one row can be one chip. Text is not: each string
+ *  is worth reading. Nor is a structure that reads on one line, for the same
+ *  reason, or a run the core has already folded. */
+function foldable(s: Span): boolean {
+  return !s.gap && s.count === 0 && s.line === null && s.kind !== "str" && ELEMENT.test(s.name);
+}
+
+/** Whether two spans are elements of the same list, read the same way. */
+function sameList(a: Span, b: Span): boolean {
+  return a.type === b.type && a.trail.length === b.trail.length && a.trail.every((t, i) => t === b.trail[i]);
+}
+
+/** The list an element belongs to, by name. */
+function listName(s: Span): string {
+  return s.trail[s.trail.length - 1] ?? s.name;
+}
+
+/** What a heading calls a part with no name of its own: the listing's word
+ *  for a run of fields at the front, the back or the middle of the file. */
+function headingName(h: OutlineHeading, fileBits: number): string {
+  if (h.name !== "") return h.name;
+  const where = h.offsetBits === 0 ? "start" : fileBits > 0 && h.offsetBits + h.sizeBits >= fileBits ? "end" : "middle";
+  return REPORT.unnamedPart(where);
+}
+
+/** What pressing a heading does, for a reader who cannot guess. */
+const HEADING_TIP = (name: string): string => `Move the cursor to the first byte of ${name}`;
 
 /** Where the spans on screen land. See `HexView.placeSpans`. */
 type Placed = {
@@ -116,6 +155,8 @@ export class HexView {
   private rowEls: HTMLElement[] = [];
   /** The spans each row is made of, kept between draws. See `fitParts`. */
   private parts: {
+    /** The line of cells: everything in the row but its headings. */
+    readonly line: HTMLElement;
     readonly addr: HTMLElement;
     readonly cells: HTMLElement;
     readonly asc: HTMLElement;
@@ -128,6 +169,10 @@ export class HexView {
     /** True for a row past the end of the file, which is emptied rather than
      *  drawn. */
     blank: boolean;
+    /** The heading lines above the row, and which parts they are for, so they
+     *  are built again only when the parts change. */
+    heading: HTMLElement | null;
+    headKey: string;
   }[] = [];
   private partsShape = "";
 
@@ -190,6 +235,22 @@ export class HexView {
    *  which forces a layout of everything the draw just wrote, so it is held
    *  here and thrown away by `relayout` alongside `metrics`. */
   private fit: { readonly rowHeight: number; readonly visibleRows: number } | null = null;
+  /** How tall the space for rows is, from the same measurement. */
+  private viewH = 0;
+  /** What the stylesheet says a heading line, a smaller one, and one line of
+   *  chips are tall, so a row's height can be worked out before it is drawn.
+   *  Read with `fit`, since only a change of style moves them. */
+  private sizes = { heading: [26, 20] as readonly [number, number], chipLine: 22 };
+  /** Rows the view may scroll past the usual last top row. Rows are not all
+   *  one height, so a screenful counted in rows can be taller than the screen,
+   *  and at the end of the file that would leave the last rows unreachable.
+   *  Worked out from the rows' heights whenever the end is drawn. */
+  private endSlack = 0;
+  /** The last PageDown: the top row it left and the one it landed on, and how
+   *  far the cursor went. A PageUp straight after goes back the same way, which
+   *  counting a screenful of rows again cannot promise when the rows are not
+   *  all one height. */
+  private lastPage: { from: number; to: number; rows: number } | null = null;
   /** True while a move is still settling, so `render` puts the work off to the
    *  end of it. Moving the cursor draws the rows, then tells the rest of the
    *  app, which comes straight back with the field to highlight and draws them
@@ -262,6 +323,7 @@ export class HexView {
     this.track.addEventListener("pointercancel", (e) => this.onTrackUp(e));
     doc.onChange(() => {
       this.spanCache = null;
+      this.endSlack = 0;
       this.render();
     });
   }
@@ -272,21 +334,31 @@ export class HexView {
     return Math.max(1, Math.ceil((this.doc.lengthBytes + 1) / this.bytesPerRow));
   }
   private get maxTopRow(): number {
-    return Math.max(0, this.totalRows - this.visibleRows);
+    return Math.max(0, this.totalRows - this.visibleRows + this.endSlack);
   }
 
-  /** Take the parts of the file to draw headings for. */
+  /** Take the parts of the file to draw headings for. Headings above the
+   *  cursor's row push it down, so it is brought back on screen if that
+   *  pushed it off; a cursor that was already off screen is left there. */
   setSections(sections: readonly OutlineHeading[]): void {
     this.sections = sections;
+    this.endSlack = 0;
     this.render();
+    this.revealCursor();
   }
 
   setBytesPerRow(n: number): void {
     this.bytesPerRow = n;
-    this.topRow = Math.min(this.topRow, this.maxTopRow);
-    this.relayout();
-    this.scrollCursorIntoView();
-    this.render();
+    this.remeasure();
+    this.showCursor();
+  }
+
+  /** Throw away every size the browser answered, and ask again. */
+  private remeasure(): void {
+    this.metrics = null;
+    this.fit = null;
+    this.endSlack = 0;
+    this.fitRows();
   }
 
   setRightColumn(c: RightColumn): void {
@@ -298,13 +370,12 @@ export class HexView {
     // Rows are taller while the field column is shown, so the number of rows
     // that fit has to be worked out again.
     this.el.classList.toggle("has-notes", c !== "text");
-    this.relayout();
+    this.remeasure();
+    this.showCursor();
   }
 
   relayout(): void {
-    this.metrics = null;
-    this.fit = null;
-    this.fitRows();
+    this.remeasure();
     this.topRow = Math.min(this.topRow, this.maxTopRow);
     this.render();
   }
@@ -312,10 +383,11 @@ export class HexView {
   /**
    * Match the number of rows to the space there is for them.
    *
-   * The row height comes from the stylesheet rather than from a row's measured
-   * box: a row measured while the browser is still placing its contents can
-   * report the height of what is inside it, and one row of that height leaves
-   * the view showing a single line of the file.
+   * The row height is the stylesheet's `min-height` for a row rather than a
+   * row's measured box: rows grow to hold their chips and headings, and one
+   * row measured at three lines tall would leave the view showing a third of
+   * the file it could. The count of rows is how many of that height fit; the
+   * rows that grow push the last ones off the bottom, where they are clipped.
    *
    * Called on every render, but it only measures once per layout: both reads
    * force the browser to lay the view out again, and a redraw has just written
@@ -332,9 +404,16 @@ export class HexView {
       return;
     }
     const probe = this.rowEls[0];
-    const h = probe === undefined ? 0 : parseFloat(getComputedStyle(probe).height);
+    const h = probe === undefined ? 0 : parseFloat(getComputedStyle(probe).minHeight);
     if (h > 0) this.rowHeight = h;
-    const fit = Math.max(1, Math.floor(this.rowsEl.clientHeight / this.rowHeight));
+    const style = getComputedStyle(this.el);
+    const px = (name: string, fallback: number): number => {
+      const v = parseFloat(style.getPropertyValue(name));
+      return v > 0 ? v : fallback;
+    };
+    this.sizes = { heading: [px("--hv-heading", 26), px("--hv-subheading", 20)], chipLine: px("--hv-chip-line", 22) };
+    this.viewH = this.rowsEl.clientHeight;
+    const fit = Math.max(1, Math.floor(this.viewH / this.rowHeight));
     if (fit !== this.visibleRows) {
       this.visibleRows = fit;
       this.topRow = Math.min(this.topRow, this.maxTopRow);
@@ -360,6 +439,8 @@ export class HexView {
     if (shape === this.partsShape && this.parts.length === this.rowEls.length) return;
     this.partsShape = shape;
     this.parts = this.rowEls.map((row) => {
+      const line = document.createElement("div");
+      line.className = "hv-line";
       const addr = document.createElement("span");
       addr.className = "hv-addr";
       const cells = document.createElement("span");
@@ -381,10 +462,11 @@ export class HexView {
         hex.push(h);
         text.push(a);
       }
-      row.replaceChildren(addr, cells);
-      if (showText) row.append(asc);
-      if (fields) row.append(note);
-      return { addr, cells, asc, note, hex, text, start: -1, blank: false };
+      line.append(addr, cells);
+      if (showText) line.append(asc);
+      if (fields) line.append(note);
+      row.replaceChildren(line);
+      return { line, addr, cells, asc, note, hex, text, start: -1, blank: false, heading: null, headKey: "" };
     });
   }
 
@@ -416,8 +498,7 @@ export class HexView {
   setMode(mode: ViewMode): void {
     this.mode = mode;
     this.nibble = 0;
-    this.scrollCursorIntoView();
-    this.render();
+    this.showCursor();
     this.onCursorChange(this.cursorState);
   }
 
@@ -494,6 +575,93 @@ export class HexView {
       this.settling = false;
     }
     this.render();
+    this.revealCursor();
+  }
+
+  /** Draw with the cursor on screen, for a change that moved nothing but may
+   *  have changed what fits. */
+  private showCursor(): void {
+    this.scrollCursorIntoView();
+    this.render();
+    this.revealCursor();
+  }
+
+  /**
+   * Bring the cursor's cell onto the screen by where it was drawn, not by its
+   * row number. Rows are not all one height, so a row inside the count that
+   * fits can still sit below the bottom edge. The view moves down by the rows
+   * the shortfall is worth and looks again: the row that becomes the top one
+   * takes on the chips carried from above it, and can grow.
+   *
+   * Not during a drag that is selecting: that scrolls at its own pace, and a
+   * second hand on the view would double it.
+   */
+  private revealCursor(): void {
+    if (this.selDrag !== null) return;
+    const bpr = this.bytesPerRow;
+    const cursorRow = Math.floor(this.cursor / bpr);
+    for (let pass = 0; pass < 6; pass++) {
+      const cell = this.parts[cursorRow - this.topRow]?.hex[this.cursor - cursorRow * bpr];
+      if (cursorRow < this.topRow || cell === undefined) return;
+      const deficit = cell.getBoundingClientRect().bottom - this.rowsEl.getBoundingClientRect().bottom;
+      if (deficit <= 0.5) return;
+      const next = Math.min(cursorRow, this.maxTopRow, this.topRow + Math.max(1, Math.ceil(deficit / this.rowHeight)));
+      if (next === this.topRow) return;
+      this.topRow = next;
+      this.render();
+    }
+  }
+
+  /** How many rows are wholly on screen, measured. At least one. */
+  private rowsInView(): number {
+    const bottom = this.rowsEl.getBoundingClientRect().bottom;
+    let n = 0;
+    for (const row of this.rowEls) {
+      if (row.getBoundingClientRect().bottom > bottom + 0.5) break;
+      n++;
+    }
+    return Math.max(1, n);
+  }
+
+  /** Scroll down a screenful. Returns how many rows the cursor should move. */
+  private pageDown(): number {
+    const rows = this.rowsInView();
+    const from = this.topRow;
+    this.topRow = Math.min(this.maxTopRow, from + rows);
+    this.lastPage = { from, to: this.topRow, rows };
+    return rows;
+  }
+
+  /**
+   * Scroll up a screenful: the row above the old top row becomes the bottom
+   * one. Returns how many rows the cursor should move, which is how far the
+   * view went, so the cursor keeps its place on screen.
+   */
+  private pageUp(): number {
+    const from = this.topRow;
+    const back = this.lastPage;
+    this.lastPage = null;
+    if (back !== null && back.to === from) {
+      this.topRow = back.from;
+      return back.rows;
+    }
+    if (from === 0) return this.rowsInView();
+    const target = from - 1;
+    this.topRow = Math.max(0, target - this.visibleRows + 1);
+    this.render();
+    // The rows above the old top were not on screen, so how many of them fit
+    // is found by drawing them and looking, the same way the cursor is.
+    for (let pass = 0; pass < 6; pass++) {
+      const row = this.rowEls[target - this.topRow];
+      if (row === undefined) break;
+      const deficit = row.getBoundingClientRect().bottom - this.rowsEl.getBoundingClientRect().bottom;
+      if (deficit <= 0.5) break;
+      const next = Math.min(target, this.topRow + Math.max(1, Math.ceil(deficit / this.rowHeight)));
+      if (next === this.topRow) break;
+      this.topRow = next;
+      this.render();
+    }
+    return from - this.topRow;
   }
 
   /** Move the cursor to an absolute bit. Bit 0 is the top bit of byte 0. */
@@ -539,8 +707,16 @@ export class HexView {
   }
 
   scrollTo(row: number): void {
-    this.topRow = Math.max(0, Math.min(this.maxTopRow, Math.floor(row)));
-    this.render();
+    const want = Math.max(0, Math.floor(row));
+    // Drawing the end of the file is what finds out how much further than a
+    // screenful of rows the view has to go for the last row to be whole, so
+    // a scroll that asked for more than it was given asks again.
+    for (let pass = 0; pass < 3; pass++) {
+      const next = Math.min(this.maxTopRow, want);
+      if (pass > 0 && next === this.topRow) break;
+      this.topRow = next;
+      this.render();
+    }
   }
 
   private scrollCursorIntoView(): void {
@@ -679,6 +855,10 @@ export class HexView {
     // chip picks that field, and moving the cursor to the row first would undo
     // what the press was for.
     if (at.closest(".hv-note") !== null) return null;
+    // A heading is not part of the file either: it names the part that starts
+    // in the row under it, and pressing it goes there. A drag across it is
+    // another matter: that reads as the row it belongs to.
+    if (pane === undefined && at.closest(".hv-headings") !== null) return null;
     const cell = at.closest<HTMLElement>("[data-off]");
     if (cell !== null) {
       const p = cell.dataset["pane"];
@@ -731,7 +911,10 @@ export class HexView {
     } else {
       this.stopAutoScroll();
     }
-    const y = Math.min(r.bottom - 1, Math.max(r.top + 1, d.y));
+    // Pinned to the last row rather than the bottom edge: the rows do not
+    // always fill the space, and a point in the slack under them is nowhere.
+    const last = this.rowsEl.lastElementChild?.getBoundingClientRect().bottom ?? r.bottom;
+    const y = Math.min(r.bottom - 1, last - 1, Math.max(r.top + 1, d.y));
     const hit = this.hitAt(d.x, y, d.pane);
     const anchor = hit === null ? 0 : hit.bit >= d.anchor ? d.anchor : d.anchor + d.unit;
     const focus = hit === null ? 0 : hit.bit >= d.anchor ? hit.bit + hit.unit : hit.bit;
@@ -761,7 +944,9 @@ export class HexView {
     const r = this.track.getBoundingClientRect();
     const thumbH = this.thumb.offsetHeight;
     const frac = (e.clientY - r.top - thumbH / 2) / Math.max(1, r.height - thumbH);
-    this.scrollTo(Math.max(0, Math.min(1, frac)) * this.maxTopRow);
+    // The bottom of the track is the end of the file, however many rows past
+    // the usual last top row that turns out to be.
+    this.scrollTo(frac >= 1 ? Infinity : Math.max(0, frac) * this.maxTopRow);
   }
   private onTrackUp(e: PointerEvent): void {
     if (this.track.hasPointerCapture(e.pointerId)) this.track.releasePointerCapture(e.pointerId);
@@ -826,14 +1011,16 @@ export class HexView {
       case "ArrowDown":
         e.preventDefault();
         return this.setCursor(this.cursor + bpr, { select: sel });
-      case "PageUp":
+      case "PageUp": {
         e.preventDefault();
-        this.topRow = Math.max(0, this.topRow - this.visibleRows);
-        return this.setCursor(this.cursor - this.visibleRows * bpr, { select: sel });
-      case "PageDown":
+        const rows = this.pageUp();
+        return this.setCursor(this.cursor - rows * bpr, { select: sel });
+      }
+      case "PageDown": {
         e.preventDefault();
-        this.topRow = Math.min(this.maxTopRow, this.topRow + this.visibleRows);
-        return this.setCursor(this.cursor + this.visibleRows * bpr, { select: sel });
+        const rows = this.pageDown();
+        return this.setCursor(this.cursor + rows * bpr, { select: sel });
+      }
       case "Home":
         e.preventDefault();
         return this.setCursor(this.cursor - (this.cursor % bpr), { select: sel });
@@ -1116,10 +1303,89 @@ export class HexView {
       }
       const row = from < start ? 0 : Math.floor((from - start) / bpr);
       if (row >= 0 && row < this.visibleRows && to > start) {
-        byRow[row]?.push({ span: s, carried: from < start });
+        const chips = byRow[row] as Chip[];
+        const prev = chips[chips.length - 1];
+        // Elements of one list, one after another on the row, are one chip
+        // saying how many: `[0]`, `[1]`, `[2]` say less than `cell_pointers
+        // 3 values`. A chip carried from above the view stays its own, since
+        // its arrow is about where it started.
+        if (prev !== undefined && !prev.carried && from >= start && foldable(s) && foldable(prev.span) && sameList(prev.span, s)) {
+          if (prev.run.length === 0) prev.run.push(prev.span);
+          prev.run.push(s);
+        } else {
+          chips.push({ span: s, carried: from < start, run: [] });
+        }
       }
     }
     return { spans, more, trouble, byteSpan, byRow };
+  }
+
+  /**
+   * The headings that fall on each row on screen. The sections are sorted by
+   * offset and a file of a hundred thousand pages has a heading for each, so
+   * the first one on screen is found by bisection and the rest read off in
+   * order.
+   */
+  private headingsByRow(start: number, windowBytes: number, bpr: number): OutlineHeading[][] {
+    const byRow: OutlineHeading[][] = [];
+    const secs = this.sections;
+    const fromBit = start * 8;
+    const toBit = (start + windowBytes) * 8;
+    let lo = 0;
+    let hi = secs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((secs[mid] as OutlineHeading).offsetBits < fromBit) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < secs.length; i++) {
+      const h = secs[i] as OutlineHeading;
+      if (h.offsetBits >= toBit) break;
+      const row = Math.floor((Math.floor(h.offsetBits / 8) - start) / bpr);
+      (byRow[row] ??= []).push(h);
+    }
+    return byRow;
+  }
+
+  /** The heading lines for the parts that start in one row: for each, its
+   *  colour, name, address range, size and share of the file, as the listing
+   *  gives them. Pressing one goes to the part's first byte. */
+  private headingBlock(heads: readonly OutlineHeading[], fileBits: number): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "hv-headings";
+    for (const h of heads) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `hv-heading hv-heading-${h.level}`;
+      if (h.level === 0) {
+        const swatch = document.createElement("span");
+        swatch.className = "hv-swatch";
+        swatch.style.background = h.color;
+        b.append(swatch);
+      }
+      const name = headingName(h, fileBits);
+      const nameEl = document.createElement("b");
+      nameEl.className = "hv-heading-name";
+      nameEl.textContent = name;
+      const range = document.createElement("span");
+      range.className = "hv-heading-range";
+      range.textContent = rangeText(h.offsetBits, h.sizeBits);
+      const size = document.createElement("span");
+      size.className = "hv-heading-size";
+      const share = shareText(h.sizeBits, fileBits);
+      size.textContent = `${formatBytes(h.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`;
+      b.append(nameEl, range, size);
+      b.title = HEADING_TIP(name);
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.setBitCursor(h.offsetBits, { pane: "hex" });
+        // An empty path is the whole file, which is not what a heading over
+        // a run of fields at its front is for.
+        if (h.path.length > 0) this.onPickField(h.path);
+      });
+      block.append(b);
+    }
+    return block;
   }
 
   /** Spans for the rows on screen. A pending reply leaves the column empty
@@ -1140,21 +1406,31 @@ export class HexView {
     return this.spanCache;
   }
 
+  /** What a chip says. A run of list elements is named for the list and says
+   *  how many; a structure that reads on one line is the whole chip, since
+   *  `[47]` is the element's number in a repeat and says nothing, and the
+   *  line says everything. */
+  private chipText(c: Chip): ChipText {
+    const s = c.span;
+    if (c.run.length > 0) return { name: listName(s), detail: runDetail(c.run.length) };
+    if (s.gap) return { name: GAP_LABEL, detail: chipDetail(s) };
+    if (s.line !== null) return { name: s.line, detail: "" };
+    return { name: s.name, detail: chipDetail(s) };
+  }
+
   /** One entry in the annotation column, coloured to match its bytes. */
-  private chip(s: Span, carried: boolean): HTMLElement {
+  private chip(c: Chip, text: ChipText): HTMLElement {
+    const s = c.span;
+    const { name, detail } = text;
     const el = document.createElement("button");
     el.type = "button";
     el.className = "hv-chip";
     if (s.gap) el.classList.add("hv-chip-gap");
     else el.classList.add(fieldClass(s.kind));
-    if (carried) el.classList.add("hv-chip-carried");
-    // A structure that reads on one line is the whole chip: `[47]` is the
-    // element's number in a repeat and says nothing, and the line says
-    // everything.
-    const name = document.createElement("b");
-    name.textContent = s.gap ? GAP_LABEL : (s.line ?? s.name);
-    el.append(name);
-    const detail = s.line === null ? chipDetail(s) : "";
+    if (c.carried) el.classList.add("hv-chip-carried");
+    const nameEl = document.createElement("b");
+    nameEl.textContent = name;
+    el.append(nameEl);
     if (detail !== "") {
       const v = document.createElement("span");
       v.className = "hv-chip-val";
@@ -1162,13 +1438,19 @@ export class HexView {
       el.append(v);
     }
     const path = [...s.trail, s.name].join(" ");
-    if (s.gap) {
-      el.title = `No field covers these ${chipDetail(s)}. Inside: ${path}`;
-    } else if (carried) {
+    if (c.run.length > 0) {
+      // The first few, by number and value, so the reader can see what kind
+      // of thing the run is without opening it.
+      const first = c.run.slice(0, 6).map((e) => `${e.name} ${chipDetail(e)}`);
+      if (c.run.length > first.length) first.push("\u2026");
+      el.title = `${s.trail.join(" ")} \u00b7 ${s.type} \u00b7 ${detail}: ${first.join(", ")}`;
+    } else if (s.gap) {
+      el.title = `No field covers these ${detail}. Inside: ${path}`;
+    } else if (c.carried) {
       // The arrow says "this began further up", which a screen reader cannot
       // see and a first-time reader should not have to work out.
       el.title = `Starts above the visible rows: ${path}, ${detail}`;
-      el.setAttribute("aria-label", `starts above: ${s.name}, ${detail}`);
+      el.setAttribute("aria-label", `starts above: ${name}, ${detail}`);
     } else {
       el.title = `${path} \u00b7 ${s.type}`;
     }
@@ -1221,6 +1503,11 @@ export class HexView {
     }
 
     this.fitParts(bpr, binary, showText, fields);
+    const headsByRow = this.headingsByRow(start, windowBytes, bpr);
+    // What each row will be tall once the browser has laid it out, from what
+    // was put in it: its lines of chips and the headings above it. Zero for a
+    // row past the end of the file.
+    const heights: number[] = [];
     for (let r = 0; r < this.rowEls.length; r++) {
       const row = this.rowEls[r];
       const parts = this.parts[r];
@@ -1230,15 +1517,27 @@ export class HexView {
         if (!parts.blank) {
           row.replaceChildren();
           parts.blank = true;
+          parts.heading = null;
+          parts.headKey = "";
         }
+        heights.push(0);
         continue;
       }
       if (parts.blank) {
-        row.append(parts.addr, parts.cells);
-        if (showText) row.append(parts.asc);
-        if (fields) row.append(parts.note);
+        row.append(parts.line);
         parts.blank = false;
       }
+      const heads = headsByRow[r] ?? [];
+      // The share of the file changes with its length, so the key does too.
+      const headKey = heads.length === 0 ? "" : `${heads.map((h) => h.key).join("|")}@${len}`;
+      if (headKey !== parts.headKey) {
+        parts.heading?.remove();
+        parts.heading = heads.length === 0 ? null : this.headingBlock(heads, len * 8);
+        if (parts.heading !== null) row.prepend(parts.heading);
+        parts.headKey = headKey;
+      }
+      let height = this.rowHeight;
+      for (const h of heads) height += this.sizes.heading[h.level];
       const { addr, note } = parts;
       setText(addr, rowStart.toString(16).padStart(addrWidth, "0"));
       // Which bytes a row stands for only changes when the view moves. A
@@ -1342,17 +1641,25 @@ export class HexView {
             if (trouble !== null) none.title = trouble;
             note.append(none);
           }
+          heights.push(height);
           continue;
         }
         const entries = byRow[r] ?? [];
-        const shown = chipsThatFit(entries.map(({ span }) => span), this.noteWidth);
-        for (const { span, carried } of entries.slice(0, shown)) note.append(this.chip(span, carried));
+        const texts = entries.map((c) => this.chipText(c));
+        const { shown, lines } = chipLayout(
+          texts.map((t) => chipWidth(t.name, t.detail)),
+          this.noteWidth,
+        );
+        // The chips take lines of their own pitch; the row is the taller of
+        // that and one line of cells, plus its headings.
+        height += Math.max(0, lines * this.sizes.chipLine - this.rowHeight);
+        for (let i = 0; i < shown; i++) note.append(this.chip(entries[i] as Chip, texts[i] as ChipText));
         if (shown < entries.length) {
           const rest = document.createElement("span");
           rest.className = "hv-chip hv-chip-gap hv-chip-rest";
           const left = entries.slice(shown);
           rest.textContent = `+${left.length}`;
-          const named = left.slice(0, 8).map(({ span }) => span.name);
+          const named = left.slice(0, 8).map((c) => this.chipText(c).name);
           if (left.length > named.length) named.push("\u2026");
           rest.title = `${left.length} more ${left.length === 1 ? "field starts" : "fields start"} on this row: ${named.join(", ")}`;
           note.append(rest);
@@ -1365,6 +1672,7 @@ export class HexView {
           note.append(rest);
         }
       }
+      heights.push(height);
     }
 
     if (this.metrics === null) {
@@ -1382,12 +1690,36 @@ export class HexView {
       }
     }
 
+    // Which rows are on screen, by the heights worked out above: a row whose
+    // top is inside the view is on screen, whatever of it is cut off below.
+    let onScreen = 0;
+    let y = 0;
+    for (const h of heights) {
+      if (h === 0) break;
+      if (y < this.viewH) onScreen++;
+      y += h;
+    }
+    // When the end of the file is drawn, how many rows further than usual the
+    // view has to go for the last row to be wholly on screen. Counted back
+    // from the last row while the rows still fit.
+    if (this.topRow + this.rowEls.length >= this.totalRows) {
+      const lastIdx = Math.min(heights.length - 1, this.totalRows - 1 - this.topRow);
+      let sum = 0;
+      let first = lastIdx;
+      for (let i = lastIdx; i >= 0; i--) {
+        sum += heights[i] ?? 0;
+        if (sum > this.viewH) break;
+        first = i;
+      }
+      this.endSlack = Math.max(0, this.topRow + first - (this.totalRows - this.visibleRows));
+    }
+
     // Scrollbar thumb: position is the fraction of rows above the viewport.
     const trackH = this.metrics.trackH;
     const thumbH = Math.max(24, Math.round((this.visibleRows / this.totalRows) * trackH));
     const top = this.maxTopRow === 0 ? 0 : Math.round((this.topRow / this.maxTopRow) * (trackH - thumbH));
     this.thumb.style.height = `${thumbH}px`;
     this.thumb.style.transform = `translateY(${top}px)`;
-    this.onViewport({ startBit: start * 8, endBit: Math.min(len, start + windowBytes) * 8 });
+    this.onViewport({ startBit: start * 8, endBit: Math.min(len, start + onScreen * bpr) * 8 });
   }
 }
