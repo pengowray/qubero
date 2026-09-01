@@ -170,6 +170,11 @@ export type FlatOptions = {
   /** What the file opens with, before its first part: the picture an image
    *  file is of. Null or absent for a file that is only its bytes. */
   readonly card?: CardKind | null;
+  /** How long the file is, in bits, when the root structure does not say.
+   *  An HDF5 root is ninety-six bytes and reaches the rest of the file by
+   *  address, so the root's own size is not the file's; the bytes past it
+   *  are still the file's and are still a row. */
+  readonly fileBits?: number;
 };
 
 export type Flattened = {
@@ -349,7 +354,7 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
   const root = src.node([]);
   if (root.status === "error") return { items: [], pending: false, reachedBytes: 0 };
   if (root.status !== "ok") return { items: [], pending: true, reachedBytes: root.reachedBytes };
-  w.fileBits = root.node.size_bits;
+  w.fileBits = Math.max(root.node.size_bits, opts.fileBits ?? 0);
   // The content comes before the structure. It is not a part of the file, so
   // it takes no section number: the first heading below it is still part 0.
   const card = opts.card ?? null;
@@ -464,7 +469,10 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
     }
     runHeading(w, path, kids, from, to, breaks, base);
   });
-  if (cursor < endBits(parent)) gap(w, path, cursor, endBits(parent), 0, true);
+  // The root's end is the file's end, whatever the root structure says its
+  // own size is; anything inside the root ends where it ends.
+  const end = path.length === 0 ? Math.max(endBits(parent), w.fileBits) : endBits(parent);
+  if (cursor < end) gap(w, path, cursor, end, 0, true);
 }
 
 /** One part of the file with a field of its own to name it. */

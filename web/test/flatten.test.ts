@@ -656,3 +656,27 @@ test("an image file opens with its picture, which is not a part of the file", ()
   // Nothing of its own to walk: the caller walks the whole tree.
   assert.equal(refold(src, emptyState, { card: "image" }, items, 0), null);
 });
+
+test("a root smaller than its file still accounts for the whole file", () => {
+  // An HDF5 root as the template really reports it: ninety-six bytes, with
+  // the rest of the file reached by address. The file is what the listing
+  // has to account for, not the root.
+  const h5: Spec = {
+    name: "file",
+    bytes: 96,
+    kids: [
+      { name: "signature", bytes: 8 },
+      { name: "superblock", bytes: 88, kids: [{ name: "offset_size", bytes: 1 }] },
+    ],
+  };
+  const root = build(h5, [], 0);
+  const { items } = flatten(source(root), emptyState, { fileBits: 113_705_336 * 8 });
+  const tail = items[items.length - 1];
+  assert.equal(tail?.kind, "gap");
+  assert.equal(tail?.kind === "gap" ? tail.unmapped : null, true);
+  assert.equal(tail?.offsetBits, 96 * 8);
+  assert.equal(tail?.sizeBits, (113_705_336 - 96) * 8);
+  // Without the length, the root is all there is to go on.
+  const bare = flatten(source(root), emptyState).items;
+  assert.equal(bare.some((i) => i.kind === "gap" && i.unmapped && i.offsetBits === 96 * 8), false);
+});

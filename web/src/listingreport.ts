@@ -283,7 +283,7 @@ export class ListingReport {
   /** How the tree is flattened. Read afresh each time, since what the file
    *  opens with follows its template, and the template can change. */
   private flatOpts(): FlatOptions {
-    return { isRecord: (node) => isRecordList(this.doc, node), card: cardKind(this.doc.template) };
+    return { isRecord: (node) => isRecordList(this.doc, node), card: cardKind(this.doc.template), fileBits: this.doc.lengthBits };
   }
 
   /** Draw the content card again: it has something new to show and is not
