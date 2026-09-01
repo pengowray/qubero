@@ -283,6 +283,42 @@ table: they are byte-aligned and `DataView`-sized, while a template field can be
 bits at an odd offset. Core owns encoding; the inspector's lenses stay where they are
 until the redundant-editing work gives both sides one model.
 
+### Three surfaces, one position
+The window is a contents rail on the left, one main view in the middle, and
+the inspector on the right. Each has one job. The rail navigates: what is in
+the file, how big each part is, and where the main view is in it. The main
+view reads: the same bytes as a listing, as a hex grid, or as text, one at a
+time in the same place. The inspector details and edits: what is at the
+cursor, what it depends on, and its value. There is no bottom panel. The one
+there was repeated the listing's tree in a vocabulary of its own and took
+38% of the height from whichever view was showing; its tree is the rail's
+Contents, its logical mode is the rail's Logical tab, and its editing was the
+inspector's already (both wrote through `doc.writeNode`).
+
+The parts of the file have one source: the listing's headings.
+`ListingReport.outline()` (`web/src/outline.ts`) lists them with their section
+index, path, extent and colour, and `onOutline` fires whenever the tree has
+been walked again. The rail lists them, the hex view draws them as heading
+lines before the row each starts in, and every file map's segments are the
+top-level ones. `sectionBreaks` in `flatten.ts` is the one heuristic for what
+counts as a part; a surface that disagreed with it would be a bug in that
+surface. So the listing walks the tree even while hidden: once, 300 ms after
+the file's last change, rather than once per chunk of a file being streamed.
+
+Each main view reports what it shows (`onViewport`, a bit range) after every
+draw, and `main.ts` passes the showing view's report to the rail, which marks
+the part of the file it falls in and unfolds that part's sub-headings. Only
+the showing view drives it; a hidden view's idea of its own place is stale.
+
+Colour is three palettes at three scales, and they never mix
+(`web/src/fieldstyle.ts`). Section colour tells the top-level parts apart:
+rail swatches, the layout strip, listing and hex headings, lit file-map
+segments. Field family says what bytes mean (number, text, marker, category,
+structure, binary): grid tints, chips, record cells. Strip hue says which
+field is which inside one open byte strip, and appears in exactly its bytes,
+its bracket and its chip. The byte-class map (zeros, repeated, text, data,
+entropy) is a fourth vocabulary and appears only on that map and its legend.
+
 ### One position, four views
 The hex cursor is a bit position, and it is what the views agree on.
 `Evaluator::locate` walks the template down to the deepest field covering a bit,
