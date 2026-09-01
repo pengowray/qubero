@@ -153,7 +153,7 @@ impl Evaluator {
 
     /// What the type says before the file has been consulted: the field's own
     /// declaration, with nothing chosen and no window unwrapped yet.
-    fn declared_ty(&self, path: &[usize]) -> R<Ty> {
+    pub(super) fn declared_ty(&self, path: &[usize]) -> R<Ty> {
         let Some((&idx, parent)) = path.split_last() else { return Ok(self.template.root.clone()) };
         match self.memo.get(parent).map(|r| &r.ty) {
             Some(Ty::Struct(s)) => match s.fields.get(idx) {

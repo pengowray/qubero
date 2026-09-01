@@ -560,6 +560,26 @@ mod tests {
         assert!(plain[0].bits.is_none());
     }
 
+    /// A record's serial-type list is as long as the header says less the
+    /// bytes the header spent saying so, and that sentence is the expression
+    /// the template holds. Written out with the numbers in it, a reader can
+    /// check the 5 rather than take it.
+    #[test]
+    fn a_length_says_what_it_was_worked_out_from() {
+        use crate::eval::Role;
+        let d = Document::new(MemSource(db()));
+        let mut ev = Evaluator::new(sqlite());
+        let rel = ev.relations(&d, &[PAGES, 0, CELLS, 0, 2, 1]).unwrap();
+        assert_eq!(rel.len(), 1);
+        assert_eq!(rel[0].role, Role::Length);
+        assert_eq!(rel[0].written, "header_size - sizeof(header_size)");
+        assert_eq!(rel[0].substituted, "4 - 1");
+        assert_eq!(rel[0].result, "3");
+        // A field the template placed and sized outright has no relationship
+        // to write out, and says nothing rather than restating its own size.
+        assert!(ev.relations(&d, &[PAGE_SIZE]).unwrap().is_empty());
+    }
+
     #[test]
     fn a_row_reads_as_its_columns() {
         let d = Document::new(MemSource(db()));
