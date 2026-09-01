@@ -19,6 +19,7 @@ import { byteStrip } from "./bytestrip.js";
 import { fileMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
 import { isRecordList, recordTable } from "./records.js";
+import type { RecordCell } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
 import { bitSizeText, childWord, countText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
@@ -432,7 +433,7 @@ export class ListingReport {
       // A table row is a range, not a field: the selection is usually one
       // column inside it.
       if (this.holdsSelection(row.offsetBits, row.sizeBits)) tr.className = "is-on";
-      for (const cell of row.cells) tr.append(el("td", fieldClass(cell.kind), cell.text));
+      for (const cell of row.cells) tr.append(this.drawCell(cell));
       const at = el("td", "rec-at");
       // The one way out of the table: the row's own bytes, which is where it
       // was read from and where the reader goes to see how.
@@ -452,6 +453,24 @@ export class ListingReport {
     host.append(grid);
     if (table.pending) host.append(el("div", "bs-wait", REPORT.reading));
     return host;
+  }
+
+  /** One cell of a record table. A value that names another part of the file
+   *  is a link there, which is rule 7's cross-reference: `data-reads` is the
+   *  same route the rows' "→ cells" links already take. */
+  private drawCell(cell: RecordCell): HTMLElement {
+    const td = el("td", fieldClass(cell.kind));
+    if (cell.link === undefined) {
+      td.textContent = cell.text;
+      return td;
+    }
+    const link = el("button", "rec-link", cell.link.text);
+    link.type = "button";
+    link.title = cell.link.label;
+    link.setAttribute("aria-label", cell.link.label);
+    link.dataset["reads"] = pathString(cell.link.path);
+    td.append(link);
+    return td;
   }
 
   private drawStrip(item: Extract<Item, { kind: "bytes" }>): HTMLElement {
@@ -821,6 +840,10 @@ export class ListingReport {
       this.rebuild();
       i = this.items.findIndex((item) => item.key === key);
     }
+    // A part big enough for a heading has no row: a SQLite page reached from
+    // a schema row's `rootpage` is a section of the file, and its heading is
+    // where the reader is being sent.
+    if (i < 0) i = this.items.findIndex((item) => item.key === `h:${pathString(path)}`);
     // The row may not be there at all: a table shows its rows itself, and a
     // list past its first page does not reach that far. Then the nearest thing
     // that holds it is what to go to, since that is what will be lit.

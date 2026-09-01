@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { columnNames } from "../src/records.ts";
+import { columnNames } from "../src/sqlitesql.ts";
 
 test("the plain case", () => {
   assert.deepEqual(columnNames("CREATE TABLE notes(id INTEGER PRIMARY KEY, title TEXT, body TEXT)"), [

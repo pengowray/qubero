@@ -20,6 +20,10 @@ export function fieldClass(kind: string): string {
       return "field-category";
     case "composite":
       return "field-structure";
+    // Not a value at all: a record table saying what a row stands for where
+    // the format wrote nothing, as a b-tree's last branch has no upper key.
+    case "note":
+      return "field-note";
     case "bytes":
     case "unread":
     default:
