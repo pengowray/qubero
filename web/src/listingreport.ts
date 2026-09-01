@@ -98,6 +98,9 @@ export class ListingReport {
    *  new top. Anything that changes what a row *says* clears this, so a kept
    *  row is never a stale one. */
   private mounted = new Map<string, HTMLElement>();
+  /** The items by key, for the redraws that start from a row on screen rather
+   *  than from a place in the list. */
+  private byKey = new Map<string, Item>();
   /** Where each item starts, in pixels, and one past the last: `tops[i + 1]`
    *  is always there. */
   private tops: number[] = [0];
@@ -239,6 +242,32 @@ export class ListingReport {
   /** Throw away the rows standing in the document, so the next paint draws
    *  them again. Anything that changes what a row says goes through here;
    *  scrolling, which changes only which rows are wanted, does not. */
+  /**
+   * Redraw what a change of selection or of the keyboard's place changes, and
+   * no more.
+   *
+   * A row says whether it is the selected one with a class, so it can be told
+   * without being built again. A heading, an open byte strip and a record
+   * table each draw the selection into themselves — as a mark on the file map,
+   * as a lit column, as a lit line — so those do go and come back.
+   */
+  private restyle(): void {
+    this.nearest = this.nearestToSelection();
+    for (const [key, node] of [...this.mounted]) {
+      const item = this.byKey.get(key);
+      if (item === undefined || item.kind === "heading" || item.kind === "bytes" || item.kind === "record") {
+        node.remove();
+        this.mounted.delete(key);
+        continue;
+      }
+      node.classList.toggle("is-on", item.kind === "row" && (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === key));
+      node.classList.toggle("is-cursor", key === this.cursor);
+      if (key === this.cursor) this.scroller.setAttribute("aria-activedescendant", node.id);
+    }
+    this.drawn = null;
+    this.paint();
+  }
+
   private discard(): void {
     if (this.mounted.size > 0) {
       for (const node of this.mounted.values()) node.remove();
@@ -249,6 +278,7 @@ export class ListingReport {
 
   private layout(): void {
     this.discard();
+    this.byKey = new Map(this.items.map((item) => [item.key, item]));
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
     for (const [i, item] of this.items.entries()) {
@@ -802,7 +832,7 @@ export class ListingReport {
     if (top < this.scroller.scrollTop) this.scroller.scrollTop = top;
     else if (bottom > this.scroller.scrollTop + this.scroller.clientHeight) this.scroller.scrollTop = bottom - this.scroller.clientHeight;
     if (item.kind === "row") this.pick(item);
-    else this.paintAgain();
+    else this.restyle();
   }
 
   /** Redraw the window that is already up, for a change that moves nothing. */
@@ -814,7 +844,7 @@ export class ListingReport {
 
   private select(path: readonly number[], offsetBits: number, sizeBits: number): void {
     this.selected = { path, offsetBits, sizeBits };
-    this.paintAgain();
+    this.restyle();
   }
 
   /**
@@ -865,11 +895,11 @@ export class ListingReport {
       i = this.nearest === null ? -1 : this.items.findIndex((item) => item.key === this.nearest);
     }
     if (i < 0) {
-      this.paintAgain();
+      this.restyle();
       return;
     }
     this.scroller.scrollTop = Math.max(0, (this.tops[i] ?? 0) - this.scroller.clientHeight / 3);
-    this.paintAgain();
+    this.restyle();
   }
 
   /** Follow the cursor: select whatever field covers this bit. */
@@ -877,6 +907,10 @@ export class ListingReport {
     if (this.picking || this.el.hidden) return;
     const at = this.doc.locate(bit);
     if (at.status !== "ok") return;
+    // A cursor moved one byte is usually still inside the field it was in, and
+    // then the listing has nothing to say that it is not already saying.
+    const now = this.selected;
+    if (now !== null && now.path.length === at.node.length && now.path.every((p, i) => p === at.node[i])) return;
     this.reveal(at.node);
   }
 
@@ -889,7 +923,7 @@ export class ListingReport {
 
   clearSelection(): void {
     this.selected = null;
-    this.paintAgain();
+    this.restyle();
   }
 }
 
