@@ -138,6 +138,13 @@ export class ListingReport {
   /** The key of the row standing in for a selection with no row of its own,
    *  worked out once a paint rather than once a row. */
   private nearest: string | null | undefined = undefined;
+  /** The rows and record tables as nested stretches of the file, so that the
+   *  one holding the selection is found by bisection and a walk up its
+   *  containers rather than by reading every item. Built with the layout,
+   *  since that is when the list changes; null when the items did not come out
+   *  in address order, which the walk means them to and which this cannot
+   *  assume of a template that placed a field out of line. */
+  private nesting: Nesting | null = null;
   /** The item the keyboard is on, by key so that it survives a re-flatten.
    *  Null until an arrow key is pressed, which starts it at the top of the
    *  window rather than at the top of the file. */
@@ -313,6 +320,7 @@ export class ListingReport {
    *  document and is only told its new top. */
   private place(): void {
     this.byKey = new Map(this.items.map((item) => [item.key, item]));
+    this.nesting = buildNesting(this.items);
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
     for (const [i, item] of this.items.entries()) {
@@ -665,13 +673,17 @@ export class ListingReport {
   private nearestToSelection(): string | null {
     const s = this.selected;
     if (s === null) return null;
-    let best: { key: string; size: number } | null = null;
-    for (const item of this.items) {
-      if (item.kind !== "row" && item.kind !== "record") continue;
-      if (!this.holdsSelection(item.offsetBits, item.sizeBits)) continue;
-      if (best === null || item.sizeBits < best.size) best = { key: item.key, size: item.sizeBits };
+    const n = this.nesting;
+    if (n === null) {
+      let best: { key: string; size: number } | null = null;
+      for (const item of this.items) {
+        if (item.kind !== "row" && item.kind !== "record") continue;
+        if (!this.holdsSelection(item.offsetBits, item.sizeBits)) continue;
+        if (best === null || item.sizeBits < best.size) best = { key: item.key, size: item.sizeBits };
+      }
+      return best?.key ?? null;
     }
-    return best?.key ?? null;
+    return holder(n, s.offsetBits, s.offsetBits + s.sizeBits);
   }
 
   private drawRow(item: Extract<Item, { kind: "row" }>): HTMLElement {
@@ -1023,6 +1035,91 @@ export class ListingReport {
 
 function pathString(path: readonly number[]): string {
   return path.join(".");
+}
+
+/**
+ * The rows and record tables of the list as a forest of nested stretches of
+ * the file.
+ *
+ * `start` is non-decreasing, so the last entry beginning at or before a bit is
+ * found by bisection; everything else that could hold that bit is one of its
+ * containers, which `parent` chains together. A list of ten thousand names
+ * gives a chain a few links long, which is the point: the question is "what is
+ * this inside", and the answer never depended on the other nine thousand.
+ */
+type Nesting = {
+  readonly start: Float64Array;
+  readonly end: Float64Array;
+  readonly parent: Int32Array;
+  readonly key: readonly string[];
+};
+
+/** Null when the items are not in address order, which leaves the caller its
+ *  own reading of the list. The walk lays them out in file order, so this is
+ *  about a template that can surprise it rather than about a case that is
+ *  expected. */
+function buildNesting(items: readonly Item[]): Nesting | null {
+  const start: number[] = [];
+  const end: number[] = [];
+  const parent: number[] = [];
+  const key: string[] = [];
+  // Indices of the entries the current one is inside, innermost last.
+  const inside: number[] = [];
+  for (const item of items) {
+    if (item.kind !== "row" && item.kind !== "record") continue;
+    const from = item.offsetBits;
+    const to = from + item.sizeBits;
+    if (from < (start[start.length - 1] ?? -Infinity)) return null;
+    while (inside.length > 0) {
+      const top = inside[inside.length - 1] ?? 0;
+      if ((start[top] ?? 0) <= from && (end[top] ?? 0) >= to) break;
+      inside.pop();
+    }
+    parent.push(inside.length === 0 ? -1 : (inside[inside.length - 1] ?? -1));
+    inside.push(start.length);
+    start.push(from);
+    end.push(to);
+    key.push(item.key);
+  }
+  return { start: Float64Array.from(start), end: Float64Array.from(end), parent: Int32Array.from(parent), key };
+}
+
+/**
+ * The smallest entry covering `[from, to)`, and the earliest of those where
+ * several are the same size, which is what reading the list in order gave.
+ *
+ * A selection of no bits belongs to the entry that begins where it is, not to
+ * the one that ended there — the same reading `HexView.highlightBits` gives a
+ * run of no bits, and the one thing here that differs from reading the whole
+ * list, which had no way to tell the two apart.
+ */
+function holder(n: Nesting, from: number, to: number): string | null {
+  let lo = 0;
+  let hi = n.start.length - 1;
+  let at = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if ((n.start[mid] ?? 0) <= from) {
+      at = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  let best = -1;
+  for (let i = at; i >= 0; i = n.parent[i] ?? -1) {
+    if ((n.end[i] ?? 0) >= to) {
+      best = i;
+      break;
+    }
+  }
+  if (best < 0) return null;
+  // A container of the same extent as what it contains is the same stretch of
+  // the file said twice, and the list named the outer one first.
+  const size = (n.end[best] ?? 0) - (n.start[best] ?? 0);
+  for (let i = n.parent[best] ?? -1; i >= 0; i = n.parent[i] ?? -1) {
+    if ((n.end[i] ?? 0) - (n.start[i] ?? 0) !== size) break;
+    best = i;
+  }
+  return n.key[best] ?? null;
 }
 
 /** The state key a click on this item turns on and off, or null for an item
