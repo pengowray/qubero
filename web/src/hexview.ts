@@ -177,6 +177,13 @@ export class HexView {
   private spanCache: { key: string; spans: Span[]; more: boolean; error: string | null } | null = null;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
+  /** The two sizes only the browser can answer: how wide the field column is,
+   *  which decides how many chips fit on a row, and how tall the scrollbar
+   *  track is. Both are asked for at the end of a redraw, after it has written
+   *  to the document, so each one costs a fresh layout of the whole view. Only
+   *  a resize or a change of shape moves them, and `relayout` — which every one
+   *  of those goes through — throws them away. */
+  private metrics: { readonly noteWidth: number; readonly trackH: number } | null = null;
   /** True while a move is still settling, so `render` puts the work off to the
    *  end of it. Moving the cursor draws the rows, then tells the rest of the
    *  app, which comes straight back with the field to highlight and draws them
@@ -277,6 +284,7 @@ export class HexView {
   }
 
   relayout(): void {
+    this.metrics = null;
     this.fitRows();
     this.topRow = Math.min(this.topRow, this.maxTopRow);
     this.render();
@@ -1327,12 +1335,15 @@ export class HexView {
       }
     }
 
-    if (fields) {
-      const w = this.rowEls[0]?.querySelector(".hv-note")?.clientWidth ?? 0;
+    if (this.metrics === null) {
+      const w = fields ? (this.rowEls[0]?.querySelector(".hv-note")?.clientWidth ?? 0) : 0;
+      // Both in one place, so the layout the first of them forces answers the
+      // second as well.
+      this.metrics = { noteWidth: w, trackH: this.track.clientHeight };
       // One redraw when the measured width first disagrees with the guess, so
       // the count of what did not fit is right rather than nearly right.
-      const remeasured = w > 0 && Math.abs(w - this.noteWidth) > 4;
-      this.noteWidth = w;
+      const remeasured = fields && w > 0 && Math.abs(w - this.noteWidth) > 4;
+      if (fields) this.noteWidth = w;
       if (remeasured) {
         this.render();
         return;
@@ -1340,7 +1351,7 @@ export class HexView {
     }
 
     // Scrollbar thumb: position is the fraction of rows above the viewport.
-    const trackH = this.track.clientHeight;
+    const trackH = this.metrics.trackH;
     const thumbH = Math.max(24, Math.round((this.visibleRows / this.totalRows) * trackH));
     const top = this.maxTopRow === 0 ? 0 : Math.round((this.topRow / this.maxTopRow) * (trackH - thumbH));
     this.thumb.style.height = `${thumbH}px`;
