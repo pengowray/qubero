@@ -1456,6 +1456,93 @@ Nothing new was needed to hold it: opening bytes lifted out of a document as a
 tab of their own is what a zip entry already does. What is new is that the
 bytes were never in the file, only written out in digits.
 
+### Bits from the bottom of the byte
+Bit order used to be MSB-first everywhere. Bit 0 of a byte was its top bit, a
+field narrower than a byte was packed big-endian whatever it said, and `endian`
+on such a field was read and thrown away. DEFLATE and a Zig packed struct fill
+a byte from the other end, and neither could be described.
+
+The addition is not a new field on the type. It is the meaning of the one that
+was already there and being ignored. `endian` says which end of the field the
+low bits come from, and for a field of whole bytes on a byte boundary that is
+byte order and nothing else, which is all it used to mean. A field narrower
+than a byte, or one starting partway through a byte, has no bytes to order, and
+the same question there is which end of the *byte* its bits are taken from. So
+`Big` is the MSB-first packing this IR always had, and `Little` is LSB-first:
+the field sits at the bottom of the byte and the fields declared after it stack
+upwards. The two answers agree at whole-byte widths already, since taking a
+number's bits from the bottom of each byte in turn is little-endian, so nothing
+that was being read correctly changed.
+
+What that costs is one thing, and it is the thing worth writing down. A field's
+offset is a count of the bits laid down before it, and for an MSB-first field
+that count is also an address. LSB-first stacks the other way, so the count has
+to be turned around inside the byte to say where the bits are: two fields of
+three and five bits are at bit 5 and bit 0 of the byte they share, in that
+order, which is `0bBBBBBAAA` written out. `Resolved` therefore keeps both
+numbers — `offset`, where the bits are, and `cursor`, where the count reached —
+and the walk that places the next field adds its size to the second. Everything
+else in the app reads the first and so is unchanged: the value, the write, the
+gutter, the listing, all of it takes those bits as it takes any other field's.
+
+Two consequences follow and both are deliberate. A structure that packs bits
+from the bottom has fields that are not in the order they sit in, so `child_at`
+treats one as scattered, the same as a structure holding a field that points
+elsewhere: the search for what covers a bit cannot stop at the first field
+starting past it. And a field that would straddle a byte boundary is refused
+rather than placed. Twelve bits from the bottom of one byte are all of that
+byte and the low nibble of the next, and a bit address numbered from the top of
+each byte has no single range meaning those bits; a field that cannot be given
+an honest place says so instead of being given a dishonest one. That is the one
+shape this does not cover, and DEFLATE's header does not need it.
+
+`Expr::Peek` answers the same way for the same reason, since a peek of three
+bits is a field of three bits that takes no space. `Ty::u8()` moved from
+`Little` to `Big`, which changes nothing for a byte on a byte boundary and
+keeps the MSB-first packing for the byte-wide fields that sit partway through
+one — JPEG XR has them. The type table writes ` lsb` after a sub-byte field's
+width and nothing after an MSB-first one, since only the order that is not the
+default is worth the space.
+
+### A stream that ends at something longer than a byte
+`Expr::ToMarker` measured to the next occurrence of one byte not followed by
+one of a set, which is exactly a JPEG scan: 0xff and a byte that is not zero,
+where zero is how an 0xff that is data gets written and so the escape and the
+terminator are the same byte. An H.264 Annex B start code is `00 00 01`, and
+one byte was not enough to say that.
+
+`lead` is now a sequence. A single-byte lead is a sequence of one and behaves
+as it did, which is what keeps the JPEG scan working; `E::to_marker` still
+takes a byte and `E::to_marker_seq` takes the sequence.
+
+The second half of it is what `unless` means when it is empty. A start code is
+followed by the NAL header, not by an escape, so there is nothing to tell the
+marker apart from — and with nothing to tell it apart from, a lead at the very
+end of the container is a marker rather than a lead nobody confirmed. So an
+empty `unless` also drops the requirement that a byte follow the lead, and the
+blocks the search reads in overlap by one byte less: a marker and its
+successor have to be whole in one block, and where there is no successor only
+the marker does.
+
+### A signature that is wrong, read beside the one it should have been
+`Value::Magic` carried the bytes that are there and a yes or no, so a file with
+the wrong signature read `"\x89PNh\r\n\x1a\n" does not match` and left the
+reader to go and find out what it should have said. The bytes it should have
+said were in the template all along; the value now carries them too, and the
+line reads `... does not match "\x89PNG\r\n\x1a\n"`.
+
+How that line is written is `eval::magic_reading`, in core, and both the
+listing and the wasm value table call it, because two places writing the same
+sentence about the same bytes is two places for them to drift apart. The type
+panel already showed the two rows of bytes side by side, from `Explain::Magic`;
+what was missing was the one-line reading, which is what the listing, the type
+table and the field row all show and what a reader sees first.
+
+Deliberately not built, and this is the reason rather than the omission: a
+mismatched field does not offer to write the bytes the format wanted.
+`encode::editable` refuses to write a magic field at all, and one narrow
+exception to that is a decision to take on purpose. This half is read-side.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
@@ -1467,26 +1554,19 @@ and the inspector rows have the same shape. Editing either side writes through i
 would make a constraint unsatisfiable, say so rather than silently picking a side.
 
 ### Known gaps
-Bit order is MSB-first everywhere: bit 0 of a byte is its top bit, and a field
-narrower than a byte is packed big-endian, with `endian` on such a field silently
-ignored. Formats that pack the other way (DEFLATE, Zig packed structs) need an
-LSB-first order on the field type, which is a real addition to the IR rather than
-a display option.
+An LSB-first field that straddles a byte boundary is refused rather than
+placed, since the bit address space has no single range that means its bits.
+See "Bits from the bottom of the byte" for why, and for what is built.
 
 MP4: sample tables past `stsd` are bytes. An SPS or PPS is exp-golomb coded,
-which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 Annex B stream is closer than it was: `Expr::ToMarker` measures to
-the next occurrence of one byte that is not followed by one of a set, which
-is what a JPEG scan needs. A start code is three bytes rather than one, and
-a multi-byte lead is the addition still missing.
+which the IR cannot describe, so a NAL unit stops at its header bits. What is
+left for an H.264 Annex B stream is a template for one; the measure it needs is
+built, and see "A stream that ends at something longer than a byte".
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 
 A field the panel will not let you edit says why only when you try to: the box
 is simply disabled until then, because the reasons live in the write path.
-
-`Value::Magic` carries only whether the bytes matched, so a mismatch reads
-`does not match` without saying what was expected. The expected bytes are in
-the template and could be carried with the value.
 
 A signature is written as C would write a string (`text::c_string`), which puts
 two bases in one line: Matroska reads `"\032E\xdf\xa3"`, and `\032` is the same

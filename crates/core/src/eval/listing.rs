@@ -80,17 +80,26 @@ pub(super) fn brief(v: &Value) -> String {
         }
         // The bytes are on their way; the row says where and how long.
         Value::Unread { .. } => "\u{2026}".to_string(),
-        // Nothing to say when the bytes are what the format asked for. The
-        // mismatch is the only half worth a reader's attention.
-        // The signature as C would write it, so a reader sees the name in it
-        // and the bytes that are not a name at once. Bytes the format did
-        // not ask for are worth saying so about.
-        Value::Magic { ok, bytes } => {
-            let text = crate::text::c_string(bytes);
-            if *ok { text } else { format!("{text} does not match") }
-        }
+        Value::Magic { ok, bytes, expected } => magic_reading(*ok, bytes, expected),
         Value::Composite { .. } => String::new(),
     }
+}
+
+/// How a signature reads in one line.
+///
+/// The bytes as C would write a string, so a reader sees the name in them and
+/// the bytes that are not a name at once. A file that has what the format
+/// asked for needs nothing further said about it. One that does not is told
+/// what was wanted as well as what is there, since a signature that is wrong
+/// is only worth reading beside the one it should have been; before this the
+/// line said the bytes did not match without saying what they did not match.
+///
+/// One caveat, and it is not this function's: `text::c_string` puts two bases
+/// in one line, so Matroska's reads `"\032E\xdf\xa3"` where `\032` is the byte
+/// the gutter calls `0x1a`. See the gap of its own about that.
+pub fn magic_reading(ok: bool, bytes: &[u8], expected: &[u8]) -> String {
+    let text = crate::text::c_string(bytes);
+    if ok { text } else { format!("{text} does not match {}", crate::text::c_string(expected)) }
 }
 
 /// A run of these is worth one entry rather than one each.
@@ -568,7 +577,8 @@ impl Evaluator {
         // are not in the order they sit in, the same as a pointer list, so
         // every one has to be looked at rather than stopping at the first that
         // starts past the bit.
-        let scattered = matches!(r.ty, Ty::PointerList { .. }) || self.has_pointing_field(&r.ty);
+        let scattered =
+            matches!(r.ty, Ty::PointerList { .. }) || self.has_pointing_field(&r.ty) || self.has_low_bit_first_field(&r.ty);
         let mut p = path.to_vec();
         for i in 0..n as usize {
             p.push(i);
@@ -609,6 +619,18 @@ impl Evaluator {
     /// the file, which is what stops its children from being in order.
     fn has_pointing_field(&self, ty: &Ty) -> bool {
         matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| matches!(f.ty, Ty::At { .. })))
+    }
+
+    /// Whether a structure packs any of its fields from the bottom of a byte.
+    ///
+    /// Such a structure's fields are not in the order they sit in either: the
+    /// first field declared inside a byte is the last one in it, so the search
+    /// for what covers a bit cannot stop at the first field starting past it.
+    /// See [`crate::decode::lsb_offset`].
+    fn has_low_bit_first_field(&self, ty: &Ty) -> bool {
+        matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| {
+            matches!(crate::decode::packed_int(&f.ty), Some((bits, e)) if bits % 8 != 0 && e == crate::template::Endian::Little)
+        }))
     }
 
     /// The first child of a pointer list that starts after `bit`. What is

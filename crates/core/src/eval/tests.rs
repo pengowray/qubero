@@ -637,12 +637,13 @@ fn a_peek_reads_the_way_round_it_is_told_to() {
     assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 16);
     assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0x0201));
 
-    // Bits narrower than a byte are packed one way whatever a peek says,
-    // which is what a field of them does too.
+    // Bits narrower than a byte have no bytes to order, so what a peek says
+    // there is which end of the byte to take them from, the same as a field
+    // of them does. Big is the top of the byte, Little the bottom.
     let three = |e| Template::new("t", T::structure("Root", vec![("n", T::computed(E::peek(3, e)))]));
-    let d = doc(&[0b101_00000]);
+    let d = doc(&[0b101_00_110]);
     assert_eq!(Evaluator::new(three(Big)).node(&d, &[0]).unwrap().value, Value::Int(0b101));
-    assert_eq!(Evaluator::new(three(Little)).node(&d, &[0]).unwrap().value, Value::Int(0b101));
+    assert_eq!(Evaluator::new(three(Little)).node(&d, &[0]).unwrap().value, Value::Int(0b110));
 }
 
 #[test]
@@ -794,6 +795,55 @@ fn a_stream_with_no_length_runs_to_the_next_marker() {
     let mut v = vec![7u8; 4095];
     v.extend_from_slice(&[0xff, 0x00, 7, 0xff, 0xd9]);
     assert_eq!(len(&v), 4098);
+}
+
+#[test]
+fn a_marker_can_be_more_than_one_byte() {
+    // What an H.264 Annex B stream needs: a NAL unit runs to the next start
+    // code, which is three bytes and not one, and the byte after it is the NAL
+    // header rather than an escape, so there is nothing to tell apart.
+    let t = || {
+        Template::new(
+            "t",
+            T::structure(
+                "Root",
+                vec![
+                    ("nal", T::bytes(E::to_marker_seq(&[0, 0, 1], &[]))),
+                    ("rest", T::bytes(E::Remaining)),
+                ],
+            ),
+        )
+    };
+    let len = |bytes: &[u8]| Evaluator::new(t()).node(&doc(bytes), &[0]).unwrap().size_bits / 8;
+
+    // Stops before the start code, so it belongs to the unit after it.
+    assert_eq!(len(&[9, 8, 7, 0, 0, 1, 0x65]), 3);
+    // Two of the three bytes are not the marker, and neither is a run of
+    // zeros with nothing after it: emulation prevention writes `00 00 03`.
+    assert_eq!(len(&[0, 0, 3, 1, 0, 0, 1, 0x41]), 4);
+    // A start code at the very end is still a start code, since with nothing
+    // to tell it apart from there is no successor to wait for.
+    assert_eq!(len(&[9, 0, 0, 1]), 1);
+    // None anywhere: a stream cut off still places its bytes.
+    assert_eq!(len(&[9, 8, 7, 0, 0]), 5);
+    // A four-byte start code is the three-byte one with a zero in front, and
+    // the measure stops at the three: the leading zero stays with the unit
+    // before it, which is where the standard puts it too.
+    assert_eq!(len(&[9, 8, 0, 0, 0, 1, 0x67]), 3);
+
+    // Split across the seam between two of the 4096-byte blocks the search
+    // reads in, which is what the overlap is for.
+    let mut v = vec![7u8; 4095];
+    v.extend_from_slice(&[0, 0, 1, 0x65]);
+    assert_eq!(len(&v), 4095);
+    let mut v = vec![7u8; 4094];
+    v.extend_from_slice(&[0, 0, 1, 0x65]);
+    assert_eq!(len(&v), 4094);
+
+    // A lead of no bytes measures to nothing and says so.
+    let empty = Template::new("t", T::structure("Root", vec![("nal", T::bytes(E::to_marker_seq(&[], &[])))]));
+    let d = doc(&[1, 2, 3]);
+    assert!(matches!(Evaluator::new(empty).node(&d, &[0]), Err(EvalError::Failed(_))));
 }
 
 #[test]
@@ -1381,12 +1431,24 @@ fn a_signature_reads_as_the_string_it_is() {
     let d = doc(b"\x89PNG\r\n\x1a\n");
     assert_eq!(listing::brief(&ev.node(&d, &[0]).unwrap().value), r#""\x89PNG\r\n\x1a\n""#);
 
-    // The bytes that are there, and that they are not the bytes asked for.
+    // The bytes that are there, and the bytes that were wanted. A signature
+    // that is wrong is only worth reading beside the one it should have been.
     let wrong = doc(b"\x89PNh\r\n\x1a\n");
     let mut ev = Evaluator::new(Template::new("t", T::structure("Root", vec![("magic", T::magic(b"\x89PNG\r\n\x1a\n"))])));
+    let node = ev.node(&wrong, &[0]).unwrap();
     assert_eq!(
-        listing::brief(&ev.node(&wrong, &[0]).unwrap().value),
-        r#""\x89PNh\r\n\x1a\n" does not match"#
+        listing::brief(&node.value),
+        r#""\x89PNh\r\n\x1a\n" does not match "\x89PNG\r\n\x1a\n""#
+    );
+    // The expected bytes are on the value, not only in the template, which is
+    // what lets anything holding one say what was wanted.
+    assert_eq!(
+        node.value,
+        Value::Magic {
+            ok: false,
+            bytes: b"\x89PNh\r\n\x1a\n".to_vec(),
+            expected: b"\x89PNG\r\n\x1a\n".to_vec()
+        }
     );
 }
 
@@ -1768,4 +1830,92 @@ fn a_read_with_no_stack_left_stops_rather_than_the_process() {
         panic!("a read with no room left should say so");
     };
     assert!(msg.contains("too deep to read"), "{msg}");
+}
+
+#[test]
+fn low_bit_first_fields_sit_at_the_bottom_of_the_byte() {
+    // A Zig packed struct, and the same shape a DEFLATE block header has:
+    // declared front to back, written bottom to top. The byte is
+    // 0b1_101_10_1_1, so `final` is the low bit and `window` is the three
+    // below the spare one at the top.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Header",
+            vec![
+                ("final", T::UInt { bits: 1, endian: Little }),
+                ("kind", T::UInt { bits: 1, endian: Little }),
+                ("level", T::UInt { bits: 2, endian: Little }),
+                ("window", T::UInt { bits: 3, endian: Little }),
+                ("spare", T::UInt { bits: 1, endian: Little }),
+                ("len", T::u16(Little)),
+            ],
+        ),
+    );
+    let d = doc(&[0b1_101_10_1_1, 0x34, 0x12]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::UInt(0b10));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::UInt(0b101));
+    assert_eq!(ev.node(&d, &[4]).unwrap().value, Value::UInt(1));
+    // Whole bytes on a byte boundary are byte order and nothing new.
+    assert_eq!(ev.node(&d, &[5]).unwrap().value, Value::UInt(0x1234));
+
+    // The bits are where the value says they are: `final` is the last bit of
+    // the byte, not the first, and the cursor lands on it there.
+    assert_eq!(ev.node(&d, &[0]).unwrap().offset_bits, 7);
+    assert_eq!(ev.node(&d, &[3]).unwrap().offset_bits, 1);
+    assert_eq!(ev.locate(&d, 7).unwrap(), vec![0]);
+    assert_eq!(ev.locate(&d, 1).unwrap(), vec![3]);
+
+    // The same eight bits packed the way this IR always packed them, to make
+    // the difference the endian makes visible.
+    let msb = Template::new(
+        "t",
+        T::structure("Header", vec![("first", T::UInt { bits: 3, endian: Big }), ("rest", T::UInt { bits: 5, endian: Big })]),
+    );
+    let mut ev = Evaluator::new(msb);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0b110));
+    assert_eq!(ev.node(&d, &[0]).unwrap().offset_bits, 0);
+}
+
+#[test]
+fn a_low_bit_first_field_is_written_back_where_it_was_read() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Header",
+            vec![("low", T::UInt { bits: 3, endian: Little }), ("high", T::UInt { bits: 5, endian: Little })],
+        ),
+    );
+    let mut d = doc(&[0b00000_001]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(0));
+
+    for (path, text) in [(vec![0], "5"), (vec![1], "31")] {
+        let w = ev.prepare_write(&d, &path, text).unwrap();
+        d.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
+        ev.invalidate();
+    }
+    let mut out = [0u8; 1];
+    d.read_bytes(0, &mut out);
+    assert_eq!(out, [0b11111_101]);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(5));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(31));
+}
+
+#[test]
+fn a_low_bit_first_field_across_a_byte_boundary_is_refused() {
+    // Twelve bits from the bottom of one byte are all of that byte and half of
+    // the next, which no single range of a bit address numbered from the top
+    // of each byte can name. Better said than placed somewhere it is not.
+    let t = Template::new("t", T::structure("R", vec![("wide", T::UInt { bits: 12, endian: Little })]));
+    let d = doc(&[0xff, 0xff]);
+    let mut ev = Evaluator::new(t);
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[0]) else {
+        panic!("a field that cannot be placed should say so");
+    };
+    assert!(msg.contains("cross a byte boundary"), "{msg}");
 }

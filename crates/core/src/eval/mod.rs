@@ -6,7 +6,7 @@
 //! zero-filled bytes can never be mistaken for data.
 
 use crate::bits::bytes_for;
-use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, narrow_bf16, narrow_f16, narrow_f32, read_int, read_uint};
+use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::machinery;
@@ -30,7 +30,7 @@ mod walk;
 mod tests;
 
 pub use explain::{Explain, FlagBit};
-pub use listing::{Span, SpanPart};
+pub use listing::{magic_reading, Span, SpanPart};
 
 /// A bounded walk over variable-size array elements that has enough samples to
 /// project the array's eventual extent. This is deliberately a projection,
@@ -107,8 +107,11 @@ pub enum Value {
     Str(String),
     /// The bytes a format fixes, and whether the file has them. The bytes
     /// are kept so the value can be read rather than only judged: a
-    /// signature is a name as often as it is a number.
-    Magic { ok: bool, bytes: Vec<u8> },
+    /// signature is a name as often as it is a number. `expected` is what the
+    /// template asked for, carried along so that a file which does not have
+    /// it can be told what it was, which is the whole of what a reader wants
+    /// from a signature that is wrong.
+    Magic { ok: bool, bytes: Vec<u8>, expected: Vec<u8> },
     Composite { count: u64 },
     /// A named integer. `name` is None when the file holds a value the enum
     /// does not list. `hex` is how the number should be shown.
@@ -265,6 +268,12 @@ struct Resolved {
     /// Effective type after unwrapping `Sized` and `Switch`.
     ty: Ty,
     offset: u64,
+    /// Where the count of bits laid down had reached when this field was
+    /// placed, which is `offset` for every field but an LSB-first one: that
+    /// one sits at the other end of its byte from where the count reached, so
+    /// the next field after it goes at `cursor + size` and not at
+    /// `offset + size`. See [`crate::decode::lsb_offset`].
+    cursor: u64,
     /// Exclusive bit limit this node may not read past.
     limit: u64,
     /// Size fixed by an enclosing `Sized`, if any.
@@ -724,6 +733,7 @@ impl Evaluator {
                         name,
                         ty: Ty::Bytes(Expr::Lit(0)),
                         offset: pr.offset,
+                        cursor: pr.offset,
                         limit: pr.offset,
                         declared_size: Some(0),
                         size: Some(0),
@@ -984,10 +994,24 @@ impl Evaluator {
                     };
                 }
                 other => {
+                    // An LSB-first field is at the other end of its byte from
+                    // where the cursor counted to, and this is the one place
+                    // that knows both the type and where the count reached.
+                    // See `decode::lsb_offset`.
+                    let placed = match packed_int(&other) {
+                        Some((bits, endian)) if lsb_packed(bits, endian, offset) => match lsb_offset(bits, offset) {
+                            Some(at) => at,
+                            None => return fail(format!(
+                                "{bits} bits packed low-bit-first would cross a byte boundary, which has no single range of bits"
+                            )),
+                        },
+                        _ => offset,
+                    };
                     return Ok(Resolved {
                         name,
                         ty: other,
-                        offset,
+                        offset: placed,
+                        cursor: offset,
                         limit,
                         declared_size,
                         size: None,

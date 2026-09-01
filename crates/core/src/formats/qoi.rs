@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(chunks.size_bits, 5 * 8);
         assert_eq!(chunks.child_count, 1);
         let marker = ev.node(&d, &[6]).unwrap();
-        assert_eq!(marker.value, Value::Magic { ok: true, bytes: vec![0, 0, 0, 0, 0, 0, 0, 1] });
+        assert_eq!(marker.value, Value::Magic { ok: true, bytes: vec![0, 0, 0, 0, 0, 0, 0, 1], expected: vec![0, 0, 0, 0, 0, 0, 0, 1] });
     }
 
     #[test]

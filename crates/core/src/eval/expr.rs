@@ -104,6 +104,15 @@ impl Evaluator {
                 if offset + u64::from(*bits) > limit {
                     return fail("looks past the end of its container");
                 }
+                // A peek narrower than a byte is placed the same way a field
+                // of the same width would be: see `decode::lsb_offset`.
+                let offset = match lsb_packed(*bits, *endian, offset) {
+                    true => match lsb_offset(*bits, offset) {
+                        Some(at) => at,
+                        None => return fail("a peek packed low-bit-first would cross a byte boundary"),
+                    },
+                    false => offset,
+                };
                 let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
                 let missing = doc.read_bits(offset, u64::from(*bits), &mut buf);
                 if !missing.is_empty() {
@@ -130,6 +139,13 @@ impl Evaluator {
                 if from + u64::from(*bits) > limit {
                     return fail("looks past the end of its container");
                 }
+                let from = match lsb_packed(*bits, *endian, from) {
+                    true => match lsb_offset(*bits, from) {
+                        Some(at) => at,
+                        None => return fail("a peek packed low-bit-first would cross a byte boundary"),
+                    },
+                    false => from,
+                };
                 let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
                 let missing = doc.read_bits(from, u64::from(*bits), &mut buf);
                 if !missing.is_empty() {
@@ -137,22 +153,34 @@ impl Evaluator {
                 }
                 read_uint(&buf, *bits, *endian) as i128
             }
-            // Walk forward for the byte that ends an unmeasured stream. A lead
-            // byte is told apart from a marker by the byte after it, so blocks
-            // overlap by one: a lead byte at the end of one block is the first
-            // byte of the next, where its successor has arrived.
+            // Walk forward for what ends an unmeasured stream. A lead is told
+            // apart from an escape by the byte after it, so blocks overlap by
+            // the length of the lead: one straddling the seam between two
+            // blocks, or ending at it with its successor in the next, is whole
+            // in one of them.
             Expr::ToMarker { lead, unless } => {
                 let Some((offset, limit)) = here else { return fail("nothing to measure") };
                 if limit < offset {
                     return fail("nothing to measure");
                 }
+                if lead.is_empty() {
+                    return fail("nothing to measure to");
+                }
                 let total = (limit - offset) / 8;
-                let (lead, unless) = (*lead, unless.clone());
-                let hit = scan_blocks(doc, offset, total, 1, Dir::Forward, |b| {
-                    (0..b.len()).find(|&i| b[i] == lead && b.get(i + 1).is_some_and(|n| !unless.contains(n)))
+                let (lead, unless) = (lead.clone(), unless.clone());
+                let n = lead.len();
+                // The lead alone when there is nothing to tell it apart from,
+                // the lead and the byte after it when there is.
+                let overlap = if unless.is_empty() { n as u64 - 1 } else { n as u64 };
+                let hit = scan_blocks(doc, offset, total, overlap, Dir::Forward, |b| {
+                    (0..b.len().saturating_sub(n - 1)).find(|&i| {
+                        b[i..i + n] == lead[..]
+                            && (unless.is_empty() || b.get(i + n).is_some_and(|next| !unless.contains(next)))
+                    })
                 })?;
-                // A lead byte with nothing after it is not a marker: nothing
-                // has said so, so the run measures to the end.
+                // A lead with nothing after it to tell it from an escape is
+                // not a marker: nothing has said so, so the run measures to
+                // the end.
                 hit.unwrap_or(total) as i128
             }
             Expr::Prev(name) => self.prev_field(doc, at, name)?,

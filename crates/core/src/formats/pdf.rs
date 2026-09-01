@@ -545,12 +545,12 @@ mod tests {
         assert_eq!(ev.node(&d, &[9, 2, 1]).unwrap().value, Value::Int(0));
         assert_eq!(
             ev.node(&d, &[9, 2, 2]).unwrap().value,
-            Value::Magic { ok: true, bytes: b"obj".to_vec() }
+            Value::Magic { ok: true, bytes: b"obj".to_vec(), expected: b"obj".to_vec() }
         );
         // The body runs to `endobj`, which is the field after it.
         assert_eq!(
             ev.node(&d, &[9, 2, 4]).unwrap().value,
-            Value::Magic { ok: true, bytes: b"endobj".to_vec() }
+            Value::Magic { ok: true, bytes: b"endobj".to_vec(), expected: b"endobj".to_vec() }
         );
         assert_eq!(ev.node(&d, &[9, 4, 0]).unwrap().value, Value::Int(3));
     }
@@ -588,7 +588,7 @@ mod tests {
         let d = Document::new(MemSource(pdf_bytes("\n")));
         let mut ev = Evaluator::new(pdf());
         assert_eq!(ev.node(&d, &[5, 0]).unwrap().value, Value::Str("trailer\n<< /Size 4 /Root 1 0 R >>\n".into()));
-        assert_eq!(ev.node(&d, &[7, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"startxref".to_vec() });
+        assert_eq!(ev.node(&d, &[7, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"startxref".to_vec(), expected: b"startxref".to_vec() });
         assert_eq!(ev.node(&d, &[8, 0]).unwrap().value, Value::Str("%%EOF".into()));
     }
 
@@ -756,18 +756,18 @@ mod tests {
         );
         assert_eq!(
             ev.node(&d, &[6, 0, 4]).unwrap().value,
-            Value::Magic { ok: true, bytes: b"stream".to_vec() }
+            Value::Magic { ok: true, bytes: b"stream".to_vec(), expected: b"stream".to_vec() }
         );
         // The rows: the newline after `stream`, twelve bytes, and the newline
         // before `endstream`.
         assert_eq!(ev.node(&d, &[6, 0, 5]).unwrap().size_bits, 14 * 8);
         assert_eq!(
             ev.node(&d, &[6, 0, 6]).unwrap().value,
-            Value::Magic { ok: true, bytes: b"endstream".to_vec() }
+            Value::Magic { ok: true, bytes: b"endstream".to_vec(), expected: b"endstream".to_vec() }
         );
         // The end of the file still reads, and no object is placed, since
         // nothing here unpacks the rows that would place them.
-        assert_eq!(ev.node(&d, &[7, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"startxref".to_vec() });
+        assert_eq!(ev.node(&d, &[7, 0]).unwrap().value, Value::Magic { ok: true, bytes: b"startxref".to_vec(), expected: b"startxref".to_vec() });
         assert_eq!(ev.node(&d, &[8, 0]).unwrap().value, Value::Str("%%EOF".into()));
         assert_eq!(ev.node(&d, &[9]).unwrap().child_count, 0);
     }
