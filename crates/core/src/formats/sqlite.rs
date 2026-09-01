@@ -502,7 +502,7 @@ mod tests {
         let mut ev = Evaluator::new(self_db());
         assert_eq!(ev.node(&d, &[]).unwrap().type_name, "SELF");
         let id = ev.node(&d, &[APPLICATION_ID]).unwrap();
-        assert_eq!(id.value, Value::Magic { ok: true, bytes: b"SELF".to_vec() });
+        assert_eq!(id.value, Value::Magic { ok: true, bytes: b"SELF".to_vec(), expected: b"SELF".to_vec() });
         assert_eq!(ev.node(&d, &[PAGE1, CELL_COUNT]).unwrap().value, Value::UInt(1));
     }
 

@@ -842,12 +842,11 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
         // table already said about where they are and how many there are.
         Value::Unread { .. } => ("unread", "\u{2026}".into(), String::new(), true),
         Value::Str(s) => ("str", s.clone(), s.clone(), true),
-        Value::Magic { ok, bytes } => {
-            // The bytes as C would write a string, which is how a signature is
-            // meant to be read: a PNG's says both that the file starts with a
-            // byte no text file has and that the word in it is PNG.
-            let text = qubero_core::text::c_string(bytes);
-            let s = if *ok { text } else { format!("{text} does not match") };
+        Value::Magic { ok, bytes, expected } => {
+            // How a signature reads is core's answer, not this crate's, so
+            // that the listing and the type table say the same thing about
+            // the same bytes. See `eval::magic_reading`.
+            let s = qubero_core::eval::magic_reading(*ok, bytes, expected);
             ("magic", s.clone(), s, *ok)
         }
         Value::Composite { count } => ("composite", count.to_string(), count.to_string(), true),

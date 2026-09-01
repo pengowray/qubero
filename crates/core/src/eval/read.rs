@@ -362,7 +362,7 @@ impl Evaluator {
             Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
             Ty::Magic(want) => {
                 let bytes = self.read(doc, r, r.offset, size)?;
-                Value::Magic { ok: bytes == *want, bytes }
+                Value::Magic { ok: bytes == *want, bytes, expected: want.clone() }
             }
             Ty::Bytes(_) => {
                 let len = size / 8;

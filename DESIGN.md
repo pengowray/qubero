@@ -1524,6 +1524,25 @@ blocks the search reads in overlap by one byte less: a marker and its
 successor have to be whole in one block, and where there is no successor only
 the marker does.
 
+### A signature that is wrong, read beside the one it should have been
+`Value::Magic` carried the bytes that are there and a yes or no, so a file with
+the wrong signature read `"\x89PNh\r\n\x1a\n" does not match` and left the
+reader to go and find out what it should have said. The bytes it should have
+said were in the template all along; the value now carries them too, and the
+line reads `... does not match "\x89PNG\r\n\x1a\n"`.
+
+How that line is written is `eval::magic_reading`, in core, and both the
+listing and the wasm value table call it, because two places writing the same
+sentence about the same bytes is two places for them to drift apart. The type
+panel already showed the two rows of bytes side by side, from `Explain::Magic`;
+what was missing was the one-line reading, which is what the listing, the type
+table and the field row all show and what a reader sees first.
+
+Deliberately not built, and this is the reason rather than the omission: a
+mismatched field does not offer to write the bytes the format wanted.
+`encode::editable` refuses to write a magic field at all, and one narrow
+exception to that is a decision to take on purpose. This half is read-side.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
@@ -1548,10 +1567,6 @@ W4V covers the six-bit flavour only, and `.wac` is not read at all.
 
 A field the panel will not let you edit says why only when you try to: the box
 is simply disabled until then, because the reasons live in the write path.
-
-`Value::Magic` carries only whether the bytes matched, so a mismatch reads
-`does not match` without saying what was expected. The expected bytes are in
-the template and could be carried with the value.
 
 A signature is written as C would write a string (`text::c_string`), which puts
 two bases in one line: Matroska reads `"\032E\xdf\xa3"`, and `\032` is the same

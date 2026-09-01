@@ -75,17 +75,26 @@ pub(super) fn brief(v: &Value) -> String {
         }
         // The bytes are on their way; the row says where and how long.
         Value::Unread { .. } => "\u{2026}".to_string(),
-        // Nothing to say when the bytes are what the format asked for. The
-        // mismatch is the only half worth a reader's attention.
-        // The signature as C would write it, so a reader sees the name in it
-        // and the bytes that are not a name at once. Bytes the format did
-        // not ask for are worth saying so about.
-        Value::Magic { ok, bytes } => {
-            let text = crate::text::c_string(bytes);
-            if *ok { text } else { format!("{text} does not match") }
-        }
+        Value::Magic { ok, bytes, expected } => magic_reading(*ok, bytes, expected),
         Value::Composite { .. } => String::new(),
     }
+}
+
+/// How a signature reads in one line.
+///
+/// The bytes as C would write a string, so a reader sees the name in them and
+/// the bytes that are not a name at once. A file that has what the format
+/// asked for needs nothing further said about it. One that does not is told
+/// what was wanted as well as what is there, since a signature that is wrong
+/// is only worth reading beside the one it should have been; before this the
+/// line said the bytes did not match without saying what they did not match.
+///
+/// One caveat, and it is not this function's: `text::c_string` puts two bases
+/// in one line, so Matroska's reads `"\032E\xdf\xa3"` where `\032` is the byte
+/// the gutter calls `0x1a`. See the gap of its own about that.
+pub fn magic_reading(ok: bool, bytes: &[u8], expected: &[u8]) -> String {
+    let text = crate::text::c_string(bytes);
+    if ok { text } else { format!("{text} does not match {}", crate::text::c_string(expected)) }
 }
 
 /// A run of these is worth one entry rather than one each.

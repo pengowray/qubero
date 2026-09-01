@@ -1431,12 +1431,24 @@ fn a_signature_reads_as_the_string_it_is() {
     let d = doc(b"\x89PNG\r\n\x1a\n");
     assert_eq!(listing::brief(&ev.node(&d, &[0]).unwrap().value), r#""\x89PNG\r\n\x1a\n""#);
 
-    // The bytes that are there, and that they are not the bytes asked for.
+    // The bytes that are there, and the bytes that were wanted. A signature
+    // that is wrong is only worth reading beside the one it should have been.
     let wrong = doc(b"\x89PNh\r\n\x1a\n");
     let mut ev = Evaluator::new(Template::new("t", T::structure("Root", vec![("magic", T::magic(b"\x89PNG\r\n\x1a\n"))])));
+    let node = ev.node(&wrong, &[0]).unwrap();
     assert_eq!(
-        listing::brief(&ev.node(&wrong, &[0]).unwrap().value),
-        r#""\x89PNh\r\n\x1a\n" does not match"#
+        listing::brief(&node.value),
+        r#""\x89PNh\r\n\x1a\n" does not match "\x89PNG\r\n\x1a\n""#
+    );
+    // The expected bytes are on the value, not only in the template, which is
+    // what lets anything holding one say what was wanted.
+    assert_eq!(
+        node.value,
+        Value::Magic {
+            ok: false,
+            bytes: b"\x89PNh\r\n\x1a\n".to_vec(),
+            expected: b"\x89PNG\r\n\x1a\n".to_vec()
+        }
     );
 }
 

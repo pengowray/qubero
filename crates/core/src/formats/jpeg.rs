@@ -445,7 +445,7 @@ mod tests {
     fn the_segments_are_read_and_the_end_marker_stops_them() {
         let d = Document::new(MemSource(jpeg_bytes()));
         let mut ev = Evaluator::new(jpeg());
-        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Magic { ok: true, bytes: vec![0xff, 0xd8] });
+        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Magic { ok: true, bytes: vec![0xff, 0xd8], expected: vec![0xff, 0xd8] });
         // Five segments and the end marker, which is one of them.
         assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 6);
         assert_eq!(

@@ -29,7 +29,7 @@ mod walk;
 mod tests;
 
 pub use explain::{Explain, FlagBit};
-pub use listing::{Span, SpanPart};
+pub use listing::{magic_reading, Span, SpanPart};
 
 /// A bounded walk over variable-size array elements that has enough samples to
 /// project the array's eventual extent. This is deliberately a projection,
@@ -105,8 +105,11 @@ pub enum Value {
     Str(String),
     /// The bytes a format fixes, and whether the file has them. The bytes
     /// are kept so the value can be read rather than only judged: a
-    /// signature is a name as often as it is a number.
-    Magic { ok: bool, bytes: Vec<u8> },
+    /// signature is a name as often as it is a number. `expected` is what the
+    /// template asked for, carried along so that a file which does not have
+    /// it can be told what it was, which is the whole of what a reader wants
+    /// from a signature that is wrong.
+    Magic { ok: bool, bytes: Vec<u8>, expected: Vec<u8> },
     Composite { count: u64 },
     /// A named integer. `name` is None when the file holds a value the enum
     /// does not list. `hex` is how the number should be shown.
