@@ -523,6 +523,13 @@ input.invalid {
   outline: none;
   user-select: none;
   touch-action: none;
+  /* Heights the view reads back to work out how tall a row will be before
+     it is laid out: a heading line, the smaller line for a part inside one,
+     and the pitch of one line of chips (a 20px chip and the 2px between
+     lines). The heading rules and `.hv-note` below are built from these. */
+  --hv-heading: 26px;
+  --hv-subheading: 20px;
+  --hv-chip-line: 22px;
 }
 .hexview:focus-visible {
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -547,10 +554,17 @@ input.invalid {
   min-height: 0;
   overflow: hidden;
 }
+/* A row is at least one line of cells tall and grows to hold its chips and
+   the headings above it; the view counts rows by the minimum and lets the
+   ones that grow push the last rows off the bottom, where `.hv-rows` clips
+   them. The line of cells is its own flex box so that a heading can sit above
+   it at full width. */
 .hv-row {
+  min-height: 20px;
+}
+.hv-line {
   display: flex;
   white-space: pre;
-  height: 20px;
 }
 .hv-addr {
   color: var(--addr);
@@ -686,15 +700,23 @@ input.invalid {
 }
 
 /* ---- annotation column ---- */
+/* Chips wrap onto further lines of the row, up to three. The padding and the
+   gap between lines add up so that n lines are n times `--hv-chip-line`:
+   1px + 20px + 2px + 20px + 1px is two lines of 22px. One line is shorter
+   than the row and sits centred in it. */
 .hv-note {
   flex: 1;
   min-width: 0;
   align-items: center;
+  align-content: center;
   margin-left: 1ch;
-  padding-left: 1ch;
+  padding: 1px 0 1px 1ch;
   border-left: 1px solid var(--line);
   display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  column-gap: 4px;
+  row-gap: 2px;
+  max-height: calc(3 * var(--hv-chip-line));
   overflow: hidden;
   white-space: nowrap;
 }
@@ -702,7 +724,75 @@ input.invalid {
   line-height: 24px;
 }
 .hexview.has-notes .hv-row {
-  height: 24px;
+  min-height: 24px;
+}
+/* The name of the part that starts in the row below, drawn as the listing
+   draws its headings: swatch, name, range, then size and share at the right.
+   A part inside a part gets the smaller line, indented and without a swatch,
+   as in the listing. Heights are fixed so the view can count on them. */
+.hv-headings {
+  font-family: var(--sans);
+}
+.hv-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: var(--hv-heading);
+  min-height: 0;
+  padding: 0 8px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.hv-heading:hover {
+  background: color-mix(in srgb, var(--fg) 6%, var(--panel));
+}
+.hv-heading-1 {
+  height: var(--hv-subheading);
+  padding-left: 18px;
+  border-top-color: color-mix(in srgb, var(--line) 70%, transparent);
+  background: none;
+  font-size: 12px;
+}
+.hv-heading-1:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+/* Straight under the column header's own rule, a second rule is a double
+   line. */
+.hv-row:first-child > .hv-headings > .hv-heading:first-child {
+  border-top-color: transparent;
+}
+.hv-swatch {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 2px;
+}
+.hv-heading-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hv-heading-range {
+  color: var(--addr);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.hv-heading-size {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
 }
 .hv-chip {
   font: inherit;
