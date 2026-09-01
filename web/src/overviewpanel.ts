@@ -94,7 +94,7 @@ const LOGICAL_TAB = "Logical";
 /** A template is chosen and the listing has not walked it yet. */
 const PARTS_PENDING = "Listing the parts of the file…";
 /** A template is chosen and walking it found no parts to list. */
-const NO_PARTS = "No parts to list. This template describes single fields, not sections of the file.";
+const NO_PARTS = "No parts to list. This template describes single fields, not parts of the file.";
 const MORE_PARTS = (n: number): string => `${n.toLocaleString()} more not listed`;
 const EXPAND = "Expand";
 const COLLAPSE = "Collapse";
