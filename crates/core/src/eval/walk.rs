@@ -48,7 +48,7 @@ impl Evaluator {
             self.resolve_upto(doc, parent, idx)?;
             let mut prev = parent.to_vec();
             prev.push(idx - 1);
-            return Ok(self.memo[&prev].offset + self.size_of(doc, &prev)?);
+            return Ok(self.memo[&prev].cursor + self.size_of(doc, &prev)?);
         }
         // Start from the nearest known offset at or before the target and walk
         // forward. `j` is the element that `at` is the start of.
@@ -148,7 +148,7 @@ impl Evaluator {
             p.push(ends);
             self.resolve(doc, &p)?;
             let size = self.size_of(doc, &p)?;
-            let end = self.memo[p.as_slice()].offset + size;
+            let end = self.memo[p.as_slice()].cursor + size;
             if size == 0 {
                 return fail("repeated element has zero size");
             }
@@ -215,13 +215,13 @@ impl Evaluator {
             p.push(*j);
             // The element may already be here, from the walk that sized the
             // list or from the caller looking at it.
-            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| r.offset + s));
+            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| r.cursor + s));
             let end = match known {
                 Some(end) => end,
                 None => {
                     self.place(doc, p, pr, *j, *at)?;
                     let size = self.size_of(doc, p)?;
-                    self.memo[p.as_slice()].offset + size
+                    self.memo[p.as_slice()].cursor + size
                 }
             };
             p.pop();
@@ -326,13 +326,16 @@ impl Evaluator {
             self.spend(*at)?;
             let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(*j);
-            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| (r.offset, s)));
-            let (start, size) = match known {
+            // Where the element covers bytes, and where the count after it
+            // resumes: the same for every element but an LSB-first one.
+            let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| (r.offset, r.cursor, s)));
+            let (start, cursor, size) = match known {
                 Some(v) => v,
                 None => {
                     self.place(doc, p, pr, *j, *at)?;
                     let size = self.size_of(doc, p)?;
-                    (self.memo[p.as_slice()].offset, size)
+                    let r = &self.memo[p.as_slice()];
+                    (r.offset, r.cursor, size)
                 }
             };
             p.pop();
@@ -345,7 +348,7 @@ impl Evaluator {
                 return Ok(Some(*j));
             }
             *j += 1;
-            *at = start + size;
+            *at = cursor + size;
             self.list_mut(&parent).walk_at = Some((*j, *at));
             if *j % CHECKPOINT == 0 {
                 self.checkpoint(&parent, *j, *at);

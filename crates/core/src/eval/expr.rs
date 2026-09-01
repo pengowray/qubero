@@ -104,6 +104,15 @@ impl Evaluator {
                 if offset + u64::from(*bits) > limit {
                     return fail("looks past the end of its container");
                 }
+                // A peek narrower than a byte is placed the same way a field
+                // of the same width would be: see `decode::lsb_offset`.
+                let offset = match lsb_packed(*bits, *endian, offset) {
+                    true => match lsb_offset(*bits, offset) {
+                        Some(at) => at,
+                        None => return fail("a peek packed low-bit-first would cross a byte boundary"),
+                    },
+                    false => offset,
+                };
                 let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
                 let missing = doc.read_bits(offset, u64::from(*bits), &mut buf);
                 if !missing.is_empty() {
@@ -130,6 +139,13 @@ impl Evaluator {
                 if from + u64::from(*bits) > limit {
                     return fail("looks past the end of its container");
                 }
+                let from = match lsb_packed(*bits, *endian, from) {
+                    true => match lsb_offset(*bits, from) {
+                        Some(at) => at,
+                        None => return fail("a peek packed low-bit-first would cross a byte boundary"),
+                    },
+                    false => from,
+                };
                 let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
                 let missing = doc.read_bits(from, u64::from(*bits), &mut buf);
                 if !missing.is_empty() {

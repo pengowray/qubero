@@ -562,12 +562,12 @@ fn datatype() -> T {
             // The high nibble is the version and the low one is the class,
             // which is why they are read as four bits each rather than as a
             // byte and a shift.
-            ("version", T::UInt { bits: 4, endian: Little }),
+            ("version", T::UInt { bits: 4, endian: Big }),
             (
                 "class",
                 T::enumeration(
                     "DatatypeClass",
-                    T::UInt { bits: 4, endian: Little },
+                    T::UInt { bits: 4, endian: Big },
                     &[
                         (0, "fixed-point"),
                         (1, "floating-point"),

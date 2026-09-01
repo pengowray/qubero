@@ -13,6 +13,51 @@ pub(crate) fn be_int(b: &[u8]) -> i128 {
     b.iter().fold(0i128, |acc, &x| (acc << 8) | x as i128)
 }
 
+/// Whether a field of `bits` bits starting at `offset` is packed from the
+/// bottom of its byte rather than the top.
+///
+/// Only fields with a byte boundary somewhere other than at both ends of them
+/// are: a number of whole bytes on a byte boundary is ordered by `endian` the
+/// ordinary way, and that path is untouched.
+pub fn lsb_packed(bits: u32, endian: Endian, offset: u64) -> bool {
+    endian == Endian::Little && (bits % 8 != 0 || offset % 8 != 0)
+}
+
+/// Where an LSB-first field's bits actually sit.
+///
+/// A field's offset is a count of the bits laid down before it, and for an
+/// MSB-first field that count is also an address: bit 0 of a byte is its top
+/// bit, so the first field in a byte is at the top. LSB-first stacks the other
+/// way, so the first field in a byte is at the bottom and the count has to be
+/// turned around inside the byte to say where the bits are. Two fields of
+/// three and five bits in one byte are at bit 5 and bit 0 of it, in that
+/// order, which is `0bBBBBBAAA` written out.
+///
+/// Turned around, the bits are contiguous and in MSB order, so everything
+/// downstream — reading, writing, highlighting, the gutter — takes them as it
+/// takes any other field, and only the address changed.
+///
+/// `None` for a field that would straddle a byte boundary, because that one
+/// cannot be turned around: a twelve-bit LSB-first field is the whole of one
+/// byte and the low nibble of the next, and a bit address space numbered from
+/// the top of each byte has no single range that means those bits. Such a
+/// field is refused rather than placed somewhere it is not.
+pub fn lsb_offset(bits: u32, offset: u64) -> Option<u64> {
+    let start = offset % 8;
+    let bits = bits as u64;
+    (start + bits <= 8).then(|| offset - start + (8 - start - bits))
+}
+
+/// The width and byte order of an integer field, looked through the wrappers
+/// that only name its values. What decides how the field is packed.
+pub fn packed_int(ty: &Ty) -> Option<(u32, Endian)> {
+    match ty {
+        Ty::UInt { bits, endian } | Ty::Int { bits, endian } | Ty::Fixed { bits, endian, .. } => Some((*bits, *endian)),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => packed_int(inner),
+        _ => None,
+    }
+}
+
 /// Size in bits if it does not depend on data.
 pub fn fixed_bits(ty: &Ty) -> Option<u64> {
     Some(match ty {

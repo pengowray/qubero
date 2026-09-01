@@ -10,6 +10,22 @@ use std::sync::Arc;
 
 use crate::json;
 
+/// Which end of the field the low bits come from.
+///
+/// For a field of whole bytes on a byte boundary this is byte order and
+/// nothing else, which is all it used to mean. A field narrower than a byte,
+/// or one that starts partway through a byte, has no bytes to order, and the
+/// same question there is which end of the byte its bits are taken from. So
+/// `Big` is MSB-first, the packing this IR always had, and `Little` is
+/// LSB-first: the field sits at the bottom of the byte and the fields after it
+/// stack upwards. A DEFLATE block header and a Zig packed struct are written
+/// that way, and before this `endian` on such a field was read and ignored.
+///
+/// The two answers are the same answer at whole-byte widths, since taking a
+/// number's bits from the bottom of each byte in turn is little-endian. It is
+/// only the fields with a byte boundary inside them that the two orders
+/// disagree about, and see [`crate::decode::lsb_offset`] for what happens
+/// there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endian {
     Little,
@@ -87,9 +103,10 @@ pub enum Expr {
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     ///
-    /// A peek says which way round it reads, the same as a field does. Bits
-    /// narrower than a byte are packed the one way whatever it says, which is
-    /// also what a field of them does.
+    /// A peek says which way round it reads, the same as a field does, and
+    /// with `Little` on a peek narrower than a byte meaning the same thing it
+    /// means on a field: the bits at the bottom of the byte rather than the
+    /// top. See [`Endian`].
     Peek { bits: u32, endian: Endian },
     /// `bits` bits read `skip` bits further on, without consuming anything.
     /// `Peek` looks at the field's own first byte, which is no use when what
@@ -780,8 +797,12 @@ pub struct StructDef {
 }
 
 impl Ty {
+    /// One byte, which has no byte order. It is declared `Big` all the same,
+    /// because a byte-wide field partway through a byte does have a bit order
+    /// and MSB-first is the one every format that writes one of these means.
+    /// See [`Endian`].
     pub fn u8() -> Ty {
-        Ty::UInt { bits: 8, endian: Endian::Little }
+        Ty::UInt { bits: 8, endian: Endian::Big }
     }
     pub fn u16(e: Endian) -> Ty {
         Ty::UInt { bits: 16, endian: e }
@@ -1097,10 +1118,21 @@ impl Ty {
                 Endian::Big => "be",
             }
         }
+        fn b(en: Endian) -> &'static str {
+            match en {
+                Endian::Little => " lsb",
+                Endian::Big => "",
+            }
+        }
         match self {
-            Ty::UInt { bits, endian } if *bits <= 8 => format!("u{bits}"),
+            // Below a byte there is no byte order to name, so `endian` there
+            // is the bit order and only the one that is not the default is
+            // worth saying. See [`Endian`].
+            Ty::UInt { bits, endian } if *bits % 8 != 0 => format!("u{bits}{}", b(*endian)),
+            Ty::UInt { bits, endian } if *bits == 8 => format!("u{bits}"),
             Ty::UInt { bits, endian } => format!("u{bits} {}", e(*endian)),
-            Ty::Int { bits, endian } if *bits <= 8 => format!("i{bits}"),
+            Ty::Int { bits, endian } if *bits % 8 != 0 => format!("i{bits}{}", b(*endian)),
+            Ty::Int { bits, endian } if *bits == 8 => format!("i{bits}"),
             Ty::Int { bits, endian } => format!("i{bits} {}", e(*endian)),
             Ty::F16(en) => format!("f16 {}", e(*en)),
             Ty::BF16(en) => format!("bf16 {}", e(*en)),

@@ -540,7 +540,8 @@ impl Evaluator {
         // are not in the order they sit in, the same as a pointer list, so
         // every one has to be looked at rather than stopping at the first that
         // starts past the bit.
-        let scattered = matches!(r.ty, Ty::PointerList { .. }) || self.has_pointing_field(&r.ty);
+        let scattered =
+            matches!(r.ty, Ty::PointerList { .. }) || self.has_pointing_field(&r.ty) || self.has_low_bit_first_field(&r.ty);
         let mut p = path.to_vec();
         for i in 0..n as usize {
             p.push(i);
@@ -581,6 +582,18 @@ impl Evaluator {
     /// the file, which is what stops its children from being in order.
     fn has_pointing_field(&self, ty: &Ty) -> bool {
         matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| matches!(f.ty, Ty::At { .. })))
+    }
+
+    /// Whether a structure packs any of its fields from the bottom of a byte.
+    ///
+    /// Such a structure's fields are not in the order they sit in either: the
+    /// first field declared inside a byte is the last one in it, so the search
+    /// for what covers a bit cannot stop at the first field starting past it.
+    /// See [`crate::decode::lsb_offset`].
+    fn has_low_bit_first_field(&self, ty: &Ty) -> bool {
+        matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| {
+            matches!(crate::decode::packed_int(&f.ty), Some((bits, e)) if bits % 8 != 0 && e == crate::template::Endian::Little)
+        }))
     }
 
     /// The first child of a pointer list that starts after `bit`. What is

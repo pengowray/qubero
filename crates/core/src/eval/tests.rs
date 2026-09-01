@@ -637,12 +637,13 @@ fn a_peek_reads_the_way_round_it_is_told_to() {
     assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 16);
     assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0x0201));
 
-    // Bits narrower than a byte are packed one way whatever a peek says,
-    // which is what a field of them does too.
+    // Bits narrower than a byte have no bytes to order, so what a peek says
+    // there is which end of the byte to take them from, the same as a field
+    // of them does. Big is the top of the byte, Little the bottom.
     let three = |e| Template::new("t", T::structure("Root", vec![("n", T::computed(E::peek(3, e)))]));
-    let d = doc(&[0b101_00000]);
+    let d = doc(&[0b101_00_110]);
     assert_eq!(Evaluator::new(three(Big)).node(&d, &[0]).unwrap().value, Value::Int(0b101));
-    assert_eq!(Evaluator::new(three(Little)).node(&d, &[0]).unwrap().value, Value::Int(0b101));
+    assert_eq!(Evaluator::new(three(Little)).node(&d, &[0]).unwrap().value, Value::Int(0b110));
 }
 
 #[test]
@@ -1768,4 +1769,92 @@ fn a_read_with_no_stack_left_stops_rather_than_the_process() {
         panic!("a read with no room left should say so");
     };
     assert!(msg.contains("too deep to read"), "{msg}");
+}
+
+#[test]
+fn low_bit_first_fields_sit_at_the_bottom_of_the_byte() {
+    // A Zig packed struct, and the same shape a DEFLATE block header has:
+    // declared front to back, written bottom to top. The byte is
+    // 0b1_101_10_1_1, so `final` is the low bit and `window` is the three
+    // below the spare one at the top.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Header",
+            vec![
+                ("final", T::UInt { bits: 1, endian: Little }),
+                ("kind", T::UInt { bits: 1, endian: Little }),
+                ("level", T::UInt { bits: 2, endian: Little }),
+                ("window", T::UInt { bits: 3, endian: Little }),
+                ("spare", T::UInt { bits: 1, endian: Little }),
+                ("len", T::u16(Little)),
+            ],
+        ),
+    );
+    let d = doc(&[0b1_101_10_1_1, 0x34, 0x12]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::UInt(0b10));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::UInt(0b101));
+    assert_eq!(ev.node(&d, &[4]).unwrap().value, Value::UInt(1));
+    // Whole bytes on a byte boundary are byte order and nothing new.
+    assert_eq!(ev.node(&d, &[5]).unwrap().value, Value::UInt(0x1234));
+
+    // The bits are where the value says they are: `final` is the last bit of
+    // the byte, not the first, and the cursor lands on it there.
+    assert_eq!(ev.node(&d, &[0]).unwrap().offset_bits, 7);
+    assert_eq!(ev.node(&d, &[3]).unwrap().offset_bits, 1);
+    assert_eq!(ev.locate(&d, 7).unwrap(), vec![0]);
+    assert_eq!(ev.locate(&d, 1).unwrap(), vec![3]);
+
+    // The same eight bits packed the way this IR always packed them, to make
+    // the difference the endian makes visible.
+    let msb = Template::new(
+        "t",
+        T::structure("Header", vec![("first", T::UInt { bits: 3, endian: Big }), ("rest", T::UInt { bits: 5, endian: Big })]),
+    );
+    let mut ev = Evaluator::new(msb);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(0b110));
+    assert_eq!(ev.node(&d, &[0]).unwrap().offset_bits, 0);
+}
+
+#[test]
+fn a_low_bit_first_field_is_written_back_where_it_was_read() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Header",
+            vec![("low", T::UInt { bits: 3, endian: Little }), ("high", T::UInt { bits: 5, endian: Little })],
+        ),
+    );
+    let mut d = doc(&[0b00000_001]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(0));
+
+    for (path, text) in [(vec![0], "5"), (vec![1], "31")] {
+        let w = ev.prepare_write(&d, &path, text).unwrap();
+        d.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
+        ev.invalidate();
+    }
+    let mut out = [0u8; 1];
+    d.read_bytes(0, &mut out);
+    assert_eq!(out, [0b11111_101]);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::UInt(5));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(31));
+}
+
+#[test]
+fn a_low_bit_first_field_across_a_byte_boundary_is_refused() {
+    // Twelve bits from the bottom of one byte are all of that byte and half of
+    // the next, which no single range of a bit address numbered from the top
+    // of each byte can name. Better said than placed somewhere it is not.
+    let t = Template::new("t", T::structure("R", vec![("wide", T::UInt { bits: 12, endian: Little })]));
+    let d = doc(&[0xff, 0xff]);
+    let mut ev = Evaluator::new(t);
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[0]) else {
+        panic!("a field that cannot be placed should say so");
+    };
+    assert!(msg.contains("cross a byte boundary"), "{msg}");
 }
