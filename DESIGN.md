@@ -505,13 +505,24 @@ fill plus underline remains the active field, and an outline remains the
 cursor. A short vertical hairline marks field boundaries.
 
 How many chips fit is worked out from the text before any are drawn, from the
-column width measured on the previous frame, and what is left over is counted
-on a `+N` chip rather than quietly cut off. The same applies to the 600-field
-limit on one screenful, which says so on the last row.
+column width measured on the previous frame. Chips that do not fit on the first
+line continue on further lines of the same row, up to three, and only what is
+left past the third line is counted on a `+N` chip. Rows therefore vary in
+height: the view creates rows by their minimum height and clips the overflow,
+row heights are known before layout (chip lines from `chipLayout`, heading
+heights from CSS custom properties), and the cursor is kept in view by measuring
+its cell against the viewport rather than by row index. The 600-field limit on
+one screenful still says so on the last row.
 
-Both side panels fold to a title bar that still names them: the bottom one to a
-strip, the right one to a narrow vertical tab. The bar is also where those two
-panels got names, which they did not have before.
+Heading lines for the parts of the file come from the listing's `outline()`,
+passed in by `setSections`, and are drawn above the row holding a part's first
+byte. They are not rows: they take no cursor and do not shift the row-to-offset
+mapping. A run of `[i]` elements of one list on a row folds to one chip,
+`name  N values`, so an array of u16 is one chip and not a jumble.
+
+The right panel folds to a narrow vertical tab that still names it. The bottom
+Structure panel is gone; its tree is the rail's Contents and its Logical mode is
+the rail's Logical tab.
 
 ### Sub-byte fields in the hex view
 A field of three bits that straddles two bytes is normal in these formats, so the
