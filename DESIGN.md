@@ -1365,6 +1365,25 @@ number that would only be right if the file had been read from the top. Going
 backwards is a search for endings in a window before the position, which is the
 only way back through lines that are not a fixed length.
 
+How tall the scrolling canvas is, on the other hand, is not the file's length.
+A canvas of one pixel per byte makes a row of scrolling worth twenty bytes and
+a line worth sixty, so the text cannot move at the rate the scrollbar does and
+has to jump a line at a time instead, which on a phone reads as jitter. The
+canvas is therefore as tall as the file is likely to have lines, estimated from
+what has been read so far, so that a pixel of scrollbar is worth about a pixel
+of text. The scrollbar goes on standing for a place in the file: its thumb at
+the middle is still the middle byte, and the walk from there to a line start is
+what makes the position exact. Where the estimate is wrong the two drift, and
+the drift is taken out when the scrolling stops, by moving the scrollbar and
+the block of drawn rows together so that nothing moves on screen.
+
+The drawn rows sit inside the scrolled canvas rather than being moved to meet a
+scroll that has already happened. A touch scroll runs on the compositor and a
+transform driven by scroll events runs on the main thread, and the two are
+never in step; positioned in the canvas the rows are carried by the same thread
+that carries everything else, and the main thread is left with nothing to do
+per frame but swap content that has scrolled out of the overscan.
+
 Four things a text file does not write down are each answered rather than
 assumed, and all four turned up in the dump reader first. Which encoding: a
 byte-order mark settles it, and where there is none the bytes decide and the

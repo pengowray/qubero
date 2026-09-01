@@ -2772,6 +2772,9 @@ table.rec tr.is-on td {
   flex: 1 1 auto;
   overflow: auto;
   outline: none;
+  /* A flick that runs off the end of the file is the end of the file, not a
+     pull on the page behind it. */
+  overscroll-behavior: contain;
 }
 .tv-scroll:focus-visible {
   outline: 2px solid var(--accent);
@@ -2781,10 +2784,15 @@ table.rec tr.is-on td {
   position: relative;
   overflow: hidden;
 }
-/* The drawn lines ride the scroll position by a transform rather than by
-   position: sticky. Sticky is clamped to its containing block, and the block
-   of drawn rows is taller than the viewport, so near the end of the file the
-   clamp shifted the rows and clipped what should have been on screen. */
+/* The drawn lines are placed on the canvas and scroll with it, rather than
+   being moved to meet a scroll that has already happened: on a touch screen
+   the scrolling is the compositor's and a transform driven by scroll events is
+   the main thread's, and the two are never in step. The transform here is that
+   placement, so it changes when the drawn lines do and not when the scrollbar
+   does. It is not position: sticky, which is clamped to its containing block:
+   the block of drawn rows is taller than the viewport, so near the end of the
+   file that clamp shifted the rows and clipped what should have been on
+   screen. */
 .tv-view {
   position: absolute;
   top: 0;
