@@ -126,13 +126,27 @@ falls out of the flat item list. Do not build this as one giant DOM.
 4. ~~Byte strip on demand per item.~~ **Done**: `web/src/bytestrip.ts`, over
    `Doc.spans` and `chipfit`'s chip vocabulary, plus gap verdicts in
    `web/src/gapcheck.ts`. **One part of rule 6 is not built**: see the open questions.
-5. ~~Record rendering for formats that declare it (SQLite cells first).~~ **Done for
-   table leaves**: `web/src/records.ts`, a registry keyed by template name. Left for
-   its next entries: index pages and b-tree interior pages, which are not tables of
-   rows; the schema page itself, whose columns SQLite fixes rather than declares;
-   and GGUF metadata. A row's "stored at" opens its bytes under the table, which is
-   rule 7's link back to the fields. The other link rule 7 asks for, a schema row's
-   root page pointing at that page, waits for the shared selection in step 6.
+5. ~~Record rendering for formats that declare it (SQLite cells first).~~ **Done**:
+   a registry in `web/src/records.ts`, with a reader per format in
+   `web/src/sqliterecords.ts` and `web/src/ggufrecords.ts`, and the `CREATE`
+   statement parser on its own in `web/src/sqlitesql.ts` (the only part with a
+   unit test, since it is the only part that is text in and names out). Five
+   things draw as tables: a SQLite table leaf, an index leaf (the payload is a
+   key, so the columns are the `CREATE INDEX` columns and then the rowid the
+   key ends with), both kinds of interior page, and GGUF's metadata block.
+   Both of rule 7's links are wired: a row's "stored at" opens its bytes under
+   the table, and a schema row's `rootpage` and an interior page's
+   `left_child_page` are links to the page, over the same `data-reads` route
+   the rows' "→ cells" links use.
+
+   Two things came out of doing it that are worth keeping in mind. Only the
+   *root* of each b-tree is named in the schema, so `claimPages` follows every
+   tree from its root once per open file and remembers which object owns each
+   page; without it a table over more than one page could not be drawn at all.
+   And SQLite serial types 8 and 9 are values (0 and 1) stored in no bytes,
+   which the template read as empty `bytes[]`; in a field listing that is
+   nearly invisible and in a table of rows it is a blank cell wherever a
+   boolean is false. They are `T::computed` now.
 6. ~~Shared selection with the hex view cursor.~~ **Done**: the selection is a bit
    range rather than a row, so the same state lights the row, the record table's
    line, the byte strip's column and every file map. `main.ts` drives whichever of
@@ -169,6 +183,11 @@ falls out of the flat item list. Do not build this as one giant DOM.
   range-fetching `ByteSource` passed straight to `Doc.open`, which takes that shape
   already (`web/src/doc.ts`), so nothing has to be held in memory. Step 1 got by on
   `dump_tree` for the GGUF; steps 4 to 6 will not.
+  **The middleware is built**, in `web/vite.config.ts`:
+  `QUBERO_FILES=D:/koboldcpp npm run dev` puts that directory under `/local/`, with
+  `Range` honoured, and does nothing when the variable is unset. Dropping
+  `/local/bge-m3-q8_0.gguf` as a `File` is enough — Chrome keeps a 634 MB blob on
+  disk and the fetch takes under two seconds.
 - Native-side checks without the browser:
   `cargo run --release -p qubero-core --example dump_tree -- <file> [template] [depth]`.
 - Core changes need `npm run wasm` (~35 s) before they reach the app.
@@ -192,11 +211,30 @@ falls out of the flat item list. Do not build this as one giant DOM.
 
 - Where "Logical tree" mode gets its alternate ordering from (likely a second
   flattening of the same tree, cells in pointer order instead of physical order).
-- Whether the record-table rendering is declared per format in the template IR or in a
-  TS registry keyed by template name. **Answered for now: the registry**, in
-  `web/src/records.ts`, on the grounds that one format is not evidence for changing
-  the IR and a second or third would be. Revisit when GGUF metadata joins it. (Mockup E in `../qubero2-extras/mockups/`
+- ~~Whether the record-table rendering is declared per format in the template IR or in
+  a TS registry keyed by template name.~~ **Settled: the registry stays.** The
+  question was left open until a second and third format arrived. Three are here now
+  — SQLite's b-tree pages, SQLite's schema page, GGUF's metadata — and they share
+  nothing an IR field could declare. A SQLite table's column names are inside a
+  `CREATE TABLE` string on a different page and have to be parsed out of SQL; an
+  index page's come from a `CREATE INDEX` plus a rowid the statement never mentions;
+  an interior page has no user columns at all, and one of its rows is a header field
+  rather than a cell; GGUF's value column needs a different summary for a scalar, a
+  string and a 250,000-element array. A declaration like "this array is a record list
+  with columns X" fits none of them. What would fit is an escape hatch per format,
+  which is the same format-specific code moved to Rust, further from the DOM it
+  exists to draw, and paid for by every consumer of the IR that will never render a
+  table. The IR describes bytes; a record view describes what several parts of a file
+  mean read together, which is a view's job. The thing that would reopen it: two
+  formats whose records really are declared beside the fields in their own template,
+  no lookups. Then the declarative half belongs in the IR and the registry keeps the
+  awkward cases. (Mockup E in `../qubero2-extras/mockups/`
   sketches the wider address-space question; it is context, not part of this task.)
+- A cell whose payload spilled onto an overflow page still reads as "loading", and
+  keeps saying so: the record is not parsed on the page it starts on, so the table
+  has no columns to show for that row and cannot tell "not yet" from "not here".
+  Whether that row should say something else, or borrow `sqlite_overflow`'s
+  reassembly, is unsettled. Long strings in a small page size are the common case.
 - Rule 6's **bits chip is not built**. The rule says sub-byte detail uses the bits
   pattern, and the mockup's row 3 cell shows it: `payload_size 18 [0|0010010]
   varint, 1 byte: high bit 0 ends it`, with the stop bit and the payload bits drawn
