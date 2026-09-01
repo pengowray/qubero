@@ -21,7 +21,7 @@ import { cardKind, watchCard } from "./contentcard.js";
 import { markMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
 import { isRecordList } from "./records.js";
-import { drawItem, el, holdsSelection, isSelected, itemOpens, runPosition } from "./listingdraw.js";
+import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens } from "./listingdraw.js";
 import type { DrawContext, Selected } from "./listingdraw.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
@@ -153,7 +153,7 @@ export class ListingReport {
         section: i.section,
         level: i.level,
         path: i.path,
-        name: i.node?.name ?? "",
+        name: i.title,
         offsetBits: i.offsetBits,
         sizeBits: i.sizeBits,
         color: sectionColor(i.section),
@@ -515,7 +515,7 @@ export class ListingReport {
     for (let i = Math.min(at, this.items.length - 1); i >= 0; i--) {
       const item = this.items[i];
       if (item === undefined || item.kind !== "heading") continue;
-      const name = item.node?.name ?? REPORT.unnamedPart(runPosition(item, fileBits));
+      const name = headingTitle(item, fileBits);
       if (item.level === 1 && part === null && section === null) part = name;
       if (item.level === 0) {
         section = name;

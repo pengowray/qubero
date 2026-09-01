@@ -262,10 +262,12 @@ export const REPORT = {
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */
   imageTooLarge: (size: string, limit: string): string => `Not decoded: this file is ${size}, and the picture is only shown for files up to ${limit}.`,
-  /** The picture is scaled to fit the column; a click shows every pixel, and
-   *  another puts it back. Tooltips on the picture itself. */
-  imageShowFull: "Show at full size",
-  imageShowFit: "Fit to the column",
+  /** The picture is scaled to fit the column, or magnified when it is a few
+   *  pixels across; a click shows it pixel for pixel, and another puts it
+   *  back. "actual" covers both directions where "full" would promise the
+   *  magnified one gets bigger. Tooltips on the picture itself. */
+  imageShowFull: "Show at actual size",
+  imageShowFit: "Scale to fit",
 } as const;
 
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the

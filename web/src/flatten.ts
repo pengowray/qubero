@@ -79,6 +79,11 @@ export type Item = Common &
         /** Absent for a heading over a run of sibling fields, which is a
          *  division of the file with no field of its own to name it. */
         readonly node: TemplateNode | null;
+        /** What the heading says. The field's own name, except that an
+         *  element of a list carries the list's name too: a part of the file
+         *  called `[1]` says nothing from across the room, and `pages[1]`
+         *  says which list it is one of. Empty when there is no node. */
+        readonly title: string;
         /** The children it covers, when it covers a run of them. */
         readonly from: number;
         readonly to: number;
@@ -404,7 +409,7 @@ export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, 
     // handing them to `heading`. Reading them again is the same question with
     // the same answer, since nothing above this item moved.
     const inner = w.kids(item.path, item.node.child_count);
-    heading(w, item.path, item.node, item.level, item.from, item.to, inner);
+    heading(w, item.path, item.node, item.level, item.from, item.to, inner, item.title);
   } else return null;
   // What the item stood over: its own byte strip, which sits at its depth, and
   // then everything indented under it. The first item at its depth or above is
@@ -416,8 +421,16 @@ export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, 
   return { items: w.items, from: at, to, pending: w.pending, reachedBytes: w.reachedBytes };
 }
 
-/** The top-level parts of the file, and what is in each. */
-function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0): void {
+/** What a part is called on its heading. An element of a list is named `[n]`
+ *  by the template, which is its place and not its name; the list's name in
+ *  front of it is what a reader can find it by again. */
+function titleOf(node: TemplateNode, list: string | null): string {
+  return list !== null && /^\[\d+\]$/.test(node.name) ? `${list}${node.name}` : node.name;
+}
+
+/** The top-level parts of the file, and what is in each. `list` is the name
+ *  of the list these are the elements of, when they are. */
+function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0, list: string | null = null): void {
   const breaks = sectionBreaks(kids);
   // Rule 1 is about the file, not only about the insides of a structure. The
   // parts of a 450 MiB HDF5 file that its template describes are its first
@@ -443,10 +456,10 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
       // a list is not a part of the file.
       if (inner !== null && inner.from === 0 && inner.nodes.length === first.child_count && elementsAreSections(first, inner.nodes, w.sectionListMax, w.fileBits)) {
         w.section -= 1;
-        sections(w, kidPath, first, inner.nodes, inner.from);
+        sections(w, kidPath, first, inner.nodes, inner.from, first.name);
         return;
       }
-      heading(w, kidPath, first, 0, from, to, inner);
+      heading(w, kidPath, first, 0, from, to, inner, titleOf(first, list));
       return;
     }
     runHeading(w, path, kids, from, to, breaks, base);
@@ -463,6 +476,7 @@ function heading(
   from: number,
   to: number,
   inner: Slice | null,
+  title: string = node.name,
 ): void {
   const key = pathKey(path);
   const open = level === 0 || w.isOpen(key) || (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX);
@@ -476,6 +490,7 @@ function heading(
     level,
     path,
     node,
+    title,
     from,
     to,
     open,
@@ -541,6 +556,7 @@ function runHeading(
     level: 0,
     path,
     node: null,
+    title: "",
     from,
     to,
     open: true,

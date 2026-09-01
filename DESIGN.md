@@ -371,23 +371,40 @@ bytes, and what those bytes say. It takes the main pane rather than sitting
 beside the hex rows, since it carries its own bytes column and two of those
 would say the same thing twice.
 
-Its scroll position is a bit offset rather than a row number, because nothing
-can know how many rows a file has without walking all of it, and `spans` is
-windowed by bit range, which is the same shape. Both directions scroll by
-counting fields rather than rows on screen, so a notch down and a notch up land
-back where they started: how many headings a screenful carries depends on where
-it starts, and that is not the same going the other way. Scrolling back has to
-ask for a window that reaches the current top row rather than one that merely
-starts before it, since a fixed number of fields from further back returns the
-first of them and the wanted ones are the last.
+The listing is a flat list of items (`web/src/flatten.ts`) drawn a screenful
+at a time (`web/src/listingreport.ts`, the drawing in `web/src/listingdraw.ts`).
+Only what is open is walked, so the list's length follows what the reader has
+opened rather than how big the file is, and a list scrolls by index. Every
+item's height is fixed by its kind, and a byte strip, a record table or the
+content card, whose height depends on its contents, is measured once it is
+in the document and laid out again; the tops are a running total, so a row
+drawn taller than it was measured at would slide out from under its place.
 
-Headings come from the trail of enclosing structures. Entering several at once
-is one heading rather than one per level, because five rows reading `sections[9]`,
-`body`, `entries[0]`, `body`, `code` push the fields off the screen to say what
-one row can say. Top-level headings are larger and carry more space than nested
-ones, while field rows keep a fixed scroll unit. On touch, vertical movement
-advances those virtual rows and horizontal movement remains the native column
-scroll.
+The hierarchy has two heading sizes and then rows. A top-level part gets the
+most space above it, a title a size larger than anything under it, its swatch,
+its address range, its size and share of the file, and the file map; the
+space above is what groups its rows with it, so there is no rule or bar above
+it doing that job. A named part inside one is a heading too, smaller, with
+space of its own. Everything below that is a row of one fixed height. Depth is
+shown once by indenting: the rows of an inner part sit one step in from the
+rows of its top-level part, so where the inner part ends can be seen, and a
+row opened out of a row is one more step and no further, with its name dimmed
+instead of indented again. A part that is an element of a list carries the
+list's name in its title (`pages[1]`, not `[1]`), since the title is what the
+rail and the hex view name the part by too.
+
+An image file opens with what it is a picture of. `web/src/contentcard.ts`
+reads the whole file the way every view reads bytes, hands it to the browser
+to decode, and the listing's first section, "Image", shows the picture scaled
+to fit with its size in pixels and the identification sentence beside it; a
+picture a few pixels across is magnified by whole pixels, and a click shows
+any picture at its actual size. Files over 64 MiB are not decoded and the
+card says so. The card is not a part of the file: it covers no bytes, is in no
+section, and is neither in the outline nor on the file map, and nothing in it
+points at bytes, because there is no mapping from a pixel to the bytes that
+made it yet. The decode starts when the listing is on screen, not when a
+hidden listing walks the tree for the other views. An edit decodes the picture
+again, after the edits have quietened.
 
 The bytes are shown as text as well, but only where they read as text: three
 bytes or more, and mostly printable. A one-byte count of 65 beside an `A`

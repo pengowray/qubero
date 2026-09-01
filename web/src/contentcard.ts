@@ -46,6 +46,11 @@ export type ImageState =
   | { readonly status: "failed" }
   | { readonly status: "too-large"; readonly bytes: number };
 
+/** A picture whose longer side is under this many pixels is magnified until
+ *  it reaches it: an icon of eight pixels is a smudge at one screen pixel
+ *  each. */
+const TINY_PX = 128;
+
 /** How long an edited file waits before its picture is decoded again. A
  *  typed edit is several changes in a row, and each decode is the whole file. */
 const REDECODE_MS = 300;
@@ -205,6 +210,14 @@ export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown:
       img.src = s.url;
       img.width = s.width;
       img.height = s.height;
+      // A picture a few pixels across is invisible at its own size, so it is
+      // drawn by a whole number of screen pixels per image pixel, each pixel
+      // square, until a click shows it at its real size like any other.
+      const zoom = card.full ? 1 : Math.max(1, Math.floor(TINY_PX / Math.max(1, s.width, s.height)));
+      if (zoom > 1) {
+        img.style.width = `${s.width * zoom}px`;
+        img.style.imageRendering = "pixelated";
+      }
       img.alt = REPORT.imagePixels(s.width, s.height);
       img.title = card.full ? REPORT.imageShowFit : REPORT.imageShowFull;
       img.addEventListener("click", (e) => {

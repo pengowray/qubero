@@ -82,6 +82,12 @@ export function runPosition(item: Item, fileBits: number): "start" | "end" | "mi
   return "middle";
 }
 
+/** What a heading says: the part's title, or for a run of fields with no
+ *  field of its own to name it, where the run sits. */
+export function headingTitle(item: Extract<Item, { kind: "heading" }>, fileBits: number): string {
+  return item.node === null ? REPORT.unnamedPart(runPosition(item, fileBits)) : item.title;
+}
+
 /** Whether a stretch of bytes is the selected one. Equality, not overlap: a
  *  field sits inside its structure, and lighting everything the selection is
  *  inside would light most of the screen. */
@@ -144,7 +150,7 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
     swatch.style.background = sectionColor(item.section);
     row.append(swatch);
   }
-  row.append(el("b", "rp-name", item.node?.name ?? REPORT.unnamedPart(runPosition(item, fileBits))));
+  row.append(el("b", "rp-name", headingTitle(item, fileBits)));
   row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits)));
   row.append(bytesButton(c, item.key));
   // Only a list too long to draw: for anything the window already holds
