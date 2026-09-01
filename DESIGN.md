@@ -1509,15 +1509,21 @@ wanted. Deliberately not built: `encode::editable` refuses to write a magic
 field at all, and one narrow exception to that is a decision worth taking on
 purpose rather than in passing.
 
-Show the IR of the connections between fields, rather than only computing with
-it. Where one field's meaning depends on others, the relationship should be
-readable: the `Expr` tree behind a length or a count written out the way the
-quantised-weights panel writes `d * scale * stored - dmin * min` with the
-numbers substituted. The pieces exist (`Expr` trees, `Evaluator::origins` and
-its "Depends on" section), and the rule that follows from it is that the core
-should describe a relationship in a small struct the UI renders, rather than the
-UI inferring one from a field's name. `ggml_quant::Offset` is the first of
-those.
+Showing the IR of the connections between fields has started. `Evaluator::
+relations` in `crates/core/src/eval/relate.rs` writes the `Expr` behind a
+length, a count, a switch or a computed value out twice: as the template holds
+it, and with every field's value in its place, plus what it comes to. It
+reaches the panel's "Depends on" section, under the fields `origins` names, so
+`header_size - sizeof(header_size)` sits above `6 - 1 = 5` and the number can
+be checked rather than taken. `Relation` is another of the small
+relationship-describing structs `ggml_quant::Offset` began; the UI renders them
+and infers nothing of its own from a field's name.
+
+What is left of it: an expression with no reading in that notation produces
+nothing rather than half a formula, so `Find`, `ToMarker`, `Peek` and `PeekAt`
+show no relationship at all. A pointer list's placement arithmetic is named by
+`origins` as a Position but is not written out. And the listing shows none of
+this: it is in the field panel only.
 
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.
 Bit-level cursor mode in the UI. Column/width presets. Worker-side core so the main
