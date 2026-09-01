@@ -204,12 +204,15 @@ export const REPORT = {
     return rest === "" ? head : `${head}: ${rest}`;
   },
   /** How a variable-length number says where it ends, keyed by the rule the
-   *  core named. `high_bit` is the mockup's own wording, reviewed. The other
-   *  three are not drafted yet and say nothing rather than something invented:
-   *  `sqlite_ninth` (a ninth byte with no continuation bit, all eight bits
-   *  value), `ebml_size` (leading zeros count the bytes, marker bit dropped
-   *  from the value) and `ebml_id` (the same framing, kept in the value). */
-  bitsRule: (rule: string): string => (rule === "high_bit" ? "high bit 0 ends it" : ""),
+   *  core named. `high_bit` is the mockup's own wording, reviewed; the other
+   *  three follow its register. An unknown rule says nothing rather than
+   *  something invented. */
+  bitsRule: (rule: string): string =>
+    rule === "high_bit"     ? "high bit 0 ends it" :
+    rule === "sqlite_ninth" ? "no high bit on the 9th byte; all 8 bits are value" :
+    rule === "ebml_size"    ? "leading zeros count the bytes; the marker bit is not part of the value" :
+    rule === "ebml_id"      ? "leading zeros count the bytes; the marker bit is part of the value" :
+    "",
   /** The last column of a table of records: where in the file the row it just
    *  showed is actually written. The mockup's own heading, and the one thing
    *  in the table that is about the file rather than about the data. */
