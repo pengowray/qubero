@@ -17,10 +17,11 @@ import { emptyState, flatten, PAGE, refold } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
 import { sectionColor } from "./fieldstyle.js";
 import { markStrip } from "./bytestrip.js";
+import { cardKind, watchCard } from "./contentcard.js";
 import { markMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
 import { isRecordList } from "./records.js";
-import { drawItem, el, holdsSelection, isSelected, itemOpens, runPosition } from "./listingdraw.js";
+import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens } from "./listingdraw.js";
 import type { DrawContext, Selected } from "./listingdraw.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
@@ -30,7 +31,7 @@ import { NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
  *  measured at would slide out from under its own place. */
-const HEIGHT = { section: 40, part: 26, row: 22, strip: 96 } as const;
+const HEIGHT = { section: 54, part: 36, row: 22, strip: 96, card: 400 } as const;
 /** Items drawn above and below the window, so a wheel notch has somewhere to
  *  go before the next paint. */
 const OVERSCAN = 6;
@@ -44,8 +45,15 @@ const HIDDEN_WALK_MS = 300;
  *  replaces it. */
 function heightOf(item: Item): number {
   if (item.kind === "bytes" || item.kind === "record") return HEIGHT.strip;
+  if (item.kind === "card") return HEIGHT.card;
   if (item.kind !== "heading") return HEIGHT.row;
   return item.level === 0 ? HEIGHT.section : HEIGHT.part;
+}
+
+/** The kinds whose height is what they turn out to be rather than what their
+ *  kind says. */
+function isMeasured(item: Item): boolean {
+  return item.kind === "bytes" || item.kind === "record" || item.kind === "card";
 }
 
 export class ListingReport {
@@ -56,7 +64,6 @@ export class ListingReport {
   private readonly canvas: HTMLElement;
   private readonly doc: Doc;
   private readonly src: TreeSource;
-  private readonly opts: FlatOptions;
   private state: ListingState = emptyState;
   private items: readonly Item[] = [];
   /** The rows standing in the document right now, by key. Scrolling a listing
@@ -146,7 +153,7 @@ export class ListingReport {
         section: i.section,
         level: i.level,
         path: i.path,
-        name: i.node?.name ?? "",
+        name: i.title,
         offsetBits: i.offsetBits,
         sizeBits: i.sizeBits,
         color: sectionColor(i.section),
@@ -161,7 +168,6 @@ export class ListingReport {
       node: (path) => doc.templateNode(path),
       children: (path, from, to) => doc.templateChildren(path, from, to),
     };
-    this.opts = { isRecord: (node) => isRecordList(doc, node) };
     this.el = el("div", "report");
     this.crumbs = el("div", "rp-crumbs");
     this.scroller = el("div", "rp-scroll");
@@ -178,13 +184,36 @@ export class ListingReport {
     this.scroller.addEventListener("click", (e) => this.onClick(e));
     this.scroller.addEventListener("keydown", (e) => this.onKey(e));
     new ResizeObserver(() => {
-      if (this.scroller.clientWidth !== this.measuredAt) this.measured.clear();
+      const width = this.scroller.clientWidth;
+      // A hidden view has no width and nothing to measure against; what was
+      // measured is kept for when it is back.
+      if (width > 0 && width !== this.measuredAt) {
+        // Strips wrap to the width and the card scales to it, so every
+        // measured height is stale. And rows drawn while this had no width
+        // were drawn for no one: the card did not start its decode. Drawing
+        // again answers both.
+        this.measured.clear();
+        this.layout();
+      }
       this.relayout();
     }).observe(this.scroller);
     // Chunks arriving turn a pending stretch into rows; so does an edit.
     doc.onChange(() => {
       this.verdicts.clear();
       this.schedule();
+    });
+    // The card at the top of an image file changes on its own, when the
+    // picture has been decoded or the reader has changed its size; it is a
+    // different height each time.
+    watchCard(doc, (what) => {
+      if (what === "size") {
+        // The picture in the card that is already up has its size now. The
+        // card is measured where it stands; a height that differs from the
+        // one it was laid out at is what lays the list out again, and one
+        // that does not ends it, which is what stops the picture in the
+        // redrawn card asking for the same thing again.
+        if (this.drawn !== null) this.remeasure(this.drawn.from, this.drawn.to);
+      } else this.refreshCard();
     });
     // A file that never changes after opening still has parts to name.
     this.schedule();
@@ -236,7 +265,7 @@ export class ListingReport {
    *  above it would otherwise push the whole file down under the cursor. */
   private rebuild(): void {
     const anchor = this.anchor();
-    this.items = flatten(this.src, this.state, this.opts).items;
+    this.items = flatten(this.src, this.state, this.flatOpts()).items;
     this.segments = this.items
       .filter((i) => i.kind === "heading" && i.level === 0)
       .map((i) => ({ offsetBits: i.offsetBits, sizeBits: i.sizeBits, color: sectionColor(i.section) }));
@@ -251,12 +280,30 @@ export class ListingReport {
     // again when its chunks land: `Doc` has already asked for them.
   }
 
-  /** Where every item starts. Anchoring and drawing are the caller's, since
-   *  what to hold on to differs between walking the tree again and finding a
-   *  strip was not the height it was taken for. */
-  /** Throw away the rows standing in the document, so the next paint draws
-   *  them again. Anything that changes what a row says goes through here;
-   *  scrolling, which changes only which rows are wanted, does not. */
+  /** How the tree is flattened. Read afresh each time, since what the file
+   *  opens with follows its template, and the template can change. */
+  private flatOpts(): FlatOptions {
+    return { isRecord: (node) => isRecordList(this.doc, node), card: cardKind(this.doc.template), fileBits: this.doc.lengthBits };
+  }
+
+  /** Draw the content card again: it has something new to show and is not
+   *  the height it was. The reader's place is kept, since the card is above
+   *  everything and would otherwise push it all down. */
+  private refreshCard(): void {
+    const key = this.items.find((i) => i.kind === "card")?.key;
+    if (key === undefined) return;
+    const node = this.mounted.get(key);
+    if (node !== undefined) {
+      node.remove();
+      this.mounted.delete(key);
+    }
+    this.measured.delete(key);
+    const anchor = this.anchor();
+    this.place();
+    if (anchor !== null) this.restore(anchor);
+    this.paint();
+  }
+
   /**
    * Redraw what a change of selection or of the keyboard's place changes, and
    * no more.
@@ -443,7 +490,7 @@ export class ListingReport {
     let changed = false;
     for (let i = from; i < to; i++) {
       const item = this.items[i];
-      if (item === undefined || (item.kind !== "bytes" && item.kind !== "record")) continue;
+      if (item === undefined || !isMeasured(item)) continue;
       const node = this.mounted.get(item.key);
       if (node === undefined) continue;
       const height = Math.ceil(node.getBoundingClientRect().height);
@@ -477,7 +524,7 @@ export class ListingReport {
     for (let i = Math.min(at, this.items.length - 1); i >= 0; i--) {
       const item = this.items[i];
       if (item === undefined || item.kind !== "heading") continue;
-      const name = item.node?.name ?? REPORT.unnamedPart(runPosition(item, fileBits));
+      const name = headingTitle(item, fileBits);
       if (item.level === 1 && part === null && section === null) part = name;
       if (item.level === 0) {
         section = name;
@@ -510,6 +557,7 @@ export class ListingReport {
       toggleBytes: (key) => this.toggleBytes(key),
       toggleDump: (at) => this.toggleDump(at),
       verdict: (item) => this.verdict(item),
+      shown: this.scroller.clientWidth > 0,
     };
   }
 
@@ -633,8 +681,8 @@ export class ListingReport {
       return;
     }
     // A click inside an open strip is for the strip, not for opening whatever
-    // the strip is sitting under.
-    if (item.kind === "bytes") return;
+    // the strip is sitting under. The content card answers its own clicks.
+    if (item.kind === "bytes" || item.kind === "card") return;
     this.cursor = item.key;
     this.activate(item);
   }
@@ -699,7 +747,7 @@ export class ListingReport {
    * walk the whole tree.
    */
   private splice(at: number): boolean {
-    const cut = refold(this.src, this.state, this.opts, this.items, at);
+    const cut = refold(this.src, this.state, this.flatOpts(), this.items, at);
     if (cut === null) return false;
     const top = this.tops[cut.from] ?? 0;
     const was = (this.tops[cut.to] ?? top) - top;

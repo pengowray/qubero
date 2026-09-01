@@ -240,6 +240,34 @@ export const REPORT = {
    *  between them. */
   rightMostRowids: "all higher rowids",
   rightMostKeys: "all higher keys",
+  /** The section an image file opens with: the picture, before the parts of
+   *  the file that encode it. Named for what it is, the way "Header" names
+   *  the run of fields below it. */
+  imageCard: "Image",
+  /** The picture's size in pixels, beside it, where a part of the file would
+   *  say its size in bytes. A multiplication sign, since "1920 x 1200" reads
+   *  as a letter x. */
+  imagePixels: (width: number, height: number): string => `${width.toLocaleString()} × ${height.toLocaleString()} pixels`,
+  /** The card while the browser is still decoding the picture, and the card
+   *  while the bytes it needs have not all arrived. Both are waits; the
+   *  second says what it is waiting for, since a streamed file can take a
+   *  while to land. */
+  imageDecoding: "Decoding the image…",
+  imageLoading: "Loading the image's bytes…",
+  /** The browser could not turn the bytes into a picture. The file may be
+   *  truncated, damaged, or in a variant the browser does not handle; the
+   *  card cannot tell which, so it says only what happened. */
+  imageFailed: "Couldn't decode this image",
+  /** A file past the size the card is willing to hand the browser whole.
+   *  The size is the file's, and the limit is named so the line reads as a
+   *  rule rather than a fault. */
+  imageTooLarge: (size: string, limit: string): string => `Not decoded: this file is ${size}, and the picture is only shown for files up to ${limit}.`,
+  /** The picture is scaled to fit the column, or magnified when it is a few
+   *  pixels across; a click shows it pixel for pixel, and another puts it
+   *  back. "actual" covers both directions where "full" would promise the
+   *  magnified one gets bigger. Tooltips on the picture itself. */
+  imageShowFull: "Show at actual size",
+  imageShowFit: "Scale to fit",
 } as const;
 
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the

@@ -2042,8 +2042,8 @@ button.insp-xrow-where:hover {
    item, so they are fixed rather than content-driven: a row that grew a line
    taller would sit over the one below it. */
 .report {
-  --rp-section: 40px;
-  --rp-part: 26px;
+  --rp-section: 54px;
+  --rp-part: 36px;
   --rp-row: 22px;
   position: relative;
   overflow: auto;
@@ -2070,19 +2070,41 @@ button.insp-xrow-where:hover {
   white-space: nowrap;
   overflow: hidden;
 }
+/* A top-level part of the file. The space above it is what groups the rows
+   under it with it, so there is more of that than there is below, and no bar
+   or rule above to do the grouping instead: a line separates what is either
+   side of it, and the space has already done that. The title is a size
+   larger than anything under it, and the hairline beneath is the title's,
+   the way the mockup draws it. */
 .rp-h0 {
   height: var(--rp-section);
-  border-top: 1px solid var(--line);
-  background: var(--panel);
-  font-family: var(--sans);
-  font-size: 14px;
-}
-.rp-h1 {
-  height: var(--rp-part);
-  padding-inline-start: 20px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  padding-block: 22px 6px;
+  border-bottom: 1px solid var(--line);
   font-family: var(--sans);
   font-size: 12px;
+}
+.rp-h0 .rp-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+/* A named part inside one: a heading still, with space of its own, but a
+   step down in size. Its title starts where the h0 title does, past the
+   swatch it does not have, so the two read as titles of two sizes rather
+   than as one title and one indented row. */
+.rp-h1 {
+  height: var(--rp-part);
+  padding-block: 12px 4px;
+  padding-inline-start: 26px;
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.rp-h1 .rp-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.rp-h0 .rp-range,
+.rp-h1 .rp-range {
+  font-family: var(--mono);
 }
 .rp-row {
   height: var(--rp-row);
@@ -2171,6 +2193,12 @@ button.insp-xrow-where:hover {
    that turned out to be empty. Nothing of it is in front of the reader, so it
    is grey. */
 .rp-nobytes {
+  color: var(--muted);
+}
+/* A row opened out of a row, past the one step in that shows where the
+   opened row's contents end. Depth beyond that is said by dimming the name
+   rather than by indenting further: rule 2, no indentation ladders. */
+.rp-deep .rp-field {
   color: var(--muted);
 }
 
@@ -2729,6 +2757,71 @@ table.rec tr.is-on td {
 .rp-empty {
   margin: 0;
   padding: 10px 12px;
+  color: var(--muted);
+  font-family: var(--sans);
+}
+
+/* ---- the content card ---- */
+/* What an image file is a picture of, before the parts that encode it. Its
+   head is drawn as a top-level heading is, since that is its place in the
+   listing's order, and has no swatch and no map, since it is not a part of
+   the file. The picture is scaled to fit the column and a click shows every
+   pixel; nothing in it points at bytes, because nothing yet can. */
+.rp-card {
+  display: block;
+  padding-bottom: 14px;
+}
+.rp-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--rp-section);
+  padding-block: 22px 6px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.rp-card-head .rp-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+.rp-card-head .rp-size {
+  font-family: var(--mono);
+}
+.rp-card-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-top: 10px;
+  white-space: normal;
+}
+.rp-card-pic {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+}
+.rp-card-pic img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 320px;
+  cursor: zoom-in;
+}
+.rp-card-pic.is-full {
+  flex: 1 1 auto;
+}
+.rp-card-pic.is-full img {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+.rp-card-id,
+.rp-card-note {
+  flex: 1 1 16em;
+  min-width: 12em;
+  margin: 0;
   color: var(--muted);
   font-family: var(--sans);
 }

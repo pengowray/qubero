@@ -79,6 +79,11 @@ export type Item = Common &
         /** Absent for a heading over a run of sibling fields, which is a
          *  division of the file with no field of its own to name it. */
         readonly node: TemplateNode | null;
+        /** What the heading says. The field's own name, except that an
+         *  element of a list carries the list's name too: a part of the file
+         *  called `[1]` says nothing from across the room, and `pages[1]`
+         *  says which list it is one of. Empty when there is no node. */
+        readonly title: string;
         /** The children it covers, when it covers a run of them. */
         readonly from: number;
         readonly to: number;
@@ -141,7 +146,19 @@ export type Item = Common &
         readonly path: readonly number[];
         readonly reachedBytes: number;
       }
+    | {
+        /** What the file is a picture of, ahead of how it is written: the
+         *  decoded image at the top of an image file. Not a part of the file,
+         *  so it covers no bytes, sits in no section, and is neither in the
+         *  outline nor on the file map. */
+        readonly kind: "card";
+        readonly card: CardKind;
+        readonly path: readonly number[];
+      }
   );
+
+/** The kinds of content a file can open with. Only pictures so far. */
+export type CardKind = "image";
 
 export type FlatOptions = {
   /** Whether a structure is drawn as a table of records rather than field by
@@ -150,6 +167,14 @@ export type FlatOptions = {
   readonly isRecord?: (node: TemplateNode) => boolean;
   readonly page?: number;
   readonly sectionListMax?: number;
+  /** What the file opens with, before its first part: the picture an image
+   *  file is of. Null or absent for a file that is only its bytes. */
+  readonly card?: CardKind | null;
+  /** How long the file is, in bits, when the root structure does not say.
+   *  An HDF5 root is ninety-six bytes and reaches the rest of the file by
+   *  address, so the root's own size is not the file's; the bytes past it
+   *  are still the file's and are still a row. */
+  readonly fileBits?: number;
 };
 
 export type Flattened = {
@@ -329,7 +354,11 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
   const root = src.node([]);
   if (root.status === "error") return { items: [], pending: false, reachedBytes: 0 };
   if (root.status !== "ok") return { items: [], pending: true, reachedBytes: root.reachedBytes };
-  w.fileBits = root.node.size_bits;
+  w.fileBits = Math.max(root.node.size_bits, opts.fileBits ?? 0);
+  // The content comes before the structure. It is not a part of the file, so
+  // it takes no section number: the first heading below it is still part 0.
+  const card = opts.card ?? null;
+  if (card !== null) w.push({ kind: "card", key: `card:${card}`, section: -1, depth: 0, offsetBits: 0, sizeBits: 0, card, path: [] });
   const kids = w.kids([], root.node.child_count);
   if (kids === null) {
     w.waiting([], 0, root.node);
@@ -385,7 +414,7 @@ export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, 
     // handing them to `heading`. Reading them again is the same question with
     // the same answer, since nothing above this item moved.
     const inner = w.kids(item.path, item.node.child_count);
-    heading(w, item.path, item.node, item.level, item.from, item.to, inner);
+    heading(w, item.path, item.node, item.level, item.from, item.to, inner, item.title);
   } else return null;
   // What the item stood over: its own byte strip, which sits at its depth, and
   // then everything indented under it. The first item at its depth or above is
@@ -397,8 +426,16 @@ export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, 
   return { items: w.items, from: at, to, pending: w.pending, reachedBytes: w.reachedBytes };
 }
 
-/** The top-level parts of the file, and what is in each. */
-function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0): void {
+/** What a part is called on its heading. An element of a list is named `[n]`
+ *  by the template, which is its place and not its name; the list's name in
+ *  front of it is what a reader can find it by again. */
+function titleOf(node: TemplateNode, list: string | null): string {
+  return list !== null && /^\[\d+\]$/.test(node.name) ? `${list}${node.name}` : node.name;
+}
+
+/** The top-level parts of the file, and what is in each. `list` is the name
+ *  of the list these are the elements of, when they are. */
+function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0, list: string | null = null): void {
   const breaks = sectionBreaks(kids);
   // Rule 1 is about the file, not only about the insides of a structure. The
   // parts of a 450 MiB HDF5 file that its template describes are its first
@@ -424,15 +461,18 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
       // a list is not a part of the file.
       if (inner !== null && inner.from === 0 && inner.nodes.length === first.child_count && elementsAreSections(first, inner.nodes, w.sectionListMax, w.fileBits)) {
         w.section -= 1;
-        sections(w, kidPath, first, inner.nodes, inner.from);
+        sections(w, kidPath, first, inner.nodes, inner.from, first.name);
         return;
       }
-      heading(w, kidPath, first, 0, from, to, inner);
+      heading(w, kidPath, first, 0, from, to, inner, titleOf(first, list));
       return;
     }
     runHeading(w, path, kids, from, to, breaks, base);
   });
-  if (cursor < endBits(parent)) gap(w, path, cursor, endBits(parent), 0, true);
+  // The root's end is the file's end, whatever the root structure says its
+  // own size is; anything inside the root ends where it ends.
+  const end = path.length === 0 ? Math.max(endBits(parent), w.fileBits) : endBits(parent);
+  if (cursor < end) gap(w, path, cursor, end, 0, true);
 }
 
 /** One part of the file with a field of its own to name it. */
@@ -444,6 +484,7 @@ function heading(
   from: number,
   to: number,
   inner: Slice | null,
+  title: string = node.name,
 ): void {
   const key = pathKey(path);
   const open = level === 0 || w.isOpen(key) || (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX);
@@ -457,6 +498,7 @@ function heading(
     level,
     path,
     node,
+    title,
     from,
     to,
     open,
@@ -522,6 +564,7 @@ function runHeading(
     level: 0,
     path,
     node: null,
+    title: "",
     from,
     to,
     open: true,
