@@ -257,7 +257,7 @@ export const REPORT = {
   /** The browser could not turn the bytes into a picture. The file may be
    *  truncated, damaged, or in a variant the browser does not handle; the
    *  card cannot tell which, so it says only what happened. */
-  imageFailed: "Couldn't decode this image.",
+  imageFailed: "Couldn't decode this image",
   /** A file past the size the card is willing to hand the browser whole.
    *  The size is the file's, and the limit is named so the line reads as a
    *  rule rather than a fault. */
