@@ -61,7 +61,7 @@ class ImageCard {
   full = false;
   /** The identification sentence, once the rules have answered. */
   identity: string | null = null;
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = new Set<(what: CardChange) => void>();
   private started = false;
   /** The edit the picture was decoded from, so a later one is noticed. */
   private decodedAt = -1;
@@ -69,13 +69,21 @@ class ImageCard {
 
   constructor(private readonly doc: Doc) {}
 
-  watch(fn: () => void): () => void {
+  watch(fn: (what: CardChange) => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
 
-  private notify(): void {
-    for (const fn of this.listeners) fn();
+  private notify(what: CardChange = "state"): void {
+    for (const fn of this.listeners) fn(what);
+  }
+
+  /** The picture on screen has its size now. An image element is nothing
+   *  tall until its bytes are decoded for display, which happens after it
+   *  is in the document, so a card measured on mounting is a card without
+   *  its picture. */
+  resized(): void {
+    this.notify("size");
   }
 
   toggleFull(): void {
@@ -172,10 +180,14 @@ function imageCardFor(doc: Doc): ImageCard {
   return card;
 }
 
-/** Be told when the card has something new to show: the decode finished, the
- *  identification arrived, or the reader changed the picture's size. The
- *  element is the listing's to draw again; its height will have changed. */
-export function watchCard(doc: Doc, fn: () => void): () => void {
+/** What a watcher is told. `state`: the card has something new to show (the
+ *  decode finished, the identification arrived, the reader changed the
+ *  picture's size) and is the listing's to draw again. `size`: the element
+ *  already up has become the height it is going to be, and only needs
+ *  measuring again. */
+export type CardChange = "state" | "size";
+
+export function watchCard(doc: Doc, fn: (what: CardChange) => void): () => void {
   return imageCardFor(doc).watch(fn);
 }
 
@@ -224,6 +236,7 @@ export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown:
         e.stopPropagation();
         card.toggleFull();
       });
+      img.addEventListener("load", () => card.resized());
       frame.append(img);
       body.append(frame);
       break;

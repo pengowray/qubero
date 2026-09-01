@@ -205,7 +205,16 @@ export class ListingReport {
     // The card at the top of an image file changes on its own, when the
     // picture has been decoded or the reader has changed its size; it is a
     // different height each time.
-    watchCard(doc, () => this.refreshCard());
+    watchCard(doc, (what) => {
+      if (what === "size") {
+        // The picture in the card that is already up has its size now. The
+        // card is measured where it stands; a height that differs from the
+        // one it was laid out at is what lays the list out again, and one
+        // that does not ends it, which is what stops the picture in the
+        // redrawn card asking for the same thing again.
+        if (this.drawn !== null) this.remeasure(this.drawn.from, this.drawn.to);
+      } else this.refreshCard();
+    });
     // A file that never changes after opening still has parts to name.
     this.schedule();
   }
