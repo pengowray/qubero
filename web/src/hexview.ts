@@ -856,8 +856,9 @@ export class HexView {
     // what the press was for.
     if (at.closest(".hv-note") !== null) return null;
     // A heading is not part of the file either: it names the part that starts
-    // in the row under it, and pressing it goes there.
-    if (at.closest(".hv-headings") !== null) return null;
+    // in the row under it, and pressing it goes there. A drag across it is
+    // another matter: that reads as the row it belongs to.
+    if (pane === undefined && at.closest(".hv-headings") !== null) return null;
     const cell = at.closest<HTMLElement>("[data-off]");
     if (cell !== null) {
       const p = cell.dataset["pane"];
@@ -910,7 +911,10 @@ export class HexView {
     } else {
       this.stopAutoScroll();
     }
-    const y = Math.min(r.bottom - 1, Math.max(r.top + 1, d.y));
+    // Pinned to the last row rather than the bottom edge: the rows do not
+    // always fill the space, and a point in the slack under them is nowhere.
+    const last = this.rowsEl.lastElementChild?.getBoundingClientRect().bottom ?? r.bottom;
+    const y = Math.min(r.bottom - 1, last - 1, Math.max(r.top + 1, d.y));
     const hit = this.hitAt(d.x, y, d.pane);
     const anchor = hit === null ? 0 : hit.bit >= d.anchor ? d.anchor : d.anchor + d.unit;
     const focus = hit === null ? 0 : hit.bit >= d.anchor ? hit.bit + hit.unit : hit.bit;
