@@ -91,6 +91,13 @@ export class ListingReport {
   private readonly opts: FlatOptions;
   private state: ListingState = emptyState;
   private items: readonly Item[] = [];
+  /** The rows standing in the document right now, by key. Scrolling a listing
+   *  moves the window by an item or two, and drawing all thirty again costs
+   *  the browser a fresh layout of every one of them. A row whose key is still
+   *  in the window is the same row: it is left where it is and only told its
+   *  new top. Anything that changes what a row *says* clears this, so a kept
+   *  row is never a stale one. */
+  private mounted = new Map<string, HTMLElement>();
   /** Where each item starts, in pixels, and one past the last: `tops[i + 1]`
    *  is always there. */
   private tops: number[] = [0];
@@ -127,7 +134,7 @@ export class ListingReport {
   private picking = false;
   /** The key of the row standing in for a selection with no row of its own,
    *  worked out once a paint rather than once a row. */
-  private nearest: string | null = null;
+  private nearest: string | null | undefined = undefined;
   /** The item the keyboard is on, by key so that it survives a re-flatten.
    *  Null until an arrow key is pressed, which starts it at the top of the
    *  window rather than at the top of the file. */
@@ -229,7 +236,19 @@ export class ListingReport {
   /** Where every item starts. Anchoring and drawing are the caller's, since
    *  what to hold on to differs between walking the tree again and finding a
    *  strip was not the height it was taken for. */
+  /** Throw away the rows standing in the document, so the next paint draws
+   *  them again. Anything that changes what a row says goes through here;
+   *  scrolling, which changes only which rows are wanted, does not. */
+  private discard(): void {
+    if (this.mounted.size > 0) {
+      for (const node of this.mounted.values()) node.remove();
+      this.mounted.clear();
+    }
+    this.nearest = undefined;
+  }
+
   private layout(): void {
+    this.discard();
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
     for (const [i, item] of this.items.entries()) {
@@ -269,42 +288,58 @@ export class ListingReport {
   private paint(): void {
     // A file nothing has a template for flattens to nothing. Leaving the last
     // file's rows up would show one file's structure over another's bytes.
+    // Read the scroll position once. Everything below this line writes to the
+    // document, and asking for it again afterwards makes the browser lay the
+    // new rows out on the spot to answer.
+    const top = this.scroller.scrollTop;
+    const height = this.scroller.clientHeight;
     if (this.items.length === 0) {
       const note = el("p", "rp-empty", this.doc.template === null ? NO_TEMPLATE_HINT : this.matched ? REPORT.reading : NO_TEMPLATE_MATCH);
+      this.discard();
       this.canvas.replaceChildren(note);
       this.drawn = null;
       return;
     }
-    const from = Math.max(0, this.indexAt(this.scroller.scrollTop) - OVERSCAN);
-    const to = Math.min(this.items.length, this.indexAt(this.scroller.scrollTop + this.scroller.clientHeight) + 1 + OVERSCAN);
+    const from = Math.max(0, this.indexAt(top) - OVERSCAN);
+    const to = Math.min(this.items.length, this.indexAt(top + height) + 1 + OVERSCAN);
     if (this.drawn !== null && this.drawn.from === from && this.drawn.to === to) return;
     this.drawn = { from, to };
-    this.nearest = this.nearestToSelection();
+    // Nothing is standing, so anything in the canvas is left over from the
+    // note an empty listing puts there.
+    if (this.mounted.size === 0) this.canvas.replaceChildren();
+    if (this.nearest === undefined) this.nearest = this.nearestToSelection();
     const fileBits = this.doc.lengthBits;
-    const out: HTMLElement[] = [];
+    const keep = new Set<string>();
     for (let i = from; i < to; i++) {
       const item = this.items[i];
       if (item === undefined) continue;
-      const node = this.draw(item, fileBits);
-      node.style.top = `${this.tops[i] ?? 0}px`;
-      node.dataset["key"] = item.key;
-      node.id = `rp-${item.key}`;
-      // The scroller is the tree and keeps the focus; which item the keyboard
-      // is on is said by `aria-activedescendant`, so a screen reader hears the
-      // row without the focus ever leaving the one scrolling element.
-      node.setAttribute("role", "treeitem");
-      const opens = openKeyOf(item);
-      if (opens !== null) node.setAttribute("aria-expanded", String(this.state.open.has(opens)));
-      if (item.key === this.cursor) {
-        node.classList.add("is-cursor");
-        this.scroller.setAttribute("aria-activedescendant", node.id);
+      keep.add(item.key);
+      let node = this.mounted.get(item.key);
+      if (node === undefined) {
+        node = this.draw(item, fileBits);
+        node.dataset["key"] = item.key;
+        node.id = `rp-${item.key}`;
+        // The scroller is the tree and keeps the focus; which item the keyboard
+        // is on is said by `aria-activedescendant`, so a screen reader hears the
+        // row without the focus ever leaving the one scrolling element.
+        node.setAttribute("role", "treeitem");
+        const opens = openKeyOf(item);
+        if (opens !== null) node.setAttribute("aria-expanded", String(this.state.open.has(opens)));
+        if (item.key === this.cursor) node.classList.add("is-cursor");
+        this.mounted.set(item.key, node);
+        this.canvas.append(node);
       }
-      out.push(node);
+      node.style.top = `${this.tops[i] ?? 0}px`;
+      if (item.key === this.cursor) this.scroller.setAttribute("aria-activedescendant", node.id);
     }
-    this.canvas.replaceChildren(...out);
+    for (const [key, node] of this.mounted) {
+      if (keep.has(key)) continue;
+      node.remove();
+      this.mounted.delete(key);
+    }
     // Taken from the top of the window rather than from `from`, which reaches
     // a few rows above it and would name the heading before this one.
-    this.trail();
+    this.trail(top);
     this.remeasure(from, to);
   }
 
@@ -323,8 +358,8 @@ export class ListingReport {
     for (let i = from; i < to; i++) {
       const item = this.items[i];
       if (item === undefined || (item.kind !== "bytes" && item.kind !== "record")) continue;
-      const node = this.canvas.querySelector<HTMLElement>(`[data-key="${CSS.escape(item.key)}"]`);
-      if (node === null) continue;
+      const node = this.mounted.get(item.key);
+      if (node === undefined) continue;
       const height = Math.ceil(node.getBoundingClientRect().height);
       if (height > 0 && this.measured.get(item.key) !== height) {
         this.measured.set(item.key, height);
@@ -347,8 +382,8 @@ export class ListingReport {
   /** What the top of the window is inside, which is the headings it has
    *  scrolled past. Sticky, because a listing scrolled far enough that its
    *  heading is gone stops saying which part of the file it is showing. */
-  private trail(): void {
-    const at = this.indexAt(this.scroller.scrollTop);
+  private trail(scrollTop: number): void {
+    const at = this.indexAt(scrollTop);
     const parts: string[] = [this.doc.name];
     const fileBits = this.doc.lengthBits;
     let section: string | null = null;
@@ -772,6 +807,7 @@ export class ListingReport {
 
   /** Redraw the window that is already up, for a change that moves nothing. */
   private paintAgain(): void {
+    this.discard();
     this.drawn = null;
     this.paint();
   }
