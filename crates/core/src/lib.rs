@@ -31,6 +31,7 @@ pub mod template;
 pub mod text;
 pub mod textview;
 pub mod thumb;
+pub mod varintbits;
 
 pub use document::Document;
 pub use encode::EDIT_LIMIT_BYTES;
