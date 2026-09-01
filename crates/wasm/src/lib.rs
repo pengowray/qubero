@@ -762,6 +762,24 @@ struct SpanDto {
     sample: Vec<String>,
     /// First element extents followed by the uninspected remainder.
     parts: Vec<SpanPartDto>,
+    /// How a variable-length number's bits divide into framing and value.
+    /// Null for a field that reads as whole bytes, which is most of them.
+    bits: Option<BitRolesDto>,
+}
+
+/// The bit split of one variable-length number, in the order it is stored.
+#[derive(Serialize)]
+struct BitRolesDto {
+    /// Which rule a reader has to know to follow the split. The view keys its
+    /// wording off this; the core does not carry the wording.
+    rule: &'static str,
+    groups: Vec<BitGroupDto>,
+}
+
+#[derive(Serialize)]
+struct BitGroupDto {
+    bits: String,
+    role: &'static str,
 }
 
 #[derive(Serialize)]
@@ -820,6 +838,14 @@ fn span_dto(s: Span) -> SpanDto {
         line: s.line,
         sample: s.sample,
         parts: s.parts.into_iter().map(span_part_dto).collect(),
+        bits: s.bits.map(|b| BitRolesDto {
+            rule: b.rule,
+            groups: b
+                .groups
+                .into_iter()
+                .map(|g| BitGroupDto { bits: g.bits, role: g.role.as_str() })
+                .collect(),
+        }),
     }
 }
 

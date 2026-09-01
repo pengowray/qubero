@@ -180,6 +180,23 @@ export type Span = {
   readonly sample: string[];
   /** First element extents of a collapsed run, then its remaining extent. */
   readonly parts: readonly { readonly size_bits: number; readonly label: string; readonly rest: boolean }[];
+  /** How a variable-length number's bits divide into framing and value. Null
+   *  for a field that reads as whole bytes, which is most of them. Which bits
+   *  are which is decode knowledge and comes from the core; only the words
+   *  beside the split are the view's. */
+  readonly bits: BitRoles | null;
+};
+
+/** What a decoder does with one run of bits: `more` and `stop` are the
+ *  continuation bit either way round, `width` is EBML spending leading zeros
+ *  on how wide the number is, and `payload` is the number itself. */
+export type BitRole = "more" | "stop" | "width" | "payload";
+
+/** One variable-length number's bits, in the order they are stored. `rule` is
+ *  the key the view has wording for; the core carries no wording. */
+export type BitRoles = {
+  readonly rule: string;
+  readonly groups: readonly { readonly bits: string; readonly role: BitRole }[];
 };
 
 /** What the byte-class scan behind the overview has found so far. */
