@@ -4,24 +4,27 @@
 // `flatten` says what to draw and in what order; this says how tall each thing
 // is and puts the ones on screen in the document. Everything else stays out of
 // it, so a file whose tree runs to millions of nodes costs a screenful of DOM.
+// What one item looks like is `listingdraw.ts`: this file is the layout, the
+// input and the selection, and hands that one an item and a `DrawContext`.
 //
 // Scrolling counts items, not bits. The old listing scrolls the file itself
 // because `spans` is windowed by bit range and cannot say how many rows a file
 // has; a flattened tree is a list with a length, and a list scrolls by index.
 
-import { formatBytes, formatOffset } from "./doc.js";
-import type { Doc, TemplateNode } from "./doc.js";
+import type { Doc } from "./doc.js";
 import type { FieldPick } from "./doc.js";
 import { emptyState, flatten, PAGE, refold } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
-import { fieldClass, sectionColor } from "./fieldstyle.js";
-import { byteStrip, markStrip } from "./bytestrip.js";
-import { fileMap, markMap } from "./filemap.js";
+import { sectionColor } from "./fieldstyle.js";
+import { markStrip } from "./bytestrip.js";
+import { markMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
-import { isRecordList, recordTable } from "./records.js";
+import { isRecordList } from "./records.js";
+import { drawItem, el, holdsSelection, isSelected, itemOpens, runPosition } from "./listingdraw.js";
+import type { DrawContext, Selected } from "./listingdraw.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
-import { bitSizeText, childWord, countText, GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
+import { NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
 
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
@@ -40,45 +43,6 @@ function heightOf(item: Item): number {
   if (item.kind !== "heading") return HEIGHT.row;
   return item.level === 0 ? HEIGHT.section : HEIGHT.part;
 }
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-/** `0x1000 – 0x1fff`, the stretch a heading covers. A part of no bytes has no
- *  range to give, which is what a field placed somewhere else looks like. */
-function rangeText(offsetBits: number, sizeBits: number): string {
-  if (sizeBits === 0) return formatOffset(offsetBits);
-  return `${formatOffset(offsetBits)} – ${formatOffset(offsetBits + sizeBits - 8)}`;
-}
-
-/** How much of the file this is, for a part big enough for the answer to mean
- *  anything. Under a per cent, the number says less than the range does. */
-function shareText(sizeBits: number, fileBits: number): string {
-  if (fileBits <= 0) return "";
-  const share = sizeBits / fileBits;
-  return share < 0.01 ? REPORT.tinyShare : `${Math.round(share * 100)}%`;
-}
-
-/** Where a run of plain fields sits in the file, which is all there is to
- *  name it by. A run at the front is a header; the same fields at the back
- *  are not. */
-function runPosition(item: Item, fileBits: number): "start" | "end" | "middle" {
-  if (item.offsetBits === 0) return "start";
-  if (fileBits > 0 && item.offsetBits + item.sizeBits >= fileBits) return "end";
-  return "middle";
-}
-
-/** What each answer from `checkGap` is called. */
-const GAP_VERDICT = {
-  zeros: REPORT.gapZeros,
-  something: REPORT.gapNonzero,
-  "too-large": REPORT.gapTooLarge,
-  unread: REPORT.gapUnread,
-} as const;
 
 export class ListingReport {
   readonly el: HTMLElement;
@@ -131,7 +95,7 @@ export class ListingReport {
    *  it. The same field appears as a row, as a line of a record table, as a
    *  column of an open byte strip and as a mark on every file map; all four
    *  are answered by the range, and only one of them by a row. */
-  private selected: { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number } | null = null;
+  private selected: Selected | null = null;
   /** True while a selection this view made is being sent out, so the cursor
    *  move it causes does not come back and undo the scroll position. */
   private picking = false;
@@ -381,6 +345,7 @@ export class ListingReport {
     if (this.mounted.size === 0) this.canvas.replaceChildren();
     if (this.nearest === undefined) this.nearest = this.nearestToSelection();
     const fileBits = this.doc.lengthBits;
+    const context = this.context();
     const keep = new Set<string>();
     for (let i = from; i < to; i++) {
       const item = this.items[i];
@@ -388,7 +353,7 @@ export class ListingReport {
       keep.add(item.key);
       let node = this.mounted.get(item.key);
       if (node === undefined) {
-        node = this.draw(item, fileBits);
+        node = drawItem(context, item, fileBits);
         node.dataset["key"] = item.key;
         node.id = `rp-${item.key}`;
         // The scroller is the tree and keeps the focus; which item the keyboard
@@ -480,125 +445,23 @@ export class ListingReport {
     );
   }
 
-  private draw(item: Item, fileBits: number): HTMLElement {
-    switch (item.kind) {
-      case "heading":
-        return this.drawHeading(item, fileBits);
-      case "row":
-        return this.drawRow(item);
-      case "gap":
-        return this.drawGap(item);
-      case "bytes":
-        return this.drawStrip(item);
-      case "record":
-        return this.drawRecord(item);
-      case "more":
-        return this.drawMore(item);
-      case "pending":
-        return el("div", "rp-item rp-pending", REPORT.reading);
-    }
-  }
-
-  private drawHeading(item: Extract<Item, { kind: "heading" }>, fileBits: number): HTMLElement {
-    const row = el("div", `rp-item rp-h${item.level}`);
-    if (item.level === 0) {
-      const swatch = el("span", "rp-swatch");
-      swatch.style.background = sectionColor(item.section);
-      row.append(swatch);
-    }
-    row.append(el("b", "rp-name", item.node?.name ?? REPORT.unnamedPart(runPosition(item, fileBits))));
-    row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits)));
-    const share = shareText(item.sizeBits, fileBits);
-    row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
-    row.append(this.bytesButton(item.key));
-    // Only a list too long to draw: for anything the window already holds
-    // whole, a pane of its own would be the same rows somewhere else.
-    if (item.node !== null && item.node.child_count > PAGE) row.append(this.listButton(item.path));
-    row.append(this.mapFor(item));
-    return row;
-  }
-
-  /** A structure the format keeps as a table, drawn as one: the format's own
-   *  column names, and where each row is written. */
-  private drawRecord(item: Extract<Item, { kind: "record" }>): HTMLElement {
-    const host = el("div", "rp-item rp-record");
-    host.style.paddingLeft = `${8 + item.depth * 12}px`;
-    const table = recordTable(this.doc, item.node);
-    if (table === null) {
-      host.append(el("div", "bs-wait", REPORT.reading));
-      return host;
-    }
-    const grid = document.createElement("table");
-    grid.className = "rec";
-    const head = document.createElement("tr");
-    for (const name of table.columns) head.append(el("th", "", name));
-    head.append(el("th", "rec-at", REPORT.storedAt));
-    grid.append(head);
-    for (const row of table.rows) {
-      const tr = document.createElement("tr");
-      // A table row is a range, not a field: the selection is usually one
-      // column inside it.
-      tr.dataset["at"] = String(row.offsetBits);
-      tr.dataset["size"] = String(row.sizeBits);
-      if (this.holdsSelection(row.offsetBits, row.sizeBits)) tr.className = "is-on";
-      for (const cell of row.cells) tr.append(el("td", fieldClass(cell.kind), cell.text));
-      const at = el("td", "rec-at");
-      // The one way out of the table: the row's own bytes, which is where it
-      // was read from and where the reader goes to see how.
-      const link = el("button", "rec-link", `${formatOffset(row.offsetBits)} \u00b7 ${formatBytes(row.sizeBits / 8)}`);
-      link.type = "button";
-      // Back to the fields: the row's own bytes, under the table it came from.
-      const rowKey = `r:${row.path.join(".")}`;
-      if (this.state.bytes.has(rowKey)) link.classList.add("is-on");
-      link.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.toggleBytes(rowKey);
-      });
-      at.append(link);
-      tr.append(at);
-      grid.append(tr);
-    }
-    host.append(grid);
-    if (table.pending) host.append(el("div", "bs-wait", REPORT.reading));
-    return host;
-  }
-
-  private drawStrip(item: Extract<Item, { kind: "bytes" }>): HTMLElement {
-    const host = el("div", "rp-item rp-strip");
-    host.style.paddingLeft = `${8 + item.depth * 12}px`;
-    const caption = `${item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
-    host.append(
-      byteStrip(this.doc, item.offsetBits, item.sizeBits, caption, this.mapFor(item), () => this.toggleBytes(item.owner), this.selected, {
-        open: this.dumps,
-        toggle: (at) => this.toggleDump(at),
-        scroll: (at) => ({ get: () => this.dumpTops.get(at) ?? 0, set: (top) => this.dumpTops.set(at, top) }),
-      }),
-    );
-    return host;
-  }
-
-  private mapFor(item: Item): HTMLElement {
-    return fileMap(this.segments, item.offsetBits, item.sizeBits, rangeText(item.offsetBits, item.sizeBits), this.selected);
-  }
-
-  /** The control that shows an item's bytes, and takes them away again. */
-  private bytesButton(key: string): HTMLElement {
-    const on = this.state.bytes.has(key);
-    const b = el("button", `rp-bytes${on ? " is-on" : ""}`, REPORT.showBytes);
-    b.type = "button";
-    b.setAttribute("aria-pressed", String(on));
-    b.dataset["bytes"] = key;
-    return b;
-  }
-
-  /** The way out of a window and into the whole list. It sits on the list's
-   *  own heading and on both ends of the drawn window, which is where a reader
-   *  finds out the list is longer than what is in front of them. */
-  private listButton(path: readonly number[]): HTMLElement {
-    const b = el("button", "rp-bytes rp-list", REPORT.paneOpen);
-    b.type = "button";
-    b.dataset["list"] = pathString(path);
-    return b;
+  /** What the drawing is allowed to see of this view, gathered once per paint.
+   *  Everything in it changes between paints and nothing in it is written to
+   *  from the other side, so a fresh reading each time is both cheaper than
+   *  keeping it in step and harder to get wrong. */
+  private context(): DrawContext {
+    return {
+      doc: this.doc,
+      segments: this.segments,
+      selected: this.selected,
+      nearest: this.nearest,
+      bytes: this.state.bytes,
+      dumps: this.dumps,
+      dumpTops: this.dumpTops,
+      toggleBytes: (key) => this.toggleBytes(key),
+      toggleDump: (at) => this.toggleDump(at),
+      verdict: (item) => this.verdict(item),
+    };
   }
 
   /** Open one field out into all of its bytes, or put it away. */
@@ -655,15 +518,14 @@ export class ListingReport {
    *  field sits inside its structure, and lighting everything the selection is
    *  inside would light most of the screen. */
   private isSelected(offsetBits: number, sizeBits: number): boolean {
-    return this.selected !== null && this.selected.offsetBits === offsetBits && this.selected.sizeBits === sizeBits;
+    return isSelected(this.selected, offsetBits, sizeBits);
   }
 
   /** Whether a stretch holds the selection. For the one row that is allowed
    *  to say so: the nearest thing on screen that contains it, when the field
    *  itself is not a row of its own. */
   private holdsSelection(offsetBits: number, sizeBits: number): boolean {
-    const s = this.selected;
-    return s !== null && s.offsetBits >= offsetBits && s.offsetBits + s.sizeBits <= offsetBits + sizeBits;
+    return holdsSelection(this.selected, offsetBits, sizeBits);
   }
 
   /** The item to light when the selected field has no row of its own: the
@@ -686,43 +548,6 @@ export class ListingReport {
     return holder(n, s.offsetBits, s.offsetBits + s.sizeBits);
   }
 
-  private drawRow(item: Extract<Item, { kind: "row" }>): HTMLElement {
-    const n = item.node;
-    // A field of no bytes is grey: whether it is a value the template worked
-    // out or a list that turned out to be empty, there is nothing of it in the
-    // file, and a row the reader can skip should look like one.
-    const row = el("div", `rp-item rp-row${n.size_bits === 0 ? " rp-nobytes" : ""}`);
-    if (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === item.key) row.classList.add("is-on");
-    row.style.paddingLeft = `${8 + item.depth * 12}px`;
-    // A computed value is not written anywhere, so it has no address, and its
-    // length says so in words: "0x101a7" and "0 bytes" would be answers to
-    // questions this row is not the answer to.
-    const written = n.type !== "computed";
-    row.append(el("span", "rp-at", written ? formatOffset(n.offset_bits) : ""));
-    // A row that opens says so. Without it the only way to find out which
-    // rows have anything under them is to click every one of them.
-    row.append(el("span", "rp-twist", itemOpens(n) ? (item.open ? "\u25be" : "\u25b8") : ""));
-    row.append(el("span", `rp-field ${fieldClass(n.kind)}`, n.name));
-    const value = el("span", "rp-value", n.composite ? countText(n.child_count, childWord(n)) : n.value);
-    if (item.reads !== null) value.append(this.readsLink(item.reads));
-    row.append(value);
-    row.append(el("span", "rp-type", n.type));
-    row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : REPORT.notStored));
-    // A toggle that opens a strip of nothing is a dead control.
-    if (n.size_bits > 0) row.append(this.bytesButton(item.key));
-    return row;
-  }
-
-  /** What reads this field, as a link to it. */
-  private readsLink(reads: { readonly name: string; readonly path: readonly number[] }): HTMLElement {
-    const link = el("button", "rp-reads", REPORT.reads(reads.name));
-    link.type = "button";
-    link.title = REPORT.readsLabel(reads.name);
-    link.setAttribute("aria-label", REPORT.readsLabel(reads.name));
-    link.dataset["reads"] = pathString(reads.path);
-    return link;
-  }
-
   private verdict(item: Extract<Item, { kind: "gap" }>): GapVerdict {
     const known = this.verdicts.get(item.key);
     if (known !== undefined) return known;
@@ -731,29 +556,6 @@ export class ListingReport {
     // the next draw after they land asks again.
     if (found !== "unread") this.verdicts.set(item.key, found);
     return found;
-  }
-
-  private drawGap(item: Extract<Item, { kind: "gap" }>): HTMLElement {
-    const row = el("div", "rp-item rp-row rp-gap");
-    row.style.paddingLeft = `${8 + item.depth * 12}px`;
-    row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
-    row.append(el("span", "rp-twist", ""));
-    row.append(el("span", "rp-field", item.unmapped ? GAP_LABEL : REPORT.gap));
-    row.append(el("span", "rp-value", GAP_VERDICT[this.verdict(item)]));
-    row.append(el("span", "rp-type", ""));
-    row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
-    return row;
-  }
-
-  private drawMore(item: Extract<Item, { kind: "more" }>): HTMLElement {
-    const row = el("div", "rp-item rp-row rp-more");
-    row.style.paddingLeft = `${8 + item.depth * 12}px`;
-    const reply = this.doc.templateNode(item.path);
-    const noun = reply.status === "ok" ? childWord(reply.node) : "item";
-    row.append(el("span", "rp-at", ""));
-    row.append(el("span", "rp-field", REPORT.more(countText(item.remaining, noun), item.side)));
-    row.append(this.listButton(item.path));
-    return row;
   }
 
   // ----- input -----
@@ -1142,6 +944,4 @@ function openTargetOf(bytesKey: string): string | null {
   return null;
 }
 
-function itemOpens(node: TemplateNode): boolean {
-  return node.composite && node.child_count > 0;
-}
+
