@@ -609,6 +609,10 @@ export class ListingReport {
   private toggleBytes(key: string): void {
     const bytes = new Set(this.state.bytes);
     let open = this.state.open;
+    // Found before the state moves. A strip belongs to the item whose key it
+    // is, so that item is the one the splice walks again — the same run of the
+    // list a fold on it would have replaced.
+    const at = this.items.findIndex((item) => item.key === key);
     if (bytes.has(key)) {
       bytes.delete(key);
       this.pruneDumps(key);
@@ -617,10 +621,11 @@ export class ListingReport {
       // A strip is part of what its item opens into, not a second expansion
       // beside it: asking a closed item for its bytes opens the item, so a
       // strip never stands over rows that are hidden.
-      const at = openTargetOf(key);
-      if (at !== null && !open.has(at)) open = new Set([...open, at]);
+      const target = openTargetOf(key);
+      if (target !== null && !open.has(target)) open = new Set([...open, target]);
     }
     this.state = { ...this.state, bytes, open };
+    if (at >= 0 && this.splice(at)) return;
     this.rebuild();
   }
 

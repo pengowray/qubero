@@ -600,3 +600,40 @@ test("a fold walked again keeps the byte strips under it", () => {
   const bytes = new Set(["r:4.5", "r:4.2"]);
   assert.ok(foldsAgree(SQLITE, { ...emptyState, open, bytes }) > 0);
 });
+
+/** Every item that can show its bytes, opened one at a time and shut again:
+ *  the spliced list against the walked one. A strip belongs to the item whose
+ *  key it is, so that item is the one walked again. */
+function stripsAgree(spec: Spec, start: ListingState = emptyState): number {
+  const root = build(spec, [], 0);
+  const src = source(root);
+  let tried = 0;
+  const base = flatten(src, start).items;
+  for (const [at, item] of base.entries()) {
+    if (item.kind !== "row" && item.kind !== "heading") continue;
+    if (item.node === null || item.sizeBits === 0) continue;
+    const want = !start.bytes.has(item.key);
+    const bytes = new Set(start.bytes);
+    if (want) bytes.add(item.key);
+    else bytes.delete(item.key);
+    const next: ListingState = { ...start, bytes };
+    const cut = refold(src, next, {}, base, at);
+    if (cut === null) continue; // a run heading has no field of its own to walk
+    const patched = [...base.slice(0, cut.from), ...cut.items, ...base.slice(cut.to)];
+    assert.deepEqual(ids(patched), ids(flatten(src, next).items), `${want ? "opening" : "closing"} bytes of ${item.key}`);
+    tried += 1;
+  }
+  return tried;
+}
+
+test("opening one byte strip gives the list a whole walk would", () => {
+  assert.ok(stripsAgree(SQLITE) > 0);
+  assert.ok(stripsAgree(GGUF) > 0);
+  assert.ok(stripsAgree(ZIP_TAIL) >= 0);
+});
+
+test("closing one byte strip gives the list a whole walk would", () => {
+  const open = new Set(["4.5", "5.0"]);
+  const bytes = new Set(["r:4.5", "r:4.2", "h:5.0"]);
+  assert.ok(stripsAgree(SQLITE, { ...emptyState, open, bytes }) > 0);
+});

@@ -360,28 +360,33 @@ export type Refold = {
  * whose fold moved, and the answer is the run of the list to replace.
  *
  * It walks the item itself as well as its contents, since the item says
- * whether it is open, and it goes through the same `child` the first walk used:
- * two ways of producing the same rows would be two things to keep in step.
+ * whether it is open and whether its bytes are showing, and it goes through the
+ * same `child` and `heading` the first walk used: two ways of producing the
+ * same rows would be two things to keep in step. That is why the same call
+ * answers a byte strip opening as well as a fold — a strip is part of what an
+ * item stands over, so the run to replace is the same run either way.
  *
- * Null for an item with no fold of its own, which the caller answers by walking
- * the whole tree.
+ * Null for an item with nothing of its own to walk, which the caller answers by
+ * walking the whole tree.
  */
 export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, items: readonly Item[], at: number): Refold | null {
   const item = items[at];
   if (item === undefined) return null;
-  let node: TemplateNode;
-  let reads: { readonly name: string; readonly path: readonly number[] } | null = null;
-  if (item.kind === "row") {
-    node = item.node;
-    reads = item.reads;
-  } else if (item.kind === "heading" && item.level === 1 && item.node !== null) {
-    // A heading at this level is what `child` makes of a composite nothing
-    // reads, so that is what to hand back to it.
-    node = item.node;
-  } else return null;
   const w = new Walk(src, state, opts);
   w.section = item.section;
-  child(w, node, item.depth, reads);
+  if (item.kind === "row") {
+    child(w, item.node, item.depth, item.reads);
+  } else if (item.kind === "heading" && item.node !== null && item.level === 1) {
+    // A heading at this level is what `child` makes of a composite nothing
+    // reads, so that is what to hand back to it.
+    child(w, item.node, item.depth, null);
+  } else if (item.kind === "heading" && item.node !== null) {
+    // A top-level part, which `sections` made by reading its children and
+    // handing them to `heading`. Reading them again is the same question with
+    // the same answer, since nothing above this item moved.
+    const inner = w.kids(item.path, item.node.child_count);
+    heading(w, item.path, item.node, item.level, item.from, item.to, inner);
+  } else return null;
   // What the item stood over: its own byte strip, which sits at its depth, and
   // then everything indented under it. The first item at its depth or above is
   // the next sibling, or the end of the part.
