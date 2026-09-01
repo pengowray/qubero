@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { TemplateNode, TemplateReply } from "../src/doc.ts";
-import { emptyState, flatten, pathKey, sectionBreaks } from "../src/flatten.ts";
+import { emptyState, flatten, pathKey, refold, sectionBreaks } from "../src/flatten.ts";
 import type { Item, ListingState, TreeSource } from "../src/flatten.ts";
 
 type Spec = {
@@ -540,4 +540,63 @@ test("a hole between two parts of the file is a row of its own", () => {
     gaps.map((g) => (g.kind === "gap" ? [g.offsetBits / 8, g.sizeBits / 8] : [])),
     [[100, 100]],
   );
+});
+
+// Opening a fold is walking one item again, and has to give the same list as
+// walking the whole file would. If these two ever part, the listing shows one
+// thing after a click and another after the next scroll.
+
+/** The state key a fold on this item turns on and off, as `listingreport`
+ *  works it out. */
+function foldKey(item: Item): string | null {
+  if (item.kind === "heading") return item.node === null || item.level === 0 ? null : pathKey(item.path);
+  if (item.kind === "row") return item.node.composite && item.node.child_count > 0 ? pathKey(item.path) : null;
+  return null;
+}
+
+function ids(items: readonly Item[]): string[] {
+  return items.map((i) => `${i.key} ${i.section}/${i.depth} @${i.offsetBits}+${i.sizeBits}`);
+}
+
+/** Every fold in the list, opened one at a time and shut again, both ways
+ *  round: the spliced list against the walked one. */
+function foldsAgree(spec: Spec, start: ListingState = emptyState): number {
+  const root = build(spec, [], 0);
+  const src = source(root);
+  let tried = 0;
+  const base = flatten(src, start).items;
+  for (const [at, item] of base.entries()) {
+    const key = foldKey(item);
+    if (key === null) continue;
+    const want = !start.open.has(key);
+    const open = new Set(start.open);
+    if (want) open.add(key);
+    else open.delete(key);
+    const next: ListingState = { ...start, open };
+    const cut = refold(src, next, {}, base, at);
+    assert.ok(cut !== null, `no refold for ${item.key}`);
+    const patched = [...base.slice(0, cut.from), ...cut.items, ...base.slice(cut.to)];
+    assert.deepEqual(ids(patched), ids(flatten(src, next).items), `${want ? "opening" : "closing"} ${key}`);
+    tried += 1;
+  }
+  return tried;
+}
+
+test("opening one fold gives the list a whole walk would", () => {
+  assert.ok(foldsAgree(SQLITE) > 0);
+  assert.ok(foldsAgree(GGUF) > 0);
+  assert.ok(foldsAgree(ZIP_TAIL) >= 0);
+});
+
+test("closing one fold gives the list a whole walk would", () => {
+  const open = new Set(["4.5", "5.0", "5.0.5", "5.1"]);
+  assert.ok(foldsAgree(SQLITE, { ...emptyState, open }) > 0);
+});
+
+test("a fold walked again keeps the byte strips under it", () => {
+  // The strip is part of what an item opens into, so it goes and comes back
+  // with the rest of the run rather than being left standing on its own.
+  const open = new Set(["4.5"]);
+  const bytes = new Set(["r:4.5", "r:4.2"]);
+  assert.ok(foldsAgree(SQLITE, { ...emptyState, open, bytes }) > 0);
 });

@@ -339,6 +339,59 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
   return { items: w.items, pending: w.pending, reachedBytes: w.reachedBytes };
 }
 
+/** A stretch of the list to replace, and what to put there. `from` to `to` is
+ *  the run the item and everything under it occupied; `items` is that run as it
+ *  is now. */
+export type Refold = {
+  readonly items: readonly Item[];
+  readonly from: number;
+  readonly to: number;
+  readonly pending: boolean;
+  readonly reachedBytes: number;
+};
+
+/**
+ * One item's fold, walked again on its own.
+ *
+ * Opening a structure changes what is under that structure and nothing else:
+ * the parts of the file, their numbering, the rows above it and the rows after
+ * it are all what they were. So the whole tree does not have to be walked to
+ * find that out. `state` is the state as it is now, `at` the index of the item
+ * whose fold moved, and the answer is the run of the list to replace.
+ *
+ * It walks the item itself as well as its contents, since the item says
+ * whether it is open, and it goes through the same `child` the first walk used:
+ * two ways of producing the same rows would be two things to keep in step.
+ *
+ * Null for an item with no fold of its own, which the caller answers by walking
+ * the whole tree.
+ */
+export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, items: readonly Item[], at: number): Refold | null {
+  const item = items[at];
+  if (item === undefined) return null;
+  let node: TemplateNode;
+  let reads: { readonly name: string; readonly path: readonly number[] } | null = null;
+  if (item.kind === "row") {
+    node = item.node;
+    reads = item.reads;
+  } else if (item.kind === "heading" && item.level === 1 && item.node !== null) {
+    // A heading at this level is what `child` makes of a composite nothing
+    // reads, so that is what to hand back to it.
+    node = item.node;
+  } else return null;
+  const w = new Walk(src, state, opts);
+  w.section = item.section;
+  child(w, node, item.depth, reads);
+  // What the item stood over: its own byte strip, which sits at its depth, and
+  // then everything indented under it. The first item at its depth or above is
+  // the next sibling, or the end of the part.
+  let to = at + 1;
+  const strip = items[to];
+  if (strip?.kind === "bytes" && strip.owner === item.key) to += 1;
+  while (to < items.length && (items[to]?.depth ?? 0) > item.depth) to += 1;
+  return { items: w.items, from: at, to, pending: w.pending, reachedBytes: w.reachedBytes };
+}
+
 /** The top-level parts of the file, and what is in each. */
 function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0): void {
   const breaks = sectionBreaks(kids);

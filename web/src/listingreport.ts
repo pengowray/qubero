@@ -12,7 +12,7 @@
 import { formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 import type { FieldPick } from "./doc.js";
-import { emptyState, flatten, PAGE } from "./flatten.js";
+import { emptyState, flatten, PAGE, refold } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
@@ -278,6 +278,14 @@ export class ListingReport {
 
   private layout(): void {
     this.discard();
+    this.place();
+  }
+
+  /** Where each item starts, from the heights their kinds say and the heights
+   *  the measured ones turned out to be. Nothing here touches the rows already
+   *  standing: a row that still says what it said keeps its place in the
+   *  document and is only told its new top. */
+  private place(): void {
     this.byKey = new Map(this.items.map((item) => [item.key, item]));
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
@@ -760,6 +768,9 @@ export class ListingReport {
 
   private setOpen(key: string, want: boolean): void {
     if (this.state.open.has(key) === want) return;
+    // Found before the state moves, since it is this list that the new one is
+    // spliced into.
+    const at = this.items.findIndex((item) => openKeyOf(item) === key);
     const open = new Set(this.state.open);
     let bytes = this.state.bytes;
     if (want) open.add(key);
@@ -778,7 +789,57 @@ export class ListingReport {
       }
     }
     this.state = { ...this.state, open, bytes };
+    if (at >= 0 && this.splice(at)) return;
     this.rebuild();
+  }
+
+  /**
+   * Redraw the one fold that moved, rather than the file.
+   *
+   * Opening a structure changes what is under it and leaves everything else
+   * where it was, so the rows above keep their places in the document and the
+   * scroll position needs no anchor: it was never going to move. False when
+   * this item has no fold of its own to walk, which is the caller's cue to
+   * walk the whole tree.
+   */
+  private splice(at: number): boolean {
+    const cut = refold(this.src, this.state, this.opts, this.items, at);
+    if (cut === null) return false;
+    const top = this.tops[cut.from] ?? 0;
+    const was = (this.tops[cut.to] ?? top) - top;
+    this.items = [...this.items.slice(0, cut.from), ...cut.items, ...this.items.slice(cut.to)];
+    const live = new Set(this.items.map((i) => i.key));
+    for (const key of [...this.measured.keys()]) if (!live.has(key)) this.measured.delete(key);
+    for (const [key, node] of [...this.mounted]) {
+      // The item itself says whether it is open, so it is not the row it was.
+      if (live.has(key) && key !== cut.items[0]?.key) continue;
+      node.remove();
+      this.mounted.delete(key);
+    }
+    this.place();
+    // A fold that moved above the window would otherwise push everything the
+    // reader is looking at up or down by however much it grew.
+    if (top < this.scroller.scrollTop) {
+      const now = (this.tops[cut.from + cut.items.length] ?? top) - top;
+      if (now !== was) this.scroller.scrollTop += now - was;
+    }
+    this.remark();
+    this.paint();
+    return true;
+  }
+
+  /** Tell the rows on screen whether they are the selected one, when what is
+   *  selected has not moved but what stands between it and a row of its own
+   *  has. */
+  private remark(): void {
+    const before = this.nearest;
+    this.nearest = this.nearestToSelection();
+    if (before === this.nearest) return;
+    for (const [key, node] of this.mounted) {
+      const item = this.byKey.get(key);
+      if (item === undefined || item.kind !== "row") continue;
+      node.classList.toggle("is-on", this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === key);
+    }
   }
 
   // ----- keyboard -----
