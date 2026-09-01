@@ -7,7 +7,7 @@
 
 import { formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
-import type { Doc, Origin, TemplateNode } from "./doc.js";
+import type { Doc, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { bitSizeText, childWord, countText } from "./strings.js";
 import { withPictures } from "./textview.js";
@@ -984,7 +984,15 @@ export class Inspector {
           if (o.role === "points" && o.target_bits !== null) jumps.push(pointsRow(o));
         }
       }
-      if (from.length === 0) continue;
+      // The sentence those fields appear in. The rows above say which fields
+      // decided this step's shape; this says what was done with them, so the
+      // number can be checked rather than taken. Asked at every step for the
+      // same reason the origins are: 128 bytes of packed weights are that
+      // long because of a record three levels up, and the arithmetic that
+      // made them is up there with it.
+      const said = this.doc.relations(at);
+      const relations = said.status === "ok" ? said.node : [];
+      if (from.length === 0 && relations.length === 0) continue;
       if (i < path.length) {
         const node = this.doc.templateNode(at);
         const b = document.createElement("button");
@@ -995,6 +1003,7 @@ export class Inspector {
         rows.push(b);
       }
       for (const o of from) rows.push(originRow(o));
+      for (const r of relations) rows.push(relationRow(r));
     }
     if (rows.length === 0 && jumps.length === 0) {
       this.origins.hidden = true;
@@ -1383,6 +1392,30 @@ function originRow(o: Origin): HTMLElement {
     v.textContent = `= ${grouped(o.value)}`;
     row.append(v);
   }
+  return row;
+}
+
+/**
+ * The relationship itself: the expression the template holds, and under it the
+ * same expression with the numbers in it and what they come to.
+ *
+ * Both forms come from the core. The panel puts them one above the other so
+ * the substitution reads as a substitution: same shape, same length, numbers
+ * where the names were.
+ */
+function relationRow(r: Relation): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "insp-relation";
+  const role = document.createElement("span");
+  role.className = "insp-origin-role";
+  role.textContent = ROLE_TEXT[r.role];
+  const written = document.createElement("code");
+  written.className = "insp-rel-written";
+  written.textContent = r.written;
+  const sums = document.createElement("code");
+  sums.className = "insp-rel-sums";
+  sums.textContent = `${r.substituted} = ${grouped(r.result)}`;
+  row.append(role, written, sums);
   return row;
 }
 

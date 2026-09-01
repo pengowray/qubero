@@ -968,6 +968,33 @@ input.invalid {
 .insp-origin-val {
   color: var(--muted);
 }
+/* The expression itself, under the fields it names. Two lines with the role
+   label beside the first, so the substituted form sits directly under the
+   written one and reads as the same expression twice. */
+.insp-relation {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0 6px;
+  padding: 3px 0 3px 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.insp-relation .insp-origin-role {
+  min-width: 0;
+}
+.insp-rel-written,
+.insp-rel-sums {
+  grid-column: 2;
+  overflow-wrap: anywhere;
+}
+.insp-rel-written {
+  color: var(--fg);
+}
+/* Quieter than the expression above it: the names are the relationship and
+   these are one file's answer to it. */
+.insp-rel-sums {
+  color: var(--muted);
+}
 /* A field named somewhere else in the panel, which the reader can go to. */
 .insp-link {
   border: 0;

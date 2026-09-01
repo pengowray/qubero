@@ -339,6 +339,24 @@ export type Origin = {
   readonly target_bits: number | null;
 };
 
+/**
+ * One relationship behind a field's shape, written out. `origins` says which
+ * fields decided a length; this says what was done with them, so a reader can
+ * check the number instead of taking it.
+ *
+ * The core writes both forms. Nothing here parses or rearranges them: the UI
+ * never infers a relationship of its own.
+ */
+export type Relation = {
+  readonly role: "length" | "count" | "type" | "value";
+  /** The expression as the template writes it: `header_size - sizeof(header_size)`. */
+  readonly written: string;
+  /** The same with every field's value in its place: `4 - 1`. */
+  readonly substituted: string;
+  /** What it comes to. */
+  readonly result: string;
+};
+
 /** What a type permits, beyond what this file's bytes happen to say. */
 /** One row of a cross-reference stream, already decoded. `offset` is a real
  *  place in the file for an in-use row and -1 for every other kind. */
@@ -1093,6 +1111,15 @@ export class Doc {
    */
   origins(path: readonly number[]): TemplateReply<Origin[]> {
     return this.handleReply<Origin[]>(this.editor.origins(Uint32Array.from(path)));
+  }
+
+  /**
+   * The relationships behind the shape of the field at `path`, written out
+   * with the numbers in them. Empty for a field the template placed and sized
+   * outright, and for one whose expression the core has no notation for.
+   */
+  relations(path: readonly number[]): TemplateReply<Relation[]> {
+    return this.handleReply<Relation[]>(this.editor.relations(Uint32Array.from(path)));
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */
