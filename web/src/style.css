@@ -222,212 +222,13 @@ input.invalid {
   flex-direction: column;
 }
 
-/* ---- type table ---- */
-.typetable {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  font-size: 13px;
-}
-.typetable table {
-  border-collapse: collapse;
-  width: 100%;
-}
-.typetable th {
-  position: sticky;
-  top: 0;
-  background: var(--panel);
-  text-align: left;
-  font-weight: 600;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-  color: var(--muted);
-}
-.typetable td {
-  padding: 2px 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 28rem;
-}
-.typetable tr[data-path] {
-  cursor: pointer;
-}
-.typetable tr[data-path]:hover {
-  background: var(--panel);
-}
-.tt-selected {
-  background: color-mix(in srgb, var(--accent) 38%, transparent) !important;
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-.tt-toggle {
-  display: inline-block;
-  width: 1.4em;
-  padding: 0;
-  min-height: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  cursor: pointer;
-}
-.tt-val {
-  font-family: var(--mono);
-}
-.tt-type,
-.tt-num {
-  font-family: var(--mono);
-  color: var(--muted);
-  font-size: 12px;
-}
-.length-total {
-  display: block;
-}
-/* A compact echo of the field-anatomy strip: the total remains readable as
-   text, while direct child extents become quiet, immediately comparable marks. */
-.length-anatomy {
-  display: flex;
-  width: 8.5ch;
-  height: 7px;
-  margin-top: 2px;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--muted) 12%, transparent);
-  border-radius: 2px;
-}
-.length-part {
-  min-width: 2px;
-  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
-  border-right: 1px solid var(--bg);
-}
-.length-part:nth-child(even) {
-  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
-}
-.length-part:last-child {
-  border-right: 0;
-}
-.length-part.is-gap {
-  background: repeating-linear-gradient(-45deg, transparent 0 2px, color-mix(in srgb, var(--muted) 32%, transparent) 2px 3px);
-}
-.length-part.is-rest {
-  background: color-mix(in srgb, var(--muted) 22%, var(--panel));
-}
 /* Anything that names a place in the file, as opposed to a value read from
    it, shares one color so an address can be told from data at a glance. */
-.addr,
-.tt-addr {
+.addr {
   color: var(--addr);
 }
-.tt-editable {
-  cursor: text;
-  text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent);
-  text-underline-offset: 3px;
-}
-.tt-editable:hover {
-  text-decoration-color: var(--accent);
-}
-.tt-input {
-  width: 100%;
-  box-sizing: border-box;
-  font-family: var(--mono);
-  font-size: inherit;
-  padding: 1px 4px;
-  min-height: 22px;
-  background: var(--bg);
-}
-.tt-status {
-  color: var(--muted);
-  padding: 4px 10px;
-  margin: 0;
-  min-height: 1.4em;
-  font-size: 12px;
-}
-.tt-status.warn {
-  color: var(--warn);
-}
-.tt-enum {
-  color: var(--accent);
-}
-.tt-num-note {
-  color: var(--muted);
-}
-.tt-depth-more {
-  color: var(--muted);
-  font-style: italic;
-}
-.tt-bad .tt-val {
-  color: var(--warn);
-}
-.tt-pending td {
-  color: var(--muted);
-  font-style: italic;
-}
-.tt-error td {
-  color: var(--warn);
-}
-.tt-more {
-  padding: 2px 8px;
-  min-height: 24px;
-  font-size: 12px;
-}
-/* The run between the page of rows and one row fetched from further down,
-   so a jump into the middle of a long list does not read as the row after. */
-.tt-skip td {
-  color: var(--muted);
-  font-size: 12px;
-  font-style: italic;
-  border-top: 1px dashed var(--line);
-  border-bottom: 1px dashed var(--line);
-}
-.tt-empty {
-  color: var(--muted);
-  padding: 8px 10px;
-  margin: 0;
-}
-.tt-actions {
-  display: flex;
-  gap: 6px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
-}
-.tt-actions button {
-  min-height: 26px;
-  padding: 3px 8px;
-  font-size: 12px;
-}
-.tt-modes {
-  display: flex;
-  gap: 1px;
-  margin-right: 4px;
-}
-.tt-modes button + button {
-  border-left: 0;
-}
-.tt-modes button.is-on {
-  color: var(--fg);
-  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-.tt-logical-summary td {
-  padding-top: 7px;
-  padding-bottom: 7px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line);
-}
-.tt-gap td {
-  color: var(--muted);
-  font-style: italic;
-  border-top: 1px dashed color-mix(in srgb, var(--line) 70%, transparent);
-}
-.tt-gap .tt-type {
-  font-style: normal;
-}
-.tt-gap .tt-addr {
-  font-style: normal;
-}
 
-/* Meaning, shared by Hex, Listing and Structure. These five colours identify
+/* Meaning, shared by Hex and Listing. These five colours identify
    stable data families rather than arbitrary siblings; overlapping UI state
    is carried by background, underline and outline instead. */
 .field-number {
@@ -473,15 +274,6 @@ input.invalid {
     --field-color: #79b8c2;
   }
 }
-.field-number .tt-val,
-.field-text .tt-val,
-.field-marker .tt-val,
-.field-category .tt-val,
-.field-structure .tt-val,
-.field-binary .tt-val {
-  color: var(--field-color);
-}
-
 /* ---- dropping a file ---- */
 .dropzone {
   position: fixed;
@@ -767,10 +559,6 @@ input.invalid {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-}
-.panel-bottom {
-  flex: 0 0 38%;
-  border-top: 1px solid var(--line);
 }
 .panel-right {
   /* Shrinkable: this panel is sized by its contents, and on a narrow window it
@@ -1258,11 +1046,6 @@ input.invalid {
   margin-top: 12px;
   text-align: right;
 }
-.tt-note {
-  margin: 6px 8px 0;
-  color: var(--muted);
-  font-size: 12px;
-}
 
 /* ---- what the type permits, under the editor ---- */
 .insp-type {
@@ -1582,71 +1365,188 @@ input.invalid {
   margin: 0;
   color: var(--muted);
 }
-.ov-regions,
+.ov-note {
+  margin: 0;
+  color: var(--muted);
+}
+/* The parts of the file as one row under the class map: the same strip the
+   listing's headings carry, at the rail's width, every part lit in its own
+   colour. See `filemap.ts`. */
+.ov-layout .fmap {
+  display: flex;
+  width: auto;
+  height: 12px;
+}
+/* Contents beside Logical. A control rather than a heading, so it sits on a
+   rule like the inspector's mode buttons do. */
+.ov-tabs {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.ov-tab {
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.ov-tab:hover {
+  color: var(--fg);
+}
+.ov-tab.is-on {
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.ov-parts,
+.ov-subs,
+.ov-logical,
 .ov-gaps {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
 }
-.ov-region {
+/* One part of the file: its colour, its name, how big it is and what share of
+   the file that is. The mark for the part the main view is in is a bar down
+   the left, which is where the eye looks for "you are here". */
+.ov-part {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px 6px;
+  grid-template-columns: 10px 1fr auto auto;
+  gap: 6px;
   align-items: center;
   font: inherit;
   color: inherit;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-left: 3px solid transparent;
+  border-radius: 0 4px 4px 0;
   min-height: 0;
-  padding: 3px 4px;
+  padding: 3px 4px 3px 2px;
   text-align: left;
   cursor: pointer;
 }
-.ov-region:hover,
+.ov-part:hover,
 .ov-gap:hover {
   background: var(--panel);
 }
-.ov-region-name {
+.ov-part.is-current {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.ov-part.is-current .ov-part-name {
+  font-weight: 600;
+}
+/* A named part inside this one is the current one: the bar says the view is
+   in here, the row under it says exactly where. */
+.ov-part.is-inside {
+  border-left-color: var(--accent);
+}
+.ov-part-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ov-region-size {
+.ov-part-size,
+.ov-part-share {
   font-family: var(--mono);
   color: var(--muted);
   text-align: right;
   white-space: nowrap;
 }
-.ov-region-bar {
-  grid-column: 1 / -1;
+.ov-part-share {
+  min-width: 3.5ch;
+}
+.ov-part-sub {
+  padding-left: 14px;
+}
+.ov-part-sub .ov-swatch {
+  width: 6px;
   height: 6px;
-  border-radius: 2px;
+  margin-left: 2px;
+}
+/* One object in the Logical tab: what it is called and how big it is, then
+   its shape, type and where its header is, on a quieter second line. */
+.ov-lrow {
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ov-lrow:hover {
   background: var(--panel);
-  overflow: hidden;
 }
-.ov-region-bar > i {
-  display: block;
-  height: 100%;
-  background: var(--accent);
+.ov-lrow.is-selected {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
-/* An object of the file rather than a region of the template: a path and what
-   is at it, on two lines, since what is at it is a sentence rather than a
-   number and would otherwise be cut off. */
-.ov-object {
-  grid-template-columns: 1fr;
+.ov-lrow-head {
+  display: grid;
+  grid-template-columns: 1.2em 1fr auto;
+  gap: 4px;
+  align-items: center;
 }
-.ov-object .ov-region-name {
+.ov-fold {
+  display: inline-block;
+  width: 1.2em;
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.ov-lrow-name {
+  font: inherit;
   font-family: var(--mono);
+  color: inherit;
+  background: none;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  padding: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.ov-object.is-group .ov-region-name {
+.ov-lrow.is-group .ov-lrow-name {
   font-weight: 600;
 }
-.ov-object .ov-region-size {
-  text-align: left;
-  white-space: normal;
-  font-size: 92%;
+.ov-lrow-size {
+  font-family: var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ov-lrow-about {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  padding-left: calc(1.2em + 4px);
+  font-size: 11px;
+  color: var(--muted);
+}
+.ov-lrow-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-lrow-where {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+.ov-more {
+  align-self: flex-start;
+  margin: 2px 0 2px 4px;
+  padding: 2px 8px;
+  min-height: 24px;
+  font-size: 12px;
 }
 .ov-focus {
   display: flex;
@@ -1775,22 +1675,6 @@ input.invalid {
 }
 .sb-replace {
   padding-left: 0;
-}
-
-/* What the structure panel says while it is still working a large file out,
-   and the cells that are waiting on it. */
-.tt-progress {
-  margin: 4px 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.tt-not-yet {
-  color: var(--muted);
-}
-
-/* A field whose bytes have not arrived: the row is real, the value is coming. */
-.tt-unread {
-  color: var(--muted);
 }
 
 /* A block of packed weights, taken apart. See `quantpanel.ts`. */
