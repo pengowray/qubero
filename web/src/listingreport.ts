@@ -34,6 +34,9 @@ const HEIGHT = { section: 40, part: 26, row: 22, strip: 96 } as const;
 /** Items drawn above and below the window, so a wheel notch has somewhere to
  *  go before the next paint. */
 const OVERSCAN = 6;
+/** How long a hidden listing waits after the file's last change before
+ *  walking the tree for the views that are showing. */
+const HIDDEN_WALK_MS = 300;
 
 /** What an item is worth before it has been drawn. A byte strip's chips wrap
  *  to the width they are given, so its real height is only known once it is
@@ -89,6 +92,7 @@ export class ListingReport {
    *  when an answer can stop being true. */
   private verdicts = new Map<string, GapVerdict>();
   private frame = 0;
+  private hiddenTimer = 0;
   /** True when the file changed while this was hidden, so the rows on screen
    *  are of a file that has moved on. Walked again when it comes back. */
   private stale = false;
@@ -182,6 +186,8 @@ export class ListingReport {
       this.verdicts.clear();
       this.schedule();
     });
+    // A file that never changes after opening still has parts to name.
+    this.schedule();
   }
 
   /** Draw again once the frame is over, however many things asked. Streaming a
@@ -197,6 +203,16 @@ export class ListingReport {
     // the reader pays in the view they are actually looking at.
     if (this.el.hidden) {
       this.stale = true;
+      // The walk is still owed while this is hidden: the rail and the hex view
+      // take the file's parts from it. Once the changes have quietened, so a
+      // file being streamed costs one walk and not one per chunk.
+      clearTimeout(this.hiddenTimer);
+      this.hiddenTimer = window.setTimeout(() => {
+        this.hiddenTimer = 0;
+        if (!this.el.hidden || !this.stale) return;
+        this.stale = false;
+        this.rebuild();
+      }, HIDDEN_WALK_MS);
       return;
     }
     if (this.frame !== 0) return;
