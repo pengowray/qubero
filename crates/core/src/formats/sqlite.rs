@@ -537,6 +537,29 @@ mod tests {
         assert_eq!(ev.node(&d, &col(6)).unwrap().value, Value::Str("CREATE TABLE m(x)".into()));
     }
 
+    /// A cell's length prefix is a varint, and the span the listing draws
+    /// carries the split between the bit that ends it and the bits that are
+    /// the number. Nothing else on the page does: a page's cell count is two
+    /// plain bytes.
+    #[test]
+    fn a_varint_span_carries_its_bit_split() {
+        use crate::varintbits::{BitRole, RULE_HIGH_BIT};
+        let d = Document::new(MemSource(db()));
+        let mut ev = Evaluator::new(sqlite());
+        let size = ev.node(&d, &[PAGES, 0, CELLS, 0, 0]).unwrap();
+        assert_eq!(size.name, "payload_size");
+        let spans = ev.spans(&d, size.offset_bits, size.offset_bits + size.size_bits, 4).unwrap();
+        let bits = spans[0].bits.as_ref().expect("a varint says how its bits divide");
+        assert_eq!(bits.rule, RULE_HIGH_BIT);
+        assert_eq!(bits.groups.len(), 2);
+        assert_eq!(bits.groups[0].role, BitRole::Stop);
+        assert_eq!(bits.groups[1].role, BitRole::Payload);
+        assert_eq!(bits.groups[1].bits.len(), 7);
+        let count = ev.node(&d, &[PAGES, 0, CELL_COUNT]).unwrap();
+        let plain = ev.spans(&d, count.offset_bits, count.offset_bits + count.size_bits, 4).unwrap();
+        assert!(plain[0].bits.is_none());
+    }
+
     #[test]
     fn a_row_reads_as_its_columns() {
         let d = Document::new(MemSource(db()));

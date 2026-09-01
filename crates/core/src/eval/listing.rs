@@ -31,6 +31,11 @@ pub struct Span {
     /// The first few element extents of a collapsed run. These let a compact
     /// view show the run's on-disk rhythm without spelling it as `8|12|...`.
     pub parts: Vec<SpanPart>,
+    /// How the field's bits divide into framing and value, for the numbers
+    /// whose bytes do not read as bytes. None for everything else, and for a
+    /// varint whose bytes have not been read yet: the split is worth drawing
+    /// when it is known and worth nothing guessed.
+    pub bits: Option<crate::varintbits::BitRoles>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,7 +420,30 @@ impl Evaluator {
             line: None,
             sample: Vec::new(),
             parts: Vec::new(),
+            bits: self.bit_roles(doc, path, info),
         })
+    }
+
+    /// The framing-and-value split of a field that stores a variable-length
+    /// number. Reading its bytes is a second read of bytes the value was
+    /// already decoded from, so a range that is not loaded means the split is
+    /// simply not offered on this pass; the view redraws when the bytes land.
+    fn bit_roles<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        info: &NodeInfo,
+    ) -> Option<crate::varintbits::BitRoles> {
+        if info.size_bits == 0 || info.size_bits % 8 != 0 || info.offset_bits % 8 != 0 {
+            return None;
+        }
+        let r = self.memo.get(path)?.clone();
+        let ty = r.ty.clone();
+        if !crate::varintbits::splits(&ty) {
+            return None;
+        }
+        let bytes = self.read(doc, &r, info.offset_bits, info.size_bits).ok()?;
+        crate::varintbits::bit_roles(&ty, &bytes)
     }
 
     /// Whether this node is the field its parent calls its own contents.

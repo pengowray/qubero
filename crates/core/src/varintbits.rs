@@ -76,6 +76,12 @@ fn bits_of(b: u8, from: u32, count: u32) -> String {
     (from..from + count).map(|i| if b >> (7 - i) & 1 == 1 { '1' } else { '0' }).collect()
 }
 
+/// Whether a field of this type has a split worth drawing at all. Asked before
+/// its bytes are fetched, so that a plain integer never causes a read.
+pub fn splits(ty: &Ty) -> bool {
+    matches!(ty.base(), Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::EbmlVint { .. })
+}
+
 /// How the bytes of one field of this type divide into framing and value.
 /// `None` for every type that reads as whole bytes, which is most of them, and
 /// for bytes that cannot be a number of this type at all.
