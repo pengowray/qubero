@@ -1504,6 +1504,26 @@ one — JPEG XR has them. The type table writes ` lsb` after a sub-byte field's
 width and nothing after an MSB-first one, since only the order that is not the
 default is worth the space.
 
+### A stream that ends at something longer than a byte
+`Expr::ToMarker` measured to the next occurrence of one byte not followed by
+one of a set, which is exactly a JPEG scan: 0xff and a byte that is not zero,
+where zero is how an 0xff that is data gets written and so the escape and the
+terminator are the same byte. An H.264 Annex B start code is `00 00 01`, and
+one byte was not enough to say that.
+
+`lead` is now a sequence. A single-byte lead is a sequence of one and behaves
+as it did, which is what keeps the JPEG scan working; `E::to_marker` still
+takes a byte and `E::to_marker_seq` takes the sequence.
+
+The second half of it is what `unless` means when it is empty. A start code is
+followed by the NAL header, not by an escape, so there is nothing to tell the
+marker apart from — and with nothing to tell it apart from, a lead at the very
+end of the container is a marker rather than a lead nobody confirmed. So an
+empty `unless` also drops the requirement that a byte follow the lead, and the
+blocks the search reads in overlap by one byte less: a marker and its
+successor have to be whole in one block, and where there is no successor only
+the marker does.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
@@ -1520,10 +1540,9 @@ placed, since the bit address space has no single range that means its bits.
 See "Bits from the bottom of the byte" for why, and for what is built.
 
 MP4: sample tables past `stsd` are bytes. An SPS or PPS is exp-golomb coded,
-which the IR cannot describe, so a NAL unit stops at its header bits. An H.264 Annex B stream is closer than it was: `Expr::ToMarker` measures to
-the next occurrence of one byte that is not followed by one of a set, which
-is what a JPEG scan needs. A start code is three bytes rather than one, and
-a multi-byte lead is the addition still missing.
+which the IR cannot describe, so a NAL unit stops at its header bits. What is
+left for an H.264 Annex B stream is a template for one; the measure it needs is
+built, and see "A stream that ends at something longer than a byte".
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 

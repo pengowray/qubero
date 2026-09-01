@@ -798,6 +798,55 @@ fn a_stream_with_no_length_runs_to_the_next_marker() {
 }
 
 #[test]
+fn a_marker_can_be_more_than_one_byte() {
+    // What an H.264 Annex B stream needs: a NAL unit runs to the next start
+    // code, which is three bytes and not one, and the byte after it is the NAL
+    // header rather than an escape, so there is nothing to tell apart.
+    let t = || {
+        Template::new(
+            "t",
+            T::structure(
+                "Root",
+                vec![
+                    ("nal", T::bytes(E::to_marker_seq(&[0, 0, 1], &[]))),
+                    ("rest", T::bytes(E::Remaining)),
+                ],
+            ),
+        )
+    };
+    let len = |bytes: &[u8]| Evaluator::new(t()).node(&doc(bytes), &[0]).unwrap().size_bits / 8;
+
+    // Stops before the start code, so it belongs to the unit after it.
+    assert_eq!(len(&[9, 8, 7, 0, 0, 1, 0x65]), 3);
+    // Two of the three bytes are not the marker, and neither is a run of
+    // zeros with nothing after it: emulation prevention writes `00 00 03`.
+    assert_eq!(len(&[0, 0, 3, 1, 0, 0, 1, 0x41]), 4);
+    // A start code at the very end is still a start code, since with nothing
+    // to tell it apart from there is no successor to wait for.
+    assert_eq!(len(&[9, 0, 0, 1]), 1);
+    // None anywhere: a stream cut off still places its bytes.
+    assert_eq!(len(&[9, 8, 7, 0, 0]), 5);
+    // A four-byte start code is the three-byte one with a zero in front, and
+    // the measure stops at the three: the leading zero stays with the unit
+    // before it, which is where the standard puts it too.
+    assert_eq!(len(&[9, 8, 0, 0, 0, 1, 0x67]), 3);
+
+    // Split across the seam between two of the 4096-byte blocks the search
+    // reads in, which is what the overlap is for.
+    let mut v = vec![7u8; 4095];
+    v.extend_from_slice(&[0, 0, 1, 0x65]);
+    assert_eq!(len(&v), 4095);
+    let mut v = vec![7u8; 4094];
+    v.extend_from_slice(&[0, 0, 1, 0x65]);
+    assert_eq!(len(&v), 4094);
+
+    // A lead of no bytes measures to nothing and says so.
+    let empty = Template::new("t", T::structure("Root", vec![("nal", T::bytes(E::to_marker_seq(&[], &[])))]));
+    let d = doc(&[1, 2, 3]);
+    assert!(matches!(Evaluator::new(empty).node(&d, &[0]), Err(EvalError::Failed(_))));
+}
+
+#[test]
 fn a_backwards_peek_reads_the_end_of_what_holds_it() {
     // A file signed at the far end, and a body that stops before the
     // signature or runs to the end depending on whether one is there.

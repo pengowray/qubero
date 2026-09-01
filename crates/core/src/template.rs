@@ -122,9 +122,9 @@ pub enum Expr {
     /// told from a TGA by the last eight bytes of one, wherever in the file the
     /// asking is done.
     PeekAt { skip: Box<Expr>, bits: u32, endian: Endian },
-    /// How far it is from here to the next `lead` byte that is not followed by
-    /// one of `unless`, in bytes, or to the end of the container when there is
-    /// no such byte.
+    /// How far it is from here to the next occurrence of `lead` that is not
+    /// followed by one of `unless`, in bytes, or to the end of the container
+    /// when there is none.
     ///
     /// This is what a stream of compressed data with no length on it needs.
     /// A JPEG writes its entropy-coded bits with no count anywhere: they run
@@ -133,12 +133,21 @@ pub enum Expr {
     /// marker, so the escape and the terminator are the same byte and only the
     /// one after it tells them apart. `unless` is that set.
     ///
-    /// The distance stops before the `lead` byte, so the marker belongs to
-    /// whatever is declared next rather than to the stream. A container that
-    /// ends without one, which is a file cut off in the middle, measures to
-    /// its end rather than failing: the bytes are still there to look at, and
-    /// refusing to place them would hide the very thing that went wrong.
-    ToMarker { lead: u8, unless: Vec<u8> },
+    /// `lead` is a sequence rather than a byte, because the thing that ends a
+    /// stream is not always one. An H.264 Annex B start code is `00 00 01`,
+    /// and the byte after it is the NAL header rather than an escape, so such
+    /// a marker leaves `unless` empty. An empty `unless` is also what says
+    /// that nothing has to follow the lead for it to count: with a set to
+    /// check against, a lead at the very end of the container is a lead
+    /// nothing has told apart from an escape and so is not a marker, and
+    /// without one there is nothing to tell apart.
+    ///
+    /// The distance stops before the lead, so the marker belongs to whatever
+    /// is declared next rather than to the stream. A container that ends
+    /// without one, which is a file cut off in the middle, measures to its end
+    /// rather than failing: the bytes are still there to look at, and refusing
+    /// to place them would hide the very thing that went wrong.
+    ToMarker { lead: Vec<u8>, unless: Vec<u8> },
     /// How far it is from here to where `needle` is written next, in bytes, or
     /// to the end of the container when it is not written again. With `last`,
     /// to the last place it is written rather than the first.
@@ -329,7 +338,12 @@ impl Expr {
     /// The bytes from here to the next `lead` byte not followed by one of
     /// `unless`, or to the end of the container if there is none.
     pub fn to_marker(lead: u8, unless: &[u8]) -> Expr {
-        Expr::ToMarker { lead, unless: unless.to_vec() }
+        Expr::ToMarker { lead: vec![lead], unless: unless.to_vec() }
+    }
+    /// The same, for a marker that is more than one byte: an H.264 Annex B
+    /// start code is `00 00 01`. See [`Expr::ToMarker`].
+    pub fn to_marker_seq(lead: &[u8], unless: &[u8]) -> Expr {
+        Expr::ToMarker { lead: lead.to_vec(), unless: unless.to_vec() }
     }
     /// The bytes from here to the next place `needle` is written, or to the
     /// end of the container when there is none.
