@@ -359,6 +359,19 @@ struct OriginDto {
     target_bits: Option<f64>,
 }
 
+/// One relationship behind a field's shape, written both ways.
+#[derive(Serialize)]
+struct RelationDto {
+    /// "length" | "count" | "type" | "value"
+    role: &'static str,
+    /// The expression as the template writes it.
+    written: String,
+    /// The same with every field's value in its place.
+    substituted: String,
+    /// What it comes to.
+    result: String,
+}
+
 #[derive(Serialize)]
 struct CaseDto {
     value: f64,
@@ -762,6 +775,24 @@ struct SpanDto {
     sample: Vec<String>,
     /// First element extents followed by the uninspected remainder.
     parts: Vec<SpanPartDto>,
+    /// How a variable-length number's bits divide into framing and value.
+    /// Null for a field that reads as whole bytes, which is most of them.
+    bits: Option<BitRolesDto>,
+}
+
+/// The bit split of one variable-length number, in the order it is stored.
+#[derive(Serialize)]
+struct BitRolesDto {
+    /// Which rule a reader has to know to follow the split. The view keys its
+    /// wording off this; the core does not carry the wording.
+    rule: &'static str,
+    groups: Vec<BitGroupDto>,
+}
+
+#[derive(Serialize)]
+struct BitGroupDto {
+    bits: String,
+    role: &'static str,
 }
 
 #[derive(Serialize)]
@@ -820,6 +851,14 @@ fn span_dto(s: Span) -> SpanDto {
         line: s.line,
         sample: s.sample,
         parts: s.parts.into_iter().map(span_part_dto).collect(),
+        bits: s.bits.map(|b| BitRolesDto {
+            rule: b.rule,
+            groups: b
+                .groups
+                .into_iter()
+                .map(|g| BitGroupDto { bits: g.bits, role: g.role.as_str() })
+                .collect(),
+        }),
     }
 }
 
@@ -1189,6 +1228,31 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.origins(&self.doc, &p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
+            }
+        }
+    }
+
+    /// The relationships behind the shape of the field at `path`, written out:
+    /// the expression as the template holds it, the same with every field's
+    /// value in its place, and what it comes to. JSON, in the same reply shape
+    /// as the rest. Empty for a field the template placed and sized outright,
+    /// and for one whose expression has no reading in that notation.
+    pub fn relations(&mut self, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<Vec<RelationDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.relations(&self.doc, &p).map(|v| {
+                    v.into_iter()
+                        .map(|r| RelationDto {
+                            role: r.role.as_str(),
+                            written: r.written,
+                            substituted: r.substituted,
+                            result: r.result,
+                        })
+                        .collect::<Vec<_>>()
+                }))
             }
         }
     }

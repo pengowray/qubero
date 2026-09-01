@@ -197,16 +197,19 @@ falls out of the flat item list. Do not build this as one giant DOM.
   `web/src/records.ts`, on the grounds that one format is not evidence for changing
   the IR and a second or third would be. Revisit when GGUF metadata joins it. (Mockup E in `../qubero2-extras/mockups/`
   sketches the wider address-space question; it is context, not part of this task.)
-- Rule 6's **bits chip is not built**. The rule says sub-byte detail uses the bits
-  pattern, and the mockup's row 3 cell shows it: `payload_size 18 [0|0010010]
-  varint, 1 byte: high bit 0 ends it`, with the stop bit and the payload bits drawn
-  apart. The strip today writes `payload_size 18 1 byte` and stops. It was left out
-  because it is not a rendering job: which bits are marker and which are payload is
-  decode knowledge, held by `SqliteVarint`, `Leb128`, `EbmlVint` and `Vlq` in core.
-  Drawing it in TS means either writing those decoders a second time in the view or
-  exposing bit roles from core the way `consumed_by` was exposed, which is the
-  better answer. The chip's tail ("high bit 0 ends it") is per-type copy and needs
-  a drafting pass of its own. A commit series, not a patch.
+- ~~Rule 6's **bits chip**.~~ **Built**, the way this note asked for: the bit
+  roles come from core, not from a second copy of the decoders in TS.
+  `crates/core/src/varintbits.rs` answers, for a type and the bytes a field of it
+  covers, which runs of bits are framing and which are the number, and names the
+  rule a reader has to know as a key. It rides on `Span.bits` and reaches the app
+  the way `consumed_by` did, bindings only in `crates/wasm`. `web/src/bytestrip.ts`
+  draws one chip per such field under the columns, in the field's own hue, which is
+  rule 5's third place for it.
+  Only the mockup's own rule has wording: `high_bit` reads "high bit 0 ends it".
+  The other three keys say the type and the size and stop, rather than inventing a
+  sentence: `sqlite_ninth` (SQLite's ninth byte, all eight bits value), `ebml_size`
+  and `ebml_id`. `REPORT.bitsRule` in `web/src/strings.ts` is where they go once
+  drafted.
 - A gap's label and its verdict can disagree, and that is deliberate. `board.dtb`
   reads `unused space` beside `not all zeros`, because the label is what the shape
   of the template implies and the verdict is what the bytes actually say. A template

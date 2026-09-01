@@ -968,6 +968,33 @@ input.invalid {
 .insp-origin-val {
   color: var(--muted);
 }
+/* The expression itself, under the fields it names. Two lines with the role
+   label beside the first, so the substituted form sits directly under the
+   written one and reads as the same expression twice. */
+.insp-relation {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0 6px;
+  padding: 3px 0 3px 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.insp-relation .insp-origin-role {
+  min-width: 0;
+}
+.insp-rel-written,
+.insp-rel-sums {
+  grid-column: 2;
+  overflow-wrap: anywhere;
+}
+.insp-rel-written {
+  color: var(--fg);
+}
+/* Quieter than the expression above it: the names are the relationship and
+   these are one file's answer to it. */
+.insp-rel-sums {
+  color: var(--muted);
+}
 /* A field named somewhere else in the panel, which the reader can go to. */
 .insp-link {
   border: 0;
@@ -2528,6 +2555,70 @@ button.insp-xrow-where:hover {
 .bs-fld.is-gap .bs-by {
   color: var(--muted);
   background: repeating-linear-gradient(-45deg, transparent 0 7px, color-mix(in srgb, var(--muted) 6%, transparent) 7px 8px);
+}
+/* Below the columns, one chip per field whose bytes do not read as bytes. The
+   hue is the link back to the column: rule 5's third place for a field's
+   colour, after its byte tint and its bracket label. */
+.bs-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.bs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fg) 3%, var(--bg));
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 16px;
+}
+.bs-chip[style*="--hue"] {
+  border-color: color-mix(in srgb, var(--hue) 45%, transparent);
+  background: color-mix(in srgb, var(--hue) 10%, transparent);
+}
+/* The name and the tail note: both are what the chip is about rather than what
+   it says, so both stay quiet and the value between them does not. */
+.bs-chip-k {
+  color: var(--muted);
+}
+.bs-chip-v {
+  color: var(--fg);
+  font-family: var(--mono);
+}
+/* The split itself. One box per run of bits, in stored order, so the boundary
+   between framing and value is a gap the eye lands on rather than a rule the
+   reader has to apply to a row of hex. */
+.bs-bits {
+  display: inline-flex;
+  gap: 1px;
+}
+.bs-bit {
+  padding: 0 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 8%, var(--bg));
+  color: var(--muted);
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 10px;
+}
+/* Framing that is not the end: the bit saying another byte follows, and EBML's
+   run of zeros saying how many. Marked, because they are the reason the field
+   is as long as it is. */
+.bs-bit.is-more,
+.bs-bit.is-width {
+  background: color-mix(in srgb, var(--fg) 14%, var(--bg));
+  color: color-mix(in srgb, var(--fg) 80%, var(--bg));
+}
+/* The bits that are the number. The one run in the chip that the value beside
+   it is actually made of, so it takes the field's own hue. */
+.bs-bit.is-payload {
+  background: color-mix(in srgb, var(--hue, var(--fg)) 22%, var(--bg));
+  color: var(--fg);
 }
 .bs-wait {
   color: var(--muted);

@@ -180,6 +180,23 @@ export type Span = {
   readonly sample: string[];
   /** First element extents of a collapsed run, then its remaining extent. */
   readonly parts: readonly { readonly size_bits: number; readonly label: string; readonly rest: boolean }[];
+  /** How a variable-length number's bits divide into framing and value. Null
+   *  for a field that reads as whole bytes, which is most of them. Which bits
+   *  are which is decode knowledge and comes from the core; only the words
+   *  beside the split are the view's. */
+  readonly bits: BitRoles | null;
+};
+
+/** What a decoder does with one run of bits: `more` and `stop` are the
+ *  continuation bit either way round, `width` is EBML spending leading zeros
+ *  on how wide the number is, and `payload` is the number itself. */
+export type BitRole = "more" | "stop" | "width" | "payload";
+
+/** One variable-length number's bits, in the order they are stored. `rule` is
+ *  the key the view has wording for; the core carries no wording. */
+export type BitRoles = {
+  readonly rule: string;
+  readonly groups: readonly { readonly bits: string; readonly role: BitRole }[];
 };
 
 /** What the byte-class scan behind the overview has found so far. */
@@ -320,6 +337,24 @@ export type Origin = {
   readonly value: string;
   /** For `points`: the bit this field's value points at. */
   readonly target_bits: number | null;
+};
+
+/**
+ * One relationship behind a field's shape, written out. `origins` says which
+ * fields decided a length; this says what was done with them, so a reader can
+ * check the number instead of taking it.
+ *
+ * The core writes both forms. Nothing here parses or rearranges them: the UI
+ * never infers a relationship of its own.
+ */
+export type Relation = {
+  readonly role: "length" | "count" | "type" | "value";
+  /** The expression as the template writes it: `header_size - sizeof(header_size)`. */
+  readonly written: string;
+  /** The same with every field's value in its place: `4 - 1`. */
+  readonly substituted: string;
+  /** What it comes to. */
+  readonly result: string;
 };
 
 /** What a type permits, beyond what this file's bytes happen to say. */
@@ -1076,6 +1111,15 @@ export class Doc {
    */
   origins(path: readonly number[]): TemplateReply<Origin[]> {
     return this.handleReply<Origin[]>(this.editor.origins(Uint32Array.from(path)));
+  }
+
+  /**
+   * The relationships behind the shape of the field at `path`, written out
+   * with the numbers in them. Empty for a field the template placed and sized
+   * outright, and for one whose expression the core has no notation for.
+   */
+  relations(path: readonly number[]): TemplateReply<Relation[]> {
+    return this.handleReply<Relation[]>(this.editor.relations(Uint32Array.from(path)));
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */

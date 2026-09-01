@@ -23,6 +23,7 @@ mod origin;
 mod placed;
 mod expr;
 mod read;
+mod relate;
 mod size;
 mod walk;
 #[cfg(test)]
@@ -43,6 +44,7 @@ pub struct ExtentEstimate {
     pub estimated_bits: u64,
 }
 pub use origin::{Origin, Role};
+pub use relate::Relation;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {

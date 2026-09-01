@@ -153,7 +153,7 @@ impl Evaluator {
 
     /// What the type says before the file has been consulted: the field's own
     /// declaration, with nothing chosen and no window unwrapped yet.
-    fn declared_ty(&self, path: &[usize]) -> R<Ty> {
+    pub(super) fn declared_ty(&self, path: &[usize]) -> R<Ty> {
         let Some((&idx, parent)) = path.split_last() else { return Ok(self.template.root.clone()) };
         match self.memo.get(parent).map(|r| &r.ty) {
             Some(Ty::Struct(s)) => match s.fields.get(idx) {
@@ -230,7 +230,11 @@ impl Evaluator {
             }
             Expr::SizeOf(name) | Expr::BitsOf(name) => {
                 if let Some(p) = self.find_field(at, name) {
-                    let o = self.origin(doc, role, format!("size of {name}"), p);
+                    let mut o = self.origin(doc, role, format!("size of {name}"), p);
+                    // How long the field is, not what it says. The row names a
+                    // size and used to answer with the value, which is a
+                    // different number and reads as this one being wrong.
+                    o.value = self.eval_expr(doc, at, e)?.to_string();
                     out.push(o);
                 }
             }

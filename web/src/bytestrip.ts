@@ -53,6 +53,27 @@ function digits(doc: Doc, span: Span): { readonly text: string; readonly rest: n
 }
 
 /**
+ * One field's bits, drawn as the decoder divides them: the bits that frame the
+ * number apart from the bits that are the number. A varint's `12` is 18, and a
+ * reader shown both and no split has to take it on trust.
+ *
+ * Which bits are which comes from the core, on the span. This draws the answer
+ * and says nothing about how a varint works.
+ */
+function bitsChip(span: Span, hue: string | null): HTMLElement | null {
+  if (span.bits === null) return null;
+  const chip = el("span", "bs-chip");
+  if (hue !== null) chip.style.setProperty("--hue", hue);
+  chip.append(el("span", "bs-chip-k", span.name));
+  if (span.value !== "") chip.append(el("span", "bs-chip-v", span.value));
+  const bits = el("span", "bs-bits");
+  for (const g of span.bits.groups) bits.append(el("i", `bs-bit is-${g.role}`, g.bits));
+  chip.append(bits);
+  chip.append(el("span", "bs-chip-k", REPORT.bitsNote(span.type, span.size_bits, span.bits.rule)));
+  return chip;
+}
+
+/**
  * The strip: a caption the caller supplies, and the fields' bytes.
  *
  * `map` is the file map for this stretch, made by the caller so that every
@@ -104,6 +125,11 @@ export function byteStrip(
    *  the truth. */
   let prevEnd = -1;
   let prevCut = false;
+  /** Chips for the fields whose bytes do not read as bytes, in the order the
+   *  strip drew their columns. Only those: a chip row restating every field's
+   *  name and value would say twice what the labels and the item's own rows
+   *  already say once. */
+  const chips: HTMLElement[] = [];
   spans.forEach((span, i) => {
     // A stretch nothing covers takes no hue: there is no field for it to be
     // the colour of.
@@ -144,10 +170,17 @@ export function byteStrip(
     // named for what it is, not for the structure it happens to sit inside.
     column.append(el("span", "bs-lb", span.gap ? REPORT.gap : span.name));
     fields.append(column);
+    const chip = bitsChip(span, hue);
+    if (chip !== null) chips.push(chip);
     prevEnd = span.offset_bits + span.size_bits;
     prevCut = rest > 0;
   });
   strip.append(fields);
+  if (chips.length > 0) {
+    const row = el("div", "bs-chips");
+    row.append(...chips);
+    strip.append(row);
+  }
   // Every field the reader has opened out, under the map that named it, in the
   // order the strip drew them.
   if (dumps !== undefined) {

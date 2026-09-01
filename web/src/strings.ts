@@ -189,6 +189,27 @@ export const REPORT = {
    *  pane's title, since it is the same question: which one, and how far does
    *  it go. No address, because the first line of the dump begins with one. */
   dumpHead: (name: string, size: number): string => `${name} \u00b7 ${bitSizeText(size)}`,
+  /** The tail of a bits chip: what the field is, how long it turned out to be,
+   *  and the rule that decided where it stopped. A varint's bytes do not read
+   *  as bytes, and the chip has just drawn the split; this says what the split
+   *  is. The type name and the size come from the field, so only the rule is
+   *  copy, and only the rules the mockup settled have any.
+   *
+   *  A rule with no wording yet drops the colon and says the first two things,
+   *  which are both true and neither invented. `bitsRule` below is the list of
+   *  what is still to draft. */
+  bitsNote: (type: string, sizeBits: number, rule: string): string => {
+    const rest = REPORT.bitsRule(rule);
+    const head = `${type}, ${bitSizeText(sizeBits)}`;
+    return rest === "" ? head : `${head}: ${rest}`;
+  },
+  /** How a variable-length number says where it ends, keyed by the rule the
+   *  core named. `high_bit` is the mockup's own wording, reviewed. The other
+   *  three are not drafted yet and say nothing rather than something invented:
+   *  `sqlite_ninth` (a ninth byte with no continuation bit, all eight bits
+   *  value), `ebml_size` (leading zeros count the bytes, marker bit dropped
+   *  from the value) and `ebml_id` (the same framing, kept in the value). */
+  bitsRule: (rule: string): string => (rule === "high_bit" ? "high bit 0 ends it" : ""),
   /** The last column of a table of records: where in the file the row it just
    *  showed is actually written. The mockup's own heading, and the one thing
    *  in the table that is about the file rather than about the data. */
