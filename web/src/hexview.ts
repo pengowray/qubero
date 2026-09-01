@@ -184,6 +184,11 @@ export class HexView {
    *  a resize or a change of shape moves them, and `relayout` — which every one
    *  of those goes through — throws them away. */
   private metrics: { readonly noteWidth: number; readonly trackH: number } | null = null;
+  /** The third size only the browser can answer: how tall a row is and how
+   *  many of them fit. Measuring it reads `clientHeight` and a computed style,
+   *  which forces a layout of everything the draw just wrote, so it is held
+   *  here and thrown away by `relayout` alongside `metrics`. */
+  private fit: { readonly rowHeight: number; readonly visibleRows: number } | null = null;
   /** True while a move is still settling, so `render` puts the work off to the
    *  end of it. Moving the cursor draws the rows, then tells the rest of the
    *  app, which comes straight back with the field to highlight and draws them
@@ -285,6 +290,7 @@ export class HexView {
 
   relayout(): void {
     this.metrics = null;
+    this.fit = null;
     this.fitRows();
     this.topRow = Math.min(this.topRow, this.maxTopRow);
     this.render();
@@ -296,10 +302,22 @@ export class HexView {
    * The row height comes from the stylesheet rather than from a row's measured
    * box: a row measured while the browser is still placing its contents can
    * report the height of what is inside it, and one row of that height leaves
-   * the view showing a single line of the file. Called on every render, so a
-   * container that grows after the view was laid out is picked up either way.
+   * the view showing a single line of the file.
+   *
+   * Called on every render, but it only measures once per layout: both reads
+   * force the browser to lay the view out again, and a redraw has just written
+   * to every row, so the answer costs a full layout every time it is asked for.
+   * Nothing a draw does changes it — only a resize, a change of shape, or the
+   * first pass where the rows do not exist yet, and all of those come through
+   * `relayout`, which drops the cache. A measurement taken before there was a
+   * row to measure is not kept, so the real height is picked up on the pass
+   * after the rows are made.
    */
   private fitRows(): void {
+    if (this.fit !== null) {
+      this.ensureRowEls();
+      return;
+    }
     const probe = this.rowEls[0];
     const h = probe === undefined ? 0 : parseFloat(getComputedStyle(probe).height);
     if (h > 0) this.rowHeight = h;
@@ -308,6 +326,7 @@ export class HexView {
       this.visibleRows = fit;
       this.topRow = Math.min(this.topRow, this.maxTopRow);
     }
+    if (probe !== undefined) this.fit = { rowHeight: this.rowHeight, visibleRows: fit };
     // Unconditional: on the first pass there are no row elements yet, however
     // many of them fit.
     this.ensureRowEls();
