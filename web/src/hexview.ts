@@ -95,6 +95,13 @@ const NO_SPANS = (windowBytes: number): Placed => ({
   byRow: [],
 });
 
+/** Write a cell's characters, unless they are already the ones it shows.
+ *  Scrolling changes every one of them and a cursor key changes none, and the
+ *  browser charges for a write either way. */
+function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
+}
+
 function asciiGlyph(b: number): string {
   return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
 }
@@ -106,6 +113,22 @@ export class HexView {
   private readonly track: HTMLElement;
   private readonly thumb: HTMLElement;
   private rowEls: HTMLElement[] = [];
+  /** The spans each row is made of, kept between draws. See `fitParts`. */
+  private parts: {
+    readonly addr: HTMLElement;
+    readonly cells: HTMLElement;
+    readonly asc: HTMLElement;
+    readonly note: HTMLElement;
+    readonly hex: readonly HTMLElement[];
+    readonly text: readonly HTMLElement[];
+    /** The byte the row starts at, so the addresses on its cells are written
+     *  again only when the view has moved. */
+    start: number;
+    /** True for a row past the end of the file, which is emptied rather than
+     *  drawn. */
+    blank: boolean;
+  }[] = [];
+  private partsShape = "";
 
   private topRow = 0;
   private visibleRows = 1;
@@ -154,6 +177,12 @@ export class HexView {
   private spanCache: { key: string; spans: Span[]; more: boolean; error: string | null } | null = null;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
+  /** True while a move is still settling, so `render` puts the work off to the
+   *  end of it. Moving the cursor draws the rows, then tells the rest of the
+   *  app, which comes straight back with the field to highlight and draws them
+   *  a second time. The first drawing is never seen: both happen inside one
+   *  event, and the browser paints once at the end of it. */
+  private settling = false;
 
   onCursorChange: (c: CursorState) => void = () => {};
   /** A field picked in the annotation column. */
@@ -276,6 +305,49 @@ export class HexView {
     this.ensureRowEls();
   }
 
+  /**
+   * Make sure every row on screen has its spans, and that they are the spans
+   * this shape of view wants.
+   *
+   * A redraw writes over them rather than building them again. Moving the
+   * cursor one byte changes two cells out of six hundred, and throwing the
+   * six hundred away to say so was most of what a keypress cost. The shape —
+   * how many bytes to a row, which columns are showing, hex or binary —
+   * decides what the spans are, so a change to any of it starts them again.
+   */
+  private fitParts(bpr: number, binary: boolean, showText: boolean, fields: boolean): void {
+    const shape = `${bpr}|${binary}|${showText}|${fields}`;
+    if (shape === this.partsShape && this.parts.length === this.rowEls.length) return;
+    this.partsShape = shape;
+    this.parts = this.rowEls.map((row) => {
+      const addr = document.createElement("span");
+      addr.className = "hv-addr";
+      const cells = document.createElement("span");
+      cells.className = binary ? "hv-bits" : "hv-hex";
+      const asc = document.createElement("span");
+      asc.className = "hv-ascii";
+      const note = document.createElement("span");
+      note.className = "hv-note";
+      const hex: HTMLElement[] = [];
+      const text: HTMLElement[] = [];
+      for (let i = 0; i < bpr; i++) {
+        const h = document.createElement("span");
+        const a = document.createElement("span");
+        // Which pane a cell belongs to never changes, so it is written once.
+        h.setAttribute("data-pane", "hex");
+        a.setAttribute("data-pane", "ascii");
+        cells.append(h);
+        asc.append(a);
+        hex.push(h);
+        text.push(a);
+      }
+      row.replaceChildren(addr, cells);
+      if (showText) row.append(asc);
+      if (fields) row.append(note);
+      return { addr, cells, asc, note, hex, text, start: -1, blank: false };
+    });
+  }
+
   private ensureRowEls(): void {
     while (this.rowEls.length < this.visibleRows) {
       const r = document.createElement("div");
@@ -363,6 +435,27 @@ export class HexView {
     this.setSelection(s.anchor, this.cursorState.bitOffset);
   }
 
+  /**
+   * Finish a cursor move: bring it on screen, tell the rest of the app, and
+   * draw the rows once at the end.
+   *
+   * Telling the app comes first because it answers. The field the cursor
+   * landed in comes back as a highlight, panels ask to be laid out again, and
+   * every one of those asks for a redraw; drawing before the answers arrive
+   * draws a screenful nobody sees, since the browser paints once when the
+   * event is over either way.
+   */
+  private settle(): void {
+    this.scrollCursorIntoView();
+    this.settling = true;
+    try {
+      this.onCursorChange(this.cursorState);
+    } finally {
+      this.settling = false;
+    }
+    this.render();
+  }
+
   /** Move the cursor to an absolute bit. Bit 0 is the top bit of byte 0. */
   setBitCursor(bitOffset: number, opts: { pane?: Pane; select?: Select } = {}): void {
     if (opts.pane) this.pane = opts.pane;
@@ -371,9 +464,7 @@ export class HexView {
     this.bit = at % 8;
     this.nibble = 0;
     this.applySelect(opts.select);
-    this.scrollCursorIntoView();
-    this.render();
-    this.onCursorChange(this.cursorState);
+    this.settle();
   }
 
   setCursor(offset: number, opts: { pane?: Pane; nibble?: 0 | 1; bit?: number; select?: Select } = {}): void {
@@ -383,9 +474,7 @@ export class HexView {
     this.bit = Math.max(0, Math.min(7, opts.bit ?? 0));
     if (opts.pane) this.pane = opts.pane;
     this.applySelect(opts.select);
-    this.scrollCursorIntoView();
-    this.render();
-    this.onCursorChange(this.cursorState);
+    this.settle();
   }
 
   /** A message about something the user just asked for, which goes away on its
@@ -904,7 +993,7 @@ export class HexView {
 
   /** Mark part of a byte in hex mode: a bar under the bits the field covers,
    *  one length of bar per run, or a tick where a run has no bits. */
-  private markBits(el: HTMLElement, runs: readonly Run[]): void {
+  private markBits(el: HTMLElement, runs: readonly Run[]): string {
     // The cell is 3ch wide: half a character of padding, two digits, half again.
     const pad = 100 / 6;
     const step = (100 - 2 * pad) / 8;
@@ -918,10 +1007,12 @@ export class HexView {
       stops.push(`transparent ${at}%`, `transparent ${from}%`, `var(--accent) ${from}%`, `var(--accent) ${to}%`);
       at = to;
     }
-    if (stops.length === 0) return;
+    if (stops.length === 0) return "";
     stops.push(`transparent ${at}%`, "transparent 100%");
-    el.classList.add("hv-hlbits");
     el.style.backgroundImage = `linear-gradient(to right, ${stops.join(", ")})`;
+    // The class goes back to the caller, which writes every class this cell
+    // wants in one go.
+    return " hv-hlbits";
   }
 
   /**
@@ -956,9 +1047,9 @@ export class HexView {
     for (let k = 0; k < 8; k++) {
       const s = document.createElement("span");
       s.textContent = text[k] ?? "0";
-      s.dataset["off"] = String(off);
-      s.dataset["bit"] = String(k);
-      s.dataset["pane"] = "hex";
+      s.setAttribute("data-off", String(off));
+      s.setAttribute("data-bit", String(k));
+      s.setAttribute("data-pane", "hex");
       if (hl.some((r) => k >= r.from && k < r.to)) s.classList.add("hv-hl");
       if (sel !== null && !selWhole && k >= sel.from && k < sel.to) s.classList.add(selClass);
       if (onCursor && k === this.bit) {
@@ -1050,6 +1141,8 @@ export class HexView {
   }
 
   render(): void {
+    // A move draws once, when it has finished moving.
+    if (this.settling) return;
     this.fitRows();
     const bpr = this.bytesPerRow;
     const len = this.doc.lengthBytes;
@@ -1087,61 +1180,78 @@ export class HexView {
       this.header.append(title);
     }
 
+    this.fitParts(bpr, binary, showText, fields);
     for (let r = 0; r < this.rowEls.length; r++) {
       const row = this.rowEls[r];
-      if (!row) continue;
+      const parts = this.parts[r];
+      if (!row || parts === undefined) continue;
       const rowStart = start + r * bpr;
       if (rowStart > len) {
-        row.replaceChildren();
+        if (!parts.blank) {
+          row.replaceChildren();
+          parts.blank = true;
+        }
         continue;
       }
-      const frag = document.createDocumentFragment();
-      const addr = document.createElement("span");
-      addr.className = "hv-addr";
-      addr.textContent = rowStart.toString(16).padStart(addrWidth, "0");
-      frag.append(addr);
-
-      const cells = document.createElement("span");
-      cells.className = binary ? "hv-bits" : "hv-hex";
-      const asc = document.createElement("span");
-      asc.className = "hv-ascii";
+      if (parts.blank) {
+        row.append(parts.addr, parts.cells);
+        if (showText) row.append(parts.asc);
+        if (fields) row.append(parts.note);
+        parts.blank = false;
+      }
+      const { addr, note } = parts;
+      setText(addr, rowStart.toString(16).padStart(addrWidth, "0"));
+      // Which bytes a row stands for only changes when the view moves. A
+      // cursor key leaves every address where it was, and writing them all
+      // again would be the largest part of the redraw it causes.
+      const moved = parts.start !== rowStart;
+      parts.start = rowStart;
       for (let i = 0; i < bpr; i++) {
         const off = rowStart + i;
-        const h = document.createElement("span");
-        const a = document.createElement("span");
-        h.dataset["off"] = a.dataset["off"] = String(off);
-        h.dataset["pane"] = "hex";
-        a.dataset["pane"] = "ascii";
+        const h = parts.hex[i] as HTMLElement;
+        const a = parts.text[i] as HTMLElement;
+        // What each cell is, gathered as a string and written only if it is
+        // not what the cell already says. Most of a redraw changes nothing —
+        // a cursor key moves a mark two cells — and a class written back
+        // unchanged still costs the browser the styling of that cell.
+        let hc = "";
+        let ac = "";
+        if (h.style.backgroundImage !== "") h.style.backgroundImage = "";
+        if (binary && h.firstChild !== null) h.textContent = "";
+        if (moved) {
+          // `setAttribute` rather than `dataset`: they write the same
+          // attribute and read back the same way, but the property setter
+          // goes through a proxy per write.
+          const at = String(off);
+          h.setAttribute("data-off", at);
+          a.setAttribute("data-off", at);
+        }
         // A user-selected range temporarily replaces the active-field mark.
         // Keeping both over the same bytes made adjacent or overlapping state
         // impossible to parse; clearing the selection reveals the field again.
         const hl = selection === null ? this.highlightBits(off) : [];
         const sb = selection === null ? null : this.selectionBits(selection, off);
+        let text = binary ? "        " : "  ";
         if (off < len) {
           const b = bytes[off - start] ?? 0;
-          a.textContent = complete ? asciiGlyph(b) : " ";
-          if (complete && !(b >= 0x20 && b < 0x7f)) a.classList.add("hv-np");
-          if (binary) {
-            this.fillBits(h, complete ? b : null, off, hl, sb);
-          } else {
-            h.textContent = complete ? HEX[b] ?? "" : "··";
-            if (!complete) h.classList.add("hv-pending");
+          setText(a, complete ? asciiGlyph(b) : " ");
+          if (complete && !(b >= 0x20 && b < 0x7f)) ac += " hv-np";
+          if (!binary) {
+            text = complete ? HEX[b] ?? "" : "··";
+            if (!complete) hc += " hv-pending";
           }
-        } else if (off === len) {
-          h.textContent = binary ? "        " : "  ";
-          a.textContent = " ";
-          h.classList.add("hv-end");
         } else {
-          h.textContent = binary ? "        " : "  ";
-          a.textContent = " ";
+          setText(a, " ");
+          if (off === len) hc += " hv-end";
         }
+        if (!binary || off >= len) setText(h, text);
 
         const si = fields && off >= start && off < start + windowBytes ? byteSpan[off - start] ?? -1 : -1;
         if (si >= 0) {
           const s = spans[si];
           if (s !== undefined && !s.gap) {
-            h.classList.add("hv-tint", fieldClass(s.kind));
-            if (off === Math.floor(s.offset_bits / 8)) h.classList.add("hv-field-start");
+            hc += ` hv-tint ${fieldClass(s.kind)}`;
+            if (off === Math.floor(s.offset_bits / 8)) hc += " hv-field-start";
           }
         }
         if (hl.length > 0) {
@@ -1151,10 +1261,10 @@ export class HexView {
           // for a whole byte cannot say "between two of these".
           const whole = covers(hl, 0, 8);
           const any = hl.some((r) => r.to > r.from);
-          if (any) a.classList.add(whole ? "hv-hl" : "hv-hl-weak");
+          if (any) ac += whole ? " hv-hl" : " hv-hl-weak";
           if (!binary && off < len) {
-            if (whole) h.classList.add("hv-hl");
-            else this.markBits(h, hl);
+            if (whole) hc += " hv-hl";
+            else hc += this.markBits(h, hl);
           }
         }
         if (sb !== null) {
@@ -1162,26 +1272,28 @@ export class HexView {
           // hex digits and one text character each stand for the whole byte,
           // and a full mark would say the whole byte is in.
           const whole = sb.from <= 0 && sb.to >= 8;
-          if (!binary && off < len) h.classList.add(whole && this.pane === "hex" ? "hv-sel" : "hv-sel-weak");
-          a.classList.add(whole && this.pane === "ascii" ? "hv-sel" : "hv-sel-weak");
+          if (!binary && off < len) hc += whole && this.pane === "hex" ? " hv-sel" : " hv-sel-weak";
+          ac += whole && this.pane === "ascii" ? " hv-sel" : " hv-sel-weak";
         }
         if (off === this.cursor) {
           // In binary the bits carry the cursor, except past the end of the
           // file where there are no bits to carry it.
           if (!binary || off >= len) {
-            h.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
-            if (!binary && this.pane === "hex" && this.nibble === 1) h.classList.add("hv-nib1");
-            if (this.insertMode) h.classList.add("hv-ins");
+            hc += this.pane === "hex" ? " hv-cur hv-focus" : " hv-cur hv-dim";
+            if (!binary && this.pane === "hex" && this.nibble === 1) hc += " hv-nib1";
+            if (this.insertMode) hc += " hv-ins";
           }
-          a.classList.add("hv-cur", this.pane === "ascii" ? "hv-focus" : "hv-dim");
-          if (this.insertMode) a.classList.add("hv-ins");
+          ac += this.pane === "ascii" ? " hv-cur hv-focus" : " hv-cur hv-dim";
+          if (this.insertMode) ac += " hv-ins";
         }
-        cells.append(h);
-        asc.append(a);
+        // The bits inside a cell carry their own marks, so in binary the cell
+        // has only what `fillBits` puts on it.
+        if (h.className !== hc) h.className = hc;
+        if (binary && off < len) this.fillBits(h, complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
+        if (a.className !== ac) a.className = ac;
       }
       if (fields) {
-        const note = document.createElement("span");
-        note.className = "hv-note";
+        note.replaceChildren();
         if (!templated || trouble !== null) {
           if (r === 0) {
             const none = document.createElement("span");
@@ -1190,10 +1302,6 @@ export class HexView {
             if (trouble !== null) none.title = trouble;
             note.append(none);
           }
-          frag.append(cells);
-          if (showText) frag.append(asc);
-          frag.append(note);
-          row.replaceChildren(frag);
           continue;
         }
         const entries = byRow[r] ?? [];
@@ -1216,13 +1324,7 @@ export class HexView {
           rest.title = `The field column shows up to ${SPAN_LIMIT} fields at a time. Scroll down to see the rest.`;
           note.append(rest);
         }
-        frag.append(cells);
-        if (showText) frag.append(asc);
-        frag.append(note);
-      } else {
-        frag.append(cells, asc);
       }
-      row.replaceChildren(frag);
     }
 
     if (fields) {
