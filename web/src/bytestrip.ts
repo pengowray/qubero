@@ -15,6 +15,8 @@ import { formatOffset } from "./doc.js";
 import type { Doc, Span } from "./doc.js";
 import { byteDump } from "./bytedump.js";
 import { fieldHue } from "./fieldstyle.js";
+import { markMap } from "./filemap.js";
+import type { MapMark } from "./filemap.js";
 import { REPORT } from "./strings.js";
 
 /** Fields asked for in one strip. Past this the strip is not the thing to be
@@ -79,6 +81,24 @@ function bitsChip(span: Span, hue: string | null): HTMLElement | null {
  * `map` is the file map for this stretch, made by the caller so that every
  * strip's is the same picture as every heading's.
  */
+/**
+ * Tell a strip that is already up what is selected now.
+ *
+ * A strip is expensive to draw — every field's bytes, its chips, and a height
+ * that has to be measured — and a change of selection moves one class and one
+ * mark. So the strip stays where it is and is told, rather than being read out
+ * of the file again.
+ */
+export function markStrip(strip: HTMLElement, selected: MapMark): void {
+  for (const column of strip.querySelectorAll<HTMLElement>(".bs-fld")) {
+    const at = Number(column.dataset["at"]);
+    const size = Number(column.dataset["size"]);
+    column.classList.toggle("is-on", selected !== null && selected.offsetBits === at && selected.sizeBits === size);
+  }
+  const map = strip.querySelector<HTMLElement>(".fmap");
+  if (map !== null) markMap(map, selected);
+}
+
 export function byteStrip(
   doc: Doc,
   offsetBits: number,
@@ -137,6 +157,10 @@ export function byteStrip(
     const isOn = selected !== undefined && selected !== null
       && selected.offsetBits === span.offset_bits && selected.sizeBits === span.size_bits;
     const column = el("div", `bs-fld${span.gap ? " is-gap" : ""}${isOn ? " is-on" : ""}`);
+    // What the column covers, so a change of selection can find its column
+    // rather than the strip being built again to answer.
+    column.dataset["at"] = String(span.offset_bits);
+    column.dataset["size"] = String(span.size_bits);
     if (hue !== null) column.style.setProperty("--hue", hue);
     const { text, rest } = digits(doc, span);
     const jump = prevCut || span.offset_bits !== prevEnd;

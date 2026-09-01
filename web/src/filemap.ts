@@ -94,12 +94,41 @@ function paint(segment: MapSegment, span: readonly [number, number] | null): str
  * `title` is what the strip says when pointed at, which the caller already has
  * in the words the rest of its row uses.
  */
+export type MapMark = { readonly offsetBits: number; readonly sizeBits: number } | null;
+
+/** The segments each drawn strip stands on, so a strip can be told what is
+ *  selected now without being drawn again. The mark is the one thing on a
+ *  strip that moves while the strip stays the same picture, and the headings
+ *  it sits on are otherwise as fixed as the geometry is. */
+const drawnOver = new WeakMap<HTMLElement, readonly MapSegment[]>();
+
+/** Move the mark on a strip that is already up. */
+export function markMap(strip: HTMLElement, mark: MapMark): void {
+  const segments = drawnOver.get(strip);
+  if (segments === undefined) return;
+  const to = mark === null ? null : mark.offsetBits + Math.max(0, mark.sizeBits);
+  segments.forEach((segment, i) => {
+    const cell = strip.children[i];
+    if (!(cell instanceof HTMLElement)) return;
+    const at = mark === null || to === null ? null : litSpan(segment, mark.offsetBits, to);
+    const pin = cell.firstElementChild;
+    if (at === null) {
+      pin?.remove();
+      return;
+    }
+    const b = pin instanceof HTMLElement ? pin : cell.appendChild(document.createElement("b"));
+    b.className = "fmap-mark";
+    b.style.insetInlineStart = `${(at[0] * 100).toFixed(2)}%`;
+    b.style.width = `${((at[1] - at[0]) * 100).toFixed(2)}%`;
+  });
+}
+
 export function fileMap(
   segments: readonly MapSegment[],
   offsetBits: number,
   sizeBits: number,
   title: string,
-  mark?: { readonly offsetBits: number; readonly sizeBits: number } | null,
+  mark?: MapMark,
 ): HTMLElement {
   const strip = document.createElement("span");
   strip.className = "fmap";
@@ -127,5 +156,6 @@ export function fileMap(
     }
     strip.append(cell);
   });
+  drawnOver.set(strip, segments);
   return strip;
 }

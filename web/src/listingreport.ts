@@ -15,8 +15,8 @@ import type { FieldPick } from "./doc.js";
 import { emptyState, flatten, PAGE, refold } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
-import { byteStrip } from "./bytestrip.js";
-import { fileMap } from "./filemap.js";
+import { byteStrip, markStrip } from "./bytestrip.js";
+import { fileMap, markMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
 import { isRecordList, recordTable } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
@@ -246,26 +246,52 @@ export class ListingReport {
    * Redraw what a change of selection or of the keyboard's place changes, and
    * no more.
    *
-   * A row says whether it is the selected one with a class, so it can be told
-   * without being built again. A heading, an open byte strip and a record
-   * table each draw the selection into themselves — as a mark on the file map,
-   * as a lit column, as a lit line — so those do go and come back.
+   * Nothing is built again. A row says whether it is the selected one with a
+   * class. A heading, an open byte strip and a record table each draw the
+   * selection into themselves — as a mark on the file map, as a lit column, as
+   * a lit line — and each of the three is told where it goes now: the mark and
+   * the column are the only parts of those that move, and a strip read out of
+   * the file again to move one class is a strip's whole cost for a class.
    */
   private restyle(): void {
     this.nearest = this.nearestToSelection();
     for (const [key, node] of [...this.mounted]) {
       const item = this.byKey.get(key);
-      if (item === undefined || item.kind === "heading" || item.kind === "bytes" || item.kind === "record") {
+      if (item === undefined) {
         node.remove();
         this.mounted.delete(key);
         continue;
       }
-      node.classList.toggle("is-on", item.kind === "row" && (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === key));
       node.classList.toggle("is-cursor", key === this.cursor);
       if (key === this.cursor) this.scroller.setAttribute("aria-activedescendant", node.id);
+      if (item.kind === "heading") {
+        const map = node.querySelector<HTMLElement>(".fmap");
+        if (map !== null) markMap(map, this.selected);
+        continue;
+      }
+      if (item.kind === "bytes") {
+        const strip = node.querySelector<HTMLElement>(".bstrip");
+        if (strip !== null) markStrip(strip, this.selected);
+        continue;
+      }
+      if (item.kind === "record") {
+        this.markRecord(node);
+        continue;
+      }
+      node.classList.toggle("is-on", item.kind === "row" && (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === key));
     }
-    this.drawn = null;
     this.paint();
+  }
+
+  /** Which line of a record table holds the selection. The lines carry the
+   *  stretch they were read from, so this is the same question `drawRecord`
+   *  asked, asked again of the table already on screen. */
+  private markRecord(host: HTMLElement): void {
+    for (const line of host.querySelectorAll<HTMLElement>("tr[data-at]")) {
+      const at = Number(line.dataset["at"]);
+      const size = Number(line.dataset["size"]);
+      line.classList.toggle("is-on", this.holdsSelection(at, size));
+    }
   }
 
   private discard(): void {
@@ -504,6 +530,8 @@ export class ListingReport {
       const tr = document.createElement("tr");
       // A table row is a range, not a field: the selection is usually one
       // column inside it.
+      tr.dataset["at"] = String(row.offsetBits);
+      tr.dataset["size"] = String(row.sizeBits);
       if (this.holdsSelection(row.offsetBits, row.sizeBits)) tr.className = "is-on";
       for (const cell of row.cells) tr.append(el("td", fieldClass(cell.kind), cell.text));
       const at = el("td", "rec-at");
