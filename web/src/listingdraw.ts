@@ -14,6 +14,7 @@ import { pathKey, PAGE } from "./flatten.js";
 import type { Item } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
+import { drawCard } from "./contentcard.js";
 import { fileMap } from "./filemap.js";
 import { recordTable } from "./records.js";
 import type { RecordCell } from "./records.js";
@@ -44,6 +45,10 @@ export type DrawContext = {
   /** What a run of unclaimed bytes turned out to hold. The answer is cached by
    *  the report, since finding it reads the file. */
   readonly verdict: (item: Extract<Item, { kind: "gap" }>) => GapVerdict;
+  /** Whether the listing is on screen. A hidden one still draws a screenful
+   *  so the other views can have its headings, and work that is only for the
+   *  eye, like decoding a picture, waits for this. */
+  readonly shown: boolean;
 };
 
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
@@ -115,7 +120,21 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
       return drawMore(c, item);
     case "pending":
       return el("div", "rp-item rp-pending", REPORT.reading);
+    case "card":
+      return drawCard(c.doc, item, c.shown);
   }
+}
+
+/** How far in from the left a row at this depth starts, and whether its name
+ *  is dimmed. The rows under a top-level part are the listing's own margin;
+ *  the rows under a part inside it are one step in, so where that part ends
+ *  can be seen; anything opened out of a row is one more step and no further,
+ *  with its name dimmed instead. Depth is a fact the reader can act on for
+ *  one or two levels and a ladder past that, and a ladder is what rule 2
+ *  says not to draw. */
+function indent(row: HTMLElement, depth: number): void {
+  row.style.paddingLeft = `${8 + 12 * Math.min(depth, 3)}px`;
+  if (depth >= 3) row.classList.add("rp-deep");
 }
 
 function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, fileBits: number): HTMLElement {
@@ -127,12 +146,14 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
   }
   row.append(el("b", "rp-name", item.node?.name ?? REPORT.unnamedPart(runPosition(item, fileBits))));
   row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits)));
-  const share = shareText(item.sizeBits, fileBits);
-  row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
   row.append(bytesButton(c, item.key));
   // Only a list too long to draw: for anything the window already holds
   // whole, a pane of its own would be the same rows somewhere else.
   if (item.node !== null && item.node.child_count > PAGE) row.append(listButton(item.path));
+  // The facts about the part's place in the file sit together at the right:
+  // how big it is, how much of the file that is, and where.
+  const share = shareText(item.sizeBits, fileBits);
+  row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
   row.append(mapFor(c, item));
   return row;
 }
@@ -144,7 +165,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // file, and a row the reader can skip should look like one.
   const row = el("div", `rp-item rp-row${n.size_bits === 0 ? " rp-nobytes" : ""}`);
   if (isSelected(c.selected, item.offsetBits, item.sizeBits) || c.nearest === item.key) row.classList.add("is-on");
-  row.style.paddingLeft = `${8 + item.depth * 12}px`;
+  indent(row, item.depth);
   // A computed value is not written anywhere, so it has no address, and its
   // length says so in words: "0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
@@ -166,7 +187,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
 
 function drawGap(c: DrawContext, item: Extract<Item, { kind: "gap" }>): HTMLElement {
   const row = el("div", "rp-item rp-row rp-gap");
-  row.style.paddingLeft = `${8 + item.depth * 12}px`;
+  indent(row, item.depth);
   row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
   row.append(el("span", "rp-twist", ""));
   row.append(el("span", "rp-field", item.unmapped ? GAP_LABEL : REPORT.gap));
@@ -180,7 +201,7 @@ function drawGap(c: DrawContext, item: Extract<Item, { kind: "gap" }>): HTMLElem
  *  column names, and where each row is written. */
 function drawRecord(c: DrawContext, item: Extract<Item, { kind: "record" }>): HTMLElement {
   const host = el("div", "rp-item rp-record");
-  host.style.paddingLeft = `${8 + item.depth * 12}px`;
+  indent(host, item.depth);
   const table = recordTable(c.doc, item.node);
   if (table === null) {
     host.append(el("div", "bs-wait", REPORT.reading));
@@ -241,7 +262,7 @@ function drawCell(cell: RecordCell): HTMLElement {
 
 function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTMLElement {
   const host = el("div", "rp-item rp-strip");
-  host.style.paddingLeft = `${8 + item.depth * 12}px`;
+  indent(host, item.depth);
   const caption = `${item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
   host.append(
     byteStrip(c.doc, item.offsetBits, item.sizeBits, caption, mapFor(c, item), () => c.toggleBytes(item.owner), c.selected, {
@@ -255,7 +276,7 @@ function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTML
 
 function drawMore(c: DrawContext, item: Extract<Item, { kind: "more" }>): HTMLElement {
   const row = el("div", "rp-item rp-row rp-more");
-  row.style.paddingLeft = `${8 + item.depth * 12}px`;
+  indent(row, item.depth);
   const reply = c.doc.templateNode(item.path);
   const noun = reply.status === "ok" ? childWord(reply.node) : "item";
   row.append(el("span", "rp-at", ""));

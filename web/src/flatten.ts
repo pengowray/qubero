@@ -141,7 +141,19 @@ export type Item = Common &
         readonly path: readonly number[];
         readonly reachedBytes: number;
       }
+    | {
+        /** What the file is a picture of, ahead of how it is written: the
+         *  decoded image at the top of an image file. Not a part of the file,
+         *  so it covers no bytes, sits in no section, and is neither in the
+         *  outline nor on the file map. */
+        readonly kind: "card";
+        readonly card: CardKind;
+        readonly path: readonly number[];
+      }
   );
+
+/** The kinds of content a file can open with. Only pictures so far. */
+export type CardKind = "image";
 
 export type FlatOptions = {
   /** Whether a structure is drawn as a table of records rather than field by
@@ -150,6 +162,9 @@ export type FlatOptions = {
   readonly isRecord?: (node: TemplateNode) => boolean;
   readonly page?: number;
   readonly sectionListMax?: number;
+  /** What the file opens with, before its first part: the picture an image
+   *  file is of. Null or absent for a file that is only its bytes. */
+  readonly card?: CardKind | null;
 };
 
 export type Flattened = {
@@ -330,6 +345,10 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
   if (root.status === "error") return { items: [], pending: false, reachedBytes: 0 };
   if (root.status !== "ok") return { items: [], pending: true, reachedBytes: root.reachedBytes };
   w.fileBits = root.node.size_bits;
+  // The content comes before the structure. It is not a part of the file, so
+  // it takes no section number: the first heading below it is still part 0.
+  const card = opts.card ?? null;
+  if (card !== null) w.push({ kind: "card", key: `card:${card}`, section: -1, depth: 0, offsetBits: 0, sizeBits: 0, card, path: [] });
   const kids = w.kids([], root.node.child_count);
   if (kids === null) {
     w.waiting([], 0, root.node);
