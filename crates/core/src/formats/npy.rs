@@ -37,9 +37,19 @@
 //!   field beside it rather than by text in one element of a list inside
 //!   another field, so neither half of that can be followed. The list is read
 //!   for the reader to see; the numbers stay bytes.
+//! - Only the plain form of a structured dtype, a flat list of `('name',
+//!   'format')` pairs. A field whose type is a dtype of its own,
+//!   `('a', [('x', '<i4')])`, a field with a shape after its format,
+//!   `('a', '<f4', (2, 2))`, a field whose name is a title and a name
+//!   together, and the dict form with `offsets` and `itemsize`, are all
+//!   written in the same brackets and are not taken apart here. A shape after
+//!   the format leaves the tuple's own closing bracket where the next field
+//!   would start, and the last of them reads as a field with nothing in it.
 //! - Four dimensions, and then no more: each one is a field of a chain the
 //!   template holds, so a shape with more of them reads the first four and
-//!   leaves the rest of the tuple uncovered.
+//!   leaves the rest of the tuple uncovered. The numbers are grouped for two
+//!   dimensions and for three; a four-dimensional array says it has four and
+//!   reads as one run all the same.
 //! - A string dtype says its width in its own name, so widths up to 64 are
 //!   read and a wider one stays bytes. A `U` is UTF-32, which is not among the
 //!   encodings, and reads as the 32-bit code points it is written as.

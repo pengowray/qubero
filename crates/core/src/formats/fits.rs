@@ -346,7 +346,10 @@ fn table_kind() -> E {
 /// is what is left of the data unit once the rows are placed.
 fn table(row: T) -> T {
     let width = card_value("NAXIS1").at_least(E::lit(1));
-    let rows = card_value("NAXIS2").at_most(E::Remaining.div(width.clone()));
+    // A row of no width is no row at all: without the check, a table that
+    // says so would lay a row over every byte of its heap.
+    let any = E::lit(0).less_than(card_value("NAXIS1"));
+    let rows = card_value("NAXIS2").mul(any).at_most(E::Remaining.div(width.clone()));
     T::structure(
         "Table",
         vec![
@@ -405,8 +408,8 @@ fn binary_column(n: usize) -> T {
             (b'M' as i128, of(pair("Complex", T::F64(Big)), 16)),
             // A variable-length array is written as how many there are and
             // where in the heap they start.
-            (b'P' as i128, of(descriptor("Array", T::Int { bits: 32, endian: Big }), 8)),
-            (b'Q' as i128, of(descriptor("Array", T::Int { bits: 64, endian: Big }), 16)),
+            (b'P' as i128, of(descriptor("Descriptor", T::Int { bits: 32, endian: Big }), 8)),
+            (b'Q' as i128, of(descriptor("Descriptor", T::Int { bits: 64, endian: Big }), 16)),
         ],
         // A type letter nobody defined, or a `TFORMn` written in a shape this
         // could not read: the row still has its width, and this column covers
@@ -429,7 +432,6 @@ fn ascii_row() -> T {
         let cell = T::at_in_window(at, T::text(StrLen::Fixed(width), Encoding::Ascii));
         fields.push((name, T::present_if(has_column(n), cell)));
     }
-    fields.push(("columns_not_read", T::present_if(E::lit(COLUMNS as i128).less_than(card_value("TFIELDS")), T::bytes(E::lit(0)))));
     T::structure("Row", fields)
 }
 
@@ -719,7 +721,7 @@ mod tests {
         b.extend_from_slice(&padded(data));
         let (d, mut ev) = eval(b);
         let desc = ev.node(&d, &[0, 1, 2, 0, 0, 0, 0]).unwrap();
-        assert_eq!(desc.type_name, "Array");
+        assert_eq!(desc.type_name, "Descriptor");
         assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0, 0, 0, 0]).unwrap().value, Value::Int(3));
         assert_eq!(ev.node(&d, &[0, 1, 2, 1]).unwrap().size_bits, 12 * 8);
     }
