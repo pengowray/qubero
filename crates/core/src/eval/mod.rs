@@ -27,11 +27,13 @@ mod read;
 mod relate;
 mod size;
 mod space;
+mod spaces;
 mod walk;
 #[cfg(test)]
 mod tests;
 
 pub use explain::{Explain, FlagBit};
+pub use spaces::{OpenedDoc, OutRange, SpaceDoc, Step, StepKind};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
 
@@ -1300,6 +1302,11 @@ impl Evaluator {
                 space::Opened::Refused(why)
             }
         })
+    }
+
+    /// The bytes of an opened space, for a reader that wants the whole of it.
+    pub(super) fn space_bytes(&self, space: u32) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.spaces.buf(space).cloned()
     }
 
     /// Which address space a read at `path` belongs to.

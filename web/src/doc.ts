@@ -717,6 +717,25 @@ export type TemplateReply<T> =
   | { readonly status: "working"; readonly reachedBytes: number }
   | { readonly status: "error"; readonly message: string };
 
+/** One thing a decoder did, as the cursor link reads it: which bits of the
+ *  compressed run it read, which bytes of the unpacked stream that came to,
+ *  and which kind of step it was. `len` and `dist` are a match's only. */
+export type MapStep = {
+  readonly in_start: number;
+  readonly in_end: number;
+  readonly out_start: number;
+  readonly out_end: number;
+  readonly kind: "literal" | "match" | "stored" | "block" | "header" | "table" | "opaque";
+  readonly len?: number;
+  readonly dist?: number;
+};
+
+/** The unpacked bytes a stretch of compressed bits came to. */
+export type MapRange = {
+  readonly out_start: number;
+  readonly out_end: number;
+};
+
 export type ExtentEstimate = {
   readonly path: readonly number[];
   readonly measured_items: number;
@@ -859,12 +878,50 @@ export class Doc {
     private readonly editor: Editor,
     private readonly blob: ByteSource,
     readonly name: string,
+    /** Which address space this document is. 0 is the file; anything else is
+     *  a compressed run that was unpacked and opened in its own right. */
+    readonly space = 0,
+    /** For a space, the `Decoded` node of the file it was unpacked from. */
+    readonly origin: readonly number[] = [],
   ) {}
 
   static async open(file: ByteSource): Promise<Doc> {
     await ensureWasm();
     const editor = new Editor(file.size, CHUNK_SIZE, CHUNK_CAPACITY);
     return new Doc(editor, file, file.name);
+  }
+
+  /** True for the file, false for an unpacked stream. */
+  get isFile(): boolean {
+    return this.space === 0;
+  }
+
+  /**
+   * Unpack the compressed stream at `path` and open what comes out as a
+   * document of its own, over the same editor. A stream already open comes
+   * back as the document it already is rather than being unpacked again.
+   *
+   * Null when the stream would not open. Which of the three ways it would not
+   * is already on the node, so the caller does not have to ask twice.
+   */
+  openSpace(path: readonly number[]): Doc | null {
+    const r = this.handleReply<{ space: number; refused?: string }>(
+      this.editor.open_space(Uint32Array.from(path)),
+    );
+    if (r.status !== "ok" || r.node.space === 0) return null;
+    return new Doc(this.editor, this.blob, this.name, r.node.space, [...path]);
+  }
+
+  /** Where the byte at `byte` of this space came from, or null. */
+  mapOut(byte: number): MapStep | null {
+    const r = this.handleReply<MapStep | null>(this.editor.map_out(this.space, byte));
+    return r.status === "ok" ? r.node : null;
+  }
+
+  /** What the bit at `bit` of the compressed run came to, or null. */
+  mapIn(bit: number): MapRange | null {
+    const r = this.handleReply<MapRange | null>(this.editor.map_in(this.space, bit));
+    return r.status === "ok" ? r.node : null;
   }
 
   /** Called whenever the document content changes or a pending chunk arrives. */
@@ -878,22 +935,22 @@ export class Doc {
   }
 
   get lengthBytes(): number {
-    return this.editor.len_bytes();
+    return this.editor.len_bytes(this.space);
   }
   get lengthBits(): number {
-    return this.editor.len_bits();
+    return this.editor.len_bits(this.space);
   }
   get modified(): boolean {
-    return this.editor.is_modified();
+    return this.editor.is_modified(this.space);
   }
   get canUndo(): boolean {
-    return this.editor.can_undo();
+    return this.editor.can_undo(this.space);
   }
   get canRedo(): boolean {
-    return this.editor.can_redo();
+    return this.editor.can_redo(this.space);
   }
   get pieceCount(): number {
-    return this.editor.piece_count();
+    return this.editor.piece_count(this.space);
   }
 
   // ----- templates -----
@@ -910,7 +967,7 @@ export class Doc {
 
   /** Best current projection for a variable-size array still being walked. */
   extentEstimate(): ExtentEstimate | null {
-    const raw = this.editor.extent_estimate();
+    const raw = this.editor.extent_estimate(this.space);
     if (raw === "") return null;
     try {
       return JSON.parse(raw) as ExtentEstimate;
@@ -1051,33 +1108,33 @@ export class Doc {
    * calls it, its shape and where its bytes are. Empty for every other format.
    */
   contents(): TemplateReply<Contents> {
-    return this.handleReply(this.editor.contents());
+    return this.handleReply(this.editor.contents(this.space));
   }
 
   /** Named ELF sections and at most `symbolLimit` symbols. */
   elfContents(symbolLimit: number): TemplateReply<ElfContents> {
-    return this.handleReply(this.editor.elf_contents(symbolLimit));
+    return this.handleReply(this.editor.elf_contents(this.space, symbolLimit));
   }
 
   isoVolume(): TemplateReply<IsoVolume> {
-    return this.handleReply(this.editor.iso_volume());
+    return this.handleReply(this.editor.iso_volume(this.space));
   }
 
   isoDirectory(extent: number, size: number, blockSize: number, limit: number, joliet: boolean): TemplateReply<IsoDirectory> {
-    return this.handleReply(this.editor.iso_directory(extent, size, blockSize, limit, joliet));
+    return this.handleReply(this.editor.iso_directory(this.space, extent, size, blockSize, limit, joliet));
   }
 
   templateNode(path: readonly number[]): TemplateReply<TemplateNode> {
-    return this.handleReply(this.editor.template_node(Uint32Array.from(path)));
+    return this.handleReply(this.editor.template_node(this.space, Uint32Array.from(path)));
   }
 
   templateChildren(path: readonly number[], from: number, to: number): TemplateReply<TemplateNode[]> {
-    return this.handleReply(this.editor.template_children(Uint32Array.from(path), from, to));
+    return this.handleReply(this.editor.template_children(this.space, Uint32Array.from(path), from, to));
   }
 
   /** The whole text of a text field, decoded in the field's own encoding. */
   fieldText(path: readonly number[]): TemplateReply<{ text: string; truncated: boolean }> {
-    return this.handleReply(this.editor.field_text(Uint32Array.from(path)));
+    return this.handleReply(this.editor.field_text(this.space, Uint32Array.from(path)));
   }
 
   /**
@@ -1087,7 +1144,7 @@ export class Doc {
    * an offset of that stream, and the file at the same offset is other bytes.
    */
   fieldBytes(path: readonly number[], limit: number): TemplateReply<{ bytes: number[]; truncated: boolean }> {
-    return this.handleReply(this.editor.field_bytes(Uint32Array.from(path), limit));
+    return this.handleReply(this.editor.field_bytes(this.space, Uint32Array.from(path), limit));
   }
 
   /**
@@ -1096,7 +1153,7 @@ export class Doc {
    * one per field.
    */
   spans(fromBit: number, toBit: number, max: number): TemplateReply<Span[]> {
-    return this.handleReply<Span[]>(this.editor.spans(fromBit, toBit, max));
+    return this.handleReply<Span[]>(this.editor.spans(this.space, fromBit, toBit, max));
   }
 
   /**
@@ -1106,7 +1163,7 @@ export class Doc {
    * the next step starts it over.
    */
   overviewStep(buckets: number): TemplateReply<OverviewState> {
-    return this.handleReply<OverviewState>(this.editor.overview_step(buckets));
+    return this.handleReply<OverviewState>(this.editor.overview_step(this.space, buckets));
   }
 
   /**
@@ -1114,7 +1171,7 @@ export class Doc {
    * `buckets` of its own. Asking about a different block starts a new scan.
    */
   overviewFocusStep(from: number, to: number, buckets: number): TemplateReply<FocusState> {
-    return this.handleReply<FocusState>(this.editor.overview_focus_step(from, to, buckets));
+    return this.handleReply<FocusState>(this.editor.overview_focus_step(this.space, from, to, buckets));
   }
 
   /** What is wrong with what the search bar holds, or "" when nothing is.
@@ -1130,7 +1187,7 @@ export class Doc {
    */
   searchStep(needle: Query, from: number): TemplateReply<SearchStep> {
     return this.handleReply<SearchStep>(
-      this.editor.search_step(needle.kind, needle.text, needle.fold, needle.backward, from),
+      this.editor.search_step(this.space, needle.kind, needle.text, needle.fold, needle.backward, from),
     );
   }
 
@@ -1155,7 +1212,7 @@ export class Doc {
    * sized by the template outright.
    */
   origins(path: readonly number[]): TemplateReply<Origin[]> {
-    return this.handleReply<Origin[]>(this.editor.origins(Uint32Array.from(path)));
+    return this.handleReply<Origin[]>(this.editor.origins(this.space, Uint32Array.from(path)));
   }
 
   /**
@@ -1164,14 +1221,14 @@ export class Doc {
    * outright, and for one whose expression the core has no notation for.
    */
   relations(path: readonly number[]): TemplateReply<Relation[]> {
-    return this.handleReply<Relation[]>(this.editor.relations(Uint32Array.from(path)));
+    return this.handleReply<Relation[]>(this.editor.relations(this.space, Uint32Array.from(path)));
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */
   /** `atBits` is where the cursor is; only a block of packed weights uses it,
    *  to say which weight the reader is standing on. */
   typeInfo(path: readonly number[], atBits = -1): TemplateReply<TypeInfo> {
-    return this.handleReply<TypeInfo>(this.editor.type_info(Uint32Array.from(path), atBits));
+    return this.handleReply<TypeInfo>(this.editor.type_info(this.space, Uint32Array.from(path), atBits));
   }
 
   /**
@@ -1226,7 +1283,7 @@ export class Doc {
 
   /** Path of the deepest template field covering `bitOffset`. */
   locate(bitOffset: number): TemplateReply<number[]> {
-    return this.handleReply<number[]>(this.editor.locate(bitOffset));
+    return this.handleReply<number[]>(this.editor.locate(this.space, bitOffset));
   }
 
   /**
@@ -1236,7 +1293,7 @@ export class Doc {
    * the chunks are on their way and the caller should ask again.
    */
   writeNode(path: readonly number[], text: string): TemplateReply<WrittenRange> {
-    const r = this.handleReply<WrittenRange>(this.editor.write_node(Uint32Array.from(path), text));
+    const r = this.handleReply<WrittenRange>(this.editor.write_node(this.space, Uint32Array.from(path), text));
     if (r.status === "ok") this.notify();
     return r;
   }
@@ -1244,7 +1301,7 @@ export class Doc {
   /** Synchronous read. Missing chunks are zero and fetched in the background. */
   read(at: number, len: number): ReadResult {
     const bytes = new Uint8Array(len);
-    const missing = this.editor.read_bytes(at, bytes);
+    const missing = this.editor.read_bytes(this.space, at, bytes);
     for (const chunk of missing) this.fetchChunk(chunk);
     return { bytes, complete: missing.length === 0 };
   }
@@ -1252,7 +1309,7 @@ export class Doc {
   /** Synchronous read of `nBits` starting at any bit, packed MSB first. */
   readBits(atBit: number, nBits: number): ReadResult {
     const bytes = new Uint8Array(Math.ceil(nBits / 8));
-    const missing = this.editor.read_bits(atBit, nBits, bytes);
+    const missing = this.editor.read_bits(this.space, atBit, nBits, bytes);
     for (const chunk of missing) this.fetchChunk(chunk);
     return { bytes, complete: missing.length === 0 };
   }
@@ -1265,13 +1322,14 @@ export class Doc {
    * seconds rather than minutes.
    */
   private fetchRun(from: number, count: number): void {
+    if (this.space !== 0) return;
     const total = Math.ceil(this.blob.size / CHUNK_SIZE);
     let start = from;
-    while (start < from + count && start < total && (this.inflight.has(start) || this.editor.has_chunk(start))) {
+    while (start < from + count && start < total && (this.inflight.has(start) || this.editor.has_chunk(this.space, start))) {
       start += 1;
     }
     let end = start;
-    while (end < from + count && end < total && !this.inflight.has(end) && !this.editor.has_chunk(end)) {
+    while (end < from + count && end < total && !this.inflight.has(end) && !this.editor.has_chunk(this.space, end)) {
       end += 1;
     }
     if (end <= start) return;
@@ -1295,6 +1353,9 @@ export class Doc {
   }
 
   private fetchChunk(chunk: number): void {
+    // An unpacked stream has no file behind it: every byte it has was decoded
+    // in one go and none of it can arrive later.
+    if (this.space !== 0) return;
     // Reading ahead can run off the end, and a chunk past the end is not a
     // chunk: feeding an empty one would look like bytes that are all zero.
     if (chunk * CHUNK_SIZE >= this.blob.size) return;
@@ -1348,7 +1409,7 @@ export class Doc {
    * bytes are still being fetched, in which case ask again once they are.
    */
   selectionText(atByte: number, len: number, first: string): SelectionText | null {
-    const got = this.editor.selection_text(atByte, len, first);
+    const got = this.editor.selection_text(this.space, atByte, len, first);
     return got === "" ? null : (JSON.parse(got) as SelectionText);
   }
 
@@ -1372,7 +1433,7 @@ export class Doc {
   async textWindow(encoding: string, from: number, want: number): Promise<TextWindow> {
     let asked = "";
     for (let go = 0; go < TEXT_ROUNDS; go++) {
-      const w = JSON.parse(this.editor.text_window(encoding, from, want)) as TextWindow;
+      const w = JSON.parse(this.editor.text_window(this.space, encoding, from, want)) as TextWindow;
       if (w.missing.length === 0) return w;
       const now = w.missing.join(",");
       if (now === asked) return { lines: [], missing: w.missing, next: from };
@@ -1390,7 +1451,7 @@ export class Doc {
   async textIndex(encoding: string, from: number, to: number): Promise<TextIndex> {
     let asked = "";
     for (let go = 0; go < TEXT_ROUNDS; go++) {
-      const packed = this.editor.text_index(encoding, from, to);
+      const packed = this.editor.text_index(this.space, encoding, from, to);
       const missing = packed[4] ?? 0;
       if (missing === 0) {
         return {
@@ -1413,7 +1474,7 @@ export class Doc {
   /** Where the line holding `at` starts, and `lines` line starts back from it. */
   async textBack(encoding: string, at: number, lines: number): Promise<TextBack> {
     for (let go = 0; go < 3; go++) {
-      const b = JSON.parse(this.editor.text_back(encoding, at, lines)) as TextBack;
+      const b = JSON.parse(this.editor.text_back(this.space, encoding, at, lines)) as TextBack;
       if (b.missing.length === 0) return b;
       await Promise.all(b.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
     }
@@ -1426,7 +1487,7 @@ export class Doc {
     const last = Math.floor((at + len - 1) / CHUNK_SIZE);
     const waits: Promise<void>[] = [];
     for (let c = first; c <= last; c++) {
-      if (!this.editor.has_chunk(c)) {
+      if (!this.editor.has_chunk(this.space, c)) {
         waits.push(this.loadChunk(c).catch((e: unknown) => {
           throw new ReadFailure(c * CHUNK_SIZE, Math.min(CHUNK_SIZE, this.blob.size - c * CHUNK_SIZE), e);
         }));

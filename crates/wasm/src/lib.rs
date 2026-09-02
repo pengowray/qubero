@@ -3,7 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::eval::{Explain, Origin};
+use qubero_core::eval::{Explain, OpenedDoc, Origin, Step as MapStep, StepKind};
 use qubero_core::hexdump;
 use qubero_core::textview;
 use qubero_core::source::Source;
@@ -16,9 +16,16 @@ use qubero_core::{
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
-pub struct Editor {
+/// Everything one reading holds: a document, what reads it, and the working
+/// each format keeps beside it. There is one per address space. Space 0 is the
+/// file; every other is a `Decoded` stream that was opened as a document of its
+/// own, and it has its own template, its own evaluator and its own byte-class
+/// scan, so two tabs never read over each other's working.
+struct Sheet {
     doc: Document<ChunkStore>,
+    /// Which `Decoded` node of the file this space was unpacked from. Empty for
+    /// space 0, which was unpacked from nothing.
+    origin: Vec<usize>,
     eval: Option<Evaluator>,
     /// What the wasm sections say about the module, when that is the template.
     /// Built on the first listing that needs it, and thrown away whenever the
@@ -44,6 +51,38 @@ pub struct Editor {
     /// The same over the one block a reader has picked out, at whatever
     /// resolution that block's own size allows.
     focus: Option<overview::Scan>,
+}
+
+impl Sheet {
+    fn new(store: ChunkStore, origin: Vec<usize>) -> Sheet {
+        Sheet {
+            doc: Document::new(store),
+            origin,
+            eval: None,
+            disasm: None,
+            bpf: None,
+            bpf_complete: false,
+            ne: None,
+            template: String::new(),
+            scan: None,
+            focus: None,
+        }
+    }
+}
+
+/// The spaces one file has open, and which of them the caller is reading.
+///
+/// Every method that reads bytes or fields names a space, because a space is a
+/// document: the tab strip in the interface is one `Doc` per space over this
+/// one editor. The file's own bytes, its edits and its save plan stay with
+/// space 0, since an unpacked stream is read-only this round.
+#[wasm_bindgen]
+pub struct Editor {
+    /// Space 0 first, then one per opened stream, in the order they opened.
+    sheets: Vec<Sheet>,
+    /// The space the call in hand names. Set by every method that takes one,
+    /// so a helper called part-way through a reading still finds it.
+    live: usize,
 }
 
 /// A field's bytes, and whether it runs on past them.
@@ -1028,6 +1067,63 @@ fn hex_trouble(text: &str) -> &'static str {
 /// last go left off rather than starting over.
 const WORK_SLICE: u64 = 5_000;
 
+/// Chunk size of a space's store. The bytes are already in memory, so this only
+/// decides how they are cut up; it matches the file's so the host's chunk
+/// arithmetic is the same on both sides.
+const SPACE_CHUNK: u64 = 64 * 1024;
+
+/// What `open_space` came to: the space, or why it would not open.
+#[derive(Serialize)]
+struct SpaceDto {
+    space: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refused: Option<String>,
+}
+
+/// One step of a decoder, as the cursor link shows it.
+#[derive(Serialize)]
+struct MapStepDto {
+    in_start: f64,
+    in_end: f64,
+    out_start: f64,
+    out_end: f64,
+    /// `literal`, `match`, `stored`, `block`, `header`, `table` or `opaque`.
+    kind: &'static str,
+    /// Set for a match only: how long it is and how far back it reaches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    len: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dist: Option<f64>,
+}
+
+/// The output bytes a stretch of input came to.
+#[derive(Serialize)]
+struct OutRangeDto {
+    out_start: f64,
+    out_end: f64,
+}
+
+fn step_dto(s: MapStep) -> MapStepDto {
+    let (kind, len, dist) = match s.kind {
+        StepKind::Literal => ("literal", None, None),
+        StepKind::Match { len, dist } => ("match", Some(len as f64), Some(dist as f64)),
+        StepKind::Stored => ("stored", None, None),
+        StepKind::Block => ("block", None, None),
+        StepKind::Header => ("header", None, None),
+        StepKind::Table => ("table", None, None),
+        StepKind::Opaque => ("opaque", None, None),
+    };
+    MapStepDto {
+        in_start: s.in_bits.start as f64,
+        in_end: s.in_bits.end as f64,
+        out_start: s.out_bytes.start as f64,
+        out_end: s.out_bytes.end as f64,
+        kind,
+        len,
+        dist,
+    }
+}
+
 const HEX_NOT_A_DIGIT: &str = "Hex is pairs of digits 0-9 a-f, like 89 50 4e 47";
 const HEX_HALF_A_BYTE: &str = "Unfinished byte: each byte is two digits, like 4e";
 
@@ -1038,51 +1134,176 @@ impl Editor {
     #[wasm_bindgen(constructor)]
     pub fn new(len: f64, chunk_size: u32, capacity: u32) -> Editor {
         let store = ChunkStore::new(len as u64, chunk_size as u64, capacity as usize);
-        Editor { doc: Document::new(store), eval: None, disasm: None, bpf: None, bpf_complete: false, ne: None, template: String::new(), scan: None, focus: None }
+        Editor { sheets: vec![Sheet::new(store, Vec::new())], live: 0 }
+    }
+
+    /// The reading in hand. A space id past the ones open falls back to the
+    /// file rather than panicking: a tab left over from before an edit asks
+    /// about a space that has been forgotten, and the honest answer to that is
+    /// the file, not a trap.
+    /// One space's reading, for a call that names it and asks nothing else of
+    /// the editor. Same fallback as `sheet`.
+    fn at(&self, space: u32) -> &Sheet {
+        self.sheets.get(space as usize).unwrap_or(&self.sheets[0])
+    }
+
+    fn sheet(&self) -> &Sheet {
+        self.sheets.get(self.live).unwrap_or(&self.sheets[0])
+    }
+
+    fn sm(&mut self) -> &mut Sheet {
+        let i = if self.live < self.sheets.len() { self.live } else { 0 };
+        &mut self.sheets[i]
+    }
+
+    /// Name the space the call is about. Every space-taking method starts here.
+    fn go(&mut self, space: u32) {
+        self.live = space as usize;
+    }
+
+    /// Drop every unpacked stream. A space is worked out from bytes of the file,
+    /// so an edit or a change of template throws it away and the tab reopens it
+    /// by path. The file's own reading, space 0, stays.
+    fn forget_spaces(&mut self) {
+        self.sheets.truncate(1);
+        self.live = 0;
+    }
+
+    /// Open the `Decoded` stream at `path` as a document of its own, and give
+    /// back the space it became: {status:"ok",node:{space,refused}}.
+    ///
+    /// A stream already open answers with the space it already is, so a second
+    /// Open unpacked focuses the tab instead of unpacking the run again.
+    /// `refused` says which of the three ways a stream would not open, and the
+    /// space is then 0.
+    pub fn open_space(&mut self, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        if let Some(i) = self.sheets.iter().position(|sh| !sh.origin.is_empty() && sh.origin == p) {
+            return reply(Ok(SpaceDto { space: i as f64, refused: None }));
+        }
+        self.live = 0;
+        let sh = &mut self.sheets[0];
+        let Some(e) = &mut sh.eval else {
+            return reply::<SpaceDto>(Err(EvalError::Failed("no template".into())));
+        };
+        // Unpacking a run is not something to do by halves: it reads the whole
+        // run and decodes it, and a half-decoded stream is not a document.
+        e.set_slice(None);
+        let opened = e.open_space_doc(&sh.doc, &p);
+        e.set_slice(Some(WORK_SLICE));
+        let doc = match opened {
+            Ok(OpenedDoc::Opened(d)) => d,
+            Ok(OpenedDoc::Refused(why)) => {
+                return reply(Ok(SpaceDto { space: 0.0, refused: Some(why.as_str().to_string()) }))
+            }
+            Err(err) => return reply::<SpaceDto>(Err(err)),
+        };
+        // The bytes are all here already, so the store keeps every chunk: a
+        // space has no file behind it to fetch a missing one back from.
+        let bytes = &doc.bytes;
+        let n = bytes.len() as u64;
+        let chunks = (n / SPACE_CHUNK + 1) as usize;
+        let mut store = ChunkStore::new(n, SPACE_CHUNK, chunks);
+        for c in 0..chunks as u64 {
+            let from = (c * SPACE_CHUNK) as usize;
+            if from >= bytes.len() {
+                break;
+            }
+            let to = bytes.len().min(from + SPACE_CHUNK as usize);
+            store.insert(c, bytes[from..to].to_vec().into_boxed_slice());
+        }
+        let mut sheet = Sheet::new(store, p);
+        sheet.template = doc.template.name.clone();
+        let mut ev = Evaluator::new(doc.template);
+        ev.set_slice(Some(WORK_SLICE));
+        sheet.eval = Some(ev);
+        self.sheets.push(sheet);
+        reply(Ok(SpaceDto { space: (self.sheets.len() - 1) as f64, refused: None }))
+    }
+
+    /// Which bits of the compressed run the byte at `byte` of `space` came
+    /// from, and by which step: {status:"ok",node:{..}} or a null node when the
+    /// codec's map does not reach that far.
+    pub fn map_out(&mut self, space: u32, byte: f64) -> String {
+        let Some(origin) = self.origin_of(space) else { return reply(Ok(None::<MapStepDto>)) };
+        let sh = &self.sheets[0];
+        let Some(e) = &sh.eval else { return reply(Ok(None::<MapStepDto>)) };
+        reply(Ok(e.map_out(&origin, byte as u64).map(step_dto)))
+    }
+
+    /// Which bytes of `space` the bit at `bit` of the compressed run came to.
+    pub fn map_in(&mut self, space: u32, bit: f64) -> String {
+        let Some(origin) = self.origin_of(space) else { return reply(Ok(None::<OutRangeDto>)) };
+        let sh = &self.sheets[0];
+        let Some(e) = &sh.eval else { return reply(Ok(None::<OutRangeDto>)) };
+        reply(Ok(e.map_in(&origin, bit as u64).map(|r| OutRangeDto {
+            out_start: r.out_bytes.start as f64,
+            out_end: r.out_bytes.end as f64,
+        })))
+    }
+
+    /// The `Decoded` node a space was unpacked from, as a path in the file.
+    /// Empty for space 0 and for a space that is no longer open.
+    pub fn space_origin(&self, space: u32) -> Vec<u32> {
+        self.origin_of(space).map_or(Vec::new(), |p| p.iter().map(|&x| x as u32).collect())
+    }
+
+    fn origin_of(&self, space: u32) -> Option<Vec<usize>> {
+        let sh = self.sheets.get(space as usize)?;
+        if sh.origin.is_empty() {
+            return None;
+        }
+        Some(sh.origin.clone())
     }
 
     fn changed(&mut self) {
-        if let Some(e) = &mut self.eval {
+        self.forget_spaces();
+        let sh = self.sm();
+        if let Some(e) = &mut sh.eval {
             e.invalidate();
         }
-        self.disasm = None;
-        self.bpf = None;
-        self.bpf_complete = false;
-        self.ne = None;
-        self.scan = None;
-        self.focus = None;
+        sh.disasm = None;
+        sh.bpf = None;
+        sh.bpf_complete = false;
+        sh.ne = None;
+        sh.scan = None;
+        sh.focus = None;
     }
 
     /// An edit that replaced bits in place at `bit`. What the template made of
     /// the bytes before it still holds, so only the rest is worked out again.
     fn changed_at(&mut self, bit: u64) {
-        if let Some(e) = &mut self.eval {
+        self.forget_spaces();
+        let sh = self.sm();
+        if let Some(e) = &mut sh.eval {
             e.invalidate_from(bit);
         }
-        self.disasm = None;
-        self.bpf = None;
-        self.bpf_complete = false;
-        self.ne = None;
-        self.scan = None;
-        self.focus = None;
+        sh.disasm = None;
+        sh.bpf = None;
+        sh.bpf_complete = false;
+        sh.ne = None;
+        sh.scan = None;
+        sh.focus = None;
     }
 
     /// One step of the byte-class scan behind the overview: at most a window
     /// of the file read and classified. The reply is the usual tri-state, with
     /// `node` carrying everything found so far, so the host can draw a partial
     /// map while the rest is read. `done` on the node says when to stop asking.
-    pub fn overview_step(&mut self, buckets: u32) -> String {
-        let len = self.doc.len_bytes();
+    pub fn overview_step(&mut self, space: u32, buckets: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let len = sh.doc.len_bytes();
         let want = overview::Scan::range(0, len, u64::from(buckets));
         // A scan already covering the same bytes at the same resolution
         // carries on; anything else starts over, since its classes describe a
         // different division of a different file.
-        let same = matches!(&self.scan, Some(s) if s.end() == len && s.bucket_bytes() == want.bucket_bytes());
+        let same = matches!(&sh.scan, Some(s) if s.end() == len && s.bucket_bytes() == want.bucket_bytes());
         if !same {
-            self.scan = Some(want);
+            sh.scan = Some(want);
         }
-        let scan = self.scan.as_mut().expect("just built");
-        match scan.step(&self.doc) {
+        let scan = sh.scan.as_mut().expect("just built");
+        match scan.step(&sh.doc) {
             overview::ScanStep::Pending(m) => reply::<OverviewDto>(Err(EvalError::Pending(m))),
             step => reply(Ok(OverviewDto {
                 done: step == overview::ScanStep::Done,
@@ -1103,14 +1324,16 @@ impl Editor {
     /// This is what answers the question the whole-file map cannot: every
     /// bucket of a block can read as dense while the first part of it is
     /// zeroes, because a bucket is judged as a whole.
-    pub fn overview_focus_step(&mut self, from: f64, to: f64, buckets: u32) -> String {
+    pub fn overview_focus_step(&mut self, space: u32, from: f64, to: f64, buckets: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
         let (from, to) = (from as u64, to as u64);
-        let fresh = !matches!(&self.focus, Some(f) if f.start() == from && f.end() == to);
+        let fresh = !matches!(&sh.focus, Some(f) if f.start() == from && f.end() == to);
         if fresh {
-            self.focus = Some(overview::Scan::range(from, to, u64::from(buckets)));
+            sh.focus = Some(overview::Scan::range(from, to, u64::from(buckets)));
         }
-        let scan = self.focus.as_mut().expect("just built");
-        match scan.step(&self.doc) {
+        let scan = sh.focus.as_mut().expect("just built");
+        match scan.step(&sh.doc) {
             overview::ScanStep::Pending(m) => reply::<FocusDto>(Err(EvalError::Pending(m))),
             step => {
                 let (entropy, entropy_max) = scan.entropy();
@@ -1150,8 +1373,9 @@ impl Editor {
 
     /// Best current projection for a variable-size array being walked, or an
     /// empty string when no unfinished walk has enough information yet.
-    pub fn extent_estimate(&self) -> String {
-        self.eval
+    pub fn extent_estimate(&self, space: u32) -> String {
+        let sh = self.at(space);
+        sh.eval
             .as_ref()
             .and_then(Evaluator::extent_estimate)
             .map(extent_estimate_dto)
@@ -1175,20 +1399,21 @@ impl Editor {
 
     /// Select a built-in template by name; "" clears it. Returns false if unknown.
     pub fn set_template(&mut self, name: &str) -> bool {
-        self.disasm = None;
-        self.bpf = None;
-        self.bpf_complete = false;
-        self.ne = None;
-        self.template = name.to_string();
+        let sh = self.sm();
+        sh.disasm = None;
+        sh.bpf = None;
+        sh.bpf_complete = false;
+        sh.ne = None;
+        sh.template = name.to_string();
         if name.is_empty() {
-            self.eval = None;
+            sh.eval = None;
             return true;
         }
         match formats::builtin(name) {
             Some(t) => {
                 let mut e = Evaluator::new(t);
                 e.set_slice(Some(WORK_SLICE));
-                self.eval = Some(e);
+                sh.eval = Some(e);
                 true
             }
             None => false,
@@ -1204,16 +1429,17 @@ impl Editor {
     /// bytes to a fixed place, which is the honest answer for a format found by
     /// searching rather than by looking.
     pub fn set_magic_template(&mut self, name: &str, rules: &str, head: &[u8]) -> bool {
+        let sh = self.sm();
         // A signature template covers a format's first bytes only, so whatever
         // full template was in use no longer applies.
-        self.disasm = None;
-        self.bpf = None;
-        self.bpf_complete = false;
-        self.ne = None;
-        self.template = String::new();
+        sh.disasm = None;
+        sh.bpf = None;
+        sh.bpf_complete = false;
+        sh.ne = None;
+        sh.template = String::new();
         match magicrule::match_signature(rules, head) {
             Some(sig) => {
-                self.eval = Some(Evaluator::new(magicrule::signature_template(name, &sig)));
+                sh.eval = Some(Evaluator::new(magicrule::signature_template(name, &sig)));
                 true
             }
             None => false,
@@ -1226,14 +1452,16 @@ impl Editor {
     ///
     /// `at_bits` is where the cursor is. Only a block of packed weights uses
     /// it, to say which weight the reader is standing on.
-    pub fn type_info(&mut self, path: &[u32], at_bits: f64) -> String {
+    pub fn type_info(&mut self, space: u32, path: &[u32], at_bits: f64) -> String {
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let at = (at_bits >= 0.0).then(|| at_bits as u64);
-        match &mut self.eval {
+        match &mut sh.eval {
             None => reply::<ExplainDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
-                reply(e.explain(&self.doc, &p, at).map(explain_dto))
+                reply(e.explain(&sh.doc, &p, at).map(explain_dto))
             }
         }
     }
@@ -1241,13 +1469,15 @@ impl Editor {
     /// Which fields settled the shape of the one at `path`, and where this one
     /// points if it holds an offset. JSON, in the same reply shape as the rest;
     /// usually an empty list, since most fields are placed and sized outright.
-    pub fn origins(&mut self, path: &[u32]) -> String {
+    pub fn origins(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut self.eval {
+        match &mut sh.eval {
             None => reply::<Vec<OriginDto>>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
-                reply(e.origins(&self.doc, &p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
+                reply(e.origins(&sh.doc, &p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
             }
         }
     }
@@ -1257,13 +1487,15 @@ impl Editor {
     /// value in its place, and what it comes to. JSON, in the same reply shape
     /// as the rest. Empty for a field the template placed and sized outright,
     /// and for one whose expression has no reading in that notation.
-    pub fn relations(&mut self, path: &[u32]) -> String {
+    pub fn relations(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut self.eval {
+        match &mut sh.eval {
             None => reply::<Vec<RelationDto>>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
-                reply(e.relations(&self.doc, &p).map(|v| {
+                reply(e.relations(&sh.doc, &p).map(|v| {
                     v.into_iter()
                         .map(|r| RelationDto {
                             role: r.role.as_str(),
@@ -1291,13 +1523,14 @@ impl Editor {
     /// the database can match on because the stub sits at a different place in
     /// every program. It is credited to this editor rather than to a rule file.
     pub fn detect_tools(&self, rules: &str, head: &[u8]) -> String {
+        let sh = self.sheet();
         let db = diescript::parse_bundle(rules);
         // What the file says about itself: where it starts running, what its
         // sections are called, where the overlay begins. Worked out once.
-        let facts = diescript::Facts::of(head, self.doc.len_bytes());
+        let facts = diescript::Facts::of(head, sh.doc.len_bytes());
         let found: Vec<ToolDto> = diescript::detect(&db, head, &facts)
             .into_iter()
-            .chain(dosbasic::detect(head, self.doc.len_bytes()))
+            .chain(dosbasic::detect(head, sh.doc.len_bytes()))
             .map(|d| ToolDto {
                 category: d.category,
                 name: d.name,
@@ -1310,27 +1543,31 @@ impl Editor {
     }
 
     /// JSON: {status:"ok",node} | {status:"pending",chunks} | {status:"error",message}
-    pub fn template_node(&mut self, path: &[u32]) -> String {
+    pub fn template_node(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut self.eval {
+        match &mut sh.eval {
             None => reply::<NodeDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
-                let r = e.node(&self.doc, &p).map(dto);
+                let r = e.node(&sh.doc, &p).map(dto);
                 reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
             }
         }
     }
 
     /// Same envelope as `template_node`, with `node` being an array of children.
-    pub fn template_children(&mut self, path: &[u32], from: f64, to: f64) -> String {
+    pub fn template_children(&mut self, space: u32, path: &[u32], from: f64, to: f64) -> String {
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut self.eval {
+        match &mut sh.eval {
             None => reply::<Vec<NodeDto>>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
                 let r = e
-                    .children(&self.doc, &p, from as u64, to as u64)
+                    .children(&sh.doc, &p, from as u64, to as u64)
                     .map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
                 reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
             }
@@ -1339,13 +1576,15 @@ impl Editor {
 
     /// Whole text of a text field, decoded in its own encoding:
     /// {status:"ok",node:{text,truncated}}.
-    pub fn field_text(&mut self, path: &[u32]) -> String {
+    pub fn field_text(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut self.eval {
+        match &mut sh.eval {
             None => reply::<TextDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
-                reply(e.text_value(&self.doc, &p).map(|(text, truncated)| TextDto { text, truncated }))
+                reply(e.text_value(&sh.doc, &p).map(|(text, truncated)| TextDto { text, truncated }))
             }
         }
     }
@@ -1354,14 +1593,16 @@ impl Editor {
     /// field is in: {status:"ok",node:{bytes:[..],truncated}}. Use this rather
     /// than `read_bits` at the node's offset, which is the file and is the
     /// wrong bytes for anything inside a decoded stream.
-    pub fn field_bytes(&mut self, path: &[u32], limit: u32) -> String {
+    pub fn field_bytes(&mut self, space: u32, path: &[u32], limit: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut self.eval {
+        match &mut sh.eval {
             None => reply::<BytesDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
                 reply(
-                    e.field_bytes(&self.doc, &p, u64::from(limit))
+                    e.field_bytes(&sh.doc, &p, u64::from(limit))
                         .map(|(bytes, truncated)| BytesDto { bytes, truncated }),
                 )
             }
@@ -1370,12 +1611,14 @@ impl Editor {
 
     /// Every field between two bit offsets, for the annotation column:
     /// {status:"ok",node:[span,..]}. `max` caps how many come back.
-    pub fn spans(&mut self, from_bit: f64, to_bit: f64, max: u32) -> String {
-        let Some(e) = &mut self.eval else {
+    pub fn spans(&mut self, space: u32, from_bit: f64, to_bit: f64, max: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let Some(e) = &mut sh.eval else {
             return reply::<Vec<SpanDto>>(Err(EvalError::Failed("no template".into())));
         };
         e.begin_slice();
-        let found = match e.spans(&self.doc, from_bit as u64, to_bit as u64, max as usize) {
+        let found = match e.spans(&sh.doc, from_bit as u64, to_bit as u64, max as usize) {
             Ok(v) => v,
             Err(err) => return reply::<Vec<SpanDto>>(Err(err)),
         };
@@ -1386,8 +1629,10 @@ impl Editor {
     /// What an HDF5 file holds, read in the file's own terms rather than the
     /// template's: {status:"ok",node:{objects,..}}. Empty for every other
     /// format, since nothing else here has a group tree to walk.
-    pub fn contents(&mut self) -> String {
-        if self.template != "hdf5" {
+    pub fn contents(&mut self, space: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        if sh.template != "hdf5" {
             return reply(Ok(ContentsDto {
                 objects: Vec::new(),
                 total: 0.0,
@@ -1397,11 +1642,11 @@ impl Editor {
                 columns: 0.0,
             }));
         }
-        let Some(e) = &mut self.eval else {
+        let Some(e) = &mut sh.eval else {
             return reply::<ContentsDto>(Err(EvalError::Failed("no template".into())));
         };
         e.begin_slice();
-        let found = match qubero_core::formats::h5ad::contents(e, &self.doc) {
+        let found = match qubero_core::formats::h5ad::contents(e, &sh.doc) {
             Ok(c) => c,
             Err(err) => return reply::<ContentsDto>(Err(err)),
         };
@@ -1447,31 +1692,33 @@ impl Editor {
 
     /// Named ELF sections and a bounded prefix of its symbols. The semantic
     /// pass is cached because resolving names crosses several linked tables.
-    pub fn elf_contents(&mut self, symbol_limit: u32) -> String {
-        if self.template != "elf" && self.template != "bpf" {
+    pub fn elf_contents(&mut self, space: u32, symbol_limit: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        if sh.template != "elf" && sh.template != "bpf" {
             return reply::<ElfContentsDto>(Err(EvalError::Failed("not an ELF template".into())));
         }
-        let Some(e) = &mut self.eval else {
+        let Some(e) = &mut sh.eval else {
             return reply::<ElfContentsDto>(Err(EvalError::Failed("no template".into())));
         };
         let need_symbols = symbol_limit > 0;
-        if self.bpf.is_none() || (need_symbols && !self.bpf_complete) {
+        if sh.bpf.is_none() || (need_symbols && !sh.bpf_complete) {
             e.set_slice(None);
             let read = if need_symbols {
-                formats::ElfProgram::read(e, &self.doc)
+                formats::ElfProgram::read(e, &sh.doc)
             } else {
-                formats::ElfProgram::read_sections(e, &self.doc)
+                formats::ElfProgram::read_sections(e, &sh.doc)
             };
             e.set_slice(Some(WORK_SLICE));
             match read {
                 Ok(program) => {
-                    self.bpf = Some(program);
-                    self.bpf_complete = need_symbols;
+                    sh.bpf = Some(program);
+                    sh.bpf_complete = need_symbols;
                 }
                 Err(error) => return reply::<ElfContentsDto>(Err(error)),
             }
         }
-        let Some(program) = &self.bpf else {
+        let Some(program) = &sh.bpf else {
             return reply::<ElfContentsDto>(Err(EvalError::Failed("could not resolve ELF tables".into())));
         };
         let sections = program.sections.iter().enumerate().map(|(i, section)| ElfSectionDto {
@@ -1499,8 +1746,9 @@ impl Editor {
     }
 
     /// The primary ISO 9660 volume and its root-directory pointer.
-    pub fn iso_volume(&self) -> String {
-        if self.template != "iso9660" {
+    pub fn iso_volume(&self, space: u32) -> String {
+        let sh = self.at(space);
+        if sh.template != "iso9660" {
             return reply::<IsoVolumeDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
         }
         let mut descriptor = vec![0u8; 2048];
@@ -1508,10 +1756,10 @@ impl Editor {
         let mut joliet = None;
         for i in 0..64usize {
             let at = (16 + i as u64) * 2048;
-            if at + 2048 > self.doc.len_bytes() {
+            if at + 2048 > sh.doc.len_bytes() {
                 break;
             }
-            let missing = self.doc.read_bytes(at, &mut descriptor);
+            let missing = sh.doc.read_bytes(at, &mut descriptor);
             if !missing.is_empty() {
                 return reply::<IsoVolumeDto>(Err(EvalError::Pending(missing)));
             }
@@ -1564,18 +1812,19 @@ impl Editor {
 
     /// One ISO directory, bounded for display but counted in full. Child
     /// directories are read only when their logical row is opened.
-    pub fn iso_directory(&self, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
-        if self.template != "iso9660" {
+    pub fn iso_directory(&self, space: u32, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
+        let sh = self.at(space);
+        if sh.template != "iso9660" {
             return reply::<IsoDirectoryDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
         }
         let block = block_size as u64;
         let len = size as u64;
         let at = (extent as u64).saturating_mul(block);
-        if block == 0 || len > 32 * 1024 * 1024 || at.saturating_add(len) > self.doc.len_bytes() {
+        if block == 0 || len > 32 * 1024 * 1024 || at.saturating_add(len) > sh.doc.len_bytes() {
             return reply::<IsoDirectoryDto>(Err(EvalError::Failed("invalid or unusually large ISO directory".into())));
         }
         let mut bytes = vec![0u8; len as usize];
-        let missing = self.doc.read_bytes(at, &mut bytes);
+        let missing = sh.doc.read_bytes(at, &mut bytes);
         if !missing.is_empty() {
             return reply::<IsoDirectoryDto>(Err(EvalError::Pending(missing)));
         }
@@ -1674,7 +1923,8 @@ impl Editor {
     /// template already produced: a name is an improvement on a number, not a
     /// requirement for reading the file.
     fn name_instructions(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
-        match self.template.as_str() {
+        let sh = self.sm();
+        match sh.template.as_str() {
             "wasm" => self.name_wasm(found),
             "bpf" => self.name_bpf(found),
             "elf" => self.name_machine(found),
@@ -1684,20 +1934,21 @@ impl Editor {
     }
 
     fn name_wasm(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        let sh = self.sm();
         if !found.iter().any(|s| s.type_name == "Instr") {
             return found.into_iter().map(span_dto).collect();
         }
-        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
-        if self.disasm.is_none() {
+        let Some(e) = &mut sh.eval else { return found.into_iter().map(span_dto).collect() };
+        if sh.disasm.is_none() {
             // The module may not have streamed in far enough yet, in which case
             // this is worth trying again on the next screenful.
-            self.disasm = formats::WasmModule::read(e, &self.doc).ok();
+            sh.disasm = formats::WasmModule::read(e, &sh.doc).ok();
         }
-        let Some(m) = &self.disasm else { return found.into_iter().map(span_dto).collect() };
+        let Some(m) = &sh.disasm else { return found.into_iter().map(span_dto).collect() };
         found
             .into_iter()
             .map(|s| {
-                let named = if s.type_name == "Instr" { m.instruction_line(e, &self.doc, &s.path).ok() } else { None };
+                let named = if s.type_name == "Instr" { m.instruction_line(e, &sh.doc, &s.path).ok() } else { None };
                 let mut dto = span_dto(s);
                 if let Some(line) = named {
                     dto.line = Some(line);
@@ -1710,19 +1961,20 @@ impl Editor {
     /// The same for eBPF, where what a line needs is in the object's tables
     /// rather than in the instruction.
     fn name_bpf(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        let sh = self.sm();
         if !found.iter().any(|s| s.type_name == "BpfInsn") {
             return found.into_iter().map(span_dto).collect();
         }
-        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
-        if !self.bpf_complete {
-            self.bpf = formats::ElfProgram::read(e, &self.doc).ok();
-            self.bpf_complete = self.bpf.is_some();
+        let Some(e) = &mut sh.eval else { return found.into_iter().map(span_dto).collect() };
+        if !sh.bpf_complete {
+            sh.bpf = formats::ElfProgram::read(e, &sh.doc).ok();
+            sh.bpf_complete = sh.bpf.is_some();
         }
-        let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };
+        let Some(p) = &sh.bpf else { return found.into_iter().map(span_dto).collect() };
         found
             .into_iter()
             .map(|s| {
-                let named = if s.type_name == "BpfInsn" { p.instruction_line(e, &self.doc, &s.path).ok() } else { None };
+                let named = if s.type_name == "BpfInsn" { p.instruction_line(e, &sh.doc, &s.path).ok() } else { None };
                 let mut dto = span_dto(s);
                 if let Some(line) = named {
                     dto.line = Some(line);
@@ -1737,26 +1989,27 @@ impl Editor {
     /// had, which is most of what is on a disk: a program is usually stripped
     /// before it ships.
     fn name_machine(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        let sh = self.sm();
         if !found.iter().any(|s| is_machine(&s.type_name)) {
             return found.into_iter().map(span_dto).collect();
         }
-        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
-        if !self.bpf_complete {
+        let Some(e) = &mut sh.eval else { return found.into_iter().map(span_dto).collect() };
+        if !sh.bpf_complete {
             // Reading the symbol table of a whole program is more than one
             // screenful of work, and stopping halfway would mean starting
             // again on every screenful after it. So this one runs to an
             // answer, and what it costs is paid once.
             e.set_slice(None);
-            self.bpf = formats::ElfProgram::read(e, &self.doc).ok();
-            self.bpf_complete = self.bpf.is_some();
+            sh.bpf = formats::ElfProgram::read(e, &sh.doc).ok();
+            sh.bpf_complete = sh.bpf.is_some();
             e.set_slice(Some(WORK_SLICE));
         }
-        let Some(p) = &self.bpf else { return found.into_iter().map(span_dto).collect() };
+        let Some(p) = &sh.bpf else { return found.into_iter().map(span_dto).collect() };
         found
             .into_iter()
             .map(|s| {
                 let named = match is_machine(&s.type_name) {
-                    true => p.machine_line(e, &self.doc, &s.path).ok().flatten(),
+                    true => p.machine_line(e, &sh.doc, &s.path).ok().flatten(),
                     false => None,
                 };
                 let mut dto = span_dto(s);
@@ -1772,22 +2025,23 @@ impl Editor {
     /// relocations, so a call into another module says which function of it
     /// the loader will point the call at.
     fn name_ne(&mut self, found: Vec<Span>) -> Vec<SpanDto> {
+        let sh = self.sm();
         if !found.iter().any(|s| is_machine(&s.type_name)) {
             return found.into_iter().map(span_dto).collect();
         }
-        let Some(e) = &mut self.eval else { return found.into_iter().map(span_dto).collect() };
-        if self.ne.is_none() {
+        let Some(e) = &mut sh.eval else { return found.into_iter().map(span_dto).collect() };
+        if sh.ne.is_none() {
             // The same as for a program's symbols: read once, in full.
             e.set_slice(None);
-            self.ne = formats::NeProgram::read(e, &self.doc).ok();
+            sh.ne = formats::NeProgram::read(e, &sh.doc).ok();
             e.set_slice(Some(WORK_SLICE));
         }
-        let Some(p) = &self.ne else { return found.into_iter().map(span_dto).collect() };
+        let Some(p) = &sh.ne else { return found.into_iter().map(span_dto).collect() };
         found
             .into_iter()
             .map(|s| {
                 let named = match (is_machine(&s.type_name), formats::NeProgram::segment_of(&s.path)) {
-                    (true, Some(segment)) => p.instruction_line(e, &self.doc, &s.path, segment).ok().flatten(),
+                    (true, Some(segment)) => p.instruction_line(e, &sh.doc, &s.path, segment).ok().flatten(),
                     _ => None,
                 };
                 let mut dto = span_dto(s);
@@ -1801,34 +2055,44 @@ impl Editor {
 
     /// Path of the deepest field covering `bit`, as {status:"ok",node:[..]}.
     /// Its ancestors are the prefixes of that path.
-    pub fn locate(&mut self, bit: f64) -> String {
-        match &mut self.eval {
+    pub fn locate(&mut self, space: u32, bit: f64) -> String {
+        self.go(space);
+        let sh = self.sm();
+        match &mut sh.eval {
             None => reply::<Vec<usize>>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 e.begin_slice();
-                reply(e.locate(&self.doc, bit as u64))
+                reply(e.locate(&sh.doc, bit as u64))
             }
         }
     }
 
     /// Write `text` into the field at `path`, encoded as that field's type.
     /// Same envelope as `template_node`; on success `node` is the bit range written.
-    pub fn write_node(&mut self, path: &[u32], text: &str) -> String {
+    pub fn write_node(&mut self, space: u32, path: &[u32], text: &str) -> String {
+        // A byte of an unpacked stream is a function of every compressed byte
+        // before it, so there is nowhere to put a change to one. The interface
+        // says so in its own words; this is the door being locked behind it.
+        if space != 0 {
+            return reply::<WriteDto>(Err(EvalError::Failed("unpacked data is read-only".into())));
+        }
+        self.go(space);
+        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        let prepared = match &mut self.eval {
+        let prepared = match &mut sh.eval {
             None => return reply::<WriteDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => {
                 // An edit is not something to do by halves, so this one runs to
                 // an answer however long it takes.
                 e.set_slice(None);
-                let prepared = e.prepare_write(&self.doc, &p, text);
+                let prepared = e.prepare_write(&sh.doc, &p, text);
                 e.set_slice(Some(WORK_SLICE));
                 prepared
             }
         };
         match prepared {
             Ok(w) => {
-                self.doc.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
+                sh.doc.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
                 self.changed_at(w.offset_bits);
                 reply(Ok(WriteDto { offset_bits: w.offset_bits as f64, size_bits: w.n_bits as f64 }))
             }
@@ -1853,7 +2117,9 @@ impl Editor {
 
     /// One step of a search, from byte `from`. The reply is the same tri-state
     /// as the rest: a step, the chunks it wants, or what is wrong with it.
-    pub fn search_step(&mut self, kind: &str, text: &str, fold: bool, backward: bool, from: f64) -> String {
+    pub fn search_step(&mut self, space: u32, kind: &str, text: &str, fold: bool, backward: bool, from: f64) -> String {
+        self.go(space);
+        let sh = self.sm();
         let n = match needle(kind, text, fold) {
             Ok(n) => n,
             Err(why) => return reply::<StepDto>(Err(EvalError::Failed(why))),
@@ -1862,7 +2128,7 @@ impl Editor {
             return reply(Ok(StepDto::End));
         }
         let s = if backward { Search::backward(n) } else { Search::forward(n) };
-        reply(match s.step(&self.doc, from as u64) {
+        reply(match s.step(&sh.doc, from as u64) {
             Step::Found { at, len } => Ok(StepDto::Found { at: at as f64, len: len as f64 }),
             Step::More { resume } => Ok(StepDto::More { resume: resume as f64 }),
             Step::End => Ok(StepDto::End),
@@ -1874,82 +2140,100 @@ impl Editor {
     /// of what was written: a replacement of a different length has moved
     /// every byte behind it.
     pub fn replace_at(&mut self, at: f64, len: f64, with: &[u8]) {
-        search::replace(&mut self.doc, at as u64, len as u64, with);
+        let sh = self.sm();
+        search::replace(&mut sh.doc, at as u64, len as u64, with);
         self.changed();
     }
 
     /// Fold the edits that follow into one undo step.
     pub fn begin_batch(&mut self) {
-        self.doc.begin_batch();
+        let sh = self.sm();
+        sh.doc.begin_batch();
     }
 
     pub fn end_batch(&mut self) {
-        self.doc.end_batch();
+        let sh = self.sm();
+        sh.doc.end_batch();
     }
 
     pub fn feed_chunk(&mut self, chunk: f64, data: &[u8]) {
-        self.doc.source_mut().insert(chunk as u64, data.into());
+        let sh = self.sm();
+        sh.doc.source_mut().insert(chunk as u64, data.into());
     }
 
-    pub fn has_chunk(&self, chunk: f64) -> bool {
-        self.doc.source().has(chunk as u64)
+    pub fn has_chunk(&self, space: u32, chunk: f64) -> bool {
+        let sh = self.at(space);
+        sh.doc.source().has(chunk as u64)
     }
 
     pub fn chunk_size(&self) -> u32 {
-        self.doc.source().chunk_size() as u32
+        let sh = self.sheet();
+        sh.doc.source().chunk_size() as u32
     }
 
-    pub fn len_bytes(&self) -> f64 {
-        self.doc.len_bytes() as f64
+    pub fn len_bytes(&self, space: u32) -> f64 {
+        let sh = self.at(space);
+        sh.doc.len_bytes() as f64
     }
 
-    pub fn len_bits(&self) -> f64 {
-        self.doc.len_bits() as f64
+    pub fn len_bits(&self, space: u32) -> f64 {
+        let sh = self.at(space);
+        sh.doc.len_bits() as f64
     }
 
     /// Fill `out` with document bytes from `at`. Returns the chunk indices that
     /// were not loaded (those bytes are zero). Empty list means the read is complete.
-    pub fn read_bytes(&self, at: f64, out: &mut [u8]) -> Vec<f64> {
-        self.doc.read_bytes(at as u64, out).into_iter().map(|m| m.chunk as f64).collect()
+    pub fn read_bytes(&self, space: u32, at: f64, out: &mut [u8]) -> Vec<f64> {
+        let sh = self.at(space);
+        sh.doc.read_bytes(at as u64, out).into_iter().map(|m| m.chunk as f64).collect()
     }
 
-    pub fn read_bits(&self, at_bit: f64, n: f64, out: &mut [u8]) -> Vec<f64> {
-        self.doc.read_bits(at_bit as u64, n as u64, out).into_iter().map(|m| m.chunk as f64).collect()
+    pub fn read_bits(&self, space: u32, at_bit: f64, n: f64, out: &mut [u8]) -> Vec<f64> {
+        let sh = self.at(space);
+        sh.doc.read_bits(at_bit as u64, n as u64, out).into_iter().map(|m| m.chunk as f64).collect()
     }
 
     pub fn overwrite_bytes(&mut self, at: f64, data: &[u8]) {
         self.changed_at(at as u64 * 8);
-        self.doc.overwrite_bytes(at as u64, data);
+        let sh = self.sm();
+        sh.doc.overwrite_bytes(at as u64, data);
     }
     /// Overwrite that folds into the previous undo step.
     pub fn amend_overwrite_bytes(&mut self, at: f64, data: &[u8]) {
         self.changed_at(at as u64 * 8);
-        self.doc.amend_overwrite_bytes(at as u64, data);
+        let sh = self.sm();
+        sh.doc.amend_overwrite_bytes(at as u64, data);
     }
     pub fn insert_bytes(&mut self, at: f64, data: &[u8]) {
         self.changed();
-        self.doc.insert_bytes(at as u64, data);
+        let sh = self.sm();
+        sh.doc.insert_bytes(at as u64, data);
     }
     pub fn delete_bytes(&mut self, at: f64, n: f64) {
         self.changed();
-        self.doc.delete_bytes(at as u64, n as u64);
+        let sh = self.sm();
+        sh.doc.delete_bytes(at as u64, n as u64);
     }
     pub fn overwrite_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
         self.changed_at(at_bit as u64);
-        self.doc.overwrite_bits(at_bit as u64, data, n as u64);
+        let sh = self.sm();
+        sh.doc.overwrite_bits(at_bit as u64, data, n as u64);
     }
     pub fn insert_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
         self.changed();
-        self.doc.insert_bits(at_bit as u64, data, n as u64);
+        let sh = self.sm();
+        sh.doc.insert_bits(at_bit as u64, data, n as u64);
     }
     pub fn delete_bits(&mut self, at_bit: f64, n: f64) {
         self.changed();
-        self.doc.delete_bits(at_bit as u64, n as u64);
+        let sh = self.sm();
+        sh.doc.delete_bits(at_bit as u64, n as u64);
     }
 
     /// Save plan as flat quads: kind (0 orig, 1 add, 2 materialize), doc_off, src_off, len.
     pub fn save_plan(&self) -> Vec<f64> {
-        self.doc
+        let sh = self.sheet();
+        sh.doc
             .save_plan()
             .iter()
             .flat_map(|r| {
@@ -1964,28 +2248,35 @@ impl Editor {
     }
 
     pub fn add_bytes(&self) -> Vec<u8> {
-        self.doc.add_bytes().to_vec()
+        let sh = self.sheet();
+        sh.doc.add_bytes().to_vec()
     }
 
     pub fn undo(&mut self) -> bool {
         self.changed();
-        self.doc.undo()
+        let sh = self.sm();
+        sh.doc.undo()
     }
     pub fn redo(&mut self) -> bool {
         self.changed();
-        self.doc.redo()
+        let sh = self.sm();
+        sh.doc.redo()
     }
-    pub fn can_undo(&self) -> bool {
-        self.doc.can_undo()
+    pub fn can_undo(&self, space: u32) -> bool {
+        let sh = self.at(space);
+        sh.doc.can_undo()
     }
-    pub fn can_redo(&self) -> bool {
-        self.doc.can_redo()
+    pub fn can_redo(&self, space: u32) -> bool {
+        let sh = self.at(space);
+        sh.doc.can_redo()
     }
-    pub fn is_modified(&self) -> bool {
-        self.doc.is_modified()
+    pub fn is_modified(&self, space: u32) -> bool {
+        let sh = self.at(space);
+        sh.doc.is_modified()
     }
-    pub fn piece_count(&self) -> u32 {
-        self.doc.piece_count() as u32
+    pub fn piece_count(&self, space: u32) -> u32 {
+        let sh = self.at(space);
+        sh.doc.piece_count() as u32
     }
 
     /// How the file reads as text: the encoding, whether that was a guess, and
@@ -2004,10 +2295,11 @@ impl Editor {
     }
 
     /// Lines starting at `from`, which must be where a line starts.
-    pub fn text_window(&self, encoding: &str, from: f64, want: u32) -> String {
+    pub fn text_window(&self, space: u32, encoding: &str, from: f64, want: u32) -> String {
+        let sh = self.at(space);
         let head = self.head(64);
         let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
-        let w = textview::window(&self.doc, r, from as u64, want as usize);
+        let w = textview::window(&sh.doc, r, from as u64, want as usize);
         serde_json::to_string(&TextWindowDto {
             next: w.next as f64,
             missing: w.missing.iter().map(|m| m.chunk as f64).collect(),
@@ -2034,10 +2326,11 @@ impl Editor {
     /// file is hundreds of thousands of numbers, and spelling each of them out
     /// and parsing it back costs more than the scan does. The layout is
     /// `[next, lf, cr, crlf, missing count, ...missing chunks, ...starts]`.
-    pub fn text_index(&self, encoding: &str, from: f64, to: f64) -> Vec<f64> {
+    pub fn text_index(&self, space: u32, encoding: &str, from: f64, to: f64) -> Vec<f64> {
+        let sh = self.at(space);
         let head = self.head(64);
         let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
-        let idx = textview::text_index(&self.doc, r, from as u64, to as u64);
+        let idx = textview::text_index(&sh.doc, r, from as u64, to as u64);
         let mut out = Vec::with_capacity(5 + idx.missing.len() + idx.starts.len());
         out.push(idx.next as f64);
         out.push(idx.lf as f64);
@@ -2052,11 +2345,12 @@ impl Editor {
     /// Where the line holding `at` starts, and where `lines` line starts back
     /// from there is. Both in one call, because scrolling text upwards wants
     /// the second and clicking in it wants the first.
-    pub fn text_back(&self, encoding: &str, at: f64, lines: u32) -> String {
+    pub fn text_back(&self, space: u32, encoding: &str, at: f64, lines: u32) -> String {
+        let sh = self.at(space);
         let head = self.head(64);
         let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
-        let (start, missing) = textview::line_start(&self.doc, r, at as u64);
-        let (back, more) = textview::back(&self.doc, r, at as u64, lines as usize);
+        let (start, missing) = textview::line_start(&sh.doc, r, at as u64);
+        let (back, more) = textview::back(&sh.doc, r, at as u64, lines as usize);
         serde_json::to_string(&TextBackDto {
             start: start as f64,
             back: back as f64,
@@ -2072,10 +2366,11 @@ impl Editor {
     /// byte-reversed rows only appear for whole bytes. `first` names the
     /// encoding to put at the front, which is whatever the text view is
     /// reading the file in.
-    pub fn selection_text(&self, at_byte: f64, len: f64, first: &str) -> String {
+    pub fn selection_text(&self, space: u32, at_byte: f64, len: f64, first: &str) -> String {
+        let sh = self.at(space);
         let want = (len as u64).min(SELECTION_TEXT_LIMIT) as usize;
         let mut buf = vec![0u8; want];
-        let missing = self.doc.read_bytes(at_byte as u64, &mut buf);
+        let missing = sh.doc.read_bytes(at_byte as u64, &mut buf);
         if !missing.is_empty() {
             return String::new();
         }
@@ -2100,9 +2395,10 @@ impl Editor {
     /// answers. A chunk that is not here yet reads as zeros, which settles the
     /// encoding as Latin-1 until it arrives.
     fn head(&self, n: u64) -> Vec<u8> {
-        let n = n.min(self.doc.len_bytes());
+        let sh = self.sheet();
+        let n = n.min(sh.doc.len_bytes());
         let mut out = vec![0u8; n as usize];
-        self.doc.read_bytes(0, &mut out);
+        sh.doc.read_bytes(0, &mut out);
         out
     }
 }
