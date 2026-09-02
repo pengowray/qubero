@@ -45,7 +45,18 @@ impl Evaluator {
                 return Ok(None);
             }
             let n = self.eval_expr(doc, path, &bits.clone())?;
-            return Ok((1..=128).contains(&n).then_some(n as u64));
+            if !(0..=128).contains(&n) {
+                return Ok(None);
+            }
+            // A width of zero is a real answer for an array, whose count says
+            // how many there are: a GRIB whose values are all the same writes
+            // no data at all, and a million of them must not be a million
+            // reads. A repeat has no count and would never end, so it keeps
+            // the walk, which refuses a zero-size element.
+            if n == 0 && !matches!(ty, Ty::Array { .. }) {
+                return Ok(None);
+            }
+            return Ok(Some(n as u64));
         }
         let Ty::Sized { size, .. } = &**elem else { return Ok(None) };
         if !uniform(size) {

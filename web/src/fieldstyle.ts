@@ -11,6 +11,10 @@ export function fieldClass(kind: string): string {
     case "uint":
     case "int":
     case "float":
+    // A slot nobody filled in is still the number field it always was, and
+    // colouring it as binary would hide which run of a header the reader is
+    // looking at.
+    case "unset":
       return "field-number";
     case "str":
       return "field-text";

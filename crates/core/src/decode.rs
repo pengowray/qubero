@@ -69,12 +69,13 @@ pub fn packed_int(ty: &Ty) -> Option<(u32, Endian)> {
 pub fn fixed_bits(ty: &Ty) -> Option<u64> {
     Some(match ty {
         Ty::UInt { bits, .. } | Ty::Int { bits, .. } | Ty::SignMagnitude { bits, .. } => *bits as u64,
-        // Fixed only in the one case that makes it so, which is the width
-        // being a number after all. Anything else has to be read.
-        Ty::UIntExpr { bits, .. } => match &**bits {
-            Expr::Lit(n) => (*n).max(0) as u64,
-            _ => return None,
-        },
+        // Never fixed, not even for a width written as a number. This answer
+        // is what places a field, and a field whose width is an expression is
+        // placed without that width being known: saying a literal one is fixed
+        // would let it past the check that refuses the one packing this cannot
+        // place. A literal width still costs nothing to read, because `stride`
+        // asks for it once for the whole run.
+        Ty::UIntExpr { .. } => return None,
         Ty::Nullable { inner, .. } => fixed_bits(inner)?,
         Ty::F16(_) | Ty::BF16(_) => 16,
         Ty::F8 { .. } => 8,

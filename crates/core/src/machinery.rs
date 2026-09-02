@@ -231,6 +231,37 @@ mod tests {
         assert_eq!(consumers(&s), vec![Some(1), Some(2), None]);
     }
 
+    /// How wide the numbers are packed settles the run the same way a length
+    /// settles a run of bytes, so the field that said so folds behind it.
+    #[test]
+    fn a_width_belongs_to_the_run_it_packs() {
+        let s = def(&T::structure(
+            "Section",
+            vec![
+                ("bits_per_value", T::u8()),
+                ("count", T::u16(Big)),
+                ("values", T::array(T::uint_expr(E::field("bits_per_value"), Big), E::field("count"))),
+            ],
+        ));
+        assert_eq!(consumers(&s), vec![Some(2), Some(2), None]);
+    }
+
+    /// A record that finds an earlier one by a number it carries is placed by
+    /// that number, so the byte holding it is machinery for the field that
+    /// used it. The list searched is the one the record is in, which is not a
+    /// sibling of anything and so names nothing here.
+    #[test]
+    fn a_computed_label_belongs_to_the_lookup_that_used_it() {
+        let s = def(&T::structure(
+            "Rec",
+            vec![
+                ("class", T::u8()),
+                ("body", T::sized(E::sibling_tagged(&["class_num"], E::field("class"), &["size"]), T::u8())),
+            ],
+        ));
+        assert_eq!(consumers(&s), vec![Some(1), None]);
+    }
+
     #[test]
     fn a_field_nobody_reads_has_no_owner() {
         let s = def(&T::structure("Header", vec![("magic", T::magic(b"AB")), ("flags", T::u16(Big))]));

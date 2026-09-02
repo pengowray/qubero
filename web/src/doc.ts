@@ -126,7 +126,9 @@ export type TemplateNode = {
   readonly value: string;
   /** What the in-place editor starts with; differs from `value` for enums. */
   readonly edit_text: string;
-  readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "magic" | "enum" | "composite";
+  /** `unset` is a number holding the value its format writes for a slot
+   *  nobody filled in; `edit_text` is still the number underneath it. */
+  readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "magic" | "enum" | "flags" | "unset" | "composite";
   readonly ok: boolean;
   readonly child_count: number;
   /** What one child is called, for counting them. Absent when they are items. */
@@ -328,7 +330,7 @@ export type SearchStep =
 /** What one other field decided about this one. `points` is the other way
  *  round: this field holds an offset, and that is where it points. */
 export type Origin = {
-  readonly role: "length" | "count" | "type" | "position" | "value" | "points";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "width" | "points";
   /** The field as the reader would name it: `len`, or `tensors[3].offset`. */
   readonly label: string;
   /** Where it is, so the reader can go there. Empty for a `points` entry. */
