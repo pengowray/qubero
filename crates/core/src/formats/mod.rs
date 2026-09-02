@@ -59,6 +59,7 @@ mod mca;
 mod midi;
 mod mkv;
 mod mp4;
+mod mseed;
 mod nes;
 mod old_mac;
 mod omf;
@@ -74,6 +75,7 @@ mod psd;
 mod pnm;
 mod qoi;
 mod rpm;
+mod sac;
 mod png;
 mod safetensors;
 mod le;
@@ -144,6 +146,7 @@ pub use mca::mca;
 pub use midi::midi;
 pub use mkv::mkv;
 pub use mp4::mp4;
+pub use mseed::mseed;
 pub use nes::nes;
 pub use old_mac::{binhex, compactpro, macbinary, stuffit};
 pub use omf::omf;
@@ -158,6 +161,7 @@ pub use c16::c16;
 pub use pnm::pnm;
 pub use qoi::qoi;
 pub use rpm::rpm;
+pub use sac::sac;
 pub use png::png;
 pub use safetensors::safetensors;
 pub use le::le;
@@ -220,6 +224,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("zip", |_| zip()),
     ("wasm", |_| wasm()),
     ("mp4", |_| mp4()),
+    ("mseed", |_| mseed()),
+    ("sac", |_| sac()),
     ("mkv", |_| mkv()),
     ("dtb", |_| dtb()),
     ("draco", |_| draco()),

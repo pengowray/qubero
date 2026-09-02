@@ -150,6 +150,11 @@ const PROBES: &[Probe] = &[
     Probe::Is("hackrffw", |h, _| is_hackrf_firmware(h)),
     Probe::Is("gdbm", |h, _| gdbm::is_gdbm(h)),
     Probe::Is("bdb", |h, _| bdb::is_bdb(h)),
+    // A miniSEED record, which has no signature but does have a front: six
+    // characters of sequence number, a letter saying how far the data has
+    // been checked, and a start time that reads as a date one way round and
+    // not the other.
+    Probe::Is("mseed", mseed::is_mseed),
     Probe::Which(|h, _| camera_raw_format(h)),
     Probe::Is("mp4", |h, _| h.len() >= 8 && &h[4..8] == b"ftyp"),
     Probe::Is("mkv", |h, _| is_mkv(h)),
@@ -186,6 +191,12 @@ const PROBES: &[Probe] = &[
             _ => None,
         },
     }),
+    // A seismogram, which announces nothing anywhere. What identifies one is
+    // its header version sitting at byte 304, reading as 6 or 7 one way round
+    // or the other, with a sample count that fits in the file. That is one
+    // word of evidence and no front marker at all, so every format that does
+    // mark its front is asked first.
+    Probe::Is("sac", sac::is_sac),
     // A record of who logged in, which has no header at all: it is recognised
     // by every record in it being the right size and shape.
     Probe::Is("utmp", utmp::is_utmp),
