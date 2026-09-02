@@ -23,6 +23,18 @@
       "cwd": "web",
       "port": 17273,
       "autoPort": true
+    },
+    {
+      "name": "web-samples",
+      "runtimeExecutable": "pwsh",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:QUBERO_FILES='C:/Users/pengo/Dropbox/projects/qubero-samples'; $env:PORT='17274'; npm run dev"
+      ],
+      "cwd": "web",
+      "port": 17274,
+      "autoPort": true
     }
   ]
 }
