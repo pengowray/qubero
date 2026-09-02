@@ -167,6 +167,9 @@ export type TemplateNode = {
   /** For a compressed run that would not open, why not: `too-large`,
    *  `failed` or `unaligned`. Null for every other field. */
   readonly refused: string | null;
+  /** True for a compressed run. One that opened can be opened as a document of
+   *  its own; one that did not says why in `refused` instead. */
+  readonly decoded: boolean;
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -905,11 +908,15 @@ export class Doc {
    * is already on the node, so the caller does not have to ask twice.
    */
   openSpace(path: readonly number[]): Doc | null {
-    const r = this.handleReply<{ space: number; refused?: string }>(
+    const r = this.handleReply<{ space: number; template: string; refused?: string }>(
       this.editor.open_space(Uint32Array.from(path)),
     );
     if (r.status !== "ok" || r.node.space === 0) return null;
-    return new Doc(this.editor, this.blob, this.name, r.node.space, [...path]);
+    const opened = new Doc(this.editor, this.blob, this.name, r.node.space, [...path]);
+    // The template came with the space rather than being chosen for it, so it
+    // is set here and never through `setTemplate`.
+    opened.template = r.node.template === "" ? null : r.node.template;
+    return opened;
   }
 
   /** Where the byte at `byte` of this space came from, or null. */
@@ -1014,6 +1021,10 @@ export class Doc {
 
   /** Built-in template name matching the file's first bytes, or null. */
   async sniffTemplate(): Promise<string | null> {
+    // A space came with its template: it is what the stream's `Decoded` node
+    // says is inside it. Sniffing would be asking the unpacked bytes to name a
+    // format that has already been named.
+    if (this.space !== 0) return null;
     // The sniffer says how much it wants: enough for a magic number, for the
     // format tag inside a WAVE's first chunk (the only thing that tells a W4V
     // from a WAV), for the PE header a Windows executable puts at an offset of
@@ -1043,6 +1054,8 @@ export class Doc {
    * describing a single field.
    */
   async identify(): Promise<Identification | null> {
+    // The unpacked bytes were named by the stream that holds them.
+    if (this.space !== 0) return null;
     const n = Math.min(IDENTIFY_WINDOW, this.lengthBytes);
     if (n === 0) return null;
     await this.ensureRange(0, n);
@@ -1055,6 +1068,9 @@ export class Doc {
   }
 
   setTemplate(name: string | null): boolean {
+    // A space's template is the one its stream was declared with. There is no
+    // menu for it, and `set_template` is the file's alone.
+    if (this.space !== 0) return false;
     const ok = this.editor.set_template(name ?? "");
     this.template = ok ? name : null;
     this.notify();

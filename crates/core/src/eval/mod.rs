@@ -198,6 +198,10 @@ pub struct NodeInfo {
     /// ways it would not, as [`crate::codec::Refusal::as_str`] words it. None
     /// for every other field, and for a stream that opened.
     pub refused: Option<String>,
+    /// True for a compressed run: the field is a stream, and what it holds is
+    /// read over the bytes it comes to rather than over the file. A run that
+    /// opened can be opened as a document of its own; see [`crate::eval::spaces`].
+    pub decoded: bool,
     /// What the template says about this field regardless of the shapes:
     /// `Some(true)` for machinery, `Some(false)` for payload, `None` when it
     /// has no opinion.
@@ -548,6 +552,7 @@ impl Evaluator {
                 Some(space::Opened::Refused(why)) => Some(why.as_str().to_string()),
                 _ => None,
             },
+            decoded: matches!(&r.ty, Ty::Decoded { .. }),
             // Nothing inside a decoded stream is written back: there is no
             // mapping from a decoded byte to a byte of the file, so a change
             // made there has nowhere to go.

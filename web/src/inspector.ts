@@ -9,7 +9,7 @@ import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, countText, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "./strings.js";
+import { bitSizeText, childWord, countText, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED } from "./strings.js";
 import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
@@ -85,6 +85,8 @@ export class Inspector {
   onGoTo: (bitOffset: number, ranges?: readonly BitRange[]) => void = () => {};
   /** Asked for when the reader opens a field's bytes as their own document. */
   onOpenTab: (bytes: Uint8Array, name: string, origin: string) => void = () => {};
+  /** A compressed run was asked for as a document of its own. */
+  onOpenUnpacked: (path: readonly number[]) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -663,17 +665,32 @@ export class Inspector {
    * in this file, so a tab is the only place to read them.
    */
   private fillOpenAs(path: readonly number[], n: TemplateNode): void {
+    const parts: Node[] = [];
+    // A compressed run that opened can be read in its own right, in a tab that
+    // stays connected to the bytes it came from. A run that would not open has
+    // no button; the line saying why is already beside the address above.
+    if (n.decoded && n.refused === null) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "insp-check-button";
+      button.textContent = UNPACKED.open;
+      button.title = UNPACKED.openTitle(n.name);
+      button.addEventListener("click", () => this.onOpenUnpacked(path));
+      parts.push(button);
+    }
     const plan = openPlan(this.doc, path, n);
-    if (plan === null) {
+    if (plan !== null) {
+      const detail = document.createElement("div");
+      detail.className = "insp-detail";
+      detail.textContent = plan.detail;
+      parts.push(subhead("Open as a file"), detail);
+      if (plan.load !== null) parts.push(this.openButton(plan));
+    }
+    if (parts.length === 0) {
       this.openAs.hidden = true;
       this.openAs.replaceChildren();
       return;
     }
-    const detail = document.createElement("div");
-    detail.className = "insp-detail";
-    detail.textContent = plan.detail;
-    const parts: Node[] = [subhead("Open as a file"), detail];
-    if (plan.load !== null) parts.push(this.openButton(plan));
     this.openAs.replaceChildren(...parts);
     this.openAs.hidden = false;
   }

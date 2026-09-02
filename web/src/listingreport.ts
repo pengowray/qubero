@@ -139,6 +139,9 @@ export class ListingReport {
   /** A long list was asked for on its own. The pane is the caller's, since
    *  where it goes on the screen is not this view's business. */
   onOpenList: (path: readonly number[]) => void = () => {};
+  /** A compressed run was asked for as a document of its own. Which tab that
+   *  becomes is the caller's business, not this view's. */
+  onOpenUnpacked: (path: readonly number[]) => void = () => {};
   /** The parts of the file changed: the tree was walked again. The rail and
    *  the hex view take their headings from `outline()` when this fires. */
   onOutline: (headings: readonly OutlineHeading[]) => void = () => {};
@@ -720,6 +723,11 @@ export class ListingReport {
     const list = target.closest<HTMLElement>("[data-list]")?.dataset["list"];
     if (list !== undefined) {
       this.onOpenList(list === "" ? [] : list.split(".").map(Number));
+      return;
+    }
+    const unpacked = target.closest<HTMLElement>("[data-unpacked]")?.dataset["unpacked"];
+    if (unpacked !== undefined) {
+      this.onOpenUnpacked(unpacked === "" ? [] : unpacked.split(".").map(Number));
       return;
     }
     const wants = target.closest<HTMLElement>("[data-bytes]")?.dataset["bytes"];

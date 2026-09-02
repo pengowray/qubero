@@ -138,6 +138,9 @@ struct NodeDto {
     /// For a compressed run that would not open: "too-large", "failed" or
     /// "unaligned". Null for every other field.
     refused: Option<String>,
+    /// True for a compressed run. One that opened can be opened as a document
+    /// of its own, which is what the Open unpacked button does.
+    decoded: bool,
 }
 
 /// What the byte-class scan has found so far. `classes` is one digit per
@@ -997,6 +1000,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         contents: n.contents,
         space: n.space as f64,
         refused: n.refused,
+        decoded: n.decoded,
     }
 }
 
@@ -1076,6 +1080,9 @@ const SPACE_CHUNK: u64 = 64 * 1024;
 #[derive(Serialize)]
 struct SpaceDto {
     space: f64,
+    /// The template reading the unpacked bytes, which is the one that declared
+    /// the stream. Empty for a stream that did not open.
+    template: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     refused: Option<String>,
 }
@@ -1179,7 +1186,8 @@ impl Editor {
     pub fn open_space(&mut self, path: &[u32]) -> String {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         if let Some(i) = self.sheets.iter().position(|sh| !sh.origin.is_empty() && sh.origin == p) {
-            return reply(Ok(SpaceDto { space: i as f64, refused: None }));
+            let template = self.sheets[i].template.clone();
+            return reply(Ok(SpaceDto { space: i as f64, template, refused: None }));
         }
         self.live = 0;
         let sh = &mut self.sheets[0];
@@ -1194,7 +1202,7 @@ impl Editor {
         let doc = match opened {
             Ok(OpenedDoc::Opened(d)) => d,
             Ok(OpenedDoc::Refused(why)) => {
-                return reply(Ok(SpaceDto { space: 0.0, refused: Some(why.as_str().to_string()) }))
+                return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why.as_str().to_string()) }))
             }
             Err(err) => return reply::<SpaceDto>(Err(err)),
         };
@@ -1213,12 +1221,14 @@ impl Editor {
             store.insert(c, bytes[from..to].to_vec().into_boxed_slice());
         }
         let mut sheet = Sheet::new(store, p);
-        sheet.template = doc.template.name.clone();
+        let doc_template = doc.template.name.clone();
+        sheet.template = doc_template.clone();
         let mut ev = Evaluator::new(doc.template);
         ev.set_slice(Some(WORK_SLICE));
         sheet.eval = Some(ev);
         self.sheets.push(sheet);
-        reply(Ok(SpaceDto { space: (self.sheets.len() - 1) as f64, refused: None }))
+        let template = doc_template;
+        reply(Ok(SpaceDto { space: (self.sheets.len() - 1) as f64, template, refused: None }))
     }
 
     /// Which bits of the compressed run the byte at `byte` of `space` came
@@ -1399,6 +1409,7 @@ impl Editor {
 
     /// Select a built-in template by name; "" clears it. Returns false if unknown.
     pub fn set_template(&mut self, name: &str) -> bool {
+        self.live = 0;
         let sh = self.sm();
         sh.disasm = None;
         sh.bpf = None;
@@ -1429,6 +1440,7 @@ impl Editor {
     /// bytes to a fixed place, which is the honest answer for a format found by
     /// searching rather than by looking.
     pub fn set_magic_template(&mut self, name: &str, rules: &str, head: &[u8]) -> bool {
+        self.live = 0;
         let sh = self.sm();
         // A signature template covers a format's first bytes only, so whatever
         // full template was in use no longer applies.
@@ -1523,7 +1535,7 @@ impl Editor {
     /// the database can match on because the stub sits at a different place in
     /// every program. It is credited to this editor rather than to a rule file.
     pub fn detect_tools(&self, rules: &str, head: &[u8]) -> String {
-        let sh = self.sheet();
+        let sh = &self.sheets[0];
         let db = diescript::parse_bundle(rules);
         // What the file says about itself: where it starts running, what its
         // sections are called, where the overlay begins. Worked out once.
@@ -2140,6 +2152,7 @@ impl Editor {
     /// of what was written: a replacement of a different length has moved
     /// every byte behind it.
     pub fn replace_at(&mut self, at: f64, len: f64, with: &[u8]) {
+        self.live = 0;
         let sh = self.sm();
         search::replace(&mut sh.doc, at as u64, len as u64, with);
         self.changed();
@@ -2147,16 +2160,19 @@ impl Editor {
 
     /// Fold the edits that follow into one undo step.
     pub fn begin_batch(&mut self) {
+        self.live = 0;
         let sh = self.sm();
         sh.doc.begin_batch();
     }
 
     pub fn end_batch(&mut self) {
+        self.live = 0;
         let sh = self.sm();
         sh.doc.end_batch();
     }
 
     pub fn feed_chunk(&mut self, chunk: f64, data: &[u8]) {
+        self.live = 0;
         let sh = self.sm();
         sh.doc.source_mut().insert(chunk as u64, data.into());
     }
@@ -2167,7 +2183,7 @@ impl Editor {
     }
 
     pub fn chunk_size(&self) -> u32 {
-        let sh = self.sheet();
+        let sh = &self.sheets[0];
         sh.doc.source().chunk_size() as u32
     }
 
@@ -2195,44 +2211,51 @@ impl Editor {
 
     pub fn overwrite_bytes(&mut self, at: f64, data: &[u8]) {
         self.changed_at(at as u64 * 8);
+        self.live = 0;
         let sh = self.sm();
         sh.doc.overwrite_bytes(at as u64, data);
     }
     /// Overwrite that folds into the previous undo step.
     pub fn amend_overwrite_bytes(&mut self, at: f64, data: &[u8]) {
         self.changed_at(at as u64 * 8);
+        self.live = 0;
         let sh = self.sm();
         sh.doc.amend_overwrite_bytes(at as u64, data);
     }
     pub fn insert_bytes(&mut self, at: f64, data: &[u8]) {
         self.changed();
+        self.live = 0;
         let sh = self.sm();
         sh.doc.insert_bytes(at as u64, data);
     }
     pub fn delete_bytes(&mut self, at: f64, n: f64) {
         self.changed();
+        self.live = 0;
         let sh = self.sm();
         sh.doc.delete_bytes(at as u64, n as u64);
     }
     pub fn overwrite_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
         self.changed_at(at_bit as u64);
+        self.live = 0;
         let sh = self.sm();
         sh.doc.overwrite_bits(at_bit as u64, data, n as u64);
     }
     pub fn insert_bits(&mut self, at_bit: f64, data: &[u8], n: f64) {
         self.changed();
+        self.live = 0;
         let sh = self.sm();
         sh.doc.insert_bits(at_bit as u64, data, n as u64);
     }
     pub fn delete_bits(&mut self, at_bit: f64, n: f64) {
         self.changed();
+        self.live = 0;
         let sh = self.sm();
         sh.doc.delete_bits(at_bit as u64, n as u64);
     }
 
     /// Save plan as flat quads: kind (0 orig, 1 add, 2 materialize), doc_off, src_off, len.
     pub fn save_plan(&self) -> Vec<f64> {
-        let sh = self.sheet();
+        let sh = &self.sheets[0];
         sh.doc
             .save_plan()
             .iter()
@@ -2248,17 +2271,19 @@ impl Editor {
     }
 
     pub fn add_bytes(&self) -> Vec<u8> {
-        let sh = self.sheet();
+        let sh = &self.sheets[0];
         sh.doc.add_bytes().to_vec()
     }
 
     pub fn undo(&mut self) -> bool {
         self.changed();
+        self.live = 0;
         let sh = self.sm();
         sh.doc.undo()
     }
     pub fn redo(&mut self) -> bool {
         self.changed();
+        self.live = 0;
         let sh = self.sm();
         sh.doc.redo()
     }
@@ -2395,7 +2420,7 @@ impl Editor {
     /// answers. A chunk that is not here yet reads as zeros, which settles the
     /// encoding as Latin-1 until it arrives.
     fn head(&self, n: u64) -> Vec<u8> {
-        let sh = self.sheet();
+        let sh = &self.sheets[0];
         let n = n.min(sh.doc.len_bytes());
         let mut out = vec![0u8; n as usize];
         sh.doc.read_bytes(0, &mut out);

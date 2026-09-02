@@ -21,7 +21,7 @@ import { recordTable } from "./records.js";
 import type { RecordCell } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
-import { bitSizeText, childWord, countText, DECODED_NO_HEX, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT } from "./strings.js";
+import { bitSizeText, childWord, countText, DECODED_NO_HEX, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT, UNPACKED } from "./strings.js";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -182,6 +182,12 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
   // the file to point at. See DESIGN.md, "A stream read as the fields inside
   // it".
   if (space === 0) row.append(bytesButton(c, item.key));
+  // A compressed run that opened can be read in its own right, with its own
+  // hex view and its own listing. A run that would not open has no button and
+  // keeps saying why instead.
+  if (item.node !== null && item.node.decoded && item.node.refused === null) {
+    row.append(unpackedButton(item.path, item.node.name));
+  }
   // Only a list too long to draw: for anything the window already holds
   // whole, a pane of its own would be the same rows somewhere else.
   if (item.node !== null && item.node.child_count > PAGE) row.append(listButton(item.path));
@@ -350,6 +356,15 @@ function bytesButton(c: DrawContext, key: string): HTMLElement {
 /** The way out of a window and into the whole list. It sits on the list's own
  *  heading and on both ends of the drawn window, which is where a reader finds
  *  out the list is longer than what is in front of them. */
+/** The control that opens a compressed run as a document of its own. */
+function unpackedButton(path: readonly number[], name: string): HTMLElement {
+  const b = el("button", "rp-bytes rp-unpacked", UNPACKED.open);
+  b.type = "button";
+  b.title = UNPACKED.openTitle(name);
+  b.dataset["unpacked"] = pathKey(path);
+  return b;
+}
+
 function listButton(path: readonly number[]): HTMLElement {
   const b = el("button", "rp-bytes rp-list", REPORT.paneOpen);
   b.type = "button";

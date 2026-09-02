@@ -281,6 +281,29 @@ function build(tab: Tab): Page {
     structure.reveal(path);
   };
   inspector.onOpenTab = openEmbedded;
+  /**
+   * Open a compressed run as a document of its own, or bring its tab to the
+   * front if it is already open. The run is unpacked once and kept, so a second
+   * ask costs nothing.
+   */
+  const openUnpacked = (path: readonly number[]): void => {
+    const n = doc.templateNode(path);
+    if (n.status !== "ok") return;
+    const unpacked = doc.openSpace(path);
+    if (unpacked === null) return;
+    const already = tabs.forSpace(unpacked.space);
+    if (already >= 0) {
+      tabs.focus(already);
+      return;
+    }
+    tabs.add({
+      doc: unpacked,
+      title: UNPACKED.tabTitle(n.node.name, doc.name),
+      origin: UNPACKED.openTitle(n.node.name),
+    });
+  };
+  structure.onOpenUnpacked = openUnpacked;
+  inspector.onOpenUnpacked = openUnpacked;
   view.onPickField = (path) => {
     goToField(path);
     overview.reveal(path);
@@ -310,6 +333,17 @@ function build(tab: Tab): Page {
     // them. It is left on the raw reading only for a file that has none.
     if (tmpl.value !== "") inspector.setMode("structure");
   });
+  // An unpacked stream was named by the stream that held it, so none of the
+  // work below applies: nothing sniffs it, nothing identifies it, and its
+  // template is not one of the menu's.
+  // Nothing here says what the unpacked bytes are. The template reading them is
+  // the one the stream was declared with, and naming the tab after it would
+  // claim the unpacked bytes are another Zstandard stream. Until the unpacked
+  // bytes are recognised in their own right, the tab's own title is the only
+  // honest answer, and it is already above.
+  if (!doc.isFile) {
+    structure.setMatched(doc.template !== null);
+  } else
   void doc.sniffTemplate().then(async (name) => {
     const templated = name !== null;
     structure.setMatched(templated);
@@ -574,6 +608,14 @@ function build(tab: Tab): Page {
   const openBtn = el("button", { type: "button", textContent: "Open" });
   openBtn.addEventListener("click", () => pick());
 
+  // An unpacked stream is read-only and has no file of its own to save to, and
+  // its template came with the stream rather than being chosen. Controls that
+  // would do nothing are not shown rather than shown disabled: a row of dead
+  // buttons is a row of questions.
+  if (!doc.isFile) {
+    for (const c of [saveBtn, undoBtn, redoBtn, tmpl]) c.hidden = true;
+  }
+
   const toolbar = el(
     "header",
     { className: "toolbar" },
@@ -604,7 +646,9 @@ function build(tab: Tab): Page {
     // been edited that reading is about bytes that are no longer there, so the
     // offer goes rather than saying something that stopped being true.
     if (doc.modified) dumpBar.hidden = true;
-    fileLabel.textContent = `${doc.name}${doc.modified ? " (edited)" : ""}  ${formatSize(doc.lengthBytes)}`;
+    // The name of what is being read, which for an unpacked stream is what the
+    // tab calls it rather than the file it came out of.
+    fileLabel.textContent = `${tab.title}${doc.modified ? " (edited)" : ""}  ${formatSize(doc.lengthBytes)}`;
     if (tabs.showing(tab)) app.querySelector(".tab.is-active")?.classList.toggle("is-edited", doc.modified);
     undoBtn.disabled = !doc.canUndo;
     redoBtn.disabled = !doc.canRedo;
