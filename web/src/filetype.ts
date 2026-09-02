@@ -78,6 +78,14 @@ const TEMPLATE_LABEL: Record<string, string> = {
   tar: "tar archive",
   "7z": "7-Zip archive",
   rar5: "RAR 5 archive",
+  root: "CERN ROOT",
+  gwf: "LIGO/Virgo GWF frame",
+  fits: "FITS",
+  npy: "NumPy array",
+  netcdf: "NetCDF classic",
+  grib: "GRIB weather data",
+  mseed: "miniSEED seismic records",
+  sac: "SAC seismogram",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */
