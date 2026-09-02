@@ -224,6 +224,8 @@ mod tests {
         assert_eq!(blocks.name, "blocks");
         assert_eq!(blocks.type_name, "blocks");
         assert_eq!(blocks.unit.as_deref(), Some("block"));
+        assert_eq!(blocks.machinery, Some(true), "the blocks are machinery for the contents");
+        assert_eq!(e.node(&d, &[6, 0]).unwrap().machinery, None, "the contents are not machinery");
         assert_eq!(blocks.space, 0, "the blocks are bits of the file, not of the stream");
         assert_eq!(blocks.child_count, 1);
         // The one block starts where the run does and runs to the end of it.

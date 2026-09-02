@@ -172,6 +172,14 @@ pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     Ok((out, b.done()))
 }
 
+/// The same, with a step budget the tests can reach. See [`crate::codec::MAX_STEPS`].
+#[cfg(test)]
+fn inflate_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {
+    let mut b = TraceBuilder::with_budget(budget);
+    let out = run(data, 0, data.len() as u64 * 8, &mut b)?;
+    Ok((out, b.done()))
+}
+
 /// A zlib stream, RFC 1950: two bytes of header, deflate, and an Adler-32.
 ///
 /// The wrapper's own bytes are steps too, so the trace tiles the run the
@@ -659,6 +667,23 @@ mod tests {
         assert_eq!(out, text);
         trace.check_tiles().expect("tiles");
         assert!(!trace.coarse(), "the budget is not reached by a stream this size");
+
+        // The same stream with a budget it does reach. The bytes are the same
+        // bytes, the trace still tiles, and what is lost is only the naming:
+        // each block's symbols become one step covering all of them.
+        let (coarse_out, coarse) = inflate_within(&packed, 50).expect("reads");
+        assert_eq!(coarse_out, out, "coarsening changed the bytes");
+        coarse.check_tiles().expect("a coarse trace still tiles");
+        assert!(coarse.coarse(), "the budget of 50 was not reached");
+        assert!(coarse.len() < trace.len(), "coarsening kept as many steps as naming them");
+        assert_eq!(coarse.blocks().len(), trace.blocks().len(), "coarsening lost a block");
+        // Every byte still maps to something; a block's symbols map to the one
+        // step standing for all of them.
+        for byte in (0..out.len() as u64).step_by(97) {
+            assert!(coarse.map_out(byte).is_some(), "byte {byte} came from nowhere");
+        }
+        assert!(coarse.steps().any(|s| s.kind == StepKind::Opaque));
+        assert!(!coarse.steps().any(|s| matches!(s.kind, StepKind::Literal(_))));
     }
 
     /// Every byte of the output belongs to exactly one step, and every bit of

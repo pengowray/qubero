@@ -2398,10 +2398,46 @@ fn locate_lands_on_what_the_decoder_read_and_never_on_what_it_produced() {
         let deep = at.len() > 1;
         assert_eq!(deep, (4..2 + len as u64 - 4).contains(&byte), "at byte {byte}, landed on {at:?}");
     }
-    // And the hex view draws the wrapper's bytes as the run they are.
-    let spans = ev.spans(&d, 2 * 8, 3 * 8, 100).unwrap();
+    // And the hex view draws the wrapper's bytes as the run they are, with
+    // the blocks between them as entries of their own rather than swallowed.
+    let spans = ev.spans(&d, 2 * 8, (2 + len as u64) * 8, 100).unwrap();
+    assert!(spans.len() > 2, "the run drew as {} entries", spans.len());
     assert_eq!(spans[0].name, "stream");
-    assert!(!spans[0].gap);
+    assert_eq!(spans[0].size_bits, 2 * 8, "the zlib header is the wrapper's two bytes");
+    // The tail is whatever the last block did not use of its last byte, and
+    // then the Adler-32.
+    assert_eq!(spans.last().unwrap().name, "stream");
+    assert!(spans.last().unwrap().size_bits >= 4 * 8, "the tail is shorter than the Adler-32");
+    assert!(spans.iter().any(|s| s.name == "bfinal"), "no block header in {:?}", names(&spans));
+    // Nothing overlaps and nothing is skipped.
+    let mut at = 2 * 8;
+    for s in &spans {
+        assert_eq!(s.offset_bits, at, "{:?} starts in the wrong place", s.name);
+        at += s.size_bits;
+    }
+    assert_eq!(at, (2 + len as u64) * 8);
+}
+
+fn names(spans: &[crate::eval::Span]) -> Vec<String> {
+    spans.iter().map(|s| s.name.clone()).collect()
+}
+
+/// An edit anywhere drops the trace, and so has to drop the fields laid out
+/// from it. They are bits of the file like any other, so nothing else would.
+#[test]
+fn an_edit_drops_the_fields_the_trace_laid_down() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    let field = ev.node(&d, &[1, 1, 0, 0]).unwrap();
+    let before = ev.memo_len();
+    // An edit past everything: `forget_after` would keep every node here,
+    // since they all end before it. They still have to go, because the trace
+    // they were laid out from does.
+    ev.invalidate_from(u64::MAX);
+    assert!(ev.memo_len() < before, "{before} nodes kept, trace or no trace");
+    // And asking again works: the stream is opened again and the fields come
+    // back the same.
+    assert_eq!(ev.node(&d, &[1, 1, 0, 0]).unwrap(), field);
 }
 
 /// A run that will not open is the bytes it is, with the node saying which way

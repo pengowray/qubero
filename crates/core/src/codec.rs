@@ -433,6 +433,11 @@ pub(crate) struct TraceBuilder {
     trace: Trace,
     /// Where the block being recorded started, and its first step.
     block_start: Option<(u64, u64, u32)>,
+    /// How many steps this trace may hold before it coarsens. Only the tests
+    /// set it: reaching [`MAX_STEPS`] takes a hundred megabytes of input, and
+    /// the path that gives up naming symbols is the one path that can leave a
+    /// trace not tiling, so it has to be reachable.
+    budget: Option<usize>,
 }
 
 impl TraceBuilder {
@@ -455,7 +460,12 @@ impl TraceBuilder {
     }
 
     pub(crate) fn over_budget(&self) -> bool {
-        self.trace.steps.len() >= MAX_STEPS
+        self.trace.steps.len() >= self.budget.unwrap_or(MAX_STEPS)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_budget(budget: usize) -> TraceBuilder {
+        TraceBuilder { budget: Some(budget), ..TraceBuilder::default() }
     }
 
     pub(crate) fn coarsen(&mut self) {

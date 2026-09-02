@@ -567,7 +567,13 @@ impl Evaluator {
             _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
-        let (consumed_by, machinery, contents) = self.in_parent(path);
+        let (consumed_by, mut machinery, contents) = self.in_parent(path);
+        // What the decoder read is machinery for what it produced: a reader
+        // who wants the contents of a stream is not asking about its Huffman
+        // tables, and a view that folds machinery should fold these.
+        if self.is_trace_field(path) {
+            machinery = Some(true);
+        }
         Ok(NodeInfo {
             path: path.to_vec(),
             space: r.space,
@@ -1568,6 +1574,14 @@ impl Evaluator {
             }
         }
         None
+    }
+
+    /// Whether this node is one of the fields a trace laid down, which is the
+    /// `blocks` child of a stream and everything under it.
+    pub(super) fn is_trace_field(&self, path: &[usize]) -> bool {
+        (0..path.len()).any(|k| {
+            path[k] == 1 && matches!(self.memo.get(&path[..k]).map(|r| &r.ty), Some(Ty::Decoded { .. }))
+        })
     }
 
     /// Whether a stream's trace has anything to show, which decides whether

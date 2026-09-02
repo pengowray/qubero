@@ -51,6 +51,7 @@ fn every_deflate_stream_in_the_collection_reads_the_same_as_miniz_oxide() {
         return;
     }
     let mut tally = Tally::default();
+    let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
     for path in &files {
         let Ok(bytes) = std::fs::read(path) else { continue };
         let name = path.display().to_string();
@@ -68,6 +69,7 @@ fn every_deflate_stream_in_the_collection_reads_the_same_as_miniz_oxide() {
                     assert!(!trace.blocks().is_empty() || ours.is_empty(), "{name}: {what} has no blocks");
                     assert!(trace.blocks().last().is_none_or(|b| b.last), "{name}: {what} never ended");
                     tally.saw(&format!("{name} {what}"), run.len(), ours.len(), trace.len());
+                    *kinds.entry(what.clone()).or_insert(0usize) += 1;
                 }
                 // miniz reads streams with trailing rubbish after them that
                 // this refuses, and the other way round for a few broken
@@ -77,6 +79,9 @@ fn every_deflate_stream_in_the_collection_reads_the_same_as_miniz_oxide() {
         }
     }
     assert!(tally.streams > 0, "the collection holds no deflate streams, which cannot be right");
+    // Which shapes the collection actually held, so a claim about coverage
+    // can be checked rather than assumed.
+    eprintln!("--- deflate runs by where they came from: {kinds:?}");
     report("deflate", &tally);
 }
 

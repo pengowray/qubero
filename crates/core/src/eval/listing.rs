@@ -339,7 +339,7 @@ impl Evaluator {
                 // at offset 0 of the decoded bytes, and treating that as a bit
                 // of the file would put the stream's contents at the front of
                 // it.
-                self.decoded_run(doc, &path, &info)?
+                self.decoded_run(doc, &path, &info, at)?
             } else if info.composite {
                 self.gap_inside(doc, &path, &info, at)?
             } else {
@@ -407,8 +407,23 @@ impl Evaluator {
     /// The hex view scrolls past every stream in the file and wants none of
     /// them unpacked to draw a row, and what a template declares inside a
     /// stream is the same whatever the bytes turn out to be.
-    fn decoded_run<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
+    fn decoded_run<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo, at: u64) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
+        // A run whose decoder kept a trace is not one entry: the blocks are
+        // entries of their own, and what is left of the run is whatever a
+        // wrapper put in front of them and after them. Drawing the whole run
+        // here would cover the blocks and the view would step past all of
+        // them.
+        if self.has_blocks(path) {
+            let mut blocks = path.to_vec();
+            blocks.push(1);
+            self.resolve(doc, &blocks)?;
+            let (from, size) = (self.memo[&blocks].offset, self.size_of(doc, &blocks)?);
+            let end = info.offset_bits + info.size_bits;
+            let (a, b) = if at < from { (info.offset_bits, from) } else { (from + size, end) };
+            span.offset_bits = a;
+            span.size_bits = b.saturating_sub(a);
+        }
         let Ty::Decoded { inner, .. } = &self.memo[path].ty else { return Ok(span) };
         let mut inner = (**inner).clone();
         for _ in 0..8 {
