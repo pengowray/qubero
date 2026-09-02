@@ -191,25 +191,67 @@ fn block(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], path: &Path)
     Some(name)
 }
 
-/// The anchor of an RNTuple, and the two envelopes it points at. When the
-/// anchor is itself compressed there are no numbers to read, only blocks, and
-/// the envelopes cannot be placed: that is the answer, not a failure.
+/// The anchor of an RNTuple, and the two envelopes it points at.
+///
+/// The anchor is often compressed, and then the numbers saying where the
+/// envelopes are do not exist in the file at all: they are bytes of the
+/// stream. Reading them means opening the stream, and the offsets they hold
+/// are still offsets of the file, so the envelopes land where the anchor says
+/// whether or not the anchor was written in the clear. That is the whole of
+/// what a decoded stream is for, on a file nobody here wrote.
 fn anchor(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], path: &Path) -> Option<String> {
     let node = ev.node(d, at).unwrap();
+    let mut at = at.to_vec();
+    let mut algorithm = None;
     if node.size_bits != 78 * 8 || node.child_count != 17 {
-        eprintln!("--- {}: the anchor is compressed, so its envelopes stay unplaced", path.display());
-        return (0..node.child_count as usize).find_map(|b| block(d, ev, &[at, &[b]].concat(), path));
+        algorithm = (0..node.child_count as usize).find_map(|b| block(d, ev, &[at.as_slice(), &[b]].concat(), path));
+        let found = anchor_inside(d, ev, &at, 8);
+        let Some(found) = found else {
+            panic!("{}: a compressed anchor whose seventeen numbers never turned up", path.display())
+        };
+        eprintln!("--- {}: the anchor is compressed, and opens into its seventeen numbers", path.display());
+        // The numbers are read out of the stream, so they are not bytes of the
+        // file and say so.
+        assert_ne!(ev.node(d, &found).unwrap().space, 0, "{}: an opened anchor still in the file's space", path.display());
+        at = found;
     }
-    let field = |ev: &mut Evaluator, i: usize| ev.node(d, &[at, &[i]].concat()).unwrap().value.as_int().unwrap();
+    let field = |ev: &mut Evaluator, i: usize| ev.node(d, &[at.as_slice(), &[i]].concat()).unwrap().value.as_int().unwrap();
     assert_eq!(field(ev, 3), 1, "{}: an anchor whose epoch is not 1", path.display());
     for (i, envelope) in [(7usize, 15usize), (10, 16)] {
         let seek = field(ev, i);
         let nbytes = field(ev, i + 1);
-        let placed = ev.node(d, &[at, &[envelope, 0]].concat()).unwrap();
+        let placed = ev.node(d, &[at.as_slice(), &[envelope, 0]].concat()).unwrap();
         assert_eq!(placed.offset_bits / 8, seek as u64, "{}: an envelope is not where the anchor says", path.display());
         assert_eq!(placed.size_bits / 8, nbytes as u64, "{}: an envelope is not as long as the anchor says", path.display());
+        // An envelope is at an offset of the file, whatever space the number
+        // naming it was read in. This is the one thing a compressed anchor
+        // could get wrong and the only way to tell: an offset read inside the
+        // stream and then followed inside the stream would land nowhere.
+        assert_eq!(placed.space, 0, "{}: an envelope placed outside the file", path.display());
     }
     eprintln!("--- {}: an RNTuple anchor, both envelopes placed", path.display());
+    algorithm
+}
+
+/// The anchor structure inside whatever the block turned out to hold. Which
+/// path reaches it depends on the codec, so it is looked for rather than
+/// spelled: the anchor is the one node with seventeen children called by its
+/// own name.
+fn anchor_inside(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], depth: u32) -> Option<Vec<usize>> {
+    if depth == 0 {
+        return None;
+    }
+    let node = ev.node(d, at).ok()?;
+    if node.type_name == "RNTupleAnchor" && node.child_count == 17 {
+        return Some(at.to_vec());
+    }
+    // Wide as well as deep would be a walk over the whole record. Every step
+    // from a block to the anchor is a wrapper holding a handful of fields.
+    for i in 0..node.child_count.min(16) as usize {
+        if let Some(found) = anchor_inside(d, ev, &[at, &[i]].concat(), depth - 1) {
+            return Some(found);
+        }
+    }
     None
 }
 

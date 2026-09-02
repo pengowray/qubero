@@ -1130,6 +1130,12 @@ impl Evaluator {
             self.spaces.refuse(path, Refusal::Unaligned);
             return Ok(space::Opened::Refused(Refusal::Unaligned));
         }
+        // A run of no bytes opens into no bytes. Not a refusal: an LZ4 frame's
+        // end mark is a block of nothing, and saying it would not unpack would
+        // be saying something went wrong where nothing did.
+        if size == 0 {
+            return Ok(space::Opened::Space(self.spaces.add(path, Vec::new())));
+        }
         if size / 8 > crate::codec::CAP_BYTES as u64 {
             self.spaces.refuse(path, Refusal::TooLarge);
             return Ok(space::Opened::Refused(Refusal::TooLarge));
