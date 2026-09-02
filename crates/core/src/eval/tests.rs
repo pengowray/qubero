@@ -2108,3 +2108,150 @@ fn a_lookup_by_computed_key_reads_text_as_well_as_numbers() {
     // The first two are not, so their bodies are nothing at all.
     assert_eq!(ev.node(&d, &[0, 3]).unwrap().size_bits, 0);
 }
+
+// ----- decoded streams -----
+
+use crate::codec::Codec;
+
+/// A file that is a two-byte header and then a zlib stream holding a
+/// structure: the shape every format that compresses part of itself has.
+fn packed_doc(inner: &[u8]) -> (Document<MemSource>, usize) {
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(inner, 6);
+    let mut bytes = vec![0xaa, 0xbb];
+    bytes.extend_from_slice(&packed);
+    (doc(&bytes), packed.len())
+}
+
+fn packed_template(len: usize) -> Template {
+    Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("tag", T::u16(Big)),
+                (
+                    "stream",
+                    T::decoded(
+                        E::lit(len as i128),
+                        Codec::Zlib,
+                        T::structure("Object", vec![("a", T::u16(Big)), ("b", T::u32(Big))]),
+                    ),
+                ),
+            ],
+        ),
+    )
+}
+
+#[test]
+fn a_stream_keeps_its_own_bytes_and_its_children_count_from_the_decoded_ones() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+
+    // The field is the compressed run: where it is in the file, and as long as
+    // the file makes it. Not as long as what came out of it.
+    let stream = ev.node(&d, &[1]).unwrap();
+    assert_eq!(stream.offset_bits, 2 * 8);
+    assert_eq!(stream.size_bits, len as u64 * 8);
+    assert_eq!(stream.space, 0);
+    assert_eq!(stream.refused, None);
+    assert_eq!(stream.child_count, 1);
+    assert!(stream.composite);
+    assert_eq!(stream.type_name, "zlib");
+
+    // Its contents count from the front of the decoded bytes, in a space of
+    // their own.
+    let object = ev.node(&d, &[1, 0]).unwrap();
+    assert_eq!(object.offset_bits, 0);
+    assert_eq!(object.space, 1);
+    let a = ev.node(&d, &[1, 0, 0]).unwrap();
+    assert_eq!((a.offset_bits, a.size_bits, a.space), (0, 16, 1));
+    assert_eq!(a.value.as_int(), Some(0x1122));
+    let b = ev.node(&d, &[1, 0, 1]).unwrap();
+    assert_eq!((b.offset_bits, b.size_bits, b.space), (16, 32, 1));
+    assert_eq!(b.value.as_int(), Some(0x33445566));
+}
+
+/// Nothing inside a stream is written back: a decoded byte is a function of
+/// every compressed byte before it, and there is nowhere to put the change.
+#[test]
+fn nothing_inside_a_stream_is_editable() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    assert!(!ev.node(&d, &[1, 0, 0]).unwrap().editable);
+    assert!(!ev.node(&d, &[1, 0, 1]).unwrap().editable);
+    // The same type outside a stream is.
+    assert!(ev.node(&d, &[0]).unwrap().editable);
+}
+
+/// The cursor stops at the run. No bit of the file is a field inside it.
+#[test]
+fn locate_never_lands_inside_a_stream() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    assert_eq!(ev.locate(&d, 0).unwrap(), vec![0]);
+    for byte in 2..2 + len as u64 {
+        assert_eq!(ev.locate(&d, byte * 8).unwrap(), vec![1], "at byte {byte}");
+    }
+    // And the hex view draws it as one entry standing for the fields inside.
+    let spans = ev.spans(&d, 2 * 8, (2 + len as u64) * 8, 100).unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].name, "stream");
+    assert_eq!(spans[0].size_bits, len as u64 * 8);
+    assert_eq!(spans[0].count, 2);
+    assert!(!spans[0].gap);
+}
+
+/// A run that will not open is the bytes it is, with the node saying which way
+/// it would not open. Not an error: a broken block should not take the listing
+/// down with it.
+#[test]
+fn a_stream_that_will_not_open_says_so_and_holds_nothing() {
+    let d = doc(&[0xaa, 0xbb, 1, 2, 3, 4, 5, 6]);
+    let mut ev = Evaluator::new(packed_template(6));
+    let stream = ev.node(&d, &[1]).unwrap();
+    assert_eq!(stream.child_count, 0);
+    assert_eq!(stream.refused.as_deref(), Some("failed"));
+    assert_eq!(stream.size_bits, 6 * 8);
+    assert_eq!(ev.locate(&d, 4 * 8).unwrap(), vec![1]);
+}
+
+/// The field a decoded one came out of, so the reader can go and look at it.
+#[test]
+fn a_field_inside_a_stream_names_the_stream_it_came_from() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    ev.node(&d, &[1, 0, 0]).unwrap();
+    let origins = ev.origins(&d, &[1, 0, 0]).unwrap();
+    let from = origins.iter().find(|o| o.role == Role::Value).expect("came from the stream");
+    assert_eq!(from.label, "stream");
+    assert_eq!(from.path, vec![1]);
+    assert_eq!(from.value, "zlib");
+}
+
+/// An edit drops what was read inside a stream and the stream is opened
+/// again from the bytes as they now stand. Forgetting by offset alone would keep
+/// them: everything in a stream is at offset 0 of its own space and so looks
+/// like it ended before any edit anywhere.
+#[test]
+fn editing_the_file_reopens_the_stream_rather_than_keeping_what_it_said() {
+    let (mut d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().value.as_int(), Some(0x1122));
+
+    // A byte of the header, well before the stream. The stream still opens,
+    // and every field inside it has been read afresh from a space opened
+    // afresh: a stale buffer would have been freed and the read would fail.
+    d.overwrite_bits(0, &[0xcc], 8);
+    ev.invalidate_from(0);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value.as_int(), Some(0xccbb));
+    let a = ev.node(&d, &[1, 0, 0]).unwrap();
+    assert_eq!(a.value.as_int(), Some(0x1122));
+    assert_eq!(a.space, 1);
+
+    // A byte of the compressed run itself: it is not the stream it was, so
+    // what it holds is worked out again rather than remembered.
+    d.overwrite_bits(5 * 8, &[0x5a], 8);
+    ev.invalidate_from(5 * 8);
+    let stream = ev.node(&d, &[1]).unwrap();
+    assert!(stream.child_count == 0 || ev.node(&d, &[1, 0, 0]).is_ok());
+}

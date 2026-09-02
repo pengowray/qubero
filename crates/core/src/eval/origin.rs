@@ -75,6 +75,7 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let mut out = Vec::new();
         self.placed_by(doc, path, &mut out)?;
+        self.decoded_from(doc, path, &mut out)?;
         // The declared type, before the switch picked a case and before `Sized`
         // was unwrapped: that is where the deciding expressions are.
         let declared = self.declared_ty(path)?;
@@ -153,6 +154,36 @@ impl Evaluator {
             label = format!("{label}.{}", field.join("."));
         }
         let o = self.origin(doc, Role::Position, label, p);
+        out.push(o);
+        Ok(())
+    }
+
+    /// The stream a field came out of, for anything read inside a decoded run.
+    ///
+    /// This is the connection a reader most needs and the one the offsets
+    /// cannot show: the field is at `+0x1c`, and `+0x1c` of *what* is the
+    /// question. The answer is the compressed run, which is a field of the
+    /// file with a place of its own to go and look at.
+    fn decoded_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<Origin>) -> R<()> {
+        if self.memo.get(path).is_none_or(|r| r.space == 0) {
+            return Ok(());
+        }
+        // The nearest stream above it, which is the one whose bytes these are.
+        // A stream inside a stream names the inner one: that is the space the
+        // field's offset counts in.
+        let found = (0..path.len()).rev().find_map(|k| match self.memo.get(&path[..k]) {
+            Some(r) => match &r.ty {
+                Ty::Decoded { codec, .. } => Some((path[..k].to_vec(), *codec, r.name.text())),
+                _ => None,
+            },
+            None => None,
+        });
+        let Some((stream, codec, label)) = found else { return Ok(()) };
+        let mut o = self.origin(doc, Role::Value, label, stream);
+        // What the run says, as a field, is a preview of compressed bytes and
+        // tells the reader nothing. What is worth saying is which codec opened
+        // it.
+        o.value = codec.as_str().to_string();
         out.push(o);
         Ok(())
     }

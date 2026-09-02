@@ -6,6 +6,7 @@
 //! zero-filled bytes can never be mistaken for data.
 
 use crate::bits::bytes_for;
+use crate::codec::Refusal;
 use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_sign_magnitude, read_uint};
 use crate::document::Document;
 use crate::encode;
@@ -25,6 +26,7 @@ mod expr;
 mod read;
 mod relate;
 mod size;
+mod space;
 mod walk;
 #[cfg(test)]
 mod tests;
@@ -186,6 +188,14 @@ pub struct NodeInfo {
     /// Whether it is folded is the view's to decide, since that depends on
     /// where the two of them end up on screen. See [`crate::machinery`].
     pub consumed_by: Option<usize>,
+    /// Which address space the offsets above are counted in. 0 is the file,
+    /// which is what all but a decoded stream's contents are. See
+    /// [`crate::template::Ty::Decoded`].
+    pub space: u32,
+    /// For a `Decoded` field whose stream would not open: which of the three
+    /// ways it would not, as [`crate::codec::Refusal::as_str`] words it. None
+    /// for every other field, and for a stream that opened.
+    pub refused: Option<String>,
     /// What the template says about this field regardless of the shapes:
     /// `Some(true)` for machinery, `Some(false)` for payload, `None` when it
     /// has no opinion.
@@ -293,6 +303,8 @@ struct Resolved {
     /// element `n - 1` for its value, so without this a track of ten thousand
     /// events is ten thousand deep rather than one.
     computed: Option<i128>,
+    /// Which address space `offset` and `limit` are bits of. 0 is the file.
+    space: u32,
 }
 
 /// Where a child sits before its type is unwrapped: what it is called, what
@@ -302,6 +314,7 @@ struct Place {
     ty: Ty,
     offset: u64,
     limit: u64,
+    space: u32,
 }
 
 pub struct Evaluator {
@@ -317,6 +330,8 @@ pub struct Evaluator {
     /// was declared, so a bit outside what the root covers can still be named,
     /// and how far the walk that finds them has got. See [`placed`].
     placed: placed::Index,
+    /// The decoded streams this reading has opened, and what each one came to.
+    spaces: space::Spaces,
 }
 
 impl Evaluator {
@@ -327,6 +342,7 @@ impl Evaluator {
             journals: Vec::new(),
             go: go::Go::default(),
             placed: placed::Index::default(),
+            spaces: space::Spaces::default(),
         }
     }
 
@@ -439,6 +455,8 @@ impl Evaluator {
         // is about to drop some of those nodes. Coarse, like the memo's own
         // invalidation, and cheap to build again.
         self.placed.forget();
+        self.spaces.forget();
+        self.memo.forget_decoded();
         self.memo.forget_after(bit);
     }
 
@@ -447,6 +465,7 @@ impl Evaluator {
     pub fn invalidate(&mut self) {
         self.memo.forget();
         self.placed.forget();
+        self.spaces.forget();
         self.journals.clear();
         self.go.restart();
     }
@@ -494,13 +513,32 @@ impl Evaluator {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
+            // A stream holds one thing when it opens and nothing when it does
+            // not, so asking about the node opens it. That is a read of the
+            // whole run, done once and kept: what stops it from being a read
+            // per row is that `locate` stops at the run, so only a stream
+            // something is actually drawing is ever unpacked, and the row has
+            // to say whether it opened.
+            Ty::Decoded { .. } => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
             _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
         let (consumed_by, machinery, contents) = self.in_parent(path);
         Ok(NodeInfo {
             path: path.to_vec(),
-            editable: !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
+            space: r.space,
+            refused: match self.spaces.get(path) {
+                Some(space::Opened::Refused(why)) => Some(why.as_str().to_string()),
+                _ => None,
+            },
+            // Nothing inside a decoded stream is written back: there is no
+            // mapping from a decoded byte to a byte of the file, so a change
+            // made there has nowhere to go.
+            editable: r.space == 0
+                && !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
             value_offset_bits: reading.0 .0,
             value_bytes: reading.0 .1,
             read_as: reading.2,
@@ -681,7 +719,7 @@ impl Evaluator {
         if path.is_empty() {
             let limit = doc.len_bits();
             let root = self.template.root.clone();
-            let r = self.effective(doc, &[], Name::Field("file".into()), root, 0, limit)?;
+            let r = self.effective(doc, &[], Name::Field("file".into()), root, 0, limit, 0)?;
             self.remember(&[], r);
             return Ok(());
         }
@@ -692,7 +730,7 @@ impl Evaluator {
         // Reading the child is what goes deeper, and a file that nests pays
         // for every frame still open above it.
         let Some(place) = self.place_child(doc, path, parent, idx)? else { return Ok(()) };
-        let r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit)?;
+        let r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit, place.space)?;
         self.remember(path, r);
         Ok(())
     }
@@ -722,8 +760,27 @@ impl Evaluator {
             // The one thing it points at keeps the field's own name: a row
             // saying `directory` twice says nothing the once did not.
             Ty::At { inner, .. } => (pr.name.clone(), (**inner).clone()),
+            // Same again for what a stream holds: the field is the stream, and
+            // its one child is what came out of it.
+            Ty::Decoded { inner, .. } => (pr.name.clone(), (**inner).clone()),
             _ => return fail("not a composite"),
         };
+        // What a stream holds is read over the bytes it came to, not over the
+        // file. The space is opened here, once, and every field below this one
+        // inherits it; a field that counts from the start of the file goes
+        // back to the file, which is how an RNTuple anchor inside a compressed
+        // record still finds its envelopes. See [`space`].
+        if let Ty::Decoded { .. } = &pr.ty {
+            let space = match self.open_space(doc, parent)? {
+                space::Opened::Space(id) => id,
+                // The stream would not open. `child_count` already said it has
+                // nothing inside, so nothing should be asking; answering with
+                // an error rather than a wrong place is what is left.
+                space::Opened::Refused(_) => return fail("this stream did not open"),
+            };
+            let limit = self.spaces.len_bits(space);
+            return Ok(Some(Place { name, ty, offset: 0, limit, space }));
+        }
         // A field that reads its contents from somewhere else in the file is
         // not bounded by the structure it was declared in: an object header
         // message is sixteen bytes long and the heap it names is half a
@@ -748,6 +805,7 @@ impl Evaluator {
                         declared_size: Some(0),
                         size: Some(0),
                         computed: None,
+                        space: pr.space,
                     };
                     self.remember(path, r);
                     return Ok(None);
@@ -763,7 +821,8 @@ impl Evaluator {
                 return fail("negative offset");
             }
             let to = self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8;
-            self.no_ring(parent, to, &what)?;
+            let into = if anchor == Anchor::File { 0 } else { pr.space };
+            self.no_ring(parent, to, into, &what)?;
             if anchor == Anchor::File {
                 escapes = Some(doc.len_bits());
             }
@@ -792,7 +851,21 @@ impl Evaluator {
                 limit = limit.min(*next);
             }
         }
-        Ok(Some(Place { name, ty, offset, limit }))
+        // An offset counted from the start of the file means the file, whatever
+        // space the field naming it was read in. This is what an RNTuple anchor
+        // needs: the anchor is inside a compressed record and its two envelopes
+        // are at file offsets it names.
+        let space = match &pr.ty {
+            Ty::At { anchor: Anchor::File, .. } | Ty::PointerList { anchor: Anchor::File, .. } => 0,
+            _ => pr.space,
+        };
+        if space != pr.space {
+            limit = doc.len_bits();
+            if offset > limit {
+                return fail("runs past the end of the file");
+            }
+        }
+        Ok(Some(Place { name, ty, offset, limit, space }))
     }
 
     /// Refuse an offset that points back at something already open above it.
@@ -833,7 +906,7 @@ impl Evaluator {
         ty.display_name()
     }
 
-    fn no_ring(&self, parent: &[usize], to: u64, what: &str) -> R<()> {
+    fn no_ring(&self, parent: &[usize], to: u64, into: u32, what: &str) -> R<()> {
         const DEEPEST: usize = 1024;
         let mut jumps = 0;
         for k in (0..=parent.len()).rev() {
@@ -841,7 +914,7 @@ impl Evaluator {
             if matches!(r.ty, Ty::At { .. }) {
                 jumps += 1;
             }
-            if r.offset == to && r.ty.display_name() == what {
+            if r.offset == to && r.space == into && r.ty.display_name() == what {
                 return fail("points back at something already being read");
             }
         }
@@ -956,6 +1029,7 @@ impl Evaluator {
         mut ty: Ty,
         offset: u64,
         mut limit: u64,
+        space: u32,
     ) -> R<Resolved> {
         let mut declared_size = None;
         let mut hops = 0;
@@ -1026,10 +1100,48 @@ impl Evaluator {
                         declared_size,
                         size: None,
                         computed: None,
+                        space,
                     });
                 }
             }
         }
+    }
+
+    /// Open the stream at `path`, or say why it would not open. Done once per
+    /// node: a stream is unpacked when something first asks what is inside it,
+    /// and the answer is kept until the memo is thrown away.
+    ///
+    /// The bytes have to be read before anything can be decided, so this
+    /// reports `Pending` like any other read. Everything after that is an
+    /// answer rather than an error: a stream that will not open is a fact
+    /// about the file, and it should not take the listing down with it.
+    pub(super) fn open_space<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<space::Opened> {
+        if let Some(known) = self.spaces.get(path) {
+            return Ok(known);
+        }
+        self.resolve(doc, path)?;
+        let size = self.size_of(doc, path)?;
+        let r = self.memo[path].clone();
+        let Ty::Decoded { codec, .. } = &r.ty else { return fail("not a decoded stream") };
+        let codec = *codec;
+        // No decoder reads half a byte, and a compressed run that does not
+        // start on one is a template saying something it cannot mean.
+        if r.offset % 8 != 0 || size % 8 != 0 {
+            self.spaces.refuse(path, Refusal::Unaligned);
+            return Ok(space::Opened::Refused(Refusal::Unaligned));
+        }
+        if size / 8 > crate::codec::CAP_BYTES as u64 {
+            self.spaces.refuse(path, Refusal::TooLarge);
+            return Ok(space::Opened::Refused(Refusal::TooLarge));
+        }
+        let packed = self.read(doc, &r, r.offset, size)?;
+        Ok(match crate::codec::decode(codec, &packed) {
+            Ok(bytes) => space::Opened::Space(self.spaces.add(path, bytes)),
+            Err(why) => {
+                self.spaces.refuse(path, why);
+                space::Opened::Refused(why)
+            }
+        })
     }
 
     /// The value of a named field directly inside the struct at `path`, as a

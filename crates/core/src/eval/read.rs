@@ -47,6 +47,18 @@ impl Evaluator {
         if at + n > r.limit {
             return fail("runs past the end of its container");
         }
+        // A field inside a decoded stream reads the bytes that stream came to.
+        // Every read in the evaluator comes through here, which is what keeps
+        // the two spaces from leaking into one another.
+        if r.space != 0 {
+            let Some(src) = self.spaces.buf(r.space) else { return fail("this stream is no longer open") };
+            if at + n > src.len() as u64 * 8 {
+                return fail("runs past the end of the decoded stream");
+            }
+            let mut buf = vec![0u8; bytes_for(n)];
+            crate::bits::copy_bits(src, at, &mut buf, 0, n);
+            return Ok(buf);
+        }
         let mut buf = vec![0u8; bytes_for(n)];
         let missing = doc.read_bits(at, n, &mut buf);
         if missing.is_empty() {

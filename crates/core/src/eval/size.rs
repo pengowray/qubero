@@ -284,6 +284,13 @@ impl Evaluator {
                 let until = until.clone();
                 self.count_repeat(doc, path, &r, &until)
             }
+            // Asking what is inside a stream is what opens it. One child when
+            // it opened, none when it would not: a refusal is a leaf, and the
+            // node carries the reason.
+            Ty::Decoded { .. } => Ok(match self.open_space(doc, path)? {
+                super::space::Opened::Space(_) => 1,
+                super::space::Opened::Refused(_) => 0,
+            }),
             Ty::Json(shape) if shape.composite() => self.json_child_count(doc, path),
             _ => Ok(0),
         }

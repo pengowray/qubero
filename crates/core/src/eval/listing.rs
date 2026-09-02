@@ -228,6 +228,13 @@ impl Evaluator {
             }
         }
         loop {
+            // The cursor stops at a decoded stream. What is inside it is at
+            // offsets of the decoded bytes, and no bit of the file is any one
+            // of those fields: the run is the answer, whole.
+            self.resolve(doc, &path)?;
+            if matches!(self.memo[&path].ty, Ty::Decoded { .. }) {
+                return Ok(path);
+            }
             let n = self.child_count(doc, &path)?;
             if n == 0 {
                 return Ok(path);
@@ -286,6 +293,13 @@ impl Evaluator {
                 self.gap_before_the_next_placement(doc, &path, &info, at)?
             } else if inline {
                 self.one_row(doc, &path, &info)?
+            } else if matches!(self.memo[&path].ty, Ty::Decoded { .. }) {
+                // The whole run, as one entry that says what it is and how
+                // many fields are inside. Before `composite`: its one child is
+                // at offset 0 of the decoded bytes, and treating that as a bit
+                // of the file would put the stream's contents at the front of
+                // it.
+                self.decoded_run(doc, &path, &info)?
             } else if info.composite {
                 self.gap_inside(doc, &path, &info, at)?
             } else {
@@ -343,6 +357,31 @@ impl Evaluator {
         span.offset_bits = at;
         span.size_bits = ends - at;
         span.count = 0;
+        Ok(span)
+    }
+
+    /// A compressed run, as the one entry it is: the whole run, named by its
+    /// codec, standing for however many fields are inside it.
+    ///
+    /// The count comes from the template rather than from opening the stream.
+    /// The hex view scrolls past every stream in the file and wants none of
+    /// them unpacked to draw a row, and what a template declares inside a
+    /// stream is the same whatever the bytes turn out to be.
+    fn decoded_run<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
+        let mut span = self.span_of(doc, path, info)?;
+        let Ty::Decoded { inner, .. } = &self.memo[path].ty else { return Ok(span) };
+        let mut inner = (**inner).clone();
+        for _ in 0..8 {
+            let Ty::Named(n) = &inner else { break };
+            match self.template.types.get(&**n) {
+                Some(t) => inner = t.clone(),
+                None => break,
+            }
+        }
+        span.count = match inner.base() {
+            Ty::Struct(s) => s.fields.len() as u64,
+            _ => 1,
+        };
         Ok(span)
     }
 

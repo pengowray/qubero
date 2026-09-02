@@ -68,6 +68,10 @@ impl Evaluator {
             declared_size: None,
             size: Some(end - offset),
             computed: None,
+            // JSON is parsed out of the bytes the field covers, wherever those
+            // bytes are: a header inside a decoded stream holds its values
+            // there too.
+            space: self.memo[parent].space,
         };
         self.remember(path, r);
         Ok(())
