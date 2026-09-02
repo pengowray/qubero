@@ -42,6 +42,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"PK\x05\x06", "zip"),
     (b"\0asm", "wasm"),
     (b"GGUF", "gguf"),
+    // Four lower-case letters, which is weaker than most of what is here; a
+    // ROOT file is what a `.root` file is, and nothing else in this table
+    // opens with them.
+    (b"root", "root"),
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
