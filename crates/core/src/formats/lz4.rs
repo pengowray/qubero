@@ -142,7 +142,7 @@ mod tests {
         let data = e.node(&d, &[14, 0, 3]).unwrap();
         assert_eq!(data.type_name, "lz4");
         assert_eq!(data.space, 0);
-        assert_eq!(data.child_count, 1);
+        assert_eq!(data.child_count, 2);
         assert_eq!(data.refused, None);
         let text = e.node(&d, &[14, 0, 3, 0, 0]).unwrap();
         assert_eq!(text.value, crate::eval::Value::Str("hello hello hello lz4".into()));

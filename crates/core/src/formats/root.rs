@@ -866,7 +866,7 @@ mod tests {
         assert_eq!(info.type_name, "deflate");
         assert_eq!(info.space, 0);
         assert_eq!(info.size_bits, 2 * 8);
-        assert_eq!(info.child_count, 1);
+        assert_eq!(info.child_count, 2);
         assert_eq!(info.refused, None);
 
         // What came out of it: the object, counted from the front of the

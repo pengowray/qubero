@@ -12,7 +12,7 @@ use crate::document::Document;
 use crate::encode;
 use crate::machinery;
 use crate::source::{Missing, Source};
-use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, Ty, Until};
+use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
 use crate::text::{self, Settled};
 
 mod explain;
@@ -27,6 +27,7 @@ mod read;
 mod relate;
 mod size;
 mod space;
+mod traced;
 mod walk;
 #[cfg(test)]
 mod tests;
@@ -85,7 +86,7 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 fn says_only_bytes(ty: &Ty) -> bool {
     match ty {
         Ty::Bytes(_) | Ty::Str { .. } => true,
-        Ty::Sized { inner, .. } => says_only_bytes(inner),
+        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => says_only_bytes(inner),
         Ty::Struct(s) => s.fields.len() == 1 && says_only_bytes(&s.fields[0].ty),
         _ => false,
     }
@@ -559,7 +560,7 @@ impl Evaluator {
             // per row is that `locate` stops at the run, so only a stream
             // something is actually drawing is ever unpacked, and the row has
             // to say whether it opened.
-            Ty::Decoded { .. } => {
+            Ty::Decoded { .. } | Ty::Traced { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -757,6 +758,16 @@ impl Evaluator {
                 _ => None,
             };
         }
+        // What a trace holds at each level: blocks, and then symbols. An LZ4
+        // block has one run of sequences rather than blocks, and counting
+        // those as blocks would say something the format does not.
+        if let Ty::Traced { part } = ty {
+            return match part {
+                TracedPart::Blocks => Some(traced::blocks_unit(self.trace_for(path).and_then(|(_, t)| t.blocks().first().map(|b| b.kind)))),
+                TracedPart::Block(_) => None,
+                TracedPart::Symbols(_) => Some("symbol"),
+            };
+        }
         let mut elem = match ty {
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. } => elem.base(),
             _ => return None,
@@ -831,8 +842,24 @@ impl Evaluator {
             // saying `directory` twice says nothing the once did not.
             Ty::At { inner, .. } => (pr.name.clone(), (**inner).clone()),
             // Same again for what a stream holds: the field is the stream, and
-            // its one child is what came out of it.
-            Ty::Decoded { inner, .. } => (pr.name.clone(), (**inner).clone()),
+            // its first child is what came out of it. Its second, when the
+            // codec keeps a trace with blocks in it, is what the decoder read
+            // to get there: payload first, machinery second.
+            Ty::Decoded { inner, .. } if idx == 0 => (pr.name.clone(), (**inner).clone()),
+            Ty::Decoded { .. } => {
+                // The trace comes of opening the stream, so a reader who asks
+                // for the blocks before asking what came out opens it here.
+                self.open_space_at(doc, parent)?;
+                let ty = Ty::Traced { part: TracedPart::Blocks };
+                return Ok(Some(Place {
+                    name: Name::Field("blocks".into()),
+                    ty,
+                    offset: pr.offset,
+                    limit: pr.limit,
+                    space: pr.space,
+                }));
+            }
+            Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
             _ => return fail("not a composite"),
         };
         // What a stream holds is read over the bytes it came to, not over the
@@ -1238,6 +1265,19 @@ impl Evaluator {
                     declared_size = Some(bits);
                     ty = *inner;
                 }
+                Ty::SizedBits { bits, inner } => {
+                    let n = self.eval_expr_at(doc, path, &bits, Some((offset, limit)))?;
+                    if n < 0 {
+                        return fail("negative size");
+                    }
+                    let bits = n as u64;
+                    if offset + bits > limit {
+                        return fail(format!("{bits} bits run past the end of the container"));
+                    }
+                    limit = offset + bits;
+                    declared_size = Some(bits);
+                    ty = *inner;
+                }
                 Ty::Switch { on, cases, default } => {
                     // The node is not in the memo yet, so where it starts has
                     // to be handed over: a switch that looks at the byte it is
@@ -1460,6 +1500,78 @@ impl Evaluator {
         self.open[at] = Some(space);
     }
 
+    /// Where a `Traced` node's child sits, which is where the decoder said it
+    /// read it. Nothing is walked and nothing is measured: a step knows its
+    /// own bits, so element a million of a symbol run is one lookup.
+    fn place_traced(
+        &mut self,
+        parent: &[usize],
+        pr: &Resolved,
+        part: TracedPart,
+        idx: usize,
+    ) -> R<Option<Place>> {
+        let Some((base, trace)) = self.trace_for(parent) else {
+            return fail("this stream is no longer open");
+        };
+        let place = |name: String, ty: Ty, at: u64| {
+            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space }))
+        };
+        match part {
+            TracedPart::Blocks => {
+                let Some(block) = trace.blocks().get(idx) else { return fail("no such block") };
+                let at = block.in_bits.start;
+                place(traced::block_name(block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
+            }
+            TracedPart::Block(i) => {
+                let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
+                let head = view.head.len();
+                if idx < head {
+                    let step = trace.step(view.head.start as usize + idx).expect("in range");
+                    let (name, ty) = traced::head_field(&step);
+                    place(name, ty, step.in_bits.start)
+                } else if idx == head && !view.symbols.is_empty() {
+                    let at = view.symbols_at(trace);
+                    place("symbols".into(), Ty::Traced { part: TracedPart::Symbols(i) }, at)
+                } else {
+                    fail("no such field")
+                }
+            }
+            TracedPart::Symbols(i) => {
+                let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
+                let k = view.symbols.start as usize + idx;
+                if k >= view.symbols.end as usize {
+                    return fail("no such symbol");
+                }
+                let step = trace.step(k).expect("in range");
+                let (name, ty) = traced::symbol_ty(&step);
+                place(name, ty, step.in_bits.start)
+            }
+        }
+    }
+
+    /// The trace behind a `Traced` node, and where the run it describes starts.
+    ///
+    /// Found by walking up to the stream that opened it, the same way a space
+    /// is: a `Traced` node is always inside one, and the trace belongs to the
+    /// stream rather than to the node.
+    pub(super) fn trace_for(&self, path: &[usize]) -> Option<(u64, &crate::codec::Trace)> {
+        for k in (0..=path.len()).rev() {
+            let Some(r) = self.memo.get(&path[..k]) else { continue };
+            if matches!(r.ty, Ty::Decoded { .. }) {
+                let space::Opened::Space(id) = self.spaces.get(&path[..k])? else { return None };
+                return Some((r.offset, self.spaces.trace(id)?));
+            }
+        }
+        None
+    }
+
+    /// Whether a stream's trace has anything to show, which decides whether
+    /// the stream has a `blocks` child at all. zstd and xz are traced at the
+    /// block and have no blocks to open, so they do not get one.
+    pub(super) fn has_blocks(&self, path: &[usize]) -> bool {
+        self.trace_for(path).is_some_and(|(_, t)| !t.blocks().is_empty())
+    }
+
     /// Which address space a read at `path` belongs to.
     ///
     /// The node's own, when it has been resolved. While it is still being
@@ -1474,6 +1586,12 @@ impl Evaluator {
                 return r.space;
             }
             if matches!(r.ty, Ty::Decoded { .. }) {
+                // The stream's second child is what the decoder read, which is
+                // bits of the run and so of the space the run is in. Only the
+                // first child is on the other side of the codec.
+                if path.get(k) == Some(&1) {
+                    return r.space;
+                }
                 return match self.spaces.get(&path[..k]) {
                     Some(space::Opened::Space(id)) => id,
                     _ => r.space,

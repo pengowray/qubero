@@ -111,7 +111,7 @@ mod tests {
         assert_eq!(run.offset_bits, 2 * 8);
         assert_eq!(run.size_bits, (packed.len() as u64 - 6) * 8);
         assert_eq!(run.space, 0);
-        assert_eq!(run.child_count, 1);
+        assert_eq!(run.child_count, 2);
         assert_eq!(run.refused, None);
         // And what came out of it counts from its own start.
         let text = e.node(&d, &[6, 0, 0]).unwrap();

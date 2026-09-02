@@ -10,6 +10,7 @@
 //! The compressed data cannot be measured without decompressing it, so it is
 //! everything between the header and the last eight bytes.
 
+use crate::codec::Codec;
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 /// The bits of `flg`, and what each one puts after the header.
@@ -80,9 +81,12 @@ pub fn gzip() -> Template {
                 ("name", T::switch(bit(3), vec![(1, optional_string())], T::bytes(E::lit(0)))),
                 ("comment", T::switch(bit(4), vec![(1, optional_string())], T::bytes(E::lit(0)))),
                 ("header_crc", T::bytes(bit(1).mul(E::lit(2)))),
-                // Deflate, which nothing here unpacks. The last eight bytes
-                // are the trailer, so the stream is everything before them.
-                ("compressed", T::bytes(E::Remaining.sub(E::lit(8)))),
+                // Deflate. The last eight bytes are the trailer, so the stream
+                // is everything before them. The run keeps its own length and
+                // stays where it is; what comes out of it is read as fields of
+                // its own, and what the decoder read on the way is read as the
+                // blocks it read them from.
+                ("compressed", T::decoded(E::Remaining.sub(E::lit(8)), Codec::Deflate, super::decoded_text())),
                 ("crc32", T::u32(Little)),
                 // The size of what was compressed, modulo four gigabytes,
                 // which is why a large file's number looks wrong.

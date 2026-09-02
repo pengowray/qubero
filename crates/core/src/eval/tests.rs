@@ -2348,7 +2348,8 @@ fn a_stream_keeps_its_own_bytes_and_its_children_count_from_the_decoded_ones() {
     assert_eq!(stream.size_bits, len as u64 * 8);
     assert_eq!(stream.space, 0);
     assert_eq!(stream.refused, None);
-    assert_eq!(stream.child_count, 1);
+    // What came out of it, and what the decoder read to get there.
+    assert_eq!(stream.child_count, 2);
     assert!(stream.composite);
     assert_eq!(stream.type_name, "zlib");
 

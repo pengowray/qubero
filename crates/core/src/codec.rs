@@ -241,6 +241,9 @@ pub enum BlockKind {
     Stored,
     Fixed,
     Dynamic,
+    /// An LZ4 block, which has no blocks inside it and no tables: one run of
+    /// sequences from the front of it to the back.
+    Sequences,
     /// A block whose insides this round does not read: a zstd or xz block.
     Opaque,
 }
@@ -251,6 +254,7 @@ impl BlockKind {
             BlockKind::Stored => "stored",
             BlockKind::Fixed => "fixed",
             BlockKind::Dynamic => "dynamic",
+            BlockKind::Sequences => "sequences",
             BlockKind::Opaque => "opaque",
         }
     }

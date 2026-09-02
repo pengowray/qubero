@@ -8,7 +8,7 @@
 //! The last sequence has no match: it is literals and then the block ends,
 //! which is how a block that does not divide evenly finishes.
 
-use crate::codec::{Refusal, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
+use crate::codec::{BlockKind, Refusal, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
 
 /// The last five bytes of a block are always literals, and a match may not
 /// come nearer than twelve bytes to the end. Not checked here: a file nobody
@@ -22,6 +22,10 @@ pub fn block(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut out: Vec<u8> = Vec::new();
     let mut at = 0usize;
     let mut coarse = false;
+    // One block, holding every sequence. LZ4 has no block structure of its
+    // own inside a block, and a trace with no blocks in it has no rows for the
+    // reader to open.
+    b.open_block(0, 0);
     while at < data.len() {
         if !coarse && b.over_budget() {
             coarse = true;
@@ -91,6 +95,7 @@ pub fn block(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             b.push(match_in as u64 * 8, was as u64, StepKind::Match { len, dist: offset as u32 });
         }
     }
+    b.close_block(data.len() as u64 * 8, out.len() as u64, BlockKind::Sequences, true);
     b.finish_at(data.len() as u64 * 8, out.len() as u64);
     Ok((out, b.done()))
 }

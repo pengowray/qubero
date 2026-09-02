@@ -15,6 +15,9 @@
 use std::path::{Path, PathBuf};
 
 use qubero_core::codec::{self, Codec, StepField, StepKind};
+use qubero_core::document::Document;
+use qubero_core::eval::Evaluator;
+use qubero_core::source::MemSource;
 
 /// What was found, so a run with no samples in hand can say so rather than
 /// passing silently.
@@ -136,6 +139,81 @@ fn every_lz4_block_in_the_collection_reads_the_same_as_lz4_flex() {
         }
     }
     report("lz4", &tally);
+}
+
+/// Every stream in every sample, opened the way a tab opens one: through the
+/// template that reads the file, as a space of its own.
+///
+/// What this catches that the byte-for-byte tests do not is the wiring. A
+/// stream whose template places its run at the wrong offset still inflates,
+/// because the bytes it was handed happened to be a stream; it opens into the
+/// wrong thing, and the trace no longer covers the run the file says it is.
+#[test]
+fn every_compressed_sample_opens_as_a_space() {
+    let files = samples();
+    if files.is_empty() {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    }
+    let mut opened = 0;
+    for path in &files {
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        if bytes.is_empty() {
+            continue;
+        }
+        let head = &bytes[..bytes.len().min(0x9000)];
+        let Some(name) = qubero_core::formats::sniff(head, bytes.len() as u64) else { continue };
+        if !matches!(name, "zlib" | "gzip" | "zip" | "lz4" | "zstd" | "xz") {
+            continue;
+        }
+        let Some(template) = qubero_core::formats::builtin(name) else { continue };
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(template);
+        let mut found = Vec::new();
+        streams(&doc, &mut ev, &[], 6, &mut found);
+        for at in found {
+            let Ok(Some(id)) = ev.open_space(&doc, 0, &at) else { continue };
+            opened += 1;
+            let space = ev.space(id).expect("just opened");
+            let what = format!("{} {at:?}", path.display());
+            space.trace().check_tiles().unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(space.trace().out_bytes(), space.len_bytes(), "{what}: the trace and the bytes disagree");
+            let (template, recognised, len) =
+                (space.template.clone(), space.recognised, space.len_bytes());
+            eprintln!("--- {what}: {len} bytes as {template}{}", if recognised { ", recognised" } else { "" });
+            // Whatever it opened as, it reads: a space that opens into a
+            // template nothing in it satisfies is worse than one that opens
+            // into bytes.
+            if len > 0 {
+                ev.space_mut(id).unwrap().node(&[]).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            }
+        }
+    }
+    eprintln!("--- {opened} streams opened as spaces");
+}
+
+/// Every `Decoded` node under `at`, which is where the streams are.
+fn streams(
+    d: &Document<MemSource>,
+    ev: &mut Evaluator,
+    at: &[usize],
+    depth: u32,
+    out: &mut Vec<Vec<usize>>,
+) {
+    if depth == 0 || out.len() >= 16 {
+        return;
+    }
+    let Ok(node) = ev.node(d, at) else { return };
+    if node.space != 0 {
+        return;
+    }
+    if matches!(node.type_name.as_str(), "deflate" | "zlib" | "lz4" | "zstd" | "xz") && node.child_count > 0 {
+        out.push(at.to_vec());
+        return;
+    }
+    for i in 0..node.child_count.min(24) as usize {
+        streams(d, ev, &[at, &[i]].concat(), depth - 1, out);
+    }
 }
 
 fn report(what: &str, tally: &Tally) {
