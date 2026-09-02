@@ -57,10 +57,14 @@ pub enum Expr {
     /// Zero when nothing in the list is tagged that way, or when the element
     /// found has no such field, so `Or` can name what to do without one.
     ///
-    /// Held behind a pointer because of what it costs the rest: the tag is a
-    /// 128-bit number, which would make every expression in every template as
-    /// wide and as strictly aligned as this one variant. One format in ninety
-    /// uses it.
+    /// The label is a number or a run of bytes, since a format that keeps its
+    /// records in text labels them in text: a FITS card is found by the
+    /// keyword written in its first eight bytes. See [`Tag`].
+    ///
+    /// Held behind a pointer because of what it costs the rest: a tag is a
+    /// 128-bit number or a vector, either of which would make every expression
+    /// in every template as wide and as strictly aligned as this one variant.
+    /// Two formats in ninety use it.
     Tagged(Arc<TaggedRef>),
     /// The numbers of one earlier array multiplied together: what a shape
     /// describes. A GGUF tensor says it is 2560 by 5120 and never says it is
