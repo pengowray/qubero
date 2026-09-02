@@ -76,6 +76,12 @@ fn a_real_structured_dtype_lists_the_fields_it_names() {
     assert_eq!(ev.node(&d, &[4, 2, 0, 0, 1]).unwrap().value, Value::Str("channel_0000".into()));
     assert_eq!(ev.node(&d, &[4, 2, 0, 0, 4]).unwrap().value, Value::Str("<f4".into()));
     assert_eq!(ev.node(&d, &[4, 2, 0, 1, 1]).unwrap().value, Value::Str("channel_0001".into()));
-    // What is in a record is still bytes: see the module note.
-    assert_eq!(ev.node(&d, &[5]).unwrap().type_name, "bytes[]");
+    // And the numbers are records, each value typed by the entry of that list
+    // that names it: over a hundred f32 columns a record.
+    let data = ev.node(&d, &[5]).unwrap();
+    assert_eq!(data.type_name, "Record[]");
+    let n = fields.child_count;
+    assert_eq!(ev.node(&d, &[5, 0, 0]).unwrap().child_count, n);
+    assert_eq!(ev.node(&d, &[5, 0, 0, 0]).unwrap().type_name, "f32 le");
+    assert_eq!(ev.node(&d, &[5, 0]).unwrap().size_bits, n * 4 * 8);
 }

@@ -63,6 +63,22 @@ pub enum Expr {
     /// `Elem { array: "tensors", field: ["offset"] }`. Empty when the elements
     /// are the numbers themselves.
     Elem { array: Arc<str>, index: Box<Expr>, field: Arc<[String]> },
+    /// The same, for a list that is not a sibling of the field asking but sits
+    /// inside one.
+    ///
+    /// `Elem` names a list by a single name, which reaches only a field
+    /// declared beside this one. A format that keeps its description of itself
+    /// in a header keeps the list in there: an NPY writes its structured dtype
+    /// as a list of `('name', 'format')` inside its header dict, and the
+    /// numbers that are typed by it are the header's sibling, not the list's.
+    /// So `path` is a path down into an earlier field, the way [`Expr::Within`]
+    /// is, and then `index` and `field` go on from the list it lands on.
+    ///
+    /// A field whose contents are somewhere else in the file is stepped
+    /// through on the way, the same as a bare name is: an NPY's record view is
+    /// declared as reading the header's own bytes over again, and naming it
+    /// means the list, not the nothing standing in its place.
+    ElemWithin { path: Arc<[String]>, index: Box<Expr>, field: Arc<[String]> },
     /// The value at `field` in the first element of the earlier list `array`
     /// whose `key` holds `tag`. `Elem` reaches an element by where it is,
     /// which is no use when what an element is, is written in it: a ZIP local
@@ -392,6 +408,15 @@ impl Expr {
     pub fn elem_field(array: &str, index: Expr, field: &[&str]) -> Expr {
         Expr::Elem {
             array: array.into(),
+            index: Box::new(index),
+            field: field.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+    /// Element `index` of a list reached by a path down into an earlier field,
+    /// and `field` inside that element. See [`Expr::ElemWithin`].
+    pub fn elem_within(path: &[&str], index: Expr, field: &[&str]) -> Expr {
+        Expr::ElemWithin {
+            path: path.iter().map(|s| s.to_string()).collect(),
             index: Box::new(index),
             field: field.iter().map(|s| s.to_string()).collect(),
         }

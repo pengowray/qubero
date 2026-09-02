@@ -265,6 +265,28 @@ impl Evaluator {
                     out.push(o);
                 }
             }
+            // The element of a list inside an earlier field. The list is
+            // reached by a path rather than by a name, so the label carries
+            // the path: `header.record[2].format`.
+            Expr::ElemWithin { path: into, index, field } => {
+                let (into, index, field) = (into.clone(), index.clone(), field.clone());
+                let i = self.eval_expr(doc, at, &index)?;
+                if i < 0 {
+                    return Ok(());
+                }
+                let Ok(mut p) = self.within_path(doc, at, &into) else { return Ok(()) };
+                p.push(i as usize);
+                let mut label = format!("{}[{i}]", into.join("."));
+                for name in field.iter() {
+                    match self.child_index(doc, &p, name)? {
+                        Some(j) => p.push(j),
+                        None => return Ok(()),
+                    }
+                    label = format!("{label}.{name}");
+                }
+                let o = self.origin(doc, role, label, p);
+                out.push(o);
+            }
             Expr::Elem { array, index, field } | Expr::Product { array, index, field } => {
                 // A shape is an array, and its own value is a count of numbers
                 // rather than a number. What it decided is the numbers

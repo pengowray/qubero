@@ -2211,6 +2211,29 @@ fn a_lookup_can_be_keyed_by_text_found_somewhere_else() {
 }
 
 #[test]
+fn a_list_inside_a_sibling_can_be_indexed() {
+    // The widths are in a table inside the header, and the values that are
+    // those widths are the header's sibling. A name reaches only a field
+    // beside the one asking, so a path is what gets there.
+    let header = T::structure("Header", vec![("n", T::u8()), ("widths", T::array(T::u8(), E::field("n")))]);
+    let value = T::structure("Value", vec![("v", T::uint_expr(E::elem_within(&["header", "widths"], E::idx(), &[]).mul(E::lit(8)), Big))]);
+    let t = T::structure(
+        "Root",
+        vec![("header", header), ("values", T::array(value, E::within(&["header", "n"])))],
+    );
+    let d = doc(&[2, 1, 2, 0xaa, 0xbb, 0xcc]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    // One byte wide, then two.
+    assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().value, Value::UInt(0xaa));
+    assert_eq!(ev.node(&d, &[1, 1, 0]).unwrap().value, Value::UInt(0xbbcc));
+    // The row says which entry of the table decided it, path and all.
+    let seen: Vec<_> = ev.origins(&d, &[1, 1, 0]).unwrap().into_iter().map(|o| (o.role, o.label)).collect();
+    assert!(seen.contains(&(Role::Width, "header.widths[1]".to_string())), "{seen:?}");
+    let rel = ev.relations(&d, &[1, 1, 0]).unwrap();
+    assert_eq!(rel[0].written, "header.widths[index] * 8");
+}
+
+#[test]
 fn a_field_can_take_its_displayed_name_from_the_file() {
     // The name is written in a table earlier in the file, and the field it
     // names is a plain number the template calls `col1`.

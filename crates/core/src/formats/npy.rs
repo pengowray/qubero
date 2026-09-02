@@ -30,13 +30,20 @@
 //!
 //! What is not read here:
 //!
-//! - What is in a record. A structured dtype, `[('a', '<i8'), ('b', '<f4')]`,
-//!   says what its fields are called and what type each of them is, and both
-//!   are in the file rather than in the template. A structure's field names
-//!   are fixed when the template is built, and a type is picked by text in a
-//!   field beside it rather than by text in one element of a list inside
-//!   another field, so neither half of that can be followed. The list is read
-//!   for the reader to see; the numbers stay bytes.
+//! A structured dtype, `[('a', '<i8'), ('b', '<f4')]`, is read as the records
+//! it describes: the list of `('name', 'format')` pairs is read from the
+//! header, and each value of each record is typed by the format in its own
+//! entry of that list. Only the plain form, where the fields lie one after
+//! another in the order they are named.
+//!
+//! What is not read here:
+//!
+//! - What a field of a record is called. The names are in the list and a
+//!   structure's field names are fixed when the template is built, so a
+//!   record's values are numbered rather than named.
+//! - A structured dtype with explicit `offsets`, which may leave gaps between
+//!   its fields. The fields are laid one after another here and would land on
+//!   the wrong bytes.
 //! - Only the plain form of a structured dtype, a flat list of `('name',
 //!   'format')` pairs. A field whose type is a dtype of its own,
 //!   `('a', [('x', '<i4')])`, a field with a shape after its format,
@@ -261,19 +268,67 @@ fn shaped(ty: T, width: i128) -> T {
 /// file, so how many there are is that room divided by how wide one is, and
 /// the shape says how they are grouped rather than how many there are.
 fn data() -> T {
-    let of = |ty: T, width: i128| shaped(ty, width);
+    let cases = dtypes().into_iter().map(|(k, ty, width)| (format!("'{k}'"), shaped(ty, width))).collect::<Vec<_>>();
+    T::Match {
+        on: E::within(&["header", "descr"]),
+        cases: cases.into(),
+        // A dtype of named fields, whose numbers are typed one at a time by
+        // the list the header already read; anything else keeps its bytes.
+        default: std::sync::Arc::new(record_data()),
+    }
+}
+
+/// The numbers of a structured dtype: a run of records, each one value per
+/// field the `descr` list names, typed by the format written in that field's
+/// own entry of the list.
+///
+/// The list is inside the header and the numbers are the header's sibling, so
+/// nothing could reach one element of it from here before
+/// [`Expr::ElemWithin`](crate::template::Expr::ElemWithin).
+///
+/// Only the plain form, where the fields lie one after another in the order
+/// they are named. A dtype written with explicit `offsets` may leave gaps
+/// between them, and this would lay the fields over the wrong bytes; see the
+/// module note for what else about a structured dtype is not read.
+fn record_data() -> T {
+    let cases = dtypes().into_iter().map(|(k, ty, _)| (k, ty)).collect::<Vec<_>>();
+    let value = T::Match {
+        // Which field of the record this is, and the format its own entry in
+        // the header's list gives it.
+        on: E::elem_within(&["header", "record"], E::idx(), &["format"]),
+        cases: cases.into(),
+        // A field of a kind this does not read. Nothing can say how long it
+        // is, so the rest of the record is one run of bytes.
+        default: std::sync::Arc::new(T::bytes(E::Remaining)),
+    };
+    let fields = || E::within(&["header", "record"]);
+    let record = T::structure("Record", vec![("values", T::array(value, fields()))]).counted_as("record");
+    // A dtype that is not a list of fields at all: the list is empty, and a
+    // run of records of no length would never end.
+    T::switch(E::lit(0).less_than(fields()), vec![(1, T::repeat(record, Until::End))], T::bytes(E::Remaining))
+}
+
+/// Every dtype numpy writes that this reads: the word it is written with
+/// inside its quotes, what one value of it is, and how many bytes that takes.
+/// Two things ask, and they have to agree: the whole array, which is one dtype
+/// for the file, and one field of a structured dtype, which is one per column.
+fn dtypes() -> Vec<(String, T, i128)> {
+    let of = |ty: T, width: i128| (ty, width);
     let int = |bits: u32, e: Endian| T::Int { bits, endian: e };
     let uint = |bits: u32, e: Endian| T::UInt { bits, endian: e };
     // Both byte orders of everything numpy writes with one, and the
     // byte-order-free spelling of the types one byte wide.
-    let mut cases: Vec<(String, T)> = vec![
+    let mut cases: Vec<(String, T, i128)> = vec![
         // A boolean is a byte holding 0 or 1.
-        ("'|b1'".into(), of(T::UInt { bits: 8, endian: Little }, 1)),
-        ("'|i1'".into(), of(int(8, Little), 1)),
-        ("'|u1'".into(), of(uint(8, Little), 1)),
-        ("'<i1'".into(), of(int(8, Little), 1)),
-        ("'<u1'".into(), of(uint(8, Little), 1)),
-    ];
+        ("|b1", of(T::UInt { bits: 8, endian: Little }, 1)),
+        ("|i1", of(int(8, Little), 1)),
+        ("|u1", of(uint(8, Little), 1)),
+        ("<i1", of(int(8, Little), 1)),
+        ("<u1", of(uint(8, Little), 1)),
+    ]
+    .into_iter()
+    .map(|(k, (ty, w))| (k.to_string(), ty, w))
+    .collect();
     for (mark, e) in [('<', Endian::Little), ('>', Endian::Big)] {
         for (kind, width) in [("i", 2), ("i", 4), ("i", 8), ("u", 2), ("u", 4), ("u", 8), ("f", 2), ("f", 4), ("f", 8)] {
             let bits = width as u32 * 8;
@@ -286,13 +341,13 @@ fn data() -> T {
                     _ => T::F64(e),
                 },
             };
-            cases.push((format!("'{mark}{kind}{width}'"), of(ty, width)));
+            cases.push((format!("{mark}{kind}{width}"), ty, width));
         }
         // A complex number is two floats that belong together, so it reads as
         // the pair it is rather than as twice as many numbers.
         for (width, part) in [(8, T::F32(e)), (16, T::F64(e))] {
             let pair = T::inline_structure("Complex", vec![("re", part.clone()), ("im", part)]);
-            cases.push((format!("'{mark}c{width}'"), of(pair, width)));
+            cases.push((format!("{mark}c{width}"), pair, width));
         }
         // A date and a length of time are both a 64-bit count of a unit named
         // in the dtype. The unit is in the name of the type the count is
@@ -300,29 +355,23 @@ fn data() -> T {
         for (code, what) in [('M', "datetime64"), ('m', "timedelta64")] {
             for unit in ["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"] {
                 let count = T::inline_structure(&format!("{what}[{unit}]"), vec![("count", int(64, e))]);
-                cases.push((format!("'{mark}{code}8[{unit}]'"), of(count, 8)));
+                cases.push((format!("{mark}{code}8[{unit}]"), count, 8));
             }
             // Written without a unit, which numpy reads as no unit at all.
-            cases.push((format!("'{mark}{code}8'"), of(int(64, e), 8)));
+            cases.push((format!("{mark}{code}8"), int(64, e), 8));
         }
         // Text of a fixed width: bytes for `S`, and four bytes a character for
         // `U`, which is UTF-32 and reads here as the code points it is.
         for n in 1..=WIDEST_STRING {
             let word = T::UInt { bits: 32, endian: e };
-            cases.push((format!("'{mark}U{n}'"), of(T::array(word, E::lit(n)), n * 4)));
-            cases.push((format!("'{mark}S{n}'"), of(T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii), n)));
+            cases.push((format!("{mark}U{n}"), T::array(word, E::lit(n)), n * 4));
+            cases.push((format!("{mark}S{n}"), T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii), n));
         }
     }
     for n in 1..=WIDEST_STRING {
-        cases.push((format!("'|S{n}'"), of(T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii), n)));
+        cases.push((format!("|S{n}"), T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii), n));
     }
-    T::Match {
-        on: E::within(&["header", "descr"]),
-        cases: cases.into(),
-        // A dtype of several types, or one whose numbers belong together:
-        // the room is right and nothing here can say what is in it.
-        default: std::sync::Arc::new(T::bytes(E::Remaining)),
-    }
+    cases
 }
 
 pub fn npy() -> Template {
@@ -488,8 +537,20 @@ mod tests {
         assert_eq!(ev.node(&d, &[4, 2, 0, 0, 1]).unwrap().value, Value::Str("a".into()));
         assert_eq!(ev.node(&d, &[4, 2, 0, 0, 4]).unwrap().value, Value::Str("<i8".into()));
         assert_eq!(ev.node(&d, &[4, 2, 0, 1, 1]).unwrap().value, Value::Str("b".into()));
-        // What is in the record is still bytes: see the module note.
-        assert_eq!(ev.node(&d, &[5]).unwrap().type_name, "bytes[]");
+        // And the numbers are read as the records they are: two of them, each
+        // an i64 and an f32, typed one field at a time from the list above.
+        let data = ev.node(&d, &[5]).unwrap();
+        assert_eq!((data.type_name.as_str(), data.child_count), ("Record[]", 2));
+        assert_eq!(ev.node(&d, &[5, 0, 0]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[5, 0, 0, 0]).unwrap().type_name, "i64 le");
+        assert_eq!(ev.node(&d, &[5, 0, 0, 1]).unwrap().type_name, "f32 le");
+        assert_eq!(ev.node(&d, &[5, 0]).unwrap().size_bits, 12 * 8);
+        // The second record starts after the first, so the fields of a run of
+        // records line up with the bytes.
+        assert_eq!(ev.node(&d, &[5, 1, 0, 0]).unwrap().offset_bits, ev.node(&d, &[5]).unwrap().offset_bits + 12 * 8);
+        // And a field says which entry of the list typed it.
+        let seen: Vec<_> = ev.origins(&d, &[5, 0, 0, 1]).unwrap().into_iter().map(|o| o.label).collect();
+        assert!(seen.iter().any(|l| l == "header.record[1].format"), "{seen:?}");
     }
 
     #[test]
@@ -511,8 +572,11 @@ mod tests {
         let (d, mut ev) = eval(b);
         assert_eq!(ev.node(&d, &[3]).unwrap().type_name, "u32 le");
         assert!(ev.node(&d, &[3]).unwrap().value.as_int().unwrap() > 1000);
-        // A dtype of named fields is not one type, so the numbers stay bytes.
-        assert_eq!(ev.node(&d, &[5]).unwrap().type_name, "bytes[]");
+        // Forty fields of four bytes each: the records are 160 bytes and the
+        // 320 bytes of data are two of them.
+        let data = ev.node(&d, &[5]).unwrap();
+        assert_eq!((data.type_name.as_str(), data.child_count), ("Record[]", 2));
+        assert_eq!(ev.node(&d, &[5, 0]).unwrap().size_bits, 160 * 8);
     }
 
     #[test]

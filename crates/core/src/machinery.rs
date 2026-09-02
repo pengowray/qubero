@@ -171,6 +171,13 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
                 out.push(Arc::from(first.as_str()));
             }
         }
+        // The same, and the index is arithmetic that may name more.
+        Expr::ElemWithin { path, index, .. } => {
+            if let Some(first) = path.first() {
+                out.push(Arc::from(first.as_str()));
+            }
+            expr_refs(index, out);
+        }
         Expr::Or(a, b)
         | Expr::Add(a, b)
         | Expr::Sub(a, b)

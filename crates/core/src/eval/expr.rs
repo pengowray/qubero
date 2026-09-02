@@ -191,16 +191,19 @@ impl Evaluator {
             // A field beside this one, and a path down into it.
             Expr::Within(field) => {
                 let field = field.clone();
-                let Some((first, rest)) = field.split_first() else { return fail("no field named") };
-                let Some(mut p) = self.find_field(at, first) else {
-                    return fail(format!("unknown field {first}"));
-                };
-                if !self.descend(doc, &mut p, rest)? {
-                    return fail(format!("{first} has no field named {}", rest.join(".")));
-                }
+                let p = self.within_path(doc, at, &field)?;
                 match self.node(doc, &p)?.value.as_int() {
                     Some(v) => v,
                     None => return fail(format!("{} holds no number", field.join("."))),
+                }
+            }
+            // A list inside an earlier field, indexed. Reached in two steps
+            // because a name reaches only a sibling.
+            Expr::ElemWithin { path, index, field } => {
+                let p = self.elem_within_path(doc, at, path, index, field, here)?;
+                match self.node(doc, &p)?.value.as_int() {
+                    Some(v) => v,
+                    None => return fail(format!("{} holds no number there", path.join("."))),
                 }
             }
             Expr::Or(a, b) => match self.eval_expr_at(doc, at, a, here)? {
@@ -304,15 +307,14 @@ impl Evaluator {
             // a format that writes its element type inside its header needs:
             // an NPY says `'descr': '<f8'` in a dict of its own, and the array
             // that reads as f64 because of it is that dict's sibling.
-            Expr::Within(field) => {
-                let Some((first, rest)) = field.split_first() else { return fail("no field named") };
-                let Some(mut p) = self.find_field(at, first) else {
-                    return fail(format!("unknown field {first}"));
-                };
-                if !self.descend(doc, &mut p, rest)? {
-                    return fail(format!("{first} has no field named {}", rest.join(".")));
-                }
-                p
+            Expr::Within(field) => self.within_path(doc, at, &field.clone())?,
+            // One element of a list inside an earlier field, read as text:
+            // what types the numbers of an NPY's structured dtype, where the
+            // word that names the type is in one element of a list in the
+            // header and the numbers are the header's sibling.
+            Expr::ElemWithin { path, index, field } => {
+                let (path, index, field) = (path.clone(), index.clone(), field.clone());
+                self.elem_within_path(doc, at, &path, &index, &field, here)?
             }
             // The element a search found, which is what a format that names
             // its own record types needs: the number a record carries selects
@@ -578,8 +580,35 @@ impl Evaluator {
                 Some(j) => path.push(j),
                 None => return Ok(false),
             }
+            // A field whose contents are somewhere else in the file is its
+            // contents, here as in `find_field`: naming it means the table it
+            // points at, not the nothing that stands in its place. Without
+            // this a path could name such a field and then go no further.
+            self.resolve(doc, path)?;
+            if matches!(self.memo[path].ty, Ty::At { .. }) {
+                path.push(0);
+            }
         }
         Ok(true)
+    }
+
+    /// Where a path down into an earlier field lands: the first name is a
+    /// field declared before this one, and the rest go inside it. What
+    /// [`Expr::Within`] and [`Expr::ElemWithin`] both start with.
+    pub(super) fn within_path<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        field: &[String],
+    ) -> R<Vec<usize>> {
+        let Some((first, rest)) = field.split_first() else { return fail("no field named") };
+        let Some(mut p) = self.find_field(at, first) else {
+            return fail(format!("unknown field {first}"));
+        };
+        if !self.descend(doc, &mut p, rest)? {
+            return fail(format!("{first} has no field named {}", rest.join(".")));
+        }
+        Ok(p)
     }
 
     /// Follow `field` down from the node at `path`, through whatever the
@@ -658,6 +687,30 @@ impl Evaluator {
     /// The path to `array[index]`, then down the named fields inside it:
     /// `tensors[i].offset` is a number, `tensors[i].dims` is an array, and
     /// getting to either is the same walk.
+    /// The path to `path[index].field`, where `path` goes down into a field
+    /// declared before this one rather than naming a sibling. See
+    /// [`Expr::ElemWithin`].
+    pub(super) fn elem_within_path<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        path: &[String],
+        index: &Expr,
+        field: &[String],
+        here: Option<(u64, u64)>,
+    ) -> R<Vec<usize>> {
+        let i = self.eval_expr_at(doc, at, index, here)?;
+        if i < 0 {
+            return fail("negative index");
+        }
+        let mut p = self.within_path(doc, at, path)?;
+        p.push(i as usize);
+        if !self.descend(doc, &mut p, field)? {
+            return fail(format!("{}[{i}] has no field named {}", path.join("."), field.join(".")));
+        }
+        Ok(p)
+    }
+
     pub(super) fn elem_path<S: Source>(
         &mut self,
         doc: &Document<S>,

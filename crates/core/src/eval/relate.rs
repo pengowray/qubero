@@ -248,6 +248,7 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::BitsOf(n) => format!("bitsof({n})"),
         Expr::Idx => "index".to_string(),
         Expr::Elem { array, index, field } => path(array, index, field)?,
+        Expr::ElemWithin { path: into, index, field } => path(&into.join("."), index, field)?,
         Expr::Product { array, index, field } => format!("product({})", path(array, index, field)?),
         Expr::ProductOf(n) => format!("product({n})"),
         Expr::SumOf(n) => format!("sum({n})"),
