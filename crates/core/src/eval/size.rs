@@ -303,6 +303,9 @@ pub(super) fn uniform(e: &Expr) -> bool {
         | Expr::Div(a, b)
         | Expr::Or(a, b)
         | Expr::Less(a, b)
+        | Expr::Shl(a, b)
+        | Expr::Shr(a, b)
+        | Expr::And(a, b)
         | Expr::Min(a, b)
         | Expr::Max(a, b) => {
             uniform(a) && uniform(b)

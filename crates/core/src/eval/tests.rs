@@ -2108,3 +2108,47 @@ fn a_lookup_by_computed_key_reads_text_as_well_as_numbers() {
     // The first two are not, so their bodies are nothing at all.
     assert_eq!(ev.node(&d, &[0, 3]).unwrap().size_bits, 0);
 }
+
+#[test]
+fn a_bit_field_of_a_number_is_a_shift_and_a_mask() {
+    // A word packing six-bit differences, the way a Steim2 word does, read as
+    // fields of the number rather than as bits of the bytes.
+    let t = T::structure(
+        "Root",
+        vec![
+            ("word", T::u32(Big)),
+            ("d0", T::computed(E::bit_field(E::field("word"), 29, 6))),
+            ("d1", T::computed(E::bit_field(E::field("word"), 23, 6))),
+            ("s0", T::computed(E::signed_bit_field(E::field("word"), 29, 6))),
+            ("s1", T::computed(E::signed_bit_field(E::field("word"), 23, 6))),
+            ("none", T::computed(E::bit_field(E::field("word"), 29, 0))),
+        ],
+    );
+    // 0b10_100001_111111_00...: bits 29..24 are 0b100001, which is 33 read
+    // plain and -31 read as two's complement; bits 23..18 are all ones.
+    let d = doc(&[0b1010_0001, 0b1111_1100, 0, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value.as_int(), Some(33));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(63));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(-31));
+    assert_eq!(ev.node(&d, &[4]).unwrap().value.as_int(), Some(-1));
+    // A field of no bits is no bits, and asks the file nothing.
+    assert_eq!(ev.node(&d, &[5]).unwrap().value.as_int(), Some(0));
+    // The reader is shown the shift and the mask, not thirty added-up bits.
+    assert_eq!(
+        write_expr(&E::bit_field(E::field("word"), 29, 6)).as_deref(),
+        Some("word >> 24 & 63")
+    );
+}
+
+#[test]
+fn a_shift_of_more_than_a_word_is_refused_either_way() {
+    let t = T::structure("Root", vec![("n", T::u32(Big)), ("after", T::u8())]);
+    let d = doc(&[0, 0, 0, 4, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    ev.resolve(&d, &[]).unwrap();
+    assert!(ev.eval_expr(&d, &[1], &E::field("n").shr(E::lit(64))).is_err());
+    assert!(ev.eval_expr(&d, &[1], &E::field("n").shr(E::lit(-1))).is_err());
+    // Anding is the arithmetic, sign and all: a mask of -1 is every bit.
+    assert_eq!(ev.eval_expr(&d, &[1], &E::field("n").and(E::lit(-1))).unwrap(), 4);
+}

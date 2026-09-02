@@ -171,6 +171,8 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         | Expr::Div(a, b)
         | Expr::Less(a, b)
         | Expr::Shl(a, b)
+        | Expr::Shr(a, b)
+        | Expr::And(a, b)
         | Expr::Min(a, b)
         | Expr::Max(a, b) => {
             expr_refs(a, out);

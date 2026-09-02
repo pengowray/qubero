@@ -812,24 +812,17 @@ const DIFFS: [&str; 7] = ["d0", "d1", "d2", "d3", "d4", "d5", "d6"];
 /// The unsigned number in the `width` bits of `src` ending at bit `top`,
 /// counting bits from the least significant.
 ///
-/// The IR has a bit and a left shift and no right shift or mask, so the field
-/// is added up a bit at a time. That is more expression than a shift and an
-/// and would be, and it is the only way to name a bit field of a number rather
-/// than of a run of bytes: a little-endian Steim word has to be read whole and
-/// taken apart afterwards, because taking it apart in place would name the
-/// bits of the byte-swapped word.
+/// A bit field of a *number*, which is what a little-endian Steim word needs:
+/// the word is read whole and taken apart afterwards, because taking it apart
+/// in place would name the bits of the byte-swapped word.
 fn bits_of(src: &E, top: u32, width: u32) -> E {
-    let mut total = E::lit(0);
-    for j in 0..width {
-        total = total.add(src.clone().bit(top - j).shl(E::lit((width - 1 - j) as i128)));
-    }
-    total
+    E::bit_field(src.clone(), top, width)
 }
 
 /// The same bits read as a signed number: the unsigned value less twice the
 /// top bit's weight, which is two's complement written out.
 fn signed_bits(src: &E, top: u32, width: u32) -> E {
-    bits_of(src, top, width).sub(src.clone().bit(top).shl(E::lit(width as i128)))
+    E::signed_bit_field(src.clone(), top, width)
 }
 
 /// One data word of a little-endian record.

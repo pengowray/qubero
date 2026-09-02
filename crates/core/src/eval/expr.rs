@@ -230,6 +230,16 @@ impl Evaluator {
                 }
                 self.eval_expr_at(doc, at, a, here)? << by
             }
+            // Down rather than up, and by the same rule: a shift of more than
+            // a machine word is a template saying something it cannot mean.
+            Expr::Shr(a, b) => {
+                let by = self.eval_expr_at(doc, at, b, here)?;
+                if !(0..64).contains(&by) {
+                    return fail("shift of more than a machine word");
+                }
+                self.eval_expr_at(doc, at, a, here)? >> by
+            }
+            Expr::And(a, b) => self.eval_expr_at(doc, at, a, here)? & self.eval_expr_at(doc, at, b, here)?,
             Expr::Less(a, b) => {
                 i128::from(self.eval_expr_at(doc, at, a, here)? < self.eval_expr_at(doc, at, b, here)?)
             }

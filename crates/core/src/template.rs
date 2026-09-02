@@ -218,6 +218,24 @@ pub enum Expr {
     /// however many bytes the header's alignment count says, so the offset in
     /// the table is only an offset once it has been shifted.
     Shl(Box<Expr>, Box<Expr>),
+    /// This shifted right by that many bits, with no sign extension: the bits
+    /// shifted off the bottom are gone and nothing is brought in at the top.
+    ///
+    /// The other half of reaching a field packed inside a number. `Bit` reads
+    /// one bit and `Shl` puts it back where it belongs, which is how a run of
+    /// packed differences was written before this existed: a five-bit field
+    /// cost five `Bit`s, five `Shl`s and four `Add`s, and the expression a
+    /// reader was shown was thirty terms long for a fact as simple as "bits 24
+    /// to 20". Shifting the whole number down and masking it says that in one
+    /// line. See [`Expr::bit_field`].
+    Shr(Box<Expr>, Box<Expr>),
+    /// The two numbers' bits, anded together. What a mask is.
+    ///
+    /// Negative numbers are anded as the two's complement they are, so a mask
+    /// of -1 leaves a number alone. Nothing in the IR writes one, but a field
+    /// read as signed can hold one, and quietly answering something else would
+    /// be worse than answering the arithmetic.
+    And(Box<Expr>, Box<Expr>),
     /// The smaller of the two, and the larger of the two.
     ///
     /// What a length that must not run past the end of the file needs.
@@ -478,6 +496,42 @@ impl Expr {
     /// This shifted left by `rhs` bits.
     pub fn shl(self, rhs: Expr) -> Expr {
         Expr::Shl(Box::new(self), Box::new(rhs))
+    }
+    /// This shifted right by `rhs` bits, bringing in nothing at the top.
+    pub fn shr(self, rhs: Expr) -> Expr {
+        Expr::Shr(Box::new(self), Box::new(rhs))
+    }
+    /// This and `rhs`, bit by bit.
+    pub fn and(self, rhs: Expr) -> Expr {
+        Expr::And(Box::new(self), Box::new(rhs))
+    }
+    /// A run of `width` bits of `src`, the topmost of them bit `top_bit`,
+    /// counting from the least significant, read as an unsigned number.
+    ///
+    /// This is how a format that packs several numbers into one word is read.
+    /// A Steim2 word holds five six-bit differences, and the second of them is
+    /// `bit_field(word, 23, 6)`: shift the run down to the bottom and keep the
+    /// bits of it. `top_bit` rather than a bottom bit, because that is the end
+    /// the specifications count from and the end a reader checks against the
+    /// hex.
+    ///
+    /// A width of zero is no bits and comes to nothing.
+    pub fn bit_field(src: Expr, top_bit: u32, width: u32) -> Expr {
+        if width == 0 {
+            return Expr::lit(0);
+        }
+        let low = i128::from(top_bit) - i128::from(width) + 1;
+        let mask = (1i128 << width) - 1;
+        src.shr(Expr::Lit(low.max(0))).and(Expr::Lit(mask))
+    }
+    /// The same run of bits read as two's complement: the unsigned value less
+    /// twice the weight of its top bit, which is what a sign bit is worth.
+    pub fn signed_bit_field(src: Expr, top_bit: u32, width: u32) -> Expr {
+        if width == 0 {
+            return Expr::lit(0);
+        }
+        let sign = Expr::bit_field(src.clone(), top_bit, 1).shl(Expr::lit(i128::from(width)));
+        Expr::bit_field(src, top_bit, width).sub(sign)
     }
     /// Bit `n` of this, counting from the least significant.
     pub fn bit(self, n: u32) -> Expr {

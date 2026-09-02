@@ -40,10 +40,14 @@ pub struct Relation {
 fn prec(e: &Expr) -> u32 {
     match e {
         Expr::Or(..) => 1,
-        Expr::Less(..) => 2,
-        Expr::Shl(..) => 3,
-        Expr::Add(..) | Expr::Sub(..) => 4,
-        Expr::Mul(..) | Expr::Div(..) => 5,
+        // Between `or` and a comparison, as it is in every language that
+        // writes these: `a & b < c` is the comparison of `a & b`, and a mask
+        // written beside an addition binds looser than the addition.
+        Expr::And(..) => 2,
+        Expr::Less(..) => 3,
+        Expr::Shl(..) | Expr::Shr(..) => 4,
+        Expr::Add(..) | Expr::Sub(..) => 5,
+        Expr::Mul(..) | Expr::Div(..) => 6,
         _ => 0,
     }
 }
@@ -145,6 +149,8 @@ impl Evaluator {
             Expr::Or(a, b) => two(a, b, "or", self, named)?.map(wrap),
             Expr::Less(a, b) => two(a, b, "<", self, named)?.map(wrap),
             Expr::Shl(a, b) => two(a, b, "<<", self, named)?.map(wrap),
+            Expr::Shr(a, b) => two(a, b, ">>", self, named)?.map(wrap),
+            Expr::And(a, b) => two(a, b, "&", self, named)?.map(wrap),
             Expr::Add(a, b) => two(a, b, "+", self, named)?.map(wrap),
             Expr::Sub(a, b) => two(a, b, "-", self, named)?.map(wrap),
             Expr::Mul(a, b) => two(a, b, "*", self, named)?.map(wrap),
@@ -247,6 +253,8 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::Or(a, b) => two(a, b, "or")?,
         Expr::Less(a, b) => two(a, b, "<")?,
         Expr::Shl(a, b) => two(a, b, "<<")?,
+        Expr::Shr(a, b) => two(a, b, ">>")?,
+        Expr::And(a, b) => two(a, b, "&")?,
         Expr::Add(a, b) => two(a, b, "+")?,
         Expr::Sub(a, b) => two(a, b, "-")?,
         Expr::Mul(a, b) => two(a, b, "*")?,
