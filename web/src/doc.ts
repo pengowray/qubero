@@ -267,6 +267,18 @@ export type TextBack = {
   readonly missing: readonly number[];
 };
 
+/** Where the lines in a stretch of the file start, and how they ended. The
+ *  starts arrive as a typed array because there can be a great many of them. */
+export type TextIndex = {
+  readonly starts: Float64Array;
+  /** Where the line after the last one starts: where the next call carries on
+   *  from. The scan stops at a line start, never inside a line. */
+  readonly next: number;
+  readonly lf: number;
+  readonly cr: number;
+  readonly crlf: number;
+};
+
 /** The most text this will read as a dump in one go. A dump is four times the
  *  size of what it describes, so this is a file of a few megabytes. */
 export const DUMP_LIMIT = 64 * 1024 * 1024;
@@ -1328,6 +1340,30 @@ export class Doc {
       await Promise.all(w.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
     }
     return { lines: [], missing: [], next: from };
+  }
+
+  /**
+   * Where every line in `[from, to)` starts, `from` included, which must be
+   * where a line starts. The core caps how far one call scans, so `next` is
+   * what the caller carries on from rather than `to`.
+   */
+  async textIndex(encoding: string, from: number, to: number): Promise<TextIndex> {
+    for (let go = 0; go < 3; go++) {
+      const packed = this.editor.text_index(encoding, from, to);
+      const missing = packed[4] ?? 0;
+      if (missing === 0) {
+        return {
+          next: packed[0] ?? from,
+          lf: packed[1] ?? 0,
+          cr: packed[2] ?? 0,
+          crlf: packed[3] ?? 0,
+          starts: packed.subarray(5),
+        };
+      }
+      const chunks = Array.from(packed.subarray(5, 5 + missing));
+      await Promise.all(chunks.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+    }
+    return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
   }
 
   /** Where the line holding `at` starts, and `lines` line starts back from it. */

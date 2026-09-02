@@ -34,7 +34,7 @@
 //! lines are not a fixed length.
 
 use crate::source::{Missing, Source};
-use crate::template::Encoding;
+use crate::template::{Encoding, Endian};
 use crate::text::{decode_settled, settle, Settled};
 
 /// Bytes read in one go, going forwards or back. A screenful of text is far
@@ -171,19 +171,27 @@ pub fn window<S: Source>(src: &S, reading: Reading, from: u64, want: usize) -> W
     let unit = reading.unit();
     let mut at = reading.align(from).min(len);
     while out.lines.len() < want && at < len {
-        let take = WINDOW.min(len - at);
-        // One unit of lookahead past the window, so a CRLF straddling its edge
-        // is read as the one ending it is and not as a CR then an LF.
-        let read = (take + unit).min(len - at);
+        // A whole line's worth of lookahead past the window, so no line is
+        // ever cut short by where the read happened to stop: where a line is
+        // cut is a fact about the file and not about which window asked. One
+        // unit more, so a CRLF straddling the edge is read as the one ending
+        // it is and not as a CR then an LF.
+        let read = (WINDOW + MAX_LINE + unit).min(len - at);
         let mut buf = vec![0u8; read as usize];
         let missing = src.read_bytes(at, &mut buf);
         if !missing.is_empty() {
             out.missing = missing;
             return out;
         }
+        let last = at + read >= len;
         let mut used = 0u64;
-        while out.lines.len() < want && used < take {
-            let line = one_line(reading, &buf[used as usize..], at + used, at + read >= len);
+        while out.lines.len() < want && used < read {
+            // Past this point the buffer no longer holds a whole line, so the
+            // rest is left to the next read rather than cut here.
+            if !last && used + MAX_LINE + unit > read {
+                break;
+            }
+            let line = one_line(reading, &buf[used as usize..], at + used, last);
             let step = line.len;
             used += step;
             out.next = line.at + line.len;
@@ -192,13 +200,79 @@ pub fn window<S: Source>(src: &S, reading: Reading, from: u64, want: usize) -> W
                 return out;
             }
         }
-        // A line that ran to the end of the window may go on past it, so the
-        // next window starts where the last whole line stopped.
         at = out.next;
         if used == 0 {
             break;
         }
-        let _ = unit;
+    }
+    out
+}
+
+/// How far one [`text_index`] call scans, whatever it was asked for. An index
+/// of a large file is built out of calls this size, so that no one of them
+/// holds the thread long enough to be felt.
+pub const INDEX_SCAN: u64 = 4 * 1024 * 1024;
+
+/// Where the lines in a stretch of the file start, and how they ended.
+#[derive(Debug, Clone, Default)]
+pub struct Index {
+    /// Line starts inside the stretch, in order.
+    pub starts: Vec<u64>,
+    /// Where the line after the last one starts, which is where the next call
+    /// carries on from. The scan stops at a line start, never inside a line.
+    pub next: u64,
+    pub lf: u64,
+    pub cr: u64,
+    pub crlf: u64,
+    /// Chunks this needs before it can answer, as [`window`] reports them.
+    pub missing: Vec<Missing>,
+}
+
+/// Where every line inside `[from, to)` starts, `from` included.
+///
+/// The same rules as [`window`], without decoding any of the text: this is the
+/// walk that turns a file into a count of lines, and it has to be able to do a
+/// hundred megabytes of it. `from` must be where a line starts.
+pub fn text_index<S: Source>(src: &S, reading: Reading, from: u64, to: u64) -> Index {
+    let len = src.len_bytes();
+    let unit = reading.unit();
+    let mut at = reading.align(from).min(len);
+    let stop = to.min(len).min(at.saturating_add(INDEX_SCAN));
+    let mut out = Index { next: at, ..Default::default() };
+    if at >= len {
+        return out;
+    }
+    let read = (stop - at + MAX_LINE + unit).min(len - at);
+    let mut buf = vec![0u8; read as usize];
+    let missing = src.read_bytes(at, &mut buf);
+    if !missing.is_empty() {
+        out.missing = missing;
+        return out;
+    }
+    let last = at + read >= len;
+    let end = read;
+    let mut used = 0u64;
+    while at + used < stop && used < end {
+        if !last && used + MAX_LINE + unit > end {
+            break;
+        }
+        out.starts.push(at + used);
+        let (text, ending) = scan_line(reading, &buf[used as usize..], last);
+        match ending {
+            Ending::Lf => out.lf += 1,
+            Ending::Cr => out.cr += 1,
+            Ending::CrLf => out.crlf += 1,
+            Ending::None | Ending::Cut => {}
+        }
+        let step = text + ending.bytes(unit);
+        used += step;
+        out.next = at + used;
+        if step == 0 {
+            break;
+        }
+    }
+    if out.starts.is_empty() {
+        out.next = at;
     }
     out
 }
@@ -267,34 +341,44 @@ pub fn back<S: Source>(src: &S, reading: Reading, at: u64, lines: usize) -> (u64
     (here, Vec::new())
 }
 
-/// The character at the front of `buf`, where there is a whole one.
-fn char_at(reading: Reading, buf: &[u8]) -> Option<char> {
-    let unit = reading.settled.unit();
-    if buf.len() < unit {
-        return None;
-    }
-    let (s, _) = decode_settled(reading.settled, &buf[..unit]);
-    s.chars().next()
-}
-
 /// The line ending starting at the front of `buf`, if one does.
+///
+/// Read from the bytes rather than through the decoder. Every encoding here
+/// spells a carriage return and a line feed the way ASCII does, in one code
+/// unit each, and no multi-byte UTF-8 sequence has a byte below 0x80 in it, so
+/// no decoding can turn up an ending these two bytes do not. Decoding one
+/// character per byte to find that out is what made a scan of a large file
+/// slow enough to be felt.
 fn ending_at(reading: Reading, buf: &[u8]) -> Option<Ending> {
     let unit = reading.settled.unit();
-    match char_at(reading, buf) {
-        Some('\n') => Some(Ending::Lf),
-        Some('\r') => match char_at(reading, buf.get(unit..).unwrap_or(&[])) {
-            Some('\n') => Some(Ending::CrLf),
+    match code_at(reading, buf) {
+        Some(0x0a) => Some(Ending::Lf),
+        Some(0x0d) => match code_at(reading, buf.get(unit..).unwrap_or(&[])) {
+            Some(0x0a) => Some(Ending::CrLf),
             _ => Some(Ending::Cr),
         },
         _ => None,
     }
 }
 
-/// Read one line from the front of `buf`, which starts at `at`.
-///
-/// `last` says whether `buf` runs to the end of the file, which is what tells
-/// a line with no ending apart from one whose ending is past the window.
-fn one_line(reading: Reading, buf: &[u8], at: u64, last: bool) -> TextLine {
+/// The code unit at the front of `buf`, where there is a whole one.
+fn code_at(reading: Reading, buf: &[u8]) -> Option<u16> {
+    match reading.settled {
+        Settled::Utf16(Endian::Little) => match buf {
+            [a, b, ..] => Some(u16::from_le_bytes([*a, *b])),
+            _ => None,
+        },
+        Settled::Utf16(Endian::Big) => match buf {
+            [a, b, ..] => Some(u16::from_be_bytes([*a, *b])),
+            _ => None,
+        },
+        _ => buf.first().map(|b| u16::from(*b)),
+    }
+}
+
+/// How far the text of the line at the front of `buf` runs, and how it ended.
+/// The walk both [`one_line`] and [`text_index`] do, with nothing decoded.
+fn scan_line(reading: Reading, buf: &[u8], last: bool) -> (u64, Ending) {
     let unit = reading.settled.unit();
     let mut i = 0usize;
     let mut ending = Ending::None;
@@ -314,6 +398,17 @@ fn one_line(reading: Reading, buf: &[u8], at: u64, last: bool) -> TextLine {
         // end the file has not reached.
         ending = Ending::Cut;
     }
+    (i as u64, ending)
+}
+
+/// Read one line from the front of `buf`, which starts at `at`.
+///
+/// `last` says whether `buf` runs to the end of the file, which is what tells
+/// a line with no ending apart from one whose ending is past the window.
+fn one_line(reading: Reading, buf: &[u8], at: u64, last: bool) -> TextLine {
+    let unit = reading.settled.unit();
+    let (text_bytes, ending) = scan_line(reading, buf, last);
+    let i = text_bytes as usize;
     let (raw, lossy) = decode_settled(reading.settled, &buf[..i]);
     let (text, escapes) = escapes_in(&raw);
     let len = i as u64 + ending.bytes(unit as u64);
@@ -378,7 +473,7 @@ fn escapes_in(raw: &str) -> (String, Vec<(u32, u32)>) {
 mod tests {
     use super::*;
     use crate::source::MemSource;
-    use crate::template::Endian;
+
 
     fn src(s: &str) -> MemSource {
         MemSource(s.as_bytes().to_vec())
@@ -504,6 +599,68 @@ mod tests {
         assert_eq!(w.next, 8);
         let w2 = window(&s, r, w.next, 2);
         assert_eq!(w2.lines[0].text, "three");
+    }
+
+    #[test]
+    fn the_index_finds_the_same_line_starts_the_window_reads() {
+        let mut text = String::new();
+        for i in 0..500 {
+            text.push_str(&"x".repeat(i % 97));
+            text.push_str(if i % 7 == 0 { "\r\n" } else if i % 11 == 0 { "\r" } else { "\n" });
+        }
+        // A line longer than one is allowed to be, so the cut rule is in it.
+        text.push_str(&"y".repeat((MAX_LINE * 3 + 17) as usize));
+        text.push('\n');
+        let s = src(&text);
+        let r = reading(&s.0);
+        let w = window(&s, r, 0, usize::MAX);
+        let want: Vec<u64> = w.lines.iter().map(|l| l.at).collect();
+        let idx = text_index(&s, r, 0, u64::MAX);
+        assert_eq!(idx.starts, want);
+        assert_eq!(idx.next, s.0.len() as u64);
+        assert_eq!(idx.lf as usize, w.lines.iter().filter(|l| l.ending == Ending::Lf).count());
+        assert_eq!(idx.cr as usize, w.lines.iter().filter(|l| l.ending == Ending::Cr).count());
+        assert_eq!(idx.crlf as usize, w.lines.iter().filter(|l| l.ending == Ending::CrLf).count());
+    }
+
+    #[test]
+    fn indexing_in_pieces_says_the_same_as_indexing_in_one() {
+        let mut text = String::new();
+        for i in 0..400 {
+            text.push_str(&"z".repeat(i % 31));
+            text.push_str(if i % 5 == 0 { "\r\n" } else { "\n" });
+        }
+        let s = src(&text);
+        let r = reading(&s.0);
+        let whole = text_index(&s, r, 0, u64::MAX);
+        let mut starts = Vec::new();
+        let (mut at, mut lf, mut crlf) = (0u64, 0u64, 0u64);
+        loop {
+            let part = text_index(&s, r, at, at + 700);
+            if part.starts.is_empty() {
+                break;
+            }
+            starts.extend_from_slice(&part.starts);
+            lf += part.lf;
+            crlf += part.crlf;
+            at = part.next;
+        }
+        assert_eq!(starts, whole.starts);
+        assert_eq!((lf, crlf), (whole.lf, whole.crlf));
+    }
+
+    #[test]
+    fn a_line_is_cut_where_the_file_says_and_not_where_the_read_stopped() {
+        // One line far longer than a read window, so a window starting part
+        // way into it must cut in the same places a window from the front does.
+        let long = "q".repeat((WINDOW * 3) as usize);
+        let s = src(&format!("head\n{long}\ntail\n"));
+        let r = reading(&s.0);
+        let whole: Vec<u64> = window(&s, r, 0, usize::MAX).lines.iter().map(|l| l.at).collect();
+        let from = whole[3];
+        let part: Vec<u64> = window(&s, r, from, usize::MAX).lines.iter().map(|l| l.at).collect();
+        assert_eq!(part, whole[3..]);
+        assert_eq!(text_index(&s, r, 0, u64::MAX).starts, whole);
     }
 
     #[test]
