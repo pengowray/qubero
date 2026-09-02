@@ -49,6 +49,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     // A gravitational wave frame file, whose fifth byte is the nul that ends
     // the four letters.
     (b"IGWD\0", "gwf"),
+    // A weather field, of either edition: the template reads the edition byte
+    // and picks the layout, so one name serves both.
+    (b"GRIB", "grib"),
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
@@ -67,6 +70,11 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"PWAD", "wad"),
     (b"\x34\x12\xaa\x55", "vpk"),
     (b"NES\x1a", "nes"),
+    // The three versions of a classic NetCDF file. A `.nc` written by a
+    // modern library is an HDF5 file instead, and matches that signature.
+    (b"CDF\x01", "netcdf"),
+    (b"CDF\x02", "netcdf"),
+    (b"CDF\x05", "netcdf"),
     (b"GIF8", "gif"),
     (b"qoif", "qoi"),
     // Three bytes rather than two: the marker after the start-of-image is

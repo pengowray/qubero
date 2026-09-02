@@ -37,6 +37,7 @@ pub mod ggml_quant;
 mod gguf;
 mod git;
 mod gif;
+mod grib;
 mod grubenv;
 mod gdbm;
 mod gwf;
@@ -65,6 +66,7 @@ mod midi;
 mod mkv;
 mod mp4;
 mod nes;
+mod netcdf;
 mod old_mac;
 mod omf;
 mod pak;
@@ -139,6 +141,7 @@ pub use elf_disasm::Program as ElfProgram;
 pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
 pub use gif::gif;
+pub use grib::grib;
 pub use grubenv::grubenv;
 pub use gdbm::gdbm;
 pub use gwf::gwf;
@@ -162,6 +165,7 @@ pub use midi::midi;
 pub use mkv::mkv;
 pub use mp4::mp4;
 pub use nes::nes;
+pub use netcdf::netcdf;
 pub use old_mac::{binhex, compactpro, macbinary, stuffit};
 pub use omf::omf;
 pub use pe::pe;
@@ -280,6 +284,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("au", |_| au()),
     ("pi1", |_| pi1()),
     ("nes", |_| nes()),
+    ("netcdf", |_| netcdf()),
+    ("grib", |_| grib()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),
     ("zlib", |_| zlib()),
