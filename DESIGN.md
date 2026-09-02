@@ -1015,6 +1015,70 @@ does not fit is read at its offset from the window, so a camera's make and
 model and exposure are strings and fractions rather than three numbers that
 happen to be small.
 
+### A stream read as the fields inside it
+A ROOT record is a nine-byte block header and then a zlib stream, and
+everything the record is *for* is on the other side of it. Read as
+`bytes[3824]` that is honest and useless. The same is true of an RNTuple
+anchor, and there it is worse than useless: the anchor holds the offsets of the
+two envelopes that describe the whole ntuple, the anchor is normally
+compressed, and so a file whose entire shape is written down plainly reads as
+one grey run.
+
+So a template may say what a run is compressed with, and the reading opens it.
+`Ty::Decoded { codec, inner }` is applied to a run of bytes and changes nothing
+about the run: the field is at the offset it is at, it is as long as the file
+makes it, and its bytes are the compressed bytes. What it gains is one child,
+`inner`, read over the bytes the run comes to. Five codecs so far: zlib, raw
+deflate, zstd, one LZ4 block, and xz. It has no length of its own, because a
+compressed stream never says how long it is, so it is written inside a `Sized`
+that does.
+
+**Spaces.** The file is space 0 and every offset in the IR is a bit of it.
+Each `Decoded` node opens another, numbered as it is opened, and a field read
+inside one counts from the front of the decoded bytes: the ROOT object is at
+`+0x0` of its record's stream and at no address in the file at all. Every node
+carries the space its offset belongs to, and every read in the evaluator goes
+through one place that dispatches on it, which is what keeps the two from
+leaking into one another.
+
+The exception is what makes an RNTuple anchor work. An offset counted from the
+start of the file means the file, whatever space the field naming it was read
+in, so `At { anchor: File }` and a pointer list anchored the same way go back
+to space 0. The anchor's `seek_header` is a number that exists only inside the
+stream, and the envelope it names is 282 bytes into the file; both of those are
+true at once, and this is the rule that says so.
+
+**Cost.** A decoded buffer is kept per node path, capped at 64 MiB. A run past
+the cap, a run the decoder will not read, and a run that does not start on a
+byte all read as the bytes they are, with the node saying which of the three it
+was: a kind, not a sentence, so the interface does the wording. A broken block
+must never take the listing down with it. The buffers go when the memo goes,
+and an edit drops them even when it is an edit the memo would otherwise have
+kept: everything inside a stream is at offset 0 of its own space and so looks,
+to a `forget_after`, like it ended before any edit anywhere.
+
+**What the views do.** The cursor stops at the run. `locate` never returns a
+node in a decoded space, and the hex view draws the whole run as one entry
+standing for the fields inside it, counted from the template rather than by
+opening anything. The listing nests the children under the stream through the
+ordinary `children` call, and writes their addresses with a leading `+`,
+`+0x1c`, because `0x1c` of a stream and `0x1c` of the file are different bytes
+and a reader comparing the listing against the hex view has to be able to tell.
+Their headings are a level under the stream, never a top-level part of the
+file. The inspector already had the stream in its trail, since the trail is the
+line of ancestors, and now says beside the address which space it is in.
+Nothing decoded is editable: a decoded byte is a function of every compressed
+byte before it, and there is nowhere in the file to put a change.
+
+**No hex mapping of decoded space.** The hex view shows bytes of the file, and
+the decoded bytes are not in it. There is no second hex pane, no mapping from a
+decoded byte back to the run it came from, and no way to point at one. This is
+a deliberate stop rather than an oversight: the honest answer to "which file
+byte is this decoded byte" is "the whole run", and a view that drew a line to
+one byte of it would be inventing a correspondence deflate does not have. What
+a reader gets instead is the field list, the addresses within the stream, and
+the stream itself sitting in the hex view as the run it is.
+
 ### A stream that says nowhere how long it is
 JPEG is a list of segments, and all but one kind of them carry a length. The
 one that does not is the whole point of the format: after the marker that
@@ -1762,8 +1826,11 @@ thread never blocks on reads.
 
 ### Compressed streams and archives
 Ten formats whose bytes are mostly not readable: zlib, bzip2, xz, zstd, lz4,
-lzip, compress, tar, 7z and RAR 5. None of them decompresses anything, and that
-is the point of writing them down. What a compressed file has to say about
+lzip, compress, tar, 7z and RAR 5. When these were written none of them
+decompressed anything, and that was the point of writing them down; four of
+them do now, and the paragraphs below are still the reason the frame is worth
+reading whether or not anything opens the run. See "A stream read as the
+fields inside it" for what opening one means. What a compressed file has to say about
 itself, it says in the frame around the compressed part, and the frame is where
 the questions a reader actually has are answered: how large was this before,
 what checksum should it come out with, how much window does a decoder need, how
