@@ -37,6 +37,7 @@ mod git;
 mod gif;
 mod grubenv;
 mod gdbm;
+mod gwf;
 mod gzip;
 mod recognise;
 pub mod sqlite_overflow;
@@ -127,6 +128,7 @@ pub use git::{git_index, git_pack_index};
 pub use gif::gif;
 pub use grubenv::grubenv;
 pub use gdbm::gdbm;
+pub use gwf::gwf;
 pub use gzip::gzip;
 pub use uf2::{image as uf2_image, uf2, Image as Uf2Image};
 pub use hackrffw::hackrffw;
@@ -257,6 +259,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("nes", |_| nes()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),
+    ("gwf", |_| gwf()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),

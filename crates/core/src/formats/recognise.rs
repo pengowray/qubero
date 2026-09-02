@@ -42,6 +42,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"PK\x05\x06", "zip"),
     (b"\0asm", "wasm"),
     (b"GGUF", "gguf"),
+    // A gravitational wave frame file, whose fifth byte is the nul that ends
+    // the four letters.
+    (b"IGWD\0", "gwf"),
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
