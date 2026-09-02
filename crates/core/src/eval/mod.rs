@@ -12,7 +12,7 @@ use crate::document::Document;
 use crate::encode;
 use crate::machinery;
 use crate::source::{Missing, Source};
-use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, Ty, Until};
+use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
 use crate::text::{self, Settled};
 
 mod explain;
@@ -27,13 +27,13 @@ mod read;
 mod relate;
 mod size;
 mod space;
-mod spaces;
+mod traced;
 mod walk;
 #[cfg(test)]
 mod tests;
 
 pub use explain::{Explain, FlagBit};
-pub use spaces::{OpenedDoc, OutRange, SpaceDoc, Step, StepKind};
+pub use space::{Space, SpaceId};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
 
@@ -75,6 +75,21 @@ pub type R<T> = Result<T, EvalError>;
 
 fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
+}
+
+/// Whether a stream's declared contents say nothing about what they are.
+///
+/// A template that says a run unpacks into bytes, or into a wrapper holding
+/// one field of bytes or of text, has no opinion worth keeping: the bytes
+/// themselves know better, and a gzip of a tar should open as a tar. A
+/// template that says anything else is believed.
+fn says_only_bytes(ty: &Ty) -> bool {
+    match ty {
+        Ty::Bytes(_) | Ty::Str { .. } => true,
+        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => says_only_bytes(inner),
+        Ty::Struct(s) => s.fields.len() == 1 && says_only_bytes(&s.fields[0].ty),
+        _ => false,
+    }
 }
 
 /// How far down a node may be before reading it is refused, counted in path
@@ -352,6 +367,12 @@ pub struct Evaluator {
     placed: placed::Index,
     /// The decoded streams this reading has opened, and what each one came to.
     spaces: space::Spaces,
+    /// The streams opened as documents of their own, which is what a tab is.
+    /// Numbered across every level of nesting, so a stream inside a stream is
+    /// a space beside its parent rather than inside it: the interface names
+    /// one number and this says which one it means. A slot is taken out while
+    /// something is being asked of it, which is why they are options.
+    open: Vec<Option<Box<space::Space>>>,
 }
 
 impl Evaluator {
@@ -363,6 +384,7 @@ impl Evaluator {
             go: go::Go::default(),
             placed: placed::Index::default(),
             spaces: space::Spaces::default(),
+            open: Vec::new(),
         }
     }
 
@@ -481,6 +503,10 @@ impl Evaluator {
         if self.spaces.any() {
             self.spaces.forget();
             self.memo.forget_decoded();
+            // A space is a reading of bytes worked out from the file, so an
+            // edit anywhere in the file drops every one of them. A tab over a
+            // stream that is gone opens it again, which is one inflate.
+            self.open.clear();
         }
         self.memo.forget_after(bit);
     }
@@ -491,6 +517,7 @@ impl Evaluator {
         self.memo.forget();
         self.placed.forget();
         self.spaces.forget();
+        self.open.clear();
         self.journals.clear();
         self.go.restart();
     }
@@ -544,14 +571,20 @@ impl Evaluator {
             // per row is that `locate` stops at the run, so only a stream
             // something is actually drawing is ever unpacked, and the row has
             // to say whether it opened.
-            Ty::Decoded { .. } => {
+            Ty::Decoded { .. } | Ty::Traced { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
             _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
-        let (consumed_by, machinery, contents) = self.in_parent(path);
+        let (consumed_by, mut machinery, contents) = self.in_parent(path);
+        // What the decoder read is machinery for what it produced: a reader
+        // who wants the contents of a stream is not asking about its Huffman
+        // tables, and a view that folds machinery should fold these.
+        if self.is_trace_field(path) {
+            machinery = Some(true);
+        }
         Ok(NodeInfo {
             path: path.to_vec(),
             space: r.space,
@@ -746,6 +779,16 @@ impl Evaluator {
                 _ => None,
             };
         }
+        // What a trace holds at each level: blocks, and then symbols. An LZ4
+        // block has one run of sequences rather than blocks, and counting
+        // those as blocks would say something the format does not.
+        if let Ty::Traced { part } = ty {
+            return match part {
+                TracedPart::Blocks => Some(traced::blocks_unit(self.trace_for(path).and_then(|(_, t)| t.blocks().first().map(|b| b.kind)))),
+                TracedPart::Block(_) => None,
+                TracedPart::Symbols(_) => Some("symbol"),
+            };
+        }
         let mut elem = match ty {
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. } => elem.base(),
             _ => return None,
@@ -820,8 +863,29 @@ impl Evaluator {
             // saying `directory` twice says nothing the once did not.
             Ty::At { inner, .. } => (pr.name.clone(), (**inner).clone()),
             // Same again for what a stream holds: the field is the stream, and
-            // its one child is what came out of it.
-            Ty::Decoded { inner, .. } => (pr.name.clone(), (**inner).clone()),
+            // its first child is what came out of it. Its second, when the
+            // codec keeps a trace with blocks in it, is what the decoder read
+            // to get there: payload first, machinery second.
+            Ty::Decoded { inner, .. } if idx == 0 => (pr.name.clone(), (**inner).clone()),
+            Ty::Decoded { .. } => {
+                // The trace comes of opening the stream, so a reader who asks
+                // for the blocks before asking what came out opens it here.
+                self.open_space_at(doc, parent)?;
+                // Where the first block starts, which for a wrapped stream is
+                // past whatever the wrapper put in front of it.
+                let at = match self.trace_for(parent) {
+                    Some((base, t)) => base + t.blocks().first().map_or(0, |b| b.in_bits.start),
+                    None => return fail("this stream is no longer open"),
+                };
+                return Ok(Some(Place {
+                    name: Name::Field("blocks".into()),
+                    ty: Ty::Traced { part: TracedPart::Blocks },
+                    offset: at,
+                    limit: pr.limit,
+                    space: pr.space,
+                }));
+            }
+            Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
             _ => return fail("not a composite"),
         };
         // What a stream holds is read over the bytes it came to, not over the
@@ -830,7 +894,7 @@ impl Evaluator {
         // back to the file, which is how an RNTuple anchor inside a compressed
         // record still finds its envelopes. See [`space`].
         if let Ty::Decoded { .. } = &pr.ty {
-            let space = match self.open_space(doc, parent)? {
+            let space = match self.open_space_at(doc, parent)? {
                 space::Opened::Space(id) => id,
                 // The stream would not open. `child_count` already said it has
                 // nothing inside, so nothing should be asking; answering with
@@ -1227,6 +1291,19 @@ impl Evaluator {
                     declared_size = Some(bits);
                     ty = *inner;
                 }
+                Ty::SizedBits { bits, inner } => {
+                    let n = self.eval_expr_at(doc, path, &bits, Some((offset, limit)))?;
+                    if n < 0 {
+                        return fail("negative size");
+                    }
+                    let bits = n as u64;
+                    if offset + bits > limit {
+                        return fail(format!("{bits} bits run past the end of the container"));
+                    }
+                    limit = offset + bits;
+                    declared_size = Some(bits);
+                    ty = *inner;
+                }
                 Ty::Switch { on, cases, default } => {
                     // The node is not in the memo yet, so where it starts has
                     // to be handed over: a switch that looks at the byte it is
@@ -1284,7 +1361,7 @@ impl Evaluator {
     /// reports `Pending` like any other read. Everything after that is an
     /// answer rather than an error: a stream that will not open is a fact
     /// about the file, and it should not take the listing down with it.
-    pub(super) fn open_space<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<space::Opened> {
+    pub(super) fn open_space_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<space::Opened> {
         if let Some(known) = self.spaces.get(path) {
             return Ok(known);
         }
@@ -1303,15 +1380,15 @@ impl Evaluator {
         // end mark is a block of nothing, and saying it would not unpack would
         // be saying something went wrong where nothing did.
         if size == 0 {
-            return Ok(space::Opened::Space(self.spaces.add(path, Vec::new())));
+            return Ok(space::Opened::Space(self.spaces.add(path, Vec::new(), crate::codec::Trace::default())));
         }
         if size / 8 > crate::codec::CAP_BYTES as u64 {
             self.spaces.refuse(path, Refusal::TooLarge);
             return Ok(space::Opened::Refused(Refusal::TooLarge));
         }
         let packed = self.read(doc, &r, r.offset, size)?;
-        Ok(match crate::codec::decode(codec, &packed) {
-            Ok(bytes) => space::Opened::Space(self.spaces.add(path, bytes)),
+        Ok(match crate::codec::decode_traced(codec, &packed) {
+            Ok((bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
             Err(why) => {
                 self.spaces.refuse(path, why);
                 space::Opened::Refused(why)
@@ -1319,9 +1396,214 @@ impl Evaluator {
         })
     }
 
-    /// The bytes of an opened space, for a reader that wants the whole of it.
-    pub(super) fn space_bytes(&self, space: u32) -> Option<std::sync::Arc<Vec<u8>>> {
-        self.spaces.buf(space).cloned()
+    /// Open the `Decoded` node at `path` of space `space` as a document of its
+    /// own, and say which space that is. Nothing when the stream would not
+    /// open, which is a fact about the file rather than an error.
+    ///
+    /// Done once per node: asking again for a stream already open hands back
+    /// the space it opened. `space` is 0 for a node of the file, and the id of
+    /// an already-open space for a stream inside a stream, which is how a zip
+    /// inside a gzip is reached.
+    pub fn open_space<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        space: SpaceId,
+        path: &[usize],
+    ) -> R<Option<SpaceId>> {
+        if let Some(id) =
+            self.open.iter().flatten().find(|s| s.parent == space && s.path == path).map(|s| s.id)
+        {
+            return Ok(Some(id));
+        }
+        // The run is unpacked by whichever reading holds it: the file's own,
+        // or the one over the space it sits in. The space is taken out of the
+        // registry for the length of the call, since it holds a reading that
+        // is about to be asked to do work.
+        let unpacked = match space {
+            0 => self.unpack(doc, path)?,
+            id => {
+                let mut held = match self.take(id) {
+                    Some(held) => held,
+                    None => return fail("no such space"),
+                };
+                let (ev, sub) = held.reading();
+                let got = ev.unpack(sub, path);
+                self.put(held);
+                got?
+            }
+        };
+        let Some((bytes, trace, codec, inner)) = unpacked else { return Ok(None) };
+        let (template, recognised) = self.template_for(&inner, &bytes);
+        let id = self.open.len() as SpaceId + 1;
+        self.open.push(Some(Box::new(space::Space::new(
+            id,
+            space,
+            path.to_vec(),
+            codec,
+            bytes,
+            trace,
+            template,
+            recognised,
+        ))));
+        Ok(Some(id))
+    }
+
+    /// The bytes and the trace of the stream at `path`, or nothing when it
+    /// would not open. The step every `open_space` starts with, whichever
+    /// reading is being asked.
+    #[allow(clippy::type_complexity)]
+    fn unpack<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+    ) -> R<Option<(std::sync::Arc<Vec<u8>>, crate::codec::Trace, crate::codec::Codec, Ty)>> {
+        let id = match self.open_space_at(doc, path)? {
+            space::Opened::Space(id) => id,
+            space::Opened::Refused(_) => return Ok(None),
+        };
+        let Ty::Decoded { codec, inner } = self.memo[path].ty.clone() else {
+            return fail("not a decoded stream");
+        };
+        let (Some(bytes), Some(trace)) = (self.spaces.buf(id), self.spaces.trace(id)) else {
+            return fail("this stream is no longer open");
+        };
+        Ok(Some((bytes.clone(), trace.clone(), codec, (*inner).clone())))
+    }
+
+    /// What a space's bytes read as: what the stream's own template said, or,
+    /// when that said only that they are bytes, whatever they turn out to be.
+    ///
+    /// This is what makes a gzip of a tar open as a tar. A template that says
+    /// something more than "bytes" is believed: a ROOT record's object is an
+    /// object whatever a sniffer would make of the first four bytes of it.
+    fn template_for(&self, inner: &Ty, bytes: &[u8]) -> (Template, bool) {
+        if says_only_bytes(inner) {
+            let head = &bytes[..bytes.len().min(0x9000)];
+            if let Some(found) = crate::formats::sniff(head, bytes.len() as u64) {
+                if let Some(t) = crate::formats::builtin(found) {
+                    return (t, true);
+                }
+            }
+        }
+        let mut t = Template::new(&self.template.name, inner.clone());
+        // The stream's fields may name types the file's template declared, and
+        // a reading that does not know them cannot place them.
+        t.types = self.template.types.clone();
+        (t, false)
+    }
+
+    /// A space this reading has opened.
+    pub fn space(&self, id: SpaceId) -> Option<&Space> {
+        self.open.get(id.checked_sub(1)? as usize)?.as_deref()
+    }
+
+    /// A space this reading has opened, to ask something of.
+    pub fn space_mut(&mut self, id: SpaceId) -> Option<&mut Space> {
+        self.open.get_mut(id.checked_sub(1)? as usize)?.as_deref_mut()
+    }
+
+    /// Every space open, in the order they were opened.
+    pub fn spaces_open(&self) -> impl Iterator<Item = &Space> {
+        self.open.iter().flatten().map(|s| &**s)
+    }
+
+    /// Which step of a decoding produced a byte of `space`.
+    pub fn map_out(&self, space: SpaceId, byte: u64) -> Option<crate::codec::Step> {
+        self.space(space)?.map_out(byte)
+    }
+
+    /// Which step read a bit of the run `space` was unpacked from.
+    pub fn map_in(&self, space: SpaceId, bit: u64) -> Option<crate::codec::Step> {
+        self.space(space)?.map_in(bit)
+    }
+
+    fn take(&mut self, id: SpaceId) -> Option<Box<Space>> {
+        self.open.get_mut(id.checked_sub(1)? as usize)?.take()
+    }
+
+    fn put(&mut self, space: Box<Space>) {
+        let at = space.id as usize - 1;
+        self.open[at] = Some(space);
+    }
+
+    /// Where a `Traced` node's child sits, which is where the decoder said it
+    /// read it. Nothing is walked and nothing is measured: a step knows its
+    /// own bits, so element a million of a symbol run is one lookup.
+    fn place_traced(
+        &mut self,
+        parent: &[usize],
+        pr: &Resolved,
+        part: TracedPart,
+        idx: usize,
+    ) -> R<Option<Place>> {
+        let Some((base, trace)) = self.trace_for(parent) else {
+            return fail("this stream is no longer open");
+        };
+        let place = |name: String, ty: Ty, at: u64| {
+            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space }))
+        };
+        match part {
+            TracedPart::Blocks => {
+                let Some(block) = trace.blocks().get(idx) else { return fail("no such block") };
+                let at = block.in_bits.start;
+                place(traced::block_name(block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
+            }
+            TracedPart::Block(i) => {
+                let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
+                let head = view.head.len();
+                if idx < head {
+                    let step = trace.step(view.head.start as usize + idx).expect("in range");
+                    let (name, ty) = traced::head_field(&step);
+                    place(name, ty, step.in_bits.start)
+                } else if idx == head && !view.symbols.is_empty() {
+                    let at = view.symbols_at(trace);
+                    place("symbols".into(), Ty::Traced { part: TracedPart::Symbols(i) }, at)
+                } else {
+                    fail("no such field")
+                }
+            }
+            TracedPart::Symbols(i) => {
+                let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
+                let k = view.symbols.start as usize + idx;
+                if k >= view.symbols.end as usize {
+                    return fail("no such symbol");
+                }
+                let step = trace.step(k).expect("in range");
+                let (name, ty) = traced::symbol_ty(&step);
+                place(name, ty, step.in_bits.start)
+            }
+        }
+    }
+
+    /// The trace behind a `Traced` node, and where the run it describes starts.
+    ///
+    /// Found by walking up to the stream that opened it, the same way a space
+    /// is: a `Traced` node is always inside one, and the trace belongs to the
+    /// stream rather than to the node.
+    pub(super) fn trace_for(&self, path: &[usize]) -> Option<(u64, &crate::codec::Trace)> {
+        for k in (0..=path.len()).rev() {
+            let Some(r) = self.memo.get(&path[..k]) else { continue };
+            if matches!(r.ty, Ty::Decoded { .. }) {
+                let space::Opened::Space(id) = self.spaces.get(&path[..k])? else { return None };
+                return Some((r.offset, self.spaces.trace(id)?));
+            }
+        }
+        None
+    }
+
+    /// Whether this node is one of the fields a trace laid down, which is the
+    /// `blocks` child of a stream and everything under it.
+    pub(super) fn is_trace_field(&self, path: &[usize]) -> bool {
+        (0..path.len()).any(|k| {
+            path[k] == 1 && matches!(self.memo.get(&path[..k]).map(|r| &r.ty), Some(Ty::Decoded { .. }))
+        })
+    }
+
+    /// Whether a stream's trace has anything to show, which decides whether
+    /// the stream has a `blocks` child at all. zstd and xz are traced at the
+    /// block and have no blocks to open, so they do not get one.
+    pub(super) fn has_blocks(&self, path: &[usize]) -> bool {
+        self.trace_for(path).is_some_and(|(_, t)| !t.blocks().is_empty())
     }
 
     /// Which address space a read at `path` belongs to.
@@ -1338,6 +1620,12 @@ impl Evaluator {
                 return r.space;
             }
             if matches!(r.ty, Ty::Decoded { .. }) {
+                // The stream's second child is what the decoder read, which is
+                // bits of the run and so of the space the run is in. Only the
+                // first child is on the other side of the codec.
+                if path.get(k) == Some(&1) {
+                    return r.space;
+                }
                 return match self.spaces.get(&path[..k]) {
                     Some(space::Opened::Space(id)) => id,
                     _ => r.space,

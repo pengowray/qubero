@@ -56,8 +56,23 @@ impl Memo {
     /// bytes and the stream may be what was edited, so they all go. Cheap: the
     /// nodes are few, and opening the stream again is one inflate.
     pub(super) fn forget_decoded(&mut self) {
-        let gone: Vec<Vec<usize>> =
-            self.nodes.iter().filter(|(_, r)| r.space != 0).map(|(p, _)| p.clone()).collect();
+        // Everything a stream produced, which is in a space of its own, and
+        // everything the decoder read to produce it, which is not: a node laid
+        // out from a trace is bits of the file and looks like any other node,
+        // and the trace it was laid out from is about to go.
+        let streams: Vec<Vec<usize>> = self
+            .nodes
+            .iter()
+            .filter(|(_, r)| matches!(r.ty, crate::template::Ty::Decoded { .. }))
+            .map(|(p, _)| p.clone())
+            .collect();
+        let under = |p: &[usize]| streams.iter().any(|s| p.len() > s.len() && p.starts_with(s));
+        let gone: Vec<Vec<usize>> = self
+            .nodes
+            .iter()
+            .filter(|(p, r)| r.space != 0 || under(p))
+            .map(|(p, _)| p.clone())
+            .collect();
         for p in gone {
             self.nodes.remove(&p);
             self.lists.remove(&p);

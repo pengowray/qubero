@@ -184,6 +184,32 @@ impl Evaluator {
                         }
                     }
                 },
+                // As wide as the decoder said it read. Not measured by adding
+                // up children: a symbol run of a million is one subtraction.
+                Ty::Traced { part } => {
+                    let part = *part;
+                    let Some((base, trace)) = self.trace_for(path) else {
+                        return fail("this stream is no longer open");
+                    };
+                    let span = match part {
+                        crate::template::TracedPart::Blocks => match (trace.blocks().first(), trace.blocks().last()) {
+                            (Some(a), Some(b)) => b.in_bits.end - a.in_bits.start,
+                            _ => 0,
+                        },
+                        crate::template::TracedPart::Block(i) => match trace.blocks().get(i as usize) {
+                            Some(b) => b.in_bits.end - b.in_bits.start,
+                            None => 0,
+                        },
+                        crate::template::TracedPart::Symbols(i) => {
+                            match super::traced::BlockView::of(trace, i) {
+                                Some(v) => v.block.in_bits.end - v.symbols_at(trace),
+                                None => 0,
+                            }
+                        }
+                    };
+                    let _ = base;
+                    span
+                }
                 Ty::Leb128 { .. } => {
                     let (_, n) = self.read_leb(doc, &r)?;
                     n * 8
@@ -290,10 +316,30 @@ impl Evaluator {
             // Asking what is inside a stream is what opens it. One child when
             // it opened, none when it would not: a refusal is a leaf, and the
             // node carries the reason.
-            Ty::Decoded { .. } => Ok(match self.open_space(doc, path)? {
+            // Asking what is inside a stream is what opens it. Nothing when it
+            // would not open: a refusal is a leaf, and the node carries the
+            // reason. What came out of it, and, when the decoder kept a trace
+            // with blocks in it, what it read to get there.
+            Ty::Decoded { .. } => Ok(match self.open_space_at(doc, path)? {
+                super::space::Opened::Space(_) if self.has_blocks(path) => 2,
                 super::space::Opened::Space(_) => 1,
                 super::space::Opened::Refused(_) => 0,
             }),
+            Ty::Traced { part } => {
+                let part = *part;
+                let Some((_, trace)) = self.trace_for(path) else { return Ok(0) };
+                Ok(match part {
+                    crate::template::TracedPart::Blocks => trace.blocks().len() as u64,
+                    crate::template::TracedPart::Block(i) => match super::traced::BlockView::of(trace, i) {
+                        Some(v) => v.head.len() as u64 + u64::from(!v.symbols.is_empty()),
+                        None => 0,
+                    },
+                    crate::template::TracedPart::Symbols(i) => match super::traced::BlockView::of(trace, i) {
+                        Some(v) => v.symbols.len() as u64,
+                        None => 0,
+                    },
+                })
+            }
             Ty::Json(shape) if shape.composite() => self.json_child_count(doc, path),
             _ => Ok(0),
         }

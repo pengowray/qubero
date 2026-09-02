@@ -1076,6 +1076,12 @@ pub enum Ty {
     At { anchor: Anchor, at: Expr, inner: Box<Ty> },
     /// Occupies exactly `size` bytes; `inner` is parsed within that window.
     Sized { size: Expr, inner: Box<Ty> },
+    /// The same, in bits.
+    ///
+    /// For a field whose width the format states in bits and which no integer
+    /// type describes: a deflate block's `bfinal` is one bit and its value is
+    /// not read out of that bit but out of the trace. See [`Ty::Traced`].
+    SizedBits { bits: Expr, inner: Box<Ty> },
     /// Pick a type by the value of `on`; falls back to `default`. The cases
     /// are shared rather than owned: resolving a field clones its type, and
     /// a switch with thirteen cases is cloned once per element of a list
@@ -1121,6 +1127,37 @@ pub enum Ty {
     /// back to the file, and a stream too large or too broken to open reads as
     /// the bytes it is with a note saying why. See [`crate::codec`].
     Decoded { codec: crate::codec::Codec, inner: Box<Ty> },
+    /// Fields laid out from what the decoder read, rather than from what a
+    /// template says.
+    ///
+    /// The one type in the IR whose children are not written down anywhere.
+    /// A deflate stream's structure cannot be: how many blocks there are, how
+    /// long each one's tables are, and how many symbols follow depend on what
+    /// the Huffman codes turn out to say, and nothing short of decoding it
+    /// finds out. So the decoder writes down what it read (see
+    /// [`crate::codec::Trace`]) and this reads the fields back off that.
+    ///
+    /// It appears as the second child of a [`Ty::Decoded`] node, over the same
+    /// bits as the run, and only when the codec's trace has blocks in it. The
+    /// first child is still what came out of the stream: payload first,
+    /// machinery second.
+    ///
+    /// Nothing here is editable and nothing is read from the file twice: every
+    /// value shown is the value the decoder used.
+    Traced { part: TracedPart },
+}
+
+/// Which level of a trace a [`Ty::Traced`] node stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TracedPart {
+    /// Every block the decoder found, one child each.
+    Blocks,
+    /// One block: its header and its tables, and then its symbols.
+    Block(u32),
+    /// The symbols of one block, one child each. Kept apart from the block so
+    /// a run of a hundred thousand literals is one row that opens rather than
+    /// a hundred thousand rows in the way of the tables above them.
+    Symbols(u32),
 }
 
 /// The value a format writes to mean a slot nobody filled in. See
@@ -1657,7 +1694,7 @@ impl Ty {
             // children, and these come one from each child.
             Ty::Chain { elem, .. } => format!("chain \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
-            Ty::Sized { inner, .. } => inner.display_name(),
+            Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Match { .. } => "switch".into(),
             Ty::Json(shape) => shape.name().to_string(),
@@ -1667,6 +1704,11 @@ impl Ty {
             // The codec first: what a reader wants from this column is which
             // of the five it is, and what comes out is a row of its own below.
             Ty::Decoded { codec, .. } => codec.as_str().to_string(),
+            Ty::Traced { part } => match part {
+                TracedPart::Blocks => "blocks".into(),
+                TracedPart::Block(_) => "block".into(),
+                TracedPart::Symbols(_) => "symbols".into(),
+            },
         }
     }
 }

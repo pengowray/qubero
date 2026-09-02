@@ -88,6 +88,7 @@ impl Evaluator {
             self.from_expr(doc, path, &from, Role::Name, &mut out)?;
         }
         self.decoded_from(doc, path, &mut out)?;
+        self.decoded_with(doc, path, &mut out)?;
         // The declared type, before the switch picked a case and before `Sized`
         // was unwrapped: that is where the deciding expressions are.
         let declared = self.declared_ty(path)?;
@@ -200,6 +201,33 @@ impl Evaluator {
         Ok(())
     }
 
+    /// The table a symbol was decoded with, for anything laid out from a trace.
+    ///
+    /// A literal in a deflate stream is nine bits, and which nine bits is not
+    /// a fact about those bits: it is a fact about the Huffman table the block
+    /// declared thirty rows above. That table is a field with a place of its
+    /// own, so the answer is a row saying which block, that the reader can go
+    /// to.
+    fn decoded_with<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<Origin>) -> R<()> {
+        // The nearest block above this node, which is the one whose header and
+        // tables settled what its symbols mean.
+        let found = (0..path.len()).rev().find_map(|k| match self.memo.get(&path[..k]).map(|r| &r.ty) {
+            Some(Ty::Traced { part: crate::template::TracedPart::Block(_) }) => Some(path[..k].to_vec()),
+            _ => None,
+        });
+        let Some(block) = found else { return Ok(()) };
+        if block == path {
+            return Ok(());
+        }
+        let label = self.memo.get(&block).map(|r| r.name.text()).unwrap_or_default();
+        let mut o = self.origin(doc, Role::Type, label, block);
+        // What the block reads as is a count of its children, which says
+        // nothing. What settled the symbol is how the block coded them.
+        o.value = String::new();
+        out.push(o);
+        Ok(())
+    }
+
     /// What the type says before the file has been consulted: the field's own
     /// declaration, with nothing chosen and no window unwrapped yet.
     pub(super) fn declared_ty(&self, path: &[usize]) -> R<Ty> {
@@ -215,7 +243,15 @@ impl Evaluator {
             // The one thing these hold, which is what the child was declared
             // as. Without this, asking what shaped a stream's contents, or
             // what an `At` points at, is an error rather than an answer.
+            Some(Ty::Decoded { .. }) if idx == 1 => Ok(Ty::Traced { part: crate::template::TracedPart::Blocks }),
             Some(Ty::At { inner, .. } | Ty::Decoded { inner, .. }) => Ok((**inner).clone()),
+            // A node laid out from a trace has no declaration to give back:
+            // the decoder made it, and what it is, is what it turned out to
+            // be. So the answer is the node itself.
+            Some(Ty::Traced { .. }) => match self.memo.get(path) {
+                Some(r) => Ok(r.ty.clone()),
+                None => fail("not resolved"),
+            },
             _ => fail("not a composite"),
         }
     }

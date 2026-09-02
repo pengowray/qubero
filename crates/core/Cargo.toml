@@ -6,6 +6,12 @@ license.workspace = true
 
 [dev-dependencies]
 proptest = "1"
+# What the decoders in `codec` are checked against. Our own inflater and LZ4
+# reader exist for the trace, not for the bytes: the bytes have to be the same
+# bytes these give, over the whole sample collection and over random data at
+# every level.
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
+lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode", "std"] }
 
 [dependencies]
 # Hashing a path of child indices happens several times per field; the default

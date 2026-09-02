@@ -43,6 +43,23 @@ impl Source for MemSource {
     }
 }
 
+/// Bytes somebody else already holds. What a decoded stream is read through:
+/// the buffer belongs to the reading that unpacked it, and the document over
+/// it borrows rather than copies, which for a 64 MiB stream is the difference
+/// between opening a tab and opening two of them.
+pub struct ArcSource(pub std::sync::Arc<Vec<u8>>);
+
+impl Source for ArcSource {
+    fn len_bytes(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<Missing> {
+        let o = offset as usize;
+        out.copy_from_slice(&self.0[o..o + out.len()]);
+        Vec::new()
+    }
+}
+
 /// One chunk, and when it was last read. Reading is what keeps a chunk alive:
 /// the head of a file is loaded first and read constantly, and dropping it
 /// because it was loaded first would take the top of the structure away every

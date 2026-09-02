@@ -2348,7 +2348,8 @@ fn a_stream_keeps_its_own_bytes_and_its_children_count_from_the_decoded_ones() {
     assert_eq!(stream.size_bits, len as u64 * 8);
     assert_eq!(stream.space, 0);
     assert_eq!(stream.refused, None);
-    assert_eq!(stream.child_count, 1);
+    // What came out of it, and what the decoder read to get there.
+    assert_eq!(stream.child_count, 2);
     assert!(stream.composite);
     assert_eq!(stream.type_name, "zlib");
 
@@ -2377,22 +2378,66 @@ fn nothing_inside_a_stream_is_editable() {
     assert!(ev.node(&d, &[0]).unwrap().editable);
 }
 
-/// The cursor stops at the run. No bit of the file is a field inside it.
+/// The cursor never lands on a field of what came *out* of a stream: those are
+/// at offsets of the decoded bytes and no bit of the file is any one of them.
+/// It does land on what the decoder read, which is bits of the file: the run
+/// is a header, some tables and a run of symbols, and every one of those is
+/// somewhere.
 #[test]
-fn locate_never_lands_inside_a_stream() {
+fn locate_lands_on_what_the_decoder_read_and_never_on_what_it_produced() {
     let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
     let mut ev = Evaluator::new(packed_template(len));
     assert_eq!(ev.locate(&d, 0).unwrap(), vec![0]);
     for byte in 2..2 + len as u64 {
-        assert_eq!(ev.locate(&d, byte * 8).unwrap(), vec![1], "at byte {byte}");
+        let at = ev.locate(&d, byte * 8).unwrap();
+        // Never inside the decoded space, which is child 0.
+        assert_ne!(at.get(1), Some(&0), "at byte {byte}, the cursor is inside the decoded bytes");
+        assert_eq!(&at[..1], &[1], "at byte {byte}");
+        // The two zlib header bytes and the four of the checksum belong to no
+        // block, so the run itself is the answer for those.
+        let deep = at.len() > 1;
+        assert_eq!(deep, (4..2 + len as u64 - 4).contains(&byte), "at byte {byte}, landed on {at:?}");
     }
-    // And the hex view draws it as one entry standing for the fields inside.
+    // And the hex view draws the wrapper's bytes as the run they are, with
+    // the blocks between them as entries of their own rather than swallowed.
     let spans = ev.spans(&d, 2 * 8, (2 + len as u64) * 8, 100).unwrap();
-    assert_eq!(spans.len(), 1);
+    assert!(spans.len() > 2, "the run drew as {} entries", spans.len());
     assert_eq!(spans[0].name, "stream");
-    assert_eq!(spans[0].size_bits, len as u64 * 8);
-    assert_eq!(spans[0].count, 2);
-    assert!(!spans[0].gap);
+    assert_eq!(spans[0].size_bits, 2 * 8, "the zlib header is the wrapper's two bytes");
+    // The tail is whatever the last block did not use of its last byte, and
+    // then the Adler-32.
+    assert_eq!(spans.last().unwrap().name, "stream");
+    assert!(spans.last().unwrap().size_bits >= 4 * 8, "the tail is shorter than the Adler-32");
+    assert!(spans.iter().any(|s| s.name == "bfinal"), "no block header in {:?}", names(&spans));
+    // Nothing overlaps and nothing is skipped.
+    let mut at = 2 * 8;
+    for s in &spans {
+        assert_eq!(s.offset_bits, at, "{:?} starts in the wrong place", s.name);
+        at += s.size_bits;
+    }
+    assert_eq!(at, (2 + len as u64) * 8);
+}
+
+fn names(spans: &[crate::eval::Span]) -> Vec<String> {
+    spans.iter().map(|s| s.name.clone()).collect()
+}
+
+/// An edit anywhere drops the trace, and so has to drop the fields laid out
+/// from it. They are bits of the file like any other, so nothing else would.
+#[test]
+fn an_edit_drops_the_fields_the_trace_laid_down() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    let field = ev.node(&d, &[1, 1, 0, 0]).unwrap();
+    let before = ev.memo_len();
+    // An edit past everything: `forget_after` would keep every node here,
+    // since they all end before it. They still have to go, because the trace
+    // they were laid out from does.
+    ev.invalidate_from(u64::MAX);
+    assert!(ev.memo_len() < before, "{before} nodes kept, trace or no trace");
+    // And asking again works: the stream is opened again and the fields come
+    // back the same.
+    assert_eq!(ev.node(&d, &[1, 1, 0, 0]).unwrap(), field);
 }
 
 /// A run that will not open is the bytes it is, with the node saying which way

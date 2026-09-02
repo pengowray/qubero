@@ -250,11 +250,29 @@ impl Evaluator {
             }
         }
         loop {
-            // The cursor stops at a decoded stream. What is inside it is at
+            // The cursor stops at a decoded stream's *contents*: those are at
             // offsets of the decoded bytes, and no bit of the file is any one
-            // of those fields: the run is the answer, whole.
+            // of them. What the decoder read to produce them is bits of the
+            // file, though, and is what the cursor lands on: a bit of the run
+            // is a bit of some block's header, or of its tables, or of one
+            // literal. For a codec whose trace has no blocks the run is still
+            // the answer, whole.
             self.resolve(doc, &path)?;
             if matches!(self.memo[&path].ty, Ty::Decoded { .. }) {
+                let blocks = self.child_count(doc, &path)? >= 2;
+                if blocks {
+                    let mut into = path.clone();
+                    into.push(1);
+                    self.resolve(doc, &into)?;
+                    let (at, size) = (self.memo[&into].offset, self.size_of(doc, &into)?);
+                    // Bits of the run a wrapper put there -- zlib's two header
+                    // bytes, its Adler-32 -- are not in any block, and the
+                    // answer for those is still the run.
+                    if (at..at + size).contains(&bit) {
+                        path = into;
+                        continue;
+                    }
+                }
                 return Ok(path);
             }
             let n = self.child_count(doc, &path)?;
@@ -321,7 +339,7 @@ impl Evaluator {
                 // at offset 0 of the decoded bytes, and treating that as a bit
                 // of the file would put the stream's contents at the front of
                 // it.
-                self.decoded_run(doc, &path, &info)?
+                self.decoded_run(doc, &path, &info, at)?
             } else if info.composite {
                 self.gap_inside(doc, &path, &info, at)?
             } else {
@@ -389,8 +407,23 @@ impl Evaluator {
     /// The hex view scrolls past every stream in the file and wants none of
     /// them unpacked to draw a row, and what a template declares inside a
     /// stream is the same whatever the bytes turn out to be.
-    fn decoded_run<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
+    fn decoded_run<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo, at: u64) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
+        // A run whose decoder kept a trace is not one entry: the blocks are
+        // entries of their own, and what is left of the run is whatever a
+        // wrapper put in front of them and after them. Drawing the whole run
+        // here would cover the blocks and the view would step past all of
+        // them.
+        if self.has_blocks(path) {
+            let mut blocks = path.to_vec();
+            blocks.push(1);
+            self.resolve(doc, &blocks)?;
+            let (from, size) = (self.memo[&blocks].offset, self.size_of(doc, &blocks)?);
+            let end = info.offset_bits + info.size_bits;
+            let (a, b) = if at < from { (info.offset_bits, from) } else { (from + size, end) };
+            span.offset_bits = a;
+            span.size_bits = b.saturating_sub(a);
+        }
         let Ty::Decoded { inner, .. } = &self.memo[path].ty else { return Ok(span) };
         let mut inner = (**inner).clone();
         for _ in 0..8 {
@@ -603,8 +636,44 @@ impl Evaluator {
     }
 
     /// Which child of `path` covers `bit`, if any.
+    /// Which child of a `Traced` node covers a bit of the file, worked out
+    /// from the trace rather than by placing anything.
+    fn traced_at(&self, path: &[usize], part: crate::template::TracedPart, bit: u64) -> Option<usize> {
+        use crate::template::TracedPart as P;
+        // The trace counts bits from the front of the run, and the cursor
+        // counts them from the front of the file.
+        let (base, trace) = self.trace_for(path)?;
+        let want = bit.checked_sub(base)?;
+        match part {
+            P::Blocks => {
+                let k = trace.blocks().partition_point(|b| b.in_bits.start <= want);
+                let i = k.checked_sub(1)?;
+                (want < trace.blocks()[i].in_bits.end).then_some(i)
+            }
+            P::Block(i) => {
+                let view = super::traced::BlockView::of(trace, i)?;
+                if want >= view.symbols_at(trace) {
+                    return (!view.symbols.is_empty()).then_some(view.head.len());
+                }
+                let k = trace.index_in(want)?;
+                (view.head.contains(&(k as u32))).then(|| k - view.head.start as usize)
+            }
+            P::Symbols(i) => {
+                let view = super::traced::BlockView::of(trace, i)?;
+                let k = trace.index_in(want)?;
+                (view.symbols.contains(&(k as u32))).then(|| k - view.symbols.start as usize)
+            }
+        }
+    }
+
     pub(super) fn child_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], n: u64, bit: u64) -> R<Option<usize>> {
         let r = self.memo[path].clone();
+        // A trace already knows which step covers a bit, and knows it by
+        // halving. So a symbol run of a hundred thousand answers the cursor
+        // without placing a single symbol before the one under it.
+        if let Ty::Traced { part } = &r.ty {
+            return Ok(self.traced_at(path, *part, bit));
+        }
         // Same-sized elements: go straight to the one that covers the bit,
         // without putting a single other element in memory.
         if let Some(each) = self.stride(doc, path, &r.ty)? {

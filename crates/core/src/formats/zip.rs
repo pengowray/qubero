@@ -1,5 +1,6 @@
 //! ZIP archives as local entries, directory entries, descriptors, and the end record.
 
+use crate::codec::Codec;
 use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
 
 const SIGS: &[(i128, &str)] = &[
@@ -295,7 +296,17 @@ fn local() -> T {
             // repeats itself here; a ZIP64 one says what it meant.
             ("data_size", T::computed(data_len())),
             ("unpacked_size", T::computed(unpacked_len())),
-            ("data", T::bytes(E::field("data_size"))),
+            // Method 8 is deflate, and a deflate run opens: what came out of
+            // it, and the blocks the decoder read to get there. Every other
+            // method is bytes, including method 0, which is the file itself.
+            (
+                "data",
+                T::switch(
+                    E::field("compression"),
+                    vec![(8, T::decoded(E::field("data_size"), Codec::Deflate, super::decoded_text()))],
+                    T::bytes(E::field("data_size")),
+                ),
+            ),
         ],
     )
 }
