@@ -144,6 +144,41 @@ fn a_real_edition_1_message_reads_as_its_five_sections() {
 }
 
 #[test]
+fn an_operational_forecast_reads_as_three_messages_on_one_grid() {
+    let Some((d, mut ev)) = read("gfs-1p00-3messages.grib2") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    assert_eq!(ev.node(&d, &[]).unwrap().child_count, 3);
+    for m in 0..3usize {
+        assert_eq!(ev.node(&d, &[m]).unwrap().type_name, "Message");
+        // The same one-degree grid in all three: 360 by 181.
+        let grid = ev.node(&d, &[m, 1, 4, 1, 2, 5]).unwrap();
+        assert_eq!(grid.type_name, "LatLonGrid", "message {m}");
+        let ni = ev.node(&d, &[m, 1, 4, 1, 2, 5, 7]).unwrap().value.as_int().unwrap();
+        let nj = ev.node(&d, &[m, 1, 4, 1, 2, 5, 8]).unwrap().value.as_int().unwrap();
+        assert_eq!((ni, nj), (360, 181));
+        // The grid runs from the north pole down, so the first latitude is
+        // the larger and the last one is negative: sign and magnitude.
+        let first = ev.node(&d, &[m, 1, 4, 1, 2, 5, 11]).unwrap().value.as_int().unwrap();
+        let last = ev.node(&d, &[m, 1, 4, 1, 2, 5, 14]).unwrap().value.as_int().unwrap();
+        assert_eq!((first, last), (90_000_000, -90_000_000));
+        // Complex packing with spatial differencing: the header reads, and
+        // the values stay bytes because their widths are inside them.
+        let packing = ev.node(&d, &[m, 1, 4, 3, 2, 2]).unwrap();
+        assert_eq!(packing.type_name, "ComplexPackingSpatial", "message {m}");
+        let groups = ev.node(&d, &[m, 1, 4, 3, 2, 2, 9]).unwrap().value.as_int().unwrap();
+        assert!(groups > 0, "message {m}: {groups} groups");
+        let order = ev.node(&d, &[m, 1, 4, 3, 2, 2, 16]).unwrap().value.as_int().unwrap();
+        assert!((1..=2).contains(&order), "message {m}: differencing order {order}");
+        assert_eq!(ev.node(&d, &[m, 1, 4, 5, 2, 0]).unwrap().type_name, "bytes[]");
+    }
+    // And the three of them cover the file end to end.
+    let last = ev.node(&d, &[2]).unwrap();
+    assert_eq!(last.offset_bits + last.size_bits, d.len_bits());
+}
+
+#[test]
 fn a_file_of_several_messages_reads_as_all_of_them() {
     let Some((d, mut ev)) = read("two-messages.grib2") else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
