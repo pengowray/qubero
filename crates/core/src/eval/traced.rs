@@ -292,6 +292,24 @@ mod tests {
         assert_eq!(names.last().unwrap(), "end of block");
     }
 
+    /// A symbol's origin names the block whose tables decoded it: which nine
+    /// bits a literal is, is a fact about that block and not about the bits.
+    #[test]
+    fn a_symbol_says_which_block_decoded_it() {
+        let (d, mut e) = reading(&"the shape of the shape of the shape. ".repeat(80).into_bytes());
+        let symbols = e.node(&d, &[6, 1, 0]).unwrap().child_count as usize - 1;
+        let at = [6, 1, 0, symbols, 0];
+        let origins = e.origins(&d, &at).unwrap();
+        let table = origins
+            .iter()
+            .find(|o| o.path == [6, 1, 0])
+            .unwrap_or_else(|| panic!("no row naming the block in {origins:?}"));
+        assert_eq!(table.role, crate::eval::Role::Type);
+        assert!(table.label.contains("dynamic"), "the block is called {:?}", table.label);
+        // And the stream it all came out of is still named.
+        assert!(e.origins(&d, &[6, 0, 0]).unwrap().iter().any(|o| o.value == "deflate"));
+    }
+
     /// Nothing the decoder read is editable: the bits are the file's, but what
     /// they mean is a Huffman code, and writing a number back into one is not
     /// a thing this offers.

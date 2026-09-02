@@ -1057,10 +1057,15 @@ and an edit drops them even when it is an edit the memo would otherwise have
 kept: everything inside a stream is at offset 0 of its own space and so looks,
 to a `forget_after`, like it ended before any edit anywhere.
 
-**What the views do.** The cursor stops at the run. `locate` never returns a
-node in a decoded space, and the hex view draws the whole run as one entry
-standing for the fields inside it, counted from the template rather than by
-opening anything. The listing nests the children under the stream through the
+**What the views do.** `locate` never returns a node in a decoded space: no bit
+of the file is a field of what came out of a stream, so the cursor stops above
+those. It does not stop at the run. What the decoder *read* is bits of the
+file, and the second child of a `Decoded` node is exactly that, laid down from
+the trace (see "What the decoder read, as fields"), so a bit of a deflate run
+is a bit of a block header, or of a Huffman table, or of one literal, and the
+cursor says which. Bits a wrapper put in the run and no block covers, zlib's
+two header bytes and its Adler-32, still answer with the run itself. The
+listing nests the children under the stream through the
 ordinary `children` call, and writes their addresses with a leading `+`,
 `+0x1c`, because `0x1c` of a stream and `0x1c` of the file are different bytes
 and a reader comparing the listing against the hex view has to be able to tell.
@@ -1070,14 +1075,40 @@ line of ancestors, and now says beside the address which space it is in.
 Nothing decoded is editable: a decoded byte is a function of every compressed
 byte before it, and there is nowhere in the file to put a change.
 
-**No hex mapping of decoded space.** The hex view shows bytes of the file, and
-the decoded bytes are not in it. There is no second hex pane, no mapping from a
-decoded byte back to the run it came from, and no way to point at one. This is
-a deliberate stop rather than an oversight: the honest answer to "which file
-byte is this decoded byte" is "the whole run", and a view that drew a line to
-one byte of it would be inventing a correspondence deflate does not have. What
-a reader gets instead is the field list, the addresses within the stream, and
-the stream itself sitting in the hex view as the run it is.
+**What the decoder read, as fields.** A decoder that only hands back bytes
+throws away the one thing a hex editor wants, which is where. So the decoders
+in `codec` keep a **trace**: for every block header, every Huffman code length,
+every literal and every match, which bits of the run it read and which bytes of
+the output it produced. The trace tiles both, exactly, which is asserted rather
+than assumed. Deflate and LZ4 are read by our own decoders for this reason and
+checked byte for byte against `miniz_oxide` and `lz4_flex`; zstd and xz keep
+their crates and are traced at the block, zstd by stepping the decoder one
+block at a time and xz out of the index at the end of the stream.
+
+`Ty::Traced` reads the fields back off the trace, and is the one type in the IR
+whose children are not written down anywhere. That is the point: how many
+blocks a deflate stream holds, how long each one's tables are and how many
+symbols follow are answers nothing short of decoding it can give. It appears as
+the second child of a `Decoded` node, over the same bits as the run, and only
+where the codec's trace has blocks in it. Every node is one step of the trace
+and is as wide as the bits that step read; every value shown is the number the
+decoder used rather than one read back out of the bits and possibly
+differently. `Ty::SizedBits` exists for the same reason, since `bfinal` is one
+bit and a byte count cannot describe it.
+
+One caveat, and it cannot be fixed: deflate reads bits from the low end of a
+byte upwards and Qubero addresses bits from the high end downwards. A step's
+*byte* extent is the same either way, so nothing wider than a byte moves, and a
+step narrower than one is highlighted at the other end of its byte from where
+deflate read it. Byte-aligned codecs have no such question.
+
+**Which file byte a decoded byte came from.** The trace answers this too, and
+in both directions: `Space::map_out(byte)` gives the step that produced a byte
+of a decoded space, `Space::map_in(bit)` the step that read a bit of the run.
+This is a correspondence deflate does have -- a literal is one bit range and
+one byte, a match is one bit range and the bytes it copied -- and saying it
+step by step is not the same as claiming a byte-for-byte mapping, which deflate
+does not have and this does not offer.
 
 ### A stream that says nowhere how long it is
 JPEG is a list of segments, and all but one kind of them carry a length. The

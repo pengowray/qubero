@@ -2378,21 +2378,29 @@ fn nothing_inside_a_stream_is_editable() {
     assert!(ev.node(&d, &[0]).unwrap().editable);
 }
 
-/// The cursor stops at the run. No bit of the file is a field inside it.
+/// The cursor never lands on a field of what came *out* of a stream: those are
+/// at offsets of the decoded bytes and no bit of the file is any one of them.
+/// It does land on what the decoder read, which is bits of the file: the run
+/// is a header, some tables and a run of symbols, and every one of those is
+/// somewhere.
 #[test]
-fn locate_never_lands_inside_a_stream() {
+fn locate_lands_on_what_the_decoder_read_and_never_on_what_it_produced() {
     let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
     let mut ev = Evaluator::new(packed_template(len));
     assert_eq!(ev.locate(&d, 0).unwrap(), vec![0]);
     for byte in 2..2 + len as u64 {
-        assert_eq!(ev.locate(&d, byte * 8).unwrap(), vec![1], "at byte {byte}");
+        let at = ev.locate(&d, byte * 8).unwrap();
+        // Never inside the decoded space, which is child 0.
+        assert_ne!(at.get(1), Some(&0), "at byte {byte}, the cursor is inside the decoded bytes");
+        assert_eq!(&at[..1], &[1], "at byte {byte}");
+        // The two zlib header bytes and the four of the checksum belong to no
+        // block, so the run itself is the answer for those.
+        let deep = at.len() > 1;
+        assert_eq!(deep, (4..2 + len as u64 - 4).contains(&byte), "at byte {byte}, landed on {at:?}");
     }
-    // And the hex view draws it as one entry standing for the fields inside.
-    let spans = ev.spans(&d, 2 * 8, (2 + len as u64) * 8, 100).unwrap();
-    assert_eq!(spans.len(), 1);
+    // And the hex view draws the wrapper's bytes as the run they are.
+    let spans = ev.spans(&d, 2 * 8, 3 * 8, 100).unwrap();
     assert_eq!(spans[0].name, "stream");
-    assert_eq!(spans[0].size_bits, len as u64 * 8);
-    assert_eq!(spans[0].count, 2);
     assert!(!spans[0].gap);
 }
 

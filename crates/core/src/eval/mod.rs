@@ -850,11 +850,16 @@ impl Evaluator {
                 // The trace comes of opening the stream, so a reader who asks
                 // for the blocks before asking what came out opens it here.
                 self.open_space_at(doc, parent)?;
-                let ty = Ty::Traced { part: TracedPart::Blocks };
+                // Where the first block starts, which for a wrapped stream is
+                // past whatever the wrapper put in front of it.
+                let at = match self.trace_for(parent) {
+                    Some((base, t)) => base + t.blocks().first().map_or(0, |b| b.in_bits.start),
+                    None => return fail("this stream is no longer open"),
+                };
                 return Ok(Some(Place {
                     name: Name::Field("blocks".into()),
-                    ty,
-                    offset: pr.offset,
+                    ty: Ty::Traced { part: TracedPart::Blocks },
+                    offset: at,
                     limit: pr.limit,
                     space: pr.space,
                 }));
