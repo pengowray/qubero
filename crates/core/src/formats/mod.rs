@@ -57,6 +57,7 @@ mod jpeg;
 mod ico;
 mod lha;
 mod lnk;
+mod lz4;
 mod lzip;
 mod mca;
 mod midi;
@@ -94,10 +95,12 @@ mod vpk;
 mod w4v;
 mod wad;
 mod xar;
+mod xz;
 mod wav;
 mod whisper;
 mod zip;
 mod zlib;
+mod zstd;
 mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
@@ -146,6 +149,7 @@ pub use jxr::jxr;
 pub use ico::ico;
 pub use lha::lha;
 pub use lnk::lnk;
+pub use lz4::lz4;
 pub use lzip::lzip;
 pub use mca::mca;
 pub use midi::midi;
@@ -183,10 +187,12 @@ pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
 pub use xar::xar;
+pub use xz::xz;
 pub use wav::wav;
 pub use whisper::whisper;
 pub use zip::{zarrzip, zip};
 pub use zlib::zlib;
+pub use zstd::zstd;
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
@@ -269,6 +275,9 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("bzip2", |_| bzip2()),
     ("lzip", |_| lzip()),
     ("compress", |_| compress()),
+    ("xz", |_| xz()),
+    ("zstd", |_| zstd()),
+    ("lz4", |_| lz4()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),
