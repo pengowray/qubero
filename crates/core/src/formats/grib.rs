@@ -518,8 +518,10 @@ fn product_definition() -> T {
 /// discipline in section 0: category 0 number 0 of discipline 0 is
 /// temperature. Naming all of those would be the whole of WMO table 4.2.
 ///
-/// A surface's scale factor and its value are both signed: a level at 0.1 hPa
-/// is a value of 1 scaled by -4, and the sign is the top bit.
+/// A surface's scale factor is signed and its value is not: a level at 0.1 hPa
+/// is a value of 1 scaled by -4, and the sign of the -4 is the top bit. The
+/// forecast time is signed too, which is how an analysis increment says it is
+/// about a moment before its own reference time.
 fn product_head() -> Vec<(&'static str, T)> {
     vec![
         ("parameter_category", T::u8()),
@@ -530,14 +532,30 @@ fn product_head() -> Vec<(&'static str, T)> {
         ("hours_after_cutoff", u16be()),
         ("minutes_after_cutoff", T::u8()),
         ("time_unit", T::enumeration("TimeUnit", T::u8(), TIME_UNIT)),
-        ("forecast_time", u32be()),
-        ("first_surface_type", T::u8()),
-        ("first_surface_scale_factor", sm8()),
-        ("first_surface_value", sm32()),
-        ("second_surface_type", T::u8()),
-        ("second_surface_scale_factor", sm8()),
-        ("second_surface_value", sm32()),
+        ("forecast_time", sm32()),
+        ("first_surface_type", surface_type()),
+        ("first_surface_scale_factor", surface_scale()),
+        ("first_surface_value", surface_value()),
+        ("second_surface_type", surface_type()),
+        ("second_surface_scale_factor", surface_scale()),
+        ("second_surface_value", surface_value()),
     ]
+}
+
+/// A field a message fills in with all ones to say it has nothing to put
+/// there. Most fields at one level have no second surface, and every one of
+/// its three fields is written that way rather than left out; read as numbers
+/// they are a surface of type 255 at a scale of -127.
+fn surface_type() -> T {
+    T::unset_int(T::u8(), 255)
+}
+
+fn surface_scale() -> T {
+    T::unset_int(sm8(), -127)
+}
+
+fn surface_value() -> T {
+    T::unset_int(u32be(), 0xFFFF_FFFF)
 }
 
 /// Product template 4.0: an analysis or a forecast at one level.
@@ -685,11 +703,10 @@ fn complex_packing(spatial: bool) -> T {
 fn image_packing(name: &str, jpeg: bool) -> T {
     let mut fields = packing_head();
     if jpeg {
-        // Below zero is a compression ratio, zero is lossless.
+        // Zero is lossless, and anything else is the ratio it was told to
+        // reach. PNG has neither field: it is lossless and that is all.
         fields.push(("compression_type", T::u8()));
         fields.push(("target_compression_ratio", T::u8()));
-    } else {
-        fields.push(("rest_of_header", T::bytes(E::lit(0))));
     }
     fields.push(("rest", T::bytes(E::Remaining)));
     T::structure(name, fields).payload(&["reference_value", "bits_per_value"])
@@ -1245,7 +1262,14 @@ mod tests {
         assert_eq!(template.value, Value::Enum { raw: 0, name: Some("analysis or forecast at a level".into()), hex: false });
         let unit = ev.node(&d, &[0, 1, 4, 2, 2, 2, 7]).unwrap();
         assert_eq!(unit.value, Value::Enum { raw: 1, name: Some("hour".into()), hex: false });
-        assert_eq!(ev.node(&d, &[0, 1, 4, 2, 2, 2, 8]).unwrap().value, Value::UInt(6));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 2, 2, 2, 8]).unwrap().value, Value::Int(6));
+        // A second surface of all ones, which is what a field at one level
+        // writes rather than leaving the fields out.
+        let second = ev.node(&d, &[0, 1, 4, 2, 2, 2, 12]).unwrap();
+        assert_eq!(second.value, Value::Unset(Box::new(Value::UInt(255))));
+        // And the field is still the u8 it was: a sentinel says how one value
+        // reads and nothing else.
+        assert_eq!(second.type_name, "u8");
     }
 
     #[test]
