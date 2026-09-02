@@ -35,6 +35,13 @@
 //! declares a class and calls it something this reader has never heard of gets
 //! its bytes, which is the honest answer.
 //!
+//! Two names, then, for a file that numbers its classes its own way: the class
+//! byte reads as an enum of the standard numbering, and the body reads as the
+//! structure the file said it was. A computed label is a number in the IR and
+//! never text, so the class byte cannot be made to say what the dictionary
+//! calls it. Where the two disagree, the body is the one to believe, and
+//! seeing both is how a reader knows they disagreed at all.
+//!
 //! What is read: the header, the structure stream, and every class the
 //! specification defines. FrameH, FrDetector, FrProcData, FrVect, FrEndOfFrame,
 //! FrTOC and FrEndOfFile are checked field for field against the GWOSC
