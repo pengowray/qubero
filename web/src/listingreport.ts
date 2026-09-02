@@ -15,7 +15,7 @@ import type { Doc } from "./doc.js";
 import type { FieldPick } from "./doc.js";
 import { emptyState, flatten, PAGE, refold } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
-import { sectionColor } from "./fieldstyle.js";
+import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.js";
 import { markStrip } from "./bytestrip.js";
 import { cardKind, watchCard } from "./contentcard.js";
 import { markMap } from "./filemap.js";
@@ -26,7 +26,7 @@ import type { DrawContext, Selected } from "./listingdraw.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
-import { NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
+import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
 
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
@@ -147,17 +147,32 @@ export class ListingReport {
   outline(): OutlineHeading[] {
     const out: OutlineHeading[] = [];
     for (const i of this.items) {
-      if (i.kind !== "heading") continue;
-      out.push({
-        key: i.key,
-        section: i.section,
-        level: i.level,
-        path: i.path,
-        name: i.title,
-        offsetBits: i.offsetBits,
-        sizeBits: i.sizeBits,
-        color: sectionColor(i.section),
-      });
+      if (i.kind === "heading") {
+        out.push({
+          key: i.key,
+          section: i.section,
+          level: i.level,
+          path: i.path,
+          name: i.title,
+          offsetBits: i.offsetBits,
+          sizeBits: i.sizeBits,
+          color: sectionColor(i.section),
+        });
+      } else if (i.kind === "gap" && i.unmapped && i.path.length === 0) {
+        // Bytes the template says nothing about, between or after the parts
+        // it names, are a part of the file too: often most of it. The rail
+        // and the hex view list them as one, in the colour of no section.
+        out.push({
+          key: i.key,
+          section: i.section,
+          level: 0,
+          path: i.path,
+          name: GAP_LABEL,
+          offsetBits: i.offsetBits,
+          sizeBits: i.sizeBits,
+          color: UNMAPPED_COLOR,
+        });
+      }
     }
     return out;
   }

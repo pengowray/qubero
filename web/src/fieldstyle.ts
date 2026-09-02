@@ -42,6 +42,10 @@ export function fieldClass(kind: string): string {
  */
 const SECTION_HUES = ["#62c48b", "#e0b04c", "#6cb2ff", "#b48ce0", "#d98a9e", "#7fd4c8"];
 
+/** The colour of bytes no part of the file claims: a grey, so it is never
+ *  mistaken for one of the section hues. */
+export const UNMAPPED_COLOR = "#8a8f98";
+
 export function sectionColor(section: number): string {
   return SECTION_HUES[((section % SECTION_HUES.length) + SECTION_HUES.length) % SECTION_HUES.length] ?? SECTION_HUES[0] ?? "#888";
 }
