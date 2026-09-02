@@ -201,14 +201,28 @@ export class TextView {
    *  browser has nothing else to do with. */
   private startIndexing(): void {
     if (this.idle !== 0) return;
+    // Idle time, but with a deadline: a browser hands a tab nobody is looking
+    // at no idle time at all, and a file opened in a tab left in the
+    // background should still be indexed by the time it is looked at.
     const soon = (f: () => void): number =>
-      typeof requestIdleCallback === "function" ? requestIdleCallback(() => f()) : window.setTimeout(f, 16);
+      typeof requestIdleCallback === "function" ? requestIdleCallback(() => f(), { timeout: 250 }) : window.setTimeout(f, 16);
     this.idle = soon(() => {
       this.idle = 0;
-      void this.indexStep().then(() => {
+      void this.indexPass().then(() => {
         if (this.index.gap !== null) this.startIndexing();
       });
     });
+  }
+
+  /** As much of the index as one turn of idle time is worth. A pass is nearly
+   *  all waiting for the file rather than scanning it, so stopping after one
+   *  step would leave the reading of a hundred megabytes paced by the
+   *  scheduler rather than by the disk. */
+  private async indexPass(): Promise<void> {
+    const until = performance.now() + 250;
+    do {
+      await this.indexStep();
+    } while (this.index.gap !== null && performance.now() < until);
   }
 
   /** One pass of the background index. */

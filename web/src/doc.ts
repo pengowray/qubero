@@ -4,6 +4,10 @@
 import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
 
 const CHUNK_SIZE = 64 * 1024;
+/** How many rounds of fetch-and-ask-again a read of text is given. Each round
+ *  is one window of file, so this is a batch of lines spanning a few tens of
+ *  megabytes: further than any screenful reaches, and short of forever. */
+const TEXT_ROUNDS = 512;
 /** Chunks to fetch past one the template asked for and did not have. Placing
  * fields runs forward through a file, so the chunk after the missing one is
  * nearly always the next one wanted. They are read in one go: asking the file
@@ -1329,14 +1333,23 @@ export class Doc {
 
   /**
    * Lines starting at `from`, which must be where a line starts. A window
-   * needing chunks that are not here yet asks for them and tries again, twice
-   * at most: a read that keeps coming back short is a read to give up on
-   * rather than one to spin over.
+   * needing chunks that are not here yet asks for them and tries again.
+   *
+   * The core stops at the first chunk it has not got, so a batch of lines
+   * spanning a lot of file takes as many rounds as it takes: a screenful of
+   * four-kilobyte lines is a megabyte, which is a round for every window of
+   * it. What is not allowed is going round without getting anywhere, so a
+   * round that asks for the same chunks as the one before it is where this
+   * gives up rather than spins.
    */
   async textWindow(encoding: string, from: number, want: number): Promise<TextWindow> {
-    for (let go = 0; go < 3; go++) {
+    let asked = "";
+    for (let go = 0; go < TEXT_ROUNDS; go++) {
       const w = JSON.parse(this.editor.text_window(encoding, from, want)) as TextWindow;
       if (w.missing.length === 0) return w;
+      const now = w.missing.join(",");
+      if (now === asked) return { lines: [], missing: w.missing, next: from };
+      asked = now;
       await Promise.all(w.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
     }
     return { lines: [], missing: [], next: from };
@@ -1348,7 +1361,8 @@ export class Doc {
    * what the caller carries on from rather than `to`.
    */
   async textIndex(encoding: string, from: number, to: number): Promise<TextIndex> {
-    for (let go = 0; go < 3; go++) {
+    let asked = "";
+    for (let go = 0; go < TEXT_ROUNDS; go++) {
       const packed = this.editor.text_index(encoding, from, to);
       const missing = packed[4] ?? 0;
       if (missing === 0) {
@@ -1361,6 +1375,9 @@ export class Doc {
         };
       }
       const chunks = Array.from(packed.subarray(5, 5 + missing));
+      const now = chunks.join(",");
+      if (now === asked) return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };
+      asked = now;
       await Promise.all(chunks.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
     }
     return { starts: new Float64Array(), next: from, lf: 0, cr: 0, crlf: 0 };

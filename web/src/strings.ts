@@ -450,8 +450,10 @@ export const TEXTVIEW = {
    *  with more than one is the interesting case and says so, largest share
    *  first: a stray carriage return in a file of line feeds is what somebody
    *  opening a file in a hex editor is looking for. The shares are whole
-   *  percentages, so a handful of odd lines in a million reads as 0%, which
-   *  is the true shape of it: they are there, and they are none of the file. */
+   *  percentages and none of them is nought: a file said to be mixed and then
+   *  shown as one ending at a hundred per cent contradicts itself, so a kind
+   *  that is in the file at all is at least one per cent of it, and the
+   *  largest gives up whatever that took. */
   lineEndings: (counts: { lf: number; cr: number; crlf: number }): string => {
     const kinds = [
       ["LF", counts.lf],
@@ -463,7 +465,9 @@ export const TEXTVIEW = {
     if (seen.length === 0 || total === 0) return "";
     const one = seen[0];
     if (seen.length === 1 || one === undefined) return one?.[0] ?? "";
-    const parts = seen.map(([name, n]) => `${name} ${Math.round((n / total) * 100)}%`);
+    const rest = seen.slice(1).map(([name, n]) => [name, Math.max(1, Math.round((n / total) * 100))] as const);
+    const top = Math.max(1, 100 - rest.reduce((n, [, share]) => n + share, 0));
+    const parts = [`${one[0]} ${top}%`, ...rest.map(([name, share]) => `${name} ${share}%`)];
     return `Mixed: ${parts.join(", ")}`;
   },
 } as const;

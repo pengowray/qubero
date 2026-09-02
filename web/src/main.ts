@@ -602,6 +602,7 @@ function build(tab: Tab): void {
     kind.info,
     encoding,
     reading,
+    endings,
     saveMsg,
     el("span", { className: "tb-spacer" }),
     views,
