@@ -248,6 +248,13 @@ struct ListState {
     /// than in order of which, with the child it belongs to. Sorted, so the
     /// child covering a bit is a halving rather than a walk through all of them.
     pointer_starts: Option<Vec<(u64, usize)>>,
+    /// For `Chain`: where each element found so far starts, in the order the
+    /// pointers were followed, and whether the walk reached its end. A chain
+    /// cannot say how long it is without being walked, and element `n` is
+    /// found by reading element `n - 1`, so the walk is kept here and carried
+    /// on rather than started again per element.
+    chain_starts: Vec<u64>,
+    chain_done: bool,
     /// Children `0..seq_end` are resolved and sized, so child `seq_end` can
     /// be placed without walking back. Keeps sibling resolution iterative.
     seq_end: usize,
@@ -486,7 +493,7 @@ impl Evaluator {
         let r = self.memo.get(path).expect("resolved").clone();
         let (value, child_count, composite) = match &r.ty {
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::At { .. } => {
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::At { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -650,7 +657,7 @@ impl Evaluator {
             };
         }
         let mut elem = match ty {
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => elem.base(),
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. } => elem.base(),
             _ => return None,
         };
         for _ in 0..8 {
@@ -716,7 +723,7 @@ impl Evaluator {
                 Some(f) => (Name::Field(f.name.clone()), f.ty.clone()),
                 None => return fail("no such field"),
             },
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. } => {
                 (Name::Index(idx), (**elem).clone())
             }
             // The one thing it points at keeps the field's own name: a row
@@ -753,6 +760,19 @@ impl Evaluator {
                     return Ok(None);
                 }
             }
+        } else if let Ty::Chain { anchor, .. } = &pr.ty {
+            // Where the walk found this element. A chain's elements are placed
+            // like an `At`'s child rather than one after another, so a file
+            // counting from its own start lets them go anywhere in it.
+            let anchor = *anchor;
+            self.extend_chain_to(doc, parent, idx)?;
+            let Some(&at) = self.list(parent).chain_starts.get(idx) else {
+                return fail("past the end of the chain");
+            };
+            if anchor == Anchor::File {
+                escapes = Some(doc.len_bits());
+            }
+            at
         } else if let Ty::At { anchor, at, inner } = &pr.ty {
             // Bytes from the anchor, which is how a header names the place it
             // keeps a table: from the start of the file, or from the start of
@@ -930,6 +950,94 @@ impl Evaluator {
         starts.sort_unstable();
         self.list_mut(list).pointer_starts = Some(starts.clone());
         Ok(starts)
+    }
+
+    /// Follow the chain at `list` until element `want` has been found, or the
+    /// walk has ended. See [`Ty::Chain`] for what ends it.
+    ///
+    /// Iterative, and it has to be: element `n` is found by reading element
+    /// `n - 1`, and doing that by recursion would put a chain of a thousand
+    /// records a thousand frames deep. Each step reads one field of the
+    /// element before it, which is already resolved because this put it there.
+    fn extend_chain_to<S: Source>(&mut self, doc: &Document<S>, list: &[usize], want: usize) -> R<()> {
+        loop {
+            let state = self.list(list);
+            if state.chain_done || state.chain_starts.len() > want {
+                return Ok(());
+            }
+            let n = state.chain_starts.len();
+            let lr = self.memo[list].clone();
+            let Ty::Chain { first, next, anchor, .. } = &lr.ty else { return fail("not a chain") };
+            let (first, next, anchor) = (first.clone(), next.clone(), *anchor);
+            let base = self.anchor_base(list, lr.offset, anchor);
+            // Where the first element is, or where the one before this said
+            // the next one is. An element with no such field ends the chain
+            // rather than failing: a record too short to hold its own pointer
+            // is a file cut off, and the records before it are still worth
+            // showing.
+            let at = if n == 0 {
+                self.eval_expr(doc, list, &first)?
+            } else {
+                let mut prev = list.to_vec();
+                prev.push(n - 1);
+                self.resolve(doc, &prev)?;
+                if !self.descend(doc, &mut prev, &next)? {
+                    self.list_mut(list).chain_done = true;
+                    return Ok(());
+                }
+                let info = self.node(doc, &prev)?;
+                let v = info.value.as_int().unwrap_or(0);
+                // All ones for the width of the field it was read from: the
+                // other way a format writes "no more". Judged by that field's
+                // width, since 0xffff is a terminator in a 16-bit field and an
+                // ordinary offset in a 32-bit one.
+                if info.size_bits > 0 && info.size_bits < 127 && v == (1i128 << info.size_bits) - 1 {
+                    self.list_mut(list).chain_done = true;
+                    return Ok(());
+                }
+                v
+            };
+            let bits = base as i128 + at * 8;
+            let ends = at <= 0
+                || bits < 0
+                || bits as u64 >= doc.len_bits()
+                || n >= crate::template::CHAIN_CAP
+                || self.list(list).chain_starts.contains(&(bits as u64));
+            if ends {
+                self.list_mut(list).chain_done = true;
+                return Ok(());
+            }
+            // Charged like any other element, so a chain long enough to be
+            // worth watching hands the caller its screen back.
+            self.spend(bits as u64)?;
+            self.list_mut(list).chain_starts.push(bits as u64);
+        }
+    }
+
+    /// Every element of the chain at `list`, walked to the end.
+    fn chain_starts<S: Source>(&mut self, doc: &Document<S>, list: &[usize]) -> R<Vec<u64>> {
+        self.extend_chain_to(doc, list, usize::MAX)?;
+        Ok(self.list(list).chain_starts.clone())
+    }
+
+    /// Where every child of a list whose children are not laid out one after
+    /// another starts, sorted, with the child it belongs to. Both kinds answer
+    /// it: a pointer list from its table of offsets, a chain by following it.
+    /// What asks is the search for the child covering a bit, which for a list
+    /// in this shape is a halving rather than a walk through all of them.
+    fn scattered_starts<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        list: &[usize],
+        lr: &Resolved,
+    ) -> R<Vec<(u64, usize)>> {
+        if matches!(lr.ty, Ty::Chain { .. }) {
+            let mut starts: Vec<(u64, usize)> =
+                self.chain_starts(doc, list)?.into_iter().enumerate().map(|(i, s)| (s, i)).collect();
+            starts.sort_unstable();
+            return Ok(starts);
+        }
+        self.pointer_starts(doc, list, lr)
     }
 
     /// Resolve and size children `0..idx` of `parent`, in order, without recursion.

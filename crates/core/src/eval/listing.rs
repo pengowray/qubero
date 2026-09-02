@@ -584,8 +584,11 @@ impl Evaluator {
         // that covers a bit is the last one starting at or before it. Asking
         // all four hundred tensors of a model which of them the cursor is in,
         // for every row of every screen, is what this is instead of.
-        if matches!(r.ty, Ty::PointerList { .. }) {
-            let starts = self.pointer_starts(doc, path, &r)?;
+        // A chain's children are scattered the same way, and are found the
+        // same way once the walk has followed it: sorted by where they start,
+        // which is not the order they are numbered in.
+        if matches!(r.ty, Ty::Chain { .. } | Ty::PointerList { .. }) {
+            let starts = self.scattered_starts(doc, path, &r)?;
             let k = starts.partition_point(|(s, _)| *s <= bit);
             if k > 0 {
                 let i = starts[k - 1].1;
@@ -613,11 +616,40 @@ impl Evaluator {
         // are not in the order they sit in, the same as a pointer list, so
         // every one has to be looked at rather than stopping at the first that
         // starts past the bit.
-        let scattered =
-            matches!(r.ty, Ty::PointerList { .. }) || self.has_pointing_field(&r.ty) || self.has_low_bit_first_field(&r.ty);
+        let scattered = matches!(r.ty, Ty::PointerList { .. } | Ty::Chain { .. })
+            || self.has_pointing_field(&r.ty)
+            || self.has_low_bit_first_field(&r.ty);
         let mut p = path.to_vec();
         for i in 0..n as usize {
             p.push(i);
+            // A chain covers no bytes where it is declared, so asking how long
+            // it is says nothing about whether the bit is inside it: what
+            // covers bytes is the elements the walk found, wherever they are.
+            // Asking the chain itself is the same halving `child_at` does for
+            // any list of scattered children.
+            let chain = match self.resolve(doc, &p) {
+                Ok(()) => matches!(self.memo[&p].ty, Ty::Chain { .. }),
+                Err(e) if scattered && !e.interrupted() => {
+                    p.pop();
+                    continue;
+                }
+                Err(e) => {
+                    p.pop();
+                    return Err(e);
+                }
+            };
+            if chain {
+                let inside = match self.child_count(doc, &p) {
+                    Ok(count) => self.child_at(doc, &p, count, bit),
+                    Err(e) => Err(e),
+                };
+                p.pop();
+                match inside {
+                    Ok(Some(_)) => return Ok(Some(i)),
+                    Err(e) if e.interrupted() => return Err(e),
+                    _ => continue,
+                }
+            }
             let placed = match self.resolve(doc, &p) {
                 Ok(()) => match self.memo[&p].ty {
                     // The field covers nothing where it is declared; what it
@@ -654,7 +686,7 @@ impl Evaluator {
     /// Whether a structure has a field whose contents are somewhere else in
     /// the file, which is what stops its children from being in order.
     fn has_pointing_field(&self, ty: &Ty) -> bool {
-        matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| matches!(f.ty, Ty::At { .. })))
+        matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| matches!(f.ty, Ty::At { .. } | Ty::Chain { .. })))
     }
 
     /// Whether a structure packs any of its fields from the bottom of a byte.
@@ -675,9 +707,9 @@ impl Evaluator {
     /// all of them.
     pub(super) fn next_child_start<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<u64>> {
         // The starts are in order, so the first one past the bit is a halving.
-        if matches!(self.memo[path].ty, Ty::PointerList { .. }) {
+        if matches!(self.memo[path].ty, Ty::PointerList { .. } | Ty::Chain { .. }) {
             let r = self.memo[path].clone();
-            let starts = self.pointer_starts(doc, path, &r)?;
+            let starts = self.scattered_starts(doc, path, &r)?;
             return Ok(starts.get(starts.partition_point(|(s, _)| *s <= bit)).map(|(s, _)| *s));
         }
         let n = self.child_count(doc, path)?;

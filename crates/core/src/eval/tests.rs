@@ -2109,6 +2109,64 @@ fn a_lookup_by_computed_key_reads_text_as_well_as_numbers() {
     assert_eq!(ev.node(&d, &[0, 3]).unwrap().size_bits, 0);
 }
 
+/// A record: where the next one is, and a byte of its own.
+fn linked() -> T {
+    T::structure("Rec", vec![("next", T::u16(Big)), ("value", T::u8())])
+}
+
+#[test]
+fn a_chain_of_pointers_is_a_flat_list() {
+    // Three records, written in an order that has nothing to do with the order
+    // they are read in: the header points at the last of them, which points
+    // back at the first, which points at the middle one, which ends the chain.
+    let t = T::structure(
+        "Root",
+        vec![("head", T::u16(Big)), ("recs", T::chain(E::field("head"), &["next"], Anchor::File, linked()))],
+    );
+    //          0..2 head=8      2..5 rec at 2      5..8 rec at 5     8..11 rec at 8
+    let d = doc(&[0, 8, /* @2 */ 0, 5, 0xaa, /* @5 */ 0, 0, 0xbb, /* @8 */ 0, 2, 0xcc]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    let list = ev.node(&d, &[1]).unwrap();
+    // Flat: three rows, not three levels.
+    assert_eq!(list.child_count, 3);
+    // The list itself covers no bytes; its elements are what cover them.
+    assert_eq!(list.size_bits, 0);
+    assert_eq!(list.type_name, "chain \u{2192} Rec");
+    let value = |ev: &mut Evaluator, i: usize| ev.node(&d, &[1, i, 1]).unwrap().value.as_int();
+    assert_eq!((value(&mut ev, 0), value(&mut ev, 1), value(&mut ev, 2)), (Some(0xcc), Some(0xaa), Some(0xbb)));
+    // Read in the order the pointers give, not the order they sit in.
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().offset_bits, 8 * 8);
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().offset_bits, 5 * 8);
+    // And the cursor finds them where they are, out of order and all. The
+    // chain covers no bytes itself, so the search through the structure's
+    // fields has to look inside it rather than at how long it is.
+    assert_eq!(ev.locate(&d, 10 * 8).unwrap(), vec![1, 0, 1]);
+    assert_eq!(ev.locate(&d, 3 * 8).unwrap(), vec![1, 1, 0]);
+    assert_eq!(ev.locate(&d, 0).unwrap(), vec![0]);
+}
+
+#[test]
+fn a_chain_stops_rather_than_going_round_for_ever() {
+    let chain = |head: E| {
+        T::structure("Root", vec![("head", T::u16(Big)), ("recs", T::chain(head, &["next"], Anchor::File, linked()))])
+    };
+    let count = |bytes: &[u8], head: E| {
+        let d = doc(bytes);
+        let mut ev = Evaluator::new(Template::new("t", chain(head)));
+        ev.node(&d, &[1]).unwrap().child_count
+    };
+    // A record pointing at itself: one element, not for ever.
+    assert_eq!(count(&[0, 2, 0, 2, 0xaa], E::field("head")), 1);
+    // Two pointing at each other.
+    assert_eq!(count(&[0, 2, 0, 5, 0xaa, 0, 2, 0xbb], E::field("head")), 2);
+    // All ones for the width of the `next` field, which here is sixteen bits.
+    assert_eq!(count(&[0, 2, 0xff, 0xff, 0xaa], E::field("head")), 1);
+    // Past the end of the file.
+    assert_eq!(count(&[0, 2, 0, 99, 0xaa], E::field("head")), 1);
+    // A chain that starts nowhere is a list of nothing rather than an error.
+    assert_eq!(count(&[0, 0, 0, 0, 0], E::field("head")), 0);
+}
+
 #[test]
 fn a_lookup_can_be_keyed_by_text_found_somewhere_else() {
     // A table of definitions labelled in words, and records that say which

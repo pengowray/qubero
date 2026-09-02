@@ -472,7 +472,7 @@ impl Evaluator {
         while let Some(idx) = cur.pop() {
             let listy = matches!(
                 self.memo.get(&cur).map(|r| &r.ty),
-                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. })
             );
             if listy {
                 out.push((cur.clone(), idx));
@@ -561,7 +561,7 @@ impl Evaluator {
         // needs it is a format that wraps a value in a list of parts: a FITS
         // quoted string is a run of pieces, and the text of one is reached by
         // saying which piece.
-        if matches!(self.memo[path].ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. }) {
+        if matches!(self.memo[path].ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. }) {
             let Ok(i) = name.parse::<usize>() else { return Ok(None) };
             let n = self.child_count(doc, path)?;
             return Ok(((i as u64) < n).then_some(i));

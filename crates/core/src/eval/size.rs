@@ -261,6 +261,9 @@ impl Evaluator {
                 self.list_mut(path).expected_count = Some(n as u64);
                 Ok(n as u64)
             }
+            // As long as the chain turns out to be, which is only knowable by
+            // following it to the end. See [`Ty::Chain`].
+            Ty::Chain { .. } => Ok(self.chain_starts(doc, path)?.len() as u64),
             // As many children as the array of offsets has entries.
             Ty::PointerList { offsets, .. } => {
                 let n = self.eval_expr(doc, path, &Expr::Ref(offsets.clone()))?;

@@ -763,6 +763,15 @@ impl StrLen {
     }
 }
 
+/// How many elements of a [`Ty::Chain`] are followed before the walk gives up.
+///
+/// Far past any real chain: the largest thing anyone keeps in one is a CDF's
+/// variable records, and a file with a million of those is a file nobody wrote.
+/// A chain longer than this is a file whose pointers are wrong in a way that
+/// happens not to close a ring, and answering with the million elements that
+/// were read beats not answering.
+pub const CHAIN_CAP: usize = 1_000_000;
+
 /// Where the offsets in a `PointerList` count from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
@@ -962,6 +971,47 @@ pub enum Ty {
         skip_missing: bool,
         skip_zero: bool,
     },
+    /// A flat list of elements found by following pointers, one to the next.
+    ///
+    /// `PointerList` places its children at offsets read from a table written
+    /// before them, which is what a format with a directory does. A format
+    /// with no directory writes the offset of the next record inside the
+    /// record before it, and there is no table anywhere: a CDF's attributes
+    /// are a chain, its variables are a chain, and each attribute's entries are
+    /// a chain of their own. Written as nesting, the only shape that could hold
+    /// it before, a file with two hundred attributes is a tree two hundred
+    /// deep, and the two hundredth is behind two hundred rows a reader has to
+    /// open one at a time. It is a list, and this is what says so.
+    ///
+    /// `first` is where the first element is, in bytes from `anchor`; `next`
+    /// is the path to the field of an element that holds where the one after
+    /// it is, in the same terms. Each element is placed at its own offset, the
+    /// way an `At` is, so the children are scattered and need not be in order.
+    ///
+    /// A path rather than a name, for the same reason [`Expr::Elem`] takes
+    /// one: a format that wraps every record in a size and a type keeps the
+    /// forward pointer inside the wrapper, and a CDF's is `body.adr_next`.
+    ///
+    /// **Where it stops.** A chain is written by a program that could crash
+    /// halfway, and a file that has been truncated or corrupted must not take
+    /// the reader with it. So the walk ends at whichever of these comes first:
+    ///
+    /// - an offset of zero, which is how every format that has one of these
+    ///   says "no more". A chain whose first element is genuinely at byte zero
+    ///   of the file cannot be written down here, and no format writes one:
+    ///   byte zero is where the magic is.
+    /// - an offset of all ones, for the width of the `next` field. That is the
+    ///   other way a format says it, and a `u32` of 0xffffffff is not an
+    ///   offset four gigabytes into a file that is not four gigabytes long.
+    /// - an offset already visited, which is a ring. Following one is not slow
+    ///   but endless.
+    /// - an offset at or past the end of the file.
+    /// - [`CHAIN_CAP`] elements, so a file that is neither a ring nor finished
+    ///   still answers.
+    ///
+    /// The list itself covers no bytes where it is declared, like an `At`: what
+    /// covers bytes is its elements, wherever they turned out to be.
+    Chain { first: Expr, next: Arc<[String]>, elem: Box<Ty>, anchor: Anchor },
     /// SQLite's variable-length integer: seven bits per byte, most significant
     /// group first, up to nine bytes, where a ninth byte contributes all eight
     /// of its bits. `Vlq` stops at four bytes and never does that, so it
@@ -1348,6 +1398,17 @@ impl Ty {
             skip_zero: false,
         }
     }
+    /// A list found by following pointers: the first element is `first` bytes
+    /// from `anchor`, and each element's field `next` says where the one after
+    /// it is. See [`Ty::Chain`] for where the walk stops.
+    pub fn chain(first: Expr, next: &[&str], anchor: Anchor, elem: Ty) -> Ty {
+        Ty::Chain {
+            first,
+            next: next.iter().map(|s| s.to_string()).collect(),
+            elem: Box::new(elem),
+            anchor,
+        }
+    }
     /// A pointer list where an offset of zero points at nothing rather than at
     /// the anchor. See [`Ty::PointerList::skip_zero`].
     pub fn skipping_zero(self) -> Ty {
@@ -1549,6 +1610,9 @@ impl Ty {
             // Not `{elem}[]`: that promises children laid out end to end,
             // and these are placed one per offset, in any order.
             Ty::PointerList { elem, .. } => format!("offsets \u{2192} {}", elem.display_name()),
+            // Not `offsets → x`: those come from a table read before the
+            // children, and these come one from each child.
+            Ty::Chain { elem, .. } => format!("chain \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
             Ty::Sized { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),

@@ -47,7 +47,7 @@
 //! keeps sixteen bytes of MD5 at the very end, after everything the chains
 //! reach.
 
-use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T};
 
 /// What a version 3 file starts with.
 pub const MAGIC: &[u8] = &[0xCD, 0xF3, 0x00, 0x01];
@@ -158,6 +158,20 @@ fn data_type() -> T {
     T::enumeration("CdfDataType", i32be(), DATA_TYPE)
 }
 
+/// The chain of records that starts at `field` and runs on through the `next`
+/// pointer inside each record.
+///
+/// Every list in a CDF is written this way: no count, no table, just a head
+/// offset and a forward pointer in every record. Written as a record holding
+/// the record after it, which is the only shape there was before
+/// [`Ty::Chain`](crate::template::Ty::Chain), a file with two hundred
+/// attributes is a tree two hundred levels deep, and the two hundredth
+/// attribute sits behind two hundred rows the reader has to open one at a
+/// time. It is a list, and this says so.
+fn chain_of(field: &str, next: &str) -> T {
+    T::chain(E::field(field), &["body", next], Anchor::File, T::Named("CdfRecord".into()))
+}
+
 /// The record `field` points at, or nothing where it holds zero. Every chain
 /// and every pointer in the file ends this way rather than with a count.
 fn at_record(field: &str) -> T {
@@ -226,10 +240,10 @@ fn gdr() -> T {
             ("leap_second_last_updated", i32be()),
             ("rfu_e", i32be()),
             ("r_dim_sizes", T::array(i32be(), E::field("r_num_dims").at_least(E::lit(0)))),
-            ("r_variables", at_record("r_vdr_head")),
-            ("z_variables", at_record("z_vdr_head")),
-            ("attributes", at_record("adr_head")),
-            ("unused", at_record("uir_head")),
+            ("r_variables", chain_of("r_vdr_head", "vdr_next")),
+            ("z_variables", chain_of("z_vdr_head", "vdr_next")),
+            ("attributes", chain_of("adr_head", "adr_next")),
+            ("unused", chain_of("uir_head", "uir_next")),
         ],
     )
 }
@@ -255,9 +269,8 @@ fn adr() -> T {
             ("max_z_entry", i32be()),
             ("rfu_e", i32be()),
             ("name", name()),
-            ("g_entries", at_record("agr_edr_head")),
-            ("z_entries", at_record("az_edr_head")),
-            ("next_attribute", at_record("adr_next")),
+            ("g_entries", chain_of("agr_edr_head", "aedr_next")),
+            ("z_entries", chain_of("az_edr_head", "aedr_next")),
         ],
     )
 }
@@ -282,7 +295,6 @@ fn aedr() -> T {
             // The value, as wide as the record has room for. Reading it means
             // knowing the file's encoding, which is not this record's to say.
             ("value", T::bytes(E::Remaining)),
-            ("next_entry", at_record("aedr_next")),
         ],
     )
 }
@@ -330,7 +342,6 @@ fn vdr(z: bool) -> T {
     fields.push(("dim_varys", T::array(i32be(), dims())));
     fields.push(("pad_value", T::bytes(E::Remaining)));
     fields.push(("values_index", at_record("vxr_head")));
-    fields.push(("next_variable", at_record("vdr_next")));
     T::structure_named(if z { "CdfZVariable" } else { "CdfRVariable" }, "name", "", fields)
 }
 
@@ -692,12 +703,28 @@ mod tests {
     }
 
     #[test]
-    fn a_chain_that_has_run_out_points_at_nothing() {
+    fn every_chain_is_a_flat_list_however_long_it_is() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(cdf());
-        // The one attribute has no next, and the free list is empty.
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 16, 0, 2, 14]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 17]).unwrap().size_bits, 0);
+        let gdr = [2, 2, 11, 0, 2];
+        let at = |e: &mut Evaluator, i: usize| {
+            let mut p = gdr.to_vec();
+            p.push(i);
+            e.node(&d, &p).unwrap()
+        };
+        // Each list is one row with its elements under it, rather than a
+        // record that holds the next record that holds the next record.
+        assert_eq!(at(&mut e, 14).child_count, 1); // rVariables
+        assert_eq!(at(&mut e, 15).child_count, 1); // zVariables
+        let attrs = at(&mut e, 16);
+        assert_eq!(attrs.child_count, 1);
+        assert_eq!(attrs.type_name, "chain \u{2192} CdfRecord");
+        // The list covers no bytes where it stands; the records it found do.
+        assert_eq!(attrs.size_bits, 0);
+        // A chain whose head is zero is a list of nothing, not a broken file.
+        assert_eq!(at(&mut e, 17).child_count, 0); // the free list
+        // The attribute's own entries are a list too.
+        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 16, 0, 2, 12]).unwrap().child_count, 1);
     }
 
     #[test]

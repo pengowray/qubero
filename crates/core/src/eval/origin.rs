@@ -178,7 +178,7 @@ impl Evaluator {
                 Some(f) => Ok(f.ty.clone()),
                 None => fail("no such field"),
             },
-            Some(Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. }) => {
+            Some(Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. }) => {
                 Ok((**elem).clone())
             }
             _ => fail("not a composite"),

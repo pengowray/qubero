@@ -90,6 +90,13 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>) {
             expr_refs(adjust, out);
             ty_refs(elem, out);
         }
+        // The field that says where the chain starts is machinery for it, the
+        // way a pointer list's table of offsets is. The `next` field is inside
+        // an element and so is not a sibling of anything here.
+        Ty::Chain { first, elem, .. } => {
+            expr_refs(first, out);
+            ty_refs(elem, out);
+        }
         Ty::At { at, inner, .. } => {
             expr_refs(at, out);
             ty_refs(inner, out);

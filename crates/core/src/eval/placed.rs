@@ -213,15 +213,30 @@ impl Evaluator {
     /// should carry on into it.
     fn open<S: Source>(&mut self, doc: &Document<S>, path: Vec<usize>) -> R<Option<Frame>> {
         self.resolve(doc, &path)?;
+        // A chain's elements are placed away from where the list is declared,
+        // the same as an `At`'s child, and the list itself covers no bytes. So
+        // each element is a stretch of its own here: without them a chain of
+        // two hundred records would be two hundred stretches of file the
+        // cursor could not name.
+        if path.len() > 1 && matches!(self.memo.get(&path[..path.len() - 1]).map(|r| &r.ty), Some(Ty::Chain { .. })) {
+            return self.record(doc, path.clone(), path);
+        }
         let ty = self.memo[&path].ty.clone();
         if !matches!(ty, Ty::At { .. }) {
             return self.frame(doc, path);
         }
         let mut inner = path.clone();
         inner.push(0);
-        self.resolve(doc, &inner)?;
-        let start = self.memo[&inner].offset;
-        let size = self.size_of(doc, &inner)?;
+        self.record(doc, inner, path)
+    }
+
+    /// Note that the node at `stretch` covers a stretch of file that `path`
+    /// put there, and carry on into it. Nothing to add when it is empty, or
+    /// when that stretch is already in the index.
+    fn record<S: Source>(&mut self, doc: &Document<S>, stretch: Vec<usize>, path: Vec<usize>) -> R<Option<Frame>> {
+        self.resolve(doc, &stretch)?;
+        let start = self.memo[&stretch].offset;
+        let size = self.size_of(doc, &stretch)?;
         if size == 0 {
             return Ok(None);
         }
@@ -229,7 +244,7 @@ impl Evaluator {
             return Ok(None);
         }
         self.placed.stretches.push(Placement { start, end: start + size, path });
-        self.frame(doc, inner)
+        self.frame(doc, stretch)
     }
 
     /// A node to carry on into, where there is anything inside it worth
@@ -251,7 +266,9 @@ impl Evaluator {
             _ => None,
         };
         // What one element of a list turns out to be settles the whole run.
-        if fields.is_none() && !matches!(ty, Ty::At { .. }) {
+        // Not for a chain: its elements are the placements, so what they hold
+        // says nothing about whether they are worth walking.
+        if fields.is_none() && !matches!(ty, Ty::At { .. } | Ty::Chain { .. }) {
             let mut first = path.clone();
             first.push(0);
             self.resolve(doc, &first)?;
@@ -272,7 +289,9 @@ impl Evaluator {
 
     fn places(&self, ty: &Ty, seen: &mut Vec<String>) -> bool {
         match ty {
-            Ty::At { .. } => true,
+            // Both types that put something somewhere other than where it was
+            // declared. A chain's elements are all elsewhere.
+            Ty::At { .. } | Ty::Chain { .. } => true,
             Ty::Named(name) => {
                 // A type that refers to itself is answered by its other
                 // fields: saying no for the loop is safe, since a type whose

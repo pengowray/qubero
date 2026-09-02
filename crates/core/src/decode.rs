@@ -97,8 +97,9 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         // number or a word.
         Ty::Computed(_) | Ty::ComputedText(_) => 0,
         // A field pointing somewhere else is a place and no bits, so a
-        // structure holding one is still as fixed as the rest of it.
-        Ty::At { .. } => 0,
+        // structure holding one is still as fixed as the rest of it. A chain
+        // is the same: it is a run of places, and the places are elsewhere.
+        Ty::At { .. } | Ty::Chain { .. } => 0,
         // A named type could be anything, including itself.
         Ty::Named(_) => return None,
         _ => return None,

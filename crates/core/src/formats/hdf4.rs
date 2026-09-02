@@ -26,7 +26,7 @@
 //! Everything is big-endian, which HDF4 calls its own on-disk order whatever
 //! the machine that wrote the file was.
 
-use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T};
 
 /// What one of these starts with.
 pub const MAGIC: &[u8] = &[0x0E, 0x03, 0x13, 0x01];
@@ -275,10 +275,10 @@ fn descriptor() -> T {
     )
 }
 
-/// One block of descriptors, and the block after it. The blocks are a chain
-/// rather than a table because a writer that runs out of slots adds a block
-/// wherever there is room, which may be the end of the file or a hole in the
-/// middle of it; a block with no next holds zero rather than an offset.
+/// One block of descriptors. The blocks are a chain rather than a table
+/// because a writer that runs out of slots adds a block wherever there is
+/// room, which may be the end of the file or a hole in the middle of it; a
+/// block with no next holds zero rather than an offset.
 fn block() -> T {
     T::structure(
         "Hdf4DescriptorBlock",
@@ -286,20 +286,19 @@ fn block() -> T {
             ("ndd", i16be()),
             ("next", u32be()),
             ("descriptors", T::array(T::Named("Hdf4Descriptor".into()), E::field("ndd").at_least(E::lit(0)))),
-            (
-                "next_block",
-                T::switch(
-                    E::field("next"),
-                    vec![(0, T::bytes(E::lit(0)))],
-                    T::at(E::field("next"), T::Named("Hdf4DescriptorBlock".into())),
-                ),
-            ),
         ],
     )
+    .machinery(&["next"])
+    .counted_as("block")
 }
 
 pub fn hdf4() -> Template {
-    let root = T::structure("Hdf4", vec![("magic", T::magic(MAGIC)), ("blocks", T::Named("Hdf4DescriptorBlock".into()))]);
+    // The first block sits straight after the signature, and each one says
+    // where the next is. A list, rather than a block that holds the block that
+    // holds the block: a file that has grown a dozen times is a dozen rows.
+    let blocks =
+        T::chain(E::size_of("magic"), &["next"], Anchor::File, T::Named("Hdf4DescriptorBlock".into()));
+    let root = T::structure("Hdf4", vec![("magic", T::magic(MAGIC)), ("blocks", blocks)]);
     Template::new("hdf4", root)
         .with_type("Hdf4DescriptorBlock", block())
         .with_type("Hdf4Descriptor", descriptor())
@@ -390,51 +389,54 @@ mod tests {
     }
 
     #[test]
-    fn the_blocks_are_a_chain_and_the_second_is_reached_by_pointer() {
+    fn the_blocks_are_a_flat_list_however_many_of_them_there_are() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        assert_eq!(e.node(&d, &[1, 0]).unwrap().value, Value::Int(2));
-        assert_eq!(e.node(&d, &[1, 2]).unwrap().child_count, 2);
-        // The second block, reached through `next`, with its own two slots.
-        assert_eq!(e.node(&d, &[1, 3, 0, 2]).unwrap().child_count, 2);
-        // The second block has no next, so the chain stops rather than
-        // pointing back at the signature.
-        assert_eq!(e.node(&d, &[1, 3, 0, 3]).unwrap().size_bits, 0);
+        // Two blocks side by side, not a block holding a block.
+        let blocks = e.node(&d, &[1]).unwrap();
+        assert_eq!(blocks.child_count, 2);
+        assert_eq!(blocks.unit.as_deref(), Some("block"));
+        assert_eq!(e.node(&d, &[1, 0, 0]).unwrap().value, Value::Int(2));
+        assert_eq!(e.node(&d, &[1, 0, 2]).unwrap().child_count, 2);
+        // The second block, found by following the first's `next`, with its
+        // own two slots. It has no next of its own, so the walk stops rather
+        // than pointing back at the signature.
+        assert_eq!(e.node(&d, &[1, 1, 2]).unwrap().child_count, 2);
     }
 
     #[test]
     fn a_descriptor_is_named_by_its_tag_and_places_its_own_bytes() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        let vg = e.node(&d, &[1, 3, 0, 2, 0]).unwrap();
+        let vg = e.node(&d, &[1, 1, 2, 0]).unwrap();
         assert_eq!(vg.name, "[0] vgroup");
-        assert_eq!(e.node(&d, &[1, 3, 0, 2, 0, 4, 0]).unwrap().size_bits, 4 * 8);
+        assert_eq!(e.node(&d, &[1, 1, 2, 0, 4, 0]).unwrap().size_bits, 4 * 8);
         // The null slot points at nothing rather than at the signature.
-        assert_eq!(e.node(&d, &[1, 3, 0, 2, 1, 4]).unwrap().child_count, 0);
+        assert_eq!(e.node(&d, &[1, 1, 2, 1, 4]).unwrap().child_count, 0);
     }
 
     #[test]
     fn the_version_record_is_read_and_the_rest_of_it_is_the_line_of_text() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        assert_eq!(e.node(&d, &[1, 2, 0, 4, 0, 0]).unwrap().value, Value::UInt(4));
-        assert_eq!(e.node(&d, &[1, 2, 0, 4, 0, 2]).unwrap().value, Value::UInt(15));
-        assert_eq!(e.node(&d, &[1, 2, 0, 4, 0, 3]).unwrap().value, Value::Str("HDF Version 4.2 Release 15".into()));
+        assert_eq!(e.node(&d, &[1, 0, 2, 0, 4, 0, 0]).unwrap().value, Value::UInt(4));
+        assert_eq!(e.node(&d, &[1, 0, 2, 0, 4, 0, 2]).unwrap().value, Value::UInt(15));
+        assert_eq!(e.node(&d, &[1, 0, 2, 0, 4, 0, 3]).unwrap().value, Value::Str("HDF Version 4.2 Release 15".into()));
     }
 
     #[test]
     fn a_vdata_header_says_what_the_columns_are() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        let vh = e.node(&d, &[1, 2, 1, 4, 0]).unwrap();
+        let vh = e.node(&d, &[1, 0, 2, 1, 4, 0]).unwrap();
         assert_eq!(vh.type_name, "Hdf4VdataHeader");
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 1]).unwrap().value, Value::UInt(4));
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 3]).unwrap().value, Value::Int(1));
-        let ty = e.node(&d, &[1, 2, 1, 4, 0, 4, 0]).unwrap();
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 1]).unwrap().value, Value::UInt(4));
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 3]).unwrap().value, Value::Int(1));
+        let ty = e.node(&d, &[1, 0, 2, 1, 4, 0, 4, 0]).unwrap();
         assert_eq!(ty.value, Value::Enum { raw: 24, name: Some("int32".into()), hex: false });
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 8, 0, 1]).unwrap().value, Value::Str("VALUES".into()));
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 9, 1]).unwrap().value, Value::Str("attname1".into()));
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 10, 1]).unwrap().value, Value::Str("Attr0.0".into()));
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 8, 0, 1]).unwrap().value, Value::Str("VALUES".into()));
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 9, 1]).unwrap().value, Value::Str("attname1".into()));
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 10, 1]).unwrap().value, Value::Str("Attr0.0".into()));
     }
 
     #[test]
@@ -442,12 +444,12 @@ mod tests {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
         // `version`, then the flags that are not there.
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 13]).unwrap().value, Value::Int(3));
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 15]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 16]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 17]).unwrap().child_count, 0);
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 13]).unwrap().value, Value::Int(3));
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 15]).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 16]).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 17]).unwrap().child_count, 0);
         // And the pair written again at the end of the record.
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 18]).unwrap().value, Value::Int(3));
-        assert_eq!(e.node(&d, &[1, 2, 1, 4, 0, 20]).unwrap().size_bits, 8);
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 18]).unwrap().value, Value::Int(3));
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 4, 0, 20]).unwrap().size_bits, 8);
     }
 }

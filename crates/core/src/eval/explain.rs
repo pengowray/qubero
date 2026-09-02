@@ -434,7 +434,7 @@ impl Evaluator {
         while let Some(idx) = cur.pop() {
             let listy = matches!(
                 self.memo.get(&cur).map(|r| &r.ty),
-                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. })
             );
             if !listy {
                 continue;

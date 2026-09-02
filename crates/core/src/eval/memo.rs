@@ -79,6 +79,8 @@ impl Memo {
             expected_count: None,
             checkpoints: Vec::new(),
             pointer_starts: None,
+            chain_starts: Vec::new(),
+            chain_done: false,
             seq_end: 0,
         };
         self.lists.get(path).unwrap_or(&NOTHING)
