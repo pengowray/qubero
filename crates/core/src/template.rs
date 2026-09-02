@@ -73,10 +73,14 @@ pub enum Expr {
     /// Zero when nothing in the list is tagged that way, or when the element
     /// found has no such field, so `Or` can name what to do without one.
     ///
-    /// Held behind a pointer because of what it costs the rest: the tag is a
-    /// 128-bit number, which would make every expression in every template as
-    /// wide and as strictly aligned as this one variant. One format in ninety
-    /// uses it.
+    /// The label is a number or a run of bytes, since a format that keeps its
+    /// records in text labels them in text: a FITS card is found by the
+    /// keyword written in its first eight bytes. See [`Tag`].
+    ///
+    /// Held behind a pointer because of what it costs the rest: a tag is a
+    /// 128-bit number or a vector, either of which would make every expression
+    /// in every template as wide and as strictly aligned as this one variant.
+    /// Two formats in ninety use it.
     Tagged(Arc<TaggedRef>),
     /// The numbers of one earlier array multiplied together: what a shape
     /// describes. A GGUF tensor says it is 2560 by 5120 and never says it is
@@ -257,9 +261,25 @@ pub struct TaggedRef {
     /// The path to the field of an element that holds its label.
     pub key: Arc<[String]>,
     /// The label to look for.
-    pub tag: i128,
+    pub tag: Tag,
     /// The path to the field to read, in the element that has it.
     pub field: Arc<[String]>,
+}
+
+/// What an element of a labelled list is labelled with. Most formats number
+/// their records, and a number is what `Tag::Int` matches. A format that keeps
+/// its records in text does not: a FITS header is eighty-column lines whose
+/// first eight bytes are the keyword, and `NAXIS1` is a label written out
+/// rather than a value counted up to. Reading those eight bytes as a number
+/// would answer with 0x4e41584953312020, which is a number no file wrote and
+/// nobody could check the template against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tag {
+    Int(i128),
+    /// The raw bytes of the key field, compared as they are written. A key of
+    /// a fixed width is padded, and the padding is part of what is compared,
+    /// the same as it is for [`Until::FieldBytes`].
+    Bytes(Vec<u8>),
 }
 
 impl Expr {
@@ -297,6 +317,14 @@ impl Expr {
     }
     /// Field `field` of the first element of `array` whose `key` holds `tag`.
     pub fn tagged(array: &str, key: &[&str], tag: i128, field: &[&str]) -> Expr {
+        Expr::tagged_by(array, key, Tag::Int(tag), field)
+    }
+    /// The same, for a list whose elements are labelled in text: `field` of the
+    /// first element of `array` whose `key` holds exactly these bytes.
+    pub fn tagged_bytes(array: &str, key: &[&str], tag: &[u8], field: &[&str]) -> Expr {
+        Expr::tagged_by(array, key, Tag::Bytes(tag.to_vec()), field)
+    }
+    fn tagged_by(array: &str, key: &[&str], tag: Tag, field: &[&str]) -> Expr {
         Expr::Tagged(Arc::new(TaggedRef {
             array: array.into(),
             key: key.iter().map(|s| s.to_string()).collect(),

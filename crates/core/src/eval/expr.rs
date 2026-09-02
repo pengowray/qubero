@@ -59,7 +59,7 @@ impl Evaluator {
             // list is read to find it, which is what a handful of tagged
             // records costs; nothing that carries thousands of them asks.
             Expr::Tagged(t) => {
-                let (key, tag, field) = (t.key.clone(), t.tag, t.field.clone());
+                let (key, tag, field) = (t.key.clone(), t.tag.clone(), t.field.clone());
                 let array = &t.array;
                 let Some(list) = self.find_field(at, array) else { return fail(format!("unknown field {array}")) };
                 let n = self.child_count(doc, &list)?;
@@ -67,7 +67,7 @@ impl Evaluator {
                 for i in 0..n as usize {
                     let mut elem = list.clone();
                     elem.push(i);
-                    if self.field_in(doc, &mut elem.clone(), &key)? != Some(tag) {
+                    if !self.tag_matches(doc, &elem, &key, &tag)? {
                         continue;
                     }
                     found = self.field_in(doc, &mut elem, &field)?.unwrap_or(0);
@@ -279,6 +279,20 @@ impl Evaluator {
                 None => return fail(format!("unknown field {name}")),
             },
             Expr::Elem { array, index, field } => self.elem_path(doc, at, array, index, field, here)?,
+            // A field declared before this one, and a path down into it. What
+            // a format that writes its element type inside its header needs:
+            // an NPY says `'descr': '<f8'` in a dict of its own, and the array
+            // that reads as f64 because of it is that dict's sibling.
+            Expr::Within(field) => {
+                let Some((first, rest)) = field.split_first() else { return fail("no field named") };
+                let Some(mut p) = self.find_field(at, first) else {
+                    return fail(format!("unknown field {first}"));
+                };
+                if !self.descend(doc, &mut p, rest)? {
+                    return fail(format!("{first} has no field named {}", rest.join(".")));
+                }
+                p
+            }
             _ => return fail("a switch on text has to name a field"),
         };
         match self.node(doc, &p)?.value {
@@ -430,6 +444,32 @@ impl Evaluator {
     /// template resolved it to, and read the number at the end. None when this
     /// node has no such field, which is how a search over siblings passes over
     /// the ones that are something else.
+    /// Whether the element at `elem` is the one a tagged lookup is after: the
+    /// number at `key` matches, or the bytes at `key` are written exactly that
+    /// way. An element that has no such field, or one that cannot be read, is
+    /// not a match, which is how the search passes over the records of a list
+    /// that are something else.
+    pub(super) fn tag_matches<S: Source>(&mut self, doc: &Document<S>, elem: &[usize], key: &[String], tag: &Tag) -> R<bool> {
+        match tag {
+            Tag::Int(want) => Ok(self.field_in(doc, &mut elem.to_vec(), key)? == Some(*want)),
+            Tag::Bytes(want) => {
+                let mut p = elem.to_vec();
+                let Some((last, above)) = key.split_last() else { return Ok(false) };
+                match self.descend(doc, &mut p, above) {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(false),
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => return Ok(false),
+                }
+                match self.child_raw_bytes(doc, &p, last) {
+                    Ok(got) => Ok(got == *want),
+                    Err(e) if e.interrupted() => Err(e),
+                    Err(_) => Ok(false),
+                }
+            }
+        }
+    }
+
     fn field_in<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>, field: &[String]) -> R<Option<i128>> {
         match self.descend(doc, path, field) {
             Ok(true) => {}

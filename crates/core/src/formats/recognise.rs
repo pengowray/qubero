@@ -52,6 +52,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     // A weather field, of either edition: the template reads the edition byte
     // and picks the layout, so one name serves both.
     (b"GRIB", "grib"),
+    (npy::MAGIC, "npy"),
+    // The first card of a FITS header, keyword and all: eight bytes of
+    // keyword and the `=` that says it has a value.
+    (b"SIMPLE  =", "fits"),
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
