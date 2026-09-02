@@ -631,7 +631,7 @@ export class Inspector {
     // stream, not of the file, and the two look the same written down. The
     // trail above already says which stream; this says which space the number
     // belongs to, beside the number.
-    const inside = n.space === 0 ? "" : ` ${DECODED_INSIDE} ·`;
+    const inside = n.space === 0 ? "" : ` ${DECODED_INSIDE}`;
     this.detail.replaceChildren(at, `${inside} · ${n.type} · ${bitSizeText(n.size_bits)}`);
     // The formula reads bytes of the file by address. There is no address of
     // the file for these bytes, so there is no formula to write.
