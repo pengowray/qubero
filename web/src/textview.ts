@@ -55,6 +55,9 @@ const CACHE_LINES = 50_000;
 /** How much file one background pass over the index covers. The core caps its
  *  own scan at the same size, so this is one call. */
 const INDEX_STEP = 4 * 1024 * 1024;
+/** The longest a line is before the core cuts it, which must match `MAX_LINE`
+ *  in `crates/core/src/textview.rs`. */
+const MAX_LINE = 4096;
 /** How much is indexed around a jump to somewhere the background pass has not
  *  reached, so that scrolling on from there is answered locally. */
 const PROBE = 1 * 1024 * 1024;
@@ -186,6 +189,8 @@ export class TextView {
     this.index = new LineIndex(this.doc.lengthBytes, this.reading.mark);
     this.cache.clear();
     this.usualEnding = "";
+    this.anchorLine = 0;
+    this.anchorAt = 0;
     this.startIndexing();
   }
 
@@ -219,7 +224,7 @@ export class TextView {
    *  step would leave the reading of a hundred megabytes paced by the
    *  scheduler rather than by the disk. */
   private async indexPass(): Promise<void> {
-    const until = performance.now() + 250;
+    const until = performance.now() + 50;
     do {
       await this.indexStep();
     } while (this.index.gap !== null && performance.now() < until);
@@ -231,13 +236,24 @@ export class TextView {
     if (from === null) return;
     const got = await this.doc.textIndex(this.chosen, from, from + INDEX_STEP);
     if (got.starts.length === 0) return;
-    const was = this.index.totalLines;
     this.index.add(got.starts, got.next, { lf: got.lf, cr: got.cr, crlf: got.crlf });
     this.settleEnding();
-    // The canvas is as tall as the file has lines, and the file just turned
-    // out to have a different number of them. Put the scrollbar back on the
-    // line the reader is looking at, so nothing moves on screen.
-    if (this.index.totalLines !== was) this.reanchor();
+    // The line on screen was a line number the index had to guess at, and the
+    // index has now counted its way to it. Take the correction on the line
+    // number and the scrollbar together: the canvas is as tall as the file has
+    // lines, and the file has just turned out to have a different number of
+    // them, so both ends of the mapping moved. Nothing moves on screen.
+    const known = this.index.lineAt(this.top);
+    if (known !== null && known !== this.topLine) {
+      this.viewLine += known - this.topLine;
+      this.topLine = known;
+      this.anchorLine = known;
+      this.anchorAt = this.top;
+      // The gutter can say which lines these are now, which it could not a
+      // moment ago.
+      this.render();
+    }
+    this.reanchor();
     this.onReading(this.reading, this.index.endings);
   }
 
@@ -278,21 +294,28 @@ export class TextView {
     return Math.max(this.scroll.clientHeight + 1, Math.min(MAX_CANVAS, want));
   }
 
-  /** Pixels of canvas one line is worth. One row, until the file has more
-   *  lines than the canvas has room for. */
-  private perLine(): number {
-    const want = this.index.totalLines * ROW;
-    return want <= MAX_CANVAS ? ROW : Math.max(1e-6, MAX_CANVAS / this.index.totalLines);
+  /** How far the scrollbar travels. */
+  private span(): number {
+    return Math.max(1, this.canvasHeight() - this.scroll.clientHeight);
+  }
+
+  /** The last line the viewport can start on, which is what the bottom of the
+   *  scrollbar has to mean. Mapping through this rather than through pixels
+   *  per line is what keeps the end of the file reachable once the canvas has
+   *  been scaled down: a screenful is worth more than a screen of canvas then,
+   *  and the last screenful would otherwise sit past the scrollbar's floor. */
+  private lastTop(): number {
+    return Math.max(1, this.index.totalLines - this.visible());
   }
 
   /** Where a line sits on the scrollbar. */
   private lineY(n: number): number {
-    return Math.round(n * this.perLine());
+    return Math.round(Math.min(1, n / this.lastTop()) * this.span());
   }
 
   /** The line the scrollbar is pointing at. */
   private lineAtY(y: number): number {
-    return Math.max(0, Math.round(y / this.perLine()));
+    return Math.max(0, Math.round((y / this.span()) * this.lastTop()));
   }
 
   /** Put the scrollbar on the line the reader is looking at, and the block of
@@ -354,11 +377,31 @@ export class TextView {
     const first = Math.max(0, this.viewLine - OVERSCAN);
     this.topLine = first;
     const known = this.index.byteOfLine(first);
-    if (known !== null) return Math.min(known, this.doc.lengthBytes);
+    if (known !== null) return this.anchoredAt(first, Math.min(known, this.doc.lengthBytes));
+    // Past the index's reach, but perhaps inside a segment a jump left behind.
+    // A segment cannot say what line number it is at, but it can say what the
+    // line after this one is, and stepping through it is what makes scrolling
+    // in un-indexed ground exact rather than a guess per row.
+    const near = this.index.place(this.anchorAt);
+    if (near !== null && near.segment.firstLine === null) {
+      const step = near.segment.starts[near.index + (first - this.anchorLine)];
+      if (step !== undefined) return this.anchoredAt(first, step);
+    }
     const b = await this.doc.textBack(this.chosen, this.index.guessByteOfLine(first), 0);
     const got = await this.doc.textIndex(this.chosen, b.start, b.start + PROBE);
     if (got.starts.length > 0) this.index.add(got.starts, got.next, { lf: got.lf, cr: got.cr, crlf: got.crlf });
-    return b.start;
+    return this.anchoredAt(first, b.start);
+  }
+
+  /** The line the top of the screen was last resolved to, so that the next row
+   *  along can be stepped to rather than guessed at. */
+  private anchorLine = 0;
+  private anchorAt = 0;
+
+  private anchoredAt(line: number, at: number): number {
+    this.anchorLine = line;
+    this.anchorAt = at;
+    return at;
   }
 
   // ---- the lines ------------------------------------------------------
@@ -412,6 +455,11 @@ export class TextView {
     if (ahead < this.doc.lengthBytes && !this.cache.has(ahead)) void this.linesFrom(ahead, BATCH);
     const first = this.lines[0];
     if (first === undefined || first.at <= 0) return;
+    // The line above is in the index nearly always, and asking the core to
+    // walk back to it would be a trip through the file on every draw. Where it
+    // is already decoded there is nothing behind the screen left to read.
+    const above = this.index.place(first.at - 1)?.at;
+    if (above !== undefined && this.cache.has(above)) return;
     void this.doc.textBack(this.chosen, first.at, BATCH).then(async (b) => {
       if (b.back < first.at && !this.cache.has(b.back)) await this.linesFrom(b.back, BATCH);
     });
@@ -633,7 +681,7 @@ export class TextView {
     // still the bytes somebody picked.
     const sel = this.selRange();
     const at = sel === null ? this.cursor : sel.start;
-    const plain = sel === null && !/[\r\n]/.test(text);
+    const plain = sel === null && this.leavesLinesAlone(text, bytes.length);
     this.write(() => this.doc.replaceAt(at, sel === null ? 0 : sel.end - sel.start, bytes));
     if (sel !== null) {
       this.selection = null;
@@ -641,6 +689,24 @@ export class TextView {
       this.onSelect(at, at, at);
     }
     await this.after(at + bytes.length, at, plain ? bytes.length : null);
+  }
+
+  /**
+   * Whether writing `text` at the caret leaves every line ending where it is,
+   * so that the index can move the lines after it along instead of reading
+   * them again.
+   *
+   * Three ways it might not. The text itself may be an ending. The caret may
+   * be on a line the core cut for being too long, where every cut after it is
+   * at a fixed distance from the line's real start and all of them move. And
+   * the line may cross that limit by growing, which makes a cut that was not
+   * there before. Anything else is a letter typed into a line.
+   */
+  private leavesLinesAlone(text: string, grew: number): boolean {
+    if (/[\r\n]/.test(text)) return false;
+    const here = this.caretLine();
+    if (here === null || here.line.ending === "cut") return false;
+    return this.textEnd(here.line) - here.line.at + grew <= MAX_LINE;
   }
 
   /** Take out the character before the caret, or the one after it. */
@@ -653,8 +719,9 @@ export class TextView {
     if (dir === -1) {
       const prev = [...cells].reverse().find((c) => c.at < this.cursor);
       if (prev !== undefined) {
+        const plain = here.line.ending !== "cut";
         this.write(() => this.doc.replaceAt(prev.at, prev.width, new Uint8Array()));
-        return this.after(prev.at, prev.at, -prev.width);
+        return this.after(prev.at, prev.at, plain ? -prev.width : null);
       }
       // At the front of a line, what is behind the caret is the line ending
       // above it, however many bytes that turned out to be.
@@ -667,8 +734,9 @@ export class TextView {
     }
     const next = cells.find((c) => c.at === this.cursor);
     if (next !== undefined) {
+      const plain = here.line.ending !== "cut";
       this.write(() => this.doc.replaceAt(next.at, next.width, new Uint8Array()));
-      return this.after(next.at, next.at, -next.width);
+      return this.after(next.at, next.at, plain ? -next.width : null);
     }
     // At the end of a line, what is in front of the caret is its ending.
     const ending = here.line.at + here.line.len - this.cursor;
