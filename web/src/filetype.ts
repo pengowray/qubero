@@ -68,6 +68,16 @@ const TEMPLATE_LABEL: Record<string, string> = {
   unityassets: "Unity serialized assets",
   utmp: "Login records",
   unitybundle: "Unity AssetBundle",
+  zlib: "zlib stream",
+  bzip2: "bzip2 stream",
+  xz: "xz stream",
+  zstd: "Zstandard stream",
+  lz4: "LZ4 frame",
+  lzip: "lzip stream",
+  compress: "compress .Z stream",
+  tar: "tar archive",
+  "7z": "7-Zip archive",
+  rar5: "RAR 5 archive",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */
