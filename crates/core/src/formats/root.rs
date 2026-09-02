@@ -446,7 +446,7 @@ mod tests {
     fn the_header_says_which_release_wrote_it_and_where_everything_is() {
         let d = Document::new(MemSource(file()));
         let mut ev = Evaluator::new(root());
-        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Magic { ok: true, bytes: b"root".to_vec() });
+        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Magic { ok: true, bytes: b"root".to_vec(), expected: b"root".to_vec() });
         assert_eq!(ev.node(&d, &[F_VERSION]).unwrap().value, Value::Int(61005));
         // 32-bit offsets, so the header is 63 bytes and the UUID ends it.
         let u = ev.node(&d, &[F_UUID]).unwrap();
