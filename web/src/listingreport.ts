@@ -13,7 +13,7 @@
 
 import type { Doc } from "./doc.js";
 import type { FieldPick } from "./doc.js";
-import { emptyState, flatten, PAGE, refold } from "./flatten.js";
+import { emptyState, flatten, PAGE, pathKey, refold } from "./flatten.js";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
 import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.js";
 import { markStrip } from "./bytestrip.js";
@@ -595,6 +595,15 @@ export class ListingReport {
       toggleDump: (at) => this.toggleDump(at),
       toggleCard: (key) => this.toggleCard(key),
       verdict: (item) => this.verdict(item),
+      // The streams that have a row of their own in this listing. What a stream
+      // holds also offers Open unpacked, for the templates that show only the
+      // contents and fold the stream itself away; this is how the contents know
+      // not to offer it twice when the stream is right above them.
+      streams: new Set(
+        this.items
+          .filter((i) => (i.kind === "row" || i.kind === "heading") && i.node !== null && i.node.decoded)
+          .map((i) => pathKey(i.path)),
+      ),
       shown: this.scroller.clientWidth > 0,
     };
   }

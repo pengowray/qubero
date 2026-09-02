@@ -197,6 +197,9 @@ function build(tab: Tab): Page {
     document.addEventListener("keydown", on);
     tab.release.push(() => document.removeEventListener("keydown", on));
   };
+  // A change to an unpacked stream has nowhere to go, so every way of asking
+  // for one is refused and says so where the other messages go.
+  doc.onRefuseEdit = (why) => say(why, true);
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const structure = new ListingReport(doc);

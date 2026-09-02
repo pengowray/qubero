@@ -202,6 +202,13 @@ pub struct NodeInfo {
     /// read over the bytes it comes to rather than over the file. A run that
     /// opened can be opened as a document of its own; see [`crate::eval::spaces`].
     pub decoded: bool,
+    /// True for the first node inside a space: the one thing a `Decoded` field
+    /// holds, whose parent is the stream. There is exactly one per space and it
+    /// is always drawn, which the stream itself is not: a template may fold the
+    /// `Decoded` field away and show only its contents. So this, rather than
+    /// `decoded`, is where a listing hangs Open unpacked, and the stream it
+    /// opens is this node's parent.
+    pub space_root: bool,
     /// What the template says about this field regardless of the shapes:
     /// `Some(true)` for machinery, `Some(false)` for payload, `None` when it
     /// has no opinion.
@@ -553,6 +560,9 @@ impl Evaluator {
                 _ => None,
             },
             decoded: matches!(&r.ty, Ty::Decoded { .. }),
+            space_root: r.space != 0
+                && !path.is_empty()
+                && self.memo.get(&path[..path.len() - 1]).is_none_or(|p| p.space != r.space),
             // Nothing inside a decoded stream is written back: there is no
             // mapping from a decoded byte to a byte of the file, so a change
             // made there has nowhere to go.

@@ -9,7 +9,7 @@ import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, countText, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED } from "./strings.js";
+import { bitSizeText, childWord, countText, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOrigin } from "./strings.js";
 import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
@@ -1004,6 +1004,12 @@ export class Inspector {
    */
   private fillOrigins(path: readonly number[]): void {
     const rows: Node[] = [];
+    // Where this field came from, for a field in an unpacked stream: which step
+    // of the decoder produced its first byte, and which bits of the compressed
+    // run that step read. It is an origin like any other and goes under the
+    // rest, because the fields above decided this field's shape while this
+    // decided that the bytes exist at all.
+    const unpacked = this.unpackedOriginRow(path);
     const jumps: Node[] = [];
     for (let i = 0; i <= path.length; i++) {
       const at = path.slice(0, i);
@@ -1038,6 +1044,7 @@ export class Inspector {
       for (const o of from) rows.push(originRow(o));
       for (const r of relations) rows.push(relationRow(r));
     }
+    if (unpacked !== null) rows.push(unpacked);
     if (rows.length === 0 && jumps.length === 0) {
       this.origins.hidden = true;
       this.origins.replaceChildren();
@@ -1048,6 +1055,32 @@ export class Inspector {
     if (jumps.length > 0) all.push(subhead("Points to"), ...jumps);
     this.origins.replaceChildren(...all);
     this.origins.hidden = false;
+  }
+
+  /**
+   * The one connection a field of an unpacked stream has that no other field
+   * has: the step of the decoder that produced it, and the bits of the file
+   * that step read. Null for a field of the file, and for a byte the codec kept
+   * no trace of.
+   *
+   * The same sentence as the status bar, deliberately: it is the same fact, and
+   * a reader who has seen it below should recognise it here.
+   */
+  private unpackedOriginRow(path: readonly number[]): HTMLElement | null {
+    if (this.doc.isFile) return null;
+    const n = this.doc.templateNode(path);
+    if (n.status !== "ok") return null;
+    const step = this.doc.mapOut(Math.floor(n.node.offset_bits / 8));
+    if (step === null) return null;
+    const row = document.createElement("div");
+    row.className = "insp-origin";
+    const role = document.createElement("span");
+    role.className = "insp-origin-role";
+    role.textContent = "unpacked";
+    const what = document.createElement("span");
+    what.textContent = unpackedOrigin(this.doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist);
+    row.append(role, what);
+    return row;
   }
 
   /** The section below the editor. See `insp-type`. */

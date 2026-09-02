@@ -2,6 +2,7 @@
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
 import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
+import { UNPACKED } from "./strings.js";
 
 const CHUNK_SIZE = 64 * 1024;
 /** How many rounds of fetch-and-ask-again a read of text is given. Each round
@@ -170,6 +171,10 @@ export type TemplateNode = {
   /** True for a compressed run. One that opened can be opened as a document of
    *  its own; one that did not says why in `refused` instead. */
   readonly decoded: boolean;
+  /** True for the one node a stream holds, whose parent is the stream. There is
+   *  one per space and it is always drawn, which the stream itself need not be,
+   *  so this is where the listing offers Open unpacked. */
+  readonly space_root: boolean;
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -899,6 +904,24 @@ export class Doc {
     return this.space === 0;
   }
 
+  /** Said when a change was asked for and refused. */
+  onRefuseEdit: (why: string) => void = () => {};
+
+  /**
+   * Whether this document refuses to be changed, saying so once if it does.
+   *
+   * Every way of changing bytes goes through here rather than through a guard
+   * in each view, because there are a dozen of those and one of them being
+   * missed would write the change into the file the stream came out of: a
+   * space's offsets are its own, and byte 4 of an unpacked stream is not byte 4
+   * of anything else.
+   */
+  private refusesEdit(): boolean {
+    if (this.space === 0) return false;
+    this.onRefuseEdit(UNPACKED.readOnly);
+    return true;
+  }
+
   /**
    * Unpack the compressed stream at `path` and open what comes out as a
    * document of its own, over the same editor. A stream already open comes
@@ -1209,6 +1232,7 @@ export class Doc {
 
   /** Put bytes where a match was found. */
   replaceAt(at: number, len: number, bytes: Uint8Array): void {
+    if (this.refusesEdit()) return;
     this.editor.replace_at(at, len, bytes);
     this.notify();
   }
@@ -1309,6 +1333,7 @@ export class Doc {
    * the chunks are on their way and the caller should ask again.
    */
   writeNode(path: readonly number[], text: string): TemplateReply<WrittenRange> {
+    if (this.refusesEdit()) return { status: "error", message: UNPACKED.readOnly };
     const r = this.handleReply<WrittenRange>(this.editor.write_node(this.space, Uint32Array.from(path), text));
     if (r.status === "ok") this.notify();
     return r;
@@ -1568,38 +1593,47 @@ export class Doc {
   }
 
   overwrite(at: number, data: Uint8Array): void {
+    if (this.refusesEdit()) return;
     this.editor.overwrite_bytes(at, data);
     this.notify();
   }
   /** Overwrite that joins the previous edit's undo step. */
   amendOverwrite(at: number, data: Uint8Array): void {
+    if (this.refusesEdit()) return;
     this.editor.amend_overwrite_bytes(at, data);
     this.notify();
   }
   insert(at: number, data: Uint8Array): void {
+    if (this.refusesEdit()) return;
     this.editor.insert_bytes(at, data);
     this.notify();
   }
   delete(at: number, n: number): void {
+    if (this.refusesEdit()) return;
     this.editor.delete_bytes(at, n);
     this.notify();
   }
   overwriteBits(atBit: number, data: Uint8Array, n: number): void {
+    if (this.refusesEdit()) return;
     this.editor.overwrite_bits(atBit, data, n);
     this.notify();
   }
   insertBits(atBit: number, data: Uint8Array, n: number): void {
+    if (this.refusesEdit()) return;
     this.editor.insert_bits(atBit, data, n);
     this.notify();
   }
   deleteBits(atBit: number, n: number): void {
+    if (this.refusesEdit()) return;
     this.editor.delete_bits(atBit, n);
     this.notify();
   }
   undo(): void {
+    if (this.refusesEdit()) return;
     if (this.editor.undo()) this.notify();
   }
   redo(): void {
+    if (this.refusesEdit()) return;
     if (this.editor.redo()) this.notify();
   }
 }

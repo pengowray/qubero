@@ -141,6 +141,9 @@ struct NodeDto {
     /// True for a compressed run. One that opened can be opened as a document
     /// of its own, which is what the Open unpacked button does.
     decoded: bool,
+    /// True for the one node a stream holds. Its parent is the stream, so this
+    /// is where the listing offers Open unpacked.
+    space_root: bool,
 }
 
 /// What the byte-class scan has found so far. `classes` is one digit per
@@ -1001,6 +1004,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         space: n.space as f64,
         refused: n.refused,
         decoded: n.decoded,
+        space_root: n.space_root,
     }
 }
 

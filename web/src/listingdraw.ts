@@ -52,6 +52,10 @@ export type DrawContext = {
   /** What a run of unclaimed bytes turned out to hold. The answer is cached by
    *  the report, since finding it reads the file. */
   readonly verdict: (item: Extract<Item, { kind: "gap" }>) => GapVerdict;
+  /** The path keys of the compressed streams that have a row of their own in
+   *  this listing, so what a stream holds does not offer to open it a second
+   *  time when the stream is drawn right above. */
+  readonly streams: ReadonlySet<string>;
   /** Whether the listing is on screen. A hidden one still draws a screenful
    *  so the other views can have its headings, and work that is only for the
    *  eye, like decoding a picture, waits for this. */
@@ -182,12 +186,7 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
   // the file to point at. See DESIGN.md, "A stream read as the fields inside
   // it".
   if (space === 0) row.append(bytesButton(c, item.key));
-  // A compressed run that opened can be read in its own right, with its own
-  // hex view and its own listing. A run that would not open has no button and
-  // keeps saying why instead.
-  if (item.node !== null && item.node.decoded && item.node.refused === null) {
-    row.append(unpackedButton(item.path, item.node.name));
-  }
+  offerUnpacked(c, row, item, item.node);
   // Only a list too long to draw: for anything the window already holds
   // whole, a pane of its own would be the same rows somewhere else.
   if (item.node !== null && item.node.child_count > PAGE) row.append(listButton(item.path));
@@ -236,6 +235,9 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // A toggle that opens a strip of nothing is a dead control, and so is one
   // over bytes that are not in the file.
   if (n.size_bits > 0 && n.space === 0) row.append(bytesButton(c, item.key));
+  // A ROOT record draws its compressed run as a row rather than as a heading,
+  // and it is the same offer there.
+  offerUnpacked(c, row, item, n);
   return row;
 }
 
@@ -356,6 +358,27 @@ function bytesButton(c: DrawContext, key: string): HTMLElement {
 /** The way out of a window and into the whole list. It sits on the list's own
  *  heading and on both ends of the drawn window, which is where a reader finds
  *  out the list is longer than what is in front of them. */
+/**
+ * Offer to open a compressed run as a document of its own, wherever the run is
+ * drawn: some templates give the stream a row of its own and fold its contents
+ * away, others fold the stream away and show only its contents, and a ROOT
+ * record draws it as an ordinary row rather than as a heading.
+ *
+ * A run that would not open gets nothing: the line saying why is already where
+ * its value would be. When both the stream and its contents are on screen, only
+ * the stream offers it, so one stream is never two buttons.
+ */
+function offerUnpacked(c: DrawContext, row: HTMLElement, item: Item, n: TemplateNode | null): void {
+  if (n === null) return;
+  if (n.decoded && n.refused === null) {
+    row.append(unpackedButton(item.path, n.name));
+    return;
+  }
+  if (!n.space_root || item.path.length === 0) return;
+  const stream = item.path.slice(0, -1);
+  if (!c.streams.has(pathKey(stream))) row.append(unpackedButton(stream, n.name));
+}
+
 /** The control that opens a compressed run as a document of its own. */
 function unpackedButton(path: readonly number[], name: string): HTMLElement {
   const b = el("button", "rp-bytes rp-unpacked", UNPACKED.open);
