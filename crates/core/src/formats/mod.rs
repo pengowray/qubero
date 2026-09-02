@@ -8,6 +8,7 @@ mod assimp;
 mod appledouble;
 mod au;
 mod bmp;
+mod bzip2;
 mod bdb;
 mod bencode;
 mod c16;
@@ -16,6 +17,7 @@ mod braw;
 mod bards_tale;
 mod cbor;
 mod coff;
+mod compress;
 mod corel;
 mod cpio;
 mod dos;
@@ -55,6 +57,7 @@ mod jpeg;
 mod ico;
 mod lha;
 mod lnk;
+mod lzip;
 mod mca;
 mod midi;
 mod mkv;
@@ -94,6 +97,7 @@ mod xar;
 mod wav;
 mod whisper;
 mod zip;
+mod zlib;
 mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
@@ -104,12 +108,14 @@ pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
 pub use bmp::bmp;
+pub use bzip2::bzip2;
 pub use cab::cab;
 pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use bencode::bencode;
 pub use cbor::cbor;
 pub use coff::coff;
+pub use compress::compress;
 pub use corel::{cdr, cmx};
 pub use cpio::cpio;
 pub use dos::{com, dos};
@@ -140,6 +146,7 @@ pub use jxr::jxr;
 pub use ico::ico;
 pub use lha::lha;
 pub use lnk::lnk;
+pub use lzip::lzip;
 pub use mca::mca;
 pub use midi::midi;
 pub use mkv::mkv;
@@ -179,6 +186,7 @@ pub use xar::xar;
 pub use wav::wav;
 pub use whisper::whisper;
 pub use zip::{zarrzip, zip};
+pub use zlib::zlib;
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
@@ -257,6 +265,10 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("nes", |_| nes()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),
+    ("zlib", |_| zlib()),
+    ("bzip2", |_| bzip2()),
+    ("lzip", |_| lzip()),
+    ("compress", |_| compress()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),

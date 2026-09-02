@@ -45,6 +45,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
+    (b"\x1f\x9d", "compress"),
+    (bzip2::MAGIC, "bzip2"),
+    (lzip::MAGIC, "lzip"),
     (uf2::MAGIC, "uf2"),
     (b"DIRC", "gitindex"),
     (b"\xfftOc", "gitpackidx"),
@@ -197,6 +200,9 @@ const PROBES: &[Probe] = &[
     // whose parse covers the whole file. Nothing marks the front of one, so
     // what recognises it is reading all of it.
     Probe::Is("bencode", bencode::is_bencode),
+    // Last of all, because it is the weakest evidence there is: a zlib
+    // stream has no signature, only two bytes that agree with each other.
+    Probe::Is("zlib", |h, _| zlib::is_zlib(h)),
     Probe::Is("cdr", |h, _| h.starts_with(b"RIFF") && h.len() >= 12 && h[8..11] == *b"CDR"),
     Probe::Is("cmx", |h, _| h.starts_with(b"RIFF") && h.get(8..12) == Some(b"CMX1")),
     // A sound file, and the one variant of it that is marked by a tag inside
