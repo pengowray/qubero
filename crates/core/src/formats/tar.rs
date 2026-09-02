@@ -114,7 +114,12 @@ fn octal(width: i128) -> T {
     T::switch(
         E::peek(8, Big),
         vec![(0, T::bytes(E::lit(width)))],
-        T::octal(StrLen::Padded { size: E::lit(width), pad: 0 }),
+        // The digits end at a zero byte or at a space, and writers disagree
+        // about which: the format allows either, and some write one of each in
+        // the same header. So the digits are a token read inside a window of
+        // the field's own width, which keeps every field where the format put
+        // it whichever the writer chose.
+        T::sized(E::lit(width), T::octal(StrLen::token(&[], &[0, b' ']))),
     )
 }
 
@@ -134,11 +139,11 @@ mod tests {
         source::MemSource,
     };
 
-    fn entry_bytes(name: &str, data: &[u8]) -> Vec<u8> {
+    fn entry_bytes_with(name: &str, data: &[u8], terminator: u8) -> Vec<u8> {
         let mut v = vec![0u8; 512];
         v[..name.len()].copy_from_slice(name.as_bytes());
         v[100..108].copy_from_slice(b"0000644\0");
-        v[124..136].copy_from_slice(format!("{:011o}\0", data.len()).as_bytes());
+        v[124..136].copy_from_slice(format!("{:011o}{}", data.len(), terminator as char).as_bytes());
         v[136..148].copy_from_slice(b"15245725034\0");
         v[148..156].copy_from_slice(b"010755\0 ");
         v[156] = b'0';
@@ -146,6 +151,10 @@ mod tests {
         v.extend_from_slice(data);
         v.resize(512 + data.len().div_ceil(512) * 512, 0);
         v
+    }
+
+    fn entry_bytes(name: &str, data: &[u8]) -> Vec<u8> {
+        entry_bytes_with(name, data, 0)
     }
 
     fn archive() -> Vec<u8> {
@@ -178,5 +187,19 @@ mod tests {
         let mut e = Evaluator::new(tar());
         assert_eq!(e.node(&d, &[0, 0, 13]).unwrap().size_bits, 8 * 8);
         assert_eq!(e.node(&d, &[0, 0, 1]).unwrap().value.as_int(), Some(0o644));
+    }
+
+    /// Some writers end a numeric field with a space rather than a zero byte,
+    /// and such an archive is not wrong: the field is still twelve bytes, and
+    /// the size in it still places the header after this one.
+    #[test]
+    fn a_size_ending_in_a_space_is_read_the_same_way() {
+        let mut v = entry_bytes_with("hello.txt", b"hello, tar\n", b' ');
+        v.extend_from_slice(&[0u8; 1024]);
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(tar());
+        assert_eq!(e.node(&d, &[0, 0, 4]).unwrap().value.as_int(), Some(11));
+        assert_eq!(e.node(&d, &[0, 0, 4]).unwrap().size_bits, 12 * 8);
+        assert_eq!(e.node(&d, &[0, 1, 0]).unwrap().offset_bits, 1024 * 8);
     }
 }

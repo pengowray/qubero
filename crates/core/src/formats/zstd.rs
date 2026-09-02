@@ -87,6 +87,8 @@ fn zstd_frame() -> T {
             // How large the frame's content is once decompressed. The two
             // flag bits mean zero, two, four or eight bytes, except that zero
             // means one byte in a single-segment frame and nothing otherwise.
+            // The two-byte form is the size less 256, which is the one reading
+            // here that is not the number the field holds.
             (
                 "frame_content_size",
                 T::switch(
