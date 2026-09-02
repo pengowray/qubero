@@ -28,17 +28,21 @@
 //!
 //! What is not read here:
 //!
-//! - A column's name. `TTYPEn` holds it, and a structure's field names are
-//!   fixed when the template is built, so the columns are `col1` and on. That
-//!   needs a name an expression can answer, which the IR has no way to say.
+//! A column is `col3` in every path and reads as `col3 flux` on the row: the
+//! declared name is what an expression and an edit are written with, and the
+//! word beside it is whatever the `TTYPE3` card says. A column's type comes
+//! from the letter in its `TFORMn` as a letter, which is what a `Match` reading
+//! its `on` as text from anywhere an expression reaches is for.
+//!
+//! What is not read here:
+//!
 //! - `TFORM1` through `TFORM32`, and `TBCOL1` through `TBCOL32`, since a
 //!   keyword is looked up by the name written out here. A table with more
 //!   columns than that reads the first 32 and says so in the row's last field.
 //! - Which kind of table it is, is read from `TBCOL1` and `TFIELDS` rather
-//!   than from `XTENSION`, which says so in text: nothing in the IR picks a
-//!   type by text found by keyword, only by text in a field beside it.
-//! - The type letter of a column is read as the number its ASCII is, for the
-//!   same reason. So a `TFORMn` card shows `74` where the file says `J`.
+//!   than from `XTENSION`, which says so in text.
+//! - A `TTYPEn` with an escaped quote in it reads as far as the quote. Nothing
+//!   names a column that way.
 //! - What is in the heap. The descriptors say how long each array is and where
 //!   it starts, and placing the arrays those point at needs a pointer list
 //!   whose offsets are read from inside every row of a table.
@@ -112,6 +116,16 @@ fn card_value(name: &str) -> E {
 /// has that keyword, or when the value was not written in that shape.
 fn card_part(name: &str, part: &str) -> E {
     E::tagged_bytes("cards", &["key"], &keyword(name), &["body", "value", "form", part])
+}
+
+/// The text of the quoted value of the card whose keyword is `name`.
+///
+/// A quoted FITS value is a list of parts, because a `''` inside one is a
+/// quote of the value rather than the end of it. A name with an escaped quote
+/// in it is not a thing anyone writes, so this reads the first part, which for
+/// every real card is the whole of the value.
+fn card_text(name: &str) -> E {
+    E::tagged_bytes("cards", &["key"], &keyword(name), &["body", "value", "parts", "0", "text"])
 }
 
 /// One card: its keyword, the `= ` that says it has a value, and the rest.
@@ -267,7 +281,7 @@ fn digits_then(d: i128, most: i128) -> T {
         "Binary column",
         vec![
             ("repeat", T::decimal(StrLen::Fixed(E::lit(d)))),
-            ("code", T::u8()),
+            ("code", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
             ("tail", T::text(StrLen::Fixed(E::to_bytes(b"/")), Encoding::Ascii)),
         ],
     );
@@ -283,7 +297,7 @@ fn ascii_form() -> T {
     T::structure(
         "ASCII column",
         vec![
-            ("code", T::u8()),
+            ("code", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
             ("width", T::decimal(StrLen::token(&[], &[b'.', b' ', b'\'']))),
             ("tail", T::text(StrLen::Fixed(E::to_bytes(b"/")), Encoding::Ascii)),
         ],
@@ -369,7 +383,14 @@ fn binary_row() -> T {
     // A table with more columns than there are names here: the rest of the row
     // is bytes, and the field says why.
     fields.push(("columns_not_read", T::present_if(E::lit(COLUMNS as i128).less_than(card_value("TFIELDS")), T::bytes(E::Remaining))));
-    T::structure("Row", fields)
+    named_columns(T::structure("Row", fields))
+}
+
+/// Give every column the name its `TTYPEn` card holds. The declared name stays
+/// `col3`, which is what a path and an expression are written with; the row
+/// reads `col3 flux`. See [`crate::template::Field::name_from`].
+fn named_columns(row: T) -> T {
+    (1..=COLUMNS).fold(row, |row, n| row.field_named_from(COL_NAMES[n - 1], card_text(&format!("TTYPE{n}"))))
 }
 
 /// One when the table has an `n`th column.
@@ -379,6 +400,11 @@ fn has_column(n: usize) -> E {
 
 /// One column of a binary table, as the type its `TFORMn` names and as many of
 /// them as its repeat count says. A count is one when none is written.
+///
+/// The type is picked by the letter as a letter. `TFORMn` is a value written in
+/// text and found by keyword, and a `Match` reads its `on` as text from
+/// wherever an expression reaches it, so nothing here has to turn `J` into 74
+/// and back.
 fn binary_column(n: usize) -> T {
     let key = format!("TFORM{n}");
     let code = card_part(&key, "code");
@@ -389,27 +415,27 @@ fn binary_column(n: usize) -> T {
     let pair = |name: &str, ty: T| T::inline_structure(name, vec![("re", ty.clone()), ("im", ty)]);
     let descriptor = |name: &str, ty: T| T::inline_structure(name, vec![("count", ty.clone()), ("offset", ty)]);
     let text = T::text(StrLen::Fixed(r.clone().at_most(E::Remaining)), Encoding::Ascii);
-    T::switch(
+    T::matches(
         code,
         vec![
             // A logical is written as the letter `T` or `F`, or as a zero byte
             // for a value nobody set.
-            (b'L' as i128, text.clone()),
+            ("L", text.clone()),
             // A bit column is that many bits, rounded up to whole bytes.
-            (b'X' as i128, T::bytes(r.clone().add(E::lit(7)).div(E::lit(8)).at_most(E::Remaining))),
-            (b'B' as i128, of(T::UInt { bits: 8, endian: Big }, 1)),
-            (b'I' as i128, of(T::Int { bits: 16, endian: Big }, 2)),
-            (b'J' as i128, of(T::Int { bits: 32, endian: Big }, 4)),
-            (b'K' as i128, of(T::Int { bits: 64, endian: Big }, 8)),
-            (b'A' as i128, text),
-            (b'E' as i128, of(T::F32(Big), 4)),
-            (b'D' as i128, of(T::F64(Big), 8)),
-            (b'C' as i128, of(pair("Complex", T::F32(Big)), 8)),
-            (b'M' as i128, of(pair("Complex", T::F64(Big)), 16)),
+            ("X", T::bytes(r.clone().add(E::lit(7)).div(E::lit(8)).at_most(E::Remaining))),
+            ("B", of(T::UInt { bits: 8, endian: Big }, 1)),
+            ("I", of(T::Int { bits: 16, endian: Big }, 2)),
+            ("J", of(T::Int { bits: 32, endian: Big }, 4)),
+            ("K", of(T::Int { bits: 64, endian: Big }, 8)),
+            ("A", text),
+            ("E", of(T::F32(Big), 4)),
+            ("D", of(T::F64(Big), 8)),
+            ("C", of(pair("Complex", T::F32(Big)), 8)),
+            ("M", of(pair("Complex", T::F64(Big)), 16)),
             // A variable-length array is written as how many there are and
             // where in the heap they start.
-            (b'P' as i128, of(descriptor("Descriptor", T::Int { bits: 32, endian: Big }), 8)),
-            (b'Q' as i128, of(descriptor("Descriptor", T::Int { bits: 64, endian: Big }), 16)),
+            ("P", of(descriptor("Descriptor", T::Int { bits: 32, endian: Big }), 8)),
+            ("Q", of(descriptor("Descriptor", T::Int { bits: 64, endian: Big }), 16)),
         ],
         // A type letter nobody defined, or a `TFORMn` written in a shape this
         // could not read: the row still has its width, and this column covers
@@ -432,7 +458,7 @@ fn ascii_row() -> T {
         let cell = T::at_in_window(at, T::text(StrLen::Fixed(width), Encoding::Ascii));
         fields.push((name, T::present_if(has_column(n), cell)));
     }
-    T::structure("Row", fields)
+    named_columns(T::structure("Row", fields))
 }
 
 /// How many elements to place: what the header says, and never more than the
@@ -472,7 +498,7 @@ pub fn fits() -> Template {
 mod tests {
     use super::*;
     use crate::document::Document;
-    use crate::eval::{Evaluator, Value};
+    use crate::eval::{Evaluator, Role, Value};
     use crate::source::MemSource;
 
     /// Pad a run of cards out to the block a FITS header is written in.
@@ -696,6 +722,26 @@ mod tests {
         assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0, 3, 0]).unwrap().value, Value::Float(2.5));
         // A row is as wide as `NAXIS1` says.
         assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0]).unwrap().size_bits, 25 * 8);
+        // Every column reads under the name its `TTYPEn` card gives it, with
+        // the declared name kept in front: that is the one a path is written
+        // with, and it does not move when the header is edited.
+        assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0, 0]).unwrap().name, "col1 counts");
+        assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0, 1]).unwrap().name, "col2 flux");
+        // A column with no `TTYPEn` keeps the name the template gave it.
+        assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0, 3]).unwrap().name, "col4");
+        // And the row says which card the name came from.
+        let seen: Vec<_> =
+            ev.origins(&d, &[0, 1, 2, 0, 0, 1]).unwrap().into_iter().map(|o| (o.role, o.value)).collect();
+        assert!(seen.iter().any(|(r, v)| *r == Role::Name && v.trim() == "flux"), "{seen:?}");
+        // The type letter is a letter. It used to read as 74, the number `J`
+        // is in ASCII, because the type was picked by a number.
+        let n = ev.node(&d, &[0, 1, 0]).unwrap().child_count;
+        let card = (0..n as usize)
+            .find(|i| ev.node(&d, &[0, 1, 0, *i]).unwrap().name.contains("TFORM1"))
+            .expect("a TFORM1 card");
+        // The card is a keyword and a body; the body is `= `, the TFORM value
+        // and the comment, and the value is a quote and the form inside it.
+        assert_eq!(text(&ev.node(&d, &[0, 1, 0, card, 1, 1, 1, 1]).unwrap().value), "J");
     }
 
     #[test]

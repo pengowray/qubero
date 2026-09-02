@@ -2110,6 +2110,64 @@ fn a_lookup_by_computed_key_reads_text_as_well_as_numbers() {
 }
 
 #[test]
+fn a_lookup_can_be_keyed_by_text_found_somewhere_else() {
+    // A table of definitions labelled in words, and records that say which
+    // definition they follow by writing the word rather than a number. The key
+    // field is padded to a fixed width and the pointing field is not, and the
+    // two still match: what is compared is what the fields read as.
+    let defs = T::array(
+        T::structure("Def", vec![("name", T::utf8_padded(E::lit(6), b' ')), ("width", T::u8())]),
+        E::lit(2),
+    );
+    let rec = T::structure(
+        "Rec",
+        vec![
+            ("kind", T::utf8(E::lit(4))),
+            // What that definition says one of these is worth.
+            ("width", T::computed(E::tagged_by_text("defs", &["name"], E::field("kind"), &["width"]))),
+            // And what it is called, read back as text.
+            ("called", T::computed_text(E::tagged_by_text("defs", &["name"], E::field("kind"), &["name"]))),
+        ],
+    );
+    let t = T::structure("Root", vec![("defs", defs), ("recs", T::repeat(rec, Until::End))]);
+    let d = doc(b"flux  \x04time  \x08timefluxnope");
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().value.as_int(), Some(8));
+    assert_eq!(ev.node(&d, &[1, 1, 1]).unwrap().value.as_int(), Some(4));
+    assert_eq!(ev.node(&d, &[1, 0, 2]).unwrap().value, Value::Str("time".into()));
+    // A word nothing is labelled with finds nothing, which is an answer rather
+    // than an error: zero for the number, and no text at all.
+    assert_eq!(ev.node(&d, &[1, 2, 1]).unwrap().value.as_int(), Some(0));
+    assert_eq!(ev.node(&d, &[1, 2, 2]).unwrap().value, Value::Str(String::new()));
+}
+
+#[test]
+fn a_field_can_take_its_displayed_name_from_the_file() {
+    // The name is written in a table earlier in the file, and the field it
+    // names is a plain number the template calls `col1`.
+    let t = T::structure(
+        "Root",
+        vec![
+            ("labels", T::array(T::utf8(E::lit(4)), E::lit(2))),
+            ("col1", T::u8()),
+            ("col2", T::u8()),
+        ],
+    )
+    .field_named_from("col1", E::elem_field("labels", E::lit(0), &[]))
+    .field_named_from("col2", E::elem_field("labels", E::lit(1), &[]));
+    let d = doc(b"fluxtime\x07\x09");
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1]).unwrap().name, "col1 flux");
+    assert_eq!(ev.node(&d, &[2]).unwrap().name, "col2 time");
+    // The declared name is still the name: a path and an expression are
+    // written with it, and it does not move when the labels are edited.
+    assert_eq!(ev.child_named(&d, &[], "col1").unwrap(), Some(vec![1]));
+    // And the connection is exposed, as a name rather than as a value.
+    let seen: Vec<_> = ev.origins(&d, &[1]).unwrap().into_iter().map(|o| (o.role, o.label)).collect();
+    assert_eq!(seen, vec![(Role::Name, "labels[0]".to_string())]);
+}
+
+#[test]
 fn a_bit_field_of_a_number_is_a_shift_and_a_mask() {
     // A word packing six-bit differences, the way a Steim2 word does, read as
     // fields of the number rather than as bits of the bytes.

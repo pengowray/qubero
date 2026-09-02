@@ -60,6 +60,9 @@ impl Evaluator {
     pub fn relations<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Vec<Relation>> {
         self.resolve(doc, path)?;
         let mut out = Vec::new();
+        if let Some(from) = self.name_from(path) {
+            self.relation(doc, path, &from, Role::Name, &mut out);
+        }
         let declared = self.declared_ty(path)?;
         let mut ty = declared;
         for _ in 0..64 {
@@ -91,7 +94,7 @@ impl Evaluator {
                 self.relation(doc, path, &e.clone(), Role::Length, &mut out)
             }
             Ty::Array { count, .. } => self.relation(doc, path, &count.clone(), Role::Count, &mut out),
-            Ty::Computed(e) => self.relation(doc, path, &e.clone(), Role::Value, &mut out),
+            Ty::Computed(e) | Ty::ComputedText(e) => self.relation(doc, path, &e.clone(), Role::Value, &mut out),
             _ => {}
         }
         Ok(out)

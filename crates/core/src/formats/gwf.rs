@@ -36,11 +36,10 @@
 //! its bytes, which is the honest answer.
 //!
 //! Two names, then, for a file that numbers its classes its own way: the class
-//! byte reads as an enum of the standard numbering, and the body reads as the
-//! structure the file said it was. A computed label is a number in the IR and
-//! never text, so the class byte cannot be made to say what the dictionary
-//! calls it. Where the two disagree, the body is the one to believe, and
-//! seeing both is how a reader knows they disagreed at all.
+//! byte reads as an enum of the standard numbering, and `class_name` beside it
+//! reads as what this file's own dictionary calls that number. Where the two
+//! disagree, the declared name is the one to believe, and seeing both is how a
+//! reader knows they disagreed at all.
 //!
 //! What is read: the header, the structure stream, and every class the
 //! specification defines. FrameH, FrDetector, FrProcData, FrVect, FrEndOfFrame,
@@ -222,6 +221,11 @@ fn structure(e: Endian) -> T {
             ("length", T::u64(e)),
             ("checksum_kind", T::enumeration("ChecksumKind", T::u8(), CHECKSUM_KIND)),
             ("class", T::enumeration("FrClass", T::u8(), CLASSES)),
+            // What this file calls that class. The number is in the file and
+            // the word is in the file, in a dictionary entry further back, and
+            // before this the reader was shown the number and left to go and
+            // find the entry themselves. A row of no bytes beside it says it.
+            ("class_name", T::computed_text(declared_name())),
             ("instance", T::u32(e)),
             ("body", T::sized(body_size(14), class_body(e))),
         ],
@@ -324,8 +328,15 @@ fn class_body(e: Endian) -> T {
 /// and the empty name is a case here rather than the default: it takes the
 /// constant table. A file that names a class something this reader has no
 /// layout for falls to the default and keeps its bytes.
+/// The name this file gives the class the asking structure carries: the `FrSH`
+/// earlier in the stream that numbered itself with this structure's class byte,
+/// and the name written in it. Empty when the file declared no such class.
+fn declared_name() -> E {
+    E::sibling_tagged(&["body", "class"], E::field("class"), &["body", "name", "text"])
+}
+
 fn declared_body(e: Endian) -> T {
-    let declared = E::sibling_tagged(&["body", "class"], E::field("class"), &["body", "name", "text"]);
+    let declared = declared_name();
     let mut cases = bodies(e);
     cases.push(("", by_class_number(e)));
     T::matches(declared, cases, T::bytes(E::Remaining))
@@ -910,7 +921,7 @@ fn toc(e: Endian) -> T {
 mod tests {
     use super::*;
     use crate::document::Document;
-    use crate::eval::{Evaluator, Value};
+    use crate::eval::{Evaluator, Role, Value};
     use crate::source::MemSource;
 
     /// Which way round a hand-built file writes its numbers.
@@ -1053,7 +1064,7 @@ mod tests {
         let d = Document::new(MemSource(file(false)));
         let mut ev = Evaluator::new(gwf());
         assert_eq!(ev.node(&d, &[8, 2]).unwrap().value, Value::UInt(0x0123_4567_89ab_cdef));
-        assert_eq!(ev.node(&d, &at(&[3, 4, 5, 1])).unwrap().value, Value::Float(-2.5));
+        assert_eq!(ev.node(&d, &at(&[3, 5, 5, 1])).unwrap().value, Value::Float(-2.5));
         assert_eq!(ev.node(&d, STREAM).unwrap().child_count, 6);
     }
 
@@ -1077,23 +1088,23 @@ mod tests {
         let sh = ev.node(&d, &at(&[0, 2])).unwrap();
         assert_eq!(sh.value, Value::Enum { raw: 1, name: Some("FrSH".into()), hex: false });
         // name, then the class number this file gave it.
-        assert_eq!(ev.node(&d, &at(&[0, 4, 0, 1])).unwrap().value, Value::Str("FrameH".into()));
-        assert_eq!(ev.node(&d, &at(&[0, 4, 1])).unwrap().value, Value::UInt(3));
+        assert_eq!(ev.node(&d, &at(&[0, 5, 0, 1])).unwrap().value, Value::Str("FrameH".into()));
+        assert_eq!(ev.node(&d, &at(&[0, 5, 1])).unwrap().value, Value::UInt(3));
         // And an element of it: what one field of a FrameH is called.
-        assert_eq!(ev.node(&d, &at(&[1, 4, 1, 1])).unwrap().value, Value::Str("STRING".into()));
+        assert_eq!(ev.node(&d, &at(&[1, 5, 1, 1])).unwrap().value, Value::Str("STRING".into()));
     }
 
     #[test]
     fn a_frame_header_reads_its_time_and_its_pointers() {
         let d = Document::new(MemSource(file(true)));
         let mut ev = Evaluator::new(gwf());
-        assert_eq!(ev.node(&d, &at(&[2, 4, 4])).unwrap().value, Value::UInt(1_126_259_447));
-        assert_eq!(ev.node(&d, &at(&[2, 4, 7])).unwrap().value, Value::Float(32.0));
+        assert_eq!(ev.node(&d, &at(&[2, 5, 4])).unwrap().value, Value::UInt(1_126_259_447));
+        assert_eq!(ev.node(&d, &at(&[2, 5, 7])).unwrap().value, Value::Float(32.0));
         // A pointer is six bytes: a class and an instance.
-        let aux = ev.node(&d, &at(&[2, 4, 19])).unwrap();
+        let aux = ev.node(&d, &at(&[2, 5, 19])).unwrap();
         assert_eq!(aux.size_bits, 48);
         assert_eq!(
-            ev.node(&d, &at(&[2, 4, 19, 0])).unwrap().value,
+            ev.node(&d, &at(&[2, 5, 19, 0])).unwrap().value,
             Value::Enum { raw: 20, name: Some("FrVect".into()), hex: false }
         );
     }
@@ -1102,13 +1113,13 @@ mod tests {
     fn an_uncompressed_vector_reads_as_the_numbers_its_type_names() {
         let d = Document::new(MemSource(file(true)));
         let mut ev = Evaluator::new(gwf());
-        let data = ev.node(&d, &at(&[3, 4, 5])).unwrap();
+        let data = ev.node(&d, &at(&[3, 5, 5])).unwrap();
         assert_eq!(data.type_name, "f64 le[]");
         assert_eq!(data.child_count, 2);
-        assert_eq!(ev.node(&d, &at(&[3, 4, 5, 0])).unwrap().value, Value::Float(1.5));
+        assert_eq!(ev.node(&d, &at(&[3, 5, 5, 0])).unwrap().value, Value::Float(1.5));
         // The dimensions come after the data, so nBytes is what placed them.
-        assert_eq!(ev.node(&d, &at(&[3, 4, 6])).unwrap().value, Value::UInt(1));
-        assert_eq!(ev.node(&d, &at(&[3, 4, 10, 0, 1])).unwrap().value, Value::Str("s".into()));
+        assert_eq!(ev.node(&d, &at(&[3, 5, 6])).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &at(&[3, 5, 10, 0, 1])).unwrap().value, Value::Str("s".into()));
     }
 
     #[test]
@@ -1132,12 +1143,12 @@ mod tests {
         let d = Document::new(MemSource(b));
         let mut ev = Evaluator::new(gwf());
         assert!(ev.node(&d, &at(&[6])).unwrap().offset_bits == start as u64 * 8);
-        let kind = ev.node(&d, &at(&[6, 4, 1])).unwrap();
+        let kind = ev.node(&d, &at(&[6, 5, 1])).unwrap();
         assert_eq!(
             kind.value,
             Value::Enum { raw: 257, name: Some("gzip (little-endian words)".into()), hex: false }
         );
-        let data = ev.node(&d, &at(&[6, 4, 5])).unwrap();
+        let data = ev.node(&d, &at(&[6, 5, 5])).unwrap();
         assert_eq!((data.type_name.as_str(), data.size_bits), ("bytes[]", 6 * 8));
     }
 
@@ -1180,10 +1191,28 @@ mod tests {
         body.extend(w.u32(0));
         let d = Document::new(MemSource(declared("FrHistory", 40, &body)));
         let mut ev = Evaluator::new(gwf());
-        let b = ev.node(&d, &at(&[1, 4])).unwrap();
+        let b = ev.node(&d, &at(&[1, 5])).unwrap();
         assert_eq!(b.type_name, "FrHistory");
-        assert_eq!(ev.node(&d, &at(&[1, 4, 0, 1])).unwrap().value, Value::Str("myProgram".into()));
-        assert_eq!(ev.node(&d, &at(&[1, 4, 1])).unwrap().value, Value::UInt(1_126_259_447));
+        assert_eq!(ev.node(&d, &at(&[1, 5, 0, 1])).unwrap().value, Value::Str("myProgram".into()));
+        assert_eq!(ev.node(&d, &at(&[1, 5, 1])).unwrap().value, Value::UInt(1_126_259_447));
+        // The class byte reads as the standard numbering, and the row beside it
+        // reads as what this file actually calls that number: 40 is FrHistory
+        // here and FrHistory is not 40 anywhere else.
+        let class = ev.node(&d, &at(&[1, 2])).unwrap();
+        assert_eq!(class.value.as_int(), Some(40));
+        let named = ev.node(&d, &at(&[1, 3])).unwrap();
+        assert_eq!(named.value, Value::Str("FrHistory".into()));
+        // A field of no bits: a reading of what is already there, not a claim
+        // that a byte exists.
+        assert_eq!(named.size_bits, 0);
+        assert_eq!(named.type_name, "computed text");
+        // And the row says where the word came from: the dictionary entry that
+        // numbered itself 40, not the class byte on its own.
+        let seen: Vec<_> = ev.origins(&d, &at(&[1, 3])).unwrap().into_iter().map(|o| (o.role, o.label)).collect();
+        // Both ends of it: the class byte that sent the search off, and the
+        // dictionary entry it landed on.
+        assert!(seen.contains(&(Role::Value, "class".to_string())), "{seen:?}");
+        assert!(seen.iter().any(|(r, l)| *r == Role::Value && l.ends_with("].body.name.text")), "{seen:?}");
     }
 
     /// The other half of the same rule: a name this reader has no layout for
@@ -1194,7 +1223,7 @@ mod tests {
     fn a_class_named_something_this_reader_does_not_know_keeps_its_bytes() {
         let d = Document::new(MemSource(declared("FrGizmo", 9, &[0xaa; 8])));
         let mut ev = Evaluator::new(gwf());
-        let body = ev.node(&d, &at(&[1, 4])).unwrap();
+        let body = ev.node(&d, &at(&[1, 5])).unwrap();
         assert_eq!((body.type_name.as_str(), body.size_bits), ("bytes[]", 8 * 8));
     }
 
@@ -1207,7 +1236,7 @@ mod tests {
         let mut ev = Evaluator::new(gwf());
         let s = ev.node(&d, &at(&[4, 2])).unwrap();
         assert_eq!(s.value, Value::Enum { raw: 9, name: Some("FrHistory".into()), hex: false });
-        assert_eq!(ev.node(&d, &at(&[4, 4])).unwrap().type_name, "FrHistory");
+        assert_eq!(ev.node(&d, &at(&[4, 5])).unwrap().type_name, "FrHistory");
     }
 
     /// One of the eleven classes no sample here declares, read from the field
@@ -1234,12 +1263,12 @@ mod tests {
         body.extend(w.u32(0));
         let d = Document::new(MemSource(declared("FrAdcData", 4, &body)));
         let mut ev = Evaluator::new(gwf());
-        assert_eq!(ev.node(&d, &at(&[1, 4])).unwrap().type_name, "FrAdcData");
-        assert_eq!(ev.node(&d, &at(&[1, 4, 6])).unwrap().value, Value::Float(2.5));
-        assert_eq!(ev.node(&d, &at(&[1, 4, 8])).unwrap().value, Value::Float(16384.0));
+        assert_eq!(ev.node(&d, &at(&[1, 5])).unwrap().type_name, "FrAdcData");
+        assert_eq!(ev.node(&d, &at(&[1, 5, 6])).unwrap().value, Value::Float(2.5));
+        assert_eq!(ev.node(&d, &at(&[1, 5, 8])).unwrap().value, Value::Float(16384.0));
         // The last field ends exactly where the structure does: every width in
         // the list between is right.
-        let last = ev.node(&d, &at(&[1, 4, 16])).unwrap();
+        let last = ev.node(&d, &at(&[1, 5, 16])).unwrap();
         let whole = ev.node(&d, &at(&[1])).unwrap();
         assert_eq!(last.offset_bits + last.size_bits, whole.offset_bits + whole.size_bits);
     }
@@ -1248,7 +1277,7 @@ mod tests {
     fn the_end_of_file_record_says_how_many_frames_there_were() {
         let d = Document::new(MemSource(file(true)));
         let mut ev = Evaluator::new(gwf());
-        assert_eq!(ev.node(&d, &at(&[5, 4, 0])).unwrap().value, Value::UInt(1));
-        assert_eq!(ev.node(&d, &at(&[5, 4, 2])).unwrap().value, Value::UInt(40));
+        assert_eq!(ev.node(&d, &at(&[5, 5, 0])).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &at(&[5, 5, 2])).unwrap().value, Value::UInt(40));
     }
 }

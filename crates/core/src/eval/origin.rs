@@ -34,6 +34,12 @@ pub enum Role {
     /// What it says. A field of no bits is worked out from other fields, and
     /// those are the fields to name.
     Value,
+    /// What it is called. Apart from `Value` because it decides nothing about
+    /// the field's contents: a FITS column is the same bytes whatever its
+    /// `TTYPE` card says, and a reader wondering where the word `flux` came
+    /// from is asking a different question from one wondering where the
+    /// numbers came from. See [`crate::template::Field::name_from`].
+    Name,
     /// Not about this field at all: this field is an offset, and points there.
     Points,
 }
@@ -47,6 +53,7 @@ impl Role {
             Role::Type => "type",
             Role::Position => "position",
             Role::Value => "value",
+            Role::Name => "name",
             Role::Points => "points",
         }
     }
@@ -75,6 +82,11 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let mut out = Vec::new();
         self.placed_by(doc, path, &mut out)?;
+        // Where the name on the row came from, when the file rather than the
+        // template says what the field is called.
+        if let Some(from) = self.name_from(path) {
+            self.from_expr(doc, path, &from, Role::Name, &mut out)?;
+        }
         // The declared type, before the switch picked a case and before `Sized`
         // was unwrapped: that is where the deciding expressions are.
         let declared = self.declared_ty(path)?;
@@ -214,7 +226,7 @@ impl Evaluator {
             // Which field decided how many bits this number is.
             Ty::UIntExpr { bits, .. } => self.from_expr(doc, path, &(**bits).clone(), Role::Width, out),
             Ty::Array { count, .. } => self.from_expr(doc, path, &count.clone(), Role::Count, out),
-            Ty::Computed(e) => self.from_expr(doc, path, &e.clone(), Role::Value, out),
+            Ty::Computed(e) | Ty::ComputedText(e) => self.from_expr(doc, path, &e.clone(), Role::Value, out),
             _ => Ok(()),
         }
     }

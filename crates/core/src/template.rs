@@ -323,9 +323,26 @@ pub enum Tag {
     /// number is that byte.
     ///
     /// Worked out once, before the search, and compared as a number. A key
-    /// written in text is matched by `Bytes`; there is no computed form of
-    /// that, because nothing in the IR produces bytes.
+    /// written in text is matched by [`Tag::ComputedText`].
     Computed(Arc<Expr>),
+    /// The same, for a list labelled in text: the label is whatever text the
+    /// expression reaches, rather than bytes written into the template.
+    ///
+    /// A format that keeps its records in text and points at them from
+    /// elsewhere in text needs it. `Bytes` finds the card a template names;
+    /// this finds the card *this* record names, which is what a header saying
+    /// `EXTNAME = 'SCI'` and a table elsewhere saying which extension it
+    /// belongs to is doing.
+    ///
+    /// Compared as text and not as bytes, which is the difference that makes
+    /// it work at all: a key field of a fixed width is padded, and the padding
+    /// is part of what `Bytes` compares but no part of what the field reads
+    /// as. So both sides are read through the same text primitive and the
+    /// answers compared, and a template does not have to know how wide the key
+    /// field of the format it is searching happens to be.
+    ComputedText(Arc<Expr>),
+    /// A label already worked out, once a search is under way. See `tag_now`.
+    Text(String),
 }
 
 impl Tag {
@@ -340,7 +357,8 @@ impl Tag {
         Some(match self {
             Tag::Int(v) => v.to_string(),
             Tag::Bytes(b) => format!("{:?}", String::from_utf8_lossy(b).trim_end()),
-            Tag::Computed(e) => crate::eval::write_expr(e)?,
+            Tag::Computed(e) | Tag::ComputedText(e) => crate::eval::write_expr(e)?,
+            Tag::Text(s) => format!("{s:?}"),
         })
     }
 }
@@ -403,6 +421,18 @@ impl Expr {
     /// `FrSH` that named its class this way. See [`TaggedRef::array`].
     pub fn sibling_tagged(key: &[&str], tag: Expr, field: &[&str]) -> Expr {
         Expr::tagged_by(None, key, Tag::Computed(Arc::new(tag)), field)
+    }
+    /// The same for a list labelled in text, where the label is text found
+    /// somewhere else in the file rather than bytes the template fixed:
+    /// `field` of the first element of `array` whose `key` reads as whatever
+    /// text `tag` reaches. See [`Tag::ComputedText`].
+    pub fn tagged_by_text(array: &str, key: &[&str], tag: Expr, field: &[&str]) -> Expr {
+        Expr::tagged_by(Some(array), key, Tag::ComputedText(Arc::new(tag)), field)
+    }
+    /// The same again over the elements before this one, for a stream that
+    /// labels its own records in text.
+    pub fn sibling_tagged_text(key: &[&str], tag: Expr, field: &[&str]) -> Expr {
+        Expr::tagged_by(None, key, Tag::ComputedText(Arc::new(tag)), field)
     }
     fn tagged_by(array: Option<&str>, key: &[&str], tag: Tag, field: &[&str]) -> Expr {
         Expr::Tagged(Arc::new(TaggedRef {
@@ -754,6 +784,26 @@ pub enum Anchor {
 pub struct Field {
     pub name: Arc<str>,
     pub ty: Ty,
+    /// Where this field's *displayed* name is written in the file, when the
+    /// format writes it somewhere rather than fixing it.
+    ///
+    /// A structure's field names are settled when the template is built, and a
+    /// format that names its own fields does not work that way: a FITS table's
+    /// third column is called whatever the `TTYPE3` card says, and a template
+    /// can only call it `col3`. [`StructDef::named_by`] answers the same
+    /// question for a whole structure, by naming a field of it; this answers
+    /// it for one field, by an expression that reaches text anywhere the file
+    /// keeps it, which for FITS is a card found by keyword.
+    ///
+    /// The declared name stays the name: every expression, every path and
+    /// every write still says `col3`, because a name read out of the file can
+    /// change when the file is edited and a path that moves is no path at all.
+    /// This decides one thing, what the row is labelled, and the label is the
+    /// declared name and then the text: `col3 flux`.
+    ///
+    /// Nothing when the text cannot be read or comes to nothing, which leaves
+    /// the field with the name it had.
+    pub name_from: Option<Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -835,6 +885,19 @@ pub enum Ty {
     /// A field of no bits whose value is worked out rather than read. What it
     /// takes to say "the same as the last one" without inventing a byte.
     Computed(Expr),
+    /// The same, for a value that is text: a field of no bits whose value is
+    /// text found somewhere else in the file.
+    ///
+    /// `Computed` covers everything the arithmetic can answer, and a name is
+    /// not one of those. A GWF structure carries a class number and what that
+    /// class is called is written in an `FrSH` structure further back; the
+    /// number is in the file and the word is in the file, and before this the
+    /// reader was shown only the number and left to go and look the word up.
+    /// A row beside it saying `trce` is the whole of what they were after.
+    ///
+    /// Zero bits, so it covers none of the file and moves nothing along. It is
+    /// a reading of what is already there, not a claim that a byte exists.
+    ComputedText(Expr),
     /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
     Leb128 { signed: bool },
     /// EBML's big-endian variable-size integer. The first set bit says how
@@ -1096,6 +1159,11 @@ impl Ty {
     pub fn computed(e: Expr) -> Ty {
         Ty::Computed(e)
     }
+    /// A field of no bits whose value is text found elsewhere in the file.
+    /// See [`Ty::ComputedText`].
+    pub fn computed_text(e: Expr) -> Ty {
+        Ty::ComputedText(e)
+    }
     pub fn vlq() -> Ty {
         Ty::Vlq
     }
@@ -1149,7 +1217,7 @@ impl Ty {
     pub fn structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
         Ty::Struct(Arc::new(StructDef {
             name: name.to_string(),
-            fields: fields.into_iter().map(|(n, ty)| Field { name: n.into(), ty }).collect(),
+            fields: fields.into_iter().map(|(n, ty)| Field { name: n.into(), ty, name_from: None }).collect(),
             named_by: None,
             contents: None,
             unit: None,
@@ -1171,6 +1239,22 @@ impl Ty {
             other => other,
         }
     }
+    /// Say where in the file the field called `field` gets its displayed name
+    /// from. The declared name is unchanged and stays the path name; the row
+    /// reads as both. See [`Field::name_from`].
+    pub fn field_named_from(self, field: &str, from: Expr) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.name_from = Some(from);
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
     /// What one of these is called when a list of them is counted, e.g.
     /// `block`, so the row reads `97,280 blocks`. See [`StructDef::unit`].
     pub fn counted_as(self, unit: &str) -> Ty {
@@ -1435,6 +1519,10 @@ impl Ty {
             Ty::EbmlVint { strip_marker: false } => "EBML ID".into(),
             Ty::EbmlVint { strip_marker: true } => "EBML size".into(),
             Ty::Computed(_) => "computed".into(),
+            // Told apart from `computed` because the value column will hold a
+            // word rather than a number, and a reader checking a row against
+            // the bytes needs to know there are none to check against.
+            Ty::ComputedText(_) => "computed text".into(),
             Ty::SqliteVarint => "varint".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),

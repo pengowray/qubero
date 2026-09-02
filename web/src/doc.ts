@@ -346,7 +346,7 @@ export type SearchStep =
 /** What one other field decided about this one. `points` is the other way
  *  round: this field holds an offset, and that is where it points. */
 export type Origin = {
-  readonly role: "length" | "count" | "type" | "position" | "value" | "width" | "points";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "points";
   /** The field as the reader would name it: `len`, or `tensors[3].offset`. */
   readonly label: string;
   /** Where it is, so the reader can go there. Empty for a `points` entry. */
@@ -366,7 +366,7 @@ export type Origin = {
  * never infers a relationship of its own.
  */
 export type Relation = {
-  readonly role: "length" | "count" | "type" | "value";
+  readonly role: "length" | "count" | "type" | "value" | "name" | "width";
   /** The expression as the template writes it: `header_size - sizeof(header_size)`. */
   readonly written: string;
   /** The same with every field's value in its place: `4 - 1`. */

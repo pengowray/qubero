@@ -253,9 +253,19 @@ impl Evaluator {
         })
     }
 
-    /// The text of the field an expression names, for a switch keyed on words
-    /// rather than on numbers. Only an expression that names a field can be
-    /// read as text: `Ref` for one beside it, `Elem` for one inside a list.
+    /// The text an expression reaches, wherever text is wanted: the case a
+    /// `Match` takes, the value of a `ComputedText` field, the name a field is
+    /// displayed under, the label a text-keyed search is looking for.
+    ///
+    /// One primitive, so that every one of those asks the same question and
+    /// gets the same answer. Which expressions can be read as text is decided
+    /// once, in [`Evaluator::text_path`], and a new way of reaching a field
+    /// works everywhere text is wanted the moment it is added there.
+    ///
+    /// Empty when the expression reaches nothing, which is not an error: a
+    /// search that found no matching record answers no text, a `Match` takes
+    /// its default, and a name that could not be read leaves the field with
+    /// the one it had.
     pub(super) fn text_at<S: Source>(
         &mut self,
         doc: &Document<S>,
@@ -263,7 +273,28 @@ impl Evaluator {
         e: &Expr,
         here: Option<(u64, u64)>,
     ) -> R<String> {
-        let p = match e {
+        match self.text_path(doc, at, e, here)? {
+            Some(p) => self.text_of(doc, &p),
+            None => Ok(String::new()),
+        }
+    }
+
+    /// Where the field an expression names is, for the expressions that name
+    /// one. `None` when the expression reaches nothing that is there.
+    ///
+    /// Every expression that lands on a field belongs here: `Ref` for one
+    /// beside it, `Elem` for one inside a list, `Within` for a path down into
+    /// a sibling, `Tagged` for the one a search found. Arithmetic does not:
+    /// there is no text in a sum, and answering with the digits of one would
+    /// be inventing a reading the file does not have.
+    pub(super) fn text_path<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<Option<Vec<usize>>> {
+        Ok(Some(match e {
             Expr::Ref(name) => match self.find_field(at, name) {
                 Some(p) => p,
                 None => return fail(format!("unknown field {name}")),
@@ -286,21 +317,41 @@ impl Evaluator {
             // The element a search found, which is what a format that names
             // its own record types needs: the number a record carries selects
             // an earlier record, and the word written in that one is the type.
+            //
+            // Nothing carrying that label is no more an error here than it is
+            // when the answer is a number. The first record of a stream that
+            // defines its own record types has nothing behind it to look in.
             Expr::Tagged(t) => {
                 let t = t.clone();
                 match self.tagged_path(doc, at, &t, here)? {
                     Some((p, _)) => p,
-                    // Nothing carries that label, which is no more an error
-                    // here than it is when the answer is a number: a `Match`
-                    // takes its default, the way it does for a word it has no
-                    // case for. The first record of a stream that defines its
-                    // own record types has nothing behind it to look in.
-                    None => return Ok(String::new()),
+                    None => return Ok(None),
                 }
             }
-            _ => return fail("a switch on text has to name a field"),
-        };
-        match self.node(doc, &p)?.value {
+            _ => return fail("text has to come from a field, not from arithmetic"),
+        }))
+    }
+
+    /// The whole text of the field at `path`.
+    ///
+    /// Not the node's value, which for a long text field is a preview with an
+    /// ellipsis on the end: a name matched against three characters of its
+    /// first two hundred and fifty-six is a name matched against something the
+    /// file does not say. Bytes read as text too, lossily, since a format that
+    /// writes a fixed-width label often declares it as bytes.
+    pub(super) fn text_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<String> {
+        self.resolve(doc, path)?;
+        if matches!(self.memo[path].ty.base(), Ty::Str { .. }) {
+            return Ok(self.text_value(doc, path)?.0);
+        }
+        let size = self.size_of(doc, path)?;
+        let r = self.memo[path].clone();
+        if matches!(r.ty.base(), Ty::Bytes(_) | Ty::Magic(_)) {
+            let shown = (size / 8).min(crate::encode::EDIT_LIMIT_BYTES);
+            let bytes = self.read(doc, &r, r.offset, shown * 8)?;
+            return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        }
+        match self.node(doc, path)?.value {
             Value::Str(s) => Ok(s),
             other => fail(format!("{other:?} is not text")),
         }
@@ -437,6 +488,7 @@ impl Evaluator {
     fn tag_now<S: Source>(&mut self, doc: &Document<S>, at: &[usize], tag: &Tag, here: Option<(u64, u64)>) -> R<Tag> {
         Ok(match tag {
             Tag::Computed(e) => Tag::Int(self.eval_expr_at(doc, at, e, here)?),
+            Tag::ComputedText(e) => Tag::Text(self.text_at(doc, at, &e.clone(), here)?),
             other => other.clone(),
         })
     }
@@ -504,6 +556,16 @@ impl Evaluator {
         if matches!(self.memo[path].ty, Ty::Json(_)) {
             return self.json_index(doc, path, name);
         }
+        // A list has no named children, so a number is the only thing a path
+        // can mean there, and it means the same thing it means in JSON. What
+        // needs it is a format that wraps a value in a list of parts: a FITS
+        // quoted string is a run of pieces, and the text of one is reached by
+        // saying which piece.
+        if matches!(self.memo[path].ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. }) {
+            let Ok(i) = name.parse::<usize>() else { return Ok(None) };
+            let n = self.child_count(doc, path)?;
+            return Ok(((i as u64) < n).then_some(i));
+        }
         let Ty::Struct(s) = self.memo[path].ty.base() else { return Ok(None) };
         Ok(s.fields.iter().position(|f| *f.name == *name))
     }
@@ -533,8 +595,31 @@ impl Evaluator {
         match tag {
             // A computed label was worked out before the search began, so what
             // arrives here is always a number. See `tag_now`.
-            Tag::Computed(_) => fail("a computed label must be worked out before the search"),
+            Tag::Computed(_) | Tag::ComputedText(_) => {
+                fail("a computed label must be worked out before the search")
+            }
             Tag::Int(want) => Ok(self.field_in(doc, &mut elem.to_vec(), key)? == Some(*want)),
+            // Text against text, both sides read the same way. `Bytes`
+            // compares what is written and so has the padding of a fixed-width
+            // key in it; this compares what the two fields read as, which is
+            // the only comparison a label worked out somewhere else can win.
+            // An element with no such field, or one that cannot be read as
+            // text, is not a match rather than an error, the same as for the
+            // other two: a list holds records that are something else.
+            Tag::Text(want) => {
+                let mut p = elem.to_vec();
+                match self.descend(doc, &mut p, key) {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(false),
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => return Ok(false),
+                }
+                match self.text_of(doc, &p) {
+                    Ok(got) => Ok(got.trim_end() == want.trim_end()),
+                    Err(e) if e.interrupted() => Err(e),
+                    Err(_) => Ok(false),
+                }
+            }
             Tag::Bytes(want) => {
                 let mut p = elem.to_vec();
                 let Some((last, above)) = key.split_last() else { return Ok(false) };

@@ -37,7 +37,7 @@ fn every_structure_of_the_gwosc_frame_reads_as_the_class_its_dictionary_names() 
     // end of the file: every length in the stream added up.
     let mut seen: Vec<String> = Vec::new();
     for i in 0..162usize {
-        let body = ev.node(&d, &[8, 7, i, 4]).unwrap();
+        let body = ev.node(&d, &[8, 7, i, 5]).unwrap();
         seen.push(body.type_name.clone());
     }
     let last = ev.node(&d, &[8, 7, 161]).unwrap();
@@ -57,15 +57,15 @@ fn every_structure_of_the_gwosc_frame_reads_as_the_class_its_dictionary_names() 
 
     // The frame header names the project and the second GW150914 arrived in.
     let frame = seen.iter().position(|t| t == "FrameH").unwrap();
-    assert_eq!(ev.node(&d, &[8, 7, frame, 4, 0, 1]).unwrap().value, Value::Str("LIGO".into()));
-    assert_eq!(ev.node(&d, &[8, 7, frame, 4, 4]).unwrap().value, Value::UInt(1_126_259_447));
+    assert_eq!(ev.node(&d, &[8, 7, frame, 5, 0, 1]).unwrap().value, Value::Str("LIGO".into()));
+    assert_eq!(ev.node(&d, &[8, 7, frame, 5, 4]).unwrap().value, Value::UInt(1_126_259_447));
 
     // Every vector in this file is gzip written on a little-endian machine, so
     // its bytes stay bytes.
     let vect = seen.iter().position(|t| t == "FrVect").unwrap();
     assert_eq!(
-        ev.node(&d, &[8, 7, vect, 4, 1]).unwrap().value,
+        ev.node(&d, &[8, 7, vect, 5, 1]).unwrap().value,
         Value::Enum { raw: 257, name: Some("gzip (little-endian words)".into()), hex: false }
     );
-    assert_eq!(ev.node(&d, &[8, 7, vect, 4, 5]).unwrap().type_name, "bytes[]");
+    assert_eq!(ev.node(&d, &[8, 7, vect, 5, 5]).unwrap().type_name, "bytes[]");
 }

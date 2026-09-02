@@ -170,6 +170,19 @@ impl Evaluator {
         if let Some(name) = self.pointed_from_name(doc, path) {
             return Ok(name);
         }
+        // A field whose displayed name the format writes somewhere: a FITS
+        // column is `col3` in every path and `col3 flux` on the row. The
+        // declared name comes first, because that is the one an expression or
+        // an edit has to be written with. See `Field::name_from`.
+        if let Some(from) = self.name_from(path) {
+            let here = Some((r.offset, r.limit));
+            if let Ok(text) = self.text_at(doc, path, &from, here) {
+                let text = text.trim();
+                if !text.is_empty() {
+                    return Ok(format!("{} {text}", r.name.text()));
+                }
+            }
+        }
         let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.text()) };
         let Some(by) = s.named_by.clone() else { return Ok(r.name.text()) };
         let Some(i) = s.fields.iter().position(|f| *f.name == *by) else { return Ok(r.name.text()) };
@@ -191,6 +204,15 @@ impl Evaluator {
         let text = brief(&info.value);
         let text = text.trim_end();
         Ok(if text.is_empty() { r.name.text() } else { format!("{} {text}", r.name.text()) })
+    }
+
+    /// Where the field at `path` gets its displayed name from, when its
+    /// structure says the file holds one. A property of the parent's
+    /// declaration, the same as `contents` and `machinery` are.
+    pub(super) fn name_from(&self, path: &[usize]) -> Option<Expr> {
+        let (&idx, parent) = path.split_last()?;
+        let Ty::Struct(s) = self.memo.get(parent)?.ty.base() else { return None };
+        s.fields.get(idx)?.name_from.clone()
     }
 
     /// The name of the record whose offset placed this pointer-list child, when

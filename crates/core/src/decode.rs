@@ -93,8 +93,9 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::Array { elem, count: Expr::Lit(n) } => fixed_bits(elem)? * (*n).max(0) as u64,
         Ty::Sized { size: Expr::Lit(n), .. } => (*n).max(0) as u64 * 8,
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => fixed_bits(inner)?,
-        // A computed field is a value and no bits.
-        Ty::Computed(_) => 0,
+        // A computed field is a value and no bits, whether that value is a
+        // number or a word.
+        Ty::Computed(_) | Ty::ComputedText(_) => 0,
         // A field pointing somewhere else is a place and no bits, so a
         // structure holding one is still as fixed as the rest of it.
         Ty::At { .. } => 0,

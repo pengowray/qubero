@@ -382,6 +382,12 @@ impl Evaluator {
                 }
                 Value::Int(v)
             }
+            // Text found elsewhere in the file. Not cached on the node the way
+            // a computed number is: a string on `Resolved` would be cloned for
+            // every child of every list, and nothing carries these in bulk.
+            Ty::ComputedText(e) => {
+                Value::Str(self.text_at(doc, at, &e.clone(), Some((r.offset, r.limit)))?)
+            }
             Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
             Ty::Magic(want) => {
                 let bytes = self.read(doc, r, r.offset, size)?;
