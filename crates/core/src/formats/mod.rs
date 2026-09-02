@@ -73,6 +73,7 @@ mod npy;
 mod old_mac;
 mod omf;
 mod pak;
+mod parquet;
 mod pcx;
 mod pdf;
 pub mod pdf_objstm;
@@ -177,6 +178,7 @@ pub use old_mac::{binhex, compactpro, macbinary, stuffit};
 pub use omf::omf;
 pub use pe::pe;
 pub use pak::pak;
+pub use parquet::parquet;
 pub use pcx::pcx;
 pub use pdf::pdf;
 pub use pi1::pi1;
@@ -322,6 +324,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("gdbm", |_| gdbm()),
     ("wad", |_| wad()),
     ("pak", |_| pak()),
+    ("parquet", |_| parquet()),
     ("vpk", |_| vpk()),
     ("mca", |_| mca()),
     ("tap", |_| tap()),

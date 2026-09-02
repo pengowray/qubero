@@ -53,6 +53,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     // and picks the layout, so one name serves both.
     (b"GRIB", "grib"),
     (npy::MAGIC, "npy"),
+    // A columnar table. The same four bytes close the file, and the eight
+    // before those are what finds everything in it.
+    (parquet::MAGIC, "parquet"),
     // The first card of a FITS header, keyword and all: eight bytes of
     // keyword and the `=` that says it has a value.
     (b"SIMPLE  =", "fits"),
