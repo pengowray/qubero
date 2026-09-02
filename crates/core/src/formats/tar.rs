@@ -191,6 +191,17 @@ mod tests {
 
     /// Some writers end a numeric field with a space rather than a zero byte,
     /// and such an archive is not wrong: the field is still twelve bytes, and
+    /// GNU tar writes the checksum as six digits, a zero and a space, so the
+    /// digits end before the window does and the zero is not part of them.
+    #[test]
+    fn a_checksum_ending_in_a_zero_then_a_space_is_a_number() {
+        let d = Document::new(MemSource(archive()));
+        let mut e = Evaluator::new(tar());
+        let n = e.node(&d, &[0, 0, 6]).unwrap();
+        assert_eq!(n.name, "checksum");
+        assert_eq!(n.value.as_int(), Some(0o10755));
+    }
+
     /// the size in it still places the header after this one.
     #[test]
     fn a_size_ending_in_a_space_is_read_the_same_way() {

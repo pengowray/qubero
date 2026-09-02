@@ -85,11 +85,20 @@ impl Evaluator {
         let (text_len, dirty) = match len {
             StrLen::Fixed(_) => (rest, false),
             // The field is the separators, the value and the byte that ends
-            // it, and the sizing pass has already measured all three.
-            StrLen::Scan { skip, comment, .. } => {
+            // it. The sizing pass measured all three when the field measured
+            // itself; inside a window of fixed width the field is the window,
+            // and the value still ends at the first ending byte, not one short
+            // of the window: a tar checksum is six digits, a zero and a space
+            // in eight bytes.
+            StrLen::Scan { skip, ends, comment } => {
                 let mut over = Skipping::default();
                 skipped = body.iter().take_while(|b| over.steps_over(**b, skip, *comment)).count() as u64;
-                (rest.saturating_sub(skipped).saturating_sub(1), true)
+                let after = &body[(skipped as usize).min(body.len())..];
+                let value = match after.iter().position(|b| ends.contains(b)) {
+                    Some(i) => i as u64,
+                    None => rest.saturating_sub(skipped).saturating_sub(1),
+                };
+                (value, true)
             }
             StrLen::Padded { pad, .. } => {
                 let term = text::unit_bytes(settled, *pad);
