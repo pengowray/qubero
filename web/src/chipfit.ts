@@ -18,10 +18,6 @@ const CHIP_VALUE = 32;
 const CHIP_CHAR = 6.7;
 /** Padding, border and gap around a chip's text. */
 const CHIP_CHROME = 20;
-/** The most characters a chip is drawn with, from the stylesheet's
- *  `max-width: 26ch`. A longer name is cut short there, so measuring it in
- *  full would send a chip that fits to the next line. */
-const CHIP_MAX_CHARS = 26;
 /** Room kept for the `+3` that counts what did not fit, so the count itself is
  *  never what pushes a chip off the row. */
 const CHIP_REST = 44;
@@ -52,7 +48,7 @@ export function chipDetail(s: Span): string {
 /** How wide a chip saying `name` and `detail` will be drawn, near enough to
  *  choose by. */
 export function chipWidth(name: string, detail: string): number {
-  const chars = Math.min(CHIP_MAX_CHARS, name.length + detail.length + (detail === "" ? 0 : 1));
+  const chars = name.length + detail.length + (detail === "" ? 0 : 1);
   return CHIP_CHROME + chars * CHIP_CHAR;
 }
 

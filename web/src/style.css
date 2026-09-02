@@ -629,7 +629,7 @@ input.invalid {
   line-height: 20px;
   height: 20px;
   min-height: 0;
-  max-width: 26ch;
+  max-width: 100%;
   padding: 0 6px;
   border: 0;
   border-left: 3px solid var(--field-color);

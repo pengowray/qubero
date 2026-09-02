@@ -37,6 +37,6 @@ test("a line limit of one is the old behaviour", () => {
   assert.deepEqual(chipLayout([200, 200, 200], 320, 1), { shown: 1, lines: 1 });
 });
 
-test("a chip is never measured wider than it is drawn", () => {
-  assert.equal(chipWidth("a".repeat(80), ""), chipWidth("a".repeat(26), ""));
+test("a chip is measured at its full text, since it is drawn as wide as the row allows", () => {
+  assert.ok(chipWidth("a".repeat(80), "") > chipWidth("a".repeat(26), ""));
 });
