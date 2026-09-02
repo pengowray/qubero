@@ -94,6 +94,19 @@ input.invalid {
 /* ---- tab strip ---- */
 /* Documents opened out of other documents. Absent for a single file, so the
    page keeps its usual look until a second tab exists. */
+/* One tab's whole page. Every open tab has one and all but the showing one are
+   hidden, so a tab switched away from and back keeps where it was scrolled to
+   and what it had folded away. */
+.tabpage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tabpage[hidden] {
+  display: none;
+}
+
 .tabstrip {
   border-bottom: 1px solid var(--line);
   background: var(--panel);

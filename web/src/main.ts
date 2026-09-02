@@ -8,10 +8,11 @@ import { ListingReport } from "./listingreport.js";
 import { ListPane } from "./listpane.js";
 import { TextView } from "./textview.js";
 import { OverviewPanel } from "./overviewpanel.js";
+import { Tabs, type Page, type Tab } from "./tabs.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
-import { DUMP, TEXTVIEW } from "./strings.js";
+import { DUMP, TEXTVIEW, UNPACKED } from "./strings.js";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -21,27 +22,23 @@ const formatSize = formatBytes;
 
 /**
  * The open documents. The first is a file the reader chose; the rest were
- * opened out of another tab's bytes: a decompressed zip entry, a field's run
- * of bytes read as a file of its own. One is showing at a time; the strip
- * above the toolbar swaps between them, and only appears once there are two.
+ * opened out of it: a compressed stream unpacked and read in its own right, a
+ * decompressed zip entry, a field's run of bytes read as a file of its own.
+ * One is showing at a time; the strip above the toolbar swaps between them,
+ * and only appears once there are two. See `tabs.ts`.
  */
-type Tab = {
-  readonly doc: Doc;
-  /** Where the bytes came from, for a document opened out of another one.
-   *  Null for a file opened from disk. */
-  readonly origin: string | null;
-};
-let tabs: Tab[] = [];
-let active = 0;
+const tabs = new Tabs(app, build);
+tabs.onEmpty = () => welcome();
+tabs.onConfirmClose = (tab) => confirm(`Discard unsaved edits to ${tab.doc.name}?`);
 
 function activeDoc(): Doc | null {
-  return tabs[active]?.doc ?? null;
+  return tabs.doc;
 }
 
 /** The first open document with unsaved edits, which is what a replacement or
  *  a page close would throw away. */
 function modifiedTab(): Tab | null {
-  return tabs.find((t) => t.doc.modified) ?? null;
+  return tabs.modified();
 }
 /** Writes to the toolbar's message slot, once there is one. */
 let say: (text: string, warn?: boolean) => void = () => {};
@@ -59,7 +56,7 @@ const discardMsg = (open: string, next: string): string =>
 const closesMsg = (): string => {
   const doc = activeDoc();
   if (doc === null) return "";
-  const what = tabs.length > 1 ? `all ${tabs.length} open files` : doc.name;
+  const what = tabs.all.length > 1 ? `all ${tabs.all.length} open documents` : doc.name;
   return `Closes ${what}${modifiedTab() !== null ? " (unsaved edits)" : ""}`;
 };
 const selectedBytes = (n: number): string => (n === 1 ? "1 byte" : `${n.toLocaleString()} bytes`);
@@ -91,57 +88,8 @@ function openFile(f: File, note?: string): void {
 /** Open bytes lifted out of the showing document as a tab of their own. */
 function openEmbedded(bytes: Uint8Array, name: string, origin: string): void {
   void Doc.open(bytesSource(bytes, name)).then((doc) => {
-    tabs.push({ doc, origin });
-    active = tabs.length - 1;
-    show();
+    tabs.add({ doc, title: name, origin });
   });
-}
-
-/** Close one tab. Its document is gone for good, so unsaved edits ask first. */
-function closeTab(i: number): void {
-  const tab = tabs[i];
-  if (tab === undefined) return;
-  if (tab.doc.modified && !confirm(`Discard unsaved edits to ${tab.doc.name}?`)) return;
-  tabs.splice(i, 1);
-  if (active >= tabs.length) active = tabs.length - 1;
-  else if (i < active) active -= 1;
-  if (tabs.length === 0) welcome();
-  else show();
-}
-
-/** The strip that swaps between tabs. Only built once there are two, so a
- *  single file looks the way it always has. */
-function tabStrip(): HTMLElement {
-  const strip = el("nav", { className: "tabstrip" });
-  strip.setAttribute("aria-label", "Open files");
-  const list = el("div", { className: "tabstrip-tabs" });
-  list.setAttribute("role", "tablist");
-  tabs.forEach((tab, i) => {
-    const here = i === active;
-    const pick = el("button", { type: "button", className: "tab-pick", textContent: tab.doc.name });
-    pick.setAttribute("role", "tab");
-    pick.setAttribute("aria-selected", String(here));
-    if (tab.origin !== null) pick.title = tab.origin;
-    if (!here) pick.addEventListener("click", () => {
-      active = i;
-      show();
-    });
-    const close = el("button", { type: "button", className: "tab-close", textContent: "×" });
-    close.title = `Close ${tab.doc.name}`;
-    close.setAttribute("aria-label", `Close ${tab.doc.name}`);
-    close.addEventListener("click", () => closeTab(i));
-    const item = el("div", { className: here ? "tab is-active" : "tab" }, pick, close);
-    if (tab.doc.modified) item.classList.add("is-edited");
-    list.append(item);
-  });
-  strip.append(list);
-  return strip;
-}
-
-/** Rebuild the page for the active tab. */
-function show(): void {
-  const tab = tabs[active];
-  if (tab !== undefined) build(tab);
 }
 
 /** A section that can be folded down to its title bar, and remembers whether
@@ -169,13 +117,27 @@ function panel(title: string, content: HTMLElement, onToggle: () => void): HTMLE
 
 /** Show this file on its own, closing whatever was open. */
 function mount(doc: Doc): void {
-  tabs = [{ doc, origin: null }];
-  active = 0;
-  show();
+  tabs.only({ doc, title: doc.name });
 }
 
-function build(tab: Tab): void {
+/**
+ * Build the page for one tab: the toolbar, the three views, the rail, the
+ * inspector and the status bar, all over that tab's document.
+ *
+ * Every open tab's page stays in the document, so anything registered on
+ * `document` rather than inside the page has to ask whether this tab is the one
+ * showing before it acts, and has to come off again when the tab closes. `key`
+ * is how a page does both.
+ */
+function build(tab: Tab): Page {
   const doc = tab.doc;
+  const key = (fn: (e: KeyboardEvent) => void): void => {
+    const on = (e: KeyboardEvent): void => {
+      if (tabs.showing(tab)) fn(e);
+    };
+    document.addEventListener("keydown", on);
+    tab.release.push(() => document.removeEventListener("keydown", on));
+  };
   const view = new HexView(doc);
   const inspector = new Inspector(doc);
   const structure = new ListingReport(doc);
@@ -443,7 +405,7 @@ function build(tab: Tab): void {
     saveMsg.classList.toggle("warn", r.kind === "failed");
   };
   saveBtn.addEventListener("click", () => void save());
-  document.addEventListener("keydown", (e) => {
+  key((e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void save();
@@ -643,7 +605,7 @@ function build(tab: Tab): void {
     // offer goes rather than saying something that stopped being true.
     if (doc.modified) dumpBar.hidden = true;
     fileLabel.textContent = `${doc.name}${doc.modified ? " (edited)" : ""}  ${formatSize(doc.lengthBytes)}`;
-    app.querySelector(".tab.is-active")?.classList.toggle("is-edited", doc.modified);
+    if (tabs.showing(tab)) app.querySelector(".tab.is-active")?.classList.toggle("is-edited", doc.modified);
     undoBtn.disabled = !doc.canUndo;
     redoBtn.disabled = !doc.canRedo;
     const c = view.cursorState;
@@ -755,8 +717,12 @@ function build(tab: Tab): void {
   };
   listPane.onClose = () => relayout();
   const right = panel("At cursor", inspector.el, relayout);
-  app.replaceChildren(
-    ...(tabs.length > 1 ? [tabStrip()] : []),
+  // One element per tab, so switching is a matter of hiding one and showing
+  // another: everything inside keeps where it was scrolled to and what it had
+  // folded away.
+  const page = el(
+    "div",
+    { className: "tabpage" },
     toolbar,
     el(
       "main",
@@ -769,25 +735,43 @@ function build(tab: Tab): void {
     kind.dialog,
   );
   const saved = localStorage.getItem("qubero.view");
-  setView(saved === "listing" || saved === "text" ? saved : "hex");
-  document.addEventListener("keydown", (e) => {
+  key((e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
-    const key = e.key.toLowerCase();
+    const pressed = e.key.toLowerCase();
     // Ctrl+H opens the bar with the replace row already open, since asking to
     // replace is asking for both halves of it.
-    if (key === "f" || key === "h") {
+    if (pressed === "f" || pressed === "h") {
       e.preventDefault();
-      search.show(key === "h");
+      search.show(pressed === "h");
     }
   });
-  view.relayout();
-  refresh();
-  inspector.setOffset(0);
-  view.el.focus();
   // The next file dropped may be one no template covers. Fetch the rules while
   // nothing is waiting on them, so that file is named as soon as it opens.
   prefetchMagic();
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, overview, structure, listPane, text, setView } });
+  let started = false;
+  /** The page is in the document now, so the views can measure themselves.
+   *  Also run each time this tab comes back to the front, since a view laid
+   *  out while it was hidden measured nothing. */
+  const shown = (): void => {
+    // The status slot belongs to whichever page is showing.
+    say = (text, warn) => {
+      saveMsg.textContent = text;
+      saveMsg.classList.toggle("warn", warn === true);
+    };
+    if (!started) {
+      started = true;
+      setView(saved === "listing" || saved === "text" ? saved : "hex");
+      view.relayout();
+      refresh();
+      inspector.setOffset(0);
+      view.el.focus();
+      return;
+    }
+    relayout();
+    refresh();
+  };
+  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, overview, structure, listPane, text, setView, tabs } });
+  return { el: page, shown };
 }
 
 function pick(): void {

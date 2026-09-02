@@ -40,6 +40,58 @@ export const DECODED_REFUSED_OTHER = "not unpacked";
  *  means. */
 export const DECODED_NO_HEX = "Offset in the unpacked stream, not a file address";
 
+/**
+ * A compressed stream opened as a document of its own: the tab it becomes, the
+ * button that opens it, and the line saying where a byte of it came from.
+ *
+ * `origin` is the same sentence in the status bar and in the inspector, because
+ * it is the same fact: this byte was produced by that step, reading those bits
+ * of the file. The step names read as the format's own words, not the
+ * decoder's: `match, 5 bytes back 12` says a run of five bytes copied from
+ * twelve back, and a reader who has never written an inflater can still tell
+ * that nothing new was stored there.
+ */
+export const UNPACKED = {
+  /** Names the tab: what was unpacked, and what out of. */
+  tabTitle: (field: string, file: string): string => `${field} unpacked from ${file}`,
+  /** On the listing heading and in the inspector, for a stream that opened. */
+  open: "Open unpacked",
+  openTitle: (field: string): string => `Open ${field} as a document of its own`,
+  /** Typing, pasting or any other edit inside an unpacked stream. A byte of it
+   *  is worked out from every compressed byte before it, so there is nowhere to
+   *  put a change to one. */
+  readOnly: "Unpacked data cannot be edited yet",
+  /** Where the byte under the cursor came from. `bits` is one range of the
+   *  compressed run, `step` says what the decoder did there. */
+  origin: (bits: string, file: string, step: string): string => `from bits ${bits} of ${file}: ${step}`,
+  /** One end of that range: `0x1a3.5` is bit 5 of byte 0x1a3. */
+  bit: (bit: number): string => `0x${Math.floor(bit / 8).toString(16)}.${bit % 8}`,
+  /** Both ends together. */
+  bits: (from: number, to: number): string => `${UNPACKED.bit(from)} to ${UNPACKED.bit(to)}`,
+  /** What the decoder did, in the format's own words. */
+  step: (kind: string, len?: number, dist?: number): string => {
+    if (kind === "match" && len !== undefined && dist !== undefined) {
+      return `match, ${len === 1 ? "1 byte" : `${len.toLocaleString()} bytes`} back ${dist.toLocaleString()}`;
+    }
+    return UNPACKED.stepName[kind] ?? kind;
+  },
+  /** The steps that are only themselves, with nothing to measure. */
+  stepName: {
+    literal: "literal",
+    stored: "stored",
+    block: "block header",
+    header: "block header",
+    table: "Huffman table",
+    opaque: "unpacked",
+  } as Readonly<Record<string, string>>,
+  /** The marks the two tabs keep on each other, named where a reader hovers. */
+  linkedIn: "The bits this byte was unpacked from",
+  linkedOut: "The bytes these bits unpacked to",
+  /** Clicking one of those marks. */
+  followIn: (file: string): string => `Show these bits in ${file}`,
+  followOut: (tab: string): string => `Show these bytes in ${tab}`,
+};
+
 /** Shown where fields would be when nothing has said what the file's are. */
 export const NO_TEMPLATE = "No template selected";
 
