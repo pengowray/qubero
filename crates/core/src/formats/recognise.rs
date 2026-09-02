@@ -42,6 +42,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"PK\x05\x06", "zip"),
     (b"\0asm", "wasm"),
     (b"GGUF", "gguf"),
+    (npy::MAGIC, "npy"),
+    // The first card of a FITS header, keyword and all: eight bytes of
+    // keyword and the `=` that says it has a value.
+    (b"SIMPLE  =", "fits"),
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),

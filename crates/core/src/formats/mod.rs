@@ -30,6 +30,7 @@ pub mod ne_disasm;
 pub mod bpf_opcodes;
 pub mod elf_disasm;
 mod eps;
+mod fits;
 mod ggml;
 pub mod ggml_quant;
 mod gguf;
@@ -60,6 +61,7 @@ mod midi;
 mod mkv;
 mod mp4;
 mod nes;
+mod npy;
 mod old_mac;
 mod omf;
 mod pak;
@@ -117,6 +119,7 @@ pub use dtb::dtb;
 pub use draco::draco;
 pub use dv::dv;
 pub use eps::eps;
+pub use fits::fits;
 pub use elf::{bpf, elf};
 pub use ne::ne;
 pub use macho::macho;
@@ -145,6 +148,7 @@ pub use midi::midi;
 pub use mkv::mkv;
 pub use mp4::mp4;
 pub use nes::nes;
+pub use npy::npy;
 pub use old_mac::{binhex, compactpro, macbinary, stuffit};
 pub use omf::omf;
 pub use pe::pe;
@@ -255,6 +259,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("au", |_| au()),
     ("pi1", |_| pi1()),
     ("nes", |_| nes()),
+    ("npy", |_| npy()),
+    ("fits", |_| fits()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),
     ("uf2", |_| uf2()),
