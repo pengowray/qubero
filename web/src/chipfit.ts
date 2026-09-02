@@ -5,8 +5,9 @@
  * The layout has to be worked out before any chip is drawn, so that what is
  * left over can be counted rather than quietly cut off, and so that the row's
  * height is known before the browser lays it out. That means measuring text
- * without a layout, which is what the width constants below are for: they are
- * the chip font's own numbers and want changing with it.
+ * without a layout. The constants below are the padding, borders and gaps the
+ * stylesheet draws around that text, and want changing with it; the text
+ * itself is measured by the caller, which is the one that can see the fonts.
  */
 
 import type { Span } from "./doc.js";
@@ -14,10 +15,18 @@ import type { Span } from "./doc.js";
 /** Longest value shown on a chip before it is cut short. */
 const CHIP_VALUE = 32;
 /** Rough width of a character in the chip font, for working out how many chips
- *  fit before any of them are drawn. */
+ *  fit before any of them are drawn. Only a stand-in: the name is bold sans
+ *  and the value is mono, so one number cannot be right for both. The view
+ *  measures the real fonts and passes the answer in; this is what is used
+ *  before there is a chip on screen to read a font from. */
 const CHIP_CHAR = 6.7;
-/** Padding, border and gap around a chip's text. */
-const CHIP_CHROME = 20;
+/** Padding either side of a chip's text (`padding: 0 6px`) and the coloured
+ *  edge (`border-left: 3px`). Mirrors `.hv-chip` in style.css. */
+const CHIP_CHROME = 6 + 6 + 3;
+/** The gap between a chip's name and its value (`gap: 6px` in `.hv-chip`). */
+const CHIP_INNER = 6;
+/** The gap between two chips side by side (`column-gap: 4px` on `.hv-note`). */
+const CHIP_GAP = 4;
 /** Room kept for the `+3` that counts what did not fit, so the count itself is
  *  never what pushes a chip off the row. */
 const CHIP_REST = 44;
@@ -45,11 +54,29 @@ export function chipDetail(s: Span): string {
   return s.value.length > CHIP_VALUE ? `${s.value.slice(0, CHIP_VALUE)}…` : s.value;
 }
 
+/**
+ * How the two runs of text on a chip are measured. The name is drawn bold
+ * sans and the value mono, so they are measured apart. The view builds one of
+ * these from a canvas and the chips' own computed fonts; `GUESS_TEXT` stands
+ * in until there is a chip on screen to read a font from.
+ */
+export type ChipMeasure = {
+  readonly name: (s: string) => number;
+  readonly value: (s: string) => number;
+};
+
+/** Character counting, for before the real fonts are known. */
+export const GUESS_TEXT: ChipMeasure = {
+  name: (s) => s.length * CHIP_CHAR,
+  value: (s) => s.length * CHIP_CHAR,
+};
+
 /** How wide a chip saying `name` and `detail` will be drawn, near enough to
- *  choose by. */
-export function chipWidth(name: string, detail: string): number {
-  const chars = name.length + detail.length + (detail === "" ? 0 : 1);
-  return CHIP_CHROME + chars * CHIP_CHAR;
+ *  choose by. Rounded up, since a fraction under the column's own whole
+ *  pixels is what makes the difference between three lines and four. */
+export function chipWidth(name: string, detail: string, text: ChipMeasure = GUESS_TEXT): number {
+  const inner = detail === "" ? 0 : CHIP_INNER + text.value(detail);
+  return Math.ceil(CHIP_CHROME + text.name(name) + inner);
 }
 
 export type ChipLayout = {
@@ -71,6 +98,9 @@ export type ChipLayout = {
  *
  * `width` of zero means the column has not been measured yet and a guess
  * stands in; the caller redraws once the real width disagrees with it.
+ *
+ * `maxLines` of `Infinity` means the row grows to hold every chip: nothing is
+ * ever left over, so nothing is ever counted.
  */
 export function chipLayout(widths: readonly number[], width: number, maxLines = CHIP_LINES): ChipLayout {
   const column = width || CHIP_COLUMN_GUESS;
@@ -83,13 +113,17 @@ export function chipLayout(widths: readonly number[], width: number, maxLines = 
     // The last chip needs no room kept after it, since there is nothing left
     // for a `+N` to count.
     const keep = lines === maxLines && !last ? CHIP_REST : 0;
-    if (onLine > 0 && w > room - keep) {
+    // A chip after the first on its line brings the gap between them with it.
+    const need = onLine > 0 ? w + CHIP_GAP : w;
+    if (onLine > 0 && need > room - keep) {
       if (lines === maxLines) break;
       lines += 1;
-      room = column;
-      onLine = 0;
+      room = column - w;
+      onLine = 1;
+      shown += 1;
+      continue;
     }
-    room -= w;
+    room -= need;
     onLine += 1;
     shown += 1;
   }

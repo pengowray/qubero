@@ -1,6 +1,6 @@
 import { Doc, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.js";
 import * as nav from "./navhistory.js";
-import { HexView, type BitRange, type RightColumn } from "./hexview.js";
+import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
@@ -589,21 +589,24 @@ function build(tab: Tab): Page {
   for (const [value, label] of [
     ["text", "Text column"],
     ["fields", "Field column"],
+    ["fields-condensed", "Field column, condensed"],
     ["both", "Text and fields"],
+    ["both-condensed", "Text and fields, condensed"],
   ] as const) {
     column.append(el("option", { value, textContent: label }));
   }
   const columnKey = (): string => (doc.template === null ? "qubero.column.plain" : "qubero.column.template");
   const syncColumn = (): void => {
     const saved = localStorage.getItem(columnKey());
-    const c: RightColumn =
-      saved === "fields" || saved === "text" || saved === "both" ? saved : doc.template === null ? "text" : "fields";
+    // Anything else saved is from an older build, or from nowhere: fall back
+    // to what a file of this kind starts with.
+    const c: RightColumn = isRightColumn(saved) ? saved : doc.template === null ? "text" : "fields";
     column.value = c;
     view.setRightColumn(c);
   };
   syncColumn();
   column.addEventListener("change", () => {
-    const c: RightColumn = column.value === "fields" ? "fields" : column.value === "both" ? "both" : "text";
+    const c: RightColumn = isRightColumn(column.value) ? column.value : "text";
     localStorage.setItem(columnKey(), c);
     view.setRightColumn(c);
   });

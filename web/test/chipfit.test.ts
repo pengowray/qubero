@@ -37,6 +37,16 @@ test("a line limit of one is the old behaviour", () => {
   assert.deepEqual(chipLayout([200, 200, 200], 320, 1), { shown: 1, lines: 1 });
 });
 
+test("without a line limit the row grows to hold every chip", () => {
+  // The same seven chips that ran out of room at three lines: none is counted,
+  // and the row is as tall as they need.
+  assert.deepEqual(chipLayout([150, 150, 150, 150, 150, 150, 150], 320, Infinity), { shown: 7, lines: 4 });
+});
+
+test("a wide column holds them all on one line", () => {
+  assert.deepEqual(chipLayout([150, 150, 150, 150, 150, 150, 150], 1200, Infinity), { shown: 7, lines: 1 });
+});
+
 test("a chip is measured at its full text, since it is drawn as wide as the row allows", () => {
   assert.ok(chipWidth("a".repeat(80), "") > chipWidth("a".repeat(26), ""));
 });

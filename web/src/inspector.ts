@@ -536,7 +536,24 @@ export class Inspector {
       // empty, and empty is what "these bytes say nothing" would look like.
       text.textContent = withPictures(r.text);
       text.title = r.text;
-      row.append(who, text);
+      const acts = document.createElement("div");
+      acts.className = "insp-acts";
+      const copy = actionButton(COPY, copyLabel(r.encodings[0] ?? ""));
+      const expand = actionButton(EXPAND, expandLabel(r.encodings[0] ?? ""));
+      acts.append(copy, expand);
+      row.append(who, text, acts);
+      copy.addEventListener("click", () => void this.copyValue(r.text));
+      expand.addEventListener("click", () => {
+        const open = row.classList.toggle("is-open");
+        expand.textContent = open ? COLLAPSE : EXPAND;
+        const label = open ? collapseLabel(r.encodings[0] ?? "") : expandLabel(r.encodings[0] ?? "");
+        expand.title = label;
+        expand.setAttribute("aria-label", label);
+      });
+      // A reading that already fits has nothing to expand into.
+      row.addEventListener("pointerenter", () => {
+        expand.hidden = !row.classList.contains("is-open") && text.scrollWidth <= text.clientWidth;
+      });
       parts.push(row);
     }
     if (got.refused.length > 0) {
@@ -1273,7 +1290,11 @@ const COPY = "Copy";
 const EDIT = "Edit";
 const COPIED = "Copied.";
 const COPY_FAILED = "Couldn't copy to the clipboard.";
+const EXPAND = "Expand";
+const COLLAPSE = "Collapse";
 const copyLabel = (row: string): string => `Copy the ${row.toLowerCase()} value`;
+const expandLabel = (row: string): string => `Show the whole ${row} reading`;
+const collapseLabel = (row: string): string => `Show the ${row} reading on one line`;
 const editLabel = (row: string): string => `Edit the ${row.toLowerCase()} value`;
 
 /** Which readings of the selection are offered, in the order they are shown.

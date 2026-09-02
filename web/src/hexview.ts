@@ -9,14 +9,22 @@ import { formatBytes } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
 import { GAP_LABEL, NO_TEMPLATE, REPORT } from "./strings.js";
 import { fieldClass } from "./fieldstyle.js";
-import { chipDetail, chipLayout, chipWidth, runDetail } from "./chipfit.js";
+import { CHIP_LINES, chipDetail, chipLayout, chipWidth, GUESS_TEXT, runDetail, type ChipMeasure } from "./chipfit.js";
 import { rangeText, shareText } from "./listingdraw.js";
 
 export type Pane = "hex" | "ascii";
-/** What sits to the right of the bytes: their text, or what the template says
- *  each one is. */
-/** What sits to the right of the bytes: the text, the fields, or both. */
-export type RightColumn = "text" | "fields" | "both";
+/**
+ * What sits to the right of the bytes: the text, the fields, or both. The
+ * `-condensed` readings cap a row's chips at three lines and count the rest;
+ * without it a row is as tall as its chips need.
+ */
+export type RightColumn = "text" | "fields" | "fields-condensed" | "both" | "both-condensed";
+/** Every reading of the column setting, in the order they are offered. */
+export const RIGHT_COLUMNS: readonly RightColumn[] = ["text", "fields", "fields-condensed", "both", "both-condensed"];
+/** Whether a saved or typed value is one of them. */
+export function isRightColumn(v: string | null): v is RightColumn {
+  return v !== null && (RIGHT_COLUMNS as readonly string[]).includes(v);
+}
 /** A run of bits, `[startBit, endBit)`. A run of no bits is a place rather than
  *  a stretch, which is what a field of no length has. */
 export type BitRange = { readonly startBit: number; readonly endBit: number };
@@ -84,6 +92,14 @@ type Chip = { span: Span; carried: boolean; run: Span[] };
 
 /** What a chip says: the name in bold and the value after it. */
 type ChipText = { readonly name: string; readonly detail: string };
+
+/** The name as it is actually drawn. A chip for a field that began above the
+ *  view is marked with an arrow by `.hv-chip-carried`, which is a CSS
+ *  `::before` and so invisible to measuring the name's own text. Without it
+ *  every carried chip is measured a character and a half short. */
+function carriedName(name: string, c: Chip | undefined): string {
+  return c?.carried === true ? `↑ ${name}` : name;
+}
 
 /** The name a list gives its elements. */
 const ELEMENT = /^\[\d+\]$/;
@@ -231,6 +247,23 @@ export class HexView {
   private spanCache: { key: string; spans: Span[]; more: boolean; error: string | null } | null = null;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
+  /**
+   * Where the chips are drawn. Beside the bytes while there is room for them;
+   * below the bytes, across the whole row, when a wide row has squeezed the
+   * side column down to nothing.
+   *
+   * Three states rather than a flag, because the measurement that decides it
+   * is the one the decision changes: chips below are as wide as the row, so
+   * measuring them again would always say "there is room" and send them back.
+   * Only `unknown` decides; `remeasure` puts it back there.
+   */
+  private arrangement: "unknown" | "side" | "below" = "unknown";
+  /** Below which side column the chips go under the bytes instead. A column
+   *  narrower than this holds one short chip and cuts every other one off. */
+  private static readonly NOTE_MIN = 120;
+  /** How a chip's two runs of text are measured, read from a drawn chip's own
+   *  fonts. Null until there has been a chip on screen to read. */
+  private chipFonts: ChipMeasure | null = null;
   /** The two sizes only the browser can answer: how wide the field column is,
    *  which decides how many chips fit on a row, and how tall the scrollbar
    *  track is. Both are asked for at the end of a redraw, after it has written
@@ -361,11 +394,27 @@ export class HexView {
     this.showCursor();
   }
 
+  /** Whether the field column is drawn at all. */
+  private get showsFields(): boolean {
+    return this.rightColumn !== "text";
+  }
+  /** Whether the bytes' text is drawn. */
+  private get showsText(): boolean {
+    return this.rightColumn === "text" || this.rightColumn.startsWith("both");
+  }
+  /** Whether a row's chips are capped and the rest counted. */
+  private get isCondensed(): boolean {
+    return this.rightColumn.endsWith("-condensed");
+  }
+
   /** Throw away every size the browser answered, and ask again. */
   private remeasure(): void {
     this.metrics = null;
     this.fit = null;
     this.endSlack = 0;
+    // Where the chips go is decided from a measurement that has just been
+    // thrown away, so it is decided again.
+    this.arrangement = "unknown";
     this.fitRows();
   }
 
@@ -373,11 +422,12 @@ export class HexView {
     this.rightColumn = c;
     // The text column is where the "ascii" pane lives; without it the cursor
     // has nowhere to be but the bytes.
-    if (c === "fields" && this.pane === "ascii") this.pane = "hex";
+    if (!this.showsText && this.pane === "ascii") this.pane = "hex";
     this.spanCache = null;
     // Rows are taller while the field column is shown, so the number of rows
     // that fit has to be worked out again.
-    this.el.classList.toggle("has-notes", c !== "text");
+    this.el.classList.toggle("has-notes", this.showsFields);
+    this.el.classList.toggle("is-condensed", this.isCondensed);
     this.remeasure();
     this.showCursor();
   }
@@ -442,8 +492,8 @@ export class HexView {
    * how many bytes to a row, which columns are showing, hex or binary —
    * decides what the spans are, so a change to any of it starts them again.
    */
-  private fitParts(bpr: number, binary: boolean, showText: boolean, fields: boolean): void {
-    const shape = `${bpr}|${binary}|${showText}|${fields}`;
+  private fitParts(bpr: number, binary: boolean, showText: boolean, fields: boolean, below: boolean): void {
+    const shape = `${bpr}|${binary}|${showText}|${fields}|${below}`;
     if (shape === this.partsShape && this.parts.length === this.rowEls.length) return;
     this.partsShape = shape;
     this.parts = this.rowEls.map((row) => {
@@ -456,7 +506,7 @@ export class HexView {
       const asc = document.createElement("span");
       asc.className = "hv-ascii";
       const note = document.createElement("span");
-      note.className = "hv-note";
+      note.className = below ? "hv-note hv-note-below" : "hv-note";
       const hex: HTMLElement[] = [];
       const text: HTMLElement[] = [];
       for (let i = 0; i < bpr; i++) {
@@ -472,8 +522,11 @@ export class HexView {
       }
       line.append(addr, cells);
       if (showText) line.append(asc);
-      if (fields) line.append(note);
-      row.replaceChildren(line);
+      // Beside the bytes the note is part of the line; below them it is the
+      // row's own second block, so that it can use the row's whole width.
+      if (fields && !below) line.append(note);
+      if (fields && below) row.replaceChildren(line, note);
+      else row.replaceChildren(line);
       return { line, addr, cells, asc, note, hex, text, start: -1, blank: false, heading: null, headKey: "" };
     });
   }
@@ -506,6 +559,9 @@ export class HexView {
   setMode(mode: ViewMode): void {
     this.mode = mode;
     this.nibble = 0;
+    // Eight digits a byte instead of two: the bytes take three times the room
+    // and what is left for the fields has to be measured again.
+    this.remeasure();
     this.showCursor();
     this.onCursorChange(this.cursorState);
   }
@@ -1508,6 +1564,36 @@ export class HexView {
     return el;
   }
 
+  /**
+   * How wide the chips' own text is drawn, read off a chip that has been. A
+   * chip's name is bold sans and its value mono, so counting characters at
+   * one width was wrong for both, and wrong by enough to predict three lines
+   * where the browser drew four.
+   *
+   * Null until a chip exists to read a font from; the caller keeps the
+   * character count until then and draws once more when this arrives.
+   */
+  private readChipFonts(): ChipMeasure | null {
+    const nameEl = this.rowsEl.querySelector(".hv-chip > b") as HTMLElement | null;
+    if (nameEl === null) return null;
+    const valEl = this.rowsEl.querySelector(".hv-chip-val") as HTMLElement | null;
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (ctx === null) return null;
+    // Built from the longhands: what `font` computes to is not something every
+    // browser will hand back whole.
+    const font = (el: HTMLElement): string => {
+      const s = getComputedStyle(el);
+      return `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+    };
+    const nameFont = font(nameEl);
+    const valFont = valEl === null ? nameFont : font(valEl);
+    const width = (f: string, s: string): number => {
+      ctx.font = f;
+      return ctx.measureText(s).width;
+    };
+    return { name: (s) => width(nameFont, s), value: (s) => width(valFont, s) };
+  }
+
   render(): void {
     // A move draws once, when it has finished moving.
     if (this.settling) return;
@@ -1519,8 +1605,15 @@ export class HexView {
     const windowBytes = this.visibleRows * bpr;
     const { bytes, complete } = this.doc.read(start, windowBytes);
     const binary = this.mode === "binary";
-    const fields = this.rightColumn !== "text";
-    const showText = this.rightColumn !== "fields";
+    const fields = this.showsFields;
+    const showText = this.showsText;
+    // Below the bytes once the side column has been squeezed too narrow to
+    // hold a chip. Until it has been measured the chips go beside the bytes,
+    // which is what the measurement is taken from.
+    const below = fields && this.arrangement === "below";
+    // Full rows grow to hold every chip; condensed ones stop at three lines
+    // and count the rest.
+    const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
     const templated = this.doc.template !== null;
     const selection = this.selectionRange;
 
@@ -1541,14 +1634,16 @@ export class HexView {
       gap.textContent = " ".repeat(bpr);
       this.header.append(gap);
     }
-    if (fields) {
+    // Nothing to head when the chips are below the bytes: the header sits over
+    // the bytes, and the fields no longer do.
+    if (fields && !below) {
       const title = document.createElement("span");
       title.className = "hv-note hv-head-note";
       title.textContent = "Fields";
       this.header.append(title);
     }
 
-    this.fitParts(bpr, binary, showText, fields);
+    this.fitParts(bpr, binary, showText, fields, below);
     const headsByRow = this.headingsByRow(start, windowBytes, bpr);
     // What each row will be tall once the browser has laid it out, from what
     // was put in it: its lines of chips and the headings above it. Zero for a
@@ -1570,7 +1665,8 @@ export class HexView {
         continue;
       }
       if (parts.blank) {
-        row.append(parts.line);
+        if (fields && below) row.append(parts.line, parts.note);
+        else row.append(parts.line);
         parts.blank = false;
       }
       const heads = headsByRow[r] ?? [];
@@ -1712,13 +1808,16 @@ export class HexView {
         }
         const entries = byRow[r] ?? [];
         const texts = entries.map((c) => this.chipText(c));
+        const measure = this.chipFonts ?? GUESS_TEXT;
         const { shown, lines } = chipLayout(
-          texts.map((t) => chipWidth(t.name, t.detail)),
+          texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, measure)),
           this.noteWidth,
+          maxLines,
         );
-        // The chips take lines of their own pitch; the row is the taller of
-        // that and one line of cells, plus its headings.
-        height += Math.max(0, lines * this.sizes.chipLine - this.rowHeight);
+        // Beside the bytes the chips share the row's height with the cells, so
+        // the row is the taller of the two. Below them the chips are their own
+        // block and their lines add to it.
+        height += below ? lines * this.sizes.chipLine : Math.max(0, lines * this.sizes.chipLine - this.rowHeight);
         for (let i = 0; i < shown; i++) note.append(this.chip(entries[i] as Chip, texts[i] as ChipText));
         if (shown < entries.length) {
           const rest = document.createElement("span");
@@ -1741,26 +1840,69 @@ export class HexView {
       heights.push(height);
     }
 
-    if (this.metrics === null) {
-      const w = fields ? (this.rowEls[0]?.querySelector(".hv-note")?.clientWidth ?? 0) : 0;
-      // Both in one place, so the layout the first of them forces answers the
-      // second as well.
+    // Everything the browser has to be asked, asked together: the widths and
+    // the fonts the next layout is worked out from, and the heights this one
+    // actually came to. One forced layout for the lot, at the end of the draw,
+    // rather than one per row.
+    const fonts = fields && this.chipFonts === null ? this.readChipFonts() : null;
+    let widened = false;
+    if (this.metrics === null || this.arrangement === "unknown") {
+      const noteEl = fields ? (this.rowEls[0]?.querySelector(".hv-note") as HTMLElement | null) : null;
+      // `clientWidth` counts the note's own left padding, which no chip can be
+      // drawn in.
+      const pad = noteEl === null ? 0 : parseFloat(getComputedStyle(noteEl).paddingLeft) || 0;
+      const w = noteEl === null ? 0 : Math.max(0, noteEl.clientWidth - pad);
+      // The note existing is what says the width has been measured. A width of
+      // zero is an answer — the column has been squeezed away entirely — and
+      // waiting for a wider one would mean measuring again on every draw.
+      if (fields && this.arrangement === "unknown" && noteEl !== null) {
+        // A side column this narrow shows a sliver of one chip and cuts the
+        // rest off, so the chips go under the bytes instead, where the whole
+        // row is theirs.
+        this.arrangement = w < HexView.NOTE_MIN ? "below" : "side";
+        // The width just measured belongs to the side column; a note below the
+        // bytes has to be measured again, in the place it will be drawn.
+        if (this.arrangement === "below") widened = true;
+      }
       this.metrics = { noteWidth: w, trackH: this.track.clientHeight };
       // One redraw when the measured width first disagrees with the guess, so
       // the count of what did not fit is right rather than nearly right.
-      const remeasured = fields && w > 0 && Math.abs(w - this.noteWidth) > 4;
-      if (fields) this.noteWidth = w;
-      if (remeasured) {
-        this.render();
-        return;
+      if (fields && w > 0 && Math.abs(w - this.noteWidth) > 4) widened = true;
+      if (fields && !below) this.noteWidth = w;
+    }
+    // A note below the bytes is as wide as the row, whatever the side column
+    // was measured at.
+    if (below) {
+      const rowW = this.rowEls[0]?.clientWidth ?? 0;
+      if (rowW > 0 && Math.abs(rowW - this.noteWidth) > 4) {
+        this.noteWidth = rowW;
+        widened = true;
       }
     }
+    if (fonts !== null) {
+      // Set before the redraw, so a font that measures the same cannot send
+      // the draw round again.
+      this.chipFonts = fonts;
+      widened = true;
+    }
+    if (widened) {
+      this.render();
+      return;
+    }
 
-    // Which rows are on screen, by the heights worked out above: a row whose
+    // How tall each row actually came out. The prediction above decides how
+    // many lines of chips a row holds and what it counts as left over; what
+    // the view scrolls by has to be what the browser drew, or a row taller
+    // than it was reckoned to be spills over the one below it. A row past the
+    // end of the file is still a box with a minimum height, so the prediction
+    // is what says which rows are there at all.
+    const real = heights.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));
+
+    // Which rows are on screen, by the heights measured above: a row whose
     // top is inside the view is on screen, whatever of it is cut off below.
     let onScreen = 0;
     let y = 0;
-    for (const h of heights) {
+    for (const h of real) {
       if (h === 0) break;
       if (y < this.viewH) onScreen++;
       y += h;
@@ -1769,11 +1911,11 @@ export class HexView {
     // view has to go for the last row to be wholly on screen. Counted back
     // from the last row while the rows still fit.
     if (this.topRow + this.rowEls.length >= this.totalRows) {
-      const lastIdx = Math.min(heights.length - 1, this.totalRows - 1 - this.topRow);
+      const lastIdx = Math.min(real.length - 1, this.totalRows - 1 - this.topRow);
       let sum = 0;
       let first = lastIdx;
       for (let i = lastIdx; i >= 0; i--) {
-        sum += heights[i] ?? 0;
+        sum += real[i] ?? 0;
         if (sum > this.viewH) break;
         first = i;
       }
