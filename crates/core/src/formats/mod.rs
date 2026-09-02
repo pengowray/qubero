@@ -80,6 +80,7 @@ mod qoi;
 mod rar5;
 mod rpm;
 mod png;
+mod root;
 mod safetensors;
 mod le;
 mod spp;
@@ -174,6 +175,7 @@ pub use qoi::qoi;
 pub use rar5::rar5;
 pub use rpm::rpm;
 pub use png::png;
+pub use root::root;
 pub use safetensors::safetensors;
 pub use le::le;
 pub use spp::spp;
@@ -264,6 +266,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("ne", |_| ne()),
     ("macho", |_| macho()),
     ("gguf", |_| gguf()),
+    ("root", |_| root()),
     ("whisper", |_| whisper()),
     ("safetensors", |_| safetensors()),
     ("json", |_| json()),
