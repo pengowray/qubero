@@ -46,6 +46,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     // ROOT file is what a `.root` file is, and nothing else in this table
     // opens with them.
     (b"root", "root"),
+    // A gravitational wave frame file, whose fifth byte is the nul that ends
+    // the four letters.
+    (b"IGWD\0", "gwf"),
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
