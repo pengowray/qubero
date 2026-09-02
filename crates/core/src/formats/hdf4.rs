@@ -32,18 +32,21 @@ use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as 
 pub const MAGIC: &[u8] = &[0x0E, 0x03, 0x13, 0x01];
 
 /// What a descriptor's tag means. The numbers are the ones in `htags.h`, and
-/// the gaps in them are tags nothing writes any more.
+/// the gaps in them are tags nothing has written for thirty years.
 ///
 /// A tag with 0x4000 added is the same object stored some other way: linked
-/// blocks, compressed, chunked, or held in another file. Those are named as a
-/// run rather than one at a time, since every tag has such a twin.
+/// blocks, compressed, chunked, or held in another file. Every tag has such a
+/// twin, so they are named as a run rather than one at a time, and the number
+/// the run counts to is the ordinary tag underneath.
 const TAG: &[(i128, &str)] = &[
     (1, "null"),
-    (20, "linked block"),
+    (20, "linked blocks"),
     (30, "version"),
     (40, "compressed"),
-    (50, "vs description"),
-    (61, "chunked"),
+    (50, "variable-length linked blocks"),
+    (51, "variable-length linked data"),
+    (60, "chunked"),
+    (61, "chunk"),
     (100, "file identifier"),
     (101, "file description"),
     (102, "tag identifier"),
@@ -52,25 +55,30 @@ const TAG: &[(i128, &str)] = &[
     (105, "data identifier annotation"),
     (106, "number type"),
     (107, "machine type"),
-    (108, "no data"),
+    (108, "free space"),
     (200, "8-bit image dimensions"),
-    (201, "8-bit compressed image"),
+    (201, "8-bit image palette"),
     (202, "8-bit raster image"),
     (203, "8-bit run-length image"),
     (204, "8-bit IMCOMP image"),
     (300, "image dimensions"),
-    (301, "lookup table"),
+    (301, "image palette"),
     (302, "raster image"),
-    (303, "compressed raster image"),
-    (304, "matte channel"),
-    (305, "colour correction"),
+    (303, "compressed image"),
+    (304, "new-format raster image"),
     (306, "raster image group"),
-    (307, "colour format"),
-    (308, "aspect ratio"),
-    (400, "24-bit image dimensions"),
-    (401, "24-bit lookup table"),
-    (402, "24-bit raster image"),
-    (403, "24-bit compressed image"),
+    (307, "palette dimensions"),
+    (308, "matte dimensions"),
+    (309, "matte data"),
+    (310, "colour correction"),
+    (311, "colour format"),
+    (312, "aspect ratio"),
+    (400, "image sequence"),
+    (401, "program to run"),
+    (500, "x-y position"),
+    (501, "machine type override"),
+    (602, "Tektronix 4014 data"),
+    (603, "Tektronix 4105 data"),
     (700, "scientific data group"),
     (701, "scientific data dimensions"),
     (702, "scientific data"),
@@ -80,11 +88,12 @@ const TAG: &[(i128, &str)] = &[
     (706, "formats"),
     (707, "max and min"),
     (708, "coordinate system"),
-    (709, "calibration"),
-    (710, "fill value"),
+    (709, "transpose"),
+    (710, "dataset links"),
     (720, "numeric data group"),
-    (721, "scientific data ragged array"),
-    (731, "vdata storage"),
+    (731, "calibration"),
+    (732, "fill value"),
+    (781, "ragged array line lengths"),
     (1962, "vdata description"),
     (1963, "vdata storage"),
     (1965, "vgroup"),
@@ -106,6 +115,12 @@ const NUMBER_TYPE: &[(i128, &str)] = &[
     (26, "int64"),
     (27, "uint64"),
 ];
+
+/// A descriptor's tag, named where it is one of the known ones and named as a
+/// special element where it is one of those.
+fn tag() -> T {
+    T::enum_ranged("Hdf4Tag", u16be(), TAG, &[(0x4000, 1, "special element for tag {n}")])
+}
 
 fn u16be() -> T {
     T::u16(Big)
@@ -201,7 +216,7 @@ fn vdata_header() -> T {
             T::array(
                 T::structure(
                     "Hdf4VdataAttribute",
-                    vec![("field_index", T::i32(Big)), ("tag", T::enumeration("Hdf4Tag", u16be(), TAG)), ("ref", u16be())],
+                    vec![("field_index", T::i32(Big)), ("tag", tag()), ("ref", u16be())],
                 ),
                 E::field("nattrs").at_least(E::lit(0)),
             ),
@@ -244,7 +259,7 @@ fn descriptor() -> T {
         "tag",
         "data",
         vec![
-            ("tag", T::enumeration("Hdf4Tag", u16be(), TAG)),
+            ("tag", tag()),
             ("ref", u16be()),
             ("offset", u32be()),
             ("length", u32be()),
