@@ -132,6 +132,11 @@ inside the listing, the audio and video content cards.
 
 ## Work packages
 
+All three landed on `main` on 2026-09-02, with two more beside them: templates for
+ten compressed formats (zlib, bzip2, xz, zstd, lz4, lzip, 7z, RAR5, tar, .Z) and
+JPEG cards in the listing (quantisation grids, Huffman tables, frame and scan
+summaries, `web/src/jpegcards.ts`). Kept for the record:
+
 Three worktree agents, in parallel, after the shared hooks are in `main`:
 
 - **A, the rail**: `overviewpanel.ts`, `typetable.ts` (delete), `main.ts` wiring,

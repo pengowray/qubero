@@ -271,7 +271,9 @@ the file. So LEB128 pads out with redundant continuation bytes (legal, and what 
 tools do), and text and byte fields must be typed at their exact length. Growing a
 field is a structural edit and waits for the redundant-editing work below.
 
-The type table (`web/src/typetable.ts`) edits values in place with this. It rebuilds
+The inspector edits values in place with this (the type table that once did the
+same, `web/src/typetable.ts`, is gone with the bottom panel; what follows is what
+its editing had to get right and the inspector still does). It rebuilds
 its rows from scratch on every document change, so the open input is re-created each
 render with its text and caret restored; a committed edit can restructure the tree
 (change a count, flip a switch) and the edited row may simply not exist afterwards.
@@ -353,8 +355,8 @@ the template says is there instead: the trail of enclosing structures, the value
 
 The panel reads a long value from the document rather than from the node, whose
 `Value::Bytes` carries only a 16-byte preview. That is why the core's text and
-byte edit limit is 4 KiB (`encode::EDIT_LIMIT_BYTES`) while the type table keeps
-its own 16-byte one: the table's Value column shows a preview, and writing back
+byte edit limit is 4 KiB (`encode::EDIT_LIMIT_BYTES`) while a row's value column
+keeps a 16-byte one: the listing's value column shows a preview, and writing back
 a preview would replace the part it elided. A text field is decoded strictly, so
 invalid bytes are shown as hex and not editable there; a lossy decode would let
 one replacement character be written back over three valid-length bad bytes.
@@ -1630,7 +1632,7 @@ shape this does not cover, and DEFLATE's header does not need it.
 bits is a field of three bits that takes no space. `Ty::u8()` moved from
 `Little` to `Big`, which changes nothing for a byte on a byte boundary and
 keeps the MSB-first packing for the byte-wide fields that sit partway through
-one — JPEG XR has them. The type table writes ` lsb` after a sub-byte field's
+one — JPEG XR has them. The inspector writes ` lsb` after a sub-byte field's
 width and nothing after an MSB-first one, since only the order that is not the
 default is worth the space.
 
@@ -1707,11 +1709,10 @@ setting, with C the default because a string that is wrong in C is wrong
 silently. The same setting is where a plain `1a 45 df a3` belongs, for readers
 who want no escapes at all.
 
-Save shows no progress while rewriting bit-shifted stretches. The type table has no
-keyboard navigation between rows, so a value cell is reached by clicking or tabbing.
-Text fields in the type table are displayed through `from_utf8_lossy`, so invalid
-bytes show as U+FFFD there; the field panel decodes strictly instead and refuses
-to edit what it cannot decode.
+Save shows no progress while rewriting bit-shifted stretches. Text fields in the
+listing are displayed through `from_utf8_lossy`, so invalid bytes show as U+FFFD
+there; the inspector decodes strictly instead and refuses to edit what it cannot
+decode.
 
 ### Later
 A magic field that does not match could offer to write the bytes the format
