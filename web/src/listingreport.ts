@@ -21,6 +21,7 @@ import { cardKind, watchCard } from "./contentcard.js";
 import { markMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
 import { isRecordList } from "./records.js";
+import { jpegCardKind } from "./jpegcards.js";
 import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens } from "./listingdraw.js";
 import type { DrawContext, Selected } from "./listingdraw.js";
 import type { GapVerdict } from "./gapcheck.js";
@@ -44,7 +45,7 @@ const HIDDEN_WALK_MS = 300;
  *  in the document; this is the guess the first layout uses, and `measured`
  *  replaces it. */
 function heightOf(item: Item): number {
-  if (item.kind === "bytes" || item.kind === "record") return HEIGHT.strip;
+  if (item.kind === "bytes" || item.kind === "record" || item.kind === "formatcard") return HEIGHT.strip;
   if (item.kind === "card") return HEIGHT.card;
   if (item.kind !== "heading") return HEIGHT.row;
   return item.level === 0 ? HEIGHT.section : HEIGHT.part;
@@ -53,7 +54,7 @@ function heightOf(item: Item): number {
 /** The kinds whose height is what they turn out to be rather than what their
  *  kind says. */
 function isMeasured(item: Item): boolean {
-  return item.kind === "bytes" || item.kind === "record" || item.kind === "card";
+  return item.kind === "bytes" || item.kind === "record" || item.kind === "card" || item.kind === "formatcard";
 }
 
 export class ListingReport {
@@ -129,6 +130,9 @@ export class ListingReport {
    *  at, and where each dump is scrolled to. Neither can live in the strip:
    *  it is built again from nothing every time anything on screen changes. */
   private dumps = new Set<number>();
+  /** The long halves of format cards the reader has opened. Outside the
+   *  items, since the items are thrown away and built again on every scroll. */
+  private cards = new Set<string>();
   private dumpTops = new Map<number, number>();
 
   onPick: (pick: FieldPick) => void = () => {};
@@ -298,7 +302,12 @@ export class ListingReport {
   /** How the tree is flattened. Read afresh each time, since what the file
    *  opens with follows its template, and the template can change. */
   private flatOpts(): FlatOptions {
-    return { isRecord: (node) => isRecordList(this.doc, node), card: cardKind(this.doc.template), fileBits: this.doc.lengthBits };
+    return {
+      isRecord: (node) => isRecordList(this.doc, node),
+      formatCard: (node) => jpegCardKind(this.doc, node),
+      card: cardKind(this.doc.template),
+      fileBits: this.doc.lengthBits,
+    };
   }
 
   /** Draw the content card again: it has something new to show and is not
@@ -351,7 +360,7 @@ export class ListingReport {
         if (strip !== null) markStrip(strip, this.selected);
         continue;
       }
-      if (item.kind === "record") {
+      if (item.kind === "record" || item.kind === "formatcard") {
         this.markRecord(node);
         continue;
       }
@@ -364,10 +373,14 @@ export class ListingReport {
    *  stretch they were read from, so this is the same question `drawRecord`
    *  asked, asked again of the table already on screen. */
   private markRecord(host: HTMLElement): void {
-    for (const line of host.querySelectorAll<HTMLElement>("tr[data-at]")) {
+    for (const line of host.querySelectorAll<HTMLElement>("[data-at][data-size]")) {
       const at = Number(line.dataset["at"]);
       const size = Number(line.dataset["size"]);
-      line.classList.toggle("is-on", this.holdsSelection(at, size));
+      // A line of a table stands for a whole structure and holds the
+      // selection; a cell of a card stands for one field and is it. Lighting
+      // a card's cells by containment would light the array a component is
+      // one of as well as the component.
+      line.classList.toggle("is-on", line.tagName === "TR" ? this.holdsSelection(at, size) : this.isSelected(at, size));
     }
   }
 
@@ -569,11 +582,25 @@ export class ListingReport {
       bytes: this.state.bytes,
       dumps: this.dumps,
       dumpTops: this.dumpTops,
+      cards: this.cards,
       toggleBytes: (key) => this.toggleBytes(key),
       toggleDump: (at) => this.toggleDump(at),
+      toggleCard: (key) => this.toggleCard(key),
       verdict: (item) => this.verdict(item),
       shown: this.scroller.clientWidth > 0,
     };
+  }
+
+  /** Open the long half of a format card, or put it away. The card is a
+   *  different height now and its height is measured rather than declared,
+   *  so the measurement goes and the list is laid out again. */
+  private toggleCard(key: string): void {
+    if (this.cards.has(key)) this.cards.delete(key);
+    else this.cards.add(key);
+    for (const k of [...this.measured.keys()]) if (k.startsWith("fc:")) this.measured.delete(k);
+
+    this.layout();
+    this.paint();
   }
 
   /** Open one field out into all of its bytes, or put it away. */
@@ -651,7 +678,7 @@ export class ListingReport {
     if (n === null) {
       let best: { key: string; size: number } | null = null;
       for (const item of this.items) {
-        if (item.kind !== "row" && item.kind !== "record") continue;
+        if (item.kind !== "row" && item.kind !== "record" && item.kind !== "formatcard") continue;
         if (!this.holdsSelection(item.offsetBits, item.sizeBits)) continue;
         if (best === null || item.sizeBits < best.size) best = { key: item.key, size: item.sizeBits };
       }
@@ -697,7 +724,7 @@ export class ListingReport {
     }
     // A click inside an open strip is for the strip, not for opening whatever
     // the strip is sitting under. The content card answers its own clicks.
-    if (item.kind === "bytes" || item.kind === "card") return;
+    if (item.kind === "bytes" || item.kind === "card" || item.kind === "formatcard") return;
     this.cursor = item.key;
     this.activate(item);
   }
@@ -984,7 +1011,7 @@ function buildNesting(items: readonly Item[]): Nesting | null {
   // Indices of the entries the current one is inside, innermost last.
   const inside: number[] = [];
   for (const item of items) {
-    if (item.kind !== "row" && item.kind !== "record") continue;
+    if (item.kind !== "row" && item.kind !== "record" && item.kind !== "formatcard") continue;
     const from = item.offsetBits;
     const to = from + item.sizeBits;
     if (from < (start[start.length - 1] ?? -Infinity)) return null;

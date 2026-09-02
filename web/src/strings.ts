@@ -270,6 +270,94 @@ export const REPORT = {
   imageShowFit: "Scale to fit",
 } as const;
 
+// ---- the JPEG cards ----
+
+/** What a JPEG's tables read as once they are laid out the way they are used
+ *  rather than the way they are stored. Every one of these sits on a card in
+ *  the listing; the field names underneath are the format's own and are not
+ *  repeated here. */
+export const JPEG = {
+  /** A quantisation table's own line: which of the four it is, and whether
+   *  its numbers are one byte or two. Both are read straight off the table's
+   *  own fields, and both matter to a reader comparing two of them. */
+  quantTable: (id: string, precision: string): string => `Quantisation table ${id}, ${precision}`,
+  /** The sentence under the grid. The numbers mean nothing without it: a
+   *  reader who does not know where the low frequencies are cannot tell a
+   *  gentle table from a brutal one, and the whole point of drawing the
+   *  square is that the pattern is visible. */
+  quantNote: "Each coefficient is divided by its number here, so bigger numbers throw more away. The average brightness is the top left cell and the finest detail is the bottom right.",
+  /** The range in the grid, said in words beside it, since a tint alone
+   *  cannot be read off as a number. */
+  quantRange: (low: string, high: string): string => `${low} to ${high}`,
+  /** A Huffman table's own line. A JPEG has up to four of each kind and the
+   *  class is what tells two tables with the same id apart, so both are on
+   *  the line and the class comes first. */
+  huffmanTable: (kind: string, id: string): string => `Huffman table, ${kind} ${id}`,
+  /** What the bar row is: sixteen counts, one per code length. The ends are
+   *  named rather than drawn as an axis, since sixteen bars need no scale. */
+  huffmanCounts: "Codes by length, 1 to 16 bits",
+  /** One bar, as a tooltip: how many codes are that long. */
+  huffmanBar: (count: string, bits: number): string => `${count} of ${bits === 1 ? "1 bit" : `${bits} bits`}`,
+  /** The total, which the file never writes down: it is the sixteen counts
+   *  added up, and it is also how many symbols follow them. */
+  huffmanTotal: (symbols: string): string => `${symbols} in all`,
+  /** The way into the codes themselves, which are not stored anywhere and
+   *  are worked out from the counts. Closed to begin with: the shape of the
+   *  table is the answer to most questions, and two hundred rows of bits is
+   *  the answer to one. */
+  huffmanShow: "Show the codes",
+  huffmanHide: "Hide the codes",
+  /** Column headings for those codes. */
+  huffmanCodeColumn: "code",
+  huffmanBitsColumn: "bits",
+  huffmanSymbolColumn: "symbol",
+  /** The counts add up to a different number than there are symbols, so the
+   *  codes cannot be rebuilt. Says what is wrong rather than showing a table
+   *  that would be wrong. */
+  huffmanMismatch: "The counts and the symbols disagree, so the codes cannot be worked out.",
+  /** The picture the frame header describes, as one line: how big, how many
+   *  bits a sample, and what the sampling factors add up to. */
+  frameSize: (width: string, height: string): string => `${width} × ${height} pixels`,
+  framePrecision: (bits: string): string => `${bits}-bit samples`,
+  /** The chroma subsampling, named the way it is spoken. Only where the
+   *  notation applies; a frame it does not fit says nothing and leaves the
+   *  per-channel factors in the table to speak for themselves. */
+  frameSubsampling: (ratio: string): string => `${ratio} subsampling`,
+  /** A frame with one channel, which has no colour to subsample. */
+  frameGreyscale: "greyscale",
+  /** Column headings for the channels of a frame. "sampling" carries its own
+   *  h × v because the two numbers are not interchangeable. */
+  frameColumns: ["channel", "sampling h × v", "quantisation table"] as const,
+  /** The scan's summary line, which is all of it that shows until the reader
+   *  asks for more. The entropy-coded bits are almost the whole file and are
+   *  not decoded, so the honest facts are how many channels are in the scan
+   *  and how much of the file the bits take. */
+  scanComponents: (channels: string): string => `${channels} in this scan`,
+  scanEntropy: (size: string): string => `${size} of entropy-coded data, not decoded`,
+  /** Only when there are any. A file with no restart markers says nothing
+   *  rather than "0 restart markers", which reads as a fault. */
+  scanRestarts: (count: string): string => `${count} in the data`,
+  /** The count is not in yet because the bytes are not. */
+  scanRestartsUnread: "restart markers not counted yet",
+  scanShow: "Show the scan header",
+  scanHide: "Hide the scan header",
+  /** Which coefficients this scan carries. A baseline file writes 0 to 63
+   *  once; a progressive one writes a different band in every scan, which is
+   *  the only way to tell its scans apart. */
+  scanBand: (from: string, to: string): string => `coefficients ${from} to ${to}`,
+  /** Column headings for the channels of a scan: which of the frame's
+   *  channels this is, and the two tables it is decoded with. */
+  scanColumns: ["channel", "DC table", "AC table"] as const,
+  /** What a card counts, for the lines that count them. Nouns rather than
+   *  whole sentences, since `countText` puts the number in front and makes
+   *  the plural. */
+  codeNoun: "code",
+  channelNoun: "channel",
+  restartNoun: "restart marker",
+  /** A card whose fields have not been read from the file yet. */
+  waiting: "Loading the table's bytes…",
+} as const;
+
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the
  *  same panel writes `0x131+4b` for an address four bits into a byte, and one
  *  `b` there is bits and the other is bytes. */

@@ -406,6 +406,24 @@ made it yet. The decode starts when the listing is on screen, not when a
 hidden listing walks the tree for the other views. An edit decodes the picture
 again, after the edits have quietened.
 
+A JPEG's tables are drawn as the shapes they are used as rather than as their
+fields. `web/src/jpegcards.ts` recognises the four segments worth a card the
+way `records.ts` recognises a table, and the listing draws one card in place of
+the segment's fields: a quantisation table as the 8 by 8 square it divides by,
+put back into that order from the diagonals the file writes it along and tinted
+by value; a Huffman table as sixteen bars, one per code length, with the codes
+themselves, which are written nowhere in the file, worked out from the counts
+behind a control; a frame header as the picture's size, precision, subsampling
+and coding, with the channels under it; and a scan as one line saying how many
+channels are in it, how much entropy-coded data it holds and how many restart
+markers are in that data, with the header behind a control and the bits never
+decoded. The reordering is in `web/src/jpegtables.ts`, which has no document
+and no DOM in it. Every number on a card is the field it was read from and
+goes there when clicked, exactly as a record table's cells do, and every row
+of a card's table opens its own bytes underneath. A card is not a heading, so
+like the content card it is out of the outline and off the file map; unlike
+the content card it covers the bytes of the segment it stands for.
+
 The bytes are shown as text as well, but only where they read as text: three
 bytes or more, and mostly printable. A one-byte count of 65 beside an `A`
 invites reading a number as a letter.

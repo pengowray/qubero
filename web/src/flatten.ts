@@ -155,6 +155,21 @@ export type Item = Common &
         readonly card: CardKind;
         readonly path: readonly number[];
       }
+    | {
+        /** A structure the format keeps in a shape that is not the shape it
+         *  means: a JPEG quantisation table written along the diagonals, a
+         *  Huffman table whose codes are written nowhere. Drawn as a card
+         *  instead of as its fields, the way a `record` is drawn as a table.
+         *  Not a heading, so like the content card it is out of the outline
+         *  and off the file map; unlike it, it does cover the bytes of the
+         *  structure it stands for. */
+        readonly kind: "formatcard";
+        /** Which card the format's reader asked for. Opaque here: nothing in
+         *  this file knows one from another. */
+        readonly card: string;
+        readonly path: readonly number[];
+        readonly node: TemplateNode;
+      }
   );
 
 /** The kinds of content a file can open with. Only pictures so far. */
@@ -165,6 +180,11 @@ export type FlatOptions = {
    *  field. Format-specific, and settled by the caller: see the handover's
    *  open question about where that belongs. */
   readonly isRecord?: (node: TemplateNode) => boolean;
+  /** Whether a structure is drawn as a card of its own rather than field by
+   *  field, and which card. Format-specific, and settled by the caller for
+   *  the same reason `isRecord` is. A node with a card is always opened: a
+   *  card the reader has to find is a card nobody sees. */
+  readonly formatCard?: (node: TemplateNode) => string | null;
   readonly page?: number;
   readonly sectionListMax?: number;
   /** What the file opens with, before its first part: the picture an image
@@ -487,7 +507,11 @@ function heading(
   title: string = node.name,
 ): void {
   const key = pathKey(path);
-  const open = level === 0 || w.isOpen(key) || (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX);
+  const open =
+    level === 0 ||
+    w.isOpen(key) ||
+    (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX) ||
+    w.opts.formatCard?.(node) != null;
   w.push({
     kind: "heading",
     key: `h:${key}`,
@@ -585,6 +609,22 @@ function body(
   kids: Slice,
   depth: number,
 ): void {
+  const card = w.opts.formatCard?.(node) ?? null;
+  if (card !== null) {
+    w.push({
+      kind: "formatcard",
+      key: `fc:${pathKey(path)}`,
+      section: w.section,
+      depth,
+      offsetBits: node.offset_bits,
+      sizeBits: node.size_bits,
+      path,
+      node,
+      card,
+    });
+    rowStrips(w, path, depth);
+    return;
+  }
   if (w.opts.isRecord?.(node) === true) {
     w.push({
       kind: "record",
@@ -597,24 +637,29 @@ function body(
       node,
       count: node.child_count,
     });
-    // A table is a view of its rows, so the rows themselves are not listed and
-    // nothing here answers "how is that row written". Asking for one row's
-    // bytes puts its strip under the table, which is the way back to the
-    // fields. Only rows already asked for are looked up, so a table of a
-    // million costs nothing until one of them is.
-    for (const key of w.state.bytes) {
-      const prefix = `r:${pathKey(path)}.`;
-      if (!key.startsWith(prefix)) continue;
-      const rowPath = key.slice(prefix.length).split(".").map(Number);
-      if (rowPath.some((n) => !Number.isInteger(n))) continue;
-      const full = [...path, ...rowPath];
-      const reply = w.src.node(full);
-      if (reply.status !== "ok") continue;
-      w.strip(key, full, reply.node.name, { start: reply.node.offset_bits, end: endBits(reply.node) }, depth + 1);
-    }
+    rowStrips(w, path, depth);
     return;
   }
   drawn(w, path, node, kids, depth);
+}
+
+/** The byte strips under a view that draws its own rows: a record table or a
+ *  format card. Neither lists the fields it was built from, so nothing in
+ *  them answers "how is that row written"; asking a row for its bytes puts
+ *  its strip under the view, which is the way back to the fields. Only rows
+ *  already asked for are looked up, so a table of a million costs nothing
+ *  until one of them is. */
+function rowStrips(w: Walk, path: readonly number[], depth: number): void {
+  const prefix = `r:${pathKey(path)}.`;
+  for (const key of w.state.bytes) {
+    if (!key.startsWith(prefix)) continue;
+    const rowPath = key.slice(prefix.length).split(".").map(Number);
+    if (rowPath.some((n) => !Number.isInteger(n))) continue;
+    const full = [...path, ...rowPath];
+    const reply = w.src.node(full);
+    if (reply.status !== "ok") continue;
+    w.strip(key, full, reply.node.name, { start: reply.node.offset_bits, end: endBits(reply.node) }, depth + 1);
+  }
 }
 
 /**
@@ -712,7 +757,8 @@ function child(w: Walk, node: TemplateNode, depth: number, reads: { readonly nam
   // written among, not as a heading over the page's contents.
   if (node.composite && node.child_count > 0 && depth === 1 && reads === null) {
     // A short table opens itself, since the table is what it is for.
-    const open = w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true);
+    const open =
+      w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true) || w.opts.formatCard?.(node) != null;
     // Null rather than an empty slice: "not read" and "read, and empty" are
     // different answers, and the strip's extent turns on which it is.
     heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null);
