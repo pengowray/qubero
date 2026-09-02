@@ -11,7 +11,7 @@ use crate::document::Document;
 use crate::encode;
 use crate::machinery;
 use crate::source::{Missing, Source};
-use crate::template::{Anchor, Encoding, Expr, StrLen, Template, Ty, Until};
+use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, Template, Ty, Until};
 use crate::text::{self, Settled};
 
 mod explain;

@@ -276,11 +276,7 @@ impl Evaluator {
                 for i in 0..n as usize {
                     let mut p = list.clone();
                     p.push(i);
-                    let mut keyed = p.clone();
-                    if !self.descend(doc, &mut keyed, key)? {
-                        continue;
-                    }
-                    if self.node(doc, &keyed)?.value.as_int() != Some(*tag) {
+                    if !self.tag_matches(doc, &p, key, tag)? {
                         continue;
                     }
                     let mut label = format!("{array}[{i}]");
