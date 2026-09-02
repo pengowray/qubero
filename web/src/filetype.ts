@@ -86,6 +86,9 @@ const TEMPLATE_LABEL: Record<string, string> = {
   grib: "GRIB weather data",
   mseed: "miniSEED seismic records",
   sac: "SAC seismogram",
+  cdf: "NASA CDF",
+  hdf4: "HDF4",
+  parquet: "Parquet",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */
