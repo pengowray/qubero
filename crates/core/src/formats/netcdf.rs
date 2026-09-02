@@ -60,9 +60,11 @@ fn u32be() -> T {
     T::u32(Big)
 }
 
-/// A count that widened in CDF-5: a dimension's length, an attribute's number
-/// of values, and a variable's size in bytes are 32 bits in a classic or
-/// 64-bit-offset file and 64 in a 64-bit-data one.
+/// Every count in the header. CDF-5 widened all of them at once: how many
+/// dimensions there are, how long a name is, how many values an attribute has,
+/// how many bytes a variable takes. Four bytes in a classic or 64-bit-offset
+/// file, eight in a 64-bit-data one. The three list tags and `nc_type` did not
+/// widen, because they are fixed 32-bit words rather than counts.
 fn size_t() -> T {
     T::switch(E::field("version"), vec![(5, T::u64(Big))], u32be())
 }
@@ -85,7 +87,7 @@ fn name() -> T {
         "",
         "text",
         vec![
-            ("len", u32be()),
+            ("len", size_t()),
             ("text", T::utf8(E::field("len"))),
             ("padding", T::bytes(E::size_of("text").pad_to(4))),
         ],
@@ -98,7 +100,7 @@ fn name() -> T {
 fn list(items: &str, elem: T) -> Vec<(&str, T)> {
     vec![
         ("tag", T::enumeration("NcTag", u32be(), TAG)),
-        ("nelems", u32be()),
+        ("nelems", size_t()),
         (items, T::array(elem, E::field("nelems"))),
     ]
 }
@@ -167,8 +169,8 @@ fn var() -> T {
         "",
         vec![
             ("name", name()),
-            ("ndims", u32be()),
-            ("dimids", T::array(u32be(), E::field("ndims"))),
+            ("ndims", size_t()),
+            ("dimids", T::array(size_t(), E::field("ndims"))),
             ("attributes", attribute_list()),
             ("nc_type", nc_type()),
             ("vsize", size_t()),
@@ -212,8 +214,16 @@ pub fn netcdf() -> Template {
             ("magic", T::magic(b"CDF")),
             ("version", T::enumeration("CdfVersion", T::u8(), VERSION)),
             // How many records have been written along the unlimited
-            // dimension. A writer that did not know may leave it at all ones.
-            ("numrecs", T::enumeration("NumRecs", u32be(), &[(0xFFFF_FFFF, "streaming")])),
+            // dimension. A writer that did not know leaves it at all ones,
+            // which is eight bytes of them in a 64-bit-data file.
+            (
+                "numrecs",
+                T::switch(
+                    E::field("version"),
+                    vec![(5, T::enumeration("NumRecs", T::u64(Big), &[(0xFFFF_FFFF_FFFF_FFFF, "streaming")]))],
+                    T::enumeration("NumRecs", u32be(), &[(0xFFFF_FFFF, "streaming")]),
+                ),
+            ),
             ("dimensions", T::structure("DimensionList", list("dims", T::Named("Dim".into())))),
             ("attributes", attribute_list()),
             ("variables", var_list()),
@@ -249,11 +259,20 @@ mod tests {
         v.to_be_bytes().to_vec()
     }
 
+    /// A count, as wide as the version writes one.
+    fn count(version: u8, v: u64) -> Vec<u8> {
+        match version == 5 {
+            true => v.to_be_bytes().to_vec(),
+            false => (v as u32).to_be_bytes().to_vec(),
+        }
+    }
+
     /// A name: its length, its bytes, and padding to four.
-    fn nm(s: &str) -> Vec<u8> {
-        let mut v = be32(s.len() as u32);
+    fn nm(version: u8, s: &str) -> Vec<u8> {
+        let mut v = count(version, s.len() as u64);
+        let head = v.len();
         v.extend_from_slice(s.as_bytes());
-        v.resize(4 + s.len().div_ceil(4) * 4, 0);
+        v.resize(head + s.len().div_ceil(4) * 4, 0);
         v
     }
 
@@ -264,37 +283,36 @@ mod tests {
     /// with the data offsets that length settles. That is what every writer of
     /// one of these does.
     fn file(version: u8) -> Vec<u8> {
-        let wide = version == 5;
-        let size = |v: u64| if wide { v.to_be_bytes().to_vec() } else { (v as u32).to_be_bytes().to_vec() };
+        let size = |v: u64| count(version, v);
         let offset = |v: u64| if version == 1 { (v as u32).to_be_bytes().to_vec() } else { v.to_be_bytes().to_vec() };
         let build = |begins: [u64; 2]| {
             let mut b = b"CDF".to_vec();
             b.push(version);
-            b.extend_from_slice(&be32(2)); // two records written
+            b.extend_from_slice(&size(2)); // two records written
             // Dimensions: time is unlimited, so its length is zero.
             b.extend_from_slice(&be32(0x0A));
-            b.extend_from_slice(&be32(2));
-            b.extend_from_slice(&nm("time"));
+            b.extend_from_slice(&size(2));
+            b.extend_from_slice(&nm(version, "time"));
             b.extend_from_slice(&size(0));
-            b.extend_from_slice(&nm("cell"));
+            b.extend_from_slice(&nm(version, "cell"));
             b.extend_from_slice(&size(3));
             // One global attribute, which is text.
             b.extend_from_slice(&be32(0x0C));
-            b.extend_from_slice(&be32(1));
-            b.extend_from_slice(&nm("title"));
+            b.extend_from_slice(&size(1));
+            b.extend_from_slice(&nm(version, "title"));
             b.extend_from_slice(&be32(2)); // char
             b.extend_from_slice(&size(5));
             b.extend_from_slice(b"depth\0\0\0"); // padded to four
             // Two variables.
             b.extend_from_slice(&be32(0x0B));
-            b.extend_from_slice(&be32(2));
+            b.extend_from_slice(&size(2));
             // sea_temp(cell): three floats, and one attribute of its own.
-            b.extend_from_slice(&nm("sea_temp"));
-            b.extend_from_slice(&be32(1));
-            b.extend_from_slice(&be32(1)); // dimid 1, cell
+            b.extend_from_slice(&nm(version, "sea_temp"));
+            b.extend_from_slice(&size(1));
+            b.extend_from_slice(&size(1)); // dimid 1, cell
             b.extend_from_slice(&be32(0x0C));
-            b.extend_from_slice(&be32(1));
-            b.extend_from_slice(&nm("units"));
+            b.extend_from_slice(&size(1));
+            b.extend_from_slice(&nm(version, "units"));
             b.extend_from_slice(&be32(2));
             b.extend_from_slice(&size(7));
             b.extend_from_slice(b"celsius\0");
@@ -302,11 +320,11 @@ mod tests {
             b.extend_from_slice(&size(12));
             b.extend_from_slice(&offset(begins[0]));
             // depth(time): a record variable, one double per record.
-            b.extend_from_slice(&nm("depth"));
-            b.extend_from_slice(&be32(1));
-            b.extend_from_slice(&be32(0)); // dimid 0, the unlimited one
+            b.extend_from_slice(&nm(version, "depth"));
+            b.extend_from_slice(&size(1));
+            b.extend_from_slice(&size(0)); // dimid 0, the unlimited one
             b.extend_from_slice(&be32(0)); // no attributes
-            b.extend_from_slice(&be32(0));
+            b.extend_from_slice(&size(0));
             b.extend_from_slice(&be32(6)); // double
             b.extend_from_slice(&size(8));
             b.extend_from_slice(&offset(begins[1]));
@@ -348,11 +366,19 @@ mod tests {
 
     #[test]
     fn a_wide_file_writes_its_counts_in_eight_bytes() {
-        // The same dimension in a CDF-5 file: the length is eight bytes long,
-        // and the fields after it are still found.
+        // CDF-5 widened every count in the header at once, not only the ones
+        // that hold a size: the record count, how many dimensions there are,
+        // how long a name is, and a dimension's length are all eight bytes.
+        // The tags did not widen, because they are fixed words.
         let d = Document::new(MemSource(file(5)));
         let mut ev = Evaluator::new(netcdf());
+        assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 64);
+        assert_eq!(ev.node(&d, &[3, 0]).unwrap().size_bits, 32);
+        assert_eq!(ev.node(&d, &[3, 1]).unwrap().size_bits, 64);
+        assert_eq!(ev.node(&d, &[3, 2, 1, 0, 0]).unwrap().size_bits, 64);
         assert_eq!(ev.node(&d, &[3, 2, 1, 1]).unwrap().size_bits, 64);
+        // And a variable's dimension ids, which are counts as well.
+        assert_eq!(ev.node(&d, &[5, 2, 0, 2, 0]).unwrap().size_bits, 64);
         assert_eq!(ev.node(&d, &[3, 2, 1, 1]).unwrap().value, Value::UInt(3));
         assert_eq!(ev.node(&d, &[5, 2, 0, 0, 1]).unwrap().value, Value::Str("sea_temp".into()));
     }
