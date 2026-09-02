@@ -97,10 +97,11 @@ fn a_steim2_record_gives_the_same_differences_whichever_way_round_it_is_written(
 /// is checked against: its differences add up from the first sample to the
 /// last.
 ///
-/// Its little-endian twin is not compared word for word. obspy wrote that
-/// fixture with one 32-bit word of the frame left unswapped, so the two files
-/// do not hold the same frame; reading it is still worth doing, and what it
-/// says about that word is what is written there.
+/// Its little-endian twin is not compared word for word. One 32-bit word of
+/// that fixture's frame appears to have been left unswapped, so the two files
+/// do not hold the same frame; obspy uses both only to test what a record
+/// header says and never reads their samples, so nothing there would have
+/// caught it. The Steim2 pair above is the clean cross-check.
 #[test]
 fn a_steim1_record_adds_its_differences_up_to_the_sample_it_ends_on() {
     let Some(root) = samples() else {
