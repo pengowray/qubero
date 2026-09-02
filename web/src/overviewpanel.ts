@@ -349,11 +349,17 @@ export class OverviewPanel {
   private viewCellsDrawn = "";
   /** The part under the pointer, lit on both maps while it is. */
   private hovering: MapMark = null;
-  /** The rows on screen, by part index, and the one list of named parts open
-   *  under the current part. */
+  /** The rows on screen, by part index, and the named parts listed under each
+   *  part the reader has unfolded. */
   private partRows = new Map<number, HTMLElement>();
-  private subsEl: HTMLElement | null = null;
-  private subRows: HTMLElement[] = [];
+  private subRowsByPart = new Map<number, HTMLElement[]>();
+  /** The parts the reader has unfolded, by heading key. Folding is the
+   *  reader's, not the view's: rows must not appear and disappear under
+   *  someone reading the list while the main view scrolls. Kept for the
+   *  session, and started again for a different template. */
+  private readonly openParts = new Set<string>();
+  private seededTemplate: string | null = null;
+  private seeded = false;
   /** A standing note about the template, shown above the parts. */
   private note = "";
   private tab: Tab = "contents";
@@ -569,9 +575,10 @@ export class OverviewPanel {
 
   /**
    * The stretch of the file the main view is showing. The part its top is in
-   * is marked, its named parts are unfolded under it, and the rail scrolls to
-   * keep the mark on screen. Only the mark moves the rail: a view that says
-   * it is still where it was must not fight the reader scrolling the rail.
+   * is marked, and the rail scrolls to keep the mark on screen. Scrolling
+   * marks; it never folds or unfolds, so the list keeps the shape the reader
+   * gave it. Only the mark moves the rail: a view that says it is still where
+   * it was must not fight the reader scrolling the rail.
    */
   setViewport(v: Viewport): void {
     this.viewport = v;
@@ -586,12 +593,14 @@ export class OverviewPanel {
       this.drawMain();
     }
     const place = this.placeOf(v);
-    if (samePlace(place, this.place)) return;
+    if (samePlace(place, this.place) && this.seeded) return;
     const wasPart = this.place?.part;
     this.place = place;
     // The row for the new part may be past the listed ones, and the old
-    // part's row may have been listed only because the view was in it.
+    // part's row may have been listed only because the view was in it. The
+    // first place of all also settles which section starts open.
     if (
+      !this.seeded ||
       (place !== null && !this.partRows.has(place.part)) ||
       (wasPart !== undefined && wasPart >= PARTS_SHOWN && (place === null || place.part !== wasPart))
     ) {
@@ -984,13 +993,36 @@ export class OverviewPanel {
     return { part: i, sub };
   }
 
+  /** Which part's fold state is which, across a list built again. The
+   *  listing's own key for the heading, so a streamed file that gains parts
+   *  keeps the ones the reader opened open. */
+  private foldKey(part: Part): string {
+    return part.head.key !== "" ? part.head.key : `section:${part.head.section}`;
+  }
+
+  /**
+   * Fold every section, except the one the file was opened at. Done once per
+   * template: after that the list is the reader's to fold and unfold, and
+   * nothing else touches it.
+   */
+  private seedFolds(): void {
+    if (this.seeded && this.seededTemplate === this.doc.template) return;
+    if (this.parts.length === 0 || this.place === null) return;
+    this.seeded = true;
+    this.seededTemplate = this.doc.template;
+    this.openParts.clear();
+    const part = this.parts[this.place.part];
+    if (part !== undefined) this.openParts.add(this.foldKey(part));
+  }
+
   /** Build the list of parts again: the first so many, the one the view is
-   *  in wherever it falls, and a count for the rest. */
-  private drawContents(): void {
+   *  in wherever it falls, and a count for the rest. `scroll` is false when
+   *  the reader pressed a caret, since the list should stay where they are
+   *  looking rather than jump back to the mark. */
+  private drawContents(scroll = true): void {
     this.drawnTemplate = this.doc.template;
     this.partRows = new Map();
-    this.subsEl = null;
-    this.subRows = [];
+    this.subRowsByPart = new Map();
     const out: HTMLElement[] = [];
     if (this.note !== "") out.push(this.noteLine(this.note));
     if (this.doc.template === null) {
@@ -1009,6 +1041,7 @@ export class OverviewPanel {
       this.contentsEl.replaceChildren(...out);
       return;
     }
+    this.seedFolds();
     const current = this.place?.part ?? -1;
     const shown = Math.min(parts.length, PARTS_SHOWN);
     for (let i = 0; i < shown; i++) out.push(...this.partRow(i));
@@ -1021,48 +1054,95 @@ export class OverviewPanel {
     }
     this.contentsEl.replaceChildren(...out);
     this.markPlace();
-    this.showPlace();
+    if (scroll) this.showPlace();
   }
 
-  /** One part's row, and under it the list of its named parts when the view
-   *  is in it. */
+  /** One part's row, and under it the list of its named parts while the
+   *  reader has it unfolded. */
   private partRow(i: number): HTMLElement[] {
     const part = this.parts[i];
     if (part === undefined) return [];
-    const row = this.headingRow(part.head, 0);
+    const open = this.openParts.has(this.foldKey(part));
+    const row = this.headingRow(part.head, 0, part.subs.length > 0 ? open : null);
     row.dataset["part"] = String(i);
     this.partRows.set(i, row);
-    row.addEventListener("click", () => this.pickHeading(part.head));
+    row.addEventListener("click", (e) => {
+      if (e.target instanceof HTMLElement && e.target.closest(".ov-fold") !== null) return;
+      this.pickHeading(part.head);
+    });
+    const caret = row.querySelector(".ov-fold");
+    if (caret instanceof HTMLButtonElement) caret.addEventListener("click", () => this.toggleFold(i));
     const out = [row];
-    if (this.place?.part === i) {
-      const subs = this.subList(part);
+    if (open) {
+      const subs = this.subList(i, part);
       if (subs !== null) out.push(subs);
     }
     return out;
   }
 
+  /** Fold or unfold one part. The mark does not move, so the rail is left
+   *  where the reader's eye is. */
+  private toggleFold(i: number): void {
+    const part = this.parts[i];
+    if (part === undefined) return;
+    const key = this.foldKey(part);
+    if (this.openParts.has(key)) this.openParts.delete(key);
+    else this.openParts.add(key);
+    this.drawContents(false);
+  }
+
   /** The named parts inside one part, as rows under its own. Null for a part
    *  with none. */
-  private subList(part: Part): HTMLElement | null {
+  private subList(i: number, part: Part): HTMLElement | null {
     if (part.subs.length === 0) return null;
     const subs = document.createElement("div");
     subs.className = "ov-subs";
-    this.subRows = part.subs.map((h, j) => {
-      const sub = this.headingRow(h, 1);
+    const rows = part.subs.map((h, j) => {
+      const sub = this.headingRow(h, 1, null);
       sub.dataset["sub"] = String(j);
       sub.addEventListener("click", () => this.pickHeading(h));
       return sub;
     });
-    subs.append(...this.subRows);
-    this.subsEl = subs;
+    this.subRowsByPart.set(i, rows);
+    subs.append(...rows);
     return subs;
   }
 
-  private headingRow(h: OutlineHeading, level: 0 | 1): HTMLElement {
+  /**
+   * One row of the Contents. `fold` is null for a row with nothing to fold,
+   * and otherwise says whether it is open: a level-0 row carries the caret
+   * that opens it, which is why it is a div with a button in it rather than a
+   * button of its own.
+   */
+  private headingRow(h: OutlineHeading, level: 0 | 1, fold: boolean | null): HTMLElement {
     const fileBits = Math.max(1, this.doc.lengthBits);
-    const row = document.createElement("button");
-    row.type = "button";
+    const row = document.createElement(level === 0 ? "div" : "button");
+    if (row instanceof HTMLButtonElement) row.type = "button";
+    else {
+      row.setAttribute("role", "button");
+      row.tabIndex = 0;
+      row.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        row.click();
+      });
+    }
     row.className = level === 0 ? "ov-part" : "ov-part ov-part-sub";
+    if (level === 0) {
+      if (fold === null) {
+        const spacer = document.createElement("span");
+        spacer.className = "ov-fold ov-fold-leaf";
+        row.append(spacer);
+      } else {
+        const caret = document.createElement("button");
+        caret.type = "button";
+        caret.className = "ov-fold";
+        caret.textContent = fold ? "▾" : "▸";
+        caret.setAttribute("aria-label", fold ? COLLAPSE : EXPAND);
+        caret.setAttribute("aria-expanded", String(fold));
+        row.append(caret);
+      }
+    }
     const bytes = formatBytes(Math.ceil(h.sizeBits / 8));
     const called = headingName(h, fileBits);
     row.title = `${called} · ${formatOffset(h.offsetBits)} · ${bytes}`;
@@ -1095,39 +1175,28 @@ export class OverviewPanel {
     this.markLayout(this.hovering ?? this.viewportMark());
   }
 
-  /** Put the mark on the row for the part the view is in, and take it off
-   *  the others. The named parts under the current part are built in
-   *  `drawContents`; this only moves the mark among rows already up. */
+  /** Put the mark on the row for the part the view is in, and take it off the
+   *  others. Marking only: which rows are on screen is the reader's, so a
+   *  part that is folded carries the mark itself, and an open one hands it to
+   *  the named part inside. */
   private markPlace(): void {
     const place = this.place;
     for (const [i, row] of this.partRows) {
       const on = place !== null && place.part === i;
-      row.classList.toggle("is-current", on && place.sub < 0);
-      row.classList.toggle("is-inside", on && place.sub >= 0);
+      const inside = on && place.sub >= 0 && this.subRowsByPart.has(i);
+      row.classList.toggle("is-current", on && !inside);
+      row.classList.toggle("is-inside", inside);
       if (on) row.setAttribute("aria-current", "location");
       else row.removeAttribute("aria-current");
     }
-    // The list of named parts is the current part's. A different part is a
-    // different list, so it is built again rather than moved.
-    const subsFor = this.subsEl?.previousElementSibling;
-    const subsPart = subsFor instanceof HTMLElement ? Number(subsFor.dataset["part"]) : NaN;
-    if (place === null || subsPart !== place.part) {
-      this.subsEl?.remove();
-      this.subsEl = null;
-      this.subRows = [];
-      const row = place === null ? undefined : this.partRows.get(place.part);
-      const part = place === null ? undefined : this.parts[place.part];
-      if (row !== undefined && part !== undefined) {
-        const subs = this.subList(part);
-        if (subs !== null) row.after(subs);
-      }
+    for (const [i, rows] of this.subRowsByPart) {
+      rows.forEach((row, j) => {
+        const on = place !== null && place.part === i && place.sub === j;
+        row.classList.toggle("is-current", on);
+        if (on) row.setAttribute("aria-current", "location");
+        else row.removeAttribute("aria-current");
+      });
     }
-    this.subRows.forEach((row, j) => {
-      const on = place !== null && place.sub === j;
-      row.classList.toggle("is-current", on);
-      if (on) row.setAttribute("aria-current", "location");
-      else row.removeAttribute("aria-current");
-    });
   }
 
   /** Scroll the rail so the marked row can be seen. */
@@ -1135,7 +1204,8 @@ export class OverviewPanel {
     if (this.body.hidden || this.tab !== "contents") return;
     const place = this.place;
     if (place === null) return;
-    const row = place.sub >= 0 ? this.subRows[place.sub] : this.partRows.get(place.part);
+    const subs = this.subRowsByPart.get(place.part);
+    const row = (place.sub >= 0 ? subs?.[place.sub] : undefined) ?? this.partRows.get(place.part);
     row?.scrollIntoView({ block: "nearest" });
   }
 

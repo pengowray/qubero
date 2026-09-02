@@ -1522,7 +1522,7 @@ input.invalid {
    the left, which is where the eye looks for "you are here". */
 .ov-part {
   display: grid;
-  grid-template-columns: 10px 1fr auto auto;
+  grid-template-columns: 1.2em 10px 1fr auto auto;
   gap: 6px;
   align-items: center;
   font: inherit;
@@ -1567,8 +1567,13 @@ input.invalid {
 .ov-part-share {
   min-width: 3.5ch;
 }
+/* A named part sits under its section's name, past the caret column. */
 .ov-part-sub {
-  padding-left: 14px;
+  grid-template-columns: 10px 1fr auto auto;
+  padding-left: 20px;
+}
+.ov-part .ov-fold {
+  text-align: left;
 }
 .ov-part-sub .ov-swatch {
   width: 6px;
