@@ -1112,13 +1112,16 @@ export class Inspector {
     return { text: r.node.text, truncated: r.node.truncated, note: n.read_as };
   }
 
-  /** A byte field is its own value: hex pairs, wrapped. */
+  /** A byte field is its own value: hex pairs, wrapped.
+   *
+   *  Asked for by path rather than read out of the file at the node's offset:
+   *  a field inside a decoded stream is at an offset of that stream, and the
+   *  file at the same offset is some other field's bytes. */
   private readHex(n: TemplateNode): { text: string; truncated: boolean; note: string | null } | null {
-    const total = n.value_bytes;
-    const shown = Math.min(total, SHOW_LIMIT);
-    const { bytes, complete } = this.doc.readBits(n.value_offset_bits, shown * 8);
-    if (!complete) return null;
-    return { text: hexText(bytes), truncated: total > shown, note: null };
+    const r = this.doc.fieldBytes(n.path, Math.min(n.value_bytes, SHOW_LIMIT));
+    if (r.status === "pending" || r.status === "working") return null;
+    if (r.status === "error") return { text: "", truncated: false, note: r.message };
+    return { text: hexText(Uint8Array.from(r.node.bytes)), truncated: r.node.truncated, note: null };
   }
 
   /**

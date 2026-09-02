@@ -46,6 +46,13 @@ pub struct Editor {
     focus: Option<overview::Scan>,
 }
 
+/// A field's bytes, and whether it runs on past them.
+#[derive(Serialize)]
+struct BytesDto {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
 #[derive(Serialize)]
 struct NodeDto {
     path: Vec<usize>,
@@ -1339,6 +1346,24 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.text_value(&self.doc, &p).map(|(text, truncated)| TextDto { text, truncated }))
+            }
+        }
+    }
+
+    /// The first `limit` bytes of a field, read in whatever address space the
+    /// field is in: {status:"ok",node:{bytes:[..],truncated}}. Use this rather
+    /// than `read_bits` at the node's offset, which is the file and is the
+    /// wrong bytes for anything inside a decoded stream.
+    pub fn field_bytes(&mut self, path: &[u32], limit: u32) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<BytesDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(
+                    e.field_bytes(&self.doc, &p, u64::from(limit))
+                        .map(|(bytes, truncated)| BytesDto { bytes, truncated }),
+                )
             }
         }
     }

@@ -596,6 +596,28 @@ impl Evaluator {
         Ok((text, span.len > shown))
     }
 
+    /// The first `limit` bytes of the field at `path`, read where the field
+    /// actually is.
+    ///
+    /// A caller with the node in hand knows its offset and could read the
+    /// document itself, and that is exactly the mistake this exists to stop: a
+    /// field inside a decoded stream is at an offset of that stream, and the
+    /// file at the same offset is other bytes entirely. `true` says the field
+    /// runs on past what came back.
+    pub fn field_bytes<S: Source>(&mut self, doc: &Document<S>, path: &[usize], limit: u64) -> R<(Vec<u8>, bool)> {
+        self.resolve(doc, path)?;
+        let size = self.size_of(doc, path)?;
+        let r = self.memo[path].clone();
+        // The value rather than the whole field, so padding and a terminator
+        // are left out the way the node's own reading leaves them out.
+        let (at, len) = match self.str_span(doc, &r, size)? {
+            Some(span) => (r.offset + span.start * 8, span.len),
+            None => (r.offset, size / 8),
+        };
+        let want = len.min(limit);
+        Ok((self.read(doc, &r, at, want * 8)?, len > want))
+    }
+
     /// Encode `text` for the field at `path`, ready to be written.
     ///
     /// Resolving a field can touch unloaded chunks, so this reports the same

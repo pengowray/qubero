@@ -1081,6 +1081,16 @@ export class Doc {
   }
 
   /**
+   * A field's own bytes, up to `limit`, read where the field actually is.
+   *
+   * Not `readBits` at the node's offset: a field inside a decoded stream is at
+   * an offset of that stream, and the file at the same offset is other bytes.
+   */
+  fieldBytes(path: readonly number[], limit: number): TemplateReply<{ bytes: number[]; truncated: boolean }> {
+    return this.handleReply(this.editor.field_bytes(Uint32Array.from(path), limit));
+  }
+
+  /**
    * Every field between two bit offsets, in order. One call covers what is on
    * screen, so the annotation column costs one round trip per view rather than
    * one per field.

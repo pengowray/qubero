@@ -2321,3 +2321,32 @@ fn a_peek_inside_a_stream_looks_at_the_stream() {
     assert_eq!(picked.type_name, "Two", "the peek read the file rather than the stream");
     assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().value.as_int(), Some(0x77));
 }
+
+/// A field's bytes come from the space the field is in. Read from the file at
+/// the same offset instead, these would be the file's first bytes, which are
+/// some other field entirely.
+#[test]
+fn a_fields_bytes_come_from_the_space_it_is_in() {
+    let inner = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66];
+    let (d, len) = packed_doc(&inner);
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("tag", T::u16(Big)),
+                ("stream", T::decoded(E::lit(len as i128), Codec::Zlib, T::bytes(E::Remaining))),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(t);
+    let (bytes, cut) = ev.field_bytes(&d, &[1, 0], 64).unwrap();
+    assert_eq!(bytes, inner);
+    assert!(!cut);
+    // The file at offset 0 is the header, and nothing here read it by mistake.
+    let (head, _) = ev.field_bytes(&d, &[0], 64).unwrap();
+    assert_eq!(head, vec![0xaa, 0xbb]);
+    // And a field longer than the limit says it was cut.
+    let (some, cut) = ev.field_bytes(&d, &[1, 0], 3).unwrap();
+    assert_eq!((some.as_slice(), cut), (&inner[..3], true));
+}
