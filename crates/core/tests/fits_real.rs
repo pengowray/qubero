@@ -58,12 +58,12 @@ fn a_real_binary_tables_columns_are_typed_by_its_header() {
     assert!(matches!(&c2.value, Value::Str(s) if s.trim() == "abc"), "{:?}", c2.value);
 
     // `TFORM3 = '1E'`: one float.
-    assert_eq!(ev.node(&doc, &at(&[2, 0, 0, 2, 0])).unwrap().value, Value::Float(3.7f32 as f64));
+    assert_eq!(ev.node(&doc, &at(&[2, 0, 0, 2, 0])).unwrap().value, Value::Float(1.1f32 as f64));
 
-    // `TFORM4 = '1L'`: a logical, which is written as the letter T or F.
+    // `TFORM4 = '1L'`: a logical, written as the letter T or F; the first row says F.
     let c4 = ev.node(&doc, &at(&[2, 0, 0, 3])).unwrap();
     assert_eq!(c4.size_bits, 8);
-    assert!(matches!(&c4.value, Value::Str(s) if s == "T"), "{:?}", c4.value);
+    assert!(matches!(&c4.value, Value::Str(s) if s == "F"), "{:?}", c4.value);
 
     // The columns add up to the width the header gave the row.
     let widths: u64 = (0..4).map(|i| ev.node(&doc, &at(&[2, 0, 0, i])).unwrap().size_bits).sum();
