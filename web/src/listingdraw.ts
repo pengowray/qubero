@@ -8,7 +8,7 @@
 // map is drawn from, what is selected, what is open — arrives as a
 // `DrawContext`, read fresh for each paint.
 
-import { formatBytes, formatOffset } from "./doc.js";
+import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
 import { pathKey, PAGE } from "./flatten.js";
 import type { Item } from "./flatten.js";
@@ -67,9 +67,15 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: str
 
 /** `0x1000 – 0x1fff`, the stretch a heading covers. A part of no bytes has no
  *  range to give, which is what a field placed somewhere else looks like. */
-export function rangeText(offsetBits: number, sizeBits: number): string {
-  if (sizeBits === 0) return formatOffset(offsetBits);
-  return `${formatOffset(offsetBits)} – ${formatOffset(offsetBits + sizeBits - 8)}`;
+export function rangeText(offsetBits: number, sizeBits: number, space = 0): string {
+  if (sizeBits === 0) return formatAddress(offsetBits, space);
+  return `${formatAddress(offsetBits, space)} – ${formatAddress(offsetBits + sizeBits - 8, space)}`;
+}
+
+/** Which address space an item's bytes are counted in. Items with no field of
+ *  their own are the file's: a gap is a stretch of the file by definition. */
+export function spaceOf(item: Item): number {
+  return "node" in item && item.node !== null ? item.node.space : 0;
 }
 
 /** How much of the file this is, for a part big enough for the answer to mean
@@ -169,7 +175,7 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
     row.append(swatch);
   }
   row.append(el("b", "rp-name", headingTitle(item, fileBits)));
-  row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits)));
+  row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits, spaceOf(item))));
   row.append(bytesButton(c, item.key));
   // Only a list too long to draw: for anything the window already holds
   // whole, a pane of its own would be the same rows somewhere else.
@@ -194,7 +200,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // length says so in words: "0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
   const written = n.type !== "computed";
-  row.append(el("span", "rp-at", written ? formatOffset(n.offset_bits) : ""));
+  row.append(el("span", "rp-at", written ? formatAddress(n.offset_bits, n.space) : ""));
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.
   row.append(el("span", "rp-twist", itemOpens(n) ? (item.open ? "▾" : "▸") : ""));

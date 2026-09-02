@@ -5,11 +5,11 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { formatBytes, formatOffset } from "./doc.js";
+import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, countText } from "./strings.js";
+import { bitSizeText, childWord, countText, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER } from "./strings.js";
 import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
@@ -626,9 +626,25 @@ export class Inspector {
     this.detail.hidden = false;
     const at = document.createElement("span");
     at.className = "addr";
-    at.textContent = formatOffset(n.offset_bits);
-    this.detail.replaceChildren(at, ` · ${n.type} · ${bitSizeText(n.size_bits)}`);
-    this.showFormula(n.offset_bits, n.size_bits, false);
+    at.textContent = formatAddress(n.offset_bits, n.space);
+    // A field read out of a compressed stream is at an address of that
+    // stream, not of the file, and the two look the same written down. The
+    // trail above already says which stream; this says which space the number
+    // belongs to, beside the number.
+    const inside = n.space === 0 ? "" : ` ${DECODED_INSIDE} ·`;
+    this.detail.replaceChildren(at, `${inside} · ${n.type} · ${bitSizeText(n.size_bits)}`);
+    // The formula reads bytes of the file by address. There is no address of
+    // the file for these bytes, so there is no formula to write.
+    if (n.space === 0) this.showFormula(n.offset_bits, n.size_bits, false);
+    else {
+      this.formula.hidden = true;
+      this.formula.replaceChildren();
+    }
+    // A compressed run nothing could open says so where its value would be.
+    if (n.refused !== null) {
+      const why = DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER;
+      this.detail.append(` · ${why}`);
+    }
     const long = !n.composite && (n.kind === "bytes" || n.kind === "str");
     this.area.hidden = !long;
     this.field.hidden = long;

@@ -17,6 +17,35 @@ export function bitSizeText(bits: number): string {
   return bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`;
 }
 
+/** A compressed run that was opened, and the fields read inside it.
+ *
+ *  PLACEHOLDER WORDING. These are working strings, short and plain, put here
+ *  so every view names the same thing the same way; they have not been
+ *  through the wording pass yet.
+ *
+ *  `DECODED_INSIDE` labels an address counted from the front of a stream
+ *  rather than from the front of the file, and the three refusals are the
+ *  reasons a run was left as the bytes it is, keyed by what the core
+ *  reports. */
+export const DECODED_INSIDE = "inside the stream";
+
+/** The stream a field was read out of, on the field's own row. */
+export const DECODED_FROM = "from";
+
+/** Why a compressed run was left as bytes. Keyed by `TemplateNode.refused`. */
+export const DECODED_REFUSED: Readonly<Record<string, string>> = {
+  "too-large": "too large to unpack",
+  failed: "would not unpack",
+  unaligned: "not on a byte",
+};
+
+/** The same, for a run whose reason is one this build does not know. */
+export const DECODED_REFUSED_OTHER = "not unpacked";
+
+/** Said once where a stream's fields are listed: they are not bytes of the
+ *  file, so the hex view cannot show them. */
+export const DECODED_NO_HEX = "not bytes of the file";
+
 /** Shown where fields would be when nothing has said what the file's are. */
 export const NO_TEMPLATE = "No template selected";
 

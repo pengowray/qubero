@@ -160,6 +160,13 @@ export type TemplateNode = {
    * signature and a `body`; giving `body` a heading of its own spends a level
    * of structure on the word "body". */
   readonly contents: boolean;
+  /** Which address space `offset_bits` counts in. 0 is the file. Anything
+   *  else is the bytes a compressed stream came to, and the offset is counted
+   *  from the front of those rather than from the front of the file. */
+  readonly space: number;
+  /** For a compressed run that would not open, why not: `too-large`,
+   *  `failed` or `unaligned`. Null for every other field. */
+  readonly refused: string | null;
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -752,6 +759,16 @@ export function formatOffset(bits: number): string {
   const byte = Math.floor(bits / 8);
   const rem = bits % 8;
   return `0x${byte.toString(16)}${rem === 0 ? "" : `+${rem}b`}`;
+}
+
+/**
+ * An address, in whatever space it belongs to. A field of the file gets the
+ * plain address; one inside a decoded stream gets a leading `+`, because
+ * `0x1c` of a stream and `0x1c` of the file are different bytes and a reader
+ * comparing the listing against the hex view has to be able to tell.
+ */
+export function formatAddress(bits: number, space: number): string {
+  return space === 0 ? formatOffset(bits) : `+${formatOffset(bits)}`;
 }
 
 /**
