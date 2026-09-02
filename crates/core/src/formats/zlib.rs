@@ -12,15 +12,20 @@
 //! between the header and the four-byte checksum at the end, the same way a
 //! gzip member's body is.
 
-use crate::template::{Endian::Big, Expr as E, Template, Ty as T};
+use crate::template::{Endian::Big, Expr as E, Part, Template, Ty as T};
 
 /// The compression level the header names, which says how hard the encoder
 /// tried rather than anything a decoder needs.
 const LEVELS: &[(i128, &str)] = &[(0, "fastest"), (1, "fast"), (2, "default"), (3, "best compression")];
 
 pub fn zlib() -> Template {
-    Template::new(
-        "zlib",
+    Template::new("zlib", part().root)
+}
+
+/// The same stream, for a format that carries one inside itself. A ROOT record
+/// compressed with `ZL` is a nine-byte block header and then exactly this.
+pub fn part() -> Part {
+    Part::new(
         T::structure(
             "ZlibStream",
             vec![

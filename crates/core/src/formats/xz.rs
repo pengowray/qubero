@@ -19,7 +19,7 @@
 //! Not read: the compressed data, and the filter chain in a block header,
 //! which is a list of identifiers and each filter's own properties.
 
-use crate::template::{Endian::{Big, Little}, Expr as E, Template, Ty as T};
+use crate::template::{Endian::{Big, Little}, Expr as E, Part, Template, Ty as T};
 
 /// What one of these starts with.
 pub const MAGIC: &[u8] = b"\xfd7zXZ\x00";
@@ -38,8 +38,14 @@ fn index_size() -> E {
 }
 
 pub fn xz() -> Template {
-    Template::new(
-        "xz",
+    Template::new("xz", part().root)
+}
+
+/// The same stream, for a format that carries one inside itself. A ROOT record
+/// compressed with `XZ` is a nine-byte block header and then a whole xz stream,
+/// footer and all, which is what makes the index at the end of it findable.
+pub fn part() -> Part {
+    Part::new(
         T::structure(
             "XzStream",
             vec![

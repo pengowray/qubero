@@ -23,7 +23,7 @@
 //! a stream: a magic in a range of sixteen, a length, and that many bytes
 //! nobody but the application reads.
 
-use crate::template::{Endian::{Big, Little}, Expr as E, Template, Until, Ty as T};
+use crate::template::{Endian::{Big, Little}, Expr as E, Part, Template, Until, Ty as T};
 
 /// What a zstd frame starts with.
 pub const MAGIC: &[u8] = b"\x28\xb5\x2f\xfd";
@@ -35,10 +35,13 @@ const SKIPPABLE_FIRST: i128 = 0x184d_2a50;
 const BLOCK_TYPES: &[(i128, &str)] = &[(0, "raw"), (1, "rle"), (2, "compressed"), (3, "reserved")];
 
 pub fn zstd() -> Template {
-    Template::new(
-        "zstd",
-        T::structure("ZstdStream", vec![("frames", T::repeat(frame(), Until::End))]),
-    )
+    Template::new("zstd", part().root)
+}
+
+/// The same stream, for a format that carries one inside itself. A ROOT record
+/// compressed with `ZS` is a nine-byte block header and then a standard frame.
+pub fn part() -> Part {
+    Part::new(T::structure("ZstdStream", vec![("frames", T::repeat(frame(), Until::End))]))
 }
 
 /// One frame, which is either zstd's own or a skippable one an application
