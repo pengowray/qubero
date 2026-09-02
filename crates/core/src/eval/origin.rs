@@ -300,7 +300,7 @@ impl Evaluator {
                 // lookup to the structure it found. Naming only the far end
                 // would leave the reader at the answer with no way back to the
                 // question.
-                if let crate::template::Tag::Computed(e) = &t.tag {
+                if let crate::template::Tag::Computed(e) | crate::template::Tag::ComputedText(e) = &t.tag {
                     self.from_expr(doc, at, &e.clone(), role, out)?;
                 }
                 let t = t.clone();

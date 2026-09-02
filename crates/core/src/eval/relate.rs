@@ -182,6 +182,16 @@ impl Evaluator {
             Expr::Tagged(t) => {
                 let tag = match &t.tag {
                     Tag::Computed(e) => self.substitute(doc, at, &e.clone(), 0, named)?,
+                    // A label that is text: substituting the expression that
+                    // works it out means the text it came to, since that is
+                    // what the search was actually given. Leaving it as
+                    // written would make the two forms the same and the whole
+                    // relationship would be dropped as saying nothing.
+                    Tag::ComputedText(e) => {
+                        let here = self.memo.get(at).map(|r| (r.offset, r.limit));
+                        *named = true;
+                        Some(format!("{:?}", self.text_at(doc, at, &e.clone(), here)?))
+                    }
                     other => other.written(),
                 };
                 let Some(tag) = tag else { return Ok(None) };

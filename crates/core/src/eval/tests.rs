@@ -2139,6 +2139,17 @@ fn a_lookup_can_be_keyed_by_text_found_somewhere_else() {
     // than an error: zero for the number, and no text at all.
     assert_eq!(ev.node(&d, &[1, 2, 1]).unwrap().value.as_int(), Some(0));
     assert_eq!(ev.node(&d, &[1, 2, 2]).unwrap().value, Value::Str(String::new()));
+    // Both ends of the search are connections: the field the word was read
+    // from, and the definition it landed on.
+    let seen: Vec<_> = ev.origins(&d, &[1, 0, 1]).unwrap().into_iter().map(|o| (o.role, o.label)).collect();
+    assert!(seen.contains(&(Role::Value, "kind".to_string())), "{seen:?}");
+    assert!(seen.iter().any(|(_, l)| l == "defs[1].width"), "{seen:?}");
+    // And the question is written out with the word in its place, rather than
+    // with the expression that found the word.
+    let rel = ev.relations(&d, &[1, 0, 1]).unwrap();
+    assert_eq!(rel[0].written, "defs[name = kind].width");
+    assert_eq!(rel[0].substituted, "defs[name = \"time\"].width");
+    assert_eq!(rel[0].result, "8");
 }
 
 #[test]

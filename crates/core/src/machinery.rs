@@ -153,7 +153,7 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             if let Some(array) = &t.array {
                 out.push(array.clone());
             }
-            if let crate::template::Tag::Computed(e) = &t.tag {
+            if let crate::template::Tag::Computed(e) | crate::template::Tag::ComputedText(e) = &t.tag {
                 expr_refs(e, out);
             }
         }
