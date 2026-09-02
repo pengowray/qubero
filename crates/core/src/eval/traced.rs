@@ -148,7 +148,7 @@ pub(super) fn symbol_ty(step: &Step) -> (String, T) {
     };
     let (name, fields) = match step.kind {
         StepKind::Literal(v) => (
-            "literal".to_string(),
+            format!("literal {}", byte(v)),
             vec![("kind", kind(0)), ("value", T::computed(E::lit(v as i128)))],
         ),
         StepKind::Match { len, dist } => (
@@ -180,6 +180,17 @@ pub(super) fn blocks_unit(kind: Option<BlockKind>) -> &'static str {
     match kind {
         Some(BlockKind::Sequences) => "sequence",
         _ => "block",
+    }
+}
+
+/// A literal's byte, as the reader would rather see it: the character when it
+/// is one, and the number when it is not. A row saying `literal 10` and a row
+/// saying `literal 'a'` are both answering "which byte", and neither reads as
+/// the other's answer.
+fn byte(v: u8) -> String {
+    match v {
+        0x20..=0x7e => format!("{:?}", v as char),
+        _ => format!("{v:#04x}"),
     }
 }
 
@@ -278,7 +289,7 @@ mod tests {
         assert_eq!(run.unit.as_deref(), Some("symbol"));
         assert!(run.child_count >= 4, "only {} symbols", run.child_count);
         let first = e.node(&d, &[6, 1, 0, symbols, 0]).unwrap();
-        assert_eq!(first.name, "literal");
+        assert_eq!(first.name, "literal 'a'");
         // Its `value` is the byte it stood for, and reads no bits of its own.
         let value = e.node(&d, &[6, 1, 0, symbols, 0, 1]).unwrap();
         assert_eq!(value.name, "value");
@@ -325,7 +336,7 @@ mod tests {
     fn a_symbol_is_as_wide_as_the_bits_it_was_coded_in() {
         let step = Step { in_bits: 3..12, out_bytes: 0..1, kind: StepKind::Literal(b'q') };
         let (name, ty) = symbol_ty(&step);
-        assert_eq!(name, "literal");
+        assert_eq!(name, "literal 'q'");
         assert!(matches!(ty, T::SizedBits { .. }));
     }
 
