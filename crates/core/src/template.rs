@@ -282,6 +282,18 @@ pub enum Tag {
     Bytes(Vec<u8>),
 }
 
+/// How a tag reads in a sentence about a connection: a number as itself, a
+/// key written in text as that text, with padding trimmed and anything that
+/// is not printable shown as an escape.
+impl std::fmt::Display for Tag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tag::Int(v) => write!(f, "{v}"),
+            Tag::Bytes(b) => write!(f, "{:?}", String::from_utf8_lossy(b).trim_end()),
+        }
+    }
+}
+
 impl Expr {
     pub fn lit(v: impl Into<i128>) -> Expr {
         Expr::Lit(v.into())
