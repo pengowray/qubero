@@ -36,12 +36,25 @@
 //! what turns differences back into samples. Undoing the differencing is not
 //! done here.
 //!
-//! The one thing skipped is blockette 1000's word order byte: the frames are
-//! taken apart into bit fields only when the fixed header reads big-endian,
-//! because the IR types a run of bits in the order they are written and
-//! cannot byte-swap a word before slicing it. A little-endian record's frames
-//! are read as words. libmseed trusts the header order over blockette 1000
-//! too, so this is not a loss anybody feels.
+//! A little-endian record gets its differences a different way. The IR slices
+//! a run of *bits* in the order they are written, and a Steim word packs its
+//! differences MSB first, so cutting a little-endian word where it lies would
+//! name the wrong bits. Such a word is read whole and the differences hang off
+//! it as computed fields, worked out from its value with shifts. The word
+//! keeps all four of its bytes and the differences take none, which is the
+//! honest picture: the bytes on disk are a word, and the differences are
+//! something a reader works out.
+//!
+//! Blockettes read: 100, 200, 201, 300, 310, 320, 390, 395, 400, 405, 500,
+//! 1000, 1001 and 2000, from libmseed's `libmseed.h`. The flag bytes of the
+//! event and calibration blockettes are left as numbers rather than named:
+//! what each bit means differs enough between them that a wrong name would be
+//! worse than none.
+//!
+//! Encodings typed: 0 to 5, 10 and 11, 12 to 18, 30 and 32. The gain-ranged
+//! ones, 12 to 18 and 30, are exposed at their sample width and no further;
+//! which bits of a GEOSCOPE or a CDSN word are the gain differs by network.
+//! 19 (Steim3) and 31 (HGLP) stay bytes, having no fixed width here to go on.
 
 use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
@@ -227,14 +240,38 @@ fn record_of(e: Endian) -> T {
         vec![
             (0, sized(e, T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii))),
             (1, sized(e, samples(T::Int { bits: 16, endian: e }, 2))),
+            (2, sized(e, samples(T::Int { bits: 24, endian: e }, 3))),
             (3, sized(e, samples(T::Int { bits: 32, endian: e }, 4))),
             (4, sized(e, samples(T::F32(e), 4))),
             (5, sized(e, samples(T::F64(e), 8))),
             (10, sized(e, steim(e, false))),
             (11, sized(e, steim(e, true))),
+            // Three bytes a sample, a gain and a mantissa packed together in a
+            // shape that is not a number of any width. Named, and left alone.
+            (12, sized(e, gain_ranged(T::bytes(E::lit(3)), 3))),
+            (13, sized(e, gain_ranged(T::u16(e), 2))),
+            (14, sized(e, gain_ranged(T::u16(e), 2))),
+            (15, sized(e, gain_ranged(T::u16(e), 2))),
+            (16, sized(e, gain_ranged(T::u16(e), 2))),
+            (17, sized(e, gain_ranged(T::u16(e), 2))),
+            (18, sized(e, gain_ranged(T::u16(e), 2))),
+            (30, sized(e, gain_ranged(T::u16(e), 2))),
+            (32, sized(e, samples(T::Int { bits: 16, endian: e }, 2))),
         ],
         sized(e, T::bytes(E::Remaining)),
     )
+}
+
+/// The gain-ranged encodings: one sample is a fixed number of bytes holding a
+/// mantissa and the gain the amplifier was on, packed differently by every
+/// network that invented one.
+///
+/// The width is the same for all of them and that is what is exposed. Which
+/// bits are the gain is not: it differs between GEOSCOPE, CDSN, SRO and the
+/// rest, and a wrong split would read as numbers rather than as the words it
+/// got wrong.
+fn gain_ranged(elem: T, width: i128) -> T {
+    samples(elem, width)
 }
 
 /// The record in the room blockette 1000 gives it: two to the power of the
@@ -349,7 +386,22 @@ fn blockette(e: Endian) -> T {
                 "body",
                 T::switch(
                     E::field("type"),
-                    vec![(1000, b1000_body()), (1001, b1001_body()), (100, b100_body(e))],
+                    vec![
+                        (100, b100_body(e)),
+                        (200, b200_body(e)),
+                        (201, b201_body(e)),
+                        (300, b300_body(e)),
+                        (310, b310_body(e)),
+                        (320, b320_body(e)),
+                        (390, b390_body(e)),
+                        (395, b395_body(e)),
+                        (400, b400_body(e)),
+                        (405, b405_body(e, rest.clone())),
+                        (500, b500_body(e)),
+                        (1000, b1000_body()),
+                        (1001, b1001_body()),
+                        (2000, b2000_body(e)),
+                    ],
                     T::bytes(rest),
                 ),
             ),
@@ -357,6 +409,220 @@ fn blockette(e: Endian) -> T {
         ],
     )
     .counted_as("blockette")
+}
+
+/// A name padded with spaces, as every text field of a blockette is written.
+fn padded(bytes: i128) -> T {
+    T::text(StrLen::Padded { size: E::lit(bytes), pad: b' ' }, Encoding::Ascii)
+}
+
+/// Blockette 200: something crossed a threshold. What the detector saw, and
+/// when it saw it.
+///
+/// The flag byte is left as a number. Its bits say whether the wave was a
+/// compression or a dilatation, whether the amplitude is in counts or in
+/// units, and whether this is the start of the event or its end; naming them
+/// wrong would be worse than not naming them.
+fn b200_body(e: Endian) -> T {
+    T::structure(
+        "GenericEventDetection",
+        vec![
+            ("amplitude", T::F32(e)),
+            ("period", T::F32(e)),
+            ("background_estimate", T::F32(e)),
+            ("flags", T::u8()),
+            ("reserved", T::u8()),
+            ("time", btime(e)),
+            ("detector", padded(24)),
+        ],
+    )
+    .machinery(&["reserved"])
+}
+
+/// Blockette 201: the same, from a Murdock-Hutt detector, which records the
+/// six signal-to-noise numbers it decided on and which of its pickers fired.
+fn b201_body(e: Endian) -> T {
+    T::structure(
+        "MurdockEventDetection",
+        vec![
+            ("amplitude", T::F32(e)),
+            ("period", T::F32(e)),
+            ("background_estimate", T::F32(e)),
+            ("flags", T::u8()),
+            ("reserved", T::u8()),
+            ("time", btime(e)),
+            ("snr_values", T::array(T::u8(), E::lit(6))),
+            ("loopback", T::u8()),
+            ("pick_algorithm", T::u8()),
+            ("detector", padded(24)),
+        ],
+    )
+    .machinery(&["reserved"])
+}
+
+/// Blockette 300: a step calibration was injected. The station drives a known
+/// signal into the channel so that what comes out can be compared with it.
+fn b300_body(e: Endian) -> T {
+    T::structure(
+        "StepCalibration",
+        vec![
+            ("time", btime(e)),
+            ("calibration_count", T::u8()),
+            ("flags", T::u8()),
+            // Both in ten-thousandths of a second.
+            ("step_duration", T::u32(e)),
+            ("interval_duration", T::u32(e)),
+            ("amplitude", T::F32(e)),
+            ("input_channel", padded(3)),
+            ("reserved", T::u8()),
+            ("reference_amplitude", T::u32(e)),
+            ("coupling", padded(12)),
+            ("rolloff", padded(12)),
+        ],
+    )
+    .machinery(&["reserved"])
+}
+
+/// Blockette 310: a sine calibration, which states a period rather than a
+/// step duration.
+fn b310_body(e: Endian) -> T {
+    T::structure(
+        "SineCalibration",
+        vec![
+            ("time", btime(e)),
+            ("reserved1", T::u8()),
+            ("flags", T::u8()),
+            ("duration", T::u32(e)),
+            ("period", T::F32(e)),
+            ("amplitude", T::F32(e)),
+            ("input_channel", padded(3)),
+            ("reserved2", T::u8()),
+            ("reference_amplitude", T::u32(e)),
+            ("coupling", padded(12)),
+            ("rolloff", padded(12)),
+        ],
+    )
+    .machinery(&["reserved1", "reserved2"])
+}
+
+/// Blockette 320: a pseudo-random calibration, which names the kind of noise
+/// it drove in and gives its amplitude peak to peak.
+fn b320_body(e: Endian) -> T {
+    T::structure(
+        "PseudoRandomCalibration",
+        vec![
+            ("time", btime(e)),
+            ("reserved1", T::u8()),
+            ("flags", T::u8()),
+            ("duration", T::u32(e)),
+            ("ptp_amplitude", T::F32(e)),
+            ("input_channel", padded(3)),
+            ("reserved2", T::u8()),
+            ("reference_amplitude", T::u32(e)),
+            ("coupling", padded(12)),
+            ("rolloff", padded(12)),
+            ("noise_type", padded(8)),
+        ],
+    )
+    .machinery(&["reserved1", "reserved2"])
+}
+
+/// Blockette 390: a calibration of a kind none of the three above describes.
+fn b390_body(e: Endian) -> T {
+    T::structure(
+        "GenericCalibration",
+        vec![
+            ("time", btime(e)),
+            ("reserved1", T::u8()),
+            ("flags", T::u8()),
+            ("duration", T::u32(e)),
+            ("amplitude", T::F32(e)),
+            ("input_channel", padded(3)),
+            ("reserved2", T::u8()),
+        ],
+    )
+    .machinery(&["reserved1", "reserved2"])
+}
+
+/// Blockette 395: a calibration stopped before it finished, and this is when.
+fn b395_body(e: Endian) -> T {
+    T::structure("CalibrationAbort", vec![("time", btime(e)), ("reserved", T::bytes(E::lit(2)))])
+        .machinery(&["reserved"])
+}
+
+/// Blockette 400: this record is a beam, formed by summing an array of
+/// sensors, and this is where it was pointed.
+fn b400_body(e: Endian) -> T {
+    T::structure(
+        "Beam",
+        vec![
+            ("azimuth", T::F32(e)),
+            ("slowness", T::F32(e)),
+            ("configuration", T::u16(e)),
+            ("reserved", T::bytes(E::lit(2))),
+        ],
+    )
+    .machinery(&["reserved"])
+}
+
+/// Blockette 405: the per-sensor delays the beam above was formed with. How
+/// many there are is not written anywhere: the blockette runs to the next one,
+/// and every two bytes of it is a delay.
+fn b405_body(e: Endian, rest: E) -> T {
+    T::structure("BeamDelay", vec![("delay_values", T::array(T::u16(e), rest.div(E::lit(2))))])
+}
+
+/// Blockette 500: what the clock was doing. The one blockette a seismologist
+/// reads when two stations disagree about when something happened.
+fn b500_body(e: Endian) -> T {
+    T::structure(
+        "Timing",
+        vec![
+            ("vco_correction", T::F32(e)),
+            ("time", btime(e)),
+            // The microseconds the ten-byte time has no room for, -50 to +49.
+            ("microseconds", T::Int { bits: 8, endian: Big }),
+            // 0 to 100, as the receiver rated its own fix.
+            ("reception_quality", T::u8()),
+            ("exception_count", T::u32(e)),
+            ("exception_type", padded(16)),
+            ("clock_model", padded(32)),
+            ("clock_status", padded(128)),
+        ],
+    )
+    .payload(&["exception_type", "clock_status"])
+}
+
+/// Blockette 2000: whatever the writer wanted to carry that SEED has no field
+/// for. A run of `~`-terminated headers naming what it is, and then the bytes.
+///
+/// Both offsets are counted from the start of the blockette, so eleven bytes
+/// of body and the four-byte header come off them here.
+fn b2000_body(e: Endian) -> T {
+    const HEAD: i128 = 15;
+    let headers = E::field("data_offset").sub(E::lit(HEAD)).at_least(E::lit(0)).at_most(E::Remaining);
+    let opaque = E::field("length").sub(E::field("data_offset")).at_least(E::lit(0)).at_most(E::Remaining);
+    T::structure(
+        "OpaqueData",
+        vec![
+            // The whole blockette, header included.
+            ("length", T::u16(e)),
+            ("data_offset", T::u16(e)),
+            ("record_number", T::u32(e)),
+            ("word_order", T::enumeration("WordOrder", T::u8(), WORD_ORDER)),
+            ("flags", T::u8()),
+            ("header_count", T::u8()),
+            (
+                "headers",
+                T::sized(
+                    headers,
+                    T::repeat(T::text(StrLen::Terminated { end: b'~', or_end: true }, Encoding::Ascii), Until::End),
+                ),
+            ),
+            ("opaque", T::bytes(opaque)),
+        ],
+    )
+    .payload(&["headers"])
 }
 
 /// Blockette 1000, which is what makes a record readable on its own: how the
@@ -474,12 +740,7 @@ fn word(e: Endian, two: bool, n: u32) -> T {
     let low = E::field("nibbles").bit(30 - 2 * n);
     let code = high.mul(E::lit(2)).add(low);
     if e == Little {
-        // The frames pack their differences MSB first inside each word, and
-        // the IR slices a run of bits in the order they are written. Slicing
-        // a byte-swapped word would name the wrong bits, so a little-endian
-        // record keeps its words whole. See the module note. The code is not
-        // even read: there is nothing here it could choose between.
-        return T::u32(Little);
+        return little_word(code, two);
     }
     let packed = |name: &'static str, bits: u32, count: u32| {
         let mut fields: Vec<(&str, T)> = Vec::new();
@@ -536,6 +797,82 @@ fn word(e: Endian, two: bool, n: u32) -> T {
 /// Names for the differences inside one word. Seven is as many as Steim2
 /// packs into thirty bits.
 const DIFFS: [&str; 7] = ["d0", "d1", "d2", "d3", "d4", "d5", "d6"];
+
+/// The unsigned number in the `width` bits of `src` ending at bit `top`,
+/// counting bits from the least significant.
+///
+/// The IR has a bit and a left shift and no right shift or mask, so the field
+/// is added up a bit at a time. That is more expression than a shift and an
+/// and would be, and it is the only way to name a bit field of a number rather
+/// than of a run of bytes: a little-endian Steim word has to be read whole and
+/// taken apart afterwards, because taking it apart in place would name the
+/// bits of the byte-swapped word.
+fn bits_of(src: &E, top: u32, width: u32) -> E {
+    let mut total = E::lit(0);
+    for j in 0..width {
+        total = total.add(src.clone().bit(top - j).shl(E::lit((width - 1 - j) as i128)));
+    }
+    total
+}
+
+/// The same bits read as a signed number: the unsigned value less twice the
+/// top bit's weight, which is two's complement written out.
+fn signed_bits(src: &E, top: u32, width: u32) -> E {
+    bits_of(src, top, width).sub(src.clone().bit(top).shl(E::lit(width as i128)))
+}
+
+/// One data word of a little-endian record: the word itself, and the
+/// differences packed inside it as computed fields.
+///
+/// A Steim frame packs its differences MSB first inside each 32-bit word, and
+/// the IR slices a run of *bits* in the order they are written, so a
+/// little-endian word cannot be cut into fields where it lies. Reading it
+/// whole and then working the fields out of its value gives the same answer.
+/// The word keeps its four bytes; the differences beside it take none.
+fn little_word(code: E, two: bool) -> T {
+    let w = E::field("word");
+    // `from` is the highest bit of the first difference, so they come out in
+    // the order they were packed: the first one in the highest bits. None of
+    // these fields is any bytes; the word beside them is all four.
+    let diffs = |name: &'static str, bits: u32, count: u32, from: u32| {
+        let fields = (0..count)
+            .map(|i| (DIFFS[i as usize], T::Computed(signed_bits(&w, from - i * bits, bits))))
+            .collect();
+        T::inline_structure(name, fields)
+    };
+    let packed = |name: &'static str, bits: u32, count: u32| {
+        T::inline_structure(name, vec![("word", T::u32(Little)), ("differences", diffs(name, bits, count, 31))])
+    };
+    // Steim2's second code, in the top two bits of the word itself, which is
+    // what decides how many differences the other thirty bits hold.
+    let sub = |name: &'static str, cases: Vec<(i128, u32, u32, &'static str)>| {
+        let cases = cases.into_iter().map(|(v, bits, count, shape)| (v, diffs(shape, bits, count, 29))).collect();
+        T::inline_structure(
+            name,
+            vec![
+                ("word", T::u32(Little)),
+                ("dnib", T::Computed(bits_of(&w, 31, 2))),
+                ("differences", T::switch(E::field("dnib"), cases, T::bytes(E::lit(0)))),
+            ],
+        )
+    };
+    let cases = if two {
+        vec![
+            (0, T::u32(Little)),
+            (1, packed("Steim2x8", 8, 4)),
+            (2, sub("Steim2Wide", vec![(1, 30, 1, "Steim2x30"), (2, 15, 2, "Steim2x15"), (3, 10, 3, "Steim2x10")])),
+            (3, sub("Steim2Narrow", vec![(0, 6, 5, "Steim2x6"), (1, 5, 6, "Steim2x5"), (2, 4, 7, "Steim2x4")])),
+        ]
+    } else {
+        vec![
+            (0, T::u32(Little)),
+            (1, packed("Steim1x8", 8, 4)),
+            (2, packed("Steim1x16", 16, 2)),
+            (3, packed("Steim1x32", 32, 1)),
+        ]
+    };
+    T::switch(code, cases, T::u32(Little))
+}
 
 /// A miniSEED file, told by the shape of its first record. There is no magic:
 /// what a record starts with is six characters of sequence number, which some
@@ -695,6 +1032,190 @@ mod tests {
         assert_eq!(ev.node(&d, &[0, 0]).unwrap().size_bits, 512 * 8);
         assert_eq!(ev.node(&d, &[0, 1]).unwrap().size_bits, 188 * 8);
         assert_eq!(ev.node(&d, &[0, 1, DATA, 0]).unwrap().child_count, 7);
+    }
+
+    /// The same frame as the test above, written the other way round. The
+    /// codes still pick the shape, and the differences still read: they are
+    /// worked out from the word's value rather than sliced out of its bytes.
+    #[test]
+    fn a_little_endian_steim_word_gives_its_differences_as_computed_fields() {
+        let nibbles: u32 = (1 << 24) | (2 << 22);
+        let mut data = nibbles.to_le_bytes().to_vec();
+        data.extend_from_slice(&100i32.to_le_bytes()); // x0
+        data.extend_from_slice(&107i32.to_le_bytes()); // xn
+        // Four 8-bit differences, packed MSB first: 1, 2, -3, 4.
+        data.extend_from_slice(&u32::from_be_bytes([1, 2, 0xfd, 4]).to_le_bytes());
+        // Two 16-bit ones: 5 and -6.
+        data.extend_from_slice(&u32::from_be_bytes([0, 5, 0xff, 0xfa]).to_le_bytes());
+        let d = Document::new(MemSource(record_bytes(false, 10, 9, &data)));
+        let mut ev = Evaluator::new(mseed());
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 1]).unwrap().value.as_int(), Some(100));
+        // The word is still four bytes, and the differences beside it none.
+        let w3 = ev.node(&d, &[0, 0, DATA, 0, 3]).unwrap();
+        assert_eq!(w3.child_count, 2); // the word, and the differences
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 0]).unwrap().size_bits, 32);
+        let diffs = ev.node(&d, &[0, 0, DATA, 0, 3, 1]).unwrap();
+        assert_eq!((diffs.child_count, diffs.size_bits), (4, 0));
+        for (i, want) in [1i128, 2, -3, 4].into_iter().enumerate() {
+            assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 1, i]).unwrap().value.as_int(), Some(want), "d{i}");
+        }
+        let wide = ev.node(&d, &[0, 0, DATA, 0, 4, 1]).unwrap();
+        assert_eq!(wide.child_count, 2);
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 4, 1, 0]).unwrap().value.as_int(), Some(5));
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 4, 1, 1]).unwrap().value.as_int(), Some(-6));
+    }
+
+    /// Steim2's second code: a word whose top two bits say how the other
+    /// thirty are divided. Little-endian, so both codes are read from values.
+    #[test]
+    fn a_little_endian_steim2_word_reads_its_second_code() {
+        // Words 1 and 2 of frame 0 are the constants, so the word under test
+        // is word 3, whose code sits in bits 25 and 24. Code 3 sends it to the
+        // narrow shapes.
+        let nibbles: u32 = 3 << 24;
+        let mut data = nibbles.to_le_bytes().to_vec();
+        data.extend_from_slice(&100i32.to_le_bytes()); // x0
+        data.extend_from_slice(&107i32.to_le_bytes()); // xn
+        // dnib 2: seven 4-bit differences, 1 through 7 with the third negative.
+        let mut word: u32 = 2 << 30;
+        for (i, v) in [1u32, 2, 13, 4, 5, 6, 7].into_iter().enumerate() {
+            word |= v << (26 - 4 * i as u32);
+        }
+        data.extend_from_slice(&word.to_le_bytes());
+        let d = Document::new(MemSource(record_bytes(false, 11, 9, &data)));
+        let mut ev = Evaluator::new(mseed());
+        let w3 = ev.node(&d, &[0, 0, DATA, 0, 3]).unwrap();
+        assert_eq!(w3.child_count, 3); // word, dnib, differences
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 1]).unwrap().value.as_int(), Some(2));
+        let diffs = ev.node(&d, &[0, 0, DATA, 0, 3, 2]).unwrap();
+        assert_eq!(diffs.type_name, "Steim2x4");
+        assert_eq!(diffs.child_count, 7);
+        for (i, want) in [1i128, 2, -3, 4, 5, 6, 7].into_iter().enumerate() {
+            assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 2, i]).unwrap().value.as_int(), Some(want), "d{i}");
+        }
+    }
+
+    /// A blockette chain of three: the one that sizes the record, a timing
+    /// blockette, and a calibration. Each is read from its own type, and the
+    /// chain places them by the forward pointers rather than by their widths.
+    #[test]
+    fn the_blockettes_after_1000_are_read_by_type() {
+        let mut extra = Vec::new();
+        // Blockette 500, at offset 56, pointing at 320 at offset 256.
+        extra.extend_from_slice(&500u16.to_be_bytes());
+        extra.extend_from_slice(&256u16.to_be_bytes());
+        extra.extend_from_slice(&0.25f32.to_be_bytes()); // vco_correction
+        extra.extend_from_slice(&2008u16.to_be_bytes());
+        extra.extend_from_slice(&1u16.to_be_bytes());
+        extra.extend_from_slice(&[0, 0, 0, 0]);
+        extra.extend_from_slice(&0u16.to_be_bytes());
+        extra.push(0xf6); // microseconds, -10
+        extra.push(90); // reception quality
+        extra.extend_from_slice(&3u32.to_be_bytes()); // exception count
+        let pad = |s: &str, n: usize| {
+            let mut v = s.as_bytes().to_vec();
+            v.resize(n, b' ');
+            v
+        };
+        extra.extend(pad("VCO CORRECTION", 16));
+        extra.extend(pad("GPS", 32));
+        extra.extend(pad("LOCKED", 128));
+
+        let mut record = record_bytes(true, 3, 9, &[]);
+        record[46..48].copy_from_slice(&48u16.to_be_bytes()); // first blockette
+        record[39] = 3; // three blockettes in the chain
+        record[50..52].copy_from_slice(&56u16.to_be_bytes()); // 1000 points at 500
+        record[44..46].copy_from_slice(&0u16.to_be_bytes()); // no samples in this one
+        record[56..56 + extra.len()].copy_from_slice(&extra);
+        // Blockette 320 at 256, last in the chain.
+        let mut cal = Vec::new();
+        cal.extend_from_slice(&320u16.to_be_bytes());
+        cal.extend_from_slice(&0u16.to_be_bytes());
+        cal.extend_from_slice(&2008u16.to_be_bytes());
+        cal.extend_from_slice(&1u16.to_be_bytes());
+        cal.extend_from_slice(&[0, 0, 0, 0]);
+        cal.extend_from_slice(&0u16.to_be_bytes());
+        cal.push(0); // reserved1
+        cal.push(0x04); // flags
+        cal.extend_from_slice(&600u32.to_be_bytes()); // duration
+        cal.extend_from_slice(&1.5f32.to_be_bytes()); // ptp amplitude
+        cal.extend(pad("BHZ", 3));
+        cal.push(0);
+        cal.extend_from_slice(&7u32.to_be_bytes());
+        cal.extend(pad("RESISTIVE", 12));
+        cal.extend(pad("3DB@10HZ", 12));
+        cal.extend(pad("TELEDYNE", 8));
+        record[256..256 + cal.len()].copy_from_slice(&cal);
+
+        let d = Document::new(MemSource(record));
+        let mut ev = Evaluator::new(mseed());
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES]).unwrap().child_count, 3);
+        let timing = ev.node(&d, &[0, 0, BLOCKETTES, 1, 2]).unwrap();
+        assert_eq!(timing.type_name, "Timing");
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES, 1, 2, 0]).unwrap().value, Value::Float(0.25));
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES, 1, 2, 2]).unwrap().value.as_int(), Some(-10));
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES, 1, 2, 6]).unwrap().value, Value::Str("GPS".into()));
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES, 1, 2, 7]).unwrap().value, Value::Str("LOCKED".into()));
+        let cal = ev.node(&d, &[0, 0, BLOCKETTES, 2, 2]).unwrap();
+        assert_eq!(cal.type_name, "PseudoRandomCalibration");
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES, 2, 2, 3]).unwrap().value.as_int(), Some(600));
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES, 2, 2, 10]).unwrap().value, Value::Str("TELEDYNE".into()));
+    }
+
+    /// Blockette 2000 is the one that measures itself: its own length and
+    /// where its opaque bytes start, both counted from its beginning.
+    #[test]
+    fn an_opaque_blockette_splits_its_headers_from_its_payload() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&2000u16.to_be_bytes());
+        b.extend_from_slice(&0u16.to_be_bytes()); // last in the chain
+        b.extend_from_slice(&37u16.to_be_bytes()); // length, header included
+        b.extend_from_slice(&30u16.to_be_bytes()); // where the payload starts
+        b.extend_from_slice(&1u32.to_be_bytes()); // record number
+        b.push(1); // big-endian
+        b.push(0); // flags
+        b.push(2); // two headers
+        b.extend_from_slice(b"Format~Version~"); // 15 bytes, to offset 30
+        b.extend_from_slice(b"opaque!"); // 7 bytes, to length 37
+
+        let mut record = record_bytes(true, 3, 9, &[]);
+        record[46..48].copy_from_slice(&48u16.to_be_bytes());
+        record[39] = 2;
+        record[50..52].copy_from_slice(&56u16.to_be_bytes());
+        record[44..46].copy_from_slice(&0u16.to_be_bytes());
+        record[56..56 + b.len()].copy_from_slice(&b);
+
+        let d = Document::new(MemSource(record));
+        let mut ev = Evaluator::new(mseed());
+        let body = ev.node(&d, &[0, 0, BLOCKETTES, 1, 2]).unwrap();
+        assert_eq!(body.type_name, "OpaqueData");
+        let headers = ev.node(&d, &[0, 0, BLOCKETTES, 1, 2, 6]).unwrap();
+        assert_eq!((headers.size_bits, headers.child_count), (15 * 8, 2));
+        assert_eq!(ev.node(&d, &[0, 0, BLOCKETTES, 1, 2, 6, 0]).unwrap().value, Value::Str("Format".into()));
+        let opaque = ev.node(&d, &[0, 0, BLOCKETTES, 1, 2, 7]).unwrap();
+        assert_eq!((opaque.type_name.as_str(), opaque.size_bits), ("bytes[]", 7 * 8));
+    }
+
+    /// The narrower and wider fixed-width encodings: 24-bit integers, and the
+    /// gain-ranged words that are two bytes each and nothing more here.
+    #[test]
+    fn the_other_fixed_width_encodings_are_typed_by_their_sample_width() {
+        let mut data = Vec::new();
+        for i in [1i32, -2, 3, -4, 5, -6, 7] {
+            data.extend_from_slice(&i.to_be_bytes()[1..]);
+        }
+        let d = Document::new(MemSource(record_bytes(true, 2, 9, &data)));
+        let mut ev = Evaluator::new(mseed());
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0]).unwrap().child_count, 7);
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 1]).unwrap().value.as_int(), Some(-2));
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 6]).unwrap().value.as_int(), Some(7));
+
+        // CDSN, 16-bit gain-ranged: seven words and no claim about their bits.
+        let d = Document::new(MemSource(record_bytes(true, 16, 9, &[0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7])));
+        let mut ev = Evaluator::new(mseed());
+        let s = ev.node(&d, &[0, 0, DATA, 0]).unwrap();
+        assert_eq!((s.type_name.as_str(), s.child_count), ("u16 be[]", 7));
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3]).unwrap().value, Value::UInt(4));
     }
 
     #[test]
