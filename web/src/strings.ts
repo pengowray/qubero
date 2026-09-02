@@ -29,9 +29,6 @@ export function bitSizeText(bits: number): string {
  *  reports. */
 export const DECODED_INSIDE = "inside the stream";
 
-/** The stream a field was read out of, on the field's own row. */
-export const DECODED_FROM = "from";
-
 /** Why a compressed run was left as bytes. Keyed by `TemplateNode.refused`. */
 export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   "too-large": "too large to unpack",
@@ -42,8 +39,9 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
 /** The same, for a run whose reason is one this build does not know. */
 export const DECODED_REFUSED_OTHER = "not unpacked";
 
-/** Said once where a stream's fields are listed: they are not bytes of the
- *  file, so the hex view cannot show them. */
+/** Why a decoded field's address has no byte strip and no place on the file
+ *  map. Shown on the address itself, where a reader wonders what `+0x1c`
+ *  means. */
 export const DECODED_NO_HEX = "not bytes of the file";
 
 /** Shown where fields would be when nothing has said what the file's are. */

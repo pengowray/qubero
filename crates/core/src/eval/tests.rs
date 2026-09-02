@@ -2255,3 +2255,69 @@ fn editing_the_file_reopens_the_stream_rather_than_keeping_what_it_said() {
     let stream = ev.node(&d, &[1]).unwrap();
     assert!(stream.child_count == 0 || ev.node(&d, &[1, 0, 0]).is_ok());
 }
+
+/// Nothing decoded is written back, and asking is refused rather than writing
+/// a bit of a stream to the byte of the file with the same number.
+#[test]
+fn a_write_into_a_stream_is_refused_rather_than_landing_in_the_file() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    let err = ev.prepare_write(&d, &[1, 0, 0], "9999").unwrap_err();
+    assert!(matches!(err, EvalError::Failed(_)), "a write into a stream produced {err:?}");
+    // The same field outside a stream still writes.
+    assert!(ev.prepare_write(&d, &[0], "1").is_ok());
+}
+
+/// A stream's contents have a declared type like any other child, so asking
+/// what shaped them is an answer rather than an error.
+#[test]
+fn the_contents_of_a_stream_can_be_asked_what_shaped_them() {
+    let (d, len) = packed_doc(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let mut ev = Evaluator::new(packed_template(len));
+    ev.node(&d, &[1, 0]).unwrap();
+    let origins = ev.origins(&d, &[1, 0]).unwrap();
+    let from = origins.iter().find(|o| o.role == Role::Value).expect("came from the stream");
+    assert_eq!((from.label.as_str(), from.value.as_str()), ("stream", "zlib"));
+    assert_eq!(from.path, vec![1]);
+    // And the relations do not fall over on it either.
+    ev.relations(&d, &[1, 0]).unwrap();
+}
+
+/// A switch that peeks at the byte it is about to read has to peek at the
+/// stream's byte, not at the file's byte with the same number. The two differ
+/// here on purpose: the file's byte 0 is 0xaa and the stream's is 0x02.
+#[test]
+fn a_peek_inside_a_stream_looks_at_the_stream() {
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&[0x02, 0x77], 6);
+    let mut bytes = vec![0xaa, 0xbb];
+    bytes.extend_from_slice(&packed);
+    let d = doc(&bytes);
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("tag", T::u16(Big)),
+                (
+                    "stream",
+                    T::decoded(
+                        E::lit(packed.len() as i128),
+                        Codec::Zlib,
+                        // The first byte says which shape follows. Read from
+                        // the file instead, that byte is 0xaa and neither case
+                        // is taken.
+                        T::switch(
+                            E::peek(8, Big),
+                            vec![(2, T::structure("Two", vec![("kind", T::u8()), ("value", T::u8())]))],
+                            T::structure("Other", vec![("wrong", T::u8())]),
+                        ),
+                    ),
+                ),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(t);
+    let picked = ev.node(&d, &[1, 0]).unwrap();
+    assert_eq!(picked.type_name, "Two", "the peek read the file rather than the stream");
+    assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().value.as_int(), Some(0x77));
+}

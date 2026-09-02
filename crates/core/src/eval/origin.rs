@@ -200,6 +200,10 @@ impl Evaluator {
             Some(Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. }) => {
                 Ok((**elem).clone())
             }
+            // The one thing these hold, which is what the child was declared
+            // as. Without this, asking what shaped a stream's contents, or
+            // what an `At` points at, is an error rather than an answer.
+            Some(Ty::At { inner, .. } | Ty::Decoded { inner, .. }) => Ok((**inner).clone()),
             _ => fail("not a composite"),
         }
     }

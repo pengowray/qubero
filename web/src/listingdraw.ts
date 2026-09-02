@@ -21,7 +21,7 @@ import { recordTable } from "./records.js";
 import type { RecordCell } from "./records.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
-import { bitSizeText, childWord, countText, GAP_LABEL, REPORT } from "./strings.js";
+import { bitSizeText, childWord, countText, DECODED_NO_HEX, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT } from "./strings.js";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -175,16 +175,21 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
     row.append(swatch);
   }
   row.append(el("b", "rp-name", headingTitle(item, fileBits)));
-  row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits, spaceOf(item))));
-  row.append(bytesButton(c, item.key));
+  const space = spaceOf(item);
+  row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits, space)));
+  // The byte strip and the file map both show bytes of the file, and a
+  // decoded field has none: its bytes came out of a stream and are nowhere in
+  // the file to point at. See DESIGN.md, "A stream read as the fields inside
+  // it".
+  if (space === 0) row.append(bytesButton(c, item.key));
   // Only a list too long to draw: for anything the window already holds
   // whole, a pane of its own would be the same rows somewhere else.
   if (item.node !== null && item.node.child_count > PAGE) row.append(listButton(item.path));
   // The facts about the part's place in the file sit together at the right:
   // how big it is, how much of the file that is, and where.
-  const share = shareText(item.sizeBits, fileBits);
+  const share = space === 0 ? shareText(item.sizeBits, fileBits) : "";
   row.append(el("span", "rp-size", `${formatBytes(item.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`));
-  row.append(mapFor(c, item));
+  if (space === 0) row.append(mapFor(c, item));
   return row;
 }
 
@@ -200,18 +205,31 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // length says so in words: "0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
   const written = n.type !== "computed";
-  row.append(el("span", "rp-at", written ? formatAddress(n.offset_bits, n.space) : ""));
+  const at = el("span", "rp-at", written ? formatAddress(n.offset_bits, n.space) : "");
+  // The leading plus says the address is counted inside a stream; this says
+  // what follows from that, for a reader who has not met one before.
+  if (n.space !== 0) at.title = DECODED_NO_HEX;
+  row.append(at);
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.
   row.append(el("span", "rp-twist", itemOpens(n) ? (item.open ? "▾" : "▸") : ""));
   row.append(el("span", `rp-field ${fieldClass(n.kind)}`, n.name));
-  const value = el("span", "rp-value", n.composite ? countText(n.child_count, childWord(n)) : n.value);
+  // A compressed run nothing could open says why where its count would be:
+  // "0 fields" is true and tells the reader nothing they can act on.
+  const said =
+    n.refused !== null
+      ? (DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER)
+      : n.composite
+        ? countText(n.child_count, childWord(n))
+        : n.value;
+  const value = el("span", "rp-value", said);
   if (item.reads !== null) value.append(readsLink(item.reads));
   row.append(value);
   row.append(el("span", "rp-type", n.type));
   row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : REPORT.notStored));
-  // A toggle that opens a strip of nothing is a dead control.
-  if (n.size_bits > 0) row.append(bytesButton(c, item.key));
+  // A toggle that opens a strip of nothing is a dead control, and so is one
+  // over bytes that are not in the file.
+  if (n.size_bits > 0 && n.space === 0) row.append(bytesButton(c, item.key));
   return row;
 }
 

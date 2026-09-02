@@ -455,8 +455,13 @@ impl Evaluator {
         // is about to drop some of those nodes. Coarse, like the memo's own
         // invalidation, and cheap to build again.
         self.placed.forget();
-        self.spaces.forget();
-        self.memo.forget_decoded();
+        // Only when there is something to drop: this is the path that exists
+        // to keep an edit to a large file cheap, and most files hold no stream
+        // at all.
+        if self.spaces.any() {
+            self.spaces.forget();
+            self.memo.forget_decoded();
+        }
         self.memo.forget_after(bit);
     }
 
@@ -601,6 +606,14 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
         let r = self.memo.get(path).expect("resolved").clone();
+        // A decoded byte is a function of every compressed byte before it, so
+        // there is no run of the file this text could be written to. `editable`
+        // already says so; this is the same answer where it cannot be ignored,
+        // since the offset below would otherwise be a bit of the stream used as
+        // a bit of the file.
+        if r.space != 0 {
+            return fail("Bytes read out of a compressed stream can't be edited: they aren't in the file.");
+        }
         if !encode::editable(&r.ty, size) {
             return fail(match &r.ty {
                 Ty::Magic(_) => "Magic bytes are fixed by the format.".to_string(),
@@ -935,11 +948,20 @@ impl Evaluator {
             // the embedded copy the offsets are counted inside. The field's
             // own path is not searched: a list that is itself a window counts
             // from the one outside it, not from itself.
-            Anchor::Window => (0..path.len())
-                .rev()
-                .find_map(|k| self.memo.get(&path[..k]).filter(|r| r.declared_size.is_some()))
-                .map(|r| r.offset)
-                .unwrap_or(0),
+            // Only a window in the same space: a stream's own field sits in
+            // the file, and counting a decoded offset from where the
+            // compressed run happens to start would be counting from a number
+            // that means nothing here.
+            Anchor::Window => {
+                let space = self.memo.get(path).map_or(0, |r| r.space);
+                (0..path.len())
+                    .rev()
+                    .find_map(|k| {
+                        self.memo.get(&path[..k]).filter(|r| r.declared_size.is_some() && r.space == space)
+                    })
+                    .map(|r| r.offset)
+                    .unwrap_or(0)
+            }
             // Its own start, aligned. `align` is bytes; offsets are bits.
             Anchor::SelfAligned(align) => {
                 let a = u64::from(align) * 8;
@@ -1148,6 +1170,36 @@ impl Evaluator {
                 space::Opened::Refused(why)
             }
         })
+    }
+
+    /// Which address space a read at `path` belongs to.
+    ///
+    /// The node's own, when it has been resolved. While it is still being
+    /// placed it is not in the memo yet and the answer comes from the nearest
+    /// ancestor that is, by the same rule `place_child` follows: below a
+    /// stream the space is the one that stream opened, and an offset counted
+    /// from the start of the file means the file.
+    pub(super) fn space_at(&self, path: &[usize]) -> u32 {
+        for k in (0..=path.len()).rev() {
+            let Some(r) = self.memo.get(&path[..k]) else { continue };
+            if k == path.len() {
+                return r.space;
+            }
+            if matches!(r.ty, Ty::Decoded { .. }) {
+                return match self.spaces.get(&path[..k]) {
+                    Some(space::Opened::Space(id)) => id,
+                    _ => r.space,
+                };
+            }
+            if matches!(
+                r.ty,
+                Ty::At { anchor: Anchor::File, .. } | Ty::PointerList { anchor: Anchor::File, .. }
+            ) {
+                return 0;
+            }
+            return r.space;
+        }
+        0
     }
 
     /// The value of a named field directly inside the struct at `path`, as a

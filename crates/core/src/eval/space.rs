@@ -69,6 +69,12 @@ impl Spaces {
         self.buf(space).map_or(0, |b| b.len() as u64 * 8)
     }
 
+    /// Whether any stream has been opened at all. Most files hold none, and
+    /// the sweep that drops decoded nodes should cost them nothing.
+    pub(super) fn any(&self) -> bool {
+        !self.opened.is_empty()
+    }
+
     /// Start again from nothing. A decoded buffer is worked out from bytes of
     /// the file, so any change to the file or the template drops it: see
     /// `Memo::forget`.
