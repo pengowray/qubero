@@ -19,21 +19,17 @@ export function bitSizeText(bits: number): string {
 
 /** A compressed run that was opened, and the fields read inside it.
  *
- *  PLACEHOLDER WORDING. These are working strings, short and plain, put here
- *  so every view names the same thing the same way; they have not been
- *  through the wording pass yet.
- *
- *  `DECODED_INSIDE` labels an address counted from the front of a stream
- *  rather than from the front of the file, and the three refusals are the
+ *  `DECODED_INSIDE` follows an address counted from the front of the unpacked
+ *  stream rather than from the front of the file, and the refusals are the
  *  reasons a run was left as the bytes it is, keyed by what the core
  *  reports. */
-export const DECODED_INSIDE = "inside the stream";
+export const DECODED_INSIDE = "in the unpacked stream";
 
 /** Why a compressed run was left as bytes. Keyed by `TemplateNode.refused`. */
 export const DECODED_REFUSED: Readonly<Record<string, string>> = {
-  "too-large": "too large to unpack",
-  failed: "would not unpack",
-  unaligned: "not on a byte",
+  "too-large": "too large to unpack (over 64 MiB)",
+  failed: "unpacking failed",
+  unaligned: "not on a byte boundary",
 };
 
 /** The same, for a run whose reason is one this build does not know. */
@@ -42,7 +38,7 @@ export const DECODED_REFUSED_OTHER = "not unpacked";
 /** Why a decoded field's address has no byte strip and no place on the file
  *  map. Shown on the address itself, where a reader wonders what `+0x1c`
  *  means. */
-export const DECODED_NO_HEX = "not bytes of the file";
+export const DECODED_NO_HEX = "Offset in the unpacked stream, not a file address";
 
 /** Shown where fields would be when nothing has said what the file's are. */
 export const NO_TEMPLATE = "No template selected";
