@@ -36,14 +36,21 @@
 //! what turns differences back into samples. Undoing the differencing is not
 //! done here.
 //!
-//! A little-endian record gets its differences a different way. The IR slices
-//! a run of *bits* in the order they are written, and a Steim word packs its
-//! differences MSB first, so cutting a little-endian word where it lies would
-//! name the wrong bits. Such a word is read whole and the differences hang off
-//! it as computed fields, worked out from its value with shifts. The word
-//! keeps all four of its bytes and the differences take none, which is the
-//! honest picture: the bytes on disk are a word, and the differences are
-//! something a reader works out.
+//! A little-endian record swaps less than it looks like it should, and this is
+//! the part worth knowing. A Steim word that holds whole differences is not
+//! swapped as a word at all: four 1-byte differences are the four bytes where
+//! they lie, two 2-byte ones are each turned round on their own, and a 4-byte
+//! one is the whole word turned round. All of Steim1 is that, and so is
+//! Steim2's four-byte case, and all of it is a matter of naming fields at
+//! their own width and byte order.
+//!
+//! Steim2's bit-packed words are the exception. Those are swapped whole and
+//! then cut up, and the IR slices a run of *bits* in the order they are
+//! written, so cutting one where it lies would name the wrong bits. Such a
+//! word is read whole and the differences hang off it as computed fields,
+//! worked out from its value with shifts. The word keeps all four of its bytes
+//! and the differences take none, which is the honest picture: what is on disk
+//! is a word, and the differences are something a reader works out.
 //!
 //! Blockettes read: 100, 200, 201, 300, 310, 320, 390, 395, 400, 405, 500,
 //! 1000, 1001 and 2000, from libmseed's `libmseed.h`. The flag bytes of the
@@ -760,13 +767,17 @@ fn word(e: Endian, two: bool, n: u32) -> T {
         let cases = cases
             .into_iter()
             .map(|(v, bits, count, shape)| {
+                // What the differences leave of the thirty bits comes before
+                // them, not after: the seven 4-bit case fills bits 27 to 0 and
+                // leaves 29 and 28 alone. Putting the slack at the other end
+                // reads every one of the seven off by four bits.
                 let mut fields: Vec<(&str, T)> = Vec::new();
-                for i in 0..count {
-                    fields.push((DIFFS[i as usize], T::Int { bits, endian: Big }));
-                }
                 let spare = 30 - bits * count;
                 if spare > 0 {
                     fields.push(("unused", T::UInt { bits: spare, endian: Big }));
+                }
+                for i in 0..count {
+                    fields.push((DIFFS[i as usize], T::Int { bits, endian: Big }));
                 }
                 (v, T::inline_structure(shape, fields))
             })
@@ -821,32 +832,42 @@ fn signed_bits(src: &E, top: u32, width: u32) -> E {
     bits_of(src, top, width).sub(src.clone().bit(top).shl(E::lit(width as i128)))
 }
 
-/// One data word of a little-endian record: the word itself, and the
-/// differences packed inside it as computed fields.
+/// One data word of a little-endian record.
 ///
-/// A Steim frame packs its differences MSB first inside each 32-bit word, and
-/// the IR slices a run of *bits* in the order they are written, so a
-/// little-endian word cannot be cut into fields where it lies. Reading it
-/// whole and then working the fields out of its value gives the same answer.
-/// The word keeps its four bytes; the differences beside it take none.
+/// A word that holds whole differences is not byte-swapped as a word at all:
+/// four 1-byte differences are the four bytes where they lie, two 2-byte ones
+/// are each swapped on their own, and a 4-byte one is the whole word swapped.
+/// So all of Steim1 and half of Steim2 is a matter of naming the fields at
+/// their own width and byte order, exactly as the big-endian side does.
+///
+/// The rest of Steim2 is not. A word that packs its differences into bit
+/// fields is swapped whole and then cut up, and the IR slices a run of *bits*
+/// in the order they are written, so cutting the word where it lies would name
+/// the wrong bits. Those words are read whole and the fields worked out from
+/// the value with shifts: the word keeps its four bytes and the differences
+/// beside it take none.
 fn little_word(code: E, two: bool) -> T {
+    // Differences that are whole numbers of bytes, laid out where they are.
+    let plain = |name: &'static str, bits: u32, count: u32| {
+        let fields =
+            (0..count).map(|i| (DIFFS[i as usize], T::Int { bits, endian: Little })).collect::<Vec<_>>();
+        T::inline_structure(name, fields)
+    };
+    // The bit-packed ones, worked out from the swapped word's value. `from` is
+    // the highest bit of the first difference, and what the differences leave
+    // of the thirty bits sits above them.
     let w = E::field("word");
-    // `from` is the highest bit of the first difference, so they come out in
-    // the order they were packed: the first one in the highest bits. None of
-    // these fields is any bytes; the word beside them is all four.
-    let diffs = |name: &'static str, bits: u32, count: u32, from: u32| {
+    let packed = |name: &'static str, bits: u32, count: u32| {
+        let from = 29 - (30 - bits * count);
         let fields = (0..count)
             .map(|i| (DIFFS[i as usize], T::Computed(signed_bits(&w, from - i * bits, bits))))
             .collect();
         T::inline_structure(name, fields)
     };
-    let packed = |name: &'static str, bits: u32, count: u32| {
-        T::inline_structure(name, vec![("word", T::u32(Little)), ("differences", diffs(name, bits, count, 31))])
-    };
     // Steim2's second code, in the top two bits of the word itself, which is
     // what decides how many differences the other thirty bits hold.
     let sub = |name: &'static str, cases: Vec<(i128, u32, u32, &'static str)>| {
-        let cases = cases.into_iter().map(|(v, bits, count, shape)| (v, diffs(shape, bits, count, 29))).collect();
+        let cases = cases.into_iter().map(|(v, bits, count, shape)| (v, packed(shape, bits, count))).collect();
         T::inline_structure(
             name,
             vec![
@@ -859,16 +880,16 @@ fn little_word(code: E, two: bool) -> T {
     let cases = if two {
         vec![
             (0, T::u32(Little)),
-            (1, packed("Steim2x8", 8, 4)),
+            (1, plain("Steim2x8", 8, 4)),
             (2, sub("Steim2Wide", vec![(1, 30, 1, "Steim2x30"), (2, 15, 2, "Steim2x15"), (3, 10, 3, "Steim2x10")])),
             (3, sub("Steim2Narrow", vec![(0, 6, 5, "Steim2x6"), (1, 5, 6, "Steim2x5"), (2, 4, 7, "Steim2x4")])),
         ]
     } else {
         vec![
             (0, T::u32(Little)),
-            (1, packed("Steim1x8", 8, 4)),
-            (2, packed("Steim1x16", 16, 2)),
-            (3, packed("Steim1x32", 32, 1)),
+            (1, plain("Steim1x8", 8, 4)),
+            (2, plain("Steim1x16", 16, 2)),
+            (3, plain("Steim1x32", 32, 1)),
         ]
     };
     T::switch(code, cases, T::u32(Little))
@@ -1034,35 +1055,35 @@ mod tests {
         assert_eq!(ev.node(&d, &[0, 1, DATA, 0]).unwrap().child_count, 7);
     }
 
-    /// The same frame as the test above, written the other way round. The
-    /// codes still pick the shape, and the differences still read: they are
-    /// worked out from the word's value rather than sliced out of its bytes.
+    /// The same frame as the test above, written the other way round.
+    ///
+    /// A Steim1 word is never swapped as a word: four 1-byte differences are
+    /// the four bytes where they lie, and two 2-byte ones are each swapped on
+    /// their own. So the bytes of word 3 are the same in both files, and only
+    /// the pairs in word 4 turn round.
     #[test]
-    fn a_little_endian_steim_word_gives_its_differences_as_computed_fields() {
+    fn a_little_endian_steim1_word_swaps_its_differences_and_not_the_word() {
         let nibbles: u32 = (1 << 24) | (2 << 22);
         let mut data = nibbles.to_le_bytes().to_vec();
         data.extend_from_slice(&100i32.to_le_bytes()); // x0
         data.extend_from_slice(&107i32.to_le_bytes()); // xn
-        // Four 8-bit differences, packed MSB first: 1, 2, -3, 4.
-        data.extend_from_slice(&u32::from_be_bytes([1, 2, 0xfd, 4]).to_le_bytes());
-        // Two 16-bit ones: 5 and -6.
-        data.extend_from_slice(&u32::from_be_bytes([0, 5, 0xff, 0xfa]).to_le_bytes());
+        // Four 8-bit differences, in the order they are written: 1, 2, -3, 4.
+        data.extend_from_slice(&[1, 2, 0xfd, 4]);
+        // Two 16-bit ones, each little-endian: 5 and -6.
+        data.extend_from_slice(&5i16.to_le_bytes());
+        data.extend_from_slice(&(-6i16).to_le_bytes());
         let d = Document::new(MemSource(record_bytes(false, 10, 9, &data)));
         let mut ev = Evaluator::new(mseed());
         assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 1]).unwrap().value.as_int(), Some(100));
-        // The word is still four bytes, and the differences beside it none.
         let w3 = ev.node(&d, &[0, 0, DATA, 0, 3]).unwrap();
-        assert_eq!(w3.child_count, 2); // the word, and the differences
-        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 0]).unwrap().size_bits, 32);
-        let diffs = ev.node(&d, &[0, 0, DATA, 0, 3, 1]).unwrap();
-        assert_eq!((diffs.child_count, diffs.size_bits), (4, 0));
+        assert_eq!((w3.child_count, w3.size_bits), (4, 32));
         for (i, want) in [1i128, 2, -3, 4].into_iter().enumerate() {
-            assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 1, i]).unwrap().value.as_int(), Some(want), "d{i}");
+            assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, i]).unwrap().value.as_int(), Some(want), "d{i}");
         }
-        let wide = ev.node(&d, &[0, 0, DATA, 0, 4, 1]).unwrap();
-        assert_eq!(wide.child_count, 2);
-        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 4, 1, 0]).unwrap().value.as_int(), Some(5));
-        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 4, 1, 1]).unwrap().value.as_int(), Some(-6));
+        let w4 = ev.node(&d, &[0, 0, DATA, 0, 4]).unwrap();
+        assert_eq!(w4.child_count, 2);
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 4, 0]).unwrap().value.as_int(), Some(5));
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 4, 1]).unwrap().value.as_int(), Some(-6));
     }
 
     /// Steim2's second code: a word whose top two bits say how the other
@@ -1076,16 +1097,18 @@ mod tests {
         let mut data = nibbles.to_le_bytes().to_vec();
         data.extend_from_slice(&100i32.to_le_bytes()); // x0
         data.extend_from_slice(&107i32.to_le_bytes()); // xn
-        // dnib 2: seven 4-bit differences, 1 through 7 with the third negative.
+        // dnib 2: seven 4-bit differences, 1 through 7 with the third
+        // negative. They fill bits 27 to 0, leaving 29 and 28 unused.
         let mut word: u32 = 2 << 30;
         for (i, v) in [1u32, 2, 13, 4, 5, 6, 7].into_iter().enumerate() {
-            word |= v << (26 - 4 * i as u32);
+            word |= v << (24 - 4 * i as u32);
         }
         data.extend_from_slice(&word.to_le_bytes());
         let d = Document::new(MemSource(record_bytes(false, 11, 9, &data)));
         let mut ev = Evaluator::new(mseed());
         let w3 = ev.node(&d, &[0, 0, DATA, 0, 3]).unwrap();
         assert_eq!(w3.child_count, 3); // word, dnib, differences
+        assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 0]).unwrap().size_bits, 32);
         assert_eq!(ev.node(&d, &[0, 0, DATA, 0, 3, 1]).unwrap().value.as_int(), Some(2));
         let diffs = ev.node(&d, &[0, 0, DATA, 0, 3, 2]).unwrap();
         assert_eq!(diffs.type_name, "Steim2x4");

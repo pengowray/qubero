@@ -65,61 +65,62 @@ fn collect(d: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], out: &mu
     }
 }
 
+/// The two byte orders read the same differences, for both compressors.
+///
+/// A word that holds whole differences is not swapped as a word: only what is
+/// inside it is. A word that packs bit fields is swapped whole and then cut
+/// up. Getting either of those the wrong way round shows here as two files
+/// that were written from the same samples and do not agree.
 #[test]
-fn a_steim2_record_gives_the_same_differences_whichever_way_round_it_is_written() {
+fn a_steim_record_gives_the_same_differences_whichever_way_round_it_is_written() {
     let Some(root) = samples() else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return;
     };
-    let (db, mut evb) = open(&root, "int32_Steim2_bigEndian.mseed");
-    let (dl, mut evl) = open(&root, "int32_Steim2_littleEndian.mseed");
-    let big = differences(&db, &mut evb, 0);
-    let little = differences(&dl, &mut evl, 0);
-    assert!(!big.is_empty(), "no differences found at all");
-    assert_eq!(big, little, "the two byte orders disagree");
+    for kind in ["Steim1", "Steim2"] {
+        let (db, mut evb) = open(&root, &format!("int32_{kind}_bigEndian.mseed"));
+        let (dl, mut evl) = open(&root, &format!("int32_{kind}_littleEndian.mseed"));
+        let big = differences(&db, &mut evb, 0);
+        let little = differences(&dl, &mut evl, 0);
+        assert!(!big.is_empty(), "{kind}: no differences found at all");
+        assert_eq!(big, little, "{kind}: the two byte orders disagree");
 
-    // The integration constants are plain words either way round, so they are
-    // the check that the two frames line up before the differences are read.
-    let c = |ev: &mut Evaluator, d: &Document<MemSource>, i| ev.node(d, &[0, 0, DATA, 0, i]).unwrap().value.as_int();
-    assert_eq!(c(&mut evb, &db, 1), Some(1));
-    assert_eq!(c(&mut evl, &dl, 1), Some(1));
-    assert_eq!(c(&mut evb, &db, 2), c(&mut evl, &dl, 2));
-
-    // Not every slot a code names holds a sample. Steim2 packs seven
-    // differences into a word whether or not the record has seven left, so the
-    // frame shows more differences than the header counts samples, and it is
-    // the sample count that says where to stop. Showing the slots is right;
-    // adding all of them up is not.
-    assert!(big.len() > 50, "a frame of seven-wide words holds more slots than this record's samples");
+        // The integration constants are plain words either way round, and are
+        // the check that the two frames line up before the differences do.
+        let c =
+            |ev: &mut Evaluator, d: &Document<MemSource>, i| ev.node(d, &[0, 0, DATA, 0, i]).unwrap().value.as_int();
+        assert_eq!(c(&mut evb, &db, 1), Some(1), "{kind}: x0");
+        assert_eq!(c(&mut evl, &dl, 1), Some(1), "{kind}: x0");
+        assert_eq!(c(&mut evb, &db, 2), Some(50), "{kind}: xn");
+    }
 }
 
-/// Steim1, the other compressor, on the same ramp. The big-endian file is what
-/// is checked against: its differences add up from the first sample to the
-/// last.
+/// Both files are a ramp from 1 to 50, so the differences a reader would
+/// actually use add up from the first sample to the last.
 ///
-/// Its little-endian twin is not compared word for word. One 32-bit word of
-/// that fixture's frame appears to have been left unswapped, so the two files
-/// do not hold the same frame; obspy uses both only to test what a record
-/// header says and never reads their samples, so nothing there would have
-/// caught it. The Steim2 pair above is the clean cross-check.
+/// Only the first `sample_count` of them are used. Steim2 packs seven
+/// differences into a word whether or not the record has seven left, so a
+/// frame shows more slots than the record has samples; showing them is right,
+/// and the sample count is what says where to stop.
 #[test]
-fn a_steim1_record_adds_its_differences_up_to_the_sample_it_ends_on() {
+fn the_differences_a_record_uses_add_up_to_the_sample_it_ends_on() {
     let Some(root) = samples() else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return;
     };
-    let (d, mut ev) = open(&root, "int32_Steim1_bigEndian.mseed");
-    let diffs = differences(&d, &mut ev, 0);
-    let x0 = ev.node(&d, &[0, 0, DATA, 0, 1]).unwrap().value.as_int().unwrap();
-    let xn = ev.node(&d, &[0, 0, DATA, 0, 2]).unwrap().value.as_int().unwrap();
-    assert_eq!((x0, xn), (1, 50));
-    assert_eq!(diffs.iter().sum::<i128>() + x0, xn);
-
-    // The little-endian file reads, and its words come out the right shape:
-    // four 8-bit differences to a word, which is what its code word says.
-    let (dl, mut evl) = open(&root, "int32_Steim1_littleEndian.mseed");
-    let little = differences(&dl, &mut evl, 0);
-    assert_eq!(little.len(), diffs.len());
+    for kind in ["Steim1", "Steim2"] {
+        for order in ["bigEndian", "littleEndian"] {
+            let (d, mut ev) = open(&root, &format!("int32_{kind}_{order}.mseed"));
+            let diffs = differences(&d, &mut ev, 0);
+            let count = ev.node(&d, &[0, 0, 8]).unwrap().value.as_int().unwrap() as usize;
+            let x0 = ev.node(&d, &[0, 0, DATA, 0, 1]).unwrap().value.as_int().unwrap();
+            let xn = ev.node(&d, &[0, 0, DATA, 0, 2]).unwrap().value.as_int().unwrap();
+            assert_eq!((x0, xn, count), (1, 50, 50), "{kind} {order}");
+            // The first difference is the dummy the format opens a record with.
+            assert!(diffs.len() >= count, "{kind} {order}: {} slots for {count} samples", diffs.len());
+            assert_eq!(diffs[..count].iter().sum::<i128>() + x0, xn, "{kind} {order}");
+        }
+    }
 }
 
 /// The three calibration blockettes, each from the fixture obspy keeps for it.
