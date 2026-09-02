@@ -15,6 +15,7 @@ import type { Item } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
 import { drawCard } from "./contentcard.js";
+import { drawJpegCard } from "./jpegcards.js";
 import { fileMap } from "./filemap.js";
 import { recordTable } from "./records.js";
 import type { RecordCell } from "./records.js";
@@ -40,6 +41,12 @@ export type DrawContext = {
    *  nothing every time anything on screen changes. */
   readonly dumps: Set<number>;
   readonly dumpTops: Map<number, number>;
+  /** The long halves of the format cards the reader has opened, by the key
+   *  the card gives them. Kept by the report for the same reason `dumps` is:
+   *  a card is built again from nothing every time anything on screen moves,
+   *  so nothing the reader opened can live in the element. */
+  readonly cards: ReadonlySet<string>;
+  readonly toggleCard: (key: string) => void;
   readonly toggleBytes: (key: string) => void;
   readonly toggleDump: (offsetBits: number) => void;
   /** What a run of unclaimed bytes turned out to hold. The answer is cached by
@@ -128,7 +135,18 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
       return el("div", "rp-item rp-pending", REPORT.reading);
     case "card":
       return drawCard(c.doc, item, c.shown);
+    case "formatcard":
+      return drawFormatCard(c, item);
   }
+}
+
+/** A structure the format keeps in a shape that is not the shape it means,
+ *  drawn as that shape. Only JPEG has these; the switch is here rather than
+ *  in a registry of one. */
+function drawFormatCard(c: DrawContext, item: Extract<Item, { kind: "formatcard" }>): HTMLElement {
+  const host = drawJpegCard(c, item);
+  indent(host, item.depth);
+  return host;
 }
 
 /** How far in from the left a row at this depth starts, and whether its name

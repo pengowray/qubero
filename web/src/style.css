@@ -2761,6 +2761,176 @@ table.rec tr.is-on td {
   font-family: var(--sans);
 }
 
+/* ---- the format cards ---- */
+/* A JPEG's tables, drawn as the shapes they are used as rather than as their
+   fields. Every number on one of these is a button that goes to the field it
+   was read from, so they are styled as text and marked on hover, not as
+   controls: sixty-four buttons drawn as buttons would be a keypad. */
+.rp-jc {
+  inset-inline: 0;
+  display: block;
+  padding-block: 6px 12px;
+  padding-inline-end: 8px;
+  overflow-x: auto;
+  white-space: normal;
+  font-family: var(--sans);
+}
+.jc-block + .jc-block {
+  margin-top: 14px;
+}
+.jc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 4px;
+}
+.jc-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.jc-aside {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.jc-caption {
+  margin: 6px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.jc-note {
+  max-width: 62ch;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* The facts a header amounts to, on one line: each is the field it came from,
+   so each is a way into the bytes. */
+.jc-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding-block: 2px 6px;
+}
+.jc-dim {
+  color: var(--muted);
+}
+/* Anything on a card that stands for one field. A button, because it goes
+   somewhere; drawn as its own text, because it is a value being read. */
+.jc-cell,
+.jc-bar,
+.jc-fact,
+.jc-value {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.jc-fact {
+  font-size: 13px;
+}
+.jc-value,
+.jc-cell {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.jc-cell:hover,
+.jc-bar:hover,
+.jc-fact:hover,
+.jc-value:hover {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.jc-cell.is-on,
+.jc-bar.is-on,
+.jc-fact.is-on,
+.jc-value.is-on {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The quantisation table as the square it divides by: the direct current in
+   the top left corner, the finest detail in the bottom right, and the tint
+   saying how hard each coefficient is divided. The tint is a second channel
+   over the number, never instead of it. */
+.jc-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 3.2em);
+  gap: 1px;
+  width: max-content;
+  margin-top: 2px;
+}
+.jc-grid .jc-cell,
+.jc-cell-empty {
+  padding: 2px 4px;
+  border-radius: 0;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+.jc-cell-empty {
+  background: repeating-linear-gradient(45deg, transparent 0 3px, var(--line) 3px 4px);
+}
+/* Sixteen counts, one per code length. No colour: the height is the whole of
+   what the row says, and the number under each bar is the exact value, so
+   nothing here has to be read off a scale. */
+.jc-bars {
+  display: grid;
+  grid-template-columns: repeat(16, 2.4em);
+  gap: 1px;
+  width: max-content;
+  margin-bottom: 4px;
+}
+.jc-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.jc-bar-well {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 30px;
+}
+.jc-bar-stem {
+  width: 100%;
+  min-height: 1px;
+  background: color-mix(in srgb, var(--fg) 45%, transparent);
+}
+.jc-bar-count,
+.jc-bar-len {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 14px;
+}
+.jc-bar-len {
+  color: var(--muted);
+}
+/* The decoded codes, which are in no part of the file. A long table, so it
+   is the half of the card that stays shut. */
+.jc-codes {
+  margin-top: 6px;
+}
+.jc-bits {
+  font-family: var(--mono);
+}
+.jc-table {
+  margin-top: 4px;
+}
+.jc-more {
+  min-height: 0;
+  margin-top: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 /* ---- the content card ---- */
 /* What an image file is a picture of, before the parts that encode it. Its
    head is drawn as a top-level heading is, since that is its place in the
