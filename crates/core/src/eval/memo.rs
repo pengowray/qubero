@@ -48,6 +48,23 @@ impl Memo {
         self.nodes.insert(path, r);
     }
 
+    /// Drop every node read inside a decoded stream.
+    ///
+    /// `forget_after` keeps what ended before the edit, and a decoded field is
+    /// at offset 0 of its own space, so every one of them would look like it
+    /// ended before any edit anywhere. They are worked out from the stream's
+    /// bytes and the stream may be what was edited, so they all go. Cheap: the
+    /// nodes are few, and opening the stream again is one inflate.
+    pub(super) fn forget_decoded(&mut self) {
+        let gone: Vec<Vec<usize>> =
+            self.nodes.iter().filter(|(_, r)| r.space != 0).map(|(p, _)| p.clone()).collect();
+        for p in gone {
+            self.nodes.remove(&p);
+            self.lists.remove(&p);
+            self.json.remove(&p);
+        }
+    }
+
     /// How many nodes are held. What a walk over a long list costs in memory
     /// is measured here rather than guessed at.
     pub(super) fn len(&self) -> usize {

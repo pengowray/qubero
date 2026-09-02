@@ -258,13 +258,27 @@ function build(tab: Tab): void {
     inspector.setPath(path);
   };
 
+  /** Whether a field's offsets are bits of the file, so the hex view and the
+   *  overview can follow them. A field read out of a compressed stream is at
+   *  an offset of that stream: moving the cursor there would land on the byte
+   *  of the file with the same number, which is some other field entirely. */
+  const inFile = (path: readonly number[]): boolean => {
+    const n = doc.templateNode(path);
+    return n.status !== "ok" || n.node.space === 0;
+  };
+
   structure.onPick = ({ path, startBit, endBit }) => {
-    view.setHighlight({ startBit, endBit });
-    picking = true;
-    view.setBitCursor(startBit, { pane: "hex" });
-    picking = false;
+    // The inspector always follows: it can say what a decoded field holds and
+    // which stream it came out of. The hex view and the overview cannot, and
+    // are left where they are rather than sent somewhere wrong.
+    if (inFile(path)) {
+      view.setHighlight({ startBit, endBit });
+      picking = true;
+      view.setBitCursor(startBit, { pane: "hex" });
+      picking = false;
+      overview.reveal(path);
+    }
     inspector.setPath(path);
-    overview.reveal(path);
   };
   // Following an offset: put the cursor where it points, and let the views
   // catch up the same way they do for a search hit.
@@ -293,6 +307,12 @@ function build(tab: Tab): void {
   inspector.onGoTo = jumpToBit;
   inspector.onPick = (path) => {
     const n = doc.templateNode(path);
+    // Following a crumb into a stream moves the listing to it and nothing
+    // else: there is no bit of the file to put the cursor on.
+    if (!inFile(path)) {
+      structure.reveal(path);
+      return;
+    }
     if (n.status === "ok") nav.recordJump(view.cursorState.bitOffset, n.node.offset_bits);
     goToField(path);
     overview.reveal(path);

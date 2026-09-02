@@ -22,7 +22,7 @@ import { markMap } from "./filemap.js";
 import { checkGap } from "./gapcheck.js";
 import { isRecordList } from "./records.js";
 import { jpegCardKind } from "./jpegcards.js";
-import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens } from "./listingdraw.js";
+import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens, spaceOf } from "./listingdraw.js";
 import type { DrawContext, Selected } from "./listingdraw.js";
 import type { GapVerdict } from "./gapcheck.js";
 import type { MapSegment } from "./filemap.js";
@@ -151,6 +151,11 @@ export class ListingReport {
   outline(): OutlineHeading[] {
     const out: OutlineHeading[] = [];
     for (const i of this.items) {
+      // A heading over the contents of a compressed stream is not a part of
+      // the file: its extent is bits of the decoded bytes, and the rail, the
+      // hex view and every file map read this list as file offsets. See
+      // DESIGN.md, "A stream read as the fields inside it".
+      if (i.kind === "heading" && spaceOf(i) !== 0) continue;
       if (i.kind === "heading") {
         out.push({
           key: i.key,

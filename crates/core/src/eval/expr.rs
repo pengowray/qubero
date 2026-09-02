@@ -93,11 +93,10 @@ impl Evaluator {
                     },
                     false => offset,
                 };
-                let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
-                let missing = doc.read_bits(offset, u64::from(*bits), &mut buf);
-                if !missing.is_empty() {
-                    return Err(EvalError::Pending(missing));
-                }
+                // In whatever space this field is being read in. A switch
+                // peeking at the byte it is about to read, inside a decoded
+                // stream, must look at that stream and not at the file.
+                let buf = self.read_in(doc, self.space_at(at), offset, u64::from(*bits))?;
                 read_uint(&buf, *bits, *endian) as i128
             }
             // The same, further on: what a record whose shape is settled by a
@@ -126,11 +125,7 @@ impl Evaluator {
                     },
                     false => from,
                 };
-                let mut buf = vec![0u8; bytes_for(u64::from(*bits))];
-                let missing = doc.read_bits(from, u64::from(*bits), &mut buf);
-                if !missing.is_empty() {
-                    return Err(EvalError::Pending(missing));
-                }
+                let buf = self.read_in(doc, self.space_at(at), from, u64::from(*bits))?;
                 read_uint(&buf, *bits, *endian) as i128
             }
             // Walk forward for what ends an unmeasured stream. A lead is told
@@ -152,7 +147,7 @@ impl Evaluator {
                 // The lead alone when there is nothing to tell it apart from,
                 // the lead and the byte after it when there is.
                 let overlap = if unless.is_empty() { n as u64 - 1 } else { n as u64 };
-                let hit = scan_blocks(doc, offset, total, overlap, Dir::Forward, |b| {
+                let hit = scan_blocks(self, doc, self.space_at(at), offset, total, overlap, Dir::Forward, |b| {
                     (0..b.len().saturating_sub(n - 1)).find(|&i| {
                         b[i..i + n] == lead[..]
                             && (unless.is_empty() || b.get(i + n).is_some_and(|next| !unless.contains(next)))
@@ -178,7 +173,7 @@ impl Evaluator {
                 let total = (limit - offset) / 8;
                 let n = needle.len();
                 let dir = if *last { Dir::Backward } else { Dir::Forward };
-                let hit = scan_blocks(doc, offset, total, n as u64 - 1, dir, |b| match dir {
+                let hit = scan_blocks(self, doc, self.space_at(at), offset, total, n as u64 - 1, dir, |b| match dir {
                     Dir::Backward => b.windows(n).rposition(|w| w == needle.as_slice()),
                     Dir::Forward => b.windows(n).position(|w| w == needle.as_slice()),
                 })?;
@@ -818,7 +813,9 @@ pub(super) enum Dir {
 /// caller fetches them and asks again. Which end the walk starts from decides
 /// whether that ever ends: see [`Dir`].
 fn scan_blocks<S: Source>(
+    ev: &Evaluator,
     doc: &Document<S>,
+    space: u32,
     offset: u64,
     total: u64,
     overlap: u64,
@@ -829,10 +826,11 @@ fn scan_blocks<S: Source>(
     // A block has to be longer than the overlap, or the walk never moves on.
     let step = BLOCK.max(overlap + 1);
     let mut buf = Vec::new();
+    // Through the evaluator rather than the document: the run being walked may
+    // be a decoded stream's, and the file at the same offset is other bytes.
     let read = |from: u64, want: u64, buf: &mut Vec<u8>| -> R<()> {
-        buf.resize(want as usize, 0);
-        let missing = doc.read_bits(offset + from * 8, want * 8, buf);
-        if missing.is_empty() { Ok(()) } else { Err(EvalError::Pending(missing)) }
+        *buf = ev.read_in(doc, space, offset + from * 8, want * 8)?;
+        Ok(())
     };
     match dir {
         Dir::Forward => {

@@ -240,6 +240,13 @@ impl Evaluator {
         if size == 0 {
             return Ok(None);
         }
+        // Only stretches of the file go in the index: this is what `locate`
+        // asks about a bit of the file. An offset counted inside a decoded
+        // stream names bytes that are not in the file at all, and indexing one
+        // would have the cursor land on a field that is nowhere near it.
+        if self.memo[&stretch].space != 0 {
+            return self.frame(doc, stretch);
+        }
         if !self.placed.ranges.insert((start, start + size)) {
             return Ok(None);
         }
@@ -309,6 +316,12 @@ impl Evaluator {
                 self.places(elem, seen)
             }
             Ty::Sized { inner, .. } => self.places(inner, seen),
+            // A stream is walked into only when something inside it points
+            // back at the file, which is exactly the RNTuple case: the anchor
+            // is compressed and the envelopes it names are at file offsets.
+            // Every other stream is pruned here and never unpacked by this
+            // walk.
+            Ty::Decoded { inner, .. } => self.places(inner, seen),
             Ty::Switch { cases, default, .. } => {
                 cases.iter().any(|(_, t)| self.places(t, seen)) || self.places(default, seen)
             }

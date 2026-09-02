@@ -160,6 +160,13 @@ export type TemplateNode = {
    * signature and a `body`; giving `body` a heading of its own spends a level
    * of structure on the word "body". */
   readonly contents: boolean;
+  /** Which address space `offset_bits` counts in. 0 is the file. Anything
+   *  else is the bytes a compressed stream came to, and the offset is counted
+   *  from the front of those rather than from the front of the file. */
+  readonly space: number;
+  /** For a compressed run that would not open, why not: `too-large`,
+   *  `failed` or `unaligned`. Null for every other field. */
+  readonly refused: string | null;
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -755,6 +762,16 @@ export function formatOffset(bits: number): string {
 }
 
 /**
+ * An address, in whatever space it belongs to. A field of the file gets the
+ * plain address; one inside a decoded stream gets a leading `+`, because
+ * `0x1c` of a stream and `0x1c` of the file are different bytes and a reader
+ * comparing the listing against the hex view has to be able to tell.
+ */
+export function formatAddress(bits: number, space: number): string {
+  return space === 0 ? formatOffset(bits) : `+${formatOffset(bits)}`;
+}
+
+/**
  * The shift-and-mask that reads `width` bits starting at `bitOffset` and leaves
  * them right-aligned in a plain number.
  *
@@ -1061,6 +1078,16 @@ export class Doc {
   /** The whole text of a text field, decoded in the field's own encoding. */
   fieldText(path: readonly number[]): TemplateReply<{ text: string; truncated: boolean }> {
     return this.handleReply(this.editor.field_text(Uint32Array.from(path)));
+  }
+
+  /**
+   * A field's own bytes, up to `limit`, read where the field actually is.
+   *
+   * Not `readBits` at the node's offset: a field inside a decoded stream is at
+   * an offset of that stream, and the file at the same offset is other bytes.
+   */
+  fieldBytes(path: readonly number[], limit: number): TemplateReply<{ bytes: number[]; truncated: boolean }> {
+    return this.handleReply(this.editor.field_bytes(Uint32Array.from(path), limit));
   }
 
   /**

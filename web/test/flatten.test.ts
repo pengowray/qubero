@@ -52,6 +52,8 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     child_count: spec.count ?? kids.length,
     composite,
     editable: false,
+    space: 0,
+    refused: null,
     value_bytes: spec.bytes,
     value_offset_bits: at * 8,
     read_as: null,

@@ -1108,6 +1108,19 @@ pub enum Ty {
     /// A type from the template's table, by name. This is what makes a format
     /// whose boxes contain boxes expressible: the type refers to itself.
     Named(Arc<str>),
+    /// A compressed run, read as what it holds. The field keeps the bytes it
+    /// has in the file and the length it has in the file; `inner` is read over
+    /// the bytes that come out of it, in an address space of its own that
+    /// starts at zero.
+    ///
+    /// Wrap it in a [`Ty::Sized`] to say how long the compressed run is: this
+    /// has no length of its own, because a compressed stream's length is never
+    /// something the stream says.
+    ///
+    /// Nothing inside is editable, there is no mapping from a decoded byte
+    /// back to the file, and a stream too large or too broken to open reads as
+    /// the bytes it is with a note saying why. See [`crate::codec`].
+    Decoded { codec: crate::codec::Codec, inner: Box<Ty> },
 }
 
 /// The value a format writes to mean a slot nobody filled in. See
@@ -1465,6 +1478,11 @@ impl Ty {
     pub fn sized(size: Expr, inner: Ty) -> Ty {
         Ty::Sized { size, inner: Box::new(inner) }
     }
+    /// `size` bytes of compressed run, holding `inner` once opened. See
+    /// [`Ty::Decoded`].
+    pub fn decoded(size: Expr, codec: crate::codec::Codec, inner: Ty) -> Ty {
+        Ty::Sized { size, inner: Box::new(Ty::Decoded { codec, inner: Box::new(inner) }) }
+    }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
@@ -1646,6 +1664,9 @@ impl Ty {
             Ty::Enum { def, .. } => def.name.clone(),
             Ty::Flags { def, .. } => def.name.clone(),
             Ty::Named(n) => n.to_string(),
+            // The codec first: what a reader wants from this column is which
+            // of the five it is, and what comes out is a row of its own below.
+            Ty::Decoded { codec, .. } => codec.as_str().to_string(),
         }
     }
 }

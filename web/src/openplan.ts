@@ -35,6 +35,10 @@ export type OpenPlan = {
 export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): OpenPlan | null {
   if (n.composite || n.kind !== "bytes") return null;
   if (n.offset_bits % 8 !== 0 || n.size_bits % 8 !== 0 || n.size_bits === 0) return null;
+  // A field read out of a compressed stream is at an offset of that stream,
+  // and everything below slices the file by that number. Opening one would
+  // hand over the wrong bytes under the right name.
+  if (n.space !== 0) return null;
   const at = n.offset_bits / 8;
   const packed = n.size_bits / 8;
   const siblings = siblingNodes(doc, path);

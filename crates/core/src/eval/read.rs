@@ -47,7 +47,28 @@ impl Evaluator {
         if at + n > r.limit {
             return fail("runs past the end of its container");
         }
+        self.read_in(doc, r.space, at, n)
+    }
+
+    /// Bytes of whichever space `space` names, with no node to bound them.
+    ///
+    /// Every read in the evaluator ends up here, which is what keeps the file
+    /// and a decoded stream from leaking into one another: a peek, a scan for
+    /// a terminator and a field's own bytes all ask the same question, and one
+    /// of them going straight to the document would read the file at an offset
+    /// that means something else entirely.
+    ///
+    /// A decoded stream is already in memory, so it never answers `Pending`.
+    pub(super) fn read_in<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, n: u64) -> R<Vec<u8>> {
         let mut buf = vec![0u8; bytes_for(n)];
+        if space != 0 {
+            let Some(src) = self.spaces.buf(space) else { return fail("this stream is no longer open") };
+            if at + n > src.len() as u64 * 8 {
+                return fail("runs past the end of the decoded stream");
+            }
+            crate::bits::copy_bits(src, at, &mut buf, 0, n);
+            return Ok(buf);
+        }
         let missing = doc.read_bits(at, n, &mut buf);
         if missing.is_empty() {
             Ok(buf)

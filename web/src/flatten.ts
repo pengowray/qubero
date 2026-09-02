@@ -697,12 +697,21 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   const order = inFileOrder(slice.nodes);
   const first = order[0];
   const last = order[order.length - 1];
+  // A compressed stream's contents are not bytes of the stream: they are
+  // counted in a space of their own, and none of them accounts for any of the
+  // run the stream occupies. Measuring them against the parent's extent would
+  // find the whole run unaccounted for and draw a gap over it.
+  const elsewhere = first !== undefined && first.space !== node.space;
   const start = before > 0 && first !== undefined ? first.offset_bits : node.offset_bits;
   const end = after > 0 && last !== undefined ? endBits(last) : endBits(node);
   const to = slice.from + slice.nodes.length;
-  if (before > 0) edge(w, "earlier", path, depth, before, slice.from, to, { start: node.offset_bits, end: start });
-  rows(w, path, slice.nodes, slice.from, [], depth, { start, end });
-  if (after > 0) edge(w, "later", path, depth, after, slice.from, to, { start: end, end: endBits(node) });
+  if (before > 0 && !elsewhere) {
+    edge(w, "earlier", path, depth, before, slice.from, to, { start: node.offset_bits, end: start });
+  }
+  rows(w, path, slice.nodes, slice.from, [], depth, elsewhere ? null : { start, end });
+  if (after > 0 && !elsewhere) {
+    edge(w, "later", path, depth, after, slice.from, to, { start: end, end: endBits(node) });
+  }
 }
 
 /** A structure's children as items: a row or a heading each, in the order
@@ -728,8 +737,12 @@ function rows(
 ): void {
   const order = inFileOrder(kids);
   let cursor = bounds?.start ?? order[0]?.offset_bits ?? 0;
+  // Which space these are counted in. A run of siblings is all in one, so the
+  // first of them settles it; a gap between two of them is real, and one
+  // measured against an offset from another space is not.
+  const space = order[0]?.space ?? 0;
   for (const kid of order) {
-    if (kid.offset_bits > cursor) gap(w, path, cursor, kid.offset_bits, depth);
+    if (kid.offset_bits > cursor && kid.space === space) gap(w, path, cursor, kid.offset_bits, depth);
     cursor = Math.max(cursor, endBits(kid));
     // A field that is only its parent's contents has no name worth a level of
     // structure: its children stand in its place, at its depth.

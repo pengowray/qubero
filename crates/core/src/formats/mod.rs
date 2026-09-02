@@ -1,6 +1,35 @@
 //! Built-in templates. These double as the test-bed for the IR: anything a
 //! format needs that the IR cannot say is a gap in the IR, not in the format.
 
+use crate::template::{Encoding, Expr as E, StrLen, Ty as T};
+
+/// What a compressed stream holds when the stream is the whole file: its text.
+///
+/// A file called `hello.txt.zst` holds `hello`, and that is the one thing a
+/// reader opening it wants to see. Bytes that are not text read as bytes,
+/// which is what an encoding that does not fit already reports, so this is
+/// safe to say of a stream holding anything.
+///
+/// One field in a structure rather than the field on its own, because the
+/// stream's own name is the compressed run's: the structure is marked as
+/// nothing but its contents, so a view that folds those spends no row on it.
+pub(crate) fn decoded_text() -> T {
+    T::structure_named(
+        "DecodedText",
+        "",
+        "text",
+        vec![("text", T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8))],
+    )
+}
+
+/// What a compressed stream holds when something else in the file says what it
+/// is: bytes, until a template is written for whatever they turn out to be.
+/// A ROOT record's contents are a streamed object, and reading one takes the
+/// streamer information the file keeps elsewhere.
+pub(crate) fn decoded_object() -> T {
+    T::structure_named("DecodedObject", "", "object", vec![("object", T::bytes(E::Remaining))])
+}
+
 mod aiff;
 mod ar;
 mod aseprite;

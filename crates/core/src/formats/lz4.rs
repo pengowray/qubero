@@ -15,6 +15,7 @@
 //! writes into an LZ4 stream for its own purposes, which share their magic
 //! range with zstd's skippable frames.
 
+use crate::codec::Codec;
 use crate::template::{Endian::{Big, Little}, Expr as E, Template, Until, Ty as T};
 
 /// What one of these starts with.
@@ -72,7 +73,16 @@ fn block() -> T {
             ("block_header", T::u32(Little)),
             ("uncompressed", T::computed(E::field("block_header").bit(31))),
             ("block_size", T::computed(E::field("block_header").sub(E::field("block_header").bit(31).mul(E::lit(UNCOMPRESSED_BIT))))),
-            ("data", T::bytes(E::field("block_size"))),
+            // A compressed block is one LZ4 block and opens on its own; a
+            // stored block is the bytes as they came and has nothing to open.
+            (
+                "data",
+                T::switch(
+                    E::field("uncompressed"),
+                    vec![(1, T::bytes(E::field("block_size")))],
+                    T::decoded(E::field("block_size"), Codec::Lz4Block, super::decoded_text()),
+                ),
+            ),
             // Only a real block has one: the end mark is the size word and
             // nothing more.
             (
@@ -105,6 +115,39 @@ mod tests {
         v.extend_from_slice(&0u32.to_le_bytes()); // the end mark
         v.extend_from_slice(&0u32.to_le_bytes()); // the content checksum
         v
+    }
+
+    /// A frame of one compressed block, which is what an encoder writes when
+    /// compressing helped.
+    fn packed_frame(content: &[u8]) -> Vec<u8> {
+        let block = lz4_flex::block::compress(content);
+        let mut v = MAGIC.to_vec();
+        v.push(0b0110_1100);
+        v.push(0b0100_0000);
+        v.extend_from_slice(&(content.len() as u64).to_le_bytes());
+        v.push(0x00);
+        v.extend_from_slice(&(block.len() as u32).to_le_bytes());
+        v.extend_from_slice(&block);
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v
+    }
+
+    /// A compressed block opens into what it holds; the block keeps the length
+    /// it has in the file.
+    #[test]
+    fn a_compressed_block_reads_as_the_text_inside_it() {
+        let d = Document::new(MemSource(packed_frame(b"hello hello hello lz4")));
+        let mut e = Evaluator::new(lz4());
+        let data = e.node(&d, &[14, 0, 3]).unwrap();
+        assert_eq!(data.type_name, "lz4");
+        assert_eq!(data.space, 0);
+        assert_eq!(data.child_count, 1);
+        assert_eq!(data.refused, None);
+        let text = e.node(&d, &[14, 0, 3, 0, 0]).unwrap();
+        assert_eq!(text.value, crate::eval::Value::Str("hello hello hello lz4".into()));
+        assert_eq!((text.offset_bits, text.space), (0, 1));
+        assert!(!text.editable);
     }
 
     #[test]

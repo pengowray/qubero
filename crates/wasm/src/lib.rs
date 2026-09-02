@@ -46,6 +46,13 @@ pub struct Editor {
     focus: Option<overview::Scan>,
 }
 
+/// A field's bytes, and whether it runs on past them.
+#[derive(Serialize)]
+struct BytesDto {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
 #[derive(Serialize)]
 struct NodeDto {
     path: Vec<usize>,
@@ -84,6 +91,14 @@ struct NodeDto {
     /// True when this field is only its parent's contents, and so has no name
     /// of its own worth a level of structure.
     contents: bool,
+    /// Which address space `offset_bits` counts in: 0 for the file, and a
+    /// number of its own for each decoded stream. A field in a space other
+    /// than the file has no place in the hex view, and its offset is drawn as
+    /// an offset within its stream.
+    space: f64,
+    /// For a compressed run that would not open: "too-large", "failed" or
+    /// "unaligned". Null for every other field.
+    refused: Option<String>,
 }
 
 /// What the byte-class scan has found so far. `classes` is one digit per
@@ -941,6 +956,8 @@ fn dto(n: NodeInfo) -> NodeDto {
         consumed_by: n.consumed_by.map(|i| i as f64),
         machinery: n.machinery,
         contents: n.contents,
+        space: n.space as f64,
+        refused: n.refused,
     }
 }
 
@@ -1329,6 +1346,24 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.text_value(&self.doc, &p).map(|(text, truncated)| TextDto { text, truncated }))
+            }
+        }
+    }
+
+    /// The first `limit` bytes of a field, read in whatever address space the
+    /// field is in: {status:"ok",node:{bytes:[..],truncated}}. Use this rather
+    /// than `read_bits` at the node's offset, which is the file and is the
+    /// wrong bytes for anything inside a decoded stream.
+    pub fn field_bytes(&mut self, path: &[u32], limit: u32) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut self.eval {
+            None => reply::<BytesDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(
+                    e.field_bytes(&self.doc, &p, u64::from(limit))
+                        .map(|(bytes, truncated)| BytesDto { bytes, truncated }),
+                )
             }
         }
     }

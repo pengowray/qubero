@@ -20,3 +20,14 @@ yaxpeax-arch = { version = "0.3.2", default-features = false, features = ["std"]
 yaxpeax-x86 = { version = "2.2.0", default-features = false, features = ["std", "fmt"] }
 yaxpeax-arm = { version = "0.4.0", default-features = false, features = ["std", "fmt"] }
 raki = "1.3.2"
+# Zstandard, pure Rust and no C. Default features off: what is left out is a
+# checksum of the decompressed data, which this does not check.
+ruzstd = { version = "0.8", default-features = false, features = ["std"] }
+# One LZ4 block. Default features off leaves out the frame reader, which the
+# lz4 template already reads itself, and keeps the checked decoder rather than
+# the one that trusts its input: this reads files nobody vouched for.
+lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode", "std"] }
+# xz, pure Rust. It reads a whole stream rather than a block: the LZMA2 inside
+# one xz block is a step of a decoder's state and does not stand on its own,
+# which is why the template opens the stream and not the block.
+lzma-rs = { version = "0.3", default-features = false }

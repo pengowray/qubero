@@ -274,7 +274,7 @@ impl Evaluator {
         if offset > pr.limit {
             return fail("runs past the end of its container");
         }
-        let r = self.effective(doc, path, Name::Index(idx), ty, offset, pr.limit)?;
+        let r = self.effective(doc, path, Name::Index(idx), ty, offset, pr.limit, pr.space)?;
         self.remember(path, r);
         Ok(())
     }
