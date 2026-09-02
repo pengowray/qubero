@@ -77,6 +77,11 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"PWAD", "wad"),
     (b"\x34\x12\xaa\x55", "vpk"),
     (b"NES\x1a", "nes"),
+    // NASA's Common Data Format, which shares three letters with the NetCDF
+    // classic file below and nothing else. Version 2.x opens with the word
+    // that means "not compressed", twice over.
+    (cdf::MAGIC, "cdf"),
+    (cdf::MAGIC_V2, "cdf"),
     // The three versions of a classic NetCDF file. A `.nc` written by a
     // modern library is an HDF5 file instead, and matches that signature.
     (b"CDF\x01", "netcdf"),

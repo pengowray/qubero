@@ -16,6 +16,7 @@ mod cab;
 mod braw;
 mod bards_tale;
 mod cbor;
+mod cdf;
 mod coff;
 mod compress;
 mod corel;
@@ -130,6 +131,7 @@ pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use bencode::bencode;
 pub use cbor::cbor;
+pub use cdf::cdf;
 pub use coff::coff;
 pub use compress::compress;
 pub use corel::{cdr, cmx};
@@ -328,6 +330,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("pak", |_| pak()),
     ("parquet", |_| parquet()),
     ("hdf4", |_| hdf4()),
+    ("cdf", |_| cdf()),
     ("vpk", |_| vpk()),
     ("mca", |_| mca()),
     ("tap", |_| tap()),
