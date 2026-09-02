@@ -56,6 +56,8 @@ const NOTE_LIMIT = 3;
  *  SQLite file of a hundred thousand pages is not a hundred thousand buttons;
  *  the part the view is in is always listed, wherever it falls. */
 const PARTS_SHOWN = 200;
+/** How long after a press on a map the Contents list holds still. */
+const MAP_PRESS_QUIET_MS = 1000;
 /** The layout strip draws one cell per part. Past this many, neighbouring
  *  parts share a cell: a strip of a hundred thousand two-pixel cells would be
  *  neither drawable nor readable. */
@@ -385,6 +387,9 @@ export class OverviewPanel {
    *  stands for. A cell is a stretch of the file, not a place in it, so
    *  picking one selects it rather than only moving the cursor to its front. */
   onJump: (startBit: number, endBit: number) => void = () => {};
+  /** When a map was last pressed, so the list does not scroll to follow the
+   *  view the press moved. */
+  private mapPressAt = -Infinity;
   /** Ctrl+click on an object whose field holds an offset: go to where it
    *  points. */
   onGoTo: (bitOffset: number) => void = () => {};
@@ -1199,9 +1204,14 @@ export class OverviewPanel {
     }
   }
 
-  /** Scroll the rail so the marked row can be seen. */
+  /** Scroll the rail so the marked row can be seen. Not after a press on one
+   *  of the maps: the reader is looking at the map, and the list moving under
+   *  their pointer is the wrong thing to notice. The view moves in its own
+   *  time (a glide can report several viewports), so this is a window rather
+   *  than a one-shot flag. */
   private showPlace(): void {
     if (this.body.hidden || this.tab !== "contents") return;
+    if (performance.now() - this.mapPressAt < MAP_PRESS_QUIET_MS) return;
     const place = this.place;
     if (place === null) return;
     const subs = this.subRowsByPart.get(place.part);
@@ -1424,6 +1434,7 @@ export class OverviewPanel {
       return;
     }
     this.setBlock(from, to);
+    this.mapPressAt = performance.now();
     this.onJump(from * 8, to * 8);
   }
 
@@ -1438,6 +1449,7 @@ export class OverviewPanel {
     const to = Math.min(f.end, from + f.bucket_bytes);
     this.picked = i;
     this.drawMap(this.focusCanvas, f.classes, { from: i, to: i + 1 });
+    this.mapPressAt = performance.now();
     this.onJump(from * 8, to * 8);
   }
 
