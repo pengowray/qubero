@@ -19,6 +19,7 @@
 //! Not read: the compressed data, and the filter chain in a block header,
 //! which is a list of identifiers and each filter's own properties.
 
+use crate::codec::Codec;
 use crate::template::{Endian::{Big, Little}, Expr as E, Part, Template, Ty as T};
 
 /// What one of these starts with.
@@ -38,13 +39,16 @@ fn index_size() -> E {
 }
 
 pub fn xz() -> Template {
-    Template::new("xz", part().root)
+    Template::new("xz", part(super::decoded_text()).root)
 }
 
 /// The same stream, for a format that carries one inside itself. A ROOT record
 /// compressed with `XZ` is a nine-byte block header and then a whole xz stream,
 /// footer and all, which is what makes the index at the end of it findable.
-pub fn part() -> Part {
+///
+/// `inner` is what the blocks turn out to hold, which is the caller's business:
+/// a file of its own holds text, and a ROOT record holds an object.
+pub fn part(inner: T) -> Part {
     Part::new(
         T::structure(
             "XzStream",
@@ -69,6 +73,14 @@ pub fn part() -> Part {
                 ),
                 ("index", T::sized(index_size(), index())),
                 ("footer", footer()),
+            // What the whole stream comes to. Nothing in it can be opened on
+            // its own: a block is a step of a decoder's state and not a run
+            // that stands by itself, so the field that holds the answer is the
+            // stream. It costs no bytes where it stands and covers the stream
+            // from its first byte, which is the file when the stream is the
+            // file and the block payload when a ROOT record carries one.
+                ("decoded", T::at_in_window(E::lit(0), T::decoded(E::Remaining, Codec::Xz, inner))),
+
             ],
         ),
     )

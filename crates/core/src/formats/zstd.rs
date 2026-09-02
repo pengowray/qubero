@@ -23,6 +23,7 @@
 //! a stream: a magic in a range of sixteen, a length, and that many bytes
 //! nobody but the application reads.
 
+use crate::codec::Codec;
 use crate::template::{Endian::{Big, Little}, Expr as E, Part, Template, Until, Ty as T};
 
 /// What a zstd frame starts with.
@@ -35,13 +36,28 @@ const SKIPPABLE_FIRST: i128 = 0x184d_2a50;
 const BLOCK_TYPES: &[(i128, &str)] = &[(0, "raw"), (1, "rle"), (2, "compressed"), (3, "reserved")];
 
 pub fn zstd() -> Template {
-    Template::new("zstd", part().root)
+    Template::new("zstd", part(super::decoded_text()).root)
 }
 
 /// The same stream, for a format that carries one inside itself. A ROOT record
 /// compressed with `ZS` is a nine-byte block header and then a standard frame.
-pub fn part() -> Part {
-    Part::new(T::structure("ZstdStream", vec![("frames", T::repeat(frame(), Until::End))]))
+///
+/// `inner` is what the frames turn out to hold, which is the caller's business:
+/// a file of its own holds text, and a ROOT record holds an object.
+pub fn part(inner: T) -> Part {
+    Part::new(T::structure(
+        "ZstdStream",
+        vec![
+            ("frames", T::repeat(frame(), Until::End)),
+            // What the whole stream comes to. Nothing in it can be opened on
+            // its own: a block is a step of a decoder's state and not a run
+            // that stands by itself, so the field that holds the answer is the
+            // stream. It costs no bytes where it stands and covers the stream
+            // from its first byte, which is the file when the stream is the
+            // file and the block payload when a ROOT record carries one.
+            ("decoded", T::at_in_window(E::lit(0), T::decoded(E::Remaining, Codec::Zstd, inner))),
+        ],
+    ))
 }
 
 /// One frame, which is either zstd's own or a skippable one an application

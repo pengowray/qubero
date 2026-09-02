@@ -12,6 +12,7 @@
 //! between the header and the four-byte checksum at the end, the same way a
 //! gzip member's body is.
 
+use crate::codec::Codec;
 use crate::template::{Endian::Big, Expr as E, Part, Template, Ty as T};
 
 /// The compression level the header names, which says how hard the encoder
@@ -19,12 +20,15 @@ use crate::template::{Endian::Big, Expr as E, Part, Template, Ty as T};
 const LEVELS: &[(i128, &str)] = &[(0, "fastest"), (1, "fast"), (2, "default"), (3, "best compression")];
 
 pub fn zlib() -> Template {
-    Template::new("zlib", part().root)
+    Template::new("zlib", part(super::decoded_text()).root)
 }
 
 /// The same stream, for a format that carries one inside itself. A ROOT record
 /// compressed with `ZL` is a nine-byte block header and then exactly this.
-pub fn part() -> Part {
+///
+/// `inner` is what the deflate stream turns out to hold, which is the caller's
+/// business: a file of its own holds text, and a ROOT record holds an object.
+pub fn part(inner: T) -> Part {
     Part::new(
         T::structure(
             "ZlibStream",
@@ -41,8 +45,11 @@ pub fn part() -> Part {
                 // beforehand, written only when the bit above says there is
                 // one. The dictionary itself is not in the file.
                 ("dictid", T::present_if(E::field("fdict"), T::u32(Big))),
-                // Deflate, which nothing here unpacks.
-                ("compressed", T::bytes(E::Remaining.sub(E::lit(4)))),
+                // Deflate. The bytes stay the compressed run they are and
+                // stay where they are; what comes out of them is read as
+                // fields of its own. The two header bytes are not part of it,
+                // which is why this is raw deflate and not zlib.
+                ("compressed", T::decoded(E::Remaining.sub(E::lit(4)), Codec::Deflate, inner)),
                 // Adler-32 of the uncompressed data, big-endian, which is the
                 // one thing in this format that is not little-endian.
                 ("adler32", T::u32(Big)),
@@ -86,7 +93,31 @@ mod tests {
         assert_eq!(e.node(&d, &[5]).unwrap().size_bits, 0);
         assert_eq!(e.node(&d, &[6]).unwrap().offset_bits, 2 * 8);
         assert_eq!(e.node(&d, &[6]).unwrap().size_bits, 2 * 8);
+        // The compressed run keeps its own length whatever it holds.
+        assert_eq!(e.node(&d, &[6]).unwrap().space, 0);
         assert_eq!(e.node(&d, &[7]).unwrap().value.as_int(), Some(1));
+    }
+
+    /// A file that is one zlib stream reads as the text inside it. This is
+    /// the whole of what someone opening `notes.txt.z` wants.
+    #[test]
+    fn the_text_inside_the_stream_is_what_the_stream_reads_as() {
+        let packed = miniz_oxide::deflate::compress_to_vec_zlib(b"hello", 6);
+        let d = Document::new(MemSource(packed.clone()));
+        let mut e = Evaluator::new(zlib());
+        // The compressed run is still the run it is, in the file, at its own
+        // length: the deflate bytes between the header and the checksum.
+        let run = e.node(&d, &[6]).unwrap();
+        assert_eq!(run.offset_bits, 2 * 8);
+        assert_eq!(run.size_bits, (packed.len() as u64 - 6) * 8);
+        assert_eq!(run.space, 0);
+        assert_eq!(run.child_count, 1);
+        assert_eq!(run.refused, None);
+        // And what came out of it counts from its own start.
+        let text = e.node(&d, &[6, 0, 0]).unwrap();
+        assert_eq!(text.value, Value::Str("hello".into()));
+        assert_eq!((text.offset_bits, text.size_bits, text.space), (0, 5 * 8, 1));
+        assert!(!text.editable);
     }
 
     #[test]

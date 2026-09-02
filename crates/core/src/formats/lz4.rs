@@ -15,6 +15,7 @@
 //! writes into an LZ4 stream for its own purposes, which share their magic
 //! range with zstd's skippable frames.
 
+use crate::codec::Codec;
 use crate::template::{Endian::{Big, Little}, Expr as E, Template, Until, Ty as T};
 
 /// What one of these starts with.
@@ -72,7 +73,16 @@ fn block() -> T {
             ("block_header", T::u32(Little)),
             ("uncompressed", T::computed(E::field("block_header").bit(31))),
             ("block_size", T::computed(E::field("block_header").sub(E::field("block_header").bit(31).mul(E::lit(UNCOMPRESSED_BIT))))),
-            ("data", T::bytes(E::field("block_size"))),
+            // A compressed block is one LZ4 block and opens on its own; a
+            // stored block is the bytes as they came and has nothing to open.
+            (
+                "data",
+                T::switch(
+                    E::field("uncompressed"),
+                    vec![(1, T::bytes(E::field("block_size")))],
+                    T::decoded(E::field("block_size"), Codec::Lz4Block, super::decoded_text()),
+                ),
+            ),
             // Only a real block has one: the end mark is the size word and
             // nothing more.
             (

@@ -134,7 +134,7 @@ fn with_key(name: &str, named_by: &str, contents: &str, rest: Vec<(&str, T)>) ->
 /// ROOT compresses in blocks of at most sixteen mebibytes unpacked, so a large
 /// object is several of these one after another and the record's contents are
 /// however many fit.
-fn compressed() -> T {
+fn compressed(inner: T) -> T {
     T::structure(
         "Compressed",
         vec![
@@ -142,7 +142,7 @@ fn compressed() -> T {
             ("method", T::u8()),
             ("compressed_size", T::UInt { bits: 24, endian: Little }),
             ("uncompressed_size", T::UInt { bits: 24, endian: Little }),
-            ("stream", T::sized(E::field("compressed_size"), stream())),
+            ("stream", T::sized(E::field("compressed_size"), stream(inner))),
         ],
     )
     .counted_as("block")
@@ -156,14 +156,14 @@ fn compressed() -> T {
 /// `CS` is not among them. The zlib of ROOT 3 wrote raw deflate with no
 /// two-byte header on it and no checksum after it, so it is not a zlib stream
 /// and there is nothing here that reads one.
-fn stream() -> T {
+fn stream(inner: T) -> T {
     T::switch(
         E::field("algorithm"),
         vec![
-            (0x5a4c, zlib::part().root),
-            (0x585a, xz::part().root),
-            (0x5a53, zstd::part().root),
-            (0x4c34, lz4_block()),
+            (0x5a4c, zlib::part(inner.clone()).root),
+            (0x585a, xz::part(inner.clone()).root),
+            (0x5a53, zstd::part(inner.clone()).root),
+            (0x4c34, lz4_block(inner)),
         ],
         T::bytes(E::Remaining),
     )
@@ -173,12 +173,15 @@ fn stream() -> T {
 /// xxhash-64 of the compressed bytes itself and then hands LZ4 a single block
 /// with no frame header and no length in front of it, so the length is the
 /// block header's `compressed_size` less the eight bytes of the checksum.
-fn lz4_block() -> T {
+fn lz4_block(inner: T) -> T {
     T::structure_named(
         "RootLz4",
         "",
         "block",
-        vec![("xxhash64", T::u64(Big)), ("block", T::bytes(E::Remaining))],
+        vec![
+            ("xxhash64", T::u64(Big)),
+            ("block", T::decoded(E::Remaining, crate::codec::Codec::Lz4Block, inner)),
+        ],
     )
 }
 
@@ -337,7 +340,7 @@ fn rntuple_record() -> T {
                 size,
                 T::switch(
                     packed,
-                    vec![(1, T::repeat(T::Named("Compressed".into()), Until::End))],
+                    vec![(1, T::repeat(compressed(anchor()), Until::End))],
                     anchor(),
                 ),
             ),
@@ -485,7 +488,7 @@ pub fn root() -> Template {
         .with_type("RNTupleRecord", rntuple_record())
         .with_type("FreeRecord", free_record())
         .with_type("Free", free())
-        .with_type("Compressed", compressed());
+        .with_type("Compressed", compressed(super::decoded_object()));
     // One set of directory types per level of the tree, so that a template
     // made of names can be walked into a fixed number of times. See
     // [`MAX_DEPTH`].
@@ -847,6 +850,43 @@ mod tests {
         assert_eq!(ev.node(&d, &inner).unwrap().child_count, 1);
         assert_eq!(ev.node(&d, &down(&inner, &[0])).unwrap().name, "[0] leaf");
         assert_eq!(ev.node(&d, &down(&inner, &[0, 9, 1])).unwrap().value, Value::Str("TTree".into()));
+    }
+
+    /// A record compressed with `ZL` holds its object on the other side of the
+    /// block header, at offsets of the decoded bytes rather than of the file.
+    #[test]
+    fn a_compressed_record_holds_its_object_in_a_space_of_its_own() {
+        let d = Document::new(MemSource(file()));
+        let mut ev = Evaluator::new(root());
+        let keys = down(&DIRECTORY, &[K_FIELDS + 2, 11, 0, K_FIELDS + 1]);
+        let block = down(&keys, &[0, K_FIELDS, 0, K_FIELDS, 0]);
+        // The zlib stream inside the block, and the deflate run inside that.
+        let run = down(&block, &[4, 6]);
+        let info = ev.node(&d, &run).unwrap();
+        assert_eq!(info.type_name, "deflate");
+        assert_eq!(info.space, 0);
+        assert_eq!(info.size_bits, 2 * 8);
+        assert_eq!(info.child_count, 1);
+        assert_eq!(info.refused, None);
+
+        // What came out of it: the object, counted from the front of the
+        // decoded bytes. This stream is an empty deflate block, so there is
+        // nothing in it and the field sits where the object would start.
+        let object = down(&run, &[0, 0]);
+        let held = ev.node(&d, &object).unwrap();
+        assert_eq!(held.name, "object");
+        assert_eq!((held.offset_bits, held.space), (0, 1));
+        assert!(!held.editable);
+
+        // The cursor never lands inside the stream. Whatever it names for a
+        // byte of the run, it is a field of the file: this file reaches its
+        // records by address, and what it answers here is whatever the index
+        // of placements has got to.
+        let at = ev.node(&d, &run).unwrap().offset_bits;
+        for bit in [at, at + 8] {
+            let found = ev.locate(&d, bit).unwrap();
+            assert!(!found.starts_with(&run) || found == run, "landed inside the stream: {found:?}");
+        }
     }
 
     /// A file whose one key is an RNTuple anchor, and the two envelopes that
