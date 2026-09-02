@@ -19,28 +19,36 @@
 //! its own schema, and the first hundred and fifty structures of the sample
 //! this was written against are nothing but that schema.
 //!
-//! **The gap.** Every other class number is assigned by the writer and is only
-//! knowable by reading the FrSH structures earlier in the same stream. The IR
-//! cannot ask that question: `Expr::Tagged` looks up a record by a label, but
-//! the label has to be a literal and the list it searches has to be an earlier
-//! *field*, not the siblings of the structure asking. So the classes below are
-//! keyed on the numbering FrameL and FrameCPP actually assign, which is the
-//! order the specification lists the structures in, and which the GWOSC sample
-//! matches exactly. A file that numbered its classes differently would show
-//! the right class number and the wrong field names. Closing this properly
-//! wants an expression that looks a sibling up by a computed key.
+//! **How a body is chosen.** Every class number other than 1 and 2 is assigned
+//! by the writer, and what it means is only knowable by reading the FrSH
+//! structures earlier in the same stream. That is the question
+//! [`Expr::sibling_tagged`] asks: among the structures before this one, find
+//! the FrSH whose `class` field holds this structure's class byte, and read the
+//! name it declares. The body is then picked by that name, not by a number,
+//! so a file that numbers `FrAdcData` 4 and a file that numbers it 40 both
+//! read as an `FrAdcData`.
 //!
-//! What is read: the header, the structure stream, FrSH, FrSE, FrameH,
-//! FrDetector, FrProcData, FrVect, FrEndOfFrame, FrTOC and FrEndOfFile, each
-//! from the field list the sample's own dictionary gives, checked byte for
-//! byte against all 162 structures in it.
+//! The constant table below is what is left when that question has no answer:
+//! a file with no dictionary at all, or one whose dictionary does not cover
+//! the class in hand. It is the numbering FrameL and FrameCPP assign, which is
+//! the order the specification lists the structures in. A file that both
+//! declares a class and calls it something this reader has never heard of gets
+//! its bytes, which is the honest answer.
 //!
-//! What stays bytes: the bodies of the classes no sample here has a dictionary
-//! for (FrAdcData, FrHistory, FrRawData, FrSerData, FrSimData, FrSimEvent,
-//! FrEvent, FrMsg, FrStatData, FrSummary, FrTable), rather than written out
-//! from memory and quietly wrong; the contents of a compressed FrVect, which
-//! is named but not unpacked; and the whole stream of a version 6 or 7 file
-//! past its structure headers, which nothing here has a sample of.
+//! What is read: the header, the structure stream, and every class the
+//! specification defines. FrameH, FrDetector, FrProcData, FrVect, FrEndOfFrame,
+//! FrTOC and FrEndOfFile are checked field for field against the GWOSC
+//! sample's own dictionary, all 162 structures of it. The other eleven are
+//! from FrameL 8.30's `Fr*Def()` functions, which are what writes the
+//! dictionary a file carries; no sample here declares them, so nothing has
+//! checked them against bytes.
+//!
+//! What stays bytes: the contents of a compressed FrVect, which is named but
+//! not unpacked; the body of a class this reader has no layout for; and the
+//! whole stream of a version 6 or 7 file past its structure headers, which
+//! nothing here has a sample of. Version 6 differs in more than its header:
+//! `sampleRate` and the event parameters are 4-byte floats there and 8-byte
+//! ones from version 8, and no field is written out on a guess.
 
 use crate::template::{Endian, Endian::*, Expr as E, Template, Ty as T, Until};
 
@@ -87,25 +95,33 @@ fn pointer_classes() -> Vec<(i128, &'static str)> {
     v
 }
 
-/// How the numbers in an FrVect are packed. The specification numbers the
-/// schemes below 256 and adds 256 to say the bytes inside were written by a
-/// machine of the other byte order, which is what the GWOSC files do.
-const COMPRESSION: &[(i128, &str)] = &[
+/// How the numbers in an FrVect are packed, from FrameL 8.30's
+/// `FrVectCompData` and `FrVectExpand`.
+///
+/// The scheme is the low byte. A writer adds 256 when its own machine is
+/// little-endian, so the top byte says which way round the words inside the
+/// packed bytes are, and a reader on the other kind of machine knows to swap
+/// them before unpacking. Every vector in the GWOSC sample is 257.
+const SCHEMES: &[(i128, &str)] = &[
     (0, "none"),
     (1, "gzip"),
-    (3, "differential, then gzip"),
-    (5, "zero-suppressed, 2-byte words"),
-    (6, "zero-suppressed, 2-byte words, then gzip"),
-    (8, "zero-suppressed, 4-byte words"),
-    (10, "differential, then zero-suppressed"),
-    (256, "none (other byte order)"),
-    (257, "gzip (other byte order)"),
-    (259, "differential, then gzip (other byte order)"),
-    (261, "zero-suppressed, 2-byte words (other byte order)"),
-    (262, "zero-suppressed, 2-byte words, then gzip (other byte order)"),
-    (264, "zero-suppressed, 4-byte words (other byte order)"),
-    (266, "differential, then zero-suppressed (other byte order)"),
+    (3, "differences, then gzip"),
+    (5, "differences, then zero-suppressed 2-byte words"),
+    (6, "differences, then zero-suppressed 2-byte words, gzip for other widths"),
+    (7, "differences, then zero-suppressed, floats as 2-byte integers"),
+    (8, "differences, then zero-suppressed 4-byte words"),
+    (10, "differences, then zero-suppressed 8-byte words"),
+    (255, "writer's own scheme"),
 ];
+
+/// The same list twice: as written by a big-endian machine, and with 256 added
+/// as written by a little-endian one.
+fn compression(e: Endian) -> T {
+    let mut owned: Vec<(i128, String)> = SCHEMES.iter().map(|(k, n)| (*k, (*n).to_string())).collect();
+    owned.extend(SCHEMES.iter().map(|(k, n)| (256 + *k, format!("{n} (little-endian words)"))));
+    let cases: Vec<(i128, &str)> = owned.iter().map(|(k, n)| (*k, n.as_str())).collect();
+    T::enumeration("FrCompression", T::u16(e), &cases)
+}
 
 /// What one number of an FrVect is.
 const VECT_TYPE: &[(i128, &str)] = &[
@@ -253,24 +269,70 @@ fn pointer(e: Endian) -> T {
     )
 }
 
-/// The bodies this reader knows, by class number. See the note at the top
-/// about where those numbers come from.
+/// Every body this reader knows, by the name the specification gives the
+/// class. This is the list both routes below choose from: the file's own
+/// dictionary picks by the name it declares, and the constant table picks by
+/// the number FrameL would have used.
+fn bodies(e: Endian) -> Vec<(&'static str, T)> {
+    vec![
+        ("FrSH", frsh(e)),
+        ("FrSE", frse(e)),
+        ("FrameH", frame_h(e)),
+        ("FrAdcData", adc_data(e)),
+        ("FrDetector", detector(e)),
+        ("FrEndOfFile", end_of_file(e)),
+        ("FrEndOfFrame", end_of_frame(e)),
+        ("FrEvent", event(e)),
+        ("FrHistory", history(e)),
+        ("FrMsg", msg(e)),
+        ("FrProcData", proc_data(e)),
+        ("FrRawData", raw_data(e)),
+        ("FrSerData", ser_data(e)),
+        ("FrSimData", sim_data(e)),
+        ("FrSimEvent", sim_event(e)),
+        ("FrStatData", stat_data(e)),
+        ("FrSummary", summary(e)),
+        ("FrTable", table(e)),
+        ("FrTOC", toc(e)),
+        ("FrVect", vect(e)),
+    ]
+}
+
+/// The body of a structure, chosen by what this file says its class is.
+///
+/// Classes 1 and 2 are the two the specification fixes, and they are taken
+/// first for a reason beyond the spec: FrSH is the structure the search below
+/// reads, and letting a dictionary entry's own body be chosen by a search
+/// through dictionary entries would make every one of them ask about every one
+/// before it. In the GWOSC sample that is 151 of the 162 structures answered
+/// without a search at all.
 fn class_body(e: Endian) -> T {
-    T::switch(
-        E::field("class"),
-        vec![
-            (1, frsh(e)),
-            (2, frse(e)),
-            (3, frame_h(e)),
-            (5, detector(e)),
-            (6, end_of_file(e)),
-            (7, end_of_frame(e)),
-            (11, proc_data(e)),
-            (19, toc(e)),
-            (20, vect(e)),
-        ],
-        T::bytes(E::Remaining),
-    )
+    T::switch(E::field("class"), vec![(1, frsh(e)), (2, frse(e))], declared_body(e))
+}
+
+/// The body of everything else: whatever the FrSH earlier in this stream that
+/// numbered itself with this structure's class byte calls it.
+///
+/// A file with no dictionary entry for the class answers with no name at all,
+/// and the empty name is a case here rather than the default: it takes the
+/// constant table. A file that names a class something this reader has no
+/// layout for falls to the default and keeps its bytes.
+fn declared_body(e: Endian) -> T {
+    let declared = E::sibling_tagged(&["body", "class"], E::field("class"), &["body", "name", "text"]);
+    let mut cases = bodies(e);
+    cases.push(("", by_class_number(e)));
+    T::matches(declared, cases, T::bytes(E::Remaining))
+}
+
+/// The fallback: the class numbers FrameL and FrameCPP assign, for a file that
+/// never said. See the note at the top.
+fn by_class_number(e: Endian) -> T {
+    let named = bodies(e);
+    let cases = CLASSES
+        .iter()
+        .filter_map(|(n, name)| named.iter().find(|(k, _)| k == name).map(|(_, t)| (*n, t.clone())))
+        .collect();
+    T::switch(E::field("class"), cases, T::bytes(E::Remaining))
 }
 
 /// A dictionary entry: this file calls class `class` by this name.
@@ -286,6 +348,8 @@ fn frsh(e: Endian) -> T {
             ("chkSum", T::u32(e)),
         ],
     )
+    // The two together are the entry: this file calls class 4 `FrAdcData`.
+    .payload(&["name", "class"])
 }
 
 /// One field of the class the FrSH before it named: what it is called and what
@@ -392,6 +456,270 @@ fn proc_data(e: Endian) -> T {
     )
 }
 
+/// One channel of the digitiser, as it came off the hardware: what it was
+/// called, what one count of it is worth, and a pointer to the numbers.
+///
+/// `bias` and `slope` are what turn a count back into volts, and `nBits` how
+/// many of the bits of a sample the converter actually set.
+fn adc_data(e: Endian) -> T {
+    T::structure_named(
+        "FrAdcData",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("comment", string(e)),
+            ("channelGroup", T::u32(e)),
+            ("channelNumber", T::u32(e)),
+            ("nBits", T::u32(e)),
+            ("bias", T::F32(e)),
+            ("slope", T::F32(e)),
+            ("units", string(e)),
+            ("sampleRate", T::F64(e)),
+            ("timeOffset", T::F64(e)),
+            ("fShift", T::F64(e)),
+            ("phase", T::F32(e)),
+            // Zero when the channel was known to be bad while it recorded.
+            ("dataValid", T::u16(e)),
+            ("data", pointer(e)),
+            ("aux", pointer(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+    .payload(&["sampleRate", "slope", "units"])
+}
+
+/// Something a trigger found in the data: when, how big, and how sure.
+///
+/// The parameters are a list of doubles with a list of names beside it, which
+/// is how one structure carries whatever a given search wanted to record.
+fn event(e: Endian) -> T {
+    let n = E::field("nParam");
+    T::structure_named(
+        "FrEvent",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("comment", string(e)),
+            ("inputs", string(e)),
+            ("GTimeS", T::u32(e)),
+            ("GTimeN", T::u32(e)),
+            ("timeBefore", T::F32(e)),
+            ("timeAfter", T::F32(e)),
+            ("eventStatus", T::u32(e)),
+            ("amplitude", T::F32(e)),
+            ("probability", T::F32(e)),
+            ("statistics", string(e)),
+            ("nParam", T::u16(e)),
+            ("parameters", T::array(T::F64(e), n.clone())),
+            ("parameterNames", T::array(string(e), n)),
+            ("data", pointer(e)),
+            ("table", pointer(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+    .payload(&["GTimeS", "amplitude"])
+}
+
+/// A line of the record of what was done to this frame: a program, when it
+/// ran, and what it said about itself.
+fn history(e: Endian) -> T {
+    T::structure_named(
+        "FrHistory",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("time", T::u32(e)),
+            ("comment", string(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+}
+
+/// One line of the detector's log, kept in the frame so that what the
+/// instrument was complaining about arrives with the data it was recording.
+fn msg(e: Endian) -> T {
+    T::structure_named(
+        "FrMsg",
+        "alarm",
+        "",
+        vec![
+            ("alarm", string(e)),
+            ("message", string(e)),
+            ("severity", T::u32(e)),
+            ("GTimeS", T::u32(e)),
+            ("GTimeN", T::u32(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+    .payload(&["message"])
+}
+
+/// The head of the raw data: five pointers at the lists of everything the
+/// instrument itself wrote, and nothing of its own but a name.
+fn raw_data(e: Endian) -> T {
+    T::structure_named(
+        "FrRawData",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("firstSer", pointer(e)),
+            ("firstAdc", pointer(e)),
+            ("firstTable", pointer(e)),
+            ("logMsg", pointer(e)),
+            ("more", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+}
+
+/// A slow channel that arrives as text: the station keeping, read off a serial
+/// line, with the whole line kept as it came.
+fn ser_data(e: Endian) -> T {
+    T::structure_named(
+        "FrSerData",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("timeSec", T::u32(e)),
+            ("timeNsec", T::u32(e)),
+            ("sampleRate", T::F64(e)),
+            ("data", string(e)),
+            ("serial", pointer(e)),
+            ("table", pointer(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+    .payload(&["timeSec", "data"])
+}
+
+/// A channel that was made up rather than recorded: an injected signal, kept
+/// beside the real data it was added to.
+fn sim_data(e: Endian) -> T {
+    T::structure_named(
+        "FrSimData",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("comment", string(e)),
+            ("sampleRate", T::F64(e)),
+            ("timeOffset", T::F64(e)),
+            ("fShift", T::F64(e)),
+            ("phase", T::F32(e)),
+            ("data", pointer(e)),
+            ("input", pointer(e)),
+            ("table", pointer(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+}
+
+/// An event that was injected rather than found. The same shape as an FrEvent
+/// without the fields that only mean something for a trigger.
+fn sim_event(e: Endian) -> T {
+    let n = E::field("nParam");
+    T::structure_named(
+        "FrSimEvent",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("comment", string(e)),
+            ("inputs", string(e)),
+            ("GTimeS", T::u32(e)),
+            ("GTimeN", T::u32(e)),
+            ("timeBefore", T::F32(e)),
+            ("timeAfter", T::F32(e)),
+            ("amplitude", T::F32(e)),
+            ("nParam", T::u16(e)),
+            ("parameters", T::array(T::F64(e), n.clone())),
+            ("parameterNames", T::array(string(e), n)),
+            ("data", pointer(e)),
+            ("table", pointer(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+    .payload(&["GTimeS", "amplitude"])
+}
+
+/// Something about the detector that does not change every frame: a
+/// calibration, valid between two times, with a version so a later one can
+/// replace it.
+fn stat_data(e: Endian) -> T {
+    T::structure_named(
+        "FrStatData",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("comment", string(e)),
+            ("representation", string(e)),
+            ("timeStart", T::u32(e)),
+            ("timeEnd", T::u32(e)),
+            ("version", T::u32(e)),
+            ("detector", pointer(e)),
+            ("data", pointer(e)),
+            ("table", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+    .payload(&["timeStart", "timeEnd", "version"])
+}
+
+/// A number worked out about a stretch of data rather than sampled from it:
+/// what the test was, and a vector of what it came to.
+fn summary(e: Endian) -> T {
+    T::structure_named(
+        "FrSummary",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("comment", string(e)),
+            ("test", string(e)),
+            ("GTimeS", T::u32(e)),
+            ("GTimeN", T::u32(e)),
+            ("moments", pointer(e)),
+            ("table", pointer(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+}
+
+/// A table: the column names here, and the columns themselves in the FrVect
+/// chain `column` points at, one vector per column.
+fn table(e: Endian) -> T {
+    T::structure_named(
+        "FrTable",
+        "name",
+        "",
+        vec![
+            ("name", string(e)),
+            ("comment", string(e)),
+            ("nColumn", T::u16(e)),
+            ("nRow", T::u32(e)),
+            ("columnName", T::array(string(e), E::field("nColumn"))),
+            ("column", pointer(e)),
+            ("next", pointer(e)),
+            ("chkSum", T::u32(e)),
+        ],
+    )
+    .payload(&["nRow", "nColumn"])
+}
+
 fn end_of_frame(e: Endian) -> T {
     T::structure(
         "FrEndOfFrame",
@@ -431,7 +759,7 @@ fn vect(e: Endian) -> T {
         "data",
         vec![
             ("name", string(e)),
-            ("compress", T::enumeration("FrCompression", T::u16(e), COMPRESSION)),
+            ("compress", compression(e)),
             ("type", T::enumeration("FrVectType", T::u16(e), VECT_TYPE)),
             ("nData", T::u64(e)),
             ("nBytes", T::u64(e)),
@@ -800,22 +1128,113 @@ mod tests {
         let kind = ev.node(&d, &at(&[6, 4, 1])).unwrap();
         assert_eq!(
             kind.value,
-            Value::Enum { raw: 257, name: Some("gzip (other byte order)".into()), hex: false }
+            Value::Enum { raw: 257, name: Some("gzip (little-endian words)".into()), hex: false }
         );
         let data = ev.node(&d, &at(&[6, 4, 5])).unwrap();
         assert_eq!((data.type_name.as_str(), data.size_bits), ("bytes[]", 6 * 8));
     }
 
+    /// A dictionary entry: this file calls class `class` by this name.
+    fn dictionary(w: W, name: &str, class: u16) -> Vec<u8> {
+        let mut sh = w.str(name);
+        sh.extend(w.u16(class));
+        sh.extend(w.str(""));
+        sh.extend(w.u32(0));
+        w.structure(1, 0, &sh)
+    }
+
+    /// A file of three structures: a dictionary entry, and then one structure
+    /// of the class it numbers holding `body`.
+    fn declared(name: &str, class: u8, body: &[u8]) -> Vec<u8> {
+        let w = W(true);
+        let mut b = b"IGWD\0".to_vec();
+        b.extend_from_slice(&[8, 1, 2, 4, 8, 4, 8]);
+        b.extend(w.u16(0x1234));
+        b.extend(w.u32(0));
+        b.extend(w.u64(0));
+        b.extend(w.f32(0.0));
+        b.extend(w.f64(0.0));
+        b.extend_from_slice(&[2, 1]);
+        b.extend(dictionary(w, name, class as u16));
+        b.extend(w.structure(class, 0, body));
+        b
+    }
+
+    /// The point of reading the dictionary rather than a table of numbers.
+    /// This file numbers `FrHistory` 40, which no library does, and the
+    /// structure of class 40 reads as a history all the same.
     #[test]
-    fn a_class_no_dictionary_here_named_keeps_its_bytes() {
+    fn a_class_the_file_numbered_itself_reads_by_the_name_the_file_gave_it() {
+        let w = W(true);
+        let mut body = w.str("myProgram");
+        body.extend(w.u32(1_126_259_447));
+        body.extend(w.str("ran once"));
+        body.extend(w.ptr(0, 0));
+        body.extend(w.u32(0));
+        let d = Document::new(MemSource(declared("FrHistory", 40, &body)));
+        let mut ev = Evaluator::new(gwf());
+        let b = ev.node(&d, &at(&[1, 4])).unwrap();
+        assert_eq!(b.type_name, "FrHistory");
+        assert_eq!(ev.node(&d, &at(&[1, 4, 0, 1])).unwrap().value, Value::Str("myProgram".into()));
+        assert_eq!(ev.node(&d, &at(&[1, 4, 1])).unwrap().value, Value::UInt(1_126_259_447));
+    }
+
+    /// The other half of the same rule: a name this reader has no layout for
+    /// keeps its bytes rather than falling back to whatever the number would
+    /// have meant. Class 9 is `FrHistory` by the standard numbering, and this
+    /// file says it is something else.
+    #[test]
+    fn a_class_named_something_this_reader_does_not_know_keeps_its_bytes() {
+        let d = Document::new(MemSource(declared("FrGizmo", 9, &[0xaa; 8])));
+        let mut ev = Evaluator::new(gwf());
+        let body = ev.node(&d, &at(&[1, 4])).unwrap();
+        assert_eq!((body.type_name.as_str(), body.size_bits), ("bytes[]", 8 * 8));
+    }
+
+    /// A file with no dictionary entry for the class falls back to the numbers
+    /// FrameL assigns. `file()` declares only `FrameH`, so its class 9
+    /// structure is read as the `FrHistory` that numbering makes it.
+    #[test]
+    fn a_class_no_dictionary_entry_covers_falls_back_to_the_standard_numbering() {
         let d = Document::new(MemSource(file(true)));
         let mut ev = Evaluator::new(gwf());
-        // The class number is still read, and still named where the standard
-        // numbering knows it. What is inside is not guessed at.
         let s = ev.node(&d, &at(&[4, 2])).unwrap();
         assert_eq!(s.value, Value::Enum { raw: 9, name: Some("FrHistory".into()), hex: false });
-        let body = ev.node(&d, &at(&[4, 4])).unwrap();
-        assert_eq!((body.type_name.as_str(), body.size_bits), ("bytes[]", 8 * 8));
+        assert_eq!(ev.node(&d, &at(&[4, 4])).unwrap().type_name, "FrHistory");
+    }
+
+    /// One of the eleven classes no sample here declares, read from the field
+    /// list FrameL writes into a dictionary.
+    #[test]
+    fn an_adc_channel_reads_its_calibration() {
+        let w = W(true);
+        let mut body = w.str("H1:LSC-DARM");
+        body.extend(w.str("darm"));
+        body.extend(w.u32(3)); // channelGroup
+        body.extend(w.u32(7)); // channelNumber
+        body.extend(w.u32(16)); // nBits
+        body.extend(w.f32(0.5)); // bias
+        body.extend(w.f32(2.5)); // slope
+        body.extend(w.str("counts"));
+        body.extend(w.f64(16384.0)); // sampleRate
+        body.extend(w.f64(0.0)); // timeOffset
+        body.extend(w.f64(0.0)); // fShift
+        body.extend(w.f32(0.0)); // phase
+        body.extend(w.u16(0)); // dataValid
+        for _ in 0..3 {
+            body.extend(w.ptr(0, 0));
+        }
+        body.extend(w.u32(0));
+        let d = Document::new(MemSource(declared("FrAdcData", 4, &body)));
+        let mut ev = Evaluator::new(gwf());
+        assert_eq!(ev.node(&d, &at(&[1, 4])).unwrap().type_name, "FrAdcData");
+        assert_eq!(ev.node(&d, &at(&[1, 4, 6])).unwrap().value, Value::Float(2.5));
+        assert_eq!(ev.node(&d, &at(&[1, 4, 8])).unwrap().value, Value::Float(16384.0));
+        // The last field ends exactly where the structure does: every width in
+        // the list between is right.
+        let last = ev.node(&d, &at(&[1, 4, 16])).unwrap();
+        let whole = ev.node(&d, &at(&[1])).unwrap();
+        assert_eq!(last.offset_bits + last.size_bits, whole.offset_bits + whole.size_bits);
     }
 
     #[test]
