@@ -442,6 +442,30 @@ export const TEXTVIEW = {
   copyFailed: "Couldn't copy to the clipboard.",
   /** What the file was read as, beside the chooser. */
   readAs: (encoding: string, guessed: boolean): string => (guessed ? `${encoding}, guessed` : encoding),
+  /** Which line ending the file uses, beside the encoding. Counted over the
+   *  whole of the file indexed so far rather than over the screen, so it does
+   *  not change as the reader scrolls.
+   *
+   *  One kind is named on its own, because that is the whole answer. A file
+   *  with more than one is the interesting case and says so, largest share
+   *  first: a stray carriage return in a file of line feeds is what somebody
+   *  opening a file in a hex editor is looking for. The shares are whole
+   *  percentages, so a handful of odd lines in a million reads as 0%, which
+   *  is the true shape of it: they are there, and they are none of the file. */
+  lineEndings: (counts: { lf: number; cr: number; crlf: number }): string => {
+    const kinds = [
+      ["LF", counts.lf],
+      ["CRLF", counts.crlf],
+      ["CR", counts.cr],
+    ] as const;
+    const seen = kinds.filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    const total = seen.reduce((n, [, k]) => n + k, 0);
+    if (seen.length === 0 || total === 0) return "";
+    const one = seen[0];
+    if (seen.length === 1 || one === undefined) return one?.[0] ?? "";
+    const parts = seen.map(([name, n]) => `${name} ${Math.round((n / total) * 100)}%`);
+    return `Mixed: ${parts.join(", ")}`;
+  },
 } as const;
 
 /** The offer to open the file a hex dump describes. */

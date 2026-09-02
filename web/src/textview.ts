@@ -5,13 +5,17 @@
 // be read, and plenty of files were: a log, a manifest, a terminal captured to
 // disk, a hex dump somebody pasted. This is the view for those.
 //
-// It scrolls by byte offset, not by line number, for the reason the listing
-// already has: nothing can say how many lines a file has without reading all
-// of it. So the scrollbar stands for a position in the file, exactly as the
-// hex grid's does, and the gutter shows the offset of each line rather than a
-// line number that would only be right if the file had been read from the top.
-// How tall the canvas under that scrollbar is, though, is a question of its
-// own, and the answer is not the file's length: see `canvasHeight`.
+// It scrolls by line, over an index of where the file's lines start that is
+// built in the background from the front of the file. Where the index has
+// reached, a scrollbar position is a line number and a line number is a byte,
+// both exactly; past it, the position is an estimate from the average line so
+// far, and the estimate is replaced rather than nudged as the index grows.
+// The gutter carries each line's offset, and its line number once the index
+// can say what that is. See `lineindex.ts`.
+//
+// The lines themselves are kept too, in a cache keyed by the byte each starts
+// at, filled a few hundred at a time ahead of and behind the screen. Scrolling
+// back over text already read asks the file for nothing.
 //
 // Three things a text file does not say about itself are shown rather than
 // smoothed over, because in a hex editor they are the interesting part:
@@ -22,6 +26,8 @@
 import { formatOffset } from "./doc.js";
 import type { Doc, TextLine, TextReading } from "./doc.js";
 import { el } from "./dom.js";
+import { LineIndex } from "./lineindex.js";
+import type { Endings } from "./lineindex.js";
 import { TEXTVIEW } from "./strings.js";
 
 /** Height of one row, which must match `--tv-row` in the stylesheet: rows are
@@ -30,13 +36,9 @@ const ROW = 20;
 /** Rows drawn above and below the window. Enough that a swap arriving a frame
  *  or two late during a flick still has drawn rows to show. */
 const OVERSCAN = 6;
-/** A line's length before the file has been asked, for the first canvas. */
-const GUESS_LINE = 64;
-/** The longest a line is taken to be when sizing the canvas. A file of one
- *  enormous line would otherwise get a canvas of no height at all. */
-const LONGEST_LINE = 4096;
 /** How tall the scrolling canvas is allowed to get. Browsers stop honouring an
- *  element's height past a few tens of millions of pixels. */
+ *  element's height past a few tens of millions of pixels, so past this the
+ *  canvas is scaled down and a pixel of scrollbar is worth more than a row. */
 const MAX_CANVAS = 20_000_000;
 /** Characters drawn on one line before the rest is left off. The core cuts a
  *  line at 4 KiB; this is what fits across a screen with room to spare. */
@@ -44,6 +46,18 @@ const MAX_CHARS = 2000;
 /** How much of a selection one copy carries. A selection can be the whole
  *  file, and the clipboard is not where a gigabyte belongs. */
 const COPY_LIMIT = 1 << 20;
+/** Lines read in one go, so a screenful is one trip through the core and the
+ *  next screenful in either direction is already in hand when it is wanted. */
+const BATCH = 300;
+/** Decoded lines kept. Enough that scrolling around inside a large log never
+ *  asks twice, and bounded so that a day of scrolling does not grow forever. */
+const CACHE_LINES = 50_000;
+/** How much file one background pass over the index covers. The core caps its
+ *  own scan at the same size, so this is one call. */
+const INDEX_STEP = 4 * 1024 * 1024;
+/** How much is indexed around a jump to somewhere the background pass has not
+ *  reached, so that scrolling on from there is answered locally. */
+const PROBE = 1 * 1024 * 1024;
 
 /** Line endings named the way the core names them. */
 const ENDINGS = new Set(["LF", "CRLF", "CR", "no ending", "cut"]);
@@ -56,8 +70,12 @@ export class TextView {
   private readonly canvas: HTMLElement;
   private readonly scroll: HTMLElement;
 
-  /** Byte offset of the first line on screen. */
+  /** Byte offset of the first drawn line. */
   private top = 0;
+  /** Line number of the first drawn line, and of the first line inside the
+   *  viewport. They differ by the overscan, except at the front of the file. */
+  private topLine = 0;
+  private viewLine = 0;
   /** What is drawn now. */
   private lines: readonly TextLine[] = [];
   private reading: TextReading = { encoding: "UTF-8", mark: 0, guessed: true, unit: 1 };
@@ -65,8 +83,9 @@ export class TextView {
   private chosen = "";
   /** The byte the cursor is on, so the character holding it can be marked. */
   private cursor = 0;
-  /** The ending most lines on screen used, so a line using another can be
-   *  marked as the odd one rather than every line being labelled. */
+  /** The ending the file mostly uses, decided from the index and not from the
+   *  screen, so a line using another can be marked as the odd one out and the
+   *  mark does not change under a scroll. */
   private usualEnding = "";
   private drawing = false;
   private pending = false;
@@ -78,10 +97,20 @@ export class TextView {
    *  away from one. */
   private extending = false;
 
+  /** Where the file's lines start. */
+  private index: LineIndex;
+  /** Lines already decoded, by the byte each starts at. A Map is its own
+   *  least-recently-used list: re-reading a line moves it to the back. */
+  private cache = new Map<number, TextLine>();
+  /** How many times the core has been asked for lines, which is the number the
+   *  whole of this is about. Read by the tests and by hand in the console. */
+  fetches = 0;
+
   /** Called when the reader picks a character, with the byte it starts at. */
   onPick: (at: number) => void = () => {};
-  /** Called when the reading is settled, so the toolbar can say what it is. */
-  onReading: (r: TextReading, usualEnding: string) => void = () => {};
+  /** Called when the reading is settled, so the toolbar can say what it is,
+   *  with the line endings counted over everything indexed so far. */
+  onReading: (r: TextReading, endings: Endings) => void = () => {};
   /** Called when the file changed, so the rest of the page catches up. */
   onEdit: () => void = () => {};
   /** Called when the encoding has no room for a character that was typed. */
@@ -101,6 +130,7 @@ export class TextView {
   private dragging = false;
 
   constructor(private doc: Doc) {
+    this.index = new LineIndex(doc.lengthBytes);
     this.gutter = el("div", { className: "tv-gutter" });
     this.rows = el("div", { className: "tv-rows" });
     this.view = el("div", { className: "tv-view" }, this.gutter, this.rows);
@@ -123,7 +153,6 @@ export class TextView {
     // this the view would go on treating every move as a drag.
     window.addEventListener("pointercancel", stop);
     new ResizeObserver(() => {
-      this.resize();
       void this.draw();
     }).observe(this.scroll);
   }
@@ -133,31 +162,303 @@ export class TextView {
     return Math.max(1, Math.floor(this.scroll.clientHeight / ROW));
   }
 
+  /** How many rows are drawn: what fits, and overscan on both sides of it. */
+  private drawn(): number {
+    return this.visible() + 2 * OVERSCAN;
+  }
+
   /** The encoding in use, or "" when the file decided. */
   get encoding(): string {
     return this.chosen;
   }
 
-  /** Read the file as this encoding instead. "" hands it back to the file. */
+  /** Read the file as this encoding instead. "" hands it back to the file.
+   *  Where the lines are is a fact about a reading of the file rather than
+   *  about the file, so the index and the decoded lines both go. */
   async setEncoding(name: string): Promise<void> {
     this.chosen = name;
-    this.resize();
+    this.forget();
     await this.draw(true);
+  }
+
+  /** Throw away everything read about the file's text. */
+  private forget(): void {
+    this.index = new LineIndex(this.doc.lengthBytes, this.reading.mark);
+    this.cache.clear();
+    this.usualEnding = "";
+    this.startIndexing();
+  }
+
+  relayout(): void {
+    void this.draw(true);
+  }
+
+  // ---- the index ------------------------------------------------------
+
+  private idle = 0;
+
+  /** Keep the index growing from wherever it has reached, in the time the
+   *  browser has nothing else to do with. */
+  private startIndexing(): void {
+    if (this.idle !== 0) return;
+    const soon = (f: () => void): number =>
+      typeof requestIdleCallback === "function" ? requestIdleCallback(() => f()) : window.setTimeout(f, 16);
+    this.idle = soon(() => {
+      this.idle = 0;
+      void this.indexStep().then(() => {
+        if (this.index.gap !== null) this.startIndexing();
+      });
+    });
+  }
+
+  /** One pass of the background index. */
+  private async indexStep(): Promise<void> {
+    const from = this.index.gap;
+    if (from === null) return;
+    const got = await this.doc.textIndex(this.chosen, from, from + INDEX_STEP);
+    if (got.starts.length === 0) return;
+    const was = this.index.totalLines;
+    this.index.add(got.starts, got.next, { lf: got.lf, cr: got.cr, crlf: got.crlf });
+    this.settleEnding();
+    // The canvas is as tall as the file has lines, and the file just turned
+    // out to have a different number of them. Put the scrollbar back on the
+    // line the reader is looking at, so nothing moves on screen.
+    if (this.index.totalLines !== was) this.reanchor();
+    this.onReading(this.reading, this.index.endings);
+  }
+
+  /** Take in the line starts a window of text just told us, so that reading
+   *  the text and knowing where it is are never two separate trips. */
+  private note(lines: readonly TextLine[], next: number): void {
+    if (lines.length === 0) return;
+    const starts = new Float64Array(lines.length);
+    let lf = 0;
+    let cr = 0;
+    let crlf = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (l === undefined) continue;
+      starts[i] = l.at;
+      if (l.ending === "LF") lf++;
+      else if (l.ending === "CR") cr++;
+      else if (l.ending === "CRLF") crlf++;
+    }
+    this.index.add(starts, next, { lf, cr, crlf });
+  }
+
+  /** Which ending the file uses, from the index rather than from the screen.
+   *  Nothing is marked while the index has seen no endings at all. */
+  private settleEnding(): void {
+    const e = this.index.endings;
+    const most = Math.max(e.lf, e.crlf, e.cr);
+    this.usualEnding = most === 0 ? "" : e.lf === most ? "LF" : e.crlf === most ? "CRLF" : "CR";
+  }
+
+  // ---- the canvas -----------------------------------------------------
+
+  /** How tall the canvas is: one row per line the file has, or per line it is
+   *  estimated to have, scaled down where that is taller than a browser will
+   *  honour. */
+  private canvasHeight(): number {
+    const want = this.index.totalLines * ROW;
+    return Math.max(this.scroll.clientHeight + 1, Math.min(MAX_CANVAS, want));
+  }
+
+  /** Pixels of canvas one line is worth. One row, until the file has more
+   *  lines than the canvas has room for. */
+  private perLine(): number {
+    const want = this.index.totalLines * ROW;
+    return want <= MAX_CANVAS ? ROW : Math.max(1e-6, MAX_CANVAS / this.index.totalLines);
+  }
+
+  /** Where a line sits on the scrollbar. */
+  private lineY(n: number): number {
+    return Math.round(n * this.perLine());
+  }
+
+  /** The line the scrollbar is pointing at. */
+  private lineAtY(y: number): number {
+    return Math.max(0, Math.round(y / this.perLine()));
+  }
+
+  /** Put the scrollbar on the line the reader is looking at, and the block of
+   *  drawn rows with it, so that nothing moves on screen. This is the whole of
+   *  what used to be a drifting estimate nudged back into place when the
+   *  scrolling stopped: the index says where the line is, and the only reason
+   *  to move anything is that the index learned something. */
+  private reanchor(): void {
+    const y = Math.max(0, Math.min(this.lineY(this.viewLine), this.canvasHeight() - this.scroll.clientHeight));
+    this.canvas.style.height = `${this.canvasHeight()}px`;
+    if (Math.abs(this.scroll.scrollTop - y) >= 1) this.scroll.scrollTop = y;
+    this.placeBlock();
+  }
+
+  /** Put the block of drawn rows where the line it starts with belongs.
+   *
+   *  The rows sit inside the scrolled canvas rather than being moved to meet
+   *  it, which is the whole of the flicker fix: a transform recomputed from a
+   *  scroll event runs on the main thread while a flick runs on the
+   *  compositor, so the two are never in step and the text slides against the
+   *  scrollport and snaps back. Positioned in the canvas the rows are scrolled
+   *  by whatever thread scrolls everything else, and only their content
+   *  changes here. */
+  private placeBlock(): void {
+    const y = this.lineY(this.viewLine) - (this.viewLine - this.topLine) * ROW;
+    this.view.style.transform = `translateY(${Math.max(0, y)}px)`;
+  }
+
+  private scrollFrame = 0;
+
+  private onScroll(): void {
+    // One catch-up per frame, from wherever the scrollbar is by then. Scroll
+    // events come faster than frames, and the positions in between are not
+    // worth drawing.
+    if (this.scrollFrame !== 0) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = 0;
+      const want = this.lineAtY(this.scroll.scrollTop);
+      if (want === this.viewLine) return;
+      this.viewLine = want;
+      void this.draw();
+    });
+  }
+
+  /** Go to a line, scrollbar and all. */
+  private async goto(n: number): Promise<void> {
+    this.viewLine = Math.max(0, Math.min(n, Math.max(0, this.index.totalLines - 1)));
+    this.scroll.scrollTop = Math.max(0, Math.min(this.lineY(this.viewLine), this.canvasHeight() - this.scroll.clientHeight));
+    await this.draw();
+  }
+
+  /** Where the first drawn line starts, for the line the viewport is on.
+   *
+   *  Inside the index this is a lookup and cannot be wrong. Past it, the line
+   *  number is an estimate, so the byte it works out to is walked back to a
+   *  real line start and the file around it is indexed, which is what makes
+   *  scrolling on from there exact even though arriving was a guess. */
+  private async topByte(): Promise<number> {
+    const first = Math.max(0, this.viewLine - OVERSCAN);
+    this.topLine = first;
+    const known = this.index.byteOfLine(first);
+    if (known !== null) return Math.min(known, this.doc.lengthBytes);
+    const b = await this.doc.textBack(this.chosen, this.index.guessByteOfLine(first), 0);
+    const got = await this.doc.textIndex(this.chosen, b.start, b.start + PROBE);
+    if (got.starts.length > 0) this.index.add(got.starts, got.next, { lf: got.lf, cr: got.cr, crlf: got.crlf });
+    return b.start;
+  }
+
+  // ---- the lines ------------------------------------------------------
+
+  /** The next `want` lines from `at`, out of the cache where they are in it
+   *  and out of the file in batches where they are not. */
+  private async linesFrom(at: number, want: number): Promise<TextLine[]> {
+    const out: TextLine[] = [];
+    let here = at;
+    while (out.length < want && here < this.doc.lengthBytes) {
+      const hit = this.cache.get(here);
+      if (hit !== undefined) {
+        // Touched, so the least recently used is the one that goes.
+        this.cache.delete(here);
+        this.cache.set(here, hit);
+        out.push(hit);
+        here += hit.len;
+        if (hit.len === 0) break;
+        continue;
+      }
+      const w = await this.doc.textWindow(this.chosen, here, Math.max(want - out.length, BATCH));
+      this.fetches++;
+      if (w.lines.length === 0) break;
+      this.note(w.lines, w.next);
+      for (const l of w.lines) this.keep(l);
+      for (const l of w.lines) {
+        if (out.length >= want) break;
+        out.push(l);
+        here = l.at + l.len;
+      }
+    }
+    return out;
+  }
+
+  private keep(line: TextLine): void {
+    this.cache.delete(line.at);
+    this.cache.set(line.at, line);
+    while (this.cache.size > CACHE_LINES) {
+      const oldest = this.cache.keys().next();
+      if (oldest.done === true) break;
+      this.cache.delete(oldest.value);
+    }
+  }
+
+  /** Read the lines just past the screen, so that a scroll of a page in either
+   *  direction is answered from the cache. */
+  private prefetch(): void {
+    const last = this.lines[this.lines.length - 1];
+    if (last === undefined) return;
+    const ahead = last.at + last.len;
+    if (ahead < this.doc.lengthBytes && !this.cache.has(ahead)) void this.linesFrom(ahead, BATCH);
+    const first = this.lines[0];
+    if (first === undefined || first.at <= 0) return;
+    void this.doc.textBack(this.chosen, first.at, BATCH).then(async (b) => {
+      if (b.back < first.at && !this.cache.has(b.back)) await this.linesFrom(b.back, BATCH);
+    });
+  }
+
+  /** Draw what fits, reading only that. */
+  async draw(force = false): Promise<void> {
+    if (this.drawing) {
+      this.pending = true;
+      return;
+    }
+    this.drawing = true;
+    try {
+      do {
+        this.pending = false;
+        if (force || !this.readingSettled || this.reading.encoding === "") {
+          const was = this.reading.mark;
+          this.reading = await this.doc.textReading(this.chosen);
+          this.readingSettled = true;
+          if (this.reading.mark !== was) this.index = new LineIndex(this.doc.lengthBytes, this.reading.mark);
+        }
+        this.index.setLength(this.doc.lengthBytes);
+        this.startIndexing();
+        const want = this.drawn();
+        this.top = await this.topByte();
+        let got = await this.linesFrom(this.top, want);
+        // A screen that came up short ran out of file. Back up so that the
+        // last screenful of a file is a full screen rather than one line at
+        // the bottom of an empty one.
+        if (got.length < want && this.top > 0) {
+          const b = await this.doc.textBack(this.chosen, this.top, want - got.length);
+          if (b.back < this.top) {
+            this.top = b.back;
+            got = await this.linesFrom(b.back, want);
+            this.topLine = this.index.lineAt(b.back) ?? Math.max(0, this.topLine - (want - got.length));
+            this.viewLine = Math.min(this.viewLine, this.topLine + OVERSCAN);
+          }
+        }
+        this.lines = got;
+        if (this.usualEnding === "") this.settleEnding();
+        this.canvas.style.height = `${this.canvasHeight()}px`;
+        this.placeBlock();
+        this.render();
+        this.onReading(this.reading, this.index.endings);
+        this.prefetch();
+      } while (this.pending);
+    } finally {
+      this.drawing = false;
+    }
   }
 
   /** Show the line holding this byte, and mark the character it falls in. */
   async setByte(at: number): Promise<void> {
     this.cursor = at;
-    // Drawn is not the same as on screen now that rows are overscanned above
-    // and below the viewport: a caret in the overscan has to be scrolled to
-    // like any other.
+    // Drawn is not the same as on screen: a caret in the overscan has to be
+    // scrolled to like any other.
     const i = this.lines.findIndex((l) => at >= l.at && at < l.at + l.len);
-    const y = this.anchorY + i * ROW;
-    const onScreen = i >= 0 && y >= this.scroll.scrollTop && y + ROW <= this.scroll.scrollTop + this.scroll.clientHeight;
+    const onScreen = i >= this.viewLine - this.topLine && i < this.viewLine - this.topLine + this.visible();
     if (!onScreen) {
       const b = await this.doc.textBack(this.chosen, at, 0);
-      this.top = b.start;
-      this.syncScrollbar();
+      return this.goto(Math.max(0, (this.index.lineAt(b.start) ?? this.index.guessLineAt(b.start)) - Math.floor(this.visible() / 3)));
     }
     await this.draw();
   }
@@ -167,201 +468,6 @@ export class TextView {
     this.selection = startByte === null || endByte <= startByte ? null : { start: startByte, end: endByte };
     if (this.selection === null) this.anchor = null;
     this.render();
-  }
-
-  relayout(): void {
-    this.resize();
-    void this.draw(true);
-  }
-
-  /** How long a line is in this file, on average. Nought until the file has
-   *  been read at all. */
-  private bytesPerLine = 0;
-  /** The canvas height, held rather than recomputed, because it must not
-   *  change under a scroll in progress: it is what turns a scrollbar position
-   *  into a byte. */
-  private canvasH = 0;
-  /** Where on the canvas the first drawn line sits. */
-  private anchorY = 0;
-  /** Whether the drawn block runs to the end of the file. */
-  private atEnd = false;
-  /** Whether the canvas has still to be sized and the scrollbar put back on
-   *  the line the reader was looking at. */
-  private resized = true;
-
-  /** How long a line is here, taken from what is on screen. It is an estimate
-   *  and it is allowed to be wrong: what it decides is how tall the canvas is,
-   *  and being wrong there costs a slow drift of the scrollbar against the
-   *  text, which `settle` corrects once the scrolling stops. */
-  private measureLines(lines: readonly TextLine[]): void {
-    const first = lines[0];
-    const last = lines[lines.length - 1];
-    if (first === undefined || last === undefined) return;
-    const bytes = last.at + last.len - first.at;
-    if (bytes <= 0) return;
-    this.bytesPerLine = Math.max(1, Math.min(LONGEST_LINE, bytes / lines.length));
-    this.canvasH = 0;
-  }
-
-  /** The line at the top of the viewport: the one to keep still when the
-   *  canvas is measured again under it. */
-  private topShown(): number {
-    const i = Math.round((this.scroll.scrollTop - this.anchorY) / ROW);
-    return this.lines[Math.max(0, Math.min(i, this.lines.length - 1))]?.at ?? this.top;
-  }
-
-  /** Size the canvas again, because the file, the encoding or the window
-   *  changed under it. The line the reader is looking at is what stays put. */
-  private resize(): void {
-    this.top = this.topShown();
-    this.bytesPerLine = 0;
-    this.canvasH = 0;
-    this.resized = true;
-  }
-
-  /** The scrollbar stands for a position in the file: dragging its thumb to
-   *  the middle goes to the middle byte, exactly as the hex grid's does.
-   *
-   *  How tall the canvas has to be for that is a separate question, and the
-   *  answer is not "as tall as the file is long". At one pixel per byte a row
-   *  of scrolling is worth twenty bytes and a line is worth sixty, so the text
-   *  cannot move at the rate the scrollbar does and has to jump instead. A
-   *  canvas of one row per line the file is likely to have puts the two rates
-   *  together, and the text moves as far as the finger did. The file still
-   *  gets no say in how many lines it has until it has been read: this is an
-   *  estimate from what has been read so far, and the walk from a scrollbar
-   *  position to a line start is what makes the position itself exact. */
-  private canvasHeight(): number {
-    if (this.canvasH === 0) {
-      const len = Math.max(1, this.doc.lengthBytes);
-      const per = this.bytesPerLine > 0 ? this.bytesPerLine : GUESS_LINE;
-      this.canvasH = Math.min(MAX_CANVAS, Math.max(this.scroll.clientHeight + 1, (Math.ceil(len / per) + 1) * ROW));
-    }
-    return this.canvasH;
-  }
-
-  /** How far the scrollbar travels, which is what a byte offset maps onto. */
-  private span(): number {
-    return Math.max(1, this.canvasHeight() - this.scroll.clientHeight);
-  }
-
-  /** The byte a scrollbar position stands for, and back again. */
-  private byteFor(y: number): number {
-    return Math.max(0, Math.min(Math.round((y / this.span()) * this.doc.lengthBytes), this.doc.lengthBytes));
-  }
-
-  private yFor(at: number): number {
-    return Math.round((at / Math.max(1, this.doc.lengthBytes)) * this.span());
-  }
-
-  /** How many rows are drawn: what fits, and overscan on both sides of it. */
-  private drawn(): number {
-    return this.visible() + 2 * OVERSCAN;
-  }
-
-  /** Put the block of drawn rows on the canvas.
-   *
-   *  The rows sit inside the scrolled canvas rather than being moved to meet
-   *  it, which is the whole of the flicker fix: a transform recomputed from a
-   *  scroll event runs on the main thread while a flick runs on the
-   *  compositor, so the two are never in step and the text slides against the
-   *  scrollport and snaps back. Positioned in the canvas the rows are scrolled
-   *  by whatever thread scrolls everything else, and only their content
-   *  changes here.
-   *
-   *  This is also what `position: sticky` could not do. Sticky is clamped to
-   *  its containing block; the block is clamped here too, but to where the
-   *  file's own ends belong — its first line at the top of the canvas, its
-   *  last at the bottom — so scrolling to either end lands exactly there
-   *  rather than shifting the rows and cutting off what should be on screen. */
-  private placeBlock(y: number): void {
-    const floor = Math.max(0, this.canvasHeight() - this.lines.length * ROW);
-    const at = this.top === 0 ? 0 : this.atEnd ? Math.min(y, floor) : y;
-    this.anchorY = Math.max(0, Math.min(at, floor));
-  }
-
-  /** Put the scrollbar where the top drawn line is. */
-  private syncScrollbar(): void {
-    this.scroll.scrollTop = Math.max(0, Math.min(this.yFor(this.top), this.span()));
-    this.anchorY = this.scroll.scrollTop;
-  }
-
-  private scrollFrame = 0;
-  private settleTimer = 0;
-
-  private onScroll(): void {
-    // One catch-up per frame, from wherever the scrollbar is by then. Scroll
-    // events come faster than frames, and each catch-up is a trip through the
-    // core; the intermediate positions are not worth drawing.
-    if (this.scrollFrame === 0) {
-      this.scrollFrame = requestAnimationFrame(() => {
-        this.scrollFrame = 0;
-        void this.follow();
-      });
-    }
-    clearTimeout(this.settleTimer);
-    this.settleTimer = window.setTimeout(() => this.settle(), 150);
-  }
-
-  /** Bring the drawn lines to where the scrollbar has got to.
-   *
-   *  A scroll of a few rows is a few rows of text: the block is walked line by
-   *  line, so what was on screen stays on screen and every pixel in between is
-   *  the compositor's alone. A scroll of more than the block is a thumb
-   *  dragged somewhere else, and that is the one that maps the scrollbar
-   *  straight onto a byte. */
-  private async follow(): Promise<void> {
-    const y = this.scroll.scrollTop;
-    // Where the first drawn row belongs: overscan above the viewport.
-    const want = y - OVERSCAN * ROW;
-    const steps = Math.round((want - this.anchorY) / ROW);
-    if (this.lines.length === 0 || Math.abs(steps) > this.drawn() * 2) return this.remap(y);
-    if (steps === 0) return;
-    return this.step(steps);
-  }
-
-  /** Move the drawn block by whole lines, and its place on the canvas with it.
-   *  What is left over is less than a row, and that remainder is the sub-line
-   *  offset: it is what lets the text move by pixels rather than by lines. */
-  private async step(n: number): Promise<void> {
-    let moved = n;
-    if (n > 0) {
-      const w = await this.doc.textWindow(this.chosen, this.top, n);
-      moved = w.lines.length;
-      this.top = w.next;
-    } else {
-      if (this.top === 0) return;
-      const b = await this.doc.textBack(this.chosen, this.top, -n);
-      if (b.back >= this.top) moved = 0;
-      this.top = b.back;
-    }
-    this.anchorY += moved * ROW;
-    await this.draw();
-  }
-
-  /** Go to the byte the scrollbar is pointing at. */
-  private async remap(y: number): Promise<void> {
-    const b = await this.doc.textBack(this.chosen, this.byteFor(y), 0);
-    this.top = b.start;
-    this.anchorY = y - OVERSCAN * ROW;
-    await this.draw();
-  }
-
-  /** When the scrolling stops, put the scrollbar back where the lines on
-   *  screen actually are. Walking by lines lets the two drift, because a run
-   *  of long lines covers more of the file per row than the estimate does, and
-   *  the scrollbar has to go on meaning a position in the file. Nothing moves
-   *  on screen: the block is shifted by the same pixels as the scrollbar, so
-   *  the text stays exactly where the reader left it. */
-  private settle(): void {
-    if (this.lines.length === 0 || this.top === 0 || this.atEnd) return;
-    const y = this.scroll.scrollTop;
-    const inBlock = y - this.anchorY;
-    const target = Math.max(0, Math.min(this.yFor(this.top) + inBlock, this.span()));
-    if (Math.abs(target - y) < 1) return;
-    this.scroll.scrollTop = target;
-    this.anchorY += this.scroll.scrollTop - y;
-    this.view.style.transform = `translateY(${this.anchorY}px)`;
   }
 
   /** Where a line's text stops, which is where its ending starts. */
@@ -513,19 +619,20 @@ export class TextView {
     // still the bytes somebody picked.
     const sel = this.selRange();
     const at = sel === null ? this.cursor : sel.start;
+    const plain = sel === null && !/[\r\n]/.test(text);
     this.write(() => this.doc.replaceAt(at, sel === null ? 0 : sel.end - sel.start, bytes));
     if (sel !== null) {
       this.selection = null;
       this.anchor = null;
       this.onSelect(at, at, at);
     }
-    await this.after(at + bytes.length);
+    await this.after(at + bytes.length, at, plain ? bytes.length : null);
   }
 
   /** Take out the character before the caret, or the one after it. */
   private async erase(dir: 1 | -1): Promise<void> {
     const gone = this.removeSelection();
-    if (gone !== null) return this.after(gone);
+    if (gone !== null) return this.after(gone, gone, null);
     const here = this.caretLine();
     if (here === null) return;
     const cells = this.charsOf(here.line);
@@ -533,7 +640,7 @@ export class TextView {
       const prev = [...cells].reverse().find((c) => c.at < this.cursor);
       if (prev !== undefined) {
         this.write(() => this.doc.replaceAt(prev.at, prev.width, new Uint8Array()));
-        return this.after(prev.at);
+        return this.after(prev.at, prev.at, -prev.width);
       }
       // At the front of a line, what is behind the caret is the line ending
       // above it, however many bytes that turned out to be.
@@ -542,27 +649,34 @@ export class TextView {
       const above = this.lines.find((l) => l.at === b.start);
       const end = above === undefined ? here.line.at - 1 : this.textEnd(above);
       this.write(() => this.doc.replaceAt(end, here.line.at - end, new Uint8Array()));
-      return this.after(end);
+      return this.after(end, end, null);
     }
     const next = cells.find((c) => c.at === this.cursor);
     if (next !== undefined) {
       this.write(() => this.doc.replaceAt(next.at, next.width, new Uint8Array()));
-      return this.after(next.at);
+      return this.after(next.at, next.at, -next.width);
     }
     // At the end of a line, what is in front of the caret is its ending.
     const ending = here.line.at + here.line.len - this.cursor;
     if (ending > 0) this.write(() => this.doc.replaceAt(this.cursor, ending, new Uint8Array()));
-    return this.after(this.cursor);
+    return this.after(this.cursor, this.cursor, null);
   }
 
-  /** After an edit: the caret lands where the change left it, the encoding is
-   *  settled again in case the change was to the front of the file, and every
-   *  other view is told. */
-  private async after(at: number): Promise<void> {
-    this.cursor = Math.max(0, Math.min(at, this.doc.lengthBytes));
-    // An edit changes how long the file is and can change how long its lines
-    // are, so the canvas is worth sizing again.
-    this.resize();
+  /** After an edit: the caret lands where the change left it, the index gives
+   *  back what the change made untrue, and every other view is told.
+   *
+   *  `delta` is how much longer the file got when the edit is known to have
+   *  left every line ending alone, and null when it might not have. A typed
+   *  letter moves the lines after it along; anything that could make or unmake
+   *  an ending has them read again. */
+  private async after(caret: number, at: number, delta: number | null): Promise<void> {
+    this.cursor = Math.max(0, Math.min(caret, this.doc.lengthBytes));
+    const from = this.index.place(at)?.at ?? at;
+    for (const key of [...this.cache.keys()]) if (key >= from) this.cache.delete(key);
+    if (delta === null) this.index.dropFrom(at);
+    else this.index.shiftFrom(at, delta);
+    this.index.setLength(this.doc.lengthBytes);
+    this.startIndexing();
     await this.draw(true);
     this.onPick(this.cursor);
     this.onEdit();
@@ -570,15 +684,7 @@ export class TextView {
 
   private async scrollLines(n: number): Promise<void> {
     if (n === 0) return;
-    if (n > 0) {
-      const w = await this.doc.textWindow(this.chosen, this.top, n);
-      this.top = w.next;
-    } else {
-      const b = await this.doc.textBack(this.chosen, this.top, -n);
-      this.top = b.back;
-    }
-    this.syncScrollbar();
-    await this.draw();
+    await this.goto(this.viewLine + n);
   }
 
   /** The byte a pointer is over, or null when it is not over a character. */
@@ -671,61 +777,12 @@ export class TextView {
     });
   }
 
-  /** Draw what fits, reading only that. */
-  async draw(force = false): Promise<void> {
-    if (this.drawing) {
-      this.pending = true;
-      return;
-    }
-    this.drawing = true;
-    try {
-      do {
-        this.pending = false;
-        if (force || !this.readingSettled || this.reading.encoding === "") {
-          this.reading = await this.doc.textReading(this.chosen);
-          this.readingSettled = true;
-        }
-        const want = this.drawn();
-        let w = await this.doc.textWindow(this.chosen, this.top, want);
-        // A window that ran out of file leaves the screen short, or empty: a
-        // file ending in a line ending puts the start of the "line" holding
-        // the last byte at the very end, and a scrollbar dragged to its floor
-        // asks for exactly that. Back the top up until the screen is full,
-        // trimming off the front anything the walk to the file's front came
-        // back over, so the screen ends up exactly full.
-        if (w.lines.length < want && this.top > 0) {
-          const b = await this.doc.textBack(this.chosen, this.top, want - w.lines.length);
-          if (b.back < this.top) {
-            const whole = await this.doc.textWindow(this.chosen, b.back, want);
-            const over = whole.lines.length - want;
-            const from = over > 0 ? whole.lines[over] : undefined;
-            this.top = from === undefined ? b.back : from.at;
-            w = from === undefined ? whole : { ...whole, lines: whole.lines.slice(over) };
-          }
-        }
-        this.lines = w.lines;
-        this.atEnd = w.lines.length < want;
-        if (this.bytesPerLine === 0) this.measureLines(w.lines);
-        if (this.resized) {
-          this.resized = false;
-          this.syncScrollbar();
-        }
-        this.usualEnding = commonEnding(w.lines);
-        this.placeBlock(this.anchorY);
-        this.render();
-        this.onReading(this.reading, this.usualEnding);
-      } while (this.pending);
-    } finally {
-      this.drawing = false;
-    }
-  }
-
   /** The rows as last drawn, keyed by everything that shaped them, so a redraw
    *  that changes nothing about a row keeps its element rather than building a
    *  thousand spans again. A scroll keeps every row that stayed on screen; a
    *  drag rebuilds only the rows the selection moved through. */
   private rowCache = new Map<string, HTMLElement>();
-  private gutterCache = new Map<number, HTMLElement>();
+  private gutterCache = new Map<string, HTMLElement>();
 
   /** Everything a row's appearance depends on. */
   private rowKey(line: TextLine): string {
@@ -735,20 +792,32 @@ export class TextView {
     const b = sel === null ? 0 : Math.min(sel.end, end);
     const selPart = b > a ? `${a}:${b}` : "";
     const cur = this.cursor >= line.at && this.cursor <= end ? this.cursor : -1;
-    const S = "\u0000";
+    const S = " ";
     return line.at + S + line.len + S + line.ending + S + String(line.lossy) + S + line.text + S + line.escapes.join(",") + S + cur + S + selPart + S + this.usualEnding + S + this.reading.encoding;
   }
 
   private render(): void {
-    this.canvas.style.height = `${this.canvasHeight()}px`;
-    this.view.style.transform = `translateY(${this.anchorY}px)`;
     const keptRows = new Map<string, HTMLElement>();
-    const keptGutter = new Map<number, HTMLElement>();
+    const keptGutter = new Map<string, HTMLElement>();
     const gutter: HTMLElement[] = [];
     const rows: HTMLElement[] = [];
-    for (const line of this.lines) {
-      const g = this.gutterCache.get(line.at) ?? el("div", { className: "tv-off", textContent: formatOffset(line.at * 8) });
-      keptGutter.set(line.at, g);
+    for (let i = 0; i < this.lines.length; i++) {
+      const line = this.lines[i];
+      if (line === undefined) continue;
+      // The line number is there once the index has reached this far, and the
+      // offset always: the offset is what this view is for, and the number is
+      // what a reader of a log came looking for.
+      const n = this.index.lineAt(line.at);
+      const gkey = `${line.at} ${n ?? ""}`;
+      const g =
+        this.gutterCache.get(gkey) ??
+        el(
+          "div",
+          { className: "tv-off" },
+          ...(n === null ? [] : [el("span", { className: "tv-lineno", textContent: String(n + 1) })]),
+          el("span", { className: "tv-at", textContent: formatOffset(line.at * 8) }),
+        );
+      keptGutter.set(gkey, g);
       gutter.push(g);
       const key = this.rowKey(line);
       const r = this.rowCache.get(key) ?? this.row(line);
@@ -757,15 +826,15 @@ export class TextView {
     }
     this.rowCache = keptRows;
     this.gutterCache = keptGutter;
-    this.gutter.replaceChildren(...gutter);
-    this.rows.replaceChildren(...rows);
+    replace(this.gutter, gutter);
+    replace(this.rows, rows);
   }
 
   /** Where each character of a line sits and how many bytes it takes. The
    *  write path asks this as much as the drawing does: what backspace removes
    *  is the width of the character before the caret, not one byte. */
   private charsOf(line: TextLine): { char: string; at: number; width: number }[] {
-    const key = `${this.reading.encoding}\u0000${this.reading.unit}`;
+    const key = `${this.reading.encoding} ${this.reading.unit}`;
     if (key !== this.charCacheKey) {
       this.charCache = new WeakMap();
       this.charCacheKey = key;
@@ -783,10 +852,10 @@ export class TextView {
     return out;
   }
 
-  /** The cells of each line, held for as long as the line is. Every window is
-   *  a fresh set of line objects, so keying on the object is what invalidates
-   *  the cache when the file changes; keying the map itself on the reading is
-   *  what invalidates it when the encoding does. */
+  /** The cells of each line, held for as long as the line is. A line lives in
+   *  the cache now, so this lasts as long as the line does rather than as long
+   *  as one window; keying the map itself on the reading is what invalidates
+   *  it when the encoding changes. */
   private charCache = new WeakMap<TextLine, { char: string; at: number; width: number }[]>();
   private charCacheKey = "";
 
@@ -890,6 +959,20 @@ export class TextView {
   }
 }
 
+/** Put a list of children in a parent, moving what is already there rather
+ *  than tearing the lot down: nearly every row of a scroll is a row that was
+ *  on screen a moment ago, and the ones entering and leaving are the only two
+ *  handfuls worth touching. */
+function replace(parent: HTMLElement, want: readonly HTMLElement[]): void {
+  const keep = new Set<Element>(want);
+  for (const child of [...parent.children]) if (!keep.has(child)) child.remove();
+  for (let i = 0; i < want.length; i++) {
+    const node = want[i];
+    if (node === undefined) continue;
+    if (parent.children[i] !== node) parent.insertBefore(node, parent.children[i] ?? null);
+  }
+}
+
 /** A string with its control characters shown as their pictures. */
 export function withPictures(text: string): string {
   return [...text].map((c) => control(c) ?? c).join("");
@@ -935,23 +1018,4 @@ function charWidth(c: string, encoding: string, unit: number): number {
   if (encoding === "UTF-8") return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
   if (unit === 2) return code < 0x10000 ? 2 : 4;
   return 1;
-}
-
-/** The ending most lines used, so the odd one out can be the one that is
- *  marked. Nothing is marked when the file has not settled on one. */
-function commonEnding(lines: readonly TextLine[]): string {
-  const count = new Map<string, number>();
-  for (const l of lines) {
-    if (l.ending === "cut" || l.ending === "no ending") continue;
-    count.set(l.ending, (count.get(l.ending) ?? 0) + 1);
-  }
-  let best = "";
-  let most = 0;
-  for (const [k, n] of count) {
-    if (n > most) {
-      best = k;
-      most = n;
-    }
-  }
-  return best;
 }
