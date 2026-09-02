@@ -92,6 +92,25 @@ export const UNPACKED = {
   followOut: (tab: string): string => `Show these bytes in ${tab}`,
 };
 
+/**
+ * One line saying where a byte of an unpacked stream came from, as the status
+ * bar and the inspector both say it:
+ * `from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: match, 5 bytes back 12`.
+ *
+ * Takes the step's parts rather than the step, so that the wording lives here
+ * and nothing here has to know the shape the core sends it in.
+ */
+export function unpackedOrigin(
+  file: string,
+  inStart: number,
+  inEnd: number,
+  kind: string,
+  len?: number,
+  dist?: number,
+): string {
+  return UNPACKED.origin(UNPACKED.bits(inStart, inEnd), file, UNPACKED.step(kind, len, dist));
+}
+
 /** Shown where fields would be when nothing has said what the file's are. */
 export const NO_TEMPLATE = "No template selected";
 

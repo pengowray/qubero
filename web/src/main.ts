@@ -1,4 +1,4 @@
-import { Doc, bytesSource, formatBytes, formatOffset, prefetchMagic } from "./doc.js";
+import { Doc, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.js";
 import * as nav from "./navhistory.js";
 import { HexView, type BitRange, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
@@ -9,10 +9,11 @@ import { ListPane } from "./listpane.js";
 import { TextView } from "./textview.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { Tabs, type Page, type Tab } from "./tabs.js";
+import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
-import { DUMP, TEXTVIEW, UNPACKED } from "./strings.js";
+import { DUMP, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -33,6 +34,64 @@ tabs.onConfirmClose = (tab) => confirm(`Discard unsaved edits to ${tab.doc.name}
 
 function activeDoc(): Doc | null {
   return tabs.doc;
+}
+
+/**
+ * What one tab lets the others do to it, so that the cursor in one can mark the
+ * bytes it answers to in another. Filled in as each page is built and dropped
+ * when the tab closes.
+ */
+type Link = {
+  /** Mark the stretch the other tab's cursor answers to, or clear it. */
+  mark: (startBit: number | null, endBit?: number) => void;
+  /** Bring this tab to the front with the cursor at this bit. */
+  goTo: (bit: number) => void;
+};
+const links = new Map<Tab, Link>();
+
+/** The tab showing the file every space was unpacked out of. */
+function fileTab(): Tab | undefined {
+  return tabs.all.find((t) => t.doc.isFile);
+}
+
+/**
+ * The cursor moved in `from`. Mark what it answers to in every other tab.
+ *
+ * The two directions are different questions with different answers. From an
+ * unpacked stream the question is which bits of the compressed run produced
+ * this byte, which `mapOut` answers; from the file it is which unpacked bytes
+ * these bits came to, which each open space answers for itself with `mapIn`.
+ * Both are null until a codec keeps a trace, and a null mark is no mark.
+ */
+function linkCursor(from: Tab, bitOffset: number): MapStep | null {
+  if (!from.doc.isFile) {
+    const step = from.doc.mapOut(Math.floor(bitOffset / 8));
+    const mark = markFromStep(step);
+    links.get(fileTab() as Tab)?.mark(mark?.startBit ?? null, mark?.endBit);
+    return step;
+  }
+  for (const t of tabs.all) {
+    if (t.doc.isFile) continue;
+    const mark = markFromRange(t.doc.mapIn(bitOffset));
+    links.get(t)?.mark(mark?.startBit ?? null, mark?.endBit);
+  }
+  return null;
+}
+
+/** Where a byte of an unpacked stream came from, in one line, or nothing when
+ *  the codec kept no trace of that byte. */
+function originLine(doc: Doc, step: MapStep | null): string {
+  if (step === null) return "";
+  return unpackedOrigin(doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist);
+}
+
+/** Bring the tab showing `doc` to the front, with the cursor at `bit`. */
+function followLink(to: Tab | undefined, bit: number): void {
+  if (to === undefined) return;
+  const i = tabs.all.indexOf(to);
+  if (i < 0) return;
+  tabs.focus(i);
+  links.get(to)?.goTo(bit);
 }
 
 /** The first open document with unsaved edits, which is what a replacement or
@@ -307,6 +366,21 @@ function build(tab: Tab): Page {
   view.onPickField = (path) => {
     goToField(path);
     overview.reveal(path);
+  };
+  // What the other tabs may do to this one: mark the stretch their cursor
+  // answers to, and send the cursor there when the reader clicks that mark.
+  links.set(tab, {
+    mark: (startBit, endBit) => view.setLinkedRange(startBit, endBit ?? 0),
+    goTo: (bit) => {
+      view.setBitCursor(bit, { pane: "hex" });
+      view.el.focus();
+    },
+  });
+  tab.release.push(() => links.delete(tab));
+  // Clicking the mark goes to the tab it came from: from an unpacked stream to
+  // the compressed bits it was made of, and back the other way.
+  view.onLinkedPick = (startBit) => {
+    followLink(doc.isFile ? tabs.all.find((t) => !t.doc.isFile) : fileTab(), startBit);
   };
   view.onHighlightClear = () => {
     followedBit = null;
@@ -639,7 +713,10 @@ function build(tab: Tab): Page {
     redoBtn,
   );
 
-  const statusbar = el("footer", { className: "statusbar" }, posLabel);
+  // The origin sits after the offset, because it answers a question about the
+  // offset: this byte, and where it came from.
+  const originLabel = el("span", { className: "tb-origin" });
+  const statusbar = el("footer", { className: "statusbar" }, posLabel, originLabel);
 
   const refresh = (): void => {
     // What the dump said was read off the file as it was opened. Once it has
@@ -671,6 +748,10 @@ function build(tab: Tab): Page {
     const selected =
       bits === 0 ? "" : `  ·  ${bits % 8 === 0 ? selectedBytes(bits / 8) : `${bits.toLocaleString()} bits`} selected`;
     posLabel.replaceChildren("Offset ", at, ` ${decimal}${listingShowing ? "" : editing}${selected}`);
+    // Where the byte under the cursor came from. Only an unpacked stream has an
+    // answer, and only once a codec keeps a trace of what it did; until then
+    // there is nothing to say and nothing is said.
+    originLabel.textContent = doc.isFile ? "" : originLine(doc, linkCursor(tab, c.bitOffset));
   };
   view.onSelectionChange = (r) => {
     text.setSelection(r === null ? null : r.startBit / 8, r === null ? 0 : r.endBit / 8);

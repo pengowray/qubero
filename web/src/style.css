@@ -174,6 +174,11 @@ input.invalid {
   color: var(--muted);
   white-space: pre;
 }
+/* Where the byte under the cursor came from, in an unpacked stream. Empty and
+   taking no room for the file, which came from nowhere but itself. */
+.tb-origin:not(:empty)::before {
+  content: "  ·  ";
+}
 .tb-file {
   font-family: var(--mono);
   white-space: pre;
@@ -410,6 +415,24 @@ input.invalid {
 .hv-hl {
   background: color-mix(in srgb, var(--accent) 38%, transparent);
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+/* Where the other tab is looking: the bits a byte of an unpacked stream came
+   from, or the bytes a compressed field unpacked to. An outline and not a fill,
+   so it reads as neither the cursor nor the selection, and can sit on top of
+   either without either being lost. Clicking it goes to the other tab. */
+.hv-linked {
+  outline: 1px dashed var(--link, #7aa2f7);
+  outline-offset: -1px;
+  border-radius: 0;
+  cursor: alias;
+}
+.hv-linked.hv-linked-first {
+  border-top-left-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+.hv-linked.hv-linked-last {
+  border-top-right-radius: 3px;
+  border-bottom-right-radius: 3px;
 }
 /* Part of a byte: a bar under exactly the bits the field covers. */
 /* The bar itself is built in `markBits`, which needs a stop per run. */

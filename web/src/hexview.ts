@@ -218,6 +218,14 @@ export class HexView {
    * and marking only the four would be marking the wrong thing.
    */
   private highlight: readonly BitRange[] = [];
+  /**
+   * The stretch this view's bytes are linked to another tab's by: the bits a
+   * byte of an unpacked stream came from, or the bytes a compressed field
+   * unpacked to. Drawn as an outline rather than as a fill, because it is
+   * neither the cursor nor the selection: it says where the *other* tab is
+   * looking, and clicking it goes there.
+   */
+  private linked: BitRange | null = null;
   private rightColumn: RightColumn = "text";
   /** Spans for the rows on screen, kept until the view or the file moves. */
   private spanCache: { key: string; spans: Span[]; more: boolean; error: string | null } | null = null;
@@ -701,6 +709,33 @@ export class HexView {
 
   /** One run, several, or nothing. Runs may be in any order and need not
    *  touch. */
+  /**
+   * Mark the stretch that answers the other tab's cursor, or clear it.
+   *
+   * Only one, because there is one cursor over there. `onLinkedPick` fires when
+   * the reader clicks it.
+   */
+  setLinkedRange(startBit: number | null, endBit = 0): void {
+    const next = startBit === null ? null : { startBit, endBit };
+    const same =
+      (next === null && this.linked === null) ||
+      (next !== null &&
+        this.linked !== null &&
+        next.startBit === this.linked.startBit &&
+        next.endBit === this.linked.endBit);
+    if (same) return;
+    this.linked = next;
+    this.render();
+  }
+
+  /** The stretch the other tab is looking at, or null. */
+  get linkedRange(): BitRange | null {
+    return this.linked;
+  }
+
+  /** The linked mark was clicked: the reader is asking to follow it. */
+  onLinkedPick: (startBit: number, endBit: number) => void = () => {};
+
   setHighlight(range: BitRange | readonly BitRange[] | null): void {
     this.highlight = range === null ? [] : Array.isArray(range) ? range : [range as BitRange];
     this.render();
@@ -745,6 +780,13 @@ export class HexView {
     const hit = this.hitAt(e.clientX, e.clientY);
     if (hit === null) return;
     e.preventDefault();
+    // A click on the mark the other tab put here follows it there, rather than
+    // moving this view's cursor to a byte the reader was only pointing at.
+    const link = this.linked;
+    if (link !== null && !e.shiftKey && hit.bit >= link.startBit && hit.bit < link.endBit) {
+      this.onLinkedPick(link.startBit, link.endBit);
+      return;
+    }
     if (e.shiftKey) {
       // Shift+click extends the selection there is, or starts one from where
       // the cursor already is.
@@ -1568,6 +1610,11 @@ export class HexView {
         // A user-selected range temporarily replaces the active-field mark.
         // Keeping both over the same bytes made adjacent or overlapping state
         // impossible to parse; clearing the selection reveals the field again.
+        // The linked stretch is marked by the byte, not by the bit: it stands
+        // for a place in another document, and half a byte of one is not a
+        // finer answer, only a smaller one.
+        const link = this.linked;
+        const linked = link !== null && off * 8 < link.endBit && (off + 1) * 8 > link.startBit;
         const hl = selection === null ? this.highlightBits(off) : [];
         const sb = selection === null ? null : this.selectionBits(selection, off);
         let text = binary ? "        " : "  ";
@@ -1613,6 +1660,21 @@ export class HexView {
           const whole = sb.from <= 0 && sb.to >= 8;
           if (!binary && off < len) hc += whole && this.pane === "hex" ? " hv-sel" : " hv-sel-weak";
           ac += whole && this.pane === "ascii" ? " hv-sel" : " hv-sel-weak";
+        }
+        if (linked && link !== null) {
+          hc += " hv-linked";
+          ac += " hv-linked";
+          // The ends of the run get the ends of the outline, so a mark that
+          // runs off a row still reads as one stretch rather than as a box per
+          // byte.
+          if (off * 8 <= link.startBit) {
+            hc += " hv-linked-first";
+            ac += " hv-linked-first";
+          }
+          if ((off + 1) * 8 >= link.endBit) {
+            hc += " hv-linked-last";
+            ac += " hv-linked-last";
+          }
         }
         if (off === this.cursor) {
           // In binary the bits carry the cursor, except past the end of the
