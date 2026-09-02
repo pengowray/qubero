@@ -107,6 +107,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"\xce\xfa\xed\xfe", "macho"),
     (b"\xcf\xfa\xed\xfe", "macho"),
     (b"\x89HDF\r\n\x1a\n", "hdf5"),
+    // The older format of the same name, which shares nothing with it. A
+    // MODIS granule and every HDF-EOS2 product is one of these.
+    (hdf4::MAGIC, "hdf4"),
     (b"ID3", "id3"),
     (b"\x00\x05\x16\x07", "appledouble"),
     (b"\x00\x05\x16\x00", "applesingle"),
