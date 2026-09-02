@@ -66,6 +66,7 @@ mod mca;
 mod midi;
 mod mkv;
 mod mp4;
+mod mseed;
 mod nes;
 mod netcdf;
 mod npy;
@@ -84,6 +85,7 @@ mod pnm;
 mod qoi;
 mod rar5;
 mod rpm;
+mod sac;
 mod png;
 mod root;
 mod safetensors;
@@ -167,6 +169,7 @@ pub use mca::mca;
 pub use midi::midi;
 pub use mkv::mkv;
 pub use mp4::mp4;
+pub use mseed::mseed;
 pub use nes::nes;
 pub use netcdf::netcdf;
 pub use npy::npy;
@@ -184,6 +187,7 @@ pub use pnm::pnm;
 pub use qoi::qoi;
 pub use rar5::rar5;
 pub use rpm::rpm;
+pub use sac::sac;
 pub use png::png;
 pub use root::root;
 pub use safetensors::safetensors;
@@ -252,6 +256,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("zip", |_| zip()),
     ("wasm", |_| wasm()),
     ("mp4", |_| mp4()),
+    ("mseed", |_| mseed()),
+    ("sac", |_| sac()),
     ("mkv", |_| mkv()),
     ("dtb", |_| dtb()),
     ("draco", |_| draco()),
