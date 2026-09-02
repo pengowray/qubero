@@ -1078,7 +1078,15 @@ export class Inspector {
     role.className = "insp-origin-role";
     role.textContent = "unpacked";
     const what = document.createElement("span");
-    what.textContent = unpackedOrigin(this.doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist);
+    what.textContent = unpackedOrigin(
+      this.doc.name,
+      step.in_start,
+      step.in_end,
+      step.kind,
+      step.len,
+      step.dist,
+      step.field,
+    );
     row.append(role, what);
     return row;
   }

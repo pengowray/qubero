@@ -49,6 +49,18 @@ type Link = {
 };
 const links = new Map<Tab, Link>();
 
+/**
+ * Which tab put the mark on which, and where in that tab to go back to.
+ *
+ * The bits of a mark are the bits of the tab it is drawn on, so they are no use
+ * as a destination: the mark on the file is a stretch of the file, and following
+ * it means going to the unpacked byte that stretch produced. That byte is
+ * wherever the cursor was in the tab that set the mark, which is what is kept
+ * here. Two streams open from one file also means the first of them is not
+ * necessarily the one to go back to.
+ */
+const markedBy = new Map<Tab, { by: Tab; bit: number }>();
+
 /** The tab showing the file every space was unpacked out of. */
 function fileTab(): Tab | undefined {
   return tabs.all.find((t) => t.doc.isFile);
@@ -67,13 +79,20 @@ function linkCursor(from: Tab, bitOffset: number): MapStep | null {
   if (!from.doc.isFile) {
     const step = from.doc.mapOut(Math.floor(bitOffset / 8));
     const mark = markFromStep(step);
-    links.get(fileTab() as Tab)?.mark(mark?.startBit ?? null, mark?.endBit);
+    const file = fileTab();
+    if (file !== undefined) {
+      links.get(file)?.mark(mark?.startBit ?? null, mark?.endBit);
+      if (mark === null) markedBy.delete(file);
+      else markedBy.set(file, { by: from, bit: bitOffset });
+    }
     return step;
   }
   for (const t of tabs.all) {
     if (t.doc.isFile) continue;
     const mark = markFromRange(t.doc.mapIn(bitOffset));
     links.get(t)?.mark(mark?.startBit ?? null, mark?.endBit);
+    if (mark === null) markedBy.delete(t);
+    else markedBy.set(t, { by: from, bit: bitOffset });
   }
   return null;
 }
@@ -82,16 +101,17 @@ function linkCursor(from: Tab, bitOffset: number): MapStep | null {
  *  the codec kept no trace of that byte. */
 function originLine(doc: Doc, step: MapStep | null): string {
   if (step === null) return "";
-  return unpackedOrigin(doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist);
+  return unpackedOrigin(doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist, step.field);
 }
 
-/** Bring the tab showing `doc` to the front, with the cursor at `bit`. */
-function followLink(to: Tab | undefined, bit: number): void {
-  if (to === undefined) return;
-  const i = tabs.all.indexOf(to);
+/** Follow the mark on `tab` back to the tab that put it there. */
+function followLink(tab: Tab): void {
+  const home = markedBy.get(tab);
+  if (home === undefined) return;
+  const i = tabs.all.indexOf(home.by);
   if (i < 0) return;
   tabs.focus(i);
-  links.get(to)?.goTo(bit);
+  links.get(home.by)?.goTo(home.bit);
 }
 
 /** The first open document with unsaved edits, which is what a replacement or
@@ -379,12 +399,14 @@ function build(tab: Tab): Page {
       view.el.focus();
     },
   });
-  tab.release.push(() => links.delete(tab));
+  tab.release.push(() => {
+    links.delete(tab);
+    markedBy.delete(tab);
+    for (const [on, home] of markedBy) if (home.by === tab) markedBy.delete(on);
+  });
   // Clicking the mark goes to the tab it came from: from an unpacked stream to
   // the compressed bits it was made of, and back the other way.
-  view.onLinkedPick = (startBit) => {
-    followLink(doc.isFile ? tabs.all.find((t) => !t.doc.isFile) : fileTab(), startBit);
-  };
+  view.onLinkedPick = () => followLink(tab);
   view.onHighlightClear = () => {
     followedBit = null;
     overview.clearSelection();
@@ -754,7 +776,10 @@ function build(tab: Tab): Page {
     // Where the byte under the cursor came from. Only an unpacked stream has an
     // answer, and only once a codec keeps a trace of what it did; until then
     // there is nothing to say and nothing is said.
-    originLabel.textContent = doc.isFile ? "" : originLine(doc, linkCursor(tab, c.bitOffset));
+    // Asked whichever tab this is: from the file it marks the unpacked tabs,
+    // and only an unpacked tab has a line of its own to show.
+    const step = linkCursor(tab, c.bitOffset);
+    originLabel.textContent = doc.isFile ? "" : originLine(doc, step);
   };
   view.onSelectionChange = (r) => {
     text.setSelection(r === null ? null : r.startBit / 8, r === null ? 0 : r.endBit / 8);

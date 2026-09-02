@@ -725,23 +725,37 @@ export type TemplateReply<T> =
   | { readonly status: "working"; readonly reachedBytes: number }
   | { readonly status: "error"; readonly message: string };
 
-/** One thing a decoder did, as the cursor link reads it: which bits of the
- *  compressed run it read, which bytes of the unpacked stream that came to,
- *  and which kind of step it was. `len` and `dist` are a match's only. */
+/**
+ * One thing a decoder did: which bits of the compressed run it read, which
+ * bytes of the unpacked stream that came to, and what it was doing.
+ *
+ * The same shape answers both directions. `mapOut` asks what made a byte of the
+ * output; `mapIn` asks what a bit of the input was read as. Either range may be
+ * empty: a header field produces no output, and a short match reads no input of
+ * its own past the code that named it.
+ */
 export type MapStep = {
   readonly in_start: number;
   readonly in_end: number;
   readonly out_start: number;
   readonly out_end: number;
-  readonly kind: "literal" | "match" | "stored" | "block" | "header" | "table" | "opaque";
+  readonly kind:
+    | "literal"
+    | "match"
+    | "stored"
+    | "block"
+    | "header"
+    | "table"
+    | "end-of-block"
+    | "opaque";
+  /** Which named field, for a header or a table step. */
+  readonly field?: string;
+  /** What that field said, or the byte a literal is. */
+  readonly value?: number;
+  /** A match's length; a table repeat's count; a code length. */
   readonly len?: number;
+  /** A match's distance. */
   readonly dist?: number;
-};
-
-/** The unpacked bytes a stretch of compressed bits came to. */
-export type MapRange = {
-  readonly out_start: number;
-  readonly out_end: number;
 };
 
 export type ExtentEstimate = {
@@ -948,10 +962,17 @@ export class Doc {
     return r.status === "ok" ? r.node : null;
   }
 
-  /** What the bit at `bit` of the compressed run came to, or null. */
-  mapIn(bit: number): MapRange | null {
-    const r = this.handleReply<MapRange | null>(this.editor.map_in(this.space, bit));
+  /** Which step read the bit at `bit` of the compressed run this space was
+   *  unpacked from, and so which of its bytes that bit produced. */
+  mapIn(bit: number): MapStep | null {
+    const r = this.handleReply<MapStep | null>(this.editor.map_in(this.space, bit));
     return r.status === "ok" ? r.node : null;
+  }
+
+  /** True when the template reading this space came from looking at the
+   *  unpacked bytes rather than from what the stream declared. */
+  get recognised(): boolean {
+    return this.space !== 0 && this.editor.space_recognised(this.space);
   }
 
   /** Called whenever the document content changes or a pending chunk arrives. */

@@ -3,7 +3,8 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::eval::{Explain, OpenedDoc, Origin, Step as MapStep, StepKind};
+use qubero_core::codec::{Step as MapStep, StepKind};
+use qubero_core::eval::{Explain, Origin, SpaceId};
 use qubero_core::hexdump;
 use qubero_core::textview;
 use qubero_core::source::Source;
@@ -26,6 +27,11 @@ struct Sheet {
     /// Which `Decoded` node of the file this space was unpacked from. Empty for
     /// space 0, which was unpacked from nothing.
     origin: Vec<usize>,
+    /// The core's number for the same space, which is what the trace behind the
+    /// cursor link is asked by. Zero for the file. The core renumbers from 1
+    /// whenever a reading is thrown away, so this is set again every time the
+    /// stream is opened again; a tab's own number never changes.
+    core_space: SpaceId,
     eval: Option<Evaluator>,
     /// What the wasm sections say about the module, when that is the template.
     /// Built on the first listing that needs it, and thrown away whenever the
@@ -54,10 +60,48 @@ struct Sheet {
 }
 
 impl Sheet {
+    /// A reading of one of the core's spaces.
+    ///
+    /// The bytes are all here already, so the store keeps every chunk: a space
+    /// has no file behind it to fetch a missing one back from. The template is
+    /// the one the core settled on, which is the stream's own or, where that
+    /// said only bytes, whatever the unpacked bytes were recognised as.
+    fn from_space(space: &mut qubero_core::eval::Space, origin: Vec<usize>) -> Sheet {
+        let template = space.reading().0.template().clone();
+        let bytes = space.bytes();
+        let n = bytes.len() as u64;
+        let chunks = (n / SPACE_CHUNK + 1) as usize;
+        let mut store = ChunkStore::new(n, SPACE_CHUNK, chunks);
+        for c in 0..chunks as u64 {
+            let from = (c * SPACE_CHUNK) as usize;
+            if from >= bytes.len() {
+                break;
+            }
+            let to = bytes.len().min(from + SPACE_CHUNK as usize);
+            store.insert(c, bytes[from..to].to_vec().into_boxed_slice());
+        }
+        let mut sheet = Sheet::new(store, origin);
+        sheet.core_space = space.id;
+        sheet.template = template.name.clone();
+        let mut ev = Evaluator::new(template);
+        ev.set_slice(Some(WORK_SLICE));
+        sheet.eval = Some(ev);
+        sheet
+    }
+
+    /// A space that is no longer there: the stream it came from was edited away
+    /// or would not open a second time. It holds no bytes rather than the
+    /// file's, because a tab named after a stream must never quietly show
+    /// something else.
+    fn empty(origin: Vec<usize>) -> Sheet {
+        Sheet::new(ChunkStore::new(0, SPACE_CHUNK, 1), origin)
+    }
+
     fn new(store: ChunkStore, origin: Vec<usize>) -> Sheet {
         Sheet {
             doc: Document::new(store),
             origin,
+            core_space: 0,
             eval: None,
             disasm: None,
             bpf: None,
@@ -1098,41 +1142,76 @@ struct MapStepDto {
     in_end: f64,
     out_start: f64,
     out_end: f64,
-    /// `literal`, `match`, `stored`, `block`, `header`, `table` or `opaque`.
+    /// The word the interface looks the step's message up by: `literal`,
+    /// `match`, `stored`, `header`, `table`, `end-of-block`, `block` or
+    /// `opaque`. [`StepKind::as_str`] is the one place these are named.
     kind: &'static str,
-    /// Set for a match only: how long it is and how far back it reaches.
+    /// Which named field, for a header or a table step: `bfinal`, `hlit`,
+    /// `code_len` and the rest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<&'static str>,
+    /// What that field said, where saying it is the point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<f64>,
+    /// A match's only: how long it is and how far back it reaches.
     #[serde(skip_serializing_if = "Option::is_none")]
     len: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dist: Option<f64>,
 }
 
-/// The output bytes a stretch of input came to.
-#[derive(Serialize)]
-struct OutRangeDto {
-    out_start: f64,
-    out_end: f64,
-}
-
 fn step_dto(s: MapStep) -> MapStepDto {
-    let (kind, len, dist) = match s.kind {
-        StepKind::Literal => ("literal", None, None),
-        StepKind::Match { len, dist } => ("match", Some(len as f64), Some(dist as f64)),
-        StepKind::Stored => ("stored", None, None),
-        StepKind::Block => ("block", None, None),
-        StepKind::Header => ("header", None, None),
-        StepKind::Table => ("table", None, None),
-        StepKind::Opaque => ("opaque", None, None),
-    };
-    MapStepDto {
+    let mut dto = MapStepDto {
         in_start: s.in_bits.start as f64,
         in_end: s.in_bits.end as f64,
         out_start: s.out_bytes.start as f64,
         out_end: s.out_bytes.end as f64,
-        kind,
-        len,
-        dist,
+        kind: s.kind.as_str(),
+        field: None,
+        value: None,
+        len: None,
+        dist: None,
+    };
+    match s.kind {
+        StepKind::Header(f, v) => {
+            dto.field = Some(f.as_str());
+            dto.value = Some(v as f64);
+        }
+        // A table step is a code length: which alphabet it belongs to, and the
+        // symbol and length it gave. The counts of a repeat go in `len`, which
+        // is where the interface looks for "how many".
+        StepKind::Table(t) => {
+            use qubero_core::codec::TableField;
+            dto.field = Some(match t {
+                TableField::CodeLen { .. } => "code_len",
+                TableField::LitLen { .. } => "lit_len",
+                TableField::Dist { .. } => "dist_len",
+                TableField::Repeat { .. } => "repeat",
+            });
+            match t {
+                TableField::CodeLen { sym, len } => {
+                    dto.value = Some(sym as f64);
+                    dto.len = Some(len as f64);
+                }
+                TableField::LitLen { sym, len } | TableField::Dist { sym, len } => {
+                    dto.value = Some(sym as f64);
+                    dto.len = Some(len as f64);
+                }
+                TableField::Repeat { code, count, len, .. } => {
+                    dto.value = Some(code as f64);
+                    dto.len = Some(count as f64);
+                    dto.dist = Some(len as f64);
+                }
+            }
+        }
+        StepKind::Literal(b) => dto.value = Some(b as f64),
+        StepKind::Match { len, dist } => {
+            dto.len = Some(len as f64);
+            dto.dist = Some(dist as f64);
+        }
+        StepKind::Stored | StepKind::EndOfBlock | StepKind::Block | StepKind::Opaque => {}
     }
+    dto
 }
 
 const HEX_NOT_A_DIGIT: &str = "Hex is pairs of digits 0-9 a-f, like 89 50 4e 47";
@@ -1148,18 +1227,14 @@ impl Editor {
         Editor { sheets: vec![Sheet::new(store, Vec::new())], live: 0 }
     }
 
-    /// The reading in hand. A space id past the ones open falls back to the
-    /// file rather than panicking: a tab left over from before an edit asks
-    /// about a space that has been forgotten, and the honest answer to that is
-    /// the file, not a trap.
+
     /// One space's reading, for a call that names it and asks nothing else of
-    /// the editor. Same fallback as `sheet`.
+    /// the editor. A number past the spaces open falls back to the file rather
+    /// than panicking; nothing should ask, since an edit reopens the spaces in
+    /// place rather than dropping them and a tab's number stays good for as
+    /// long as the tab does.
     fn at(&self, space: u32) -> &Sheet {
         self.sheets.get(space as usize).unwrap_or(&self.sheets[0])
-    }
-
-    fn sheet(&self) -> &Sheet {
-        self.sheets.get(self.live).unwrap_or(&self.sheets[0])
     }
 
     fn sm(&mut self) -> &mut Sheet {
@@ -1176,8 +1251,39 @@ impl Editor {
     /// so an edit or a change of template throws it away and the tab reopens it
     /// by path. The file's own reading, space 0, stays.
     fn forget_spaces(&mut self) {
-        self.sheets.truncate(1);
         self.live = 0;
+        if self.sheets.len() < 2 {
+            return;
+        }
+        // The spaces are not dropped, because the tabs showing them are still
+        // open and a tab has to keep meaning what its title says. Each is
+        // unpacked again from the stream it came from, so the tab's own number
+        // stays good; the core renumbers its own spaces from 1 and the new
+        // number is written back here. A stream that no longer opens leaves an
+        // empty space rather than falling back to the file's bytes under the
+        // stream's name.
+        let origins: Vec<Vec<usize>> =
+            self.sheets[1..].iter().map(|sh| sh.origin.clone()).collect();
+        for (i, origin) in origins.into_iter().enumerate() {
+            let file = &mut self.sheets[0];
+            let opened = match &mut file.eval {
+                None => None,
+                Some(e) => {
+                    e.set_slice(None);
+                    let got = e.open_space(&file.doc, 0, &origin).ok().flatten();
+                    e.set_slice(Some(WORK_SLICE));
+                    got
+                }
+            };
+            let sheet = match opened {
+                Some(id) => match self.sheets[0].eval.as_mut().and_then(|e| e.space_mut(id)) {
+                    Some(sp) => Sheet::from_space(sp, origin),
+                    None => Sheet::empty(origin),
+                },
+                None => Sheet::empty(origin),
+            };
+            self.sheets[i + 1] = sheet;
+        }
     }
 
     /// Open the `Decoded` stream at `path` as a document of its own, and give
@@ -1194,80 +1300,85 @@ impl Editor {
             return reply(Ok(SpaceDto { space: i as f64, template, refused: None }));
         }
         self.live = 0;
-        let sh = &mut self.sheets[0];
-        let Some(e) = &mut sh.eval else {
+        let file = &mut self.sheets[0];
+        let Some(e) = &mut file.eval else {
             return reply::<SpaceDto>(Err(EvalError::Failed("no template".into())));
         };
         // Unpacking a run is not something to do by halves: it reads the whole
         // run and decodes it, and a half-decoded stream is not a document.
         e.set_slice(None);
-        let opened = e.open_space_doc(&sh.doc, &p);
+        let opened = e.open_space(&file.doc, 0, &p);
         e.set_slice(Some(WORK_SLICE));
-        let doc = match opened {
-            Ok(OpenedDoc::Opened(d)) => d,
-            Ok(OpenedDoc::Refused(why)) => {
-                return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why.as_str().to_string()) }))
+        let id = match opened {
+            Ok(Some(id)) => id,
+            // The stream would not open. Which of the three ways is already on
+            // the node, so the reply only has to say that it did not.
+            Ok(None) => {
+                let why = self.refusal_at(&p);
+                return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why) }));
             }
             Err(err) => return reply::<SpaceDto>(Err(err)),
         };
-        // The bytes are all here already, so the store keeps every chunk: a
-        // space has no file behind it to fetch a missing one back from.
-        let bytes = &doc.bytes;
-        let n = bytes.len() as u64;
-        let chunks = (n / SPACE_CHUNK + 1) as usize;
-        let mut store = ChunkStore::new(n, SPACE_CHUNK, chunks);
-        for c in 0..chunks as u64 {
-            let from = (c * SPACE_CHUNK) as usize;
-            if from >= bytes.len() {
-                break;
-            }
-            let to = bytes.len().min(from + SPACE_CHUNK as usize);
-            store.insert(c, bytes[from..to].to_vec().into_boxed_slice());
-        }
-        let mut sheet = Sheet::new(store, p);
-        let doc_template = doc.template.name.clone();
-        sheet.template = doc_template.clone();
-        let mut ev = Evaluator::new(doc.template);
-        ev.set_slice(Some(WORK_SLICE));
-        sheet.eval = Some(ev);
+        let Some(sp) = self.sheets[0].eval.as_mut().and_then(|e| e.space_mut(id)) else {
+            return reply::<SpaceDto>(Err(EvalError::Failed("space vanished".into())));
+        };
+        let sheet = Sheet::from_space(sp, p);
+        let template = sheet.template.clone();
         self.sheets.push(sheet);
-        let template = doc_template;
         reply(Ok(SpaceDto { space: (self.sheets.len() - 1) as f64, template, refused: None }))
+    }
+
+    /// Why the stream at `path` would not open, in the core's own word for it.
+    fn refusal_at(&mut self, path: &[usize]) -> String {
+        let file = &mut self.sheets[0];
+        let Some(e) = &mut file.eval else { return "failed".into() };
+        match e.node(&file.doc, path) {
+            Ok(n) => n.refused.unwrap_or_else(|| "failed".into()),
+            Err(_) => "failed".into(),
+        }
     }
 
     /// Which bits of the compressed run the byte at `byte` of `space` came
     /// from, and by which step: {status:"ok",node:{..}} or a null node when the
     /// codec's map does not reach that far.
     pub fn map_out(&mut self, space: u32, byte: f64) -> String {
-        let Some(origin) = self.origin_of(space) else { return reply(Ok(None::<MapStepDto>)) };
-        let sh = &self.sheets[0];
-        let Some(e) = &sh.eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_out(&origin, byte as u64).map(step_dto)))
+        let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
+        let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
+        reply(Ok(e.map_out(core, byte as u64).map(step_dto)))
     }
 
-    /// Which bytes of `space` the bit at `bit` of the compressed run came to.
+    /// Which step read the bit at `bit` of the run `space` was unpacked from,
+    /// and so which of its bytes that bit produced.
     pub fn map_in(&mut self, space: u32, bit: f64) -> String {
-        let Some(origin) = self.origin_of(space) else { return reply(Ok(None::<OutRangeDto>)) };
-        let sh = &self.sheets[0];
-        let Some(e) = &sh.eval else { return reply(Ok(None::<OutRangeDto>)) };
-        reply(Ok(e.map_in(&origin, bit as u64).map(|r| OutRangeDto {
-            out_start: r.out_bytes.start as f64,
-            out_end: r.out_bytes.end as f64,
-        })))
+        let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
+        let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
+        reply(Ok(e.map_in(core, bit as u64).map(step_dto)))
     }
 
     /// The `Decoded` node a space was unpacked from, as a path in the file.
     /// Empty for space 0 and for a space that is no longer open.
     pub fn space_origin(&self, space: u32) -> Vec<u32> {
-        self.origin_of(space).map_or(Vec::new(), |p| p.iter().map(|&x| x as u32).collect())
+        match self.sheets.get(space as usize) {
+            Some(sh) if !sh.origin.is_empty() => sh.origin.iter().map(|&x| x as u32).collect(),
+            _ => Vec::new(),
+        }
     }
 
-    fn origin_of(&self, space: u32) -> Option<Vec<usize>> {
+    /// True when the template reading a space came from looking at the unpacked
+    /// bytes rather than from what the stream declared: a gzip of a tar opens
+    /// as a tar, and this is what says so.
+    pub fn space_recognised(&self, space: u32) -> bool {
+        let Some(core) = self.core_space(space) else { return false };
+        self.sheets[0].eval.as_ref().and_then(|e| e.space(core)).is_some_and(|s| s.recognised)
+    }
+
+    /// The core's number for one of this editor's spaces, if it is still open.
+    fn core_space(&self, space: u32) -> Option<SpaceId> {
         let sh = self.sheets.get(space as usize)?;
-        if sh.origin.is_empty() {
+        if sh.core_space == 0 {
             return None;
         }
-        Some(sh.origin.clone())
+        Some(sh.core_space)
     }
 
     fn changed(&mut self) {
@@ -1413,7 +1524,9 @@ impl Editor {
 
     /// Select a built-in template by name; "" clears it. Returns false if unknown.
     pub fn set_template(&mut self, name: &str) -> bool {
-        self.live = 0;
+        // A different template may not have the stream a space came from, so
+        // the spaces are worked out again against it before anything else.
+        self.forget_spaces();
         let sh = self.sm();
         sh.disasm = None;
         sh.bpf = None;

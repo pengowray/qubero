@@ -85,7 +85,7 @@ test("a step becomes the bits to mark in the compressed tab", () => {
 });
 
 test("a range becomes the bytes to mark in the unpacked tab", () => {
-  assert.deepEqual(markFromRange({ out_start: 0x40, out_end: 0x45 }), { startBit: 0x200, endBit: 0x228 });
+  assert.deepEqual(markFromRange(MATCH), { startBit: 0x200, endBit: 0x228 });
 });
 
 test("nothing to mark where the map has no answer", () => {
@@ -94,5 +94,5 @@ test("nothing to mark where the map has no answer", () => {
   // A step that read no bits, and a range of no bytes, are not marks either: an
   // outline round nothing would say the other cursor is somewhere it is not.
   assert.equal(markFromStep({ ...MATCH, in_end: MATCH.in_start }), null);
-  assert.equal(markFromRange({ out_start: 9, out_end: 9 }), null);
+  assert.equal(markFromRange({ ...MATCH, out_end: MATCH.out_start }), null);
 });

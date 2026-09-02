@@ -782,8 +782,12 @@ export class HexView {
     e.preventDefault();
     // A click on the mark the other tab put here follows it there, rather than
     // moving this view's cursor to a byte the reader was only pointing at.
+    // By the byte, the same rule the mark is drawn by: a step may start and end
+    // inside a byte, and a reader clicking a byte that is outlined means that
+    // byte, not the particular bit of it their pointer landed on.
     const link = this.linked;
-    if (link !== null && !e.shiftKey && hit.bit >= link.startBit && hit.bit < link.endBit) {
+    const clicked = Math.floor(hit.bit / 8);
+    if (link !== null && !e.shiftKey && clicked * 8 < link.endBit && (clicked + 1) * 8 > link.startBit) {
       this.onLinkedPick(link.startBit, link.endBit);
       return;
     }

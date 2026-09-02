@@ -68,10 +68,21 @@ export const UNPACKED = {
   bit: (bit: number): string => `0x${Math.floor(bit / 8).toString(16)}.${bit % 8}`,
   /** Both ends together. */
   bits: (from: number, to: number): string => `${UNPACKED.bit(from)} to ${UNPACKED.bit(to)}`,
-  /** What the decoder did, in the format's own words. */
-  step: (kind: string, len?: number, dist?: number): string => {
+  /**
+   * What the decoder did, in the format's own words rather than the decoder's.
+   *
+   * `match, 5 bytes back 12` says a run of five bytes copied from twelve back;
+   * a reader who has never written an inflater can still see that nothing new
+   * was stored there. A header or table step names its field, because "header"
+   * alone does not say which of a dozen fields the cursor is standing on.
+   */
+  step: (kind: string, len?: number, dist?: number, field?: string): string => {
     if (kind === "match" && len !== undefined && dist !== undefined) {
       return `match, ${len === 1 ? "1 byte" : `${len.toLocaleString()} bytes`} back ${dist.toLocaleString()}`;
+    }
+    if ((kind === "header" || kind === "table") && field !== undefined) {
+      const named = UNPACKED.fieldName[field];
+      if (named !== undefined) return named;
     }
     return UNPACKED.stepName[kind] ?? kind;
   },
@@ -82,7 +93,35 @@ export const UNPACKED = {
     block: "block header",
     header: "block header",
     table: "Huffman table",
+    "end-of-block": "end of block",
     opaque: "unpacked",
+  } as Readonly<Record<string, string>>,
+  /**
+   * The named fields a deflate header and its code tables are made of, keyed by
+   * what the core calls each one. The format's own names are kept, because a
+   * reader with RFC 1951 open should be able to find the same word there;
+   * what is added is the few words saying what it decides.
+   */
+  fieldName: {
+    bfinal: "last-block flag",
+    btype: "block type",
+    hlit: "literal code count",
+    hdist: "distance code count",
+    hclen: "code-length count",
+    len: "stored length",
+    nlen: "stored length check",
+    padding: "padding to the next byte",
+    wrapper: "wrapper bytes",
+    token: "sequence token",
+    length_extra: "extra length bits",
+    offset: "match offset",
+    frame_header: "frame header",
+    block_header: "block header",
+    footer: "footer",
+    code_len: "code-length code",
+    lit_len: "literal code length",
+    dist_len: "distance code length",
+    repeat: "repeated code lengths",
   } as Readonly<Record<string, string>>,
   /** The marks the two tabs keep on each other, named where a reader hovers. */
   linkedIn: "The bits this byte was unpacked from",
@@ -107,8 +146,9 @@ export function unpackedOrigin(
   kind: string,
   len?: number,
   dist?: number,
+  field?: string,
 ): string {
-  return UNPACKED.origin(UNPACKED.bits(inStart, inEnd), file, UNPACKED.step(kind, len, dist));
+  return UNPACKED.origin(UNPACKED.bits(inStart, inEnd), file, UNPACKED.step(kind, len, dist, field));
 }
 
 /** Shown where fields would be when nothing has said what the file's are. */

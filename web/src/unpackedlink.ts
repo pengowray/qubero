@@ -18,14 +18,10 @@ export type Step = {
   readonly out_start: number;
   readonly out_end: number;
   readonly kind: string;
+  readonly field?: string;
+  readonly value?: number;
   readonly len?: number;
   readonly dist?: number;
-};
-
-/** The unpacked bytes a stretch of compressed bits came to. */
-export type OutRange = {
-  readonly out_start: number;
-  readonly out_end: number;
 };
 
 /** A stretch of one document, in bits of it. */
@@ -45,12 +41,16 @@ export function markFromStep(step: Step | null): Marked | null {
 }
 
 /**
- * Where to mark the unpacked stream, given the bits under the cursor of the
- * compressed tab. Counted in bytes over there, because unpacked output is
- * bytes: nothing produces half of one.
+ * Where to mark the unpacked stream, given the step that read the bits under
+ * the cursor of the compressed tab. Counted in bytes over there, because
+ * unpacked output is bytes: nothing produces half of one.
+ *
+ * A step that produced nothing marks nothing. That is not a failure: a block
+ * header is read and produces no output, and outlining zero bytes of the
+ * unpacked stream would say the reader is standing somewhere they are not.
  */
-export function markFromRange(range: OutRange | null): Marked | null {
-  if (range === null) return null;
-  if (range.out_end <= range.out_start) return null;
-  return { startBit: range.out_start * 8, endBit: range.out_end * 8 };
+export function markFromRange(step: Step | null): Marked | null {
+  if (step === null) return null;
+  if (step.out_end <= step.out_start) return null;
+  return { startBit: step.out_start * 8, endBit: step.out_end * 8 };
 }

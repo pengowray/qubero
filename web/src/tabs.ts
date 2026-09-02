@@ -110,6 +110,9 @@ export class Tabs {
     for (const tab of this.list) this.discard(tab);
     this.list = [];
     this.at = 0;
+    // Whatever else was in the host goes too: the start screen, or the strip
+    // left over from the documents just closed.
+    this.host.replaceChildren();
     this.add({ ...t, closable: false });
   }
 
@@ -167,11 +170,15 @@ export class Tabs {
       current.page = built.el;
       current.shown = built.shown;
     }
-    const pages = this.list.map((t) => t.page).filter((p): p is HTMLElement => p !== null);
     for (const t of this.list) if (t.page !== null) t.page.hidden = t !== current;
-    // The strip only appears once there are two, so a single file looks the way
-    // it always has.
-    this.host.replaceChildren(...(this.list.length > 1 ? [this.strip()] : []), ...pages);
+    // Only what is not already here is put here. Taking a page out of the
+    // document and putting it back resets every scroll container inside it, and
+    // the whole point of keeping the pages is that a tab comes back where it
+    // was left.
+    for (const t of this.list) {
+      if (t.page !== null && !t.page.isConnected) this.host.append(t.page);
+    }
+    this.refresh();
     current.shown();
     this.onSwitch(current);
   }
