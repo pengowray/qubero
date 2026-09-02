@@ -16,6 +16,7 @@ mod cab;
 mod braw;
 mod bards_tale;
 mod cbor;
+mod cdf;
 mod coff;
 mod compress;
 mod corel;
@@ -47,6 +48,7 @@ mod recognise;
 pub mod sqlite_overflow;
 mod uf2;
 mod hackrffw;
+mod hdf4;
 mod hdf5;
 pub mod h5ad;
 pub mod hdf5_chunk;
@@ -73,6 +75,7 @@ mod npy;
 mod old_mac;
 mod omf;
 mod pak;
+mod parquet;
 mod pcx;
 mod pdf;
 pub mod pdf_objstm;
@@ -128,6 +131,7 @@ pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use bencode::bencode;
 pub use cbor::cbor;
+pub use cdf::cdf;
 pub use coff::coff;
 pub use compress::compress;
 pub use corel::{cdr, cmx};
@@ -153,6 +157,7 @@ pub use gwf::gwf;
 pub use gzip::gzip;
 pub use uf2::{image as uf2_image, uf2, Image as Uf2Image};
 pub use hackrffw::hackrffw;
+pub use hdf4::hdf4;
 pub use hdf5::hdf5;
 pub use id3::id3;
 pub use ilbm::ilbm;
@@ -177,6 +182,7 @@ pub use old_mac::{binhex, compactpro, macbinary, stuffit};
 pub use omf::omf;
 pub use pe::pe;
 pub use pak::pak;
+pub use parquet::parquet;
 pub use pcx::pcx;
 pub use pdf::pdf;
 pub use pi1::pi1;
@@ -322,6 +328,9 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("gdbm", |_| gdbm()),
     ("wad", |_| wad()),
     ("pak", |_| pak()),
+    ("parquet", |_| parquet()),
+    ("hdf4", |_| hdf4()),
+    ("cdf", |_| cdf()),
     ("vpk", |_| vpk()),
     ("mca", |_| mca()),
     ("tap", |_| tap()),

@@ -53,6 +53,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     // and picks the layout, so one name serves both.
     (b"GRIB", "grib"),
     (npy::MAGIC, "npy"),
+    // A columnar table. The same four bytes close the file, and the eight
+    // before those are what finds everything in it.
+    (parquet::MAGIC, "parquet"),
     // The first card of a FITS header, keyword and all: eight bytes of
     // keyword and the `=` that says it has a value.
     (b"SIMPLE  =", "fits"),
@@ -74,6 +77,11 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"PWAD", "wad"),
     (b"\x34\x12\xaa\x55", "vpk"),
     (b"NES\x1a", "nes"),
+    // NASA's Common Data Format, which shares three letters with the NetCDF
+    // classic file below and nothing else. Version 2.x opens with the word
+    // that means "not compressed", twice over.
+    (cdf::MAGIC, "cdf"),
+    (cdf::MAGIC_V2, "cdf"),
     // The three versions of a classic NetCDF file. A `.nc` written by a
     // modern library is an HDF5 file instead, and matches that signature.
     (b"CDF\x01", "netcdf"),
@@ -104,6 +112,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"\xce\xfa\xed\xfe", "macho"),
     (b"\xcf\xfa\xed\xfe", "macho"),
     (b"\x89HDF\r\n\x1a\n", "hdf5"),
+    // The older format of the same name, which shares nothing with it. A
+    // MODIS granule and every HDF-EOS2 product is one of these.
+    (hdf4::MAGIC, "hdf4"),
     (b"ID3", "id3"),
     (b"\x00\x05\x16\x07", "appledouble"),
     (b"\x00\x05\x16\x00", "applesingle"),
