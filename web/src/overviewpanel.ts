@@ -30,6 +30,10 @@ import type { LogicalNode, LogicalOutline } from "./logicaloutline.js";
 /** How the map is drawn: a square this wide plus a one-pixel gap. */
 const CELL = 5;
 const GAP = 1;
+/** Room around the cells for the outline of the viewed range, which is drawn
+ *  just outside the cells it encloses and would otherwise be clipped at the
+ *  edges of the map. */
+const MAP_PAD = 3;
 /** The padding either side of the sidebar's contents, which the cells have to
  *  fit inside. Kept in step with `.ov-body` in the stylesheet. */
 const BODY_PADDING = 8;
@@ -338,8 +342,11 @@ export class OverviewPanel {
   private parts: readonly Part[] = [];
   /** The part the main view is looking at. */
   private place: Place | null = null;
-  /** The stretch of the file the main view is showing, for the layout strip. */
+  /** The stretch of the file the main view is showing, for the layout strip
+   *  and for the outline on the map. */
   private viewport: Viewport | null = null;
+  /** The run of cells that outline was last drawn round. */
+  private viewCellsDrawn = "";
   /** The part under the pointer, lit on both maps while it is. */
   private hovering: MapMark = null;
   /** The rows on screen, by part index, and the one list of named parts open
@@ -567,6 +574,15 @@ export class OverviewPanel {
   setViewport(v: Viewport): void {
     this.viewport = v;
     if (this.layoutStrip !== null && !this.hovering) this.markLayout(this.viewportMark());
+    // The view reports itself on every scroll frame; the map only changes when
+    // the run of cells it covers does.
+    const s = this.state;
+    const cells = s === null ? null : this.viewCells(s);
+    const key = cells === null ? "" : `${cells.from}-${cells.to}`;
+    if (key !== this.viewCellsDrawn) {
+      this.viewCellsDrawn = key;
+      this.drawMain();
+    }
     const place = this.placeOf(v);
     if (samePlace(place, this.place)) return;
     const wasPart = this.place?.part;
@@ -679,10 +695,31 @@ export class OverviewPanel {
     const s = this.state;
     if (s === null) return;
     this.drawFacts(s);
-    this.drawMap(this.canvas, s.classes, this.highlight);
+    this.drawMain();
     this.drawLegend(s);
     this.drawNotes(s);
     this.renderFocus();
+  }
+
+  /** The whole-file map, with whatever is dimmed dimmed and the viewed range
+   *  outlined. Every draw of that map goes through here, so the two marks
+   *  never come apart. */
+  private drawMain(): void {
+    const s = this.state;
+    if (s === null) return;
+    this.drawMap(this.canvas, s.classes, this.highlight, this.viewCells(s));
+  }
+
+  /** The run of cells the main view is showing, or null when it shows none of
+   *  the file the map has scanned so far. */
+  private viewCells(s: OverviewState): { from: number; to: number } | null {
+    const v = this.viewport;
+    const bits = s.bucket_bytes * 8;
+    if (v === null || bits <= 0 || s.classes.length === 0) return null;
+    const from = Math.floor(v.startBit / bits);
+    if (from >= s.classes.length || from < 0) return null;
+    const to = Math.min(s.classes.length, Math.max(from + 1, Math.ceil(v.endBit / bits)));
+    return { from, to };
   }
 
   private drawFacts(s: OverviewState): void {
@@ -709,30 +746,86 @@ export class OverviewPanel {
 
   /** One map, wherever it is drawn. Cells outside `bright` are dimmed, which
    *  is how a part under the pointer or a picked block shows where its bytes
-   *  sit. */
-  private drawMap(canvas: HTMLCanvasElement, classes: string, bright: { from: number; to: number } | null): void {
+   *  sit. `outline` is the run of cells the main view is showing, drawn round
+   *  them rather than over them so every cell keeps the colour of its class. */
+  private drawMap(
+    canvas: HTMLCanvasElement,
+    classes: string,
+    bright: { from: number; to: number } | null,
+    outline: { from: number; to: number } | null = null,
+  ): void {
     const width = this.innerWidth();
     if (width <= 0) return;
-    const cols = Math.max(8, Math.floor(width / (CELL + GAP)));
+    const cols = Math.max(8, Math.floor((width - MAP_PAD * 2) / (CELL + GAP)));
     const rows = Math.max(1, Math.ceil(Math.max(1, classes.length) / cols));
+    const w = cols * (CELL + GAP) + MAP_PAD * 2;
+    const h = rows * (CELL + GAP) + MAP_PAD * 2;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(cols * (CELL + GAP) * dpr);
-    canvas.height = Math.round(rows * (CELL + GAP) * dpr);
-    canvas.style.width = `${cols * (CELL + GAP)}px`;
-    canvas.style.height = `${rows * (CELL + GAP)}px`;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
     canvas.dataset["cols"] = String(cols);
     const ctx = canvas.getContext("2d");
     if (ctx === null) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cols * (CELL + GAP), rows * (CELL + GAP));
+    ctx.clearRect(0, 0, w, h);
     const colors = this.colors();
     for (let i = 0; i < classes.length; i++) {
       const cls = Number(classes[i]);
       ctx.globalAlpha = bright === null || (i >= bright.from && i < bright.to) ? 1 : 0.25;
       ctx.fillStyle = colors[cls] ?? colors[3] ?? "#888";
-      ctx.fillRect((i % cols) * (CELL + GAP), Math.floor(i / cols) * (CELL + GAP), CELL, CELL);
+      ctx.fillRect(MAP_PAD + (i % cols) * (CELL + GAP), MAP_PAD + Math.floor(i / cols) * (CELL + GAP), CELL, CELL);
     }
     ctx.globalAlpha = 1;
+    if (outline !== null && outline.to > outline.from) this.strokeRun(ctx, cols, outline.from, outline.to);
+  }
+
+  /**
+   * Draw the border of a run of cells: a rectangle when the run sits in one
+   * row, and the stepped shape of the wrapped run when it does not. A line in
+   * the page's background colour goes under a narrower one in the accent
+   * colour, so the border reads against a cell of any class.
+   */
+  private strokeRun(ctx: CanvasRenderingContext2D, cols: number, from: number, to: number): void {
+    const step = CELL + GAP;
+    const last = to - 1;
+    const r0 = Math.floor(from / cols);
+    const r1 = Math.floor(last / cols);
+    const c0 = from % cols;
+    const c1 = last % cols;
+    // The cell's box, grown by a pixel, so the border sits in the gap between
+    // cells rather than over the colour it is marking.
+    const left = (c: number): number => MAP_PAD + c * step - 1;
+    const right = (c: number): number => MAP_PAD + c * step + CELL + 1;
+    const top = (r: number): number => MAP_PAD + r * step - 1;
+    const bottom = (r: number): number => MAP_PAD + r * step + CELL + 1;
+    const path = new Path2D();
+    if (r0 === r1) {
+      path.rect(left(c0), top(r0), right(c1) - left(c0), bottom(r0) - top(r0));
+    } else {
+      const near = left(0);
+      const far = right(cols - 1);
+      path.moveTo(left(c0), top(r0));
+      path.lineTo(far, top(r0));
+      path.lineTo(far, top(r1));
+      path.lineTo(right(c1), top(r1));
+      path.lineTo(right(c1), bottom(r1));
+      path.lineTo(near, bottom(r1));
+      path.lineTo(near, bottom(r0));
+      path.lineTo(left(c0), bottom(r0));
+      path.closePath();
+    }
+    const style = getComputedStyle(this.el);
+    const accent = style.getPropertyValue("--accent").trim();
+    const ground = style.getPropertyValue("--bg").trim();
+    ctx.lineJoin = "miter";
+    ctx.strokeStyle = ground === "" ? "#fff" : ground;
+    ctx.lineWidth = 4;
+    ctx.stroke(path);
+    ctx.strokeStyle = accent === "" ? "#2457c5" : accent;
+    ctx.lineWidth = 2;
+    ctx.stroke(path);
   }
 
   /** The width the body's contents have, inside its padding. */
@@ -1235,7 +1328,7 @@ export class OverviewPanel {
       const from = Math.floor(range.offsetBits / bucketBits);
       this.highlight = { from, to: Math.max(from + 1, Math.ceil((range.offsetBits + range.sizeBits) / bucketBits)) };
     }
-    this.drawMap(this.canvas, s.classes, this.highlight);
+    this.drawMain();
   }
 
   private blockBuckets(): { offsetBits: number; sizeBits: number } | null {
@@ -1409,8 +1502,8 @@ export class OverviewPanel {
     const cols = Number(canvas.dataset["cols"] ?? 0);
     if (cols === 0 || count === 0) return null;
     const box = canvas.getBoundingClientRect();
-    const col = Math.floor((e.clientX - box.left) / (CELL + GAP));
-    const row = Math.floor((e.clientY - box.top) / (CELL + GAP));
+    const col = Math.floor((e.clientX - box.left - MAP_PAD) / (CELL + GAP));
+    const row = Math.floor((e.clientY - box.top - MAP_PAD) / (CELL + GAP));
     if (col < 0 || col >= cols || row < 0) return null;
     const i = row * cols + col;
     return i < count ? i : null;

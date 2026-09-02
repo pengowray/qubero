@@ -1466,6 +1466,21 @@ input.invalid {
   display: flex;
   width: auto;
   height: 12px;
+  /* The border round the viewed stretch stands a pixel outside the strip. */
+  overflow: visible;
+}
+/* The stretch the main view is showing, marked here the way it is marked on
+   the class map above: a border round it, not a block of colour over it, so
+   each part keeps its own colour under the mark. */
+.ov-layout .fmap-mark {
+  box-sizing: border-box;
+  min-width: 4px;
+  background: none;
+  mix-blend-mode: normal;
+  border: 2px solid var(--accent);
+  box-shadow:
+    0 0 0 1px var(--bg),
+    inset 0 0 0 1px var(--bg);
 }
 /* Contents beside Logical. A control rather than a heading, so it sits on a
    rule like the inspector's mode buttons do. */
