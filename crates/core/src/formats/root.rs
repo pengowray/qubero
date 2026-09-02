@@ -271,14 +271,14 @@ pub fn root() -> Template {
             ("fUnits", T::u8()),
             // The algorithm and the level in one number: 404 is lz4 at 4.
             ("fCompress", T::i32(Big)),
-            ("fSeekInfo", seek("large")),
-            ("fNbytesInfo", T::i32(Big)),
-            ("fUUID", uuid()),
             ("compression_algorithm", T::computed(E::field("fCompress").div(E::lit(100)))),
             (
                 "compression_level",
                 T::computed(E::field("fCompress").sub(E::field("fCompress").div(E::lit(100)).mul(E::lit(100)))),
             ),
+            ("fSeekInfo", seek("large")),
+            ("fNbytesInfo", T::i32(Big)),
+            ("fUUID", uuid()),
             // The header stops at 63 bytes and `fBEGIN` is 100 in every file
             // anyone has written, so what is between them reads as a gap. The
             // three fields below take up no room where they stand: each one
@@ -429,7 +429,7 @@ mod tests {
     /// field that places a record elsewhere takes up no bytes and has the
     /// record as its one child, which is the extra `0` in every path here.
     const F_VERSION: usize = 1;
-    const F_UUID: usize = 13;
+    const F_UUID: usize = 15;
     const DIRECTORY: [usize; 2] = [16, 0];
     const STREAMER: [usize; 2] = [17, 0];
     const FREE: [usize; 2] = [18, 0];
@@ -452,8 +452,8 @@ mod tests {
         let u = ev.node(&d, &[F_UUID]).unwrap();
         assert_eq!(u.offset_bits + u.size_bits, 63 * 8);
         // 101 is zlib at level one.
-        assert_eq!(ev.node(&d, &[14]).unwrap().value, Value::Int(1));
-        assert_eq!(ev.node(&d, &[15]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[11]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[12]).unwrap().value, Value::Int(1));
     }
 
     #[test]

@@ -453,6 +453,12 @@ test("a run of plain fields is one part and each composite its own", () => {
   const comp = (name: string): TemplateNode => build({ name, bytes: 1, kids: [{ name: "x", bytes: 1 }] }, [], 0).node;
   assert.deepEqual(sectionBreaks([leaf("a"), leaf("b"), comp("c"), leaf("d"), comp("e")]), [0, 2, 3, 4]);
   assert.deepEqual(sectionBreaks([]), []);
+  // Computed values weigh nothing: they open no part of their own, and go
+  // with the leaf run after them or stay in the part before them.
+  const none = (name: string): TemplateNode => build({ name, bytes: 0 }, [], 0).node;
+  assert.deepEqual(sectionBreaks([leaf("a"), comp("c"), none("x"), none("y"), leaf("d")]), [0, 1, 2]);
+  assert.deepEqual(sectionBreaks([leaf("a"), comp("c"), none("x"), comp("e")]), [0, 1, 3]);
+  assert.deepEqual(sectionBreaks([none("x"), none("y")]), [0]);
 });
 
 // A ZIP entry's tail, where the template stops reading and starts working
