@@ -148,6 +148,21 @@ fn block(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], path: &Path)
                 "{}: an {name} block whose stream does not start with {name}",
                 path.display()
             );
+            // An xz stream is placed by reading its footer backwards from the
+            // end of the window the block gave it, so a window a byte out
+            // reads as nothing. The footer is the ninth field and is twelve
+            // bytes wherever it lands.
+            if name == "xz" {
+                let footer = ev.node(d, &[stream.as_slice(), &[8]].concat()).unwrap();
+                assert_eq!(footer.size_bits, 12 * 8, "{}: an xz footer that is not twelve bytes", path.display());
+                let end = (footer.offset_bits + footer.size_bits) / 8;
+                assert_eq!(
+                    end,
+                    (node.offset_bits + node.size_bits) / 8,
+                    "{}: the xz stream does not end where the block does",
+                    path.display()
+                );
+            }
         }
         "zlib" => {
             let method = ev.node(d, &[stream.as_slice(), &[1]].concat()).unwrap().value;
