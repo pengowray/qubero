@@ -442,6 +442,34 @@ export const TEXTVIEW = {
   copyFailed: "Couldn't copy to the clipboard.",
   /** What the file was read as, beside the chooser. */
   readAs: (encoding: string, guessed: boolean): string => (guessed ? `${encoding}, guessed` : encoding),
+  /** Which line ending the file uses, beside the encoding. Counted over the
+   *  whole of the file indexed so far rather than over the screen, so it does
+   *  not change as the reader scrolls.
+   *
+   *  One kind is named on its own, because that is the whole answer. A file
+   *  with more than one is the interesting case and says so, largest share
+   *  first: a stray carriage return in a file of line feeds is what somebody
+   *  opening a file in a hex editor is looking for. The shares are whole
+   *  percentages and none of them is nought: a file said to be mixed and then
+   *  shown as one ending at a hundred per cent contradicts itself, so a kind
+   *  that is in the file at all is at least one per cent of it, and the
+   *  largest gives up whatever that took. */
+  lineEndings: (counts: { lf: number; cr: number; crlf: number }): string => {
+    const kinds = [
+      ["LF", counts.lf],
+      ["CRLF", counts.crlf],
+      ["CR", counts.cr],
+    ] as const;
+    const seen = kinds.filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    const total = seen.reduce((n, [, k]) => n + k, 0);
+    if (seen.length === 0 || total === 0) return "";
+    const one = seen[0];
+    if (seen.length === 1 || one === undefined) return one?.[0] ?? "";
+    const rest = seen.slice(1).map(([name, n]) => [name, Math.max(1, Math.round((n / total) * 100))] as const);
+    const top = Math.max(1, 100 - rest.reduce((n, [, share]) => n + share, 0));
+    const parts = [`${one[0]} ${top}%`, ...rest.map(([name, share]) => `${name} ${share}%`)];
+    return `Mixed: ${parts.join(", ")}`;
+  },
 } as const;
 
 /** The offer to open the file a hex dump describes. */

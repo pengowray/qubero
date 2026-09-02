@@ -515,7 +515,12 @@ function build(tab: Tab): void {
   // What the file was read as, beside the chooser, so a guess is never passed
   // off as a fact.
   const reading = el("span", { className: "tb-reading" });
-  text.onReading = (r) => {
+  // Which line ending the file uses, which is a fact about the whole file and
+  // not about the screen, so it belongs beside the encoding rather than in the
+  // margin of every line.
+  const endings = el("span", { className: "tb-endings" });
+  text.onReading = (r, counts) => {
+    endings.textContent = TEXTVIEW.lineEndings(counts);
     reading.textContent = encoding.value === "" ? TEXTVIEW.readAs(r.encoding, r.guessed) : "";
     // Which reading of a selection the panel names first is whichever the file
     // is being read in, chosen or settled.
@@ -531,7 +536,7 @@ function build(tab: Tab): void {
   /** Controls that only mean anything over the hex rows. */
   const hexOnly = [width, mode, column];
   /** Controls that only mean anything over the text. */
-  const textOnly = [encoding, reading];
+  const textOnly = [encoding, reading, endings];
   /** True while the listing is showing, which is also while the hex grid's
    *  editing state is not the user's to act on. */
   let listingShowing = false;
@@ -597,6 +602,7 @@ function build(tab: Tab): void {
     kind.info,
     encoding,
     reading,
+    endings,
     saveMsg,
     el("span", { className: "tb-spacer" }),
     views,

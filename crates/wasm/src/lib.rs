@@ -1992,6 +1992,28 @@ impl Editor {
         .unwrap_or_default()
     }
 
+    /// Where every line in `[from, to)` starts, `from` included, which must be
+    /// where a line starts.
+    ///
+    /// Packed into one array of doubles rather than JSON: an index of a large
+    /// file is hundreds of thousands of numbers, and spelling each of them out
+    /// and parsing it back costs more than the scan does. The layout is
+    /// `[next, lf, cr, crlf, missing count, ...missing chunks, ...starts]`.
+    pub fn text_index(&self, encoding: &str, from: f64, to: f64) -> Vec<f64> {
+        let head = self.head(64);
+        let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
+        let idx = textview::text_index(&self.doc, r, from as u64, to as u64);
+        let mut out = Vec::with_capacity(5 + idx.missing.len() + idx.starts.len());
+        out.push(idx.next as f64);
+        out.push(idx.lf as f64);
+        out.push(idx.cr as f64);
+        out.push(idx.crlf as f64);
+        out.push(idx.missing.len() as f64);
+        out.extend(idx.missing.iter().map(|m| m.chunk as f64));
+        out.extend(idx.starts.iter().map(|s| *s as f64));
+        out
+    }
+
     /// Where the line holding `at` starts, and where `lines` line starts back
     /// from there is. Both in one call, because scrolling text upwards wants
     /// the second and clicking in it wants the first.

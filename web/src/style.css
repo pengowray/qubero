@@ -3085,6 +3085,21 @@ table.rec tr.is-on td {
   overflow: hidden;
   text-overflow: clip;
 }
+/* Two things in the gutter: which line it is, once the index has counted that
+   far, and where it is in the file, always. The offset is what a hex editor is
+   for, so it is the one that keeps the stronger colour, and the line number
+   sits in front of it the way it does in every other text view. */
+.tv-off {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.tv-lineno {
+  opacity: 0.65;
+}
+.tv-at {
+  flex: 0 0 auto;
+}
 .tv-text {
   cursor: text;
 }
@@ -3152,7 +3167,8 @@ table.rec tr.is-on td {
 .dumpbar-open {
   flex: 0 0 auto;
 }
-.tb-reading {
+.tb-reading,
+.tb-endings {
   color: var(--muted);
   font-family: var(--sans);
   font-size: 12px;

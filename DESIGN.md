@@ -1470,25 +1470,45 @@ read, and plenty of files were: a log, a manifest, a terminal captured to disk,
 a hex dump somebody pasted. `crates/core/src/textview.rs` is the model and
 `web/src/textview.ts` is the third main view.
 
-It scrolls by byte offset rather than by line number, for the reason the
-listing already has: nothing can say how many lines a file has without reading
-all of it. So the scrollbar stands for a place in the file, exactly as the hex
-grid's does, and the gutter carries each line's offset rather than a line
-number that would only be right if the file had been read from the top. Going
-backwards is a search for endings in a window before the position, which is the
-only way back through lines that are not a fixed length.
+Nothing can say how many lines a file has without reading all of it, which the
+listing has run into as well. The answer here is not to avoid the question but
+to answer it in the background: `crates/core/src/textview.rs` will walk a
+stretch of the file for its line starts without decoding a character of it, and
+`web/src/lineindex.ts` keeps what that walk found. The index grows from the
+front of the file in four-megabyte passes in the browser's idle time, and a
+hundred megabytes of it takes about half a second of scanning once the bytes
+are in hand; the file is still not loaded, since the pass reads through the
+same chunks every other view reads through and lets them fall out of the cache
+behind it.
 
-How tall the scrolling canvas is, on the other hand, is not the file's length.
-A canvas of one pixel per byte makes a row of scrolling worth twenty bytes and
-a line worth sixty, so the text cannot move at the rate the scrollbar does and
-has to jump a line at a time instead, which on a phone reads as jitter. The
-canvas is therefore as tall as the file is likely to have lines, estimated from
-what has been read so far, so that a pixel of scrollbar is worth about a pixel
-of text. The scrollbar goes on standing for a place in the file: its thumb at
-the middle is still the middle byte, and the walk from there to a line start is
-what makes the position exact. Where the estimate is wrong the two drift, and
-the drift is taken out when the scrolling stops, by moving the scrollbar and
-the block of drawn rows together so that nothing moves on screen.
+Where the index has reached, everything is exact: a scrollbar position is a
+line number, a line number is a byte, and the gutter carries a line number as
+well as an offset. Past it, a position is an estimate from the average line so
+far, and the estimate is replaced as the index arrives rather than nudged. A
+jump to somewhere the index has not reached walks back to a line start, puts a
+detached segment of index down around it and carries on; such a segment is
+provisional, because where a line is cut for being too long depends on where
+the line before it started, so when the scan from the front catches up it wins
+and a segment that does not line up with it is dropped rather than believed.
+
+The canvas under the scrollbar is one row per line, capped where a browser
+stops honouring an element's height and scaled down past that. There is no
+drift to take out any more, and the settling that used to do it is gone: the
+only thing that moves the scrollbar without the reader is the index learning
+that the file has a different number of lines than was estimated, and that
+moves the block of drawn rows by the same pixels so nothing moves on screen.
+
+The lines themselves are kept too, in a cache keyed by the byte each starts at
+and filled a few hundred at a time ahead of and behind the screen. Scrolling
+back over text already read asks the core for nothing, and paging forward asks
+once every few pages rather than once a frame. An edit gives back the line it
+landed on and everything after it; a typed letter, which cannot have made or
+unmade an ending, moves the lines after it along instead of forgetting them.
+
+Which line ending the file uses is a fact about the file, so it is counted over
+the index and not over the screen, and it no longer changes as the reader
+scrolls. The toolbar names it, and names the mix where there is one; in the
+text, only the lines that differ from it are marked.
 
 The drawn rows sit inside the scrolled canvas rather than being moved to meet a
 scroll that has already happened. A touch scroll runs on the compositor and a
@@ -1502,7 +1522,7 @@ assumed, and all four turned up in the dump reader first. Which encoding: a
 byte-order mark settles it, and where there is none the bytes decide and the
 view says it was a guess, with a chooser beside it because nothing in a capture
 of a DOS screen says it is CP437. Which line ending: per line, since a file may
-use all of them, and a line whose ending is not the one the rest of the screen
+use all of them, and a line whose ending is not the one the rest of the file
 used is marked. Where a line stops when it never does: a minified file is one
 line of two gigabytes, so a line is cut at 4 KiB and says it was cut. And where
 the escape sequences are: a capture of a coloured terminal is full of them, and
