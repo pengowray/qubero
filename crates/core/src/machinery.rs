@@ -112,7 +112,11 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>) {
             }
             ty_refs(default, out);
         }
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => ty_refs(inner, out),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => ty_refs(inner, out),
+        // How wide the number is settles it the way a length settles a run of
+        // bytes, so the field that said so is machinery for it: a GRIB's
+        // `bits_per_value` belongs to the grid it packs.
+        Ty::UIntExpr { bits, .. } => expr_refs(bits, out),
         // A value worked out from other fields, which is not the same as being
         // placed by them. See the module note.
         Ty::Computed(_) => {}
@@ -141,7 +145,18 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             out.push(array.clone());
             expr_refs(index, out);
         }
-        Expr::Tagged(t) => out.push(t.array.clone()),
+        // The list searched, when it is one named beside this field, and the
+        // field the label is worked out from, when it is. A search over the
+        // enclosing list names neither: what it looks at is elements, and an
+        // element is not a sibling of the field asking.
+        Expr::Tagged(t) => {
+            if let Some(array) = &t.array {
+                out.push(array.clone());
+            }
+            if let crate::template::Tag::Computed(e) = &t.tag {
+                expr_refs(e, out);
+            }
+        }
         // A path starting at a sibling and going down into it. Only its first
         // step names something in this structure.
         Expr::Sibling(path) | Expr::Within(path) => {

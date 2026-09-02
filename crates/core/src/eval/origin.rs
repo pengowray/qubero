@@ -20,6 +20,11 @@ use super::*;
 pub enum Role {
     /// How many bytes this field runs for.
     Length,
+    /// How many bits wide the number is. Apart from `Length` because it is not
+    /// bytes and because it is a different question: a run of grid values is
+    /// as long as the count says, and each value in it is as wide as the
+    /// packing said. See [`crate::template::Ty::UIntExpr`].
+    Width,
     /// How many children it has.
     Count,
     /// Which type it is read as.
@@ -37,6 +42,7 @@ impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
             Role::Length => "length",
+            Role::Width => "width",
             Role::Count => "count",
             Role::Type => "type",
             Role::Position => "position",
@@ -73,7 +79,7 @@ impl Evaluator {
         // was unwrapped: that is where the deciding expressions are.
         let declared = self.declared_ty(path)?;
         self.wrapper_origins(doc, path, declared, &mut out)?;
-        let base = self.memo[path].ty.clone();
+        let base = self.memo[path].ty.without_sentinel().clone();
         self.base_origins(doc, path, &base, &mut out)?;
         if let Some((label, bits)) = self.points_at(doc, path)? {
             out.push(Origin {
@@ -205,6 +211,8 @@ impl Evaluator {
             Ty::Str { len: StrLen::Fixed(e) | StrLen::Padded { size: e, .. }, .. } => {
                 self.from_expr(doc, path, &e.clone(), Role::Length, out)
             }
+            // Which field decided how many bits this number is.
+            Ty::UIntExpr { bits, .. } => self.from_expr(doc, path, &(**bits).clone(), Role::Width, out),
             Ty::Array { count, .. } => self.from_expr(doc, path, &count.clone(), Role::Count, out),
             Ty::Computed(e) => self.from_expr(doc, path, &e.clone(), Role::Value, out),
             _ => Ok(()),
@@ -274,26 +282,20 @@ impl Evaluator {
             // place: the answer came from wherever in the list the tag was,
             // and that is the element to point at.
             Expr::Tagged(t) => {
-                let (array, key, tag, field) = (&t.array, &t.key, &t.tag, &t.field);
-                let Some(list) = self.find_field(at, array) else { return Ok(()) };
-                let n = self.child_count(doc, &list)?;
-                for i in 0..n as usize {
-                    let mut p = list.clone();
-                    p.push(i);
-                    if !self.tag_matches(doc, &p, key, tag)? {
-                        continue;
-                    }
-                    let mut label = format!("{array}[{i}]");
-                    for name in field.iter() {
-                        match self.child_index(doc, &p, name)? {
-                            Some(j) => p.push(j),
-                            None => return Ok(()),
-                        }
-                        label = format!("{label}.{name}");
-                    }
+                // The label may be read from this record rather than fixed by
+                // the format, and then the field holding it is half the
+                // connection: a GWF structure's class byte is what sent the
+                // lookup to the structure it found. Naming only the far end
+                // would leave the reader at the answer with no way back to the
+                // question.
+                if let crate::template::Tag::Computed(e) = &t.tag {
+                    self.from_expr(doc, at, &e.clone(), role, out)?;
+                }
+                let t = t.clone();
+                let here = self.memo.get(at).map(|r| (r.offset, r.limit));
+                if let Some((p, label)) = self.tagged_path(doc, at, &t, here)? {
                     let o = self.origin(doc, role, label, p);
                     out.push(o);
-                    break;
                 }
             }
             Expr::Add(a, b)

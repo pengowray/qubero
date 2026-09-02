@@ -24,8 +24,10 @@ pub const EDIT_LIMIT_BYTES: u64 = 4096;
 /// the preview elided.
 pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     match ty {
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
+        // A sentinel and a set of names are both readings of the number, so a
+        // field keeps whatever editability the number under them has.
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => editable(inner, size_bits),
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::UIntExpr { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
@@ -62,6 +64,31 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
             let u = (v as u128) & mask(*bits);
             Ok(write_uint(u, *bits, *endian))
         }
+        // The sign is a bit of its own, so the range is symmetrical and one
+        // shorter each way than two's complement: an eight-bit field holds
+        // -127 to 127. Writing -0 is not offered; zero is written as zero.
+        Ty::SignMagnitude { bits, endian } => {
+            let v = parse_int(text).ok_or_else(|| whole_number_msg(true))?;
+            let max = if *bits > 1 { (1i128 << (bits - 1)) - 1 } else { 0 };
+            if v < -max || v > max {
+                return Err(range_msg(&ty.display_name(), &(-max).to_string(), &max.to_string()));
+            }
+            let sign = if v < 0 { 1u128 << (bits - 1) } else { 0 };
+            Ok(write_uint(sign | v.unsigned_abs(), *bits, *endian))
+        }
+        // As wide as the field turned out to be, which is what it was read at.
+        Ty::UIntExpr { endian, .. } => {
+            let bits = size_bits as u32;
+            let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
+            let max = mask(bits);
+            if v > max {
+                return Err(range_msg(&ty.display_name(), "0", &max.to_string()));
+            }
+            Ok(write_uint(v, bits, *endian))
+        }
+        // A sentinel decides how the number reads, never how it is written:
+        // typing -12345 back into a slot writes -12345.
+        Ty::Nullable { inner, .. } => encode(inner, text, size_bits, state),
         Ty::Fixed { bits, frac, endian, signed } => {
             let x = parse_float(text)?;
             let scaled = (x * (1u64 << frac) as f64).round();

@@ -52,8 +52,15 @@ pub fn lsb_offset(bits: u32, offset: u64) -> Option<u64> {
 /// that only name its values. What decides how the field is packed.
 pub fn packed_int(ty: &Ty) -> Option<(u32, Endian)> {
     match ty {
-        Ty::UInt { bits, endian } | Ty::Int { bits, endian } | Ty::Fixed { bits, endian, .. } => Some((*bits, *endian)),
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => packed_int(inner),
+        Ty::UInt { bits, endian }
+        | Ty::Int { bits, endian }
+        | Ty::SignMagnitude { bits, endian }
+        | Ty::Fixed { bits, endian, .. } => Some((*bits, *endian)),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => packed_int(inner),
+        // How wide it is, is not known until it is read, and where it goes has
+        // to be settled before that. `read_size` refuses the one packing that
+        // would need this answer; see [`Ty::UIntExpr`].
+        Ty::UIntExpr { .. } => None,
         _ => None,
     }
 }
@@ -61,7 +68,14 @@ pub fn packed_int(ty: &Ty) -> Option<(u32, Endian)> {
 /// Size in bits if it does not depend on data.
 pub fn fixed_bits(ty: &Ty) -> Option<u64> {
     Some(match ty {
-        Ty::UInt { bits, .. } | Ty::Int { bits, .. } => *bits as u64,
+        Ty::UInt { bits, .. } | Ty::Int { bits, .. } | Ty::SignMagnitude { bits, .. } => *bits as u64,
+        // Fixed only in the one case that makes it so, which is the width
+        // being a number after all. Anything else has to be read.
+        Ty::UIntExpr { bits, .. } => match &**bits {
+            Expr::Lit(n) => (*n).max(0) as u64,
+            _ => return None,
+        },
+        Ty::Nullable { inner, .. } => fixed_bits(inner)?,
         Ty::F16(_) | Ty::BF16(_) => 16,
         Ty::F8 { .. } => 8,
         Ty::Fixed { bits, .. } => *bits as u64,
@@ -97,6 +111,19 @@ pub(crate) fn read_int(buf: &[u8], bits: u32, endian: Endian) -> i128 {
     } else {
         u as i128
     }
+}
+
+/// Interpret a sign-and-magnitude integer of `bits` bits: the top bit is the
+/// sign and the rest are how far from zero, read as an ordinary unsigned
+/// number rather than as a complement. Negative zero comes back as zero, which
+/// is the number it is. See [`Ty::SignMagnitude`].
+pub(crate) fn read_sign_magnitude(buf: &[u8], bits: u32, endian: Endian) -> i128 {
+    let u = read_uint(buf, bits, endian);
+    if bits == 0 {
+        return 0;
+    }
+    let magnitude = (u & ((1u128 << (bits - 1)) - 1)) as i128;
+    if (u >> (bits - 1)) & 1 == 1 { -magnitude } else { magnitude }
 }
 
 /// Interpret `bits` bits (MSB-first packed in `buf`) as an unsigned integer.

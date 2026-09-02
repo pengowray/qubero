@@ -75,9 +75,14 @@ impl Evaluator {
                 _ => break,
             }
         }
-        let base = self.memo[path].ty.clone();
+        let base = self.memo[path].ty.without_sentinel().clone();
         match &base {
             Ty::Bytes(e) => self.relation(doc, path, &e.clone(), Role::Length, &mut out),
+            // How wide the number is, which is the one thing about it the
+            // template did not fix. Told apart from a byte length because it
+            // is bits and because a reader asking "why is this eleven bits"
+            // wants the field that said eleven.
+            Ty::UIntExpr { bits, .. } => self.relation(doc, path, &(**bits).clone(), Role::Width, &mut out),
             Ty::Str { len: StrLen::Fixed(e) | StrLen::Padded { size: e, .. }, .. } => {
                 self.relation(doc, path, &e.clone(), Role::Length, &mut out)
             }
@@ -101,7 +106,7 @@ impl Evaluator {
         role: Role,
         out: &mut Vec<Relation>,
     ) {
-        let Some(written) = write_expr(e, 0) else { return };
+        let Some(written) = write_expr(e) else { return };
         let mut named = false;
         let Ok(Some(substituted)) = self.substitute(doc, at, e, 0, &mut named) else { return };
         if !named || substituted == written {
@@ -136,7 +141,7 @@ impl Evaluator {
             Ok(Some(format!("{l} {op} {r}")))
         };
         let s = match e {
-            Expr::Lit(_) => write_expr(e, outer),
+            Expr::Lit(_) => write_at(e, outer),
             Expr::Or(a, b) => two(a, b, "or", self, named)?.map(wrap),
             Expr::Less(a, b) => two(a, b, "<", self, named)?.map(wrap),
             Expr::Shl(a, b) => two(a, b, "<<", self, named)?.map(wrap),
@@ -161,11 +166,25 @@ impl Evaluator {
                 let Some(inner) = self.substitute(doc, at, a, 0, named)? else { return Ok(None) };
                 Some(format!("bit({inner}, {i})"))
             }
+            // A search over a list, where the value alone would hide the half
+            // of it this record contributed. `earlier[class_num = 9].name`
+            // says what was looked for and where; `"trce"` says only what came
+            // back, and leaves the reader to guess which element answered.
+            Expr::Tagged(t) => {
+                let tag = match &t.tag {
+                    Tag::Computed(e) => self.substitute(doc, at, &e.clone(), 0, named)?,
+                    other => other.written(),
+                };
+                let Some(tag) = tag else { return Ok(None) };
+                let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
+                *named = true;
+                Some(format!("{}[{} = {tag}]{field}", t.array.as_deref().unwrap_or("earlier"), t.key.join(".")))
+            }
             // Everything left that this can write at all is a leaf that reads
             // the file. What it reads is the whole of what substituting it
             // means, so one evaluation covers all of them.
             _ => {
-                if write_expr(e, 0).is_none() {
+                if write_expr(e).is_none() {
                     return Ok(None);
                 }
                 *named = true;
@@ -179,14 +198,23 @@ impl Evaluator {
 /// The expression as the template writes it. None for the expressions with no
 /// reading in this notation: a search for a byte pattern, or a peek at bits
 /// that are not a field.
-fn write_expr(e: &Expr, outer: u32) -> Option<String> {
+///
+/// Public because a type can hold an expression too: a field as wide as
+/// another field says names that field in the type column, and the notation it
+/// is named in should be the one every other connection is written in. See
+/// [`crate::template::Ty::UIntExpr`].
+pub fn write_expr(e: &Expr) -> Option<String> {
+    write_at(e, 0)
+}
+
+fn write_at(e: &Expr, outer: u32) -> Option<String> {
     let here = prec(e);
     let wrap = |s: String| if here > 0 && here < outer { format!("({s})") } else { s };
     let two = |a: &Expr, b: &Expr, op: &str| -> Option<String> {
-        Some(wrap(format!("{} {op} {}", write_expr(a, here)?, write_expr(b, here + 1)?)))
+        Some(wrap(format!("{} {op} {}", write_at(a, here)?, write_at(b, here + 1)?)))
     };
     let path = |array: &str, index: &Expr, field: &[String]| -> Option<String> {
-        let mut s = format!("{array}[{}]", write_expr(index, 0)?);
+        let mut s = format!("{array}[{}]", write_at(index, 0)?);
         for f in field {
             s.push('.');
             s.push_str(f);
@@ -207,10 +235,14 @@ fn write_expr(e: &Expr, outer: u32) -> Option<String> {
         Expr::MaxOf(n) => format!("max({n})"),
         Expr::Prev(n) => format!("previous {n}"),
         Expr::Sibling(f) | Expr::Within(f) => f.join("."),
+        // The list, the question asked of each element, and what is read from
+        // the one that answers. A search over the elements before this one has
+        // no field to name, so it is named for what it searches: `earlier`.
         Expr::Tagged(t) => {
             let key = t.key.join(".");
             let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
-            format!("{}[{key} = {}]{field}", t.array, t.tag)
+            let array = t.array.as_deref().unwrap_or("earlier");
+            format!("{array}[{key} = {}]{field}", t.tag.written()?)
         }
         Expr::Or(a, b) => two(a, b, "or")?,
         Expr::Less(a, b) => two(a, b, "<")?,
@@ -219,10 +251,10 @@ fn write_expr(e: &Expr, outer: u32) -> Option<String> {
         Expr::Sub(a, b) => two(a, b, "-")?,
         Expr::Mul(a, b) => two(a, b, "*")?,
         Expr::Div(a, b) => two(a, b, "/")?,
-        Expr::Min(a, b) => format!("min({}, {})", write_expr(a, 0)?, write_expr(b, 0)?),
-        Expr::Max(a, b) => format!("max({}, {})", write_expr(a, 0)?, write_expr(b, 0)?),
-        Expr::PadTo { n, align } => format!("align({}, {align})", write_expr(n, 0)?),
-        Expr::Bit(a, i) => format!("bit({}, {i})", write_expr(a, 0)?),
+        Expr::Min(a, b) => format!("min({}, {})", write_at(a, 0)?, write_at(b, 0)?),
+        Expr::Max(a, b) => format!("max({}, {})", write_at(a, 0)?, write_at(b, 0)?),
+        Expr::PadTo { n, align } => format!("align({}, {align})", write_at(n, 0)?),
+        Expr::Bit(a, i) => format!("bit({}, {i})", write_at(a, 0)?),
         _ => return None,
     })
 }
@@ -235,24 +267,35 @@ mod tests {
     #[test]
     fn an_expression_reads_as_the_template_writes_it() {
         let e = E::Sub(Box::new(E::field("cell_content_start")), Box::new(E::lit(100)));
-        assert_eq!(write_expr(&e, 0).as_deref(), Some("cell_content_start - 100"));
+        assert_eq!(write_expr(&e).as_deref(), Some("cell_content_start - 100"));
     }
 
     #[test]
     fn brackets_appear_only_where_they_change_the_reading() {
         let sum = E::Add(Box::new(E::field("a")), Box::new(E::field("b")));
         let mul = E::Mul(Box::new(sum.clone()), Box::new(E::lit(2)));
-        assert_eq!(write_expr(&mul, 0).as_deref(), Some("(a + b) * 2"));
+        assert_eq!(write_expr(&mul).as_deref(), Some("(a + b) * 2"));
         let plain = E::Add(Box::new(E::Mul(Box::new(E::field("a")), Box::new(E::lit(2)))), Box::new(E::field("b")));
-        assert_eq!(write_expr(&plain, 0).as_deref(), Some("a * 2 + b"));
+        assert_eq!(write_expr(&plain).as_deref(), Some("a * 2 + b"));
         // Subtraction does not associate, so the right side keeps its brackets.
         let right = E::Sub(Box::new(E::field("a")), Box::new(sum));
-        assert_eq!(write_expr(&right, 0).as_deref(), Some("a - (a + b)"));
+        assert_eq!(write_expr(&right).as_deref(), Some("a - (a + b)"));
+    }
+
+    #[test]
+    fn a_lookup_by_computed_key_reads_as_the_question_it_asks() {
+        // The list named beside the field, keyed on a number this record holds.
+        let named = E::tagged_by_expr("structures", &["class_num"], E::field("class"), &["name"]);
+        assert_eq!(write_expr(&named).as_deref(), Some("structures[class_num = class].name"));
+        // The same over the elements before this one, which have no field name
+        // to be reached by.
+        let earlier = E::sibling_tagged(&["class_num"], E::field("class"), &["name"]);
+        assert_eq!(write_expr(&earlier).as_deref(), Some("earlier[class_num = class].name"));
     }
 
     #[test]
     fn an_expression_with_no_reading_is_not_half_written() {
         let e = E::Add(Box::new(E::field("a")), Box::new(E::Find { needle: vec![0], last: false }));
-        assert_eq!(write_expr(&e, 0), None);
+        assert_eq!(write_expr(&e), None);
     }
 }

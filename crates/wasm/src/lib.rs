@@ -880,6 +880,10 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
         // The bytes have not arrived; the row stands on what the file's own
         // table already said about where they are and how many there are.
         Value::Unread { .. } => ("unread", "\u{2026}".into(), String::new(), true),
+        // A slot the file left at its format's "nobody filled this in" value.
+        // The editor still starts from the number that is written there, so
+        // opening the field shows what would be overwritten.
+        Value::Unset(inner) => ("unset", "unset".into(), shown(inner).2, true),
         Value::Str(s) => ("str", s.clone(), s.clone(), true),
         Value::Magic { ok, bytes, expected } => {
             // How a signature reads is core's answer, not this crate's, so
