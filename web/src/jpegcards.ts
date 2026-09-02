@@ -196,7 +196,7 @@ function huffmanTable(c: DrawContext, host: HTMLElement, table: TemplateNode): v
   const block = el("div", "jc-block");
   const counts = (countNodes ?? []).map(numberOf);
   const total = counts.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
-  block.append(head(JPEG.huffmanTable(enumName(cls).toUpperCase(), id?.value ?? ""), total === 0 ? "" : JPEG.huffmanTotal(countText(total, "code"))));
+  block.append(head(JPEG.huffmanTable(enumName(cls).toUpperCase(), id?.value ?? ""), total === 0 ? "" : JPEG.huffmanTotal(countText(total, JPEG.codeNoun))));
   if (countNodes === null) {
     block.append(el("div", "bs-wait", JPEG.waiting));
     host.append(block);
@@ -207,7 +207,7 @@ function huffmanTable(c: DrawContext, host: HTMLElement, table: TemplateNode): v
   const tallest = Math.max(1, ...counts);
   countNodes.forEach((node, i) => {
     const column = fieldButton(c, node, "jc-bar", "");
-    column.title = JPEG.huffmanBar(countText(counts[i] ?? 0, "code"), i + 1);
+    column.title = JPEG.huffmanBar(countText(counts[i] ?? 0, JPEG.codeNoun), i + 1);
     const well = el("span", "jc-bar-well");
     const stem = el("span", "jc-bar-stem");
     // A count of nothing still gets a column so the sixteen lengths line up;
@@ -327,13 +327,13 @@ function scanCard(c: DrawContext, host: HTMLElement, body: TemplateNode): void {
   const channels = components === null ? null : kids(c.doc, components);
   const line = el("div", "jc-line");
   if (channels !== null && components !== null) {
-    line.append(fieldButton(c, components, "jc-fact", JPEG.scanComponents(countText(channels.length, "channel"))));
+    line.append(fieldButton(c, components, "jc-fact", JPEG.scanComponents(countText(channels.length, JPEG.channelNoun))));
   }
   if (entropy !== null) {
     line.append(fieldButton(c, entropy, "jc-fact", JPEG.scanEntropy(formatBytes(entropy.size_bits / 8))));
     const restarts = restartCount(c.doc, entropy);
     if (restarts === null) line.append(el("span", "jc-fact jc-dim", JPEG.scanRestartsUnread));
-    else if (restarts > 0) line.append(el("span", "jc-fact", JPEG.scanRestarts(countText(restarts, "restart marker"))));
+    else if (restarts > 0) line.append(el("span", "jc-fact", JPEG.scanRestarts(countText(restarts, JPEG.restartNoun))));
   }
   host.append(line);
   const key = `${pathKey(body.path)}:header`;

@@ -348,6 +348,12 @@ export const JPEG = {
   /** Column headings for the channels of a scan: which of the frame's
    *  channels this is, and the two tables it is decoded with. */
   scanColumns: ["channel", "DC table", "AC table"] as const,
+  /** What a card counts, for the lines that count them. Nouns rather than
+   *  whole sentences, since `countText` puts the number in front and makes
+   *  the plural. */
+  codeNoun: "code",
+  channelNoun: "channel",
+  restartNoun: "restart marker",
   /** A card whose fields have not been read from the file yet. */
   waiting: "Loading the table's bytes…",
 } as const;

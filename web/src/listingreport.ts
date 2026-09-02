@@ -361,7 +361,11 @@ export class ListingReport {
     for (const line of host.querySelectorAll<HTMLElement>("[data-at][data-size]")) {
       const at = Number(line.dataset["at"]);
       const size = Number(line.dataset["size"]);
-      line.classList.toggle("is-on", this.holdsSelection(at, size));
+      // A line of a table stands for a whole structure and holds the
+      // selection; a cell of a card stands for one field and is it. Lighting
+      // a card's cells by containment would light the array a component is
+      // one of as well as the component.
+      line.classList.toggle("is-on", line.tagName === "TR" ? this.holdsSelection(at, size) : this.isSelected(at, size));
     }
   }
 
@@ -992,7 +996,7 @@ function buildNesting(items: readonly Item[]): Nesting | null {
   // Indices of the entries the current one is inside, innermost last.
   const inside: number[] = [];
   for (const item of items) {
-    if (item.kind !== "row" && item.kind !== "record") continue;
+    if (item.kind !== "row" && item.kind !== "record" && item.kind !== "formatcard") continue;
     const from = item.offsetBits;
     const to = from + item.sizeBits;
     if (from < (start[start.length - 1] ?? -Infinity)) return null;
