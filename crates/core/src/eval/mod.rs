@@ -6,12 +6,12 @@
 //! zero-filled bytes can never be mistaken for data.
 
 use crate::bits::bytes_for;
-use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_uint};
+use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_sign_magnitude, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::machinery;
 use crate::source::{Missing, Source};
-use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, Template, Ty, Until};
+use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, Ty, Until};
 use crate::text::{self, Settled};
 
 mod explain;
@@ -31,6 +31,7 @@ mod tests;
 
 pub use explain::{Explain, FlagBit};
 pub use listing::{magic_reading, Span, SpanPart};
+pub use relate::write_expr;
 
 /// A bounded walk over variable-size array elements that has enough samples to
 /// project the array's eventual extent. This is deliberately a projection,
@@ -119,6 +120,11 @@ pub enum Value {
     /// A run of bytes whose first few have not arrived yet. The field's place
     /// and length are known; only what it holds is still coming.
     Unread { len: u64 },
+    /// A slot holding the value its format writes to mean nobody filled it in.
+    /// The number is kept rather than thrown away: it is what the bytes say,
+    /// it is what an expression reading this field gets, and a reader who
+    /// wants to see -12345 can still be shown it. See [`crate::template::Ty::Nullable`].
+    Unset(Box<Value>),
     /// An integer read as independent bits. `set` names the bits that are on,
     /// in bit order; `unnamed` counts the bits that are on and have no name,
     /// which is worth saying rather than hiding.
@@ -133,6 +139,10 @@ impl Value {
             Value::Composite { count } => Some(*count as i128),
             Value::Enum { raw, .. } => Some(*raw),
             Value::Flags { raw, .. } => i128::try_from(*raw).ok(),
+            // An unset slot is still the number the file holds. A count that
+            // nobody filled in is -12345, and the clamp in front of it is
+            // there to deal with exactly that.
+            Value::Unset(inner) => inner.as_int(),
             // Short text/byte fields used in expressions are their bytes as a
             // big-endian number, so a switch can key on e.g. "IHDR".
             Value::Bytes { len, preview } if *len <= 15 => Some(be_int(preview)),

@@ -210,7 +210,10 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
         let r = self.memo.get(path).expect("resolved").clone();
-        Ok(match &r.ty {
+        // A sentinel is a reading of one value, so what is worth explaining is
+        // the number under it: an unset SAC float still wants the float panel.
+        let ty = r.ty.without_sentinel().clone();
+        Ok(match &ty {
             Ty::Magic(want) => {
                 // A short read is not a failure to explain: the expected bytes
                 // are known whatever the file turned out to hold.
@@ -247,7 +250,7 @@ impl Evaluator {
                 Explain::Float { format: if *e4m3 { "e4m3" } else { "e5m2" }, width: 8, bits: raw[0] as u64 }
             }
             Ty::F16(e) | Ty::BF16(e) | Ty::F32(e) | Ty::F64(e) => {
-                let (format, width): (&'static str, u32) = match r.ty {
+                let (format, width): (&'static str, u32) = match ty {
                     Ty::F16(_) => ("binary16", 16),
                     Ty::BF16(_) => ("bfloat16", 16),
                     Ty::F32(_) => ("binary32", 32),

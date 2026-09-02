@@ -77,6 +77,9 @@ pub enum Expr {
     /// records in text labels them in text: a FITS card is found by the
     /// keyword written in its first eight bytes. See [`Tag`].
     ///
+    /// The label may also be worked out rather than written down, and the list
+    /// may be the one this field's own element sits in. See [`TaggedRef`].
+    ///
     /// Held behind a pointer because of what it costs the rest: a tag is a
     /// 128-bit number or a vector, either of which would make every expression
     /// in every template as wide and as strictly aligned as this one variant.
@@ -256,8 +259,22 @@ pub enum Expr {
 /// not set the width of every expression there is.
 #[derive(Debug, Clone)]
 pub struct TaggedRef {
-    /// The list to look in.
-    pub array: Arc<str>,
+    /// The list to look in, by the name of an earlier field. `None` means the
+    /// list this field's own element sits in, and only the elements before it.
+    ///
+    /// A named list is the ordinary case: a ZIP entry's extra fields are a
+    /// list declared beside the field asking. `None` is for the format that
+    /// writes its records and the records that describe them in one run: a GWF
+    /// file is a stream of structures, and what kind each one is, is written in
+    /// an `FrSH` structure earlier in the same stream. There is no field to
+    /// name there, because the list is the one the asking element is in, and a
+    /// name reaches only fields declared *before* the field asking.
+    ///
+    /// Earlier elements only, and that is not a limitation to work around: a
+    /// search over later ones would have to place them, and placing them is
+    /// what is asking. Every format that writes a table of definitions writes
+    /// it before what it defines, for the same reason.
+    pub array: Option<Arc<str>>,
     /// The path to the field of an element that holds its label.
     pub key: Arc<[String]>,
     /// The label to look for.
@@ -273,24 +290,40 @@ pub struct TaggedRef {
 /// rather than a value counted up to. Reading those eight bytes as a number
 /// would answer with 0x4e41584953312020, which is a number no file wrote and
 /// nobody could check the template against.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Tag {
     Int(i128),
     /// The raw bytes of the key field, compared as they are written. A key of
     /// a fixed width is padded, and the padding is part of what is compared,
     /// the same as it is for [`Until::FieldBytes`].
     Bytes(Vec<u8>),
+    /// A label worked out where the question is asked, rather than one written
+    /// into the template. `Int` finds the record a format fixed the number of;
+    /// this finds the record *this* record points at, which is what a format
+    /// that numbers its own types needs: a GWF structure carries a class byte,
+    /// and which class that is, is written in an earlier structure whose class
+    /// number is that byte.
+    ///
+    /// Worked out once, before the search, and compared as a number. A key
+    /// written in text is matched by `Bytes`; there is no computed form of
+    /// that, because nothing in the IR produces bytes.
+    Computed(Arc<Expr>),
 }
 
-/// How a tag reads in a sentence about a connection: a number as itself, a
-/// key written in text as that text, with padding trimmed and anything that
-/// is not printable shown as an escape.
-impl std::fmt::Display for Tag {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Tag::Int(v) => write!(f, "{v}"),
-            Tag::Bytes(b) => write!(f, "{:?}", String::from_utf8_lossy(b).trim_end()),
-        }
+impl Tag {
+    /// How a tag reads in a sentence about a connection: a number as itself, a
+    /// key written in text as that text, with padding trimmed and anything
+    /// that is not printable shown as an escape, and a computed label as the
+    /// expression that works it out.
+    ///
+    /// Nothing when the expression has no reading, so that a connection is
+    /// written whole or not at all. See `eval::relate`.
+    pub fn written(&self) -> Option<String> {
+        Some(match self {
+            Tag::Int(v) => v.to_string(),
+            Tag::Bytes(b) => format!("{:?}", String::from_utf8_lossy(b).trim_end()),
+            Tag::Computed(e) => crate::eval::write_expr(e)?,
+        })
     }
 }
 
@@ -329,16 +362,33 @@ impl Expr {
     }
     /// Field `field` of the first element of `array` whose `key` holds `tag`.
     pub fn tagged(array: &str, key: &[&str], tag: i128, field: &[&str]) -> Expr {
-        Expr::tagged_by(array, key, Tag::Int(tag), field)
+        Expr::tagged_by(Some(array), key, Tag::Int(tag), field)
     }
     /// The same, for a list whose elements are labelled in text: `field` of the
     /// first element of `array` whose `key` holds exactly these bytes.
     pub fn tagged_bytes(array: &str, key: &[&str], tag: &[u8], field: &[&str]) -> Expr {
-        Expr::tagged_by(array, key, Tag::Bytes(tag.to_vec()), field)
+        Expr::tagged_by(Some(array), key, Tag::Bytes(tag.to_vec()), field)
     }
-    fn tagged_by(array: &str, key: &[&str], tag: Tag, field: &[&str]) -> Expr {
+    /// The same, for a label this record works out rather than one the format
+    /// fixed: `field` of the first element of `array` whose `key` holds
+    /// whatever `tag` comes to here. See [`Tag::Computed`].
+    pub fn tagged_by_expr(array: &str, key: &[&str], tag: Expr, field: &[&str]) -> Expr {
+        Expr::tagged_by(Some(array), key, Tag::Computed(Arc::new(tag)), field)
+    }
+    /// The same again, searching the list this element is in rather than a
+    /// list named beside it, and only the elements before this one: `field` of
+    /// the nearest earlier element whose `key` holds whatever `tag` comes to.
+    ///
+    /// This is the one that reaches a sibling inside the same `Repeat`, which
+    /// no name can: a name reaches fields declared before the field asking,
+    /// and the elements of a list are not fields. A GWF structure finds the
+    /// `FrSH` that named its class this way. See [`TaggedRef::array`].
+    pub fn sibling_tagged(key: &[&str], tag: Expr, field: &[&str]) -> Expr {
+        Expr::tagged_by(None, key, Tag::Computed(Arc::new(tag)), field)
+    }
+    fn tagged_by(array: Option<&str>, key: &[&str], tag: Tag, field: &[&str]) -> Expr {
         Expr::Tagged(Arc::new(TaggedRef {
-            array: array.into(),
+            array: array.map(Arc::from),
             key: key.iter().map(|s| s.to_string()).collect(),
             tag,
             field: field.iter().map(|s| s.to_string()).collect(),
@@ -656,6 +706,58 @@ pub struct Field {
 pub enum Ty {
     UInt { bits: u32, endian: Endian },
     Int { bits: u32, endian: Endian },
+    /// Sign and magnitude: the top bit says which way the number goes, and the
+    /// bits below it are how far, read as an ordinary unsigned number. Not
+    /// two's complement, where -1 is every bit set; here -1 is the top bit and
+    /// a one.
+    ///
+    /// A GRIB message writes its latitudes, its scale factors and its grid
+    /// increments this way, which is what most formats older than the hardware
+    /// that settled on two's complement do. Reading one as an `Int` turns a
+    /// southern latitude into a number near the bottom of the range, which is
+    /// a plausible-looking answer and wrong by the whole width of the field.
+    ///
+    /// The sign bit set with a magnitude of zero is negative zero, which the
+    /// value reads as 0: it is the same number, and a format that writes it
+    /// means the same number. `bits` counts the sign bit, so an eight-bit
+    /// field holds -127 to 127.
+    SignMagnitude { bits: u32, endian: Endian },
+    /// An unsigned integer as wide as an earlier field says, rather than as
+    /// wide as the template says.
+    ///
+    /// What a format that packs its numbers to fit needs. A GRIB section 7 is
+    /// the values of a grid at whatever width section 5 said would hold them,
+    /// which is 11 bits or 16 or 12 and is a property of the message, not of
+    /// the format. Written as a `Switch` over every width it could be, that is
+    /// sixty-four cases of the same type; written as bytes, the grid is one
+    /// long run with no values in it at all.
+    ///
+    /// The width is in bits and is read where the field is placed, so it may
+    /// name any field an expression can reach. Zero is allowed and is a field
+    /// of no bits: a GRIB whose values are all the same writes a width of
+    /// zero and no data. A run of them is still counted and sized by
+    /// arithmetic when the width does not depend on the element (see
+    /// `eval::size::uniform`), so a grid of a million values is placed without
+    /// walking it.
+    ///
+    /// `Little` is refused for a width that is not whole bytes, or at an
+    /// offset that is not on one: a field packed from the bottom of its byte
+    /// has to be placed before it is read, and how wide it is, is not known
+    /// until it is. Every format that writes these packs them MSB-first.
+    UIntExpr { bits: Box<Expr>, endian: Endian },
+    /// A number with a value that means "nobody filled this in".
+    ///
+    /// Every slot of a SAC header exists in every file, and one nothing was
+    /// written into holds -12345, or -12345.0 for a float. Shown as the number
+    /// it is, that is a magnitude of twelve thousand kilometres and a time in
+    /// 1962, and the reader has to know the convention to know it is neither.
+    ///
+    /// The type column still says what the field is, because the field is
+    /// still an `i32`: this only decides how the value reads. Expressions see
+    /// the number underneath, so a count that is unset still clamps and
+    /// compares as the number the file holds rather than becoming an absence
+    /// halfway through the arithmetic.
+    Nullable { inner: Box<Ty>, unset: Unset },
     F16(Endian),
     /// Brain float: the top half of an f32, so it reaches as far as a float
     /// does and holds three digits rather than seven. Not an f16, which trades
@@ -816,6 +918,27 @@ pub enum Ty {
     Named(Arc<str>),
 }
 
+/// The value a format writes to mean a slot nobody filled in. See
+/// [`Ty::Nullable`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unset {
+    Int(i128),
+    /// Compared exactly, which is what a sentinel needs and what makes it a
+    /// sentinel: -12345.0 is a number a float holds exactly, and a file either
+    /// wrote those thirty-two bits or wrote a measurement.
+    Float(f64),
+}
+
+impl Unset {
+    /// Whether this is the value that means nothing was filled in.
+    pub fn matches(&self, v: &crate::eval::Value) -> bool {
+        match self {
+            Unset::Int(want) => v.as_int() == Some(*want),
+            Unset::Float(want) => matches!(v, crate::eval::Value::Float(f) if f == want),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
@@ -879,6 +1002,24 @@ impl Ty {
     }
     pub fn i32(e: Endian) -> Ty {
         Ty::Int { bits: 32, endian: e }
+    }
+    /// A number whose top bit is its sign. See [`Ty::SignMagnitude`].
+    pub fn sign_magnitude(bits: u32, e: Endian) -> Ty {
+        Ty::SignMagnitude { bits, endian: e }
+    }
+    /// An unsigned integer as many bits wide as `bits` comes to when the field
+    /// is read. See [`Ty::UIntExpr`].
+    pub fn uint_expr(bits: Expr, e: Endian) -> Ty {
+        Ty::UIntExpr { bits: Box::new(bits), endian: e }
+    }
+    /// `inner`, reading as unset when it holds `sentinel`. See
+    /// [`Ty::Nullable`].
+    pub fn unset_int(inner: Ty, sentinel: i128) -> Ty {
+        Ty::Nullable { inner: Box::new(inner), unset: Unset::Int(sentinel) }
+    }
+    /// The same for a float slot, compared exactly.
+    pub fn unset_float(inner: Ty, sentinel: f64) -> Ty {
+        Ty::Nullable { inner: Box::new(inner), unset: Unset::Float(sentinel) }
     }
     /// Unsigned fixed-point, e.g. `fixed(32, 16, Big)` for MP4's 16.16.
     pub fn fixed(bits: u32, frac: u32, endian: Endian) -> Ty {
@@ -1169,7 +1310,19 @@ impl Ty {
 
     pub fn base(&self) -> &Ty {
         match self {
-            Ty::Enum { inner, .. } => inner.base(),
+            // A sentinel is a reading of the number, not a type of its own, so
+            // everything that asks what a field really is looks through it.
+            Ty::Enum { inner, .. } | Ty::Nullable { inner, .. } => inner.base(),
+            other => other,
+        }
+    }
+
+    /// The type under a sentinel, or the type itself. A sentinel says how one
+    /// value reads and nothing else, so everything asking what the field is
+    /// shaped like looks straight through it. See [`Ty::Nullable`].
+    pub fn without_sentinel(&self) -> &Ty {
+        match self {
+            Ty::Nullable { inner, .. } => inner.without_sentinel(),
             other => other,
         }
     }
@@ -1198,6 +1351,22 @@ impl Ty {
             Ty::Int { bits, endian } if *bits % 8 != 0 => format!("i{bits}{}", b(*endian)),
             Ty::Int { bits, endian } if *bits == 8 => format!("i{bits}"),
             Ty::Int { bits, endian } => format!("i{bits} {}", e(*endian)),
+            // Not `i{bits}`: the whole point is that it is not two's
+            // complement, and a reader checking the bytes against the value
+            // needs the type column to say so.
+            Ty::SignMagnitude { bits, endian } if *bits % 8 != 0 => format!("sm{bits}{}", b(*endian)),
+            Ty::SignMagnitude { bits, endian: _ } if *bits == 8 => format!("sm{bits}"),
+            Ty::SignMagnitude { bits, endian } => format!("sm{bits} {}", e(*endian)),
+            // The width names the field it is read from, so the column says
+            // `u bits_per_value be` rather than a width nothing in the file
+            // has. An expression with no reading leaves a question mark,
+            // which is honest: the width is decided somewhere this cannot
+            // write down.
+            Ty::UIntExpr { bits, endian } => {
+                format!("u{} {}", crate::eval::write_expr(bits).map_or("?".to_string(), |s| format!(" {s}")), e(*endian))
+            }
+            // A sentinel says how the number reads, not what the field is.
+            Ty::Nullable { inner, .. } => inner.display_name(),
             Ty::F16(en) => format!("f16 {}", e(*en)),
             Ty::BF16(en) => format!("bf16 {}", e(*en)),
             Ty::F8 { e4m3: true } => "f8 e4m3".into(),

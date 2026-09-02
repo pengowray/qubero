@@ -33,21 +33,7 @@ impl Evaluator {
             },
             // The index of the element this sits in, which is what a field
             // whose type comes from a list read earlier needs.
-            Expr::Idx => {
-                let mut cur = at.to_vec();
-                let mut found = 0;
-                while let Some(idx) = cur.pop() {
-                    let listy = self
-                        .memo
-                        .get(&cur)
-                        .map(|r| matches!(r.ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. }));
-                    if listy == Some(true) {
-                        found = idx as i128;
-                        break;
-                    }
-                }
-                found
-            }
+            Expr::Idx => self.enclosing_lists(at).first().map_or(0, |(_, i)| *i as i128),
             Expr::Elem { array, index, field } => {
                 let p = self.elem_path(doc, at, array, index, field, here)?;
                 match self.node(doc, &p)?.value.as_int() {
@@ -58,22 +44,16 @@ impl Evaluator {
             // Search a list for the element that says what it is. The whole
             // list is read to find it, which is what a handful of tagged
             // records costs; nothing that carries thousands of them asks.
+            //
+            // Zero when nothing in the list is labelled that way, or when what
+            // was found holds no number, so `Or` can name what to do without
+            // one.
             Expr::Tagged(t) => {
-                let (key, tag, field) = (t.key.clone(), t.tag.clone(), t.field.clone());
-                let array = &t.array;
-                let Some(list) = self.find_field(at, array) else { return fail(format!("unknown field {array}")) };
-                let n = self.child_count(doc, &list)?;
-                let mut found = 0;
-                for i in 0..n as usize {
-                    let mut elem = list.clone();
-                    elem.push(i);
-                    if !self.tag_matches(doc, &elem, &key, &tag)? {
-                        continue;
-                    }
-                    found = self.field_in(doc, &mut elem, &field)?.unwrap_or(0);
-                    break;
+                let t = t.clone();
+                match self.tagged_path(doc, at, &t, here)? {
+                    Some((p, _)) => self.node(doc, &p)?.value.as_int().unwrap_or(0),
+                    None => 0,
                 }
-                found
             }
             Expr::Product { array, index, field } => {
                 let p = self.elem_path(doc, at, array, index, field, here)?;
@@ -293,6 +273,21 @@ impl Evaluator {
                 }
                 p
             }
+            // The element a search found, which is what a format that names
+            // its own record types needs: the number a record carries selects
+            // an earlier record, and the word written in that one is the type.
+            Expr::Tagged(t) => {
+                let t = t.clone();
+                match self.tagged_path(doc, at, &t, here)? {
+                    Some((p, _)) => p,
+                    // Nothing carries that label, which is no more an error
+                    // here than it is when the answer is a number: a `Match`
+                    // takes its default, the way it does for a word it has no
+                    // case for. The first record of a stream that defines its
+                    // own record types has nothing behind it to look in.
+                    None => return Ok(String::new()),
+                }
+            }
             _ => return fail("a switch on text has to name a field"),
         };
         match self.node(doc, &p)?.value {
@@ -361,15 +356,9 @@ impl Evaluator {
     /// asks, element `n - 1` is already in the memo: this is a lookup, not a
     /// walk back to the start.
     fn prev_field<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<i128> {
-        let mut cur = at.to_vec();
-        while let Some(idx) = cur.pop() {
-            let listy = matches!(
-                self.memo.get(&cur).map(|r| &r.ty),
-                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
-            );
-            if !listy {
-                continue;
-            }
+        // Only the innermost list: the element before this one is a question
+        // about the list this element is in, and nothing outside it.
+        if let Some((cur, idx)) = self.enclosing_lists(at).into_iter().next() {
             if idx == 0 {
                 return Ok(0);
             }
@@ -393,15 +382,7 @@ impl Evaluator {
     /// with its middle dropped means placing them again. Formats that need it
     /// have tens of elements, not millions; it does not belong in a long list.
     fn sibling_field<S: Source>(&mut self, doc: &Document<S>, at: &[usize], field: &[String]) -> R<i128> {
-        let mut cur = at.to_vec();
-        while let Some(idx) = cur.pop() {
-            let listy = matches!(
-                self.memo.get(&cur).map(|r| &r.ty),
-                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
-            );
-            if !listy {
-                continue;
-            }
+        for (cur, idx) in self.enclosing_lists(at) {
             for earlier in (0..idx).rev() {
                 let mut elem = cur.clone();
                 elem.push(earlier);
@@ -414,6 +395,95 @@ impl Evaluator {
             // and what declared its width is a chunk two levels out.
         }
         Ok(0)
+    }
+
+    /// The lists this node sits in, innermost first, each with the index this
+    /// node has in it.
+    ///
+    /// Four things ask this question and three of them used to answer it
+    /// themselves: `Idx` wants the innermost index, `Prev` the element before,
+    /// `Sibling` the elements before that one, and a tagged search over an
+    /// enclosing list all of them. Two walks that disagreed about what counts
+    /// as a list would put two of those answers in different lists.
+    pub(super) fn enclosing_lists(&self, at: &[usize]) -> Vec<(Vec<usize>, usize)> {
+        let mut out = Vec::new();
+        let mut cur = at.to_vec();
+        while let Some(idx) = cur.pop() {
+            let listy = matches!(
+                self.memo.get(&cur).map(|r| &r.ty),
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. })
+            );
+            if listy {
+                out.push((cur.clone(), idx));
+            }
+        }
+        out
+    }
+
+    /// The label a tagged search is looking for, worked out once before the
+    /// search rather than once per element: a computed label reads a field of
+    /// the record asking, and that answer is the same however many elements
+    /// are tried against it.
+    fn tag_now<S: Source>(&mut self, doc: &Document<S>, at: &[usize], tag: &Tag, here: Option<(u64, u64)>) -> R<Tag> {
+        Ok(match tag {
+            Tag::Computed(e) => Tag::Int(self.eval_expr_at(doc, at, e, here)?),
+            other => other.clone(),
+        })
+    }
+
+    /// Where a tagged search lands: the path of the field it names, and how a
+    /// reader would name it. `None` when no element carries the label, or when
+    /// the one that does has no such field.
+    ///
+    /// Two searches, by the same rule. A named list is read from the start,
+    /// because a list of records the format fixed the numbering of has no
+    /// order worth respecting. The enclosing list is read backwards from the
+    /// element asking, and never past it: the elements after this one have not
+    /// been placed, and placing them is what is asking. A record that defines
+    /// another is written before it in every format that has both.
+    pub(super) fn tagged_path<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        t: &TaggedRef,
+        here: Option<(u64, u64)>,
+    ) -> R<Option<(Vec<usize>, String)>> {
+        let tag = self.tag_now(doc, at, &t.tag, here)?;
+        let mut tried: Vec<(Vec<usize>, usize)> = Vec::new();
+        match &t.array {
+            Some(array) => {
+                let Some(list) = self.find_field(at, array) else { return fail(format!("unknown field {array}")) };
+                let n = self.child_count(doc, &list)?;
+                tried.extend((0..n as usize).map(|i| (list.clone(), i)));
+            }
+            None => {
+                for (list, mine) in self.enclosing_lists(at) {
+                    tried.extend((0..mine).rev().map(|i| (list.clone(), i)));
+                }
+            }
+        }
+        for (list, i) in tried {
+            let mut p = list.clone();
+            p.push(i);
+            if !self.tag_matches(doc, &p, &t.key, &tag)? {
+                continue;
+            }
+            // Named for the list it was found in, which for the enclosing list
+            // is whatever that list is called where it was declared.
+            let name = match &t.array {
+                Some(array) => array.to_string(),
+                None => self.memo.get(&list).map_or_else(String::new, |r| r.name.text()),
+            };
+            let mut label = format!("{name}[{i}]");
+            if !self.descend(doc, &mut p, &t.field)? {
+                return Ok(None);
+            }
+            for f in t.field.iter() {
+                label = format!("{label}.{f}");
+            }
+            return Ok(Some((p, label)));
+        }
+        Ok(None)
     }
 
     /// Which child of the node at `path` is called `name`: a field of a
@@ -451,6 +521,9 @@ impl Evaluator {
     /// that are something else.
     pub(super) fn tag_matches<S: Source>(&mut self, doc: &Document<S>, elem: &[usize], key: &[String], tag: &Tag) -> R<bool> {
         match tag {
+            // A computed label was worked out before the search began, so what
+            // arrives here is always a number. See `tag_now`.
+            Tag::Computed(_) => fail("a computed label must be worked out before the search"),
             Tag::Int(want) => Ok(self.field_in(doc, &mut elem.to_vec(), key)? == Some(*want)),
             Tag::Bytes(want) => {
                 let mut p = elem.to_vec();

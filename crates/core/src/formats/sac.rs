@@ -225,18 +225,19 @@ pub fn sac() -> Template {
 }
 
 fn file(e: Endian) -> T {
-    let unset = |inner: T| T::enumeration("SacInt", inner, &[(UNSET, "unset")]);
     let mut fields: Vec<(&str, T)> = Vec::with_capacity(FLOATS.len() + INTS.len() + STRINGS.len() + 1);
-    // A float slot has no room for a name for -12345, so an unset one reads
-    // as the sentinel itself. See the module gap note.
-    fields.extend(FLOATS.iter().map(|name| (*name, T::F32(e))));
+    // A float slot holds -12345.0 when nobody filled it in, and it is still a
+    // float: the type column says `f32 be` and only the value reads as unset.
+    // A one-case enum said it the other way round, and enums have to sit on
+    // integers, so the floats could not say it at all.
+    fields.extend(FLOATS.iter().map(|name| (*name, T::unset_float(T::F32(e), UNSET as f64))));
     fields.extend(INTS.iter().map(|name| {
         let ty = match ENUMERATED.iter().find(|(field, ..)| field == name) {
             Some((_, ty_name, cases)) => T::enumeration(ty_name, T::i32(e), cases),
             None if name.starts_with('l') => {
                 T::enumeration("SacLogical", T::i32(e), &[(0, "false"), (1, "true"), (UNSET, "unset")])
             }
-            None => unset(T::i32(e)),
+            None => T::unset_int(T::i32(e), UNSET),
         };
         (*name, ty)
     }));
@@ -359,13 +360,27 @@ mod tests {
     }
 
     /// A slot nobody filled in reads as unset rather than as a number the
-    /// reader has to recognise.
+    /// reader has to recognise, and says so for a float as well as for an
+    /// integer. The type column still says what the field is: an unset slot is
+    /// an `i32` or an `f32` holding a sentinel, not a type of its own.
     #[test]
     fn an_unfilled_slot_reads_as_unset() {
         let d = Document::new(MemSource(build(false, 4, 1, 1)));
         let mut ev = Evaluator::new(sac());
-        let nzjday = ev.node(&d, &[FIRST_INT + 1]).unwrap().value;
-        assert!(matches!(nzjday, Value::Enum { name: Some(ref n), .. } if n == "unset"), "{nzjday:?}");
+        let nzjday = ev.node(&d, &[FIRST_INT + 1]).unwrap();
+        assert_eq!(nzjday.value, Value::Unset(Box::new(Value::Int(UNSET))));
+        assert_eq!(nzjday.type_name, "i32 le");
+        // `depmin`, the second float slot, which this file leaves alone.
+        let depmin = ev.node(&d, &[1]).unwrap();
+        assert_eq!(depmin.value, Value::Unset(Box::new(Value::Float(UNSET as f64))));
+        assert_eq!(depmin.type_name, "f32 le");
+        // A slot that was filled in is the number it holds, and nothing has
+        // been wrapped away: `delta` is the sample spacing.
+        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Float(0.01));
+        // Unset or not, the field is still one an expression can read and one
+        // the reader can edit.
+        assert_eq!(nzjday.value.as_int(), Some(UNSET));
+        assert!(depmin.editable);
     }
 
     /// Unevenly spaced samples are two arrays: the values, and then the times

@@ -46,6 +46,7 @@ fn show(v: &Value) -> String {
         Value::Str(s) => format!("{s:?}"),
         Value::Bytes { len, .. } => format!("{len} bytes"),
         Value::Unread { len } => format!("{len} bytes, unread"),
+        Value::Unset(_) => "unset".to_string(),
         Value::Magic { ok, bytes, .. } => format!("{}{}", String::from_utf8_lossy(bytes), if *ok { "" } else { " (wrong)" }),
         Value::Enum { raw, name, .. } => match name {
             Some(n) => format!("{n} ({raw})"),

@@ -340,6 +340,20 @@ impl Evaluator {
             Ty::Json(_) => self.json_value(doc, at)?,
             Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
             Ty::Int { bits, endian } => Value::Int(read_int(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
+            Ty::SignMagnitude { bits, endian } => {
+                Value::Int(read_sign_magnitude(&self.read(doc, r, r.offset, size)?, *bits, *endian))
+            }
+            // As wide as it turned out to be, which is the size already worked
+            // out for it. Nothing re-reads the width here.
+            Ty::UIntExpr { endian, .. } => {
+                Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, size as u32, *endian))
+            }
+            // The number, and whether it is the one that means nothing was
+            // filled in.
+            Ty::Nullable { inner, unset } => {
+                let v = self.primitive_value(doc, at, r, inner, size)?;
+                if unset.matches(&v) { Value::Unset(Box::new(v)) } else { v }
+            }
             Ty::Fixed { bits, frac, endian, signed } => {
                 let buf = self.read(doc, r, r.offset, size)?;
                 let raw = if *signed { read_int(&buf, *bits, *endian) as f64 } else { read_uint(&buf, *bits, *endian) as f64 };

@@ -1919,3 +1919,192 @@ fn a_low_bit_first_field_across_a_byte_boundary_is_refused() {
     };
     assert!(msg.contains("cross a byte boundary"), "{msg}");
 }
+
+// ----- sign and magnitude -----
+
+#[test]
+fn a_sign_magnitude_number_is_not_twos_complement() {
+    // The same two bytes read three ways. 0x8005 is -5 with the sign bit and
+    // a magnitude of five; as two's complement the same bytes are -32763,
+    // which is a plausible-looking number and wrong by the width of the field.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "R",
+            vec![
+                ("south", T::sign_magnitude(16, Big)),
+                ("north", T::sign_magnitude(16, Big)),
+                ("as_int", T::at(E::lit(0), T::Int { bits: 16, endian: Big })),
+            ],
+        ),
+    );
+    let d = doc(&[0x80, 0x05, 0x00, 0x05]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Int(-5));
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Int(5));
+    assert_eq!(ev.node(&d, &[2, 0]).unwrap().value, Value::Int(-32763));
+    // The type column says which of the two readings this is.
+    assert_eq!(ev.node(&d, &[0]).unwrap().type_name, "sm16 be");
+}
+
+#[test]
+fn negative_zero_is_zero_and_the_range_is_symmetrical() {
+    let t = Template::new("t", T::structure("R", vec![("v", T::sign_magnitude(8, Big))]));
+    let mut d = doc(&[0x80]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Int(0), "negative zero is zero");
+    // Written back, an eight-bit field reaches -127 and no further: the sign
+    // costs a bit that two's complement spends on one more negative number.
+    let w = ev.prepare_write(&d, &[0], "-127").unwrap();
+    d.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
+    ev.invalidate();
+    assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Int(-127));
+    assert!(ev.prepare_write(&d, &[0], "-128").is_err());
+}
+
+// ----- a width read from the file -----
+
+#[test]
+fn a_number_is_as_wide_as_an_earlier_field_says() {
+    // Three values of eleven bits each, packed one after another, after the
+    // byte that says eleven: 0b00000000001_00000000010_00000000011.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "R",
+            vec![
+                ("bits_per_value", T::u8()),
+                ("values", T::array(T::uint_expr(E::field("bits_per_value"), Big), E::lit(3))),
+            ],
+        ),
+    );
+    let d = doc(&[11, 0b0000_0000, 0b0010_0000, 0b0000_1000, 0b0000_0001, 0b1000_0000]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().value, Value::UInt(1));
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value, Value::UInt(2));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value, Value::UInt(3));
+    // Each value is as wide as the header said, and the run is that times the
+    // count: the list is measured by arithmetic, not by walking it.
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().size_bits, 11);
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 33);
+    // The type column names the field that decided the width.
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().type_name, "u bits_per_value be");
+    // And the connection is exposed: the reader can go to the field that
+    // settled it.
+    let origins = ev.origins(&d, &[1, 0]).unwrap();
+    let width = origins.iter().find(|o| o.role == Role::Width).expect("a width has an origin");
+    assert_eq!((width.label.as_str(), width.value.as_str(), width.path.as_slice()), ("bits_per_value", "11", &[0][..]));
+}
+
+#[test]
+fn a_width_of_no_bits_is_a_value_of_no_bits() {
+    // A GRIB whose values are all the same writes a width of zero and no data
+    // at all. The values are still there to be counted; they are all zero.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "R",
+            vec![("w", T::u8()), ("values", T::array(T::uint_expr(E::field("w"), Big), E::lit(4)))],
+        ),
+    );
+    let d = doc(&[0]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 0);
+    assert_eq!(ev.node(&d, &[1, 3]).unwrap().value, Value::UInt(0));
+}
+
+#[test]
+fn a_width_the_template_cannot_place_is_refused() {
+    // Packed from the bottom of the byte, at a width nothing knows until the
+    // field has been read: where it goes cannot be settled, so it is refused
+    // rather than placed somewhere it is not.
+    let t = Template::new(
+        "t",
+        T::structure("R", vec![("w", T::u8()), ("v", T::uint_expr(E::field("w"), Little))]),
+    );
+    let d = doc(&[11, 0xff, 0xff]);
+    let mut ev = Evaluator::new(t);
+    let Err(EvalError::Failed(msg)) = ev.node(&d, &[1]) else { panic!("should refuse") };
+    assert!(msg.contains("low-bit-first"), "{msg}");
+}
+
+// ----- finding a sibling by a key this record works out -----
+
+/// A stream of records where each one carries a class number, and what that
+/// class is called is written in an earlier record of the same stream. This is
+/// the shape GWF has, and the one no name can reach: the records are elements
+/// of a list, not fields declared beside the field asking.
+fn classed() -> Template {
+    let record = T::structure(
+        "Rec",
+        vec![
+            ("class", T::u8()),
+            ("class_num", T::u8()),
+            ("name", T::utf8(E::lit(4))),
+            // The name of whichever earlier record numbered itself with this
+            // record's class byte.
+            ("of_class", T::Computed(E::sibling_tagged(&["class_num"], E::field("class"), &["class_num"]))),
+        ],
+    );
+    Template::new("t", T::repeat(record, Until::End))
+}
+
+#[test]
+fn a_record_finds_the_earlier_one_that_defines_its_class() {
+    // Two definitions and then a record of class 9.
+    let d = doc(b"\x00\x08dict\x00\x09trce\x09\x00data");
+    let mut ev = Evaluator::new(classed());
+    // The third record's class byte is 9, and the record that numbered itself
+    // 9 is the second one.
+    assert_eq!(ev.node(&d, &[2, 3]).unwrap().value.as_int(), Some(9));
+    // Which is a connection, not a coincidence: the reader is pointed at the
+    // element the answer came from, and at the byte that sent it there.
+    let origins = ev.origins(&d, &[2, 3]).unwrap();
+    let labels: Vec<&str> = origins.iter().map(|o| o.label.as_str()).collect();
+    // Named for the list it was found in, which here is the whole file.
+    assert_eq!(labels, vec!["class", "file[1].class_num"]);
+    assert_eq!(origins[1].path, vec![1, 1]);
+    // And the relationship is written out both ways.
+    let rel = ev.relations(&d, &[2, 3]).unwrap();
+    assert_eq!(rel[0].written, "earlier[class_num = class].class_num");
+    assert_eq!(rel[0].substituted, "earlier[class_num = 9].class_num");
+}
+
+#[test]
+fn a_lookup_that_finds_nothing_is_zero_rather_than_an_error() {
+    // A record whose class nothing earlier defined. Zero, so `Or` can name
+    // what to do without one, the same answer every other search here gives.
+    let d = doc(b"\x07\x00data");
+    let mut ev = Evaluator::new(classed());
+    assert_eq!(ev.node(&d, &[0, 3]).unwrap().value.as_int(), Some(0));
+}
+
+#[test]
+fn a_lookup_by_computed_key_reads_text_as_well_as_numbers() {
+    // The same search, used to pick a type by the word an earlier record
+    // holds rather than by a number. What a format that names its own record
+    // types needs.
+    let record = T::structure(
+        "Rec",
+        vec![
+            ("class", T::u8()),
+            ("class_num", T::u8()),
+            ("name", T::utf8(E::lit(4))),
+            (
+                "body",
+                T::matches(
+                    E::sibling_tagged(&["class_num"], E::field("class"), &["name"]),
+                    vec![("trce", T::u16(Big))],
+                    T::bytes(E::lit(0)),
+                ),
+            ),
+        ],
+    );
+    let d = doc(b"\x00\x08dict\x00\x09trce\x09\x00data\xbe\xef");
+    let mut ev = Evaluator::new(Template::new("t", T::repeat(record, Until::End)));
+    // The third record's class is 9, the record numbered 9 is called `trce`,
+    // and a `trce` body is a sixteen-bit number.
+    assert_eq!(ev.node(&d, &[2, 3]).unwrap().value, Value::UInt(0xbeef));
+    // The first two are not, so their bodies are nothing at all.
+    assert_eq!(ev.node(&d, &[0, 3]).unwrap().size_bits, 0);
+}

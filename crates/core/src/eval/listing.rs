@@ -80,6 +80,9 @@ pub(super) fn brief(v: &Value) -> String {
         }
         // The bytes are on their way; the row says where and how long.
         Value::Unread { .. } => "\u{2026}".to_string(),
+        // A slot nobody filled in. The number underneath is in the file and in
+        // the hex view; saying -12345 here would read as a measurement.
+        Value::Unset(_) => "unset".to_string(),
         Value::Magic { ok, bytes, expected } => magic_reading(*ok, bytes, expected),
         Value::Composite { .. } => String::new(),
     }
@@ -118,9 +121,11 @@ const COLLAPSE_ELEMENT_BYTES: u64 = 256;
 /// A type that holds one number or one run of bytes, and nothing inside it.
 pub(super) fn plain(ty: &Ty) -> bool {
     match ty {
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => plain(inner),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => plain(inner),
         Ty::UInt { .. }
         | Ty::Int { .. }
+        | Ty::SignMagnitude { .. }
+        | Ty::UIntExpr { .. }
         | Ty::F16(_)
         | Ty::BF16(_)
         | Ty::F32(_)

@@ -112,7 +112,11 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>) {
             }
             ty_refs(default, out);
         }
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => ty_refs(inner, out),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => ty_refs(inner, out),
+        // How wide the number is settles it the way a length settles a run of
+        // bytes, so the field that said so is machinery for it: a GRIB's
+        // `bits_per_value` belongs to the grid it packs.
+        Ty::UIntExpr { bits, .. } => expr_refs(bits, out),
         // A value worked out from other fields, which is not the same as being
         // placed by them. See the module note.
         Ty::Computed(_) => {}
@@ -141,7 +145,18 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             out.push(array.clone());
             expr_refs(index, out);
         }
-        Expr::Tagged(t) => out.push(t.array.clone()),
+        // The list searched, when it is one named beside this field, and the
+        // field the label is worked out from, when it is. A search over the
+        // enclosing list names neither: what it looks at is elements, and an
+        // element is not a sibling of the field asking.
+        Expr::Tagged(t) => {
+            if let Some(array) = &t.array {
+                out.push(array.clone());
+            }
+            if let crate::template::Tag::Computed(e) = &t.tag {
+                expr_refs(e, out);
+            }
+        }
         // A path starting at a sibling and going down into it. Only its first
         // step names something in this structure.
         Expr::Sibling(path) | Expr::Within(path) => {
@@ -214,6 +229,37 @@ mod tests {
             ],
         ));
         assert_eq!(consumers(&s), vec![Some(1), Some(2), None]);
+    }
+
+    /// How wide the numbers are packed settles the run the same way a length
+    /// settles a run of bytes, so the field that said so folds behind it.
+    #[test]
+    fn a_width_belongs_to_the_run_it_packs() {
+        let s = def(&T::structure(
+            "Section",
+            vec![
+                ("bits_per_value", T::u8()),
+                ("count", T::u16(Big)),
+                ("values", T::array(T::uint_expr(E::field("bits_per_value"), Big), E::field("count"))),
+            ],
+        ));
+        assert_eq!(consumers(&s), vec![Some(2), Some(2), None]);
+    }
+
+    /// A record that finds an earlier one by a number it carries is placed by
+    /// that number, so the byte holding it is machinery for the field that
+    /// used it. The list searched is the one the record is in, which is not a
+    /// sibling of anything and so names nothing here.
+    #[test]
+    fn a_computed_label_belongs_to_the_lookup_that_used_it() {
+        let s = def(&T::structure(
+            "Rec",
+            vec![
+                ("class", T::u8()),
+                ("body", T::sized(E::sibling_tagged(&["class_num"], E::field("class"), &["size"]), T::u8())),
+            ],
+        ));
+        assert_eq!(consumers(&s), vec![Some(1), None]);
     }
 
     #[test]

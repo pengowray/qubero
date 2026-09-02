@@ -35,6 +35,29 @@ impl Evaluator {
         if let Some(f) = fixed_bits(elem) {
             return Ok(Some(f));
         }
+        // A run of numbers packed to whatever width the header named. The
+        // width is asked once, of the list, and every element is that wide, so
+        // a grid of a million values is placed by arithmetic rather than by a
+        // million reads. Only when the width asks nothing about the element,
+        // which is the same test a window's size passes.
+        if let Ty::UIntExpr { bits, .. } = elem.without_sentinel() {
+            if !uniform(bits) {
+                return Ok(None);
+            }
+            let n = self.eval_expr(doc, path, &bits.clone())?;
+            if !(0..=128).contains(&n) {
+                return Ok(None);
+            }
+            // A width of zero is a real answer for an array, whose count says
+            // how many there are: a GRIB whose values are all the same writes
+            // no data at all, and a million of them must not be a million
+            // reads. A repeat has no count and would never end, so it keeps
+            // the walk, which refuses a zero-size element.
+            if n == 0 && !matches!(ty, Ty::Array { .. }) {
+                return Ok(None);
+            }
+            return Ok(Some(n as u64));
+        }
         let Ty::Sized { size, .. } = &**elem else { return Ok(None) };
         if !uniform(size) {
             return Ok(None);
@@ -175,22 +198,37 @@ impl Evaluator {
                     let (_, n) = self.read_ebml_vint(doc, &r, *strip_marker)?;
                     n * 8
                 }
-                Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => match **inner {
-                    Ty::Leb128 { .. } => {
-                        let (_, n) = self.read_leb(doc, &r)?;
-                        n * 8
+                // A wrapper that names values, names bits, or names one value
+                // as unset is as long as what it wraps. Asked of the inner
+                // type rather than listed case by case, so that a wrapper over
+                // a width read from the file works the same as one over a
+                // variable-length integer.
+                Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => {
+                    let inner = (**inner).clone();
+                    match fixed_bits(&inner) {
+                        Some(f) => f,
+                        None => {
+                            let mut ir = r.clone();
+                            ir.ty = inner;
+                            self.read_size(doc, path, &ir)?
+                        }
                     }
-                    Ty::Vlq => {
-                        let (_, n) = self.read_vlq(doc, &r)?;
-                        n * 8
+                }
+                // As many bits as an earlier field says. `Little` is refused
+                // here rather than placed wrongly: a field packed from the
+                // bottom of its byte has to be placed before it is read, and
+                // where it goes depends on a width only reading gives.
+                Ty::UIntExpr { bits, endian } => {
+                    let (bits, endian) = (bits.clone(), *endian);
+                    let n = self.eval_expr(doc, path, &bits)?;
+                    if !(0..=128).contains(&n) {
+                        return fail(format!("a number {n} bits wide is not one this can read"));
                     }
-                    Ty::EbmlVint { strip_marker } => {
-                        let (_, n) = self.read_ebml_vint(doc, &r, strip_marker)?;
-                        n * 8
+                    if endian == crate::template::Endian::Little && (n % 8 != 0 || r.offset % 8 != 0) {
+                        return fail("a number packed low-bit-first has to have a width the template knows");
                     }
-                    Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,
-                    _ => return fail("enum over a type with no fixed size"),
-                },
+                    n as u64
+                }
                 // A JSON field is as long as the text it was given: what the
                 // values inside it come to is what the parse says, and any
                 // room left over is padding the format put there.
@@ -199,7 +237,12 @@ impl Evaluator {
                 // which runs to the end of its container.
                 Ty::PointerList { .. } => r.limit - r.offset,
                 Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,
-                _ => unreachable!("fixed-size and composite types are the caller's"),
+                // Reached only through a wrapper over something that is
+                // neither a number nor a run of bytes, which is a template
+                // saying something it cannot mean. An error rather than a
+                // panic: one field of one format should not take the reader
+                // down with it.
+                other => return fail(format!("{} has no length of its own", other.display_name())),
         })
     }
 

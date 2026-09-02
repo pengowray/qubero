@@ -1372,7 +1372,7 @@ function grouped(value: string): string {
 }
 
 /** What one field decided about the one at the cursor: `Length  len = 20`. */
-const ROLE_TEXT = { length: "Length", count: "Count", type: "Type", position: "Position", value: "Value", points: "" } as const;
+const ROLE_TEXT = { length: "Length", count: "Count", type: "Type", position: "Position", value: "Value", width: "Width", points: "" } as const;
 
 function originRow(o: Origin): HTMLElement {
   const row = document.createElement("div");
