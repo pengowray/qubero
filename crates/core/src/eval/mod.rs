@@ -32,6 +32,7 @@ mod walk;
 mod tests;
 
 pub use explain::{Explain, FlagBit};
+pub use space::{Space, SpaceId};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
 
@@ -73,6 +74,21 @@ pub type R<T> = Result<T, EvalError>;
 
 fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
+}
+
+/// Whether a stream's declared contents say nothing about what they are.
+///
+/// A template that says a run unpacks into bytes, or into a wrapper holding
+/// one field of bytes or of text, has no opinion worth keeping: the bytes
+/// themselves know better, and a gzip of a tar should open as a tar. A
+/// template that says anything else is believed.
+fn says_only_bytes(ty: &Ty) -> bool {
+    match ty {
+        Ty::Bytes(_) | Ty::Str { .. } => true,
+        Ty::Sized { inner, .. } => says_only_bytes(inner),
+        Ty::Struct(s) => s.fields.len() == 1 && says_only_bytes(&s.fields[0].ty),
+        _ => false,
+    }
 }
 
 /// How far down a node may be before reading it is refused, counted in path
@@ -339,6 +355,12 @@ pub struct Evaluator {
     placed: placed::Index,
     /// The decoded streams this reading has opened, and what each one came to.
     spaces: space::Spaces,
+    /// The streams opened as documents of their own, which is what a tab is.
+    /// Numbered across every level of nesting, so a stream inside a stream is
+    /// a space beside its parent rather than inside it: the interface names
+    /// one number and this says which one it means. A slot is taken out while
+    /// something is being asked of it, which is why they are options.
+    open: Vec<Option<Box<space::Space>>>,
 }
 
 impl Evaluator {
@@ -350,6 +372,7 @@ impl Evaluator {
             go: go::Go::default(),
             placed: placed::Index::default(),
             spaces: space::Spaces::default(),
+            open: Vec::new(),
         }
     }
 
@@ -468,6 +491,10 @@ impl Evaluator {
         if self.spaces.any() {
             self.spaces.forget();
             self.memo.forget_decoded();
+            // A space is a reading of bytes worked out from the file, so an
+            // edit anywhere in the file drops every one of them. A tab over a
+            // stream that is gone opens it again, which is one inflate.
+            self.open.clear();
         }
         self.memo.forget_after(bit);
     }
@@ -478,6 +505,7 @@ impl Evaluator {
         self.memo.forget();
         self.placed.forget();
         self.spaces.forget();
+        self.open.clear();
         self.journals.clear();
         self.go.restart();
     }
@@ -813,7 +841,7 @@ impl Evaluator {
         // back to the file, which is how an RNTuple anchor inside a compressed
         // record still finds its envelopes. See [`space`].
         if let Ty::Decoded { .. } = &pr.ty {
-            let space = match self.open_space(doc, parent)? {
+            let space = match self.open_space_at(doc, parent)? {
                 space::Opened::Space(id) => id,
                 // The stream would not open. `child_count` already said it has
                 // nothing inside, so nothing should be asking; answering with
@@ -1267,7 +1295,7 @@ impl Evaluator {
     /// reports `Pending` like any other read. Everything after that is an
     /// answer rather than an error: a stream that will not open is a fact
     /// about the file, and it should not take the listing down with it.
-    pub(super) fn open_space<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<space::Opened> {
+    pub(super) fn open_space_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<space::Opened> {
         if let Some(known) = self.spaces.get(path) {
             return Ok(known);
         }
@@ -1286,20 +1314,150 @@ impl Evaluator {
         // end mark is a block of nothing, and saying it would not unpack would
         // be saying something went wrong where nothing did.
         if size == 0 {
-            return Ok(space::Opened::Space(self.spaces.add(path, Vec::new())));
+            return Ok(space::Opened::Space(self.spaces.add(path, Vec::new(), crate::codec::Trace::default())));
         }
         if size / 8 > crate::codec::CAP_BYTES as u64 {
             self.spaces.refuse(path, Refusal::TooLarge);
             return Ok(space::Opened::Refused(Refusal::TooLarge));
         }
         let packed = self.read(doc, &r, r.offset, size)?;
-        Ok(match crate::codec::decode(codec, &packed) {
-            Ok(bytes) => space::Opened::Space(self.spaces.add(path, bytes)),
+        Ok(match crate::codec::decode_traced(codec, &packed) {
+            Ok((bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
             Err(why) => {
                 self.spaces.refuse(path, why);
                 space::Opened::Refused(why)
             }
         })
+    }
+
+    /// Open the `Decoded` node at `path` of space `space` as a document of its
+    /// own, and say which space that is. Nothing when the stream would not
+    /// open, which is a fact about the file rather than an error.
+    ///
+    /// Done once per node: asking again for a stream already open hands back
+    /// the space it opened. `space` is 0 for a node of the file, and the id of
+    /// an already-open space for a stream inside a stream, which is how a zip
+    /// inside a gzip is reached.
+    pub fn open_space<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        space: SpaceId,
+        path: &[usize],
+    ) -> R<Option<SpaceId>> {
+        if let Some(id) =
+            self.open.iter().flatten().find(|s| s.parent == space && s.path == path).map(|s| s.id)
+        {
+            return Ok(Some(id));
+        }
+        // The run is unpacked by whichever reading holds it: the file's own,
+        // or the one over the space it sits in. The space is taken out of the
+        // registry for the length of the call, since it holds a reading that
+        // is about to be asked to do work.
+        let unpacked = match space {
+            0 => self.unpack(doc, path)?,
+            id => {
+                let mut held = match self.take(id) {
+                    Some(held) => held,
+                    None => return fail("no such space"),
+                };
+                let (ev, sub) = held.reading();
+                let got = ev.unpack(sub, path);
+                self.put(held);
+                got?
+            }
+        };
+        let Some((bytes, trace, codec, inner)) = unpacked else { return Ok(None) };
+        let (template, recognised) = self.template_for(&inner, &bytes);
+        let id = self.open.len() as SpaceId + 1;
+        self.open.push(Some(Box::new(space::Space::new(
+            id,
+            space,
+            path.to_vec(),
+            codec,
+            bytes,
+            trace,
+            template,
+            recognised,
+        ))));
+        Ok(Some(id))
+    }
+
+    /// The bytes and the trace of the stream at `path`, or nothing when it
+    /// would not open. The step every `open_space` starts with, whichever
+    /// reading is being asked.
+    #[allow(clippy::type_complexity)]
+    fn unpack<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+    ) -> R<Option<(std::sync::Arc<Vec<u8>>, crate::codec::Trace, crate::codec::Codec, Ty)>> {
+        let id = match self.open_space_at(doc, path)? {
+            space::Opened::Space(id) => id,
+            space::Opened::Refused(_) => return Ok(None),
+        };
+        let Ty::Decoded { codec, inner } = self.memo[path].ty.clone() else {
+            return fail("not a decoded stream");
+        };
+        let (Some(bytes), Some(trace)) = (self.spaces.buf(id), self.spaces.trace(id)) else {
+            return fail("this stream is no longer open");
+        };
+        Ok(Some((bytes.clone(), trace.clone(), codec, (*inner).clone())))
+    }
+
+    /// What a space's bytes read as: what the stream's own template said, or,
+    /// when that said only that they are bytes, whatever they turn out to be.
+    ///
+    /// This is what makes a gzip of a tar open as a tar. A template that says
+    /// something more than "bytes" is believed: a ROOT record's object is an
+    /// object whatever a sniffer would make of the first four bytes of it.
+    fn template_for(&self, inner: &Ty, bytes: &[u8]) -> (Template, bool) {
+        if says_only_bytes(inner) {
+            let head = &bytes[..bytes.len().min(0x9000)];
+            if let Some(found) = crate::formats::sniff(head, bytes.len() as u64) {
+                if let Some(t) = crate::formats::builtin(found) {
+                    return (t, true);
+                }
+            }
+        }
+        let mut t = Template::new(&self.template.name, inner.clone());
+        // The stream's fields may name types the file's template declared, and
+        // a reading that does not know them cannot place them.
+        t.types = self.template.types.clone();
+        (t, false)
+    }
+
+    /// A space this reading has opened.
+    pub fn space(&self, id: SpaceId) -> Option<&Space> {
+        self.open.get(id.checked_sub(1)? as usize)?.as_deref()
+    }
+
+    /// A space this reading has opened, to ask something of.
+    pub fn space_mut(&mut self, id: SpaceId) -> Option<&mut Space> {
+        self.open.get_mut(id.checked_sub(1)? as usize)?.as_deref_mut()
+    }
+
+    /// Every space open, in the order they were opened.
+    pub fn spaces_open(&self) -> impl Iterator<Item = &Space> {
+        self.open.iter().flatten().map(|s| &**s)
+    }
+
+    /// Which step of a decoding produced a byte of `space`.
+    pub fn map_out(&self, space: SpaceId, byte: u64) -> Option<crate::codec::Step> {
+        self.space(space)?.map_out(byte)
+    }
+
+    /// Which step read a bit of the run `space` was unpacked from.
+    pub fn map_in(&self, space: SpaceId, bit: u64) -> Option<crate::codec::Step> {
+        self.space(space)?.map_in(bit)
+    }
+
+    fn take(&mut self, id: SpaceId) -> Option<Box<Space>> {
+        self.open.get_mut(id.checked_sub(1)? as usize)?.take()
+    }
+
+    fn put(&mut self, space: Box<Space>) {
+        let at = space.id as usize - 1;
+        self.open[at] = Some(space);
     }
 
     /// Which address space a read at `path` belongs to.

@@ -290,7 +290,7 @@ impl Evaluator {
             // Asking what is inside a stream is what opens it. One child when
             // it opened, none when it would not: a refusal is a leaf, and the
             // node carries the reason.
-            Ty::Decoded { .. } => Ok(match self.open_space(doc, path)? {
+            Ty::Decoded { .. } => Ok(match self.open_space_at(doc, path)? {
                 super::space::Opened::Space(_) => 1,
                 super::space::Opened::Refused(_) => 0,
             }),
