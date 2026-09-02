@@ -77,14 +77,17 @@ mod pi1;
 mod psd;
 mod pnm;
 mod qoi;
+mod rar5;
 mod rpm;
 mod png;
 mod safetensors;
 mod le;
 mod spp;
 pub(crate) mod sqlite;
+mod sevenzip;
 mod swf;
 mod tap;
+mod tar;
 mod tga;
 mod tiff;
 mod thumbsdb;
@@ -168,6 +171,7 @@ pub use bdb::bdb;
 pub use c16::c16;
 pub use pnm::pnm;
 pub use qoi::qoi;
+pub use rar5::rar5;
 pub use rpm::rpm;
 pub use png::png;
 pub use safetensors::safetensors;
@@ -175,8 +179,10 @@ pub use le::le;
 pub use spp::spp;
 pub use sqlite::{self_db, sqlite};
 pub use sqlite_overflow::{payload as sqlite_payload, Payload as SqlitePayload};
+pub use sevenzip::sevenzip;
 pub use swf::swf;
 pub use tap::tap;
+pub use tar::tar;
 pub use tga::tga;
 pub use tiff::{camera_raw, tiff};
 pub use thumbsdb::thumbsdb;
@@ -278,6 +284,9 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("xz", |_| xz()),
     ("zstd", |_| zstd()),
     ("lz4", |_| lz4()),
+    ("tar", |_| tar()),
+    ("7z", |_| sevenzip()),
+    ("rar5", |_| rar5()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),

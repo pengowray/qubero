@@ -51,6 +51,8 @@ const MAGIC: &[(&[u8], &str)] = &[
     (xz::MAGIC, "xz"),
     (zstd::MAGIC, "zstd"),
     (lz4::MAGIC, "lz4"),
+    (sevenzip::MAGIC, "7z"),
+    (rar5::MAGIC, "rar5"),
     (uf2::MAGIC, "uf2"),
     (b"DIRC", "gitindex"),
     (b"\xfftOc", "gitpackidx"),
@@ -181,6 +183,9 @@ const PROBES: &[Probe] = &[
     Probe::Is("unityassets", is_unity_assets),
     Probe::Is("thumbsdb", |h, _| is_thumbs_db(h)),
     Probe::Is("deb", |h, _| is_deb(h)),
+    // Nothing marks the front of a tar: the signature is 257 bytes in,
+    // and the bytes before it could open anything.
+    Probe::Is("tar", |h, _| tar::is_tar(h)),
     Probe::Which(assimp_format),
     Probe::Signatures,
     // The Amiga container, whose form type says which format it holds.
