@@ -99,18 +99,45 @@ fn limit_or_failed(status: miniz_oxide::inflate::TINFLStatus) -> Refusal {
 /// Zstandard, read a frame at a time. A file compressed by `zstd` is one
 /// frame; ROOT writes one per block. Concatenated frames are read through to
 /// the end, which is what the format says a decoder does.
-fn zstd(_data: &[u8]) -> Result<Vec<u8>, Refusal> {
-    Err(Refusal::Failed)
+fn zstd(data: &[u8]) -> Result<Vec<u8>, Refusal> {
+    use std::io::Read;
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(data).map_err(|_| Refusal::Failed)?;
+    // One byte past the cap, so a stream that only just fits is told from one
+    // that does not.
+    let mut out = Vec::new();
+    match decoder.by_ref().take(CAP_BYTES as u64 + 1).read_to_end(&mut out) {
+        Ok(_) if out.len() > CAP_BYTES => Err(Refusal::TooLarge),
+        Ok(_) => Ok(out),
+        Err(_) => Err(Refusal::Failed),
+    }
 }
 
 /// One LZ4 block. Nothing in the block says how long it unpacks to, and the
-/// header that would is not part of it, so the size is found by trying.
-fn lz4_block(_data: &[u8]) -> Result<Vec<u8>, Refusal> {
-    Err(Refusal::Failed)
+/// header that would is not part of it, so the size is found by trying: four
+/// times the compressed run, doubling until it fits. Asking for the cap
+/// outright would allocate 64 MiB for every block in the file.
+fn lz4_block(data: &[u8]) -> Result<Vec<u8>, Refusal> {
+    let mut room = (data.len().saturating_mul(4)).clamp(1024, CAP_BYTES);
+    loop {
+        match lz4_flex::block::decompress(data, room) {
+            Ok(out) => return Ok(out),
+            Err(_) if room >= CAP_BYTES => return Err(Refusal::TooLarge),
+            Err(_) => room = room.saturating_mul(2).min(CAP_BYTES),
+        }
+    }
 }
 
-fn xz(_data: &[u8]) -> Result<Vec<u8>, Refusal> {
-    Err(Refusal::Failed)
+/// A whole xz stream, header through footer. The LZMA2 inside one block is a
+/// step of a decoder's state and does not stand on its own, which is why the
+/// template opens the stream and not the block.
+fn xz(data: &[u8]) -> Result<Vec<u8>, Refusal> {
+    let mut input = std::io::BufReader::new(data);
+    let mut out = Vec::new();
+    match lzma_rs::xz_decompress(&mut input, &mut out) {
+        Ok(()) if out.len() > CAP_BYTES => Err(Refusal::TooLarge),
+        Ok(()) => Ok(out),
+        Err(_) => Err(Refusal::Failed),
+    }
 }
 
 #[cfg(test)]
@@ -132,8 +159,17 @@ mod tests {
     }
 
     #[test]
+    fn an_lz4_block_is_sized_by_trying_since_nothing_in_it_says() {
+        let long = "lz4 block ".repeat(5000);
+        let packed = lz4_flex::block::compress(long.as_bytes());
+        assert_eq!(decode(Codec::Lz4Block, &packed).unwrap(), long.as_bytes());
+    }
+
+    #[test]
     fn bytes_that_are_not_a_stream_are_refused_rather_than_guessed_at() {
         assert_eq!(decode(Codec::Zlib, b"not compressed"), Err(Refusal::Failed));
+        assert_eq!(decode(Codec::Zstd, b"not compressed"), Err(Refusal::Failed));
+        assert_eq!(decode(Codec::Xz, b"not compressed"), Err(Refusal::Failed));
     }
 
 }
