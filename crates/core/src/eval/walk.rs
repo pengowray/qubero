@@ -176,6 +176,7 @@ impl Evaluator {
         let stop = match until {
             Until::End => false,
             Until::FieldBytes { field, bytes } => self.child_raw_bytes(doc, elem, field)? == *bytes,
+            Until::FieldValue { field, value } => self.child_int(doc, elem, field)? == Some(*value),
         };
         let n = {
             let m = self.list_mut(path);

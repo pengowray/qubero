@@ -8,6 +8,7 @@ mod assimp;
 mod appledouble;
 mod au;
 mod bmp;
+mod bzip2;
 mod bdb;
 mod bencode;
 mod c16;
@@ -16,6 +17,7 @@ mod braw;
 mod bards_tale;
 mod cbor;
 mod coff;
+mod compress;
 mod corel;
 mod cpio;
 mod dos;
@@ -55,6 +57,8 @@ mod jpeg;
 mod ico;
 mod lha;
 mod lnk;
+mod lz4;
+mod lzip;
 mod mca;
 mod midi;
 mod mkv;
@@ -73,14 +77,17 @@ mod pi1;
 mod psd;
 mod pnm;
 mod qoi;
+mod rar5;
 mod rpm;
 mod png;
 mod safetensors;
 mod le;
 mod spp;
 pub(crate) mod sqlite;
+mod sevenzip;
 mod swf;
 mod tap;
+mod tar;
 mod tga;
 mod tiff;
 mod thumbsdb;
@@ -91,9 +98,12 @@ mod vpk;
 mod w4v;
 mod wad;
 mod xar;
+mod xz;
 mod wav;
 mod whisper;
 mod zip;
+mod zlib;
+mod zstd;
 mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
@@ -104,12 +114,14 @@ pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
 pub use bmp::bmp;
+pub use bzip2::bzip2;
 pub use cab::cab;
 pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use bencode::bencode;
 pub use cbor::cbor;
 pub use coff::coff;
+pub use compress::compress;
 pub use corel::{cdr, cmx};
 pub use cpio::cpio;
 pub use dos::{com, dos};
@@ -140,6 +152,8 @@ pub use jxr::jxr;
 pub use ico::ico;
 pub use lha::lha;
 pub use lnk::lnk;
+pub use lz4::lz4;
+pub use lzip::lzip;
 pub use mca::mca;
 pub use midi::midi;
 pub use mkv::mkv;
@@ -157,6 +171,7 @@ pub use bdb::bdb;
 pub use c16::c16;
 pub use pnm::pnm;
 pub use qoi::qoi;
+pub use rar5::rar5;
 pub use rpm::rpm;
 pub use png::png;
 pub use safetensors::safetensors;
@@ -164,8 +179,10 @@ pub use le::le;
 pub use spp::spp;
 pub use sqlite::{self_db, sqlite};
 pub use sqlite_overflow::{payload as sqlite_payload, Payload as SqlitePayload};
+pub use sevenzip::sevenzip;
 pub use swf::swf;
 pub use tap::tap;
+pub use tar::tar;
 pub use tga::tga;
 pub use tiff::{camera_raw, tiff};
 pub use thumbsdb::thumbsdb;
@@ -176,9 +193,12 @@ pub use vpk::vpk;
 pub use w4v::w4v;
 pub use wad::wad;
 pub use xar::xar;
+pub use xz::xz;
 pub use wav::wav;
 pub use whisper::whisper;
 pub use zip::{zarrzip, zip};
+pub use zlib::zlib;
+pub use zstd::zstd;
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
@@ -257,6 +277,16 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("nes", |_| nes()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),
+    ("zlib", |_| zlib()),
+    ("bzip2", |_| bzip2()),
+    ("lzip", |_| lzip()),
+    ("compress", |_| compress()),
+    ("xz", |_| xz()),
+    ("zstd", |_| zstd()),
+    ("lz4", |_| lz4()),
+    ("tar", |_| tar()),
+    ("7z", |_| sevenzip()),
+    ("rar5", |_| rar5()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),

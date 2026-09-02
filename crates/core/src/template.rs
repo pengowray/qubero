@@ -419,6 +419,16 @@ pub enum Until {
     /// Repeat until an element whose field `field` has the given raw bytes
     /// (that element is included).
     FieldBytes { field: String, bytes: Vec<u8> },
+    /// Repeat until an element whose field `field` reads as `value` (that
+    /// element is included).
+    ///
+    /// `FieldBytes` compares what is written, which is what a format ending
+    /// its list with a known byte string needs and what a field of no bytes
+    /// cannot answer. A zstd block says it is the last one in the low bit of a
+    /// three-byte header packed from that bit up, so the flag is worked out
+    /// from the header rather than read, and there are no bytes of its own to
+    /// compare.
+    FieldValue { field: String, value: i128 },
 }
 
 /// Names for the individual bits of an integer field: a PE's `characteristics`

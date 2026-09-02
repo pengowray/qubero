@@ -1720,3 +1720,58 @@ this: it is in the field panel only.
 Search (bytes, text, regex) streaming over chunks. Selection ranges, copy/paste.
 Bit-level cursor mode in the UI. Column/width presets. Worker-side core so the main
 thread never blocks on reads.
+
+### Compressed streams and archives
+Ten formats whose bytes are mostly not readable: zlib, bzip2, xz, zstd, lz4,
+lzip, compress, tar, 7z and RAR 5. None of them decompresses anything, and that
+is the point of writing them down. What a compressed file has to say about
+itself, it says in the frame around the compressed part, and the frame is where
+the questions a reader actually has are answered: how large was this before,
+what checksum should it come out with, how much window does a decoder need, how
+many blocks are there, where does the next member start.
+
+So each of these reads the header, the per-block or per-entry structure where
+there is one, and the trailer, and leaves the compressed run as one field of
+bytes, the way a gzip member already did. The variations are in how that run is
+measured, and there are four answers: a length in the header, which an lz4 block
+and a 7z packed stream have; a length at the end, which is lzip and gzip; a
+length in a separate index, which is xz; and no length at all, which is where a
+stream simply runs to whatever the file has left.
+
+Three of them make the frame worth more than that. The xz footer says how long
+the index is, so the index can be placed from the end of the file without
+reading anything in between, and the index holds every block's compressed and
+uncompressed size: the shape of the whole file, with no decoder anywhere near
+it. A tar entry's octal size field places the entry after it, so the archive
+reads as the list of files it is. A RAR 5 archive is a chain of blocks whose
+every number is a variable-length integer, and the size in each header is what
+steps over a block a reader does not understand, which is what this does with
+every kind of block.
+
+What is left out, beyond decompression itself:
+
+* bzip2 past the first block. Only the stream header is byte-aligned. Every
+  block after the first begins at whatever bit the one before it ended on, and
+  so does the end-of-stream marker. Searching the bytes for the block magic
+  would find it in the one file in eight where it happens to land on a
+  boundary, and a split that is right sometimes is worse than no split.
+* A 7z header. It sits at the offset the front of the file gives, and it is
+  normally an LZMA stream that unpacks into the names, sizes, times and folder
+  structure, which is everything a 7z knows about itself.
+* An xz block's filter chain, a RAR 5 block's own fields, and the deflate,
+  LZMA and entropy-coded bits all of these hold.
+* Second and later members. lzip, xz and gzip files may hold several streams
+  one after another, and each of these reads the first. The trailer says where
+  the next one starts, so what is missing is a repeat rather than a measurement.
+* What a tar entry's type letter means when it is not a file. A pax header, a
+  GNU long name and a sparse map each describe the entry after them, and acting
+  on one would mean the template rewriting what it had already said. They are
+  measured and shown like any other entry.
+
+Recognising them is signatures, except twice. A tar writes ustar 257
+bytes in and nothing at all before that, so it is a probe rather than a prefix.
+A zlib stream has no signature whatsoever: two header bytes, of which the low
+nibble of the first is the method, the top nibble is the window, and five bits
+of the second are chosen to make the pair a multiple of 31. That is the weakest
+evidence in the sniffer, so it is asked last, after every format that announces
+itself has spoken.

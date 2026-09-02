@@ -1022,6 +1022,19 @@ impl Evaluator {
         }
     }
 
+    /// The value of a named field directly inside the struct at `path`, as a
+    /// number, or nothing when it has no numeric reading.
+    fn child_int<S: Source>(&mut self, doc: &Document<S>, path: &[usize], field: &str) -> R<Option<i128>> {
+        let idx = match &self.memo[path].ty {
+            Ty::Struct(s) => s.fields.iter().position(|f| *f.name == *field),
+            _ => None,
+        };
+        let Some(idx) = idx else { return fail(format!("no field named {field}")) };
+        let mut p = path.to_vec();
+        p.push(idx);
+        Ok(self.node(doc, &p)?.value.as_int())
+    }
+
     /// Raw bytes of a named field directly inside the struct at `path`.
     fn child_raw_bytes<S: Source>(&mut self, doc: &Document<S>, path: &[usize], field: &str) -> R<Vec<u8>> {
         let idx = match &self.memo[path].ty {
