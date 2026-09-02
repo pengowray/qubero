@@ -6,9 +6,9 @@
 // any of them.
 //
 // Top to bottom: the facts, the byte-class map with a layout strip under it,
-// the Contents (the listing's headings, one source of truth for the parts of
-// the file) with a Logical tab beside it for formats that have their own
-// objects, the notes, and the block detail.
+// the detail of the block picked on that map, the Contents (the listing's
+// headings, one source of truth for the parts of the file) with a Logical tab
+// beside it for formats that have their own objects, and the notes.
 //
 // The class map is a grid of equal cells, one per bucket of the byte-class
 // scan, coloured by what the bucket's bytes are like. The same map answers for
@@ -453,11 +453,13 @@ export class OverviewPanel {
       this.readout,
       this.legend,
       this.layout,
+      // Straight under the map the cell was picked on: the cell and the
+      // zoomed-in view of it are one thing to look at.
+      this.focusEl,
       this.tabs,
       this.contentsEl,
       this.logicalEl,
       this.notes,
-      this.focusEl,
     );
     this.el.append(header, this.body);
 
@@ -1344,6 +1346,13 @@ export class OverviewPanel {
     if (s === null || i === null) return;
     const from = i * s.bucket_bytes;
     const to = Math.min(this.doc.lengthBytes, from + s.bucket_bytes);
+    // The cell already open closes: the same press that opened it, again.
+    // Closing is not a place to go, so the view stays where it is.
+    const open = this.block;
+    if (open !== null && open.from === from && open.to === to) {
+      this.setBlock(0, 0);
+      return;
+    }
     this.setBlock(from, to);
     this.onJump(from * 8, to * 8);
   }
