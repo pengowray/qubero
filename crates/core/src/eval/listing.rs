@@ -108,6 +108,12 @@ const COLLAPSE_RUN: u64 = 8;
 /// Beyond this point the list's section row and a few record names are a more
 /// useful first view than scores of repeated internal fields.
 const COLLAPSE_COMPLEX_RUN: u64 = 32;
+/// A run of records folds only when the records are small. A model's tensor
+/// table is hundreds of records a few dozen bytes each, and a row per field
+/// would fill the column with nothing but its insides; a frame file's hundred
+/// and sixty structures are kilobytes each, and one chip standing for the
+/// whole megabyte says nothing about any of them.
+const COLLAPSE_ELEMENT_BYTES: u64 = 256;
 
 /// A type that holds one number or one run of bytes, and nothing inside it.
 pub(super) fn plain(ty: &Ty) -> bool {
@@ -520,6 +526,9 @@ impl Evaluator {
             };
             let n = self.child_count(doc, &path[..k])?;
             let threshold = if complex { COLLAPSE_COMPLEX_RUN } else { COLLAPSE_RUN };
+            if complex && n > 0 && self.size_of(doc, &path[..k])? / n > COLLAPSE_ELEMENT_BYTES * 8 {
+                continue;
+            }
             if n >= threshold {
                 return Ok(Some((path[..k].to_vec(), n)));
             }

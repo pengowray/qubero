@@ -242,15 +242,25 @@ function elementsAreSections(node: TemplateNode, kids: readonly TemplateNode[], 
 export function sectionBreaks(kids: readonly TemplateNode[]): number[] {
   const breaks: number[] = [];
   let inLeafRun = false;
+  // Fields with no bytes, which is what a computed value is, are not a part
+  // of the file: a heading saying `Fields, 0 bytes` names nothing. They go
+  // with the leaf run that follows them, or, when a structure follows, with
+  // whatever part they are already in.
+  let weightless: number | null = null;
   kids.forEach((k, i) => {
     if (k.composite) {
       breaks.push(i);
       inLeafRun = false;
+      weightless = null;
+    } else if (k.size_bits === 0) {
+      if (!inLeafRun && weightless === null) weightless = i;
     } else if (!inLeafRun) {
-      breaks.push(i);
+      breaks.push(weightless ?? i);
       inLeafRun = true;
+      weightless = null;
     }
   });
+  if (breaks.length === 0 && kids.length > 0) breaks.push(0);
   return breaks;
 }
 
@@ -495,6 +505,16 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
   if (cursor < end) gap(w, path, cursor, end, 0, true);
 }
 
+/** What a heading covers. A field that points elsewhere costs nothing where
+ *  it is declared, so its node is empty and sits at the pointer; a heading
+ *  saying `directory, 0 bytes` there is not where the directory is. The one
+ *  thing it points at is. */
+function pointee(w: Walk, path: readonly number[], node: TemplateNode, inner: Slice | null): TemplateNode {
+  if (node.size_bits !== 0 || !node.composite || node.child_count !== 1) return node;
+  const only = (inner ?? w.kids(path, 1))?.nodes[0];
+  return only !== undefined && only.size_bits > 0 ? only : node;
+}
+
 /** One part of the file with a field of its own to name it. */
 function heading(
   w: Walk,
@@ -512,13 +532,14 @@ function heading(
     w.isOpen(key) ||
     (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX) ||
     w.opts.formatCard?.(node) != null;
+  const covers = pointee(w, path, node, inner);
   w.push({
     kind: "heading",
     key: `h:${key}`,
     section: w.section,
     depth: level,
-    offsetBits: node.offset_bits,
-    sizeBits: node.size_bits,
+    offsetBits: covers.offset_bits,
+    sizeBits: covers.size_bits,
     level,
     path,
     node,
