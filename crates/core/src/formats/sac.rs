@@ -14,10 +14,13 @@
 //! and lays the whole file out in whichever answers plausibly. Every reader
 //! of this format does the same, because it is all there is to go on.
 //!
-//! A version 7 file appends a footer of doubles after the samples, so that
-//! the fields needing more precision than a float has can have it without
-//! anything moving. The footer is left as bytes here: which of the floats it
-//! restates is a list as long as the header.
+//! A version 7 file appends a footer of twenty-two doubles after the samples,
+//! so that the fields needing more precision than a float has can have it
+//! without anything in the header moving. Every one of them restates a float
+//! slot by the same name, and the two disagreeing is not an error: a reader of
+//! a version 7 file takes the double and a reader that only knows version 6
+//! takes the float, which is what the whole arrangement is for. `sb` and
+//! `sdelta` are the exceptions, having no float slot at all.
 
 use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
@@ -252,24 +255,53 @@ fn file(e: Endian) -> T {
         .payload(&["delta", "npts", "b", "e"])
 }
 
+/// The twenty-two doubles a version 7 file writes after the samples, in the
+/// order the format fixes them in. Each restates the float slot of the same
+/// name, except `sb` and `sdelta`, which are the begin time and the sample
+/// spacing of an unevenly sampled trace and have no float slot.
+const FOOTER: &[&str] = &[
+    "delta", "b", "e", "o", "a",
+    "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9",
+    "f", "evlo", "evla", "stlo", "stla", "sb", "sdelta",
+];
+
 /// The samples. How many arrays of them there are is what `iftype` and
 /// `leven` between them say: a spectrum holds two components, and so does a
 /// trace whose samples are not evenly spaced, since then every sample needs
 /// its own x written beside it.
 ///
-/// A version 7 file has a footer of doubles after all of that, which lands in
-/// `footer` because the arrays are counted rather than run to the end.
+/// A version 7 file has the footer after all of that, which lands in `footer`
+/// because the arrays are counted rather than run to the end.
 fn data(e: Endian) -> T {
     let pair = |first: &'static str, second: &'static str| {
-        T::structure("SacData", vec![(first, samples(e)), (second, samples(e)), ("footer", T::bytes(E::Remaining))])
+        T::structure("SacData", vec![(first, samples(e)), (second, samples(e)), ("footer", footer(e))])
     };
-    let single = T::structure("SacData", vec![("y", samples(e)), ("footer", T::bytes(E::Remaining))]);
+    let single = T::structure("SacData", vec![("y", samples(e)), ("footer", footer(e))]);
     T::switch(
         E::field("iftype"),
         vec![(2, pair("real", "imaginary")), (3, pair("amplitude", "phase"))],
         // Unevenly spaced samples are the values and then the times, whatever
         // the file type says the file is.
         T::switch(E::field("leven"), vec![(0, pair("y", "x"))], single),
+    )
+}
+
+/// The footer, when `nvhdr` says 7 and the file is long enough to hold it. A
+/// version 6 file has nothing here, and a version 7 file cut off before its
+/// footer keeps whatever arrived as bytes rather than reading past its end.
+///
+/// A slot nobody filled in holds -12345 here as it does in the header, and
+/// says so as a double.
+fn footer(e: Endian) -> T {
+    let doubles = T::structure(
+        "SacFooter",
+        FOOTER.iter().map(|name| (*name, T::unset_float(T::F64(e), UNSET as f64))).collect(),
+    );
+    let room = E::lit(FOOTER.len() as i128 * 8).less_than(E::Remaining.add(E::lit(1)));
+    T::switch(
+        E::field("nvhdr").less_than(E::lit(7)).or(E::lit(1).sub(room)),
+        vec![(0, doubles)],
+        T::bytes(E::Remaining),
     )
 }
 
@@ -318,6 +350,10 @@ mod tests {
 
     /// A minimal file: the header slot by slot, and `npts` samples.
     fn build(big: bool, npts: i32, iftype: i32, leven: i32) -> Vec<u8> {
+        build_v(big, npts, iftype, leven, 6)
+    }
+
+    fn build_v(big: bool, npts: i32, iftype: i32, leven: i32, nvhdr: i32) -> Vec<u8> {
         let i32b = |v: i32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
         let f32b = |v: f32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
         let mut v = Vec::new();
@@ -326,7 +362,7 @@ mod tests {
         }
         let mut ints = [-12345i32; 40];
         ints[0] = 1978; // nzyear
-        ints[6] = 6; // nvhdr
+        ints[6] = nvhdr;
         ints[9] = npts;
         ints[15] = iftype;
         ints[35] = leven;
@@ -391,6 +427,56 @@ mod tests {
         let mut ev = Evaluator::new(sac());
         assert_eq!(ev.node(&d, &[DATA]).unwrap().child_count, 3); // y, x, footer
         assert_eq!(ev.node(&d, &[DATA, 1]).unwrap().child_count, 0, "only four samples were written");
+    }
+
+    /// A version 7 file: the same header, the samples, and then twenty-two
+    /// doubles restating the slots that needed the precision.
+    #[test]
+    fn a_version_7_file_reads_its_footer_of_doubles() {
+        for big in [true, false] {
+            let mut v = build_v(big, 4, 1, 1, 7);
+            let start = v.len();
+            for (i, _) in FOOTER.iter().enumerate() {
+                // delta and b are filled in; everything else is a slot nobody
+                // touched, which the footer spells the same way the header does.
+                let d = match i {
+                    0 => 0.01f64,
+                    1 => 1.5,
+                    _ => UNSET as f64,
+                };
+                v.extend_from_slice(&if big { d.to_be_bytes() } else { d.to_le_bytes() });
+            }
+            let d = Document::new(MemSource(v));
+            let mut ev = Evaluator::new(sac());
+            let f = ev.node(&d, &[DATA, 1]).unwrap();
+            assert_eq!(f.type_name, "SacFooter", "big={big}");
+            assert_eq!(f.offset_bits, start as u64 * 8);
+            assert_eq!(f.child_count, 22);
+            // The double says the sample spacing to more places than the float
+            // slot at the top of the file can hold.
+            assert_eq!(ev.node(&d, &[DATA, 1, 0]).unwrap().value, Value::Float(0.01));
+            assert_eq!(ev.node(&d, &[DATA, 1, 1]).unwrap().value, Value::Float(1.5));
+            let sdelta = ev.node(&d, &[DATA, 1, 21]).unwrap();
+            assert_eq!(sdelta.value, Value::Unset(Box::new(Value::Float(UNSET as f64))));
+            assert_eq!(sdelta.type_name, if big { "f64 be" } else { "f64 le" });
+        }
+    }
+
+    /// A version 6 file has nothing after its samples, and a version 7 file
+    /// that stops before its footer keeps what arrived as bytes rather than
+    /// reading twenty-two doubles out of four.
+    #[test]
+    fn a_file_with_no_room_for_a_footer_does_not_read_one() {
+        let d = Document::new(MemSource(build(false, 4, 1, 1)));
+        let mut ev = Evaluator::new(sac());
+        assert_eq!(ev.node(&d, &[DATA, 1]).unwrap().size_bits, 0);
+
+        let mut cut = build_v(false, 4, 1, 1, 7);
+        cut.extend_from_slice(&[0; 8]); // one double of the twenty-two
+        let d = Document::new(MemSource(cut));
+        let mut ev = Evaluator::new(sac());
+        let f = ev.node(&d, &[DATA, 1]).unwrap();
+        assert_eq!((f.type_name.as_str(), f.size_bits), ("bytes[]", 64));
     }
 
     #[test]
