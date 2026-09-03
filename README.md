@@ -4,13 +4,22 @@ Web hex editor for files of any size. Rust core (wasm) + TypeScript UI.
 
 ## Build and run
 
+Node and the Rust wasm toolchain are the prerequisites:
+
 ```
 rustup target add wasm32-unknown-unknown
 cargo install wasm-pack
-cd web && npm install && npm run wasm && npm run dev
 ```
 
-Open http://localhost:5173 and drop a file, or `?synthetic=5G` for a fake 5 GiB file.
+Then `run.bat` on Windows, `./run.sh` elsewhere. It installs and builds
+whatever is missing before starting the dev server, so a fresh clone and an
+everyday run are the same command.
+
+Open http://localhost:17272 and drop a file, or `?synthetic=5G` for a fake
+5 GiB file.
+
+`build.bat` / `./build.sh` build the site into `web/dist` instead, the same
+steps the deploy workflow runs. Serve that with `npm run preview` in `web`.
 
 Tests: `cargo test -p qubero-core`. Typecheck: `cd web && npx tsc --noEmit`.
 `npm run wasm` builds two modules: the editor, and the file(1) rule database
