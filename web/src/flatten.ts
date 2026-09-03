@@ -627,11 +627,18 @@ function frontOf(node: TemplateNode, kids: Slice | null): { readonly start: numb
   const order = inFileOrder(kids.nodes);
   const first = order.find((k, i) => !isMachinery(k, i, []));
   if (first === undefined || first.offset_bits <= start) return whole;
-  // Only when there is something in that front to look at. A list whose
-  // elements sit at the back of a page has three and a half thousand bytes of
-  // free space before its first element, and opening on that shows a strip
-  // with nothing in it.
-  if (!order.some((k) => k.offset_bits >= start && k.offset_bits < first.offset_bits)) return whole;
+  // Only a bulk structure is worth leaving out: the page's cells, which have
+  // rows of their own to be read in. A plain field after the machinery is
+  // part of what the reader asked to see, and the strip already cuts a long
+  // one short by itself. A descriptor whose one byte of machinery is followed
+  // by its magic string opens on the descriptor, not on the byte.
+  if (!first.composite || first.child_count === 0) return whole;
+  // And only when there is a front to look at. A list whose elements sit at
+  // the back of a page has three and a half thousand bytes of free space
+  // before its first element, and opening on that shows a strip with nothing
+  // in it; a front of one field is not a front but a field, and the strip
+  // would be that field's column and nothing else.
+  if (order.filter((k) => k.offset_bits >= start && k.offset_bits < first.offset_bits).length < 2) return whole;
   return { start, end: first.offset_bits };
 }
 

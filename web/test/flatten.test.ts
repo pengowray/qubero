@@ -279,6 +279,35 @@ test("asking for a part's bytes opens on its machinery, not on all of it", () =>
   assert.equal(strip.owner, page.key);
 });
 
+test("a part whose machinery is followed by plain fields opens on the whole part", () => {
+  // An ISO 9660 volume descriptor: one byte of type, then the magic string
+  // and the rest of the fields. Nothing here is bulk, so there is nothing to
+  // leave out, and a strip of the type byte alone would be a strip of nothing.
+  const descriptor: Spec = {
+    name: "file",
+    bytes: 2048,
+    kids: [
+      {
+        name: "primary",
+        bytes: 2048,
+        kids: [
+          { name: "type", bytes: 1, machinery: true },
+          { name: "identifier", bytes: 5 },
+          { name: "version", bytes: 1 },
+          { name: "volume_space_size", bytes: 8, kids: [{ name: "le", bytes: 4 }, { name: "be", bytes: 4 }] },
+          { name: "unused", bytes: 2033 },
+        ],
+      },
+    ],
+  };
+  const part = run(descriptor).items.find((i) => i.kind === "heading" && i.node?.name === "primary");
+  assert.ok(part?.kind === "heading");
+  const strip = run(descriptor, { ...emptyState, bytes: new Set([part.key]) }).items.find((i) => i.kind === "bytes");
+  assert.ok(strip?.kind === "bytes");
+  assert.equal(strip.offsetBits, part.offsetBits);
+  assert.equal(strip.sizeBits, part.sizeBits);
+});
+
 test("a row's bytes are its own", () => {
   const rows = run(SQLITE).items;
   const row = rows.find((i) => i.kind === "row" && i.node.name === "page_size");
