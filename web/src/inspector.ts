@@ -528,10 +528,12 @@ export class Inspector {
    * a selection made over the bits is not characters, which is the same reason
    * the byte-reversed number rows only appear for whole bytes.
    *
-   * One row per distinct reading rather than one per encoding. Most runs are
-   * printable and every encoding here agrees on that range, so six rows would
-   * be the same sentence five times over; the encodings that agree are named
-   * beside the reading instead, which is a fact of its own.
+   * One row per encoding, always in the same order, so a reading is found in
+   * the same place from one selection to the next. The two code-page rows are
+   * chosen by the reader: the chooser is the row's label, and what the page
+   * makes of the bytes sits beside it, so a change is seen where it was made.
+   * A row that agrees with the UTF-8 one is drawn quieter, so the one that
+   * differs is the one that stands out.
    */
   private renderSelectionText(ranges: readonly BitRange[], bits: number, readable: boolean): void {
     const one = ranges[0];
@@ -551,60 +553,19 @@ export class Inspector {
       this.selText.hidden = true;
       return;
     }
-    const parts: Node[] = [subhead(SEL_TEXT_TITLE)];
-    for (const r of got.readings) {
-      const row = document.createElement("div");
-      row.className = "insp-reading";
-      const who = this.encodingLabel(r.encodings);
-      const text = document.createElement("span");
-      text.className = "insp-reading-text";
-      // Control characters as their pictures, the way the text view shows
-      // them: a selected line feed drawn as a line feed is a row that looks
-      // empty, and empty is what "these bytes say nothing" would look like.
-      text.textContent = withPictures(r.text);
-      text.title = r.text;
-      const acts = document.createElement("div");
-      acts.className = "insp-acts";
-      const copy = actionButton(COPY, copyLabel(r.encodings[0] ?? ""));
-      const expand = actionButton(EXPAND, expandLabel(r.encodings[0] ?? ""));
-      acts.append(copy, expand);
-      row.append(who, text, acts);
-      copy.addEventListener("click", () => void this.copyValue(r.text));
-      expand.addEventListener("click", () => {
-        const open = row.classList.toggle("is-open");
-        expand.textContent = open ? COLLAPSE : EXPAND;
-        const label = open ? collapseLabel(r.encodings[0] ?? "") : expandLabel(r.encodings[0] ?? "");
-        expand.title = label;
-        expand.setAttribute("aria-label", label);
-      });
-      // A reading that already fits has nothing to expand into.
-      row.addEventListener("pointerenter", () => {
-        expand.hidden = !row.classList.contains("is-open") && text.scrollWidth <= text.clientWidth;
-      });
-      parts.push(row);
-    }
-    // A page the bytes do not fit is named in the "Not …" line below like any
-    // other refusal, but the chooser has to stay reachable: a reader who is on
-    // the wrong page cannot get to the right one through a line of prose.
-    for (const slot of ["a", "b"] as const) {
-      const page = slot === "a" ? this.pageA : this.pageB;
-      if (!got.refused.includes(page)) continue;
-      const row = document.createElement("div");
-      row.className = "insp-reading";
-      const who = this.encodingLabel([page]);
-      const text = document.createElement("span");
-      text.className = "insp-reading-miss";
-      text.textContent = SEL_TEXT_PAGE_REFUSED;
-      row.append(who, text);
-      parts.push(row);
-    }
-    parts.push(this.literalRow(atByte, nBytes));
-    if (got.refused.length > 0) {
-      const miss = document.createElement("div");
-      miss.className = "insp-reading-miss";
-      miss.textContent = SEL_TEXT_REFUSED(got.refused);
-      parts.push(miss);
-    }
+    const by = new Map<string, string>();
+    for (const r of got.readings) for (const enc of r.encodings) by.set(enc, r.text);
+    const utf8 = by.get("UTF-8") ?? null;
+    const ascii = by.has("ASCII");
+    const rows: Node[] = [
+      this.readingRow(ascii ? SEL_TEXT_UTF8_ASCII : "UTF-8", "UTF-8", by.get("UTF-8"), null),
+      this.readingRow("UTF-16 LE", "UTF-16 LE", by.get("UTF-16 LE"), utf8),
+      this.readingRow("UTF-16 BE", "UTF-16 BE", by.get("UTF-16 BE"), utf8),
+      this.readingRow(this.pagePicker("a"), this.pageA, by.get(this.pageA), utf8),
+      this.readingRow(this.pagePicker("b"), this.pageB, by.get(this.pageB), utf8),
+      this.literalRow(atByte, nBytes),
+    ];
+    const parts: Node[] = [subhead(SEL_TEXT_TITLE), ...rows];
     if (!got.all) {
       const cut = document.createElement("div");
       cut.className = "insp-reading-miss";
@@ -623,39 +584,82 @@ export class Inspector {
   }
 
   /**
-   * Which encodings agree on a reading. The two single-byte slots are the
-   * reader's own choice, so those two names are the choosers themselves rather
-   * than a label sitting next to one: the name is where you would reach for it.
+   * One encoding's row. `label` is what names the row: plain text, or the
+   * chooser for a code-page row. `text` undefined means the bytes are not
+   * valid in this encoding, which is said in the reading's place rather than
+   * by leaving the row out: a missing row reads as a forgotten one.
+   * `same` is the UTF-8 reading, for quietening a row that only repeats it.
    */
-  private encodingLabel(encodings: readonly string[]): HTMLElement {
+  private readingRow(label: string | HTMLElement, name: string, text: string | undefined, same: string | null): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "insp-reading";
     const who = document.createElement("span");
     who.className = "insp-reading-enc";
-    encodings.forEach((name, i) => {
-      if (i > 0) who.append(document.createTextNode(" · "));
-      const slot = name === this.pageA ? "a" : name === this.pageB ? "b" : null;
-      if (slot === null) {
-        who.append(document.createTextNode(name));
-        return;
-      }
-      const pages = slot === "a" ? CODEPAGES_A : CODEPAGES_B;
-      const pick = picker(pages, name, SEL_TEXT_PAGE_LABEL, slot);
-      pick.addEventListener("change", () => {
-        if (slot === "a") this.pageA = pick.value;
-        else this.pageB = pick.value;
-        rememberChoice(slot === "a" ? CODEPAGE_A_KEY : CODEPAGE_B_KEY, pick.value);
-        this.refocus = slot;
-        this.renderSelection();
-      });
-      who.append(pick);
+    who.append(label);
+    row.append(who);
+    if (text === undefined) {
+      const miss = document.createElement("span");
+      miss.className = "insp-reading-miss";
+      miss.textContent = SEL_TEXT_NOT_VALID;
+      row.append(miss);
+      return row;
+    }
+    if (same !== null && text === same) row.classList.add("is-same");
+    this.readingCell(row, text, withPictures(text), copyLabel(name), expandLabel(name), collapseLabel(name));
+    return row;
+  }
+
+  /** The text of a row, with its copy and expand buttons. `shown` is the text
+   *  as drawn; `text` is what gets copied. */
+  private readingCell(row: HTMLElement, text: string, shown: string, copyTip: string, expandTip: string, collapseTip: string): void {
+    const cell = document.createElement("span");
+    cell.className = "insp-reading-text";
+    // Control characters as their pictures, the way the text view shows
+    // them: a selected line feed drawn as a line feed is a row that looks
+    // empty, and empty is what "these bytes say nothing" would look like.
+    cell.textContent = shown;
+    cell.title = text;
+    const acts = document.createElement("div");
+    acts.className = "insp-acts";
+    const copy = actionButton(COPY, copyTip);
+    const expand = actionButton(EXPAND, expandTip);
+    acts.append(copy, expand);
+    row.append(cell, acts);
+    copy.addEventListener("click", () => void this.copyValue(text));
+    expand.addEventListener("click", () => {
+      const open = row.classList.toggle("is-open");
+      expand.textContent = open ? COLLAPSE : EXPAND;
+      const label = open ? collapseTip : expandTip;
+      expand.title = label;
+      expand.setAttribute("aria-label", label);
     });
-    return who;
+    // A reading that already fits has nothing to expand into.
+    row.addEventListener("pointerenter", () => {
+      expand.hidden = !row.classList.contains("is-open") && cell.scrollWidth <= cell.clientWidth;
+    });
+  }
+
+  /** The chooser that is one code-page row's label. Which page a run of high
+   *  bytes is read as is the reader's own decision, so it is made on the row
+   *  that shows the answer. */
+  private pagePicker(slot: "a" | "b"): HTMLSelectElement {
+    const pages = slot === "a" ? CODEPAGES_A : CODEPAGES_B;
+    const pick = picker(pages, slot === "a" ? this.pageA : this.pageB, SEL_TEXT_PAGE_LABEL, slot);
+    pick.addEventListener("change", () => {
+      if (slot === "a") this.pageA = pick.value;
+      else this.pageB = pick.value;
+      rememberChoice(slot === "a" ? CODEPAGE_A_KEY : CODEPAGE_B_KEY, pick.value);
+      this.refocus = slot;
+      this.renderSelection();
+    });
+    return pick;
   }
 
   /** The selection as a string literal, in whichever language is wanted: what
    *  to paste into a parser being written against the file. */
   private literalRow(atByte: number, nBytes: number): HTMLElement {
     const row = document.createElement("div");
-    row.className = "insp-reading";
+    row.className = "insp-reading insp-reading-literal";
     const who = document.createElement("span");
     who.className = "insp-reading-enc";
     const pick = picker(LITERAL_LANGS, this.literalLang, SEL_TEXT_LANG_LABEL, "lang");
@@ -665,29 +669,10 @@ export class Inspector {
       this.refocus = "lang";
       this.renderSelection();
     });
-    who.append(pick);
-    const text = document.createElement("span");
-    text.className = "insp-reading-text";
+    who.append(pick, document.createTextNode(" " + SEL_TEXT_LITERAL));
+    row.append(who);
     const lit = this.doc.selectionLiteral(atByte, nBytes, this.literalLang) ?? "";
-    text.textContent = lit;
-    text.title = lit;
-    const acts = document.createElement("div");
-    acts.className = "insp-acts";
-    const copy = actionButton(COPY, SEL_TEXT_LITERAL_COPY);
-    const expand = actionButton(EXPAND, SEL_TEXT_LITERAL_EXPAND);
-    acts.append(copy, expand);
-    row.append(who, text, acts);
-    copy.addEventListener("click", () => void this.copyValue(lit));
-    expand.addEventListener("click", () => {
-      const open = row.classList.toggle("is-open");
-      expand.textContent = open ? COLLAPSE : EXPAND;
-      const label = open ? SEL_TEXT_LITERAL_COLLAPSE : SEL_TEXT_LITERAL_EXPAND;
-      expand.title = label;
-      expand.setAttribute("aria-label", label);
-    });
-    row.addEventListener("pointerenter", () => {
-      expand.hidden = !row.classList.contains("is-open") && text.scrollWidth <= text.clientWidth;
-    });
+    this.readingCell(row, lit, lit, SEL_TEXT_LITERAL_COPY, SEL_TEXT_LITERAL_EXPAND, SEL_TEXT_LITERAL_COLLAPSE);
     return row;
   }
 
@@ -1392,21 +1377,14 @@ const SELECTION_LIMIT_BITS = SELECTION_LIMIT_BYTES * 8;
 
 const SEL_TITLE = "Selection";
 const SEL_TEXT_TITLE = "As text";
-/** Encodings the bytes do not fit. Named rather than shown: what they produce
- *  is a row of replacement characters that says nothing.
- *
- *  Joined with "or" rather than a comma, since "Not A, B" leaves the second
- *  one ambiguously negated at a skim and both of them are excluded. */
-const SEL_TEXT_REFUSED = (who: readonly string[]): string => {
-  if (who.length <= 1) return `Not ${who[0] ?? ""}`;
-  if (who.length === 2) return `Not ${who[0]} or ${who[1]}`;
-  return `Not ${who.slice(0, -1).join(", ")}, or ${who[who.length - 1]}`;
-};
 const SEL_TEXT_PARTIAL = (n: number): string => `First ${n.toLocaleString()} bytes`;
-/** Beside a chooser whose page has no character for one of these bytes. The
- *  row exists only so the chooser can be reached; what the page would produce
- *  is a replacement character, which says nothing. */
-const SEL_TEXT_PAGE_REFUSED = "Not valid in this codepage";
+/** The UTF-8 row when the bytes are all ASCII too: one fact, said once. */
+const SEL_TEXT_UTF8_ASCII = "UTF-8 · ASCII";
+/** In the reading's place when the bytes do not fit the row's encoding. The
+ *  row stays, so every encoding is found where it always is. */
+const SEL_TEXT_NOT_VALID = "Not valid";
+/** After the language chooser on the string-literal row. */
+const SEL_TEXT_LITERAL = "literal";
 const SEL_TEXT_PAGE_LABEL = "Codepage for this row";
 const SEL_TEXT_LANG_LABEL = "Language for the string literal";
 const SEL_TEXT_LITERAL_COPY = "Copy the string literal";

@@ -3253,18 +3253,14 @@ table.rec tr.is-on td {
   }
 }
 
-/* The selection read as text. One row per distinct reading: the encodings that
-   agree on it are the label, and the reading itself gets the width and the
-   contrast, since it is what was asked for. */
-/* A table: the encodings in one column, the readings starting on one line
-   under each other, so the eye can run down them. */
+/* The selection read as text. One row per encoding, always in the same
+   order, so each reading is found where it was last time. The encodings are
+   one column, the readings another starting on one line, so the eye can run
+   down them and see where they differ. */
 .insp-seltext {
   margin-top: 8px;
   display: grid;
-  /* The label takes what it needs up to half the width, and wraps past that:
-     when every encoding agrees the label names all of them, and the reading
-     is still the thing the row is for. */
-  grid-template-columns: fit-content(50%) minmax(0, 1fr);
+  grid-template-columns: max-content minmax(0, 1fr);
   column-gap: 10px;
 }
 .insp-seltext > :not(.insp-reading) {
@@ -3274,27 +3270,35 @@ table.rec tr.is-on td {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
-  align-items: baseline;
+  align-items: center;
   padding: 2px 0;
   min-width: 0;
   position: relative;
+}
+/* The literal is a different kind of thing from a reading: set it a little
+   apart. */
+.insp-reading-literal {
+  margin-top: 4px;
 }
 .insp-reading-enc {
   color: var(--muted);
   font-family: var(--sans);
   font-size: 11px;
   min-width: 0;
+  white-space: nowrap;
 }
-/* A chooser wearing the label's clothes. Which code page a run of high bytes
-   is read as is the reader's own decision, so it is made where the answer is
-   rather than in a settings pane somewhere else. */
+/* A chooser as the row's label. It looks like the control it is, so the rows
+   that can be changed are told from the rows that cannot. Which code page a
+   run of high bytes is read as is the reader's own decision, so it is made
+   where the answer is rather than in a settings pane somewhere else. */
 .insp-reading-pick {
   color: var(--muted);
   font-family: var(--sans);
   font-size: 11px;
   background: none;
-  border: 0;
-  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 2px;
   margin: 0;
   cursor: pointer;
   max-width: 100%;
@@ -3305,6 +3309,7 @@ table.rec tr.is-on td {
 .insp-reading-pick:hover,
 .insp-reading-pick:focus {
   color: var(--fg);
+  border-color: var(--fg);
 }
 .insp-reading-text {
   min-width: 0;
@@ -3313,6 +3318,11 @@ table.rec tr.is-on td {
   white-space: pre;
   font-family: var(--mono);
 }
+/* A reading that only repeats the UTF-8 one says nothing new, so it is drawn
+   quieter: the row that differs is then the one that shows. */
+.insp-reading.is-same .insp-reading-text {
+  color: var(--muted);
+}
 .insp-reading.is-open .insp-reading-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3320,9 +3330,9 @@ table.rec tr.is-on td {
 .insp-reading:hover .insp-acts {
   opacity: 1;
 }
-/* What the bytes are not. Quieter than a reading, because it is the absence of
-   one, but present: a panel that simply left an encoding out would be read as
-   having forgotten it. */
+/* Bytes that are not valid in the row's encoding. Quieter than a reading,
+   because it is the absence of one, but in the reading's place: a row simply
+   left out would be read as forgotten. */
 .insp-reading-miss {
   padding: 2px 0;
   color: var(--muted);
