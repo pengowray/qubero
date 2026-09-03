@@ -193,8 +193,6 @@ export class HexView {
      *  stay under their column whichever line they ended up on. */
     hexCells: HTMLElement[];
     textCells: HTMLElement[];
-    /** Where each line starts, as a position in the row. Always starts at 0. */
-    segs: number[];
     /** The byte the row starts at, so the addresses on its cells are written
      *  again only when the view has moved. */
     start: number;
@@ -534,7 +532,6 @@ export class HexView {
         lines: [first],
         hexCells: [...first.hex],
         textCells: [...first.text],
-        segs: [0],
         start: -1,
         blank: false,
         layoutKey: "",
@@ -634,7 +631,6 @@ export class HexView {
         a.removeAttribute("data-off");
       }
     }
-    parts.segs = [...segs];
   }
 
   private ensureRowEls(): void {
@@ -1080,6 +1076,19 @@ export class HexView {
       if ((p !== "hex" && p !== "ascii") || !Number.isFinite(off)) return null;
       if (bit === undefined) return { pane: pane ?? p, bit: off * 8, unit: 8 };
       return { pane: pane ?? p, bit: off * 8 + Number(bit), unit: 1 };
+    }
+    // A cell held open and empty, on the far side of a cut row. It has no byte
+    // of its own, but it sits under the column that names one: the byte its
+    // place in the row stands for, which is the one the reader is pointing at.
+    const col = at.parentElement;
+    const row0 = at.closest<HTMLElement>(".hv-row");
+    if (col !== null && row0 !== null && /\bhv-(?:hex|bits|ascii)\b/.test(col.className)) {
+      const idx = this.rowEls.indexOf(row0);
+      const i = Array.prototype.indexOf.call(col.children, at);
+      if (idx >= 0 && i >= 0) {
+        const off = (this.topRow + idx) * this.bytesPerRow + i;
+        if (off <= this.doc.lengthBytes) return { pane: pane ?? this.pane, bit: off * 8, unit: 8 };
+      }
     }
     // Rows past the end of the file have no cells in them, so the row itself is
     // all there is to go on.
