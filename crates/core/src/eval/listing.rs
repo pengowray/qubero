@@ -365,10 +365,19 @@ impl Evaluator {
         at: u64,
     ) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
+        // The gap is the whole stretch between what ends before `at` and what
+        // begins after it, not the part of it from `at` on: `at` is wherever
+        // the view happens to start, and a gap that began at the top of the
+        // screen would shrink as the view scrolled down through it.
+        let root_end = self.memo[&Vec::new()].offset + self.size_of(doc, &[])?;
+        let mut begins = if root_end <= at { root_end } else { 0 };
+        if let Some(end) = self.placement_end_before(doc, at)? {
+            begins = begins.max(end);
+        }
         let ends = self.placement_after(doc, at)?.unwrap_or(doc.len_bits()).max(at + 8);
         span.gap = true;
-        span.offset_bits = at;
-        span.size_bits = ends - at;
+        span.offset_bits = begins;
+        span.size_bits = ends - begins;
         span.count = 0;
         Ok(span)
     }
@@ -384,6 +393,15 @@ impl Evaluator {
     /// all three and leave most of the file unannotated.
     fn gap_inside<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo, at: u64) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
+        // From where the last thing before `at` ends, not from `at` itself,
+        // which is only where the view starts: see `gap_before_the_next_placement`.
+        let mut begins = info.offset_bits;
+        if let Some(end) = self.prev_child_end(doc, path, at)? {
+            begins = begins.max(end);
+        }
+        if let Some(end) = self.placement_end_before(doc, at)? {
+            begins = begins.max(end);
+        }
         let mut ends = info.offset_bits + info.size_bits;
         for k in (0..=path.len()).rev() {
             if let Some(next) = self.next_child_start(doc, &path[..k], at)? {
@@ -394,8 +412,8 @@ impl Evaluator {
             ends = ends.min(next);
         }
         span.gap = true;
-        span.offset_bits = at;
-        span.size_bits = ends - at;
+        span.offset_bits = begins;
+        span.size_bits = ends - begins;
         span.count = 0;
         Ok(span)
     }
@@ -837,4 +855,36 @@ impl Evaluator {
         Ok(best)
     }
 
+    /// Where the child of `path` that begins last at or before `bit` ends, if
+    /// it ends at or before `bit`. None when no child begins by then, or when
+    /// the one that does runs past `bit`, which means `bit` is inside it.
+    pub(super) fn prev_child_end<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<u64>> {
+        let mut p = path.to_vec();
+        let last: Option<usize> = if matches!(self.memo[path].ty, Ty::PointerList { .. } | Ty::Chain { .. }) {
+            let r = self.memo[path].clone();
+            let starts = self.scattered_starts(doc, path, &r)?;
+            let n = starts.partition_point(|(s, _)| *s <= bit);
+            starts[..n].iter().max_by_key(|(s, _)| *s).map(|(_, i)| *i)
+        } else {
+            let n = self.child_count(doc, path)?;
+            let mut best: Option<(u64, usize)> = None;
+            for i in 0..n as usize {
+                p.push(i);
+                let placed = self.resolve(doc, &p).map(|()| self.memo[&p].offset);
+                p.pop();
+                match placed {
+                    Ok(off) if off <= bit && best.map_or(true, |(b, _)| off >= b) => best = Some((off, i)),
+                    Ok(_) => {}
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => {}
+                }
+            }
+            best.map(|(_, i)| i)
+        };
+        let Some(i) = last else { return Ok(None) };
+        p.push(i);
+        self.resolve(doc, &p)?;
+        let end = self.memo[&p].offset + self.size_of(doc, &p)?;
+        Ok((end <= bit).then_some(end))
+    }
 }

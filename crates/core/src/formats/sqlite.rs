@@ -629,11 +629,15 @@ mod tests {
         let text = ev.node(&d, &[PAGES, 0, CELLS, 0, 2, 2, 2]).unwrap();
         assert_eq!(ev.locate(&d, text.offset_bits).unwrap(), vec![PAGES, 0, CELLS, 0, 2, 2, 2]);
         // Free space between the pointer array and the first row belongs to no
-        // field, and stops where that row starts.
+        // field. Asked from partway into it, it is still the whole stretch:
+        // it begins where the pointer array ends and stops where that row
+        // starts.
         let from = (PAGE + 20) as u64 * 8;
         let free = ev.spans(&d, from, 2 * PAGE as u64 * 8, 4).unwrap();
         assert!(free[0].gap);
-        assert_eq!(free[0].offset_bits, from);
+        let pointers = ev.node(&d, &[PAGES, 0, POINTERS]).unwrap();
+        assert_eq!(free[0].offset_bits, pointers.offset_bits + pointers.size_bits);
+        assert!(free[0].offset_bits < from);
         let first_cell = ev.node(&d, &[PAGES, 0, CELLS, 1]).unwrap();
         assert_eq!(free[0].offset_bits + free[0].size_bits, first_cell.offset_bits);
         assert!(!free[1].gap);

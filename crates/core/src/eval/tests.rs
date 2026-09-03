@@ -50,6 +50,13 @@ fn spans_cover_a_stretch_without_a_call_per_field() {
     assert_eq!(part[0].name, "codes");
     assert_eq!(part[0].offset_bits, 2 * 8);
 
+    // The same for a gap: asked from its second byte, it is still the whole
+    // gap, not the part of it below the view.
+    let mid = ev.spans(&d, 17 * 8, 18 * 8, 100).unwrap();
+    assert_eq!(mid.len(), 1);
+    assert!(mid[0].gap);
+    assert_eq!((mid[0].offset_bits, mid[0].size_bits), (16 * 8, 2 * 8));
+
     // A shorter run stays one entry per field.
     let t2 = Template::new("t", T::array(T::u8(), E::lit(4)));
     let mut ev2 = Evaluator::new(t2);

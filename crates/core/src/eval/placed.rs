@@ -138,6 +138,14 @@ impl Evaluator {
         Ok(self.placed.stretches.iter().map(|p| p.start).filter(|&s| s > bit).min())
     }
 
+    /// Where the last placed stretch ending at or before `bit` ends, which is
+    /// where a stretch nothing covers began. None when nothing placed ends
+    /// before it.
+    pub(super) fn placement_end_before<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Option<u64>> {
+        self.index_placements(doc)?;
+        Ok(self.placed.stretches.iter().map(|p| p.end).filter(|&e| e <= bit).max())
+    }
+
     /// Carry the walk on for one go.
     fn index_placements<S: Source>(&mut self, doc: &Document<S>) -> R<()> {
         if self.placed.done {
