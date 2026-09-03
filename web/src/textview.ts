@@ -304,8 +304,8 @@ export class TextView {
   }
 
   /** How far the scrollbar travels. */
-  private span(): number {
-    return Math.max(1, this.canvasHeight() - this.scroll.clientHeight);
+  private span(height = this.canvasHeight()): number {
+    return Math.max(1, height - this.scroll.clientHeight);
   }
 
   /** The last line the viewport can start on, which is what the bottom of the
@@ -318,8 +318,8 @@ export class TextView {
   }
 
   /** Where a line sits on the scrollbar. */
-  private lineY(n: number): number {
-    return Math.round(Math.min(1, n / this.lastTop()) * this.span());
+  private lineY(n: number, height = this.canvasHeight()): number {
+    return Math.round(Math.min(1, n / this.lastTop()) * this.span(height));
   }
 
   /** The line the scrollbar is pointing at. */
@@ -333,11 +333,28 @@ export class TextView {
    *  scrolling stopped: the index says where the line is, and the only reason
    *  to move anything is that the index learned something. */
   private reanchor(): void {
-    const y = Math.max(0, Math.min(this.lineY(this.viewLine), this.canvasHeight() - this.scroll.clientHeight));
-    this.canvas.style.height = `${this.canvasHeight()}px`;
+    // Nothing moved unless the canvas is a different height than the last
+    // time it was set: the mapping from line to pixel only changes with it.
+    // Touching the scrollbar for no reason was what made the text flicker: a
+    // wheel in flight sits a fraction of a row past the line, and putting the
+    // scrollbar back on the line every index pass threw that fraction away,
+    // several times a second, under the reader's hand.
+    const height = this.canvasHeight();
+    const was = this.canvasWas;
+    this.canvasWas = height;
+    if (was === height) return;
+    // The fraction of a row the view is past the line, kept across the
+    // change in mapping so the text on screen stays exactly where it is.
+    const frac = was === -1 ? 0 : this.scroll.scrollTop - this.lineY(this.viewLine, was);
+    this.canvas.style.height = `${height}px`;
+    const y = Math.max(0, Math.min(this.lineY(this.viewLine) + frac, height - this.scroll.clientHeight));
     if (Math.abs(this.scroll.scrollTop - y) >= 1) this.scroll.scrollTop = y;
     this.placeBlock();
   }
+
+  /** The canvas height last written, so a reanchor can tell whether anything
+   *  changed and what the old mapping was. */
+  private canvasWas = -1;
 
   /** Put the block of drawn rows where the line it starts with belongs.
    *
@@ -509,7 +526,8 @@ export class TextView {
         }
         this.lines = got;
         if (this.usualEnding === "") this.settleEnding();
-        this.canvas.style.height = `${this.canvasHeight()}px`;
+        this.canvasWas = this.canvasHeight();
+        this.canvas.style.height = `${this.canvasWas}px`;
         this.placeBlock();
         this.render();
         this.onReading(this.reading, this.index.endings);
