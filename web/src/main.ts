@@ -14,6 +14,7 @@ import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
 import { DUMP, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
+import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -620,8 +621,18 @@ function build(tab: Tab): Page {
   const encoding = el("select", { className: "tb-enc" });
   encoding.setAttribute("aria-label", TEXTVIEW.encodingLabel);
   encoding.append(el("option", { value: "", textContent: TEXTVIEW.encodingAuto }));
-  for (const name of ["UTF-8", "ASCII", "Latin-1", "CP437", "UTF-16 LE", "UTF-16 BE"]) {
-    encoding.append(el("option", { value: name, textContent: name }));
+  // Grouped, because eleven single-byte pages in one list is a list nobody
+  // reads to the end of, and which family a page belongs to is the thing a
+  // reader already knows about the file.
+  for (const [label, names] of [
+    [TEXTVIEW.encodingUnicode, UNICODE_ENCODINGS],
+    [TEXTVIEW.encodingWindows, CODEPAGES_A],
+    [TEXTVIEW.encodingDos, CODEPAGES_B],
+  ] as const) {
+    const group = el("optgroup");
+    group.label = label;
+    for (const name of names) group.append(el("option", { value: name, textContent: name }));
+    encoding.append(group);
   }
   encoding.addEventListener("change", () => {
     // The panel reads a selection every way text can be read; which way the

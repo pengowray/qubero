@@ -2508,7 +2508,8 @@ impl Editor {
     /// byte-reversed rows only appear for whole bytes. `first` names the
     /// encoding to put at the front, which is whatever the text view is
     /// reading the file in.
-    pub fn selection_text(&self, space: u32, at_byte: f64, len: f64, first: &str) -> String {
+    pub fn selection_text(&self, space: u32, at_byte: f64, len: f64, first: &str, page_a: &str, page_b: &str) -> String {
+        use qubero_core::text::CodePage;
         let sh = self.at(space);
         let want = (len as u64).min(SELECTION_TEXT_LIMIT) as usize;
         let mut buf = vec![0u8; want];
@@ -2516,7 +2517,9 @@ impl Editor {
         if !missing.is_empty() {
             return String::new();
         }
-        let r = qubero_core::text::readings(&buf, named_encoding(first));
+        let a = CodePage::by_name(page_a).unwrap_or(CodePage::Latin1);
+        let b = CodePage::by_name(page_b).unwrap_or(CodePage::Cp437);
+        let r = qubero_core::text::readings(&buf, named_encoding(first), a, b);
         serde_json::to_string(&SelectionTextDto {
             readings: r
                 .agreed
@@ -2531,6 +2534,22 @@ impl Editor {
             all: want as u64 >= len as u64,
         })
         .unwrap_or_default()
+    }
+
+    /// The same bytes written as a string literal in one language: what to
+    /// paste into a parser being written against the file. Empty while the
+    /// bytes are still being fetched, and cut to the same length the readings
+    /// are, so the row says the same run the rows above it do.
+    pub fn selection_literal(&self, space: u32, at_byte: f64, len: f64, lang: &str) -> String {
+        use qubero_core::text::Lang;
+        let sh = self.at(space);
+        let want = (len as u64).min(SELECTION_TEXT_LIMIT) as usize;
+        let mut buf = vec![0u8; want];
+        let missing = sh.doc.read_bytes(at_byte as u64, &mut buf);
+        if !missing.is_empty() {
+            return String::new();
+        }
+        qubero_core::text::literal(Lang::by_name(lang).unwrap_or(Lang::C), &buf)
     }
 
     /// The first `n` bytes, for questions that only the front of the file
@@ -2595,16 +2614,15 @@ struct TextEncodeDto {
 
 /// An encoding named across the boundary, or nothing to let the file decide.
 fn named_encoding(name: &str) -> Option<qubero_core::text::Settled> {
-    use qubero_core::text::Settled;
+    use qubero_core::text::{CodePage, Settled};
     use qubero_core::Endian;
     Some(match name {
         "UTF-8" => Settled::Utf8,
         "ASCII" => Settled::Ascii,
-        "Latin-1" => Settled::Latin1,
-        "CP437" => Settled::Cp437,
         "UTF-16 LE" => Settled::Utf16(Endian::Little),
         "UTF-16 BE" => Settled::Utf16(Endian::Big),
-        _ => return None,
+        // Every single-byte page is named the same way it is shown.
+        _ => Settled::SingleByte(CodePage::by_name(name)?),
     })
 }
 

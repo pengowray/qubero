@@ -572,6 +572,12 @@ export const TEXTVIEW = {
    *  file", which would claim the file said, and only a byte-order mark does. */
   encodingAuto: "Auto-detect",
   encodingLabel: "Encoding",
+  /** Groups in the encoding chooser. Which family a code page belongs to is
+   *  what a reader already knows about a file, so it is what the list is cut
+   *  by. ASCII sits under Unicode because UTF-8 is a superset of it. */
+  encodingUnicode: "Unicode",
+  encodingWindows: "Windows and ISO",
+  encodingDos: "DOS",
   /** The clipboard would not take it. */
   copyFailed: "Couldn't copy to the clipboard.",
   /** What the file was read as, beside the chooser. */

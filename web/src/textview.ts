@@ -24,6 +24,15 @@
 // noise to be hidden; it is what is in the file.
 
 import { formatOffset } from "./doc.js";
+import {
+  CODEPAGE_A_DEFAULT,
+  CODEPAGE_A_KEY,
+  CODEPAGE_B_DEFAULT,
+  CODEPAGE_B_KEY,
+  CODEPAGES_A,
+  CODEPAGES_B,
+  storedChoice,
+} from "./encodings.js";
 import type { Doc, TextLine, TextReading } from "./doc.js";
 import { el } from "./dom.js";
 import { LineIndex } from "./lineindex.js";
@@ -1030,7 +1039,17 @@ export class TextView {
     const sel = this.selRange();
     if (sel === null) return;
     const len = Math.min(sel.end - sel.start, COPY_LIMIT);
-    const got = this.doc.selectionText(sel.start, len, this.chosen === "" ? this.reading.encoding : this.chosen);
+    const first = this.chosen === "" ? this.reading.encoding : this.chosen;
+    // The reading wanted here is the file's own, which comes back first. The
+    // two code page slots still have to be named, and are the reader's own
+    // choices so that a page picked in the panel is the one a copy uses.
+    const got = this.doc.selectionText(
+      sel.start,
+      len,
+      first,
+      storedChoice(CODEPAGE_A_KEY, CODEPAGES_A, CODEPAGE_A_DEFAULT),
+      storedChoice(CODEPAGE_B_KEY, CODEPAGES_B, CODEPAGE_B_DEFAULT),
+    );
     const text = got?.readings[0]?.text;
     if (text === undefined) return;
     try {

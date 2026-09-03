@@ -1470,9 +1470,19 @@ export class Doc {
    * What a run of bytes says, read every way text can be read. Empty while the
    * bytes are still being fetched, in which case ask again once they are.
    */
-  selectionText(atByte: number, len: number, first: string): SelectionText | null {
-    const got = this.editor.selection_text(this.space, atByte, len, first);
+  selectionText(atByte: number, len: number, first: string, pageA: string, pageB: string): SelectionText | null {
+    const got = this.editor.selection_text(this.space, atByte, len, first, pageA, pageB);
     return got === "" ? null : (JSON.parse(got) as SelectionText);
+  }
+
+  /**
+   * The same run of bytes written as a string literal in `lang`, or null while
+   * the bytes are still being fetched. Cut to the same length the readings
+   * are, so both are saying the same run.
+   */
+  selectionLiteral(atByte: number, len: number, lang: string): string | null {
+    const got = this.editor.selection_literal(this.space, atByte, len, lang);
+    return got === "" ? null : got;
   }
 
   /** How the file reads as text. Pass "" to let the file decide. */

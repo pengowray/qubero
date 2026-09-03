@@ -15,6 +15,19 @@ import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
 import { extraction } from "./bitextract.js";
 import { crc32, hex32, hexBytes, lhaCrc16, sha1, sum8 } from "./integrity.js";
+import {
+  CODEPAGE_A_DEFAULT,
+  CODEPAGE_A_KEY,
+  CODEPAGE_B_DEFAULT,
+  CODEPAGE_B_KEY,
+  CODEPAGES_A,
+  CODEPAGES_B,
+  LITERAL_LANG_DEFAULT,
+  LITERAL_LANG_KEY,
+  LITERAL_LANGS,
+  rememberChoice,
+  storedChoice,
+} from "./encodings.js";
 
 const AUTO_CHECK_BYTES = 1024 * 1024;
 
@@ -67,6 +80,16 @@ export class Inspector {
   /** What the text view is reading the file in, so the likeliest reading of a
    *  selection is the one at the top. Empty when it settled for itself. */
   textEncoding = "";
+  /** Which single-byte page each of the two slots is reading high bytes as.
+   *  Nothing in a file says which page it is in, so this is the reader's own
+   *  choice and is kept between visits. */
+  private pageA = storedChoice(CODEPAGE_A_KEY, CODEPAGES_A, CODEPAGE_A_DEFAULT);
+  private pageB = storedChoice(CODEPAGE_B_KEY, CODEPAGES_B, CODEPAGE_B_DEFAULT);
+  /** Which language the string literal row is written in. */
+  private literalLang = storedChoice(LITERAL_LANG_KEY, LITERAL_LANGS, LITERAL_LANG_DEFAULT);
+  /** Which of the choosers to put the keyboard back on after a re-render, so
+   *  changing one with the keyboard does not lose it. */
+  private refocus: string | null = null;
   private readonly selRows = new Map<SelKind, SelRow>();
   /** Which reading of the selection is open for typing into. Only one is, so
    *  the rest go on showing what the file says while it is being changed. */
@@ -512,13 +535,19 @@ export class Inspector {
    */
   private renderSelectionText(ranges: readonly BitRange[], bits: number, readable: boolean): void {
     const one = ranges[0];
+    // A render that draws no choosers has none to put the keyboard back on,
+    // and a note left standing would take focus off whatever is next.
     if (!readable || one === undefined || bits === 0) {
+      this.refocus = null;
       this.selText.hidden = true;
       this.selText.replaceChildren();
       return;
     }
-    const got = this.doc.selectionText(one.startBit / 8, bits / 8, this.textEncoding);
+    const atByte = one.startBit / 8;
+    const nBytes = bits / 8;
+    const got = this.doc.selectionText(atByte, nBytes, this.textEncoding, this.pageA, this.pageB);
     if (got === null || (got.readings.length === 0 && got.refused.length === 0)) {
+      this.refocus = null;
       this.selText.hidden = true;
       return;
     }
@@ -526,9 +555,7 @@ export class Inspector {
     for (const r of got.readings) {
       const row = document.createElement("div");
       row.className = "insp-reading";
-      const who = document.createElement("span");
-      who.className = "insp-reading-enc";
-      who.textContent = r.encodings.join(" · ");
+      const who = this.encodingLabel(r.encodings);
       const text = document.createElement("span");
       text.className = "insp-reading-text";
       // Control characters as their pictures, the way the text view shows
@@ -556,6 +583,22 @@ export class Inspector {
       });
       parts.push(row);
     }
+    // A page the bytes do not fit is named in the "Not …" line below like any
+    // other refusal, but the chooser has to stay reachable: a reader who is on
+    // the wrong page cannot get to the right one through a line of prose.
+    for (const slot of ["a", "b"] as const) {
+      const page = slot === "a" ? this.pageA : this.pageB;
+      if (!got.refused.includes(page)) continue;
+      const row = document.createElement("div");
+      row.className = "insp-reading";
+      const who = this.encodingLabel([page]);
+      const text = document.createElement("span");
+      text.className = "insp-reading-miss";
+      text.textContent = SEL_TEXT_PAGE_REFUSED;
+      row.append(who, text);
+      parts.push(row);
+    }
+    parts.push(this.literalRow(atByte, nBytes));
     if (got.refused.length > 0) {
       const miss = document.createElement("div");
       miss.className = "insp-reading-miss";
@@ -570,6 +613,82 @@ export class Inspector {
     }
     this.selText.replaceChildren(...parts);
     this.selText.hidden = false;
+    // Changing a chooser rebuilds these rows and throws the old one away, so
+    // the keyboard is put back on the new one in its place.
+    if (this.refocus !== null) {
+      const back = this.selText.querySelector<HTMLSelectElement>(`select[data-slot="${this.refocus}"]`);
+      this.refocus = null;
+      back?.focus();
+    }
+  }
+
+  /**
+   * Which encodings agree on a reading. The two single-byte slots are the
+   * reader's own choice, so those two names are the choosers themselves rather
+   * than a label sitting next to one: the name is where you would reach for it.
+   */
+  private encodingLabel(encodings: readonly string[]): HTMLElement {
+    const who = document.createElement("span");
+    who.className = "insp-reading-enc";
+    encodings.forEach((name, i) => {
+      if (i > 0) who.append(document.createTextNode(" · "));
+      const slot = name === this.pageA ? "a" : name === this.pageB ? "b" : null;
+      if (slot === null) {
+        who.append(document.createTextNode(name));
+        return;
+      }
+      const pages = slot === "a" ? CODEPAGES_A : CODEPAGES_B;
+      const pick = picker(pages, name, SEL_TEXT_PAGE_LABEL, slot);
+      pick.addEventListener("change", () => {
+        if (slot === "a") this.pageA = pick.value;
+        else this.pageB = pick.value;
+        rememberChoice(slot === "a" ? CODEPAGE_A_KEY : CODEPAGE_B_KEY, pick.value);
+        this.refocus = slot;
+        this.renderSelection();
+      });
+      who.append(pick);
+    });
+    return who;
+  }
+
+  /** The selection as a string literal, in whichever language is wanted: what
+   *  to paste into a parser being written against the file. */
+  private literalRow(atByte: number, nBytes: number): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "insp-reading";
+    const who = document.createElement("span");
+    who.className = "insp-reading-enc";
+    const pick = picker(LITERAL_LANGS, this.literalLang, SEL_TEXT_LANG_LABEL, "lang");
+    pick.addEventListener("change", () => {
+      this.literalLang = pick.value;
+      rememberChoice(LITERAL_LANG_KEY, pick.value);
+      this.refocus = "lang";
+      this.renderSelection();
+    });
+    who.append(pick);
+    const text = document.createElement("span");
+    text.className = "insp-reading-text";
+    const lit = this.doc.selectionLiteral(atByte, nBytes, this.literalLang) ?? "";
+    text.textContent = lit;
+    text.title = lit;
+    const acts = document.createElement("div");
+    acts.className = "insp-acts";
+    const copy = actionButton(COPY, SEL_TEXT_LITERAL_COPY);
+    const expand = actionButton(EXPAND, SEL_TEXT_LITERAL_EXPAND);
+    acts.append(copy, expand);
+    row.append(who, text, acts);
+    copy.addEventListener("click", () => void this.copyValue(lit));
+    expand.addEventListener("click", () => {
+      const open = row.classList.toggle("is-open");
+      expand.textContent = open ? COLLAPSE : EXPAND;
+      const label = open ? SEL_TEXT_LITERAL_COLLAPSE : SEL_TEXT_LITERAL_EXPAND;
+      expand.title = label;
+      expand.setAttribute("aria-label", label);
+    });
+    row.addEventListener("pointerenter", () => {
+      expand.hidden = !row.classList.contains("is-open") && text.scrollWidth <= text.clientWidth;
+    });
+    return row;
   }
 
   render(): void {
@@ -1284,6 +1403,15 @@ const SEL_TEXT_REFUSED = (who: readonly string[]): string => {
   return `Not ${who.slice(0, -1).join(", ")}, or ${who[who.length - 1]}`;
 };
 const SEL_TEXT_PARTIAL = (n: number): string => `First ${n.toLocaleString()} bytes`;
+/** Beside a chooser whose page has no character for one of these bytes. The
+ *  row exists only so the chooser can be reached; what the page would produce
+ *  is a replacement character, which says nothing. */
+const SEL_TEXT_PAGE_REFUSED = "Not valid in this codepage";
+const SEL_TEXT_PAGE_LABEL = "Codepage for this row";
+const SEL_TEXT_LANG_LABEL = "Language for the string literal";
+const SEL_TEXT_LITERAL_COPY = "Copy the string literal";
+const SEL_TEXT_LITERAL_EXPAND = "Show the whole string literal";
+const SEL_TEXT_LITERAL_COLLAPSE = "Show the string literal on one line";
 const SEL_LENGTH = "Length";
 const LOADING = "Loading…";
 const COPY = "Copy";
@@ -1319,6 +1447,25 @@ type SelRow = {
 
 function reversed(kind: SelKind): boolean {
   return kind === "unsignedLe" || kind === "signedLe";
+}
+
+/** A chooser dressed as the label it stands in for, so a row reads as a
+ *  sentence rather than as a form. `slot` says which one it is, which is how
+ *  the keyboard finds it again after the rows are rebuilt. */
+function picker(options: readonly string[], value: string, label: string, slot: string): HTMLSelectElement {
+  const s = document.createElement("select");
+  s.className = "insp-reading-pick";
+  s.dataset["slot"] = slot;
+  s.setAttribute("aria-label", label);
+  s.title = label;
+  for (const name of options) {
+    const o = document.createElement("option");
+    o.value = name;
+    o.textContent = name;
+    s.append(o);
+  }
+  s.value = value;
+  return s;
 }
 
 /** A small button that stays out of the way until it is wanted. */
