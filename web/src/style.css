@@ -3261,7 +3261,10 @@ table.rec tr.is-on td {
 .insp-seltext {
   margin-top: 8px;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  /* The label takes what it needs up to half the width, and wraps past that:
+     when every encoding agrees the label names all of them, and the reading
+     is still the thing the row is for. */
+  grid-template-columns: fit-content(50%) minmax(0, 1fr);
   column-gap: 10px;
 }
 .insp-seltext > :not(.insp-reading) {
@@ -3280,7 +3283,7 @@ table.rec tr.is-on td {
   color: var(--muted);
   font-family: var(--sans);
   font-size: 11px;
-  white-space: nowrap;
+  min-width: 0;
 }
 /* A chooser wearing the label's clothes. Which code page a run of high bytes
    is read as is the reader's own decision, so it is made where the answer is
@@ -3295,6 +3298,9 @@ table.rec tr.is-on td {
   margin: 0;
   cursor: pointer;
   max-width: 100%;
+  /* As wide as the name it shows, not as wide as the longest name it could
+     show: a native select is sized for "Windows-1252" even when it says "C". */
+  field-sizing: content;
 }
 .insp-reading-pick:hover,
 .insp-reading-pick:focus {

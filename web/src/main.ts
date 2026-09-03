@@ -734,6 +734,9 @@ function build(tab: Tab): Page {
     { className: "toolbar" },
     openBtn,
     saveBtn,
+    // Before anything whose width changes with the file or the view, so the
+    // switch stays put when it is pressed.
+    views,
     fileLabel,
     kind.label,
     kind.info,
@@ -742,7 +745,6 @@ function build(tab: Tab): Page {
     endings,
     saveMsg,
     el("span", { className: "tb-spacer" }),
-    views,
     goto,
     width,
     mode,
