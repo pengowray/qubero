@@ -601,7 +601,7 @@ function build(tab: Tab): Page {
     const saved = localStorage.getItem(columnKey());
     // Anything else saved is from an older build, or from nowhere: fall back
     // to what a file of this kind starts with.
-    const c: RightColumn = isRightColumn(saved) ? saved : doc.template === null ? "text" : "fields";
+    const c: RightColumn = isRightColumn(saved) ? saved : doc.template === null ? "text" : "both";
     column.value = c;
     view.setRightColumn(c);
   };

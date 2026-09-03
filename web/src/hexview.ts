@@ -162,6 +162,18 @@ function asciiGlyph(b: number): string {
   return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
 }
 
+/** One line of cells: an address, the bytes, their text and their fields. A row
+ *  is one of these unless a part starts part-way along it. */
+type LineParts = {
+  readonly line: HTMLElement;
+  readonly addr: HTMLElement;
+  readonly cells: HTMLElement;
+  readonly asc: HTMLElement;
+  readonly note: HTMLElement;
+  readonly hex: readonly HTMLElement[];
+  readonly text: readonly HTMLElement[];
+};
+
 export class HexView {
   readonly el: HTMLElement;
   private readonly header: HTMLElement;
@@ -171,26 +183,32 @@ export class HexView {
   private rowEls: HTMLElement[] = [];
   /** The spans each row is made of, kept between draws. See `fitParts`. */
   private parts: {
-    /** The line of cells: everything in the row but its headings. */
-    readonly line: HTMLElement;
-    readonly addr: HTMLElement;
-    readonly cells: HTMLElement;
-    readonly asc: HTMLElement;
-    readonly note: HTMLElement;
-    readonly hex: readonly HTMLElement[];
-    readonly text: readonly HTMLElement[];
+    /** The lines of cells the row is drawn as. One unless a part starts
+     *  part-way along the row, in which case the row is cut where it starts so
+     *  the heading can sit between the bytes before it and the bytes after.
+     *  Spare lines are kept for reuse and left out of the row. */
+    lines: LineParts[];
+    /** Which line's cell each byte of the row is drawn in, by position in the
+     *  row. The same position in every other line is left blank, so the bytes
+     *  stay under their column whichever line they ended up on. */
+    hexCells: HTMLElement[];
+    textCells: HTMLElement[];
+    /** Where each line starts, as a position in the row. Always starts at 0. */
+    segs: number[];
     /** The byte the row starts at, so the addresses on its cells are written
      *  again only when the view has moved. */
     start: number;
     /** True for a row past the end of the file, which is emptied rather than
      *  drawn. */
     blank: boolean;
-    /** The heading lines above the row, and which parts they are for, so they
-     *  are built again only when the parts change. */
-    heading: HTMLElement | null;
-    headKey: string;
+    /** The headings on the row and where the row is cut for them, so the lines
+     *  and heading blocks are built again only when either changes. */
+    layoutKey: string;
   }[] = [];
   private partsShape = "";
+  /** What `fitParts` last built the lines for, so a line added mid-draw for a
+   *  row that had to be cut is built the same way. */
+  private lineShape = { bpr: 16, binary: false, showText: true, fields: false, below: false };
 
   private topRow = 0;
   private visibleRows = 1;
@@ -508,39 +526,115 @@ export class HexView {
     const shape = `${bpr}|${binary}|${showText}|${fields}|${below}`;
     if (shape === this.partsShape && this.parts.length === this.rowEls.length) return;
     this.partsShape = shape;
+    this.lineShape = { bpr, binary, showText, fields, below };
     this.parts = this.rowEls.map((row) => {
-      const line = document.createElement("div");
-      line.className = "hv-line";
-      const addr = document.createElement("span");
-      addr.className = "hv-addr";
-      const cells = document.createElement("span");
-      cells.className = binary ? "hv-bits" : "hv-hex";
-      const asc = document.createElement("span");
-      asc.className = "hv-ascii";
-      const note = document.createElement("span");
-      note.className = below ? "hv-note hv-note-below" : "hv-note";
-      const hex: HTMLElement[] = [];
-      const text: HTMLElement[] = [];
-      for (let i = 0; i < bpr; i++) {
-        const h = document.createElement("span");
-        const a = document.createElement("span");
-        // Which pane a cell belongs to never changes, so it is written once.
-        h.setAttribute("data-pane", "hex");
-        a.setAttribute("data-pane", "ascii");
-        cells.append(h);
-        asc.append(a);
-        hex.push(h);
-        text.push(a);
-      }
-      line.append(addr, cells);
-      if (showText) line.append(asc);
-      // Beside the bytes the note is part of the line; below them it is the
-      // row's own second block, so that it can use the row's whole width.
-      if (fields && !below) line.append(note);
-      if (fields && below) row.replaceChildren(line, note);
-      else row.replaceChildren(line);
-      return { line, addr, cells, asc, note, hex, text, start: -1, blank: false, heading: null, headKey: "" };
+      const first = this.makeLine();
+      row.replaceChildren(first.line);
+      return {
+        lines: [first],
+        hexCells: [...first.hex],
+        textCells: [...first.text],
+        segs: [0],
+        start: -1,
+        blank: false,
+        layoutKey: "",
+      };
     });
+  }
+
+  /** One line of cells, built for the shape the view is currently drawn in. */
+  private makeLine(): LineParts {
+    const { bpr, binary, showText, fields, below } = this.lineShape;
+    const line = document.createElement("div");
+    line.className = "hv-line";
+    const addr = document.createElement("span");
+    addr.className = "hv-addr";
+    const cells = document.createElement("span");
+    cells.className = binary ? "hv-bits" : "hv-hex";
+    const asc = document.createElement("span");
+    asc.className = "hv-ascii";
+    const note = document.createElement("span");
+    note.className = below ? "hv-note hv-note-below" : "hv-note";
+    const hex: HTMLElement[] = [];
+    const text: HTMLElement[] = [];
+    for (let i = 0; i < bpr; i++) {
+      const h = document.createElement("span");
+      const a = document.createElement("span");
+      // Which pane a cell belongs to never changes, so it is written once.
+      h.setAttribute("data-pane", "hex");
+      a.setAttribute("data-pane", "ascii");
+      cells.append(h);
+      asc.append(a);
+      hex.push(h);
+      text.push(a);
+    }
+    line.append(addr, cells);
+    if (showText) line.append(asc);
+    // Beside the bytes the note is part of the line; below them it is a block
+    // of its own after the line, so that it can use the row's whole width.
+    if (fields && !below) line.append(note);
+    return { line, addr, cells, asc, note, hex, text };
+  }
+
+  /**
+   * Lay a row out: its lines, the heading blocks between them, and which line
+   * draws each byte.
+   *
+   * A part that starts part-way along a row cuts the row there. Both pieces
+   * keep their place in the columns — the bytes before the cut leave the rest
+   * of the first line blank, the bytes after it leave the front of the second
+   * line blank — so a byte is always under the column header that names it.
+   * Only the first line carries the address, since a row address is a multiple
+   * of the row width and the address of a cut is not.
+   */
+  private layOutRow(
+    row: HTMLElement,
+    parts: HexView["parts"][number],
+    rowStart: number,
+    segs: readonly number[],
+    heads: ReadonlyMap<number, OutlineHeading[]>,
+    fileBits: number,
+    addrWidth: number,
+  ): void {
+    const { bpr, binary, fields, below } = this.lineShape;
+    while (parts.lines.length < segs.length) parts.lines.push(this.makeLine());
+    const kids: HTMLElement[] = [];
+    for (const [j, at] of segs.entries()) {
+      const here = heads.get(at);
+      if (here !== undefined) kids.push(this.headingBlock(here, fileBits, rowStart + at));
+      const lp = parts.lines[j] as LineParts;
+      kids.push(lp.line);
+      if (fields && below) kids.push(lp.note);
+    }
+    row.replaceChildren(...kids);
+    const blankHex = binary ? "        " : "  ";
+    for (const [j, from] of segs.entries()) {
+      const to = segs[j + 1] ?? bpr;
+      const lp = parts.lines[j] as LineParts;
+      // Every line but the first has the address column held open and empty,
+      // so its bytes line up with the ones above.
+      if (j > 0) setText(lp.addr, " ".repeat(addrWidth));
+      for (let i = 0; i < bpr; i++) {
+        const h = lp.hex[i] as HTMLElement;
+        const a = lp.text[i] as HTMLElement;
+        if (i >= from && i < to) {
+          parts.hexCells[i] = h;
+          parts.textCells[i] = a;
+          continue;
+        }
+        // Held open but empty. Dropping `data-off` is what keeps a click on
+        // the blank half of a cut row from landing on the byte the cell used
+        // to draw.
+        h.className = "";
+        h.style.backgroundImage = "";
+        h.textContent = blankHex;
+        h.removeAttribute("data-off");
+        a.className = "";
+        a.textContent = " ";
+        a.removeAttribute("data-off");
+      }
+    }
+    parts.segs = [...segs];
   }
 
   private ensureRowEls(): void {
@@ -677,7 +771,7 @@ export class HexView {
     const bpr = this.bytesPerRow;
     const cursorRow = Math.floor(this.cursor / bpr);
     for (let pass = 0; pass < 6; pass++) {
-      const cell = this.parts[cursorRow - this.topRow]?.hex[this.cursor - cursorRow * bpr];
+      const cell = this.parts[cursorRow - this.topRow]?.hexCells[this.cursor - cursorRow * bpr];
       if (cursorRow < this.topRow || cell === undefined) return;
       const deficit = cell.getBoundingClientRect().bottom - this.rowsEl.getBoundingClientRect().bottom;
       if (deficit <= 0.5) return;
@@ -970,9 +1064,14 @@ export class HexView {
     // what the press was for.
     if (at.closest(".hv-note") !== null) return null;
     // A heading is not part of the file either: it names the part that starts
-    // in the row under it, and pressing it goes there. A drag across it is
-    // another matter: that reads as the row it belongs to.
-    if (pane === undefined && at.closest(".hv-headings") !== null) return null;
+    // under it, and pressing it goes there. A drag across it is another
+    // matter: that reads as the byte the heading sits before.
+    const head = at.closest<HTMLElement>(".hv-headings");
+    if (head !== null) {
+      if (pane === undefined) return null;
+      const off = Number(head.dataset["segOff"]);
+      if (Number.isFinite(off)) return { pane: pane ?? this.pane, bit: off * 8, unit: 8 };
+    }
     const cell = at.closest<HTMLElement>("[data-off]");
     if (cell !== null) {
       const p = cell.dataset["pane"];
@@ -1461,12 +1560,14 @@ export class HexView {
     return byRow;
   }
 
-  /** The heading lines for the parts that start in one row: for each, its
+  /** The heading lines for the parts that start at one place: for each, its
    *  colour, name, address range, size and share of the file, as the listing
-   *  gives them. Pressing one goes to the part's first byte. */
-  private headingBlock(heads: readonly OutlineHeading[], fileBits: number): HTMLElement {
+   *  gives them. Pressing one goes to the part's first byte. `at` is the byte
+   *  the block sits before, which is what a drag across it reads as. */
+  private headingBlock(heads: readonly OutlineHeading[], fileBits: number, at: number): HTMLElement {
     const block = document.createElement("div");
     block.className = "hv-headings";
+    block.dataset["segOff"] = String(at);
     for (const h of heads) {
       const b = document.createElement("button");
       b.type = "button";
@@ -1670,29 +1771,34 @@ export class HexView {
         if (!parts.blank) {
           row.replaceChildren();
           parts.blank = true;
-          parts.heading = null;
-          parts.headKey = "";
+          parts.layoutKey = "";
         }
         heights.push(0);
         continue;
       }
-      if (parts.blank) {
-        if (fields && below) row.append(parts.line, parts.note);
-        else row.append(parts.line);
-        parts.blank = false;
-      }
+      parts.blank = false;
       const heads = headsByRow[r] ?? [];
-      // The share of the file changes with its length, so the key does too.
-      const headKey = heads.length === 0 ? "" : `${heads.map((h) => h.key).join("|")}@${len}`;
-      if (headKey !== parts.headKey) {
-        parts.heading?.remove();
-        parts.heading = heads.length === 0 ? null : this.headingBlock(heads, len * 8);
-        if (parts.heading !== null) row.prepend(parts.heading);
-        parts.headKey = headKey;
+      // Where each heading goes, as a position in the row. A part that starts
+      // part-way along cuts the row there, so the heading sits between the
+      // bytes before it and the bytes after. Condensed readings keep every
+      // heading above the row: they are the readings that trade room for rows.
+      const headsAt = new Map<number, OutlineHeading[]>();
+      for (const h of heads) {
+        const at = this.isCondensed ? 0 : Math.min(bpr - 1, Math.max(0, Math.floor(h.offsetBits / 8) - rowStart));
+        (headsAt.get(at) ?? (headsAt.set(at, []), headsAt.get(at) as OutlineHeading[])).push(h);
       }
-      let height = this.rowHeight;
+      const segs = [...new Set([0, ...headsAt.keys()])].sort((a, b) => a - b);
+      // The share of the file changes with its length, so the key does too.
+      const layoutKey = `${segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
+      if (layoutKey !== parts.layoutKey) {
+        this.layOutRow(row, parts, rowStart, segs, headsAt, len * 8, addrWidth);
+        parts.layoutKey = layoutKey;
+        // Cells that changed line have to be told which byte they draw again.
+        parts.start = -1;
+      }
+      let height = this.rowHeight * segs.length;
       for (const h of heads) height += this.sizes.heading[h.level];
-      const { addr, note } = parts;
+      const addr = (parts.lines[0] as LineParts).addr;
       setText(addr, rowStart.toString(16).padStart(addrWidth, "0"));
       // Which bytes a row stands for only changes when the view moves. A
       // cursor key leaves every address where it was, and writing them all
@@ -1701,8 +1807,8 @@ export class HexView {
       parts.start = rowStart;
       for (let i = 0; i < bpr; i++) {
         const off = rowStart + i;
-        const h = parts.hex[i] as HTMLElement;
-        const a = parts.text[i] as HTMLElement;
+        const h = parts.hexCells[i] as HTMLElement;
+        const a = parts.textCells[i] as HTMLElement;
         // What each cell is, gathered as a string and written only if it is
         // not what the cell already says. Most of a redraw changes nothing —
         // a cursor key moves a mark two cells — and a class written back
@@ -1806,47 +1912,63 @@ export class HexView {
         if (a.className !== ac) a.className = ac;
       }
       if (fields) {
-        note.replaceChildren();
+        for (let j = 0; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
+        const firstNote = (parts.lines[0] as LineParts).note;
         if (!templated || trouble !== null) {
           if (r === 0) {
             const none = document.createElement("span");
             none.className = "hv-chip hv-chip-gap hv-chip-wide";
             none.textContent = trouble ?? NO_TEMPLATE;
             if (trouble !== null) none.title = trouble;
-            note.append(none);
+            firstNote.append(none);
           }
           heights.push(height);
           continue;
         }
-        const entries = byRow[r] ?? [];
-        const texts = entries.map((c) => this.chipText(c));
+        // A cut row's chips go beside the bytes they name. A run of list
+        // elements folded into one chip goes with the first of them, since
+        // that is the byte the chip's arrow points at.
+        const buckets: Chip[][] = segs.map(() => []);
+        for (const c of byRow[r] ?? []) {
+          let j = 0;
+          if (!c.carried) {
+            const at = Math.floor(c.span.offset_bits / 8) - rowStart;
+            while (j + 1 < segs.length && (segs[j + 1] as number) <= at) j++;
+          }
+          (buckets[j] as Chip[]).push(c);
+        }
         const measure = this.chipFonts ?? GUESS_TEXT;
-        const { shown, lines } = chipLayout(
-          texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, measure)),
-          this.noteWidth,
-          maxLines,
-        );
-        // Beside the bytes the chips share the row's height with the cells, so
-        // the row is the taller of the two. Below them the chips are their own
-        // block and their lines add to it.
-        height += below ? lines * this.sizes.chipLine : Math.max(0, lines * this.sizes.chipLine - this.rowHeight);
-        for (let i = 0; i < shown; i++) note.append(this.chip(entries[i] as Chip, texts[i] as ChipText));
-        if (shown < entries.length) {
-          const rest = document.createElement("span");
-          rest.className = "hv-chip hv-chip-gap hv-chip-rest";
-          const left = entries.slice(shown);
-          rest.textContent = `+${left.length}`;
-          const named = left.slice(0, 8).map((c) => this.chipText(c).name);
-          if (left.length > named.length) named.push("\u2026");
-          rest.title = `${left.length} more ${left.length === 1 ? "field starts" : "fields start"} on this row: ${named.join(", ")}`;
-          note.append(rest);
+        for (let j = 0; j < segs.length; j++) {
+          const note = (parts.lines[j] as LineParts).note;
+          const entries = buckets[j] as Chip[];
+          const texts = entries.map((c) => this.chipText(c));
+          const { shown, lines } = chipLayout(
+            texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, measure)),
+            this.noteWidth,
+            maxLines,
+          );
+          // Beside the bytes the chips share their line's height with the
+          // cells, so the line is the taller of the two. Below them the chips
+          // are their own block and their lines add to it.
+          height += below ? lines * this.sizes.chipLine : Math.max(0, lines * this.sizes.chipLine - this.rowHeight);
+          for (let i = 0; i < shown; i++) note.append(this.chip(entries[i] as Chip, texts[i] as ChipText));
+          if (shown < entries.length) {
+            const rest = document.createElement("span");
+            rest.className = "hv-chip hv-chip-gap hv-chip-rest";
+            const left = entries.slice(shown);
+            rest.textContent = `+${left.length}`;
+            const named = left.slice(0, 8).map((c) => this.chipText(c).name);
+            if (left.length > named.length) named.push("\u2026");
+            rest.title = `${left.length} more ${left.length === 1 ? "field starts" : "fields start"} on this row: ${named.join(", ")}`;
+            note.append(rest);
+          }
         }
         if (more && r === this.rowEls.length - 1) {
           const rest = document.createElement("span");
           rest.className = "hv-chip hv-chip-gap";
           rest.textContent = "more fields below";
           rest.title = `The field column shows up to ${SPAN_LIMIT} fields at a time. Scroll down to see the rest.`;
-          note.append(rest);
+          (parts.lines[segs.length - 1] as LineParts).note.append(rest);
         }
       }
       heights.push(height);

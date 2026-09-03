@@ -619,7 +619,7 @@ input.invalid {
 }
 /* Straight under the column header's own rule, a second rule is a double
    line. */
-.hv-row:first-child > .hv-headings > .hv-heading:first-child {
+.hv-row:first-child > .hv-headings:first-child > .hv-heading:first-child {
   border-top-color: transparent;
 }
 .hv-swatch {
