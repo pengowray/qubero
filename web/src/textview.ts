@@ -37,14 +37,12 @@ import type { Doc, TextLine, TextReading } from "./doc.js";
 import { el } from "./dom.js";
 import { LineIndex } from "./lineindex.js";
 import type { Endings } from "./lineindex.js";
+import { moveRows, needsPaint, paintWindow } from "./paintwindow.js";
 import { TEXTVIEW } from "./strings.js";
 
 /** Height of one row, which must match `--tv-row` in the stylesheet: rows are
  *  placed by arithmetic on it. */
 const ROW = 20;
-/** Rows drawn above and below the window. Enough that a swap arriving a frame
- *  or two late during a flick still has drawn rows to show. */
-const OVERSCAN = 6;
 /** How tall the scrolling canvas is allowed to get. Browsers stop honouring an
  *  element's height past a few tens of millions of pixels, so past this the
  *  canvas is scaled down and a pixel of scrollbar is worth more than a row. */
@@ -64,6 +62,12 @@ const CACHE_LINES = 50_000;
 /** How much file one background pass over the index covers. The core caps its
  *  own scan at the same size, so this is one call. */
 const INDEX_STEP = 4 * 1024 * 1024;
+/** Files no larger than this are indexed to their end. A multi-gigabyte image
+ *  should not be read cover to cover merely because its text tab was opened. */
+const FULL_INDEX_LIMIT = 256 * 1024 * 1024;
+/** Enough of a giant file to establish a useful line-length estimate. Jumps
+ *  elsewhere leave local index segments, so nearby movement stays exact. */
+const GIANT_INDEX_HEAD = 64 * 1024 * 1024;
 /** The longest a line is before the core cuts it, which must match `MAX_LINE`
  *  in `crates/core/src/textview.rs`. */
 const MAX_LINE = 4096;
@@ -153,6 +157,7 @@ export class TextView {
     this.el = el("div", { className: "textview" }, this.scroll);
 
     this.scroll.addEventListener("scroll", () => this.onScroll(), { passive: true });
+    this.scroll.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     this.scroll.addEventListener("keydown", (e) => this.onKey(e));
     this.rows.addEventListener("pointerdown", (e) => this.onPointerDown(e));
     this.rows.addEventListener("pointermove", (e) => this.onPointerMove(e));
@@ -172,11 +177,6 @@ export class TextView {
   /** How many rows fit. */
   private visible(): number {
     return Math.max(1, Math.floor(this.scroll.clientHeight / ROW));
-  }
-
-  /** How many rows are drawn: what fits, and overscan on both sides of it. */
-  private drawn(): number {
-    return this.visible() + 2 * OVERSCAN;
   }
 
   /** The encoding in use, or "" when the file decided. */
@@ -211,10 +211,19 @@ export class TextView {
 
   private idle = 0;
 
+  /** Where the next background scan may begin. Giant files keep a measured
+   *  head and local segments instead of turning opening Text into a full-file
+   *  read. */
+  private indexFrom(): number | null {
+    const from = this.index.gap;
+    const stop = this.doc.lengthBytes <= FULL_INDEX_LIMIT ? this.doc.lengthBytes : GIANT_INDEX_HEAD;
+    return from !== null && from < stop ? from : null;
+  }
+
   /** Keep the index growing from wherever it has reached, in the time the
    *  browser has nothing else to do with. */
   private startIndexing(): void {
-    if (this.idle !== 0) return;
+    if (this.idle !== 0 || this.indexFrom() === null) return;
     // Idle time, but with a deadline: a browser hands a tab nobody is looking
     // at no idle time at all, and a file opened in a tab left in the
     // background should still be indexed by the time it is looked at.
@@ -223,7 +232,7 @@ export class TextView {
     this.idle = soon(() => {
       this.idle = 0;
       void this.indexPass().then(() => {
-        if (this.index.gap !== null) this.startIndexing();
+        if (this.indexFrom() !== null) this.startIndexing();
       });
     });
   }
@@ -236,12 +245,12 @@ export class TextView {
     const until = performance.now() + 50;
     do {
       await this.indexStep();
-    } while (this.index.gap !== null && performance.now() < until);
+    } while (this.indexFrom() !== null && performance.now() < until);
   }
 
   /** One pass of the background index. */
   private async indexStep(): Promise<void> {
-    const from = this.index.gap;
+    const from = this.indexFrom();
     if (from === null) return;
     const got = await this.doc.textIndex(this.chosen, from, from + INDEX_STEP);
     if (got.starts.length === 0) return;
@@ -362,35 +371,92 @@ export class TextView {
    *  it, which is the whole of the flicker fix: a transform recomputed from a
    *  scroll event runs on the main thread while a flick runs on the
    *  compositor, so the two are never in step and the text slides against the
-   *  scrollport and snaps back. Positioned in the canvas the rows are scrolled
-   *  by whatever thread scrolls everything else, and only their content
-   *  changes here. */
+   *  scrollport and snaps back. On an uncapped canvas this placement is
+   *  constant while the viewport moves, so the compositor carries the rows by
+   *  itself. On a capped canvas it also accounts for compressed scrollbar
+   *  pixels: one scrollbar pixel can cross several full-height rows there. */
   private placeBlock(): void {
-    const y = this.lineY(this.viewLine) - (this.viewLine - this.topLine) * ROW;
-    this.view.style.transform = `translateY(${Math.max(0, y)}px)`;
+    const y = this.lineY(this.viewLine) - (this.viewLine - this.topLine) * ROW - this.viewOffset;
+    this.view.style.transform = `translateY(${y}px)`;
   }
 
   private scrollFrame = 0;
 
+  /** Runway on either side of the rows currently in the DOM. */
+  private paintRunway = 0;
+  /** Pixels already scrolled into `viewLine` when a capped canvas is moved by
+   *  wheel rows rather than by its heavily compressed native pixels. */
+  private viewOffset = 0;
+
+  /** Whether the browser-height ceiling has compressed rows on the canvas. */
+  private compressed(): boolean {
+    return this.index.totalLines * ROW > MAX_CANVAS;
+  }
+
+  /** Whether scrolling has come near enough to a painted edge to refill it. */
+  private needsPaint(line: number): boolean {
+    if (this.lines.length === 0) return true;
+    const last = this.lines[this.lines.length - 1];
+    const atEnd = last !== undefined && last.at + last.len >= this.doc.lengthBytes;
+    return needsPaint(
+      line,
+      this.visible(),
+      this.topLine,
+      this.lines.length,
+      this.paintRunway,
+      this.topLine === 0,
+      atEnd,
+    );
+  }
+
   private onScroll(): void {
-    // One catch-up per frame, from wherever the scrollbar is by then. Scroll
-    // events come faster than frames, and the positions in between are not
-    // worth drawing.
+    // The compositor scrolls through rows already in the DOM. JavaScript only
+    // recentres that painted window when half its runway has been consumed;
+    // ordinary half-page and page movements therefore need no draw at all.
     if (this.scrollFrame !== 0) return;
     this.scrollFrame = requestAnimationFrame(() => {
       this.scrollFrame = 0;
       const want = this.lineAtY(this.scroll.scrollTop);
       if (want === this.viewLine) return;
       this.viewLine = want;
-      void this.draw();
+      this.viewOffset = 0;
+      // This is the same transform on an ordinary canvas. Once the canvas is
+      // capped it keeps the full-height rows aligned with a compressed
+      // scrollbar without replacing any of them.
+      this.placeBlock();
+      if (this.needsPaint(want)) void this.draw();
     });
   }
 
-  /** Go to a line, scrollbar and all. */
-  private async goto(n: number): Promise<void> {
+  /**
+   * A native wheel over a capped canvas is not a text scroll: a few hundred
+   * pixels can mean thousands or millions of lines and instantly outrun any
+   * useful painted window. Move by the text's real row height instead. The
+   * native scrollbar remains globally mapped, so dragging its thumb is still
+   * a deliberate jump to anywhere in the file.
+   */
+  private onWheel(e: WheelEvent): void {
+    if (!this.compressed() || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? ROW : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.scroll.clientHeight : 1;
+    const next = moveRows(this.viewLine, this.viewOffset, e.deltaY * unit, ROW, this.lastTop());
+    if (next.line === this.viewLine && next.offset === this.viewOffset) return;
+    this.viewLine = next.line;
+    this.viewOffset = next.offset;
+    this.scroll.scrollTop = this.lineY(this.viewLine);
+    this.placeBlock();
+    if (this.needsPaint(this.viewLine)) void this.draw();
+  }
+
+  /** Go to a line, scrollbar and all. `render` also refreshes row decoration,
+   *  used when arriving there changed the caret rather than only the scroll. */
+  private async goto(n: number, render = false): Promise<void> {
     this.viewLine = Math.max(0, Math.min(n, Math.max(0, this.index.totalLines - 1)));
+    this.viewOffset = 0;
+    const repaint = this.needsPaint(this.viewLine);
     this.scroll.scrollTop = Math.max(0, Math.min(this.lineY(this.viewLine), this.canvasHeight() - this.scroll.clientHeight));
-    await this.draw();
+    this.placeBlock();
+    if (repaint || render) await this.draw();
   }
 
   /** Where the first drawn line starts, for the line the viewport is on.
@@ -399,8 +465,7 @@ export class TextView {
    *  number is an estimate, so the byte it works out to is walked back to a
    *  real line start and the file around it is indexed, which is what makes
    *  scrolling on from there exact even though arriving was a guess. */
-  private async topByte(): Promise<number> {
-    const first = Math.max(0, this.viewLine - OVERSCAN);
+  private async topByte(first: number): Promise<number> {
     this.topLine = first;
     const known = this.index.byteOfLine(first);
     if (known !== null) return this.anchoredAt(first, Math.min(known, this.doc.lengthBytes));
@@ -509,19 +574,26 @@ export class TextView {
         }
         this.index.setLength(this.doc.lengthBytes);
         this.startIndexing();
-        const want = this.drawn();
-        this.top = await this.topByte();
+        const window = paintWindow(this.viewLine, this.visible());
+        const want = window.count;
+        this.paintRunway = window.runway;
+        this.top = await this.topByte(window.first);
         let got = await this.linesFrom(this.top, want);
         // A screen that came up short ran out of file. Back up so that the
         // last screenful of a file is a full screen rather than one line at
         // the bottom of an empty one.
         if (got.length < want && this.top > 0) {
+          const oldTop = this.top;
           const b = await this.doc.textBack(this.chosen, this.top, want - got.length);
           if (b.back < this.top) {
             this.top = b.back;
             got = await this.linesFrom(b.back, want);
-            this.topLine = this.index.lineAt(b.back) ?? Math.max(0, this.topLine - (want - got.length));
-            this.viewLine = Math.min(this.viewLine, this.topLine + OVERSCAN);
+            const backed = got.findIndex((line) => line.at === oldTop);
+            this.topLine = this.index.lineAt(b.back) ?? Math.max(0, this.topLine - Math.max(0, backed));
+            // An estimated jump may have named lines beyond the real end.
+            // Clamp it to the last full viewport without pulling a valid last
+            // screen upward merely because its lower runway met the file end.
+            this.viewLine = Math.min(this.viewLine, this.topLine + Math.max(0, got.length - this.visible()));
           }
         }
         this.lines = got;
@@ -547,7 +619,10 @@ export class TextView {
     const onScreen = i >= this.viewLine - this.topLine && i < this.viewLine - this.topLine + this.visible();
     if (!onScreen) {
       const b = await this.doc.textBack(this.chosen, at, 0);
-      return this.goto(Math.max(0, (this.index.lineAt(b.start) ?? this.index.guessLineAt(b.start)) - Math.floor(this.visible() / 3)));
+      return this.goto(
+        Math.max(0, (this.index.lineAt(b.start) ?? this.index.guessLineAt(b.start)) - Math.floor(this.visible() / 3)),
+        true,
+      );
     }
     await this.draw();
   }
@@ -798,25 +873,40 @@ export class TextView {
 
   /** The byte a pointer is over, or null when it is not over a character. */
   private byteUnder(e: MouseEvent): number | null {
-    const target = (e.target as HTMLElement).closest<HTMLElement>("[data-at]");
-    if (target === null) return null;
-    const at = Number(target.dataset.at);
-    if (!Number.isFinite(at)) return null;
-    // Past the middle of a character the caret belongs after it, which is what
-    // makes selecting the last character of a run possible.
-    const box = target.getBoundingClientRect();
-    const after = e.clientX > box.left + box.width / 2;
-    const width = this.widthAt(at);
-    return after ? at + width : at;
-  }
+    const target = e.target;
+    if (!(target instanceof Element)) return null;
+    const run = target.closest<HTMLElement>(".tv-text[data-cell]");
+    const row = target.closest<HTMLElement>(".tv-row[data-line-at]");
+    if (run === null || row === null) return null;
+    const lineAt = Number(row.dataset.lineAt);
+    const first = Number(run.dataset.cell);
+    const line = this.lines.find((candidate) => candidate.at === lineAt);
+    if (!Number.isFinite(first) || line === undefined) return null;
 
-  /** How many bytes the character starting at a byte takes. */
-  private widthAt(at: number): number {
-    for (const line of this.lines) {
-      const cell = this.charsOf(line).find((c) => c.at === at);
-      if (cell !== undefined) return cell.width;
-    }
-    return 1;
+    // Runs keep the DOM small; ask the browser which insertion point inside
+    // the run the pointer is nearest to, then turn that character back into
+    // the byte address the editor owns. Offsets are UTF-16 code units, while
+    // `charsOf` is Unicode code points, so count rather than using it raw.
+    type CaretPoint = { readonly offsetNode: Node; readonly offset: number };
+    type PointDocument = Document & {
+      caretPositionFromPoint?: (x: number, y: number) => CaretPoint | null;
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const doc = document as PointDocument;
+    const position = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+    const range = position === undefined ? doc.caretRangeFromPoint?.(e.clientX, e.clientY) : undefined;
+    const node = position?.offsetNode ?? range?.startContainer;
+    const offset = position?.offset ?? range?.startOffset;
+    if (node === undefined || offset === undefined || !run.contains(node)) return null;
+    const into =
+      node === run
+        ? offset === 0
+          ? 0
+          : [...(run.textContent ?? "")].length
+        : [...(node.textContent ?? "").slice(0, offset)].length;
+    const cells = this.charsOf(line);
+    const cell = cells[first + into];
+    return cell?.at ?? this.textEnd(line);
   }
 
   /** How the caret was last put somewhere, so a touch is not answered twice. */
@@ -970,30 +1060,49 @@ export class TextView {
 
   private row(line: TextLine): HTMLElement {
     const row = el("div", { className: "tv-row" });
+    row.dataset.lineAt = String(line.at);
     if (line.lossy) row.classList.add("is-lossy");
     const cells = this.charsOf(line);
     const escapes = escapeMask(cells.length, line.escapes);
     const sel = this.selection;
     const shown = Math.min(cells.length, MAX_CHARS);
-    // One span per character rather than one per run of them. A selection and
-    // a caret both land between characters, and finding which one a pointer is
-    // over is what the spans are for.
+    // Adjacent characters with the same appearance share one span. A plain
+    // long line is one node rather than two thousand; `byteUnder` uses the
+    // browser's caret hit test to recover an exact character inside the run.
+    let runText = "";
+    let runClass = "";
+    let runStart = 0;
+    const flush = (): void => {
+      if (runText === "") return;
+      const span = el("span", { className: `tv-text${runClass}`, textContent: runText });
+      span.dataset.cell = String(runStart);
+      row.append(span);
+      runText = "";
+    };
     for (let i = 0; i < shown; i++) {
       const cell = cells[i];
       if (cell === undefined) continue;
       const { char: c, at, width } = cell;
-      if (this.cursor === at) row.append(el("span", { className: "tv-caret" }));
-      const span = el("span", { className: "tv-text" });
-      span.dataset.at = String(at);
-      if (escapes[i] === true) span.classList.add("tv-esc");
-      else if (control(c) !== null) span.classList.add("tv-ctl");
+      if (this.cursor === at) {
+        flush();
+        row.append(el("span", { className: "tv-caret" }));
+      }
+      const picture = control(c);
+      let classes = escapes[i] === true ? " tv-esc" : picture === null ? "" : " tv-ctl";
       // The cursor may sit inside a character rather than on its front, which
       // is what a selection made over the bytes elsewhere can do.
-      if (this.cursor >= at && this.cursor < at + width) span.classList.add("is-cursor");
-      if (sel !== null && at < sel.end && at + width > sel.start) span.classList.add("is-sel");
-      span.append(control(c) ?? c);
-      row.append(span);
+      if (this.cursor >= at && this.cursor < at + width) classes += " is-cursor";
+      if (sel !== null && at < sel.end && at + width > sel.start) classes += " is-sel";
+      if (classes !== runClass) {
+        flush();
+        runClass = classes;
+        runStart = i;
+      } else if (runText === "") {
+        runStart = i;
+      }
+      runText += picture ?? c;
     }
+    flush();
     const end = this.textEnd(line);
     if (this.cursor === end) row.append(el("span", { className: "tv-caret" }));
     // A line ending inside the selection is shown as a selected space at the

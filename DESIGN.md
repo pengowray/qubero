@@ -1594,11 +1594,19 @@ that the file has a different number of lines than was estimated, and that
 moves the block of drawn rows by the same pixels so nothing moves on screen.
 
 The lines themselves are kept too, in a cache keyed by the byte each starts at
-and filled a few hundred at a time ahead of and behind the screen. Scrolling
-back over text already read asks the core for nothing, and paging forward asks
-once every few pages rather than once a frame. An edit gives back the line it
-landed on and everything after it; a typed letter, which cannot have made or
-unmade an ending, moves the lines after it along instead of forgetting them.
+and filled a few hundred at a time ahead of and behind the screen. Decoded
+readahead is not painted readahead: the browser can only scroll rows already in
+the DOM, so the drawn window is seventeen viewports tall, with eight complete
+viewports on either side. Adjacent characters of the same appearance are one
+text run rather than one element each, making that larger runway substantially
+cheaper than the old five-view window. It is recentered only after half that
+runway is used.
+A half-page or page movement therefore needs neither a file read nor a DOM
+update, and a refill begins with a viewport still available in its direction.
+Scrolling back over text already read asks the core for nothing. An edit gives
+back the line it landed on and everything after it; a typed letter, which
+cannot have made or unmade an ending, moves the lines after it along instead of
+forgetting them.
 
 Which line ending the file uses is a fact about the file, so it is counted over
 the index and not over the screen, and it no longer changes as the reader
@@ -1609,8 +1617,21 @@ The drawn rows sit inside the scrolled canvas rather than being moved to meet a
 scroll that has already happened. A touch scroll runs on the compositor and a
 transform driven by scroll events runs on the main thread, and the two are
 never in step; positioned in the canvas the rows are carried by the same thread
-that carries everything else, and the main thread is left with nothing to do
-per frame but swap content that has scrolled out of the overscan.
+that carries everything else. The main thread does not replace them line by
+line; it recentres the painted window only when the remaining runway reaches
+four viewports. A canvas scaled down for a giant file cannot use native wheel
+pixels: one gesture would stand for thousands of lines and outrun any finite
+window. There the wheel advances full-height text rows, preserving its
+sub-row remainder, while the thumb keeps its global mapping for deliberate
+jumps. The placement transform compensates for those compressed scrollbar
+pixels.
+
+A file at most 256 MiB is indexed to its end in the background. A larger file
+is sampled through its first 64 MiB instead: enough to measure its usual line
+length, without opening the text tab becoming a sequential read of a 7 GiB
+image. A jump beyond that head puts down the same local index segment as any
+other unindexed jump, so finding the following and preceding lines remains
+exact around the place being read.
 
 Four things a text file does not write down are each answered rather than
 assumed, and all four turned up in the dump reader first. Which encoding: a
