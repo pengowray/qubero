@@ -14,6 +14,7 @@ import { pathKey, PAGE } from "./flatten.js";
 import type { Item } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { byteStrip } from "./bytestrip.js";
+import { byteDump } from "./bytedump.js";
 import { drawCard } from "./contentcard.js";
 import { drawJpegCard } from "./jpegcards.js";
 import { fileMap } from "./filemap.js";
@@ -250,6 +251,9 @@ function drawGap(c: DrawContext, item: Extract<Item, { kind: "gap" }>): HTMLElem
   row.append(el("span", "rp-value", GAP_VERDICT[c.verdict(item)]));
   row.append(el("span", "rp-type", ""));
   row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
+  // The one question a gap row cannot answer in a word: what is actually in
+  // there. Same control as a field's, and it opens on the same bytes.
+  if (item.sizeBits > 0) row.append(bytesButton(c, item.key));
   return row;
 }
 
@@ -319,7 +323,17 @@ function drawCell(cell: RecordCell): HTMLElement {
 function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTMLElement {
   const host = el("div", "rp-item rp-strip");
   indent(host, item.depth);
-  const caption = `${item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
+  // A gap has no field to take a name from, so the row's own word names it.
+  const gap = item.owner.startsWith("gap:");
+  const caption = `${gap ? GAP_LABEL : item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
+  // A strip is a map of the fields in a stretch, and a gap has none: its
+  // columns would be one column called "unmapped". What the reader wants
+  // there is the bytes, so a gap opens straight into the dump. It costs
+  // nothing however long the gap is, since only the lines on screen are read.
+  if (gap && item.offsetBits % 8 === 0 && item.sizeBits % 8 === 0) {
+    host.append(gapDump(c, item, caption));
+    return host;
+  }
   host.append(
     byteStrip(c.doc, item.offsetBits, item.sizeBits, caption, mapFor(c, item), () => c.toggleBytes(item.owner), c.selected, {
       open: c.dumps,
@@ -328,6 +342,30 @@ function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTML
     }),
   );
   return host;
+}
+
+/** A run of unclaimed bytes, opened. The same caption and the same way out as
+ *  a byte strip has, so one control closes either. */
+function gapDump(c: DrawContext, item: Extract<Item, { kind: "bytes" }>, caption: string): HTMLElement {
+  const strip = el("div", "bstrip");
+  const cap = el("div", "bs-cap");
+  cap.append(el("span", "bs-cap-text", caption), mapFor(c, item));
+  const close = el("button", "bs-close", REPORT.hideBytes);
+  close.type = "button";
+  close.addEventListener("click", (e) => {
+    e.stopPropagation();
+    c.toggleBytes(item.owner);
+  });
+  cap.append(close);
+  strip.append(cap);
+  const at = item.offsetBits;
+  strip.append(
+    byteDump(c.doc, at / 8, item.sizeBits / 8, GAP_LABEL, {
+      get: () => c.dumpTops.get(at) ?? 0,
+      set: (top) => c.dumpTops.set(at, top),
+    }),
+  );
+  return strip;
 }
 
 function drawMore(c: DrawContext, item: Extract<Item, { kind: "more" }>): HTMLElement {

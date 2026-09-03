@@ -2267,6 +2267,11 @@ button.insp-xrow-where:hover {
 .rp-gap .rp-size {
   font-style: normal;
 }
+/* A gap has no type to name, and the empty column between the verdict and the
+   size was clipping the verdict to make room for nothing. */
+.rp-gap .rp-type {
+  display: none;
+}
 /* A field with no bytes in the file: a value the template works out, or a list
    that turned out to be empty. Nothing of it is in front of the reader, so it
    is grey. */

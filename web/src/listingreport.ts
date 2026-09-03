@@ -372,7 +372,14 @@ export class ListingReport {
         this.markRecord(node);
         continue;
       }
-      node.classList.toggle("is-on", item.kind === "row" && (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === key));
+      // A gap is a stretch of the file like any row's, and clicking it selects
+      // it, so it lights the same way. Only by its own extent: it has no field
+      // for `nearest` to stand in for.
+      node.classList.toggle(
+        "is-on",
+        (item.kind === "row" && (this.isSelected(item.offsetBits, item.sizeBits) || this.nearest === key)) ||
+          (item.kind === "gap" && this.isSelected(item.offsetBits, item.sizeBits)),
+      );
     }
     this.paint();
   }
@@ -662,6 +669,10 @@ export class ListingReport {
   private pruneDumps(bytesKey: string): void {
     const strip = this.items.find((i) => i.key === `bytes:${bytesKey}`);
     if (strip === undefined) return;
+    // A gap opens straight into its dump rather than into a strip with a dump
+    // inside it, so its scroll is in `dumpTops` with nothing in `dumps` to
+    // find it by.
+    this.dumpTops.delete(strip.offsetBits);
     for (const at of [...this.dumps]) {
       if (at >= strip.offsetBits && at < strip.offsetBits + strip.sizeBits) {
         this.dumps.delete(at);
@@ -763,11 +774,11 @@ export class ListingReport {
     }
     const openKey = openKeyOf(item);
     if (openKey !== null) this.setOpen(openKey, !this.state.open.has(openKey));
-    if (item.kind === "row") this.pick(item);
+    if (item.kind === "row" || item.kind === "gap") this.pick(item);
   }
 
   /** Say what is selected, both here and to everything else showing it. */
-  private pick(item: Extract<Item, { kind: "row" }>): void {
+  private pick(item: Extract<Item, { kind: "row" | "gap" }>): void {
     this.select(item.path, item.offsetBits, item.sizeBits);
     this.picking = true;
     this.onPick({ path: item.path, startBit: item.offsetBits, endBit: item.offsetBits + item.sizeBits });
@@ -900,7 +911,7 @@ export class ListingReport {
     const bottom = this.tops[at + 1] ?? top;
     if (top < this.scroller.scrollTop) this.scroller.scrollTop = top;
     else if (bottom > this.scroller.scrollTop + this.scroller.clientHeight) this.scroller.scrollTop = bottom - this.scroller.clientHeight;
-    if (item.kind === "row") this.pick(item);
+    if (item.kind === "row" || item.kind === "gap") this.pick(item);
     else this.restyle();
   }
 

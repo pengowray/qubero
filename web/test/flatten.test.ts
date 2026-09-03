@@ -536,6 +536,39 @@ test("bytes past the last part of the file are not lost", () => {
   );
 });
 
+test("a part that points somewhere else is measured where it points", () => {
+  // A PDF's `xref_offset` is nine bytes into the file and its one child is the
+  // cross-reference table four kilobytes away. The heading belongs at the
+  // table; the bytes between the header and the table are unmapped, and they
+  // are unmapped once, at the top level, not inside every pointer.
+  const pointed: Spec = {
+    name: "file",
+    bytes: 0x2000,
+    kids: [
+      { name: "header", bytes: 9 },
+      { name: "xref_offset", bytes: 0, kids: [{ name: "xref", bytes: 8, at: 0x1000 }] },
+    ],
+  };
+  const { items } = run(pointed);
+  const heading = items.find((i) => i.kind === "heading" && i.node?.name === "xref_offset");
+  assert.equal(heading?.offsetBits, 0x1000 * 8);
+  assert.equal(heading?.sizeBits, 8 * 8);
+  // Nothing inside it: the pointer's own offset is not an edge to measure its
+  // target against.
+  assert.deepEqual(items.filter((i) => i.kind === "gap" && pathKey(i.path) === "1"), []);
+  const gaps = items.filter((i) => i.kind === "gap");
+  assert.deepEqual(
+    gaps.map((g) => (g.kind === "gap" ? [g.offsetBits / 8, g.sizeBits / 8, g.unmapped] : [])),
+    [
+      [9, 0x1000 - 9, true],
+      [0x1008, 0x2000 - 0x1008, true],
+    ],
+  );
+  // And each one sits after the part whose bytes end where it starts.
+  const order = items.filter((i) => i.kind === "heading" || i.kind === "gap").map((i) => i.kind);
+  assert.deepEqual(order, ["heading", "gap", "heading", "gap"]);
+});
+
 test("a hole between two parts of the file is a row of its own", () => {
   const split: Spec = {
     name: "file",

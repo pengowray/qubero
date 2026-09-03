@@ -203,13 +203,14 @@ export const REPORT = {
    *  rows one line below already carry their names. */
   unnamedPart: (where: "start" | "end" | "middle"): string =>
     where === "start" ? "Header" : where === "end" ? "Trailer" : "Fields",
-  /** Bytes inside a part that none of its fields covers, which the format has
-   *  left free: the empty middle of a b-tree page. `GAP_LABEL` above says
-   *  "unmapped" for the opposite claim, that the template says nothing about
-   *  the bytes at all; both rows can appear in one listing, so neither word
-   *  may suggest the other. The mockup's "unused page space" is this row with
-   *  the part's own name in it, which the general form cannot know. */
-  gap: "unused space",
+  /** Bytes inside a part that none of its fields covers: the empty middle of
+   *  a b-tree page. The same word as `GAP_LABEL` above, because it is the
+   *  same claim, that the template describes no field here, and that is all
+   *  either row knows. "Unused" would be a claim about the format, and a
+   *  template that misses a field it should have read would then be telling
+   *  the reader those bytes are spare. Where the row sits says the rest: a
+   *  gap inside a structure is one line of that structure's own listing. */
+  gap: "unmapped",
   /** The verdict beside a gap row: every byte of it was read and each one is
    *  zero. "verified" is doing the work: it says the bytes were looked at,
    *  where a bare "zeros" could pass as a guess about padding. Only a whole

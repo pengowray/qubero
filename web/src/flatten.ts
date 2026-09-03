@@ -102,10 +102,12 @@ export type Item = Common &
         readonly reads: { readonly name: string; readonly path: readonly number[] } | null;
       }
     | {
-        /** Bytes no row of the listing covers. Inside a structure that is the
-         *  format leaving space; between or after the file's own parts it is
-         *  the template not reaching them, which is a different claim and a
-         *  different word. */
+        /** Bytes no row of the listing covers. `unmapped` says which kind:
+         *  inside a structure it is the format leaving space, and between or
+         *  after the file's own parts it is the template not reaching them.
+         *  Both rows read "unmapped"; the difference is in where they sit and
+         *  in what the rail and the hex view make of them, which is what the
+         *  flag is for. */
         readonly kind: "gap";
         readonly path: readonly number[];
         readonly unmapped: boolean;
@@ -467,42 +469,92 @@ function titleOf(node: TemplateNode, list: string | null): string {
  *  of the list these are the elements of, when they are. */
 function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: readonly TemplateNode[], base = 0, list: string | null = null): void {
   const breaks = sectionBreaks(kids);
+  // What each part of the file actually covers, worked out before any of them
+  // is drawn. Template order is not file order: a PDF declares the offset of
+  // its cross-reference table before the table itself — so a running cursor
+  // through the declarations answers the wrong question, and a field that
+  // points elsewhere answers it at the pointer rather than at the target.
+  type Part = { readonly from: number; readonly to: number; readonly inner: Slice | null; readonly extent: Span | null };
+  const parts: Part[] = [];
+  breaks.forEach((from, b) => {
+    const to = breaks[b + 1] ?? kids.length;
+    const first = kids[from];
+    if (first === undefined) return;
+    if (to - from === 1 && first.composite) {
+      const inner = w.kids([...path, from], first.child_count);
+      const covers = pointee(w, [...path, from], first, inner);
+      parts.push({ from, to, inner, extent: extentOf([covers]) });
+      return;
+    }
+    parts.push({ from, to, inner: null, extent: extentOf(kids.slice(from, to)) });
+  });
   // Rule 1 is about the file, not only about the insides of a structure. The
   // parts of a 450 MiB HDF5 file that its template describes are its first
   // ninety-six bytes; everything after that is reached through addresses
   // rather than by lying next to them, and a listing that simply stops at
   // 0x60 has lost four hundred and fifty megabytes without a word.
-  let cursor = parent.offset_bits;
-  breaks.forEach((from, b) => {
-    const to = breaks[b + 1] ?? kids.length;
-    const first = kids[from];
-    if (first === undefined) return;
-    const run = kids.slice(from, to);
-    const start = Math.min(...run.map((k) => k.offset_bits));
-    if (start > cursor) gap(w, path, cursor, start, 0, true);
-    cursor = Math.max(cursor, ...run.map(endBits));
+  //
+  // The root's end is the file's end, whatever the root structure says its
+  // own size is; anything inside the root ends where it ends.
+  const end = path.length === 0 ? Math.max(endBits(parent), w.fileBits) : endBits(parent);
+  const holes = uncovered(parent.offset_bits, end, parts.map((p) => p.extent));
+  // Every hole starts either where the parent does or where some part ends,
+  // so each one has a place in the list without the parts being reordered.
+  const drawnHoles = new Set<number>();
+  const at = (bit: number): void => {
+    for (const hole of holes) {
+      if (hole.start !== bit || drawnHoles.has(hole.start)) continue;
+      drawnHoles.add(hole.start);
+      gap(w, path, hole.start, hole.end, 0, true);
+    }
+  };
+  at(parent.offset_bits);
+  for (const part of parts) {
+    const first = kids[part.from];
+    if (first === undefined) continue;
     w.section += 1;
-    if (to - from === 1 && first.composite) {
-      const kidPath = [...path, from];
-      const inner = w.kids(kidPath, first.child_count);
+    if (part.to - part.from === 1 && first.composite) {
+      const kidPath = [...path, part.from];
       // A list of a handful of structures is a handful of parts of the file,
       // not one part holding a list: three SQLite pages read as three. Only a
       // list drawn whole can be, since a part of the file that is only some of
       // a list is not a part of the file.
-      if (inner !== null && inner.from === 0 && inner.nodes.length === first.child_count && elementsAreSections(first, inner.nodes, w.sectionListMax, w.fileBits)) {
+      if (part.inner !== null && part.inner.from === 0 && part.inner.nodes.length === first.child_count && elementsAreSections(first, part.inner.nodes, w.sectionListMax, w.fileBits)) {
         w.section -= 1;
-        sections(w, kidPath, first, inner.nodes, inner.from, first.name);
-        return;
+        sections(w, kidPath, first, part.inner.nodes, part.inner.from, first.name);
+      } else {
+        heading(w, kidPath, first, 0, part.from, part.to, part.inner, titleOf(first, list));
       }
-      heading(w, kidPath, first, 0, from, to, inner, titleOf(first, list));
-      return;
+    } else {
+      runHeading(w, path, kids, part.from, part.to, breaks, base);
     }
-    runHeading(w, path, kids, from, to, breaks, base);
-  });
-  // The root's end is the file's end, whatever the root structure says its
-  // own size is; anything inside the root ends where it ends.
-  const end = path.length === 0 ? Math.max(endBits(parent), w.fileBits) : endBits(parent);
-  if (cursor < end) gap(w, path, cursor, end, 0, true);
+    if (part.extent !== null) at(part.extent.end);
+  }
+}
+
+/** A stretch of bits. */
+type Span = { readonly start: number; readonly end: number };
+
+/** What a run of siblings covers between them. Fields of no bytes contribute
+ *  nothing: a computed value is not a stretch of the file. */
+function extentOf(nodes: readonly TemplateNode[]): Span | null {
+  const real = nodes.filter((n) => n.size_bits > 0);
+  if (real.length === 0) return null;
+  return { start: Math.min(...real.map((n) => n.offset_bits)), end: Math.max(...real.map(endBits)) };
+}
+
+/** The stretches of `start` to `end` that none of `spans` covers, in order. */
+function uncovered(start: number, end: number, spans: readonly (Span | null)[]): Span[] {
+  const sorted = spans.filter((s): s is Span => s !== null).sort((a, b) => a.start - b.start);
+  const holes: Span[] = [];
+  let cursor = start;
+  for (const span of sorted) {
+    if (span.start > cursor) holes.push({ start: cursor, end: Math.min(span.start, end) });
+    cursor = Math.max(cursor, span.end);
+    if (cursor >= end) break;
+  }
+  if (cursor < end) holes.push({ start: cursor, end });
+  return holes.filter((h) => h.end > h.start);
 }
 
 /** What a heading covers. A field that points elsewhere costs nothing where
@@ -554,7 +606,7 @@ function heading(
   // whether or not they are being listed.
   const stripKey = `h:${key}`;
   const seen = inner ?? (w.state.bytes.has(stripKey) ? w.kids(path, node.child_count) : null);
-  w.strip(stripKey, path, node?.name ?? "", frontOf(node, seen), level + 1);
+  w.strip(stripKey, path, node?.name ?? "", frontOf(covers, seen), level + 1);
   if (!open) return;
   if (inner === null) {
     w.waiting(path, level + 1, node);
@@ -702,15 +754,26 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   // run the stream occupies. Measuring them against the parent's extent would
   // find the whole run unaccounted for and draw a gap over it.
   const elsewhere = first !== undefined && first.space !== node.space;
-  const start = before > 0 && first !== undefined ? first.offset_bits : node.offset_bits;
-  const end = after > 0 && last !== undefined ? endBits(last) : endBits(node);
+  // A field of no bytes has no edges of its own to measure its children
+  // against: a pointer costs nothing where it is declared and its target
+  // lives somewhere else entirely. Measuring the target against the pointer
+  // would find every byte between the two unaccounted for and draw a gap over
+  // them, inside a heading that is nowhere near them. So the children are the
+  // extent.
+  const hollow = node.size_bits === 0 && order.length > 0;
+  const start = (before > 0 || hollow) && first !== undefined ? first.offset_bits : node.offset_bits;
+  const end = hollow ? Math.max(...order.map(endBits)) : after > 0 && last !== undefined ? endBits(last) : endBits(node);
+  // Where the elements this window leaves out are. Unknown for a hollow node,
+  // whose own extent says nothing about them, so those ends stand for no
+  // bytes rather than for the wrong ones.
+  const outer = hollow ? { start, end } : { start: node.offset_bits, end: endBits(node) };
   const to = slice.from + slice.nodes.length;
   if (before > 0 && !elsewhere) {
-    edge(w, "earlier", path, depth, before, slice.from, to, { start: node.offset_bits, end: start });
+    edge(w, "earlier", path, depth, before, slice.from, to, { start: outer.start, end: start });
   }
   rows(w, path, slice.nodes, slice.from, [], depth, elsewhere ? null : { start, end });
   if (after > 0 && !elsewhere) {
-    edge(w, "later", path, depth, after, slice.from, to, { start: end, end: endBits(node) });
+    edge(w, "later", path, depth, after, slice.from, to, { start: end, end: outer.end });
   }
 }
 
@@ -758,9 +821,10 @@ function rows(
 }
 
 function gap(w: Walk, path: readonly number[], from: number, to: number, depth: number, unmapped = false): void {
+  const key = `gap:${pathKey(path)}@${from}`;
   w.push({
     kind: "gap",
-    key: `gap:${pathKey(path)}@${from}`,
+    key,
     section: w.section,
     depth,
     offsetBits: from,
@@ -768,6 +832,10 @@ function gap(w: Walk, path: readonly number[], from: number, to: number, depth: 
     path,
     unmapped,
   });
+  // A gap the reader can look into. What is in bytes nothing describes is the
+  // one question the row cannot answer for them, and the verdict beside it is
+  // a summary of exactly the thing they would want to read.
+  w.strip(key, path, "", { start: from, end: to }, depth + 1);
 }
 
 /** One child of a structure: a heading when it is a named part with something
