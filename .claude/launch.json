@@ -9,7 +9,7 @@
         "dev"
       ],
       "cwd": "web",
-      "port": 5173,
+      "port": 17272,
       "autoPort": true
     },
     {
