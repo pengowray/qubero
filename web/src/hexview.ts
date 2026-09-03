@@ -434,8 +434,18 @@ export class HexView {
 
   relayout(): void {
     this.remeasure();
-    this.topRow = Math.min(this.topRow, this.maxTopRow);
+    // The slack past the last screenful was thrown away with the other sizes,
+    // so the limit is not known until the end has been drawn again. Clamping
+    // first would pull a view sitting at the end back up by that slack, and
+    // the next scroll would put it back: a view that jumps while the reader
+    // holds the wheel. So draw where it was, then clamp by what was found.
+    this.topRow = Math.min(this.topRow, Math.max(0, this.totalRows - 1));
     this.render();
+    const limit = this.maxTopRow;
+    if (this.topRow > limit) {
+      this.topRow = limit;
+      this.render();
+    }
   }
 
   /**
@@ -474,7 +484,9 @@ export class HexView {
     const fit = Math.max(1, Math.floor(this.viewH / this.rowHeight));
     if (fit !== this.visibleRows) {
       this.visibleRows = fit;
-      this.topRow = Math.min(this.topRow, this.maxTopRow);
+      // Only as far as the file goes: how far past the last screenful the
+      // view may sit is found by drawing the end, which `relayout` clamps by.
+      this.topRow = Math.min(this.topRow, Math.max(0, this.totalRows - 1));
     }
     if (probe !== undefined) this.fit = { rowHeight: this.rowHeight, visibleRows: fit };
     // Unconditional: on the first pass there are no row elements yet, however
