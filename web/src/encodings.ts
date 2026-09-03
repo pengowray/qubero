@@ -29,6 +29,12 @@ export const LITERAL_LANGS = ["C", "Rust", "Python", "JavaScript", "JSON", "C#",
 
 export const CODEPAGE_A_KEY = "qubero.codepage.a";
 export const CODEPAGE_B_KEY = "qubero.codepage.b";
+/** What the literal chooser shows for each language: the language alone reads
+ *  as a mystery beside a quoted string, so each option says what it is. */
+export const LITERAL_LANG_NAMES: Readonly<Record<string, string>> = Object.fromEntries(
+  LITERAL_LANGS.map((l) => [l, `${l} string`]),
+);
+
 export const LITERAL_LANG_KEY = "qubero.literal.lang";
 
 export const CODEPAGE_A_DEFAULT = "Latin-1";

@@ -24,6 +24,7 @@ import {
   CODEPAGES_B,
   LITERAL_LANG_DEFAULT,
   LITERAL_LANG_KEY,
+  LITERAL_LANG_NAMES,
   LITERAL_LANGS,
   rememberChoice,
   storedChoice,
@@ -662,14 +663,14 @@ export class Inspector {
     row.className = "insp-reading insp-reading-literal";
     const who = document.createElement("span");
     who.className = "insp-reading-enc";
-    const pick = picker(LITERAL_LANGS, this.literalLang, SEL_TEXT_LANG_LABEL, "lang");
+    const pick = picker(LITERAL_LANGS, this.literalLang, SEL_TEXT_LANG_LABEL, "lang", LITERAL_LANG_NAMES);
     pick.addEventListener("change", () => {
       this.literalLang = pick.value;
       rememberChoice(LITERAL_LANG_KEY, pick.value);
       this.refocus = "lang";
       this.renderSelection();
     });
-    who.append(pick, document.createTextNode(" " + SEL_TEXT_LITERAL));
+    who.append(pick);
     row.append(who);
     const lit = this.doc.selectionLiteral(atByte, nBytes, this.literalLang) ?? "";
     this.readingCell(row, lit, lit, SEL_TEXT_LITERAL_COPY, SEL_TEXT_LITERAL_EXPAND, SEL_TEXT_LITERAL_COLLAPSE);
@@ -1383,8 +1384,6 @@ const SEL_TEXT_UTF8_ASCII = "UTF-8 · ASCII";
 /** In the reading's place when the bytes do not fit the row's encoding. The
  *  row stays, so every encoding is found where it always is. */
 const SEL_TEXT_NOT_VALID = "Not valid";
-/** After the language chooser on the string-literal row. */
-const SEL_TEXT_LITERAL = "literal";
 const SEL_TEXT_PAGE_LABEL = "Codepage for this row";
 const SEL_TEXT_LANG_LABEL = "Language for the string literal";
 const SEL_TEXT_LITERAL_COPY = "Copy the string literal";
@@ -1430,7 +1429,7 @@ function reversed(kind: SelKind): boolean {
 /** A chooser dressed as the label it stands in for, so a row reads as a
  *  sentence rather than as a form. `slot` says which one it is, which is how
  *  the keyboard finds it again after the rows are rebuilt. */
-function picker(options: readonly string[], value: string, label: string, slot: string): HTMLSelectElement {
+function picker(options: readonly string[], value: string, label: string, slot: string, names?: Readonly<Record<string, string>>): HTMLSelectElement {
   const s = document.createElement("select");
   s.className = "insp-reading-pick";
   s.dataset["slot"] = slot;
@@ -1439,7 +1438,7 @@ function picker(options: readonly string[], value: string, label: string, slot: 
   for (const name of options) {
     const o = document.createElement("option");
     o.value = name;
-    o.textContent = name;
+    o.textContent = names?.[name] ?? name;
     s.append(o);
   }
   s.value = value;
