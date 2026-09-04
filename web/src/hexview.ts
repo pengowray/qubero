@@ -2258,7 +2258,10 @@ export class HexView {
         const block = (b: { entries: Chip[]; texts: ChipText[]; shown: number } | null): string =>
           b === null
             ? ""
-            : `${b.shown}/${b.entries.length}~` +
+            : // The first field that did not fit is named in the key too: the
+              // count of them can stay the same while the names the "+N" chip
+              // lists in its tooltip change.
+              `${b.shown}/${b.entries.length}/${b.texts[b.shown]?.name ?? ""}~` +
               b.texts
                 .slice(0, b.shown)
                 .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${t.name}${t.detail}`)
