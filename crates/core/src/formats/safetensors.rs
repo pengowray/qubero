@@ -135,8 +135,29 @@ mod tests {
         let (d, mut ev) = eval();
         let dtype = ev.node(&d, &[1, 1, 0]).unwrap();
         let at = (dtype.offset_bits / 8) as usize;
-        // The quotes are part of the value's text, so this is `"F16"`.
-        assert_eq!(&file()[at..at + (dtype.size_bits / 8) as usize], b"\"F16\"");
+        // The member runs from its key to the next one: key, colon, value and
+        // the comma after it.
+        assert_eq!(&file()[at..at + (dtype.size_bits / 8) as usize], b"\"dtype\":\"F16\",");
+        // The value alone is still known. The quotes are part of its text, so
+        // this is `"F16"`.
+        let val = (dtype.value_offset_bits / 8) as usize;
+        assert_eq!(&file()[val..val + dtype.value_bytes as usize], b"\"F16\"");
+    }
+
+    #[test]
+    fn the_elements_of_an_array_tile_it_too() {
+        let (d, mut ev) = eval();
+        // The two offsets of `data_offsets`: the first takes the comma after
+        // it, the last stops at itself, and between them nothing is left over.
+        let first = ev.node(&d, &[1, 1, 2, 0]).unwrap();
+        let last = ev.node(&d, &[1, 1, 2, 1]).unwrap();
+        assert_eq!(first.offset_bits + first.size_bits, last.offset_bits);
+        assert_eq!(last.offset_bits + last.size_bits, last.value_offset_bits + last.value_bytes * 8);
+        // An element has no key, so its value starts where the element does.
+        assert_eq!(first.value_offset_bits, first.offset_bits);
+        // And the offsets the weights are read by are the numbers they were.
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0]).unwrap().value, Value::Int(0));
+        assert_eq!(ev.node(&d, &[1, 1, 2, 1]).unwrap().value, Value::Int(8));
     }
 
     #[test]

@@ -161,6 +161,11 @@ export type TemplateNode = {
    * signature and a `body`; giving `body` a heading of its own spends a level
    * of structure on the word "body". */
   readonly contents: boolean;
+  /** True when the node's own bytes include punctuation its children do not
+   *  account for: the braces of a JSON object, the brackets of an array. Its
+   *  children tile what is between them, and what is left over is the node's
+   *  own syntax rather than bytes nothing describes. */
+  readonly framed: boolean;
   /** Which address space `offset_bits` counts in. 0 is the file. Anything
    *  else is the bytes a compressed stream came to, and the offset is counted
    *  from the front of those rather than from the front of the file. */

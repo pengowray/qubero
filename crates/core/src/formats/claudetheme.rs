@@ -168,8 +168,72 @@ mod tests {
     fn a_value_sits_where_its_text_does() {
         let (d, mut ev) = eval();
         let base = ev.node(&d, &[1]).unwrap();
+        // The member is its key, its value and the comma after it, so that the
+        // members of the theme tile it with no bytes left between them.
         let at = (base.offset_bits / 8) as usize;
-        assert_eq!(&SAMPLE.as_bytes()[at..at + (base.size_bits / 8) as usize], b"\"dark\"");
+        assert_eq!(&SAMPLE.as_bytes()[at..at + (base.size_bits / 8) as usize], b"\"base\": \"dark\",\n  ");
+        // The value is still known apart from it, and is what it always was.
+        let val = (base.value_offset_bits / 8) as usize;
+        assert_eq!(&SAMPLE.as_bytes()[val..val + base.value_bytes as usize], b"\"dark\"");
+    }
+
+    #[test]
+    fn the_members_of_an_object_tile_it_bar_its_braces() {
+        let (d, mut ev) = eval();
+        for (path, n) in [(vec![], 3usize), (vec![2], 5)] {
+            let parent = ev.node(&d, &path).unwrap();
+            let kids: Vec<_> = (0..n)
+                .map(|i| {
+                    let mut p = path.clone();
+                    p.push(i);
+                    ev.node(&d, &p).unwrap()
+                })
+                .collect();
+            for pair in kids.windows(2) {
+                assert_eq!(pair[0].offset_bits + pair[0].size_bits, pair[1].offset_bits, "{:?} tiles", path);
+            }
+            // What is left over is the object's own punctuation: the brace and
+            // the whitespace inside it at either end, and nothing more.
+            let first = kids.first().unwrap();
+            let last = kids.last().unwrap();
+            let at = (parent.value_offset_bits / 8) as usize;
+            let head = ((first.offset_bits / 8) as usize) - at;
+            assert!(SAMPLE.as_bytes()[at..at + head].iter().all(|c| c.is_ascii_whitespace() || *c == b'{'), "{:?} head", path);
+            let tail_at = ((last.offset_bits + last.size_bits) / 8) as usize;
+            let tail_end = at + parent.value_bytes as usize;
+            assert!(
+                SAMPLE.as_bytes()[tail_at..tail_end].iter().all(|c| c.is_ascii_whitespace() || *c == b'}'),
+                "{:?} tail",
+                path
+            );
+        }
+        // And the object is framed, so a listing knows the leftovers are its
+        // syntax rather than bytes nothing describes.
+        assert!(ev.node(&d, &[2]).unwrap().framed);
+        assert!(!ev.node(&d, &[1]).unwrap().framed, "a string frames nothing");
+    }
+
+    #[test]
+    fn a_nested_member_covers_its_key_and_its_comma() {
+        let (d, mut ev) = eval();
+        let permission = ev.node(&d, &[2, 1]).unwrap();
+        let at = (permission.offset_bits / 8) as usize;
+        assert_eq!(
+            &SAMPLE.as_bytes()[at..at + (permission.size_bits / 8) as usize],
+            b"\"permission\": \"#5769f7\",\n    "
+        );
+        assert_eq!(permission.value, Value::Str("#5769f7".into()));
+        let val = (permission.value_offset_bits / 8) as usize;
+        assert_eq!(&SAMPLE.as_bytes()[val..val + permission.value_bytes as usize], b"\"#5769f7\"");
+    }
+
+    #[test]
+    fn the_hex_column_calls_a_brace_the_object_it_belongs_to() {
+        let (d, mut ev) = eval();
+        let spans = ev.spans(&d, 0, SAMPLE.len() as u64 * 8, 200).unwrap();
+        assert!(spans.iter().all(|s| !s.gap), "no run of a theme is unaccounted for");
+        // The first entry is the file's own brace, named after the file.
+        assert_eq!(spans[0].name, "file");
     }
 
     #[test]

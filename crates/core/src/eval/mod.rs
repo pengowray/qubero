@@ -205,6 +205,12 @@ pub struct NodeInfo {
     /// Whether it is folded is the view's to decide, since that depends on
     /// where the two of them end up on screen. See [`crate::machinery`].
     pub consumed_by: Option<usize>,
+    /// True when this node's own bytes include punctuation its children do not
+    /// account for: the braces of a JSON object, the brackets of an array. The
+    /// children of such a node tile what is between them and nothing else, so
+    /// what is left over is the node's own syntax rather than bytes nothing
+    /// describes, and a listing should not call it unmapped.
+    pub framed: bool,
     /// Which address space the offsets above are counted in. 0 is the file,
     /// which is what all but a decoded stream's contents are. See
     /// [`crate::template::Ty::Decoded`].
@@ -340,6 +346,13 @@ struct Resolved {
     computed: Option<i128>,
     /// Which address space `offset` and `limit` are bits of. 0 is the file.
     space: u32,
+    /// The bits of this field its value proper occupies, when that is less
+    /// than the field: `(offset, size)` in bits. A JSON member's field is the
+    /// key, the colon, the value and the comma after it, so that the members
+    /// of an object tile it with nothing falling between them; its value is
+    /// the part an editor writes and a reader is shown. None for a field
+    /// whose value is the whole of it, which is nearly all of them.
+    payload: Option<(u64, u64)>,
 }
 
 /// Where a child sits before its type is unwrapped: what it is called, what
@@ -578,6 +591,13 @@ impl Evaluator {
             _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
+        // A field that is more than its value says where the value is: a JSON
+        // member covers its key and the comma after it, and the value the
+        // inspector shows and an editor would write is the part between them.
+        let reading = match r.payload {
+            Some((at, bits)) => ((at, bits / 8), reading.1, reading.2),
+            None => reading,
+        };
         let (consumed_by, mut machinery, contents) = self.in_parent(path);
         // What the decoder read is machinery for what it produced: a reader
         // who wants the contents of a stream is not asking about its Huffman
@@ -613,6 +633,9 @@ impl Evaluator {
             child_count,
             composite,
             consumed_by,
+            // The braces of an object and the brackets of an array are the
+            // node's own, and its members account for everything between them.
+            framed: matches!(&r.ty, Ty::Json(shape, _) if shape.composite()) && child_count > 0,
             machinery,
             contents,
         })
@@ -667,9 +690,12 @@ impl Evaluator {
         let r = self.memo[path].clone();
         // The value rather than the whole field, so padding and a terminator
         // are left out the way the node's own reading leaves them out.
-        let (at, len) = match self.str_span(doc, &r, size)? {
-            Some(span) => (r.offset + span.start * 8, span.len),
-            None => (r.offset, size / 8),
+        let (at, len) = match (r.payload, self.str_span(doc, &r, size)?) {
+            // Same again for a field whose value is only part of it: the bytes
+            // of a JSON member are the bytes of its value, not of its key.
+            (Some((at, bits)), _) => (at, bits / 8),
+            (None, Some(span)) => (r.offset + span.start * 8, span.len),
+            (None, None) => (r.offset, size / 8),
         };
         let want = len.min(limit);
         Ok((self.read(doc, &r, at, want * 8)?, len > want))
@@ -724,8 +750,12 @@ impl Evaluator {
             },
             None => encode::StrState::default(),
         };
-        let data = encode::encode(&r.ty, text, size, &state).map_err(EvalError::Failed)?;
-        Ok(Write { offset_bits: r.offset, data, n_bits: size })
+        // Only the value is written back. A field that is more than its value
+        // has bytes the format owns on either side, and an edit that took the
+        // field's whole run would write over them.
+        let (at, n_bits) = r.payload.unwrap_or((r.offset, size));
+        let data = encode::encode(&r.ty, text, n_bits, &state).map_err(EvalError::Failed)?;
+        Ok(Write { offset_bits: at, data, n_bits })
     }
 
     /// Children `from..to` of the node at `path` (clamped to the child count).
@@ -929,6 +959,7 @@ impl Evaluator {
                         size: Some(0),
                         computed: None,
                         space: pr.space,
+                        payload: None,
                     };
                     self.remember(path, r);
                     return Ok(None);
@@ -1347,6 +1378,7 @@ impl Evaluator {
                         size: None,
                         computed: None,
                         space,
+                        payload: None,
                     });
                 }
             }

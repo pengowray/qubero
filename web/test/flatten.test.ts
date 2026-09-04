@@ -22,6 +22,9 @@ type Spec = {
   /** True when the field is only its parent's contents, as `StructDef::contents`
    *  says of a ZIP entry's `body`. */
   contents?: boolean;
+  /** True when the node's own bytes include punctuation its children do not
+   *  account for, as a JSON object's braces are. */
+  framed?: boolean;
   /** The type name, where the rules turn on it: `computed` for a value the
    *  template works out rather than reads. */
   type?: string;
@@ -62,6 +65,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     consumed_by: spec.consumed_by ?? null,
     machinery: spec.machinery ?? null,
     contents: spec.contents ?? false,
+    framed: spec.framed ?? false,
   };
   return { node, kids };
 }
@@ -356,6 +360,22 @@ test("free space at a structure's own edges is accounted for", () => {
       [50, 50],
     ],
   );
+});
+
+test("a framed structure's own punctuation is not a gap", () => {
+  // What a JSON object does: its members tile everything between the braces,
+  // and the braces themselves are the object's, not bytes nothing covers.
+  const object: Spec = {
+    name: "file",
+    bytes: 100,
+    framed: true,
+    kids: [
+      { name: "a", bytes: 49, at: 1 },
+      { name: "b", bytes: 49 },
+    ],
+  };
+  const gaps = run(object, { ...emptyState, open: new Set(["0"]) }).items.filter((i) => i.kind === "gap");
+  assert.deepEqual(gaps, []);
 });
 
 test("the rows of a page are a part of it, not another indent", () => {
