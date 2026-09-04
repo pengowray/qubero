@@ -145,6 +145,22 @@ mod tests {
     }
 
     #[test]
+    fn the_elements_of_an_array_tile_it_too() {
+        let (d, mut ev) = eval();
+        // The two offsets of `data_offsets`: the first takes the comma after
+        // it, the last stops at itself, and between them nothing is left over.
+        let first = ev.node(&d, &[1, 1, 2, 0]).unwrap();
+        let last = ev.node(&d, &[1, 1, 2, 1]).unwrap();
+        assert_eq!(first.offset_bits + first.size_bits, last.offset_bits);
+        assert_eq!(last.offset_bits + last.size_bits, last.value_offset_bits + last.value_bytes * 8);
+        // An element has no key, so its value starts where the element does.
+        assert_eq!(first.value_offset_bits, first.offset_bits);
+        // And the offsets the weights are read by are the numbers they were.
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0]).unwrap().value, Value::Int(0));
+        assert_eq!(ev.node(&d, &[1, 1, 2, 1]).unwrap().value, Value::Int(8));
+    }
+
+    #[test]
     fn the_weights_are_read_as_the_type_the_header_names() {
         let (d, mut ev) = eval();
         let first = ev.node(&d, &[2, 1]).unwrap();
