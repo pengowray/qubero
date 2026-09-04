@@ -275,7 +275,27 @@ impl Evaluator {
                 }
                 return Ok(path);
             }
-            let n = self.child_count(doc, &path)?;
+            // How many elements a code section holds is a question only the
+            // decoding of every one of them answers, and which one covers a
+            // byte is not that question: the walk stops at the byte. So the
+            // count is asked only where it is cheap, and where it is not the
+            // element is found by walking to it from the nearest kept offset.
+            let Some(n) = self.count_unless_walk(doc, &path)? else {
+                match self.child_covering(doc, &path, u64::MAX, bit) {
+                    Ok(Some(i)) => {
+                        path.push(i);
+                        continue;
+                    }
+                    Ok(None) => return Ok(path),
+                    Err(e) if e.interrupted() => return Err(e),
+                    // The run ended on something that would not parse, which
+                    // is what the bytes after the last whole element of a run
+                    // look like. Counting the run would have stopped there
+                    // too, and the answer for a bit past the end of it is the
+                    // run itself, which reads as a gap.
+                    Err(_) => return Ok(path),
+                }
+            };
             if n == 0 {
                 return Ok(path);
             }
@@ -838,7 +858,11 @@ impl Evaluator {
             let starts = self.scattered_starts(doc, path, &r)?;
             return Ok(starts.get(starts.partition_point(|(s, _)| *s <= bit)).map(|(s, _)| *s));
         }
-        let n = self.child_count(doc, path)?;
+        // A run whose count is a walk of the whole container says nothing here
+        // rather than decoding a code section to bound a gap. The gap keeps the
+        // wider edge the node's own extent gives it, which is what it had
+        // before there was anything to narrow it with.
+        let Some(n) = self.count_unless_walk(doc, path)? else { return Ok(None) };
         let mut best: Option<u64> = None;
         let mut p = path.to_vec();
         for i in 0..n as usize {
@@ -866,7 +890,20 @@ impl Evaluator {
             let n = starts.partition_point(|(s, _)| *s <= bit);
             starts[..n].iter().max_by_key(|(s, _)| *s).map(|(_, i)| *i)
         } else {
-            let n = self.child_count(doc, path)?;
+            // A run whose count is a walk of its container is asked where the
+            // bit is instead, which walks no further than the bit. The walk
+            // leaves behind where the element before it ended, which is
+            // exactly what this wanted: the slack at the end of a run of
+            // records begins where the last whole record stopped, not where
+            // the run did.
+            let Some(n) = self.count_unless_walk(doc, path)? else {
+                return match self.child_covering(doc, path, u64::MAX, bit) {
+                    // Inside a child, so nothing ends before the bit.
+                    Ok(Some(_)) => Ok(None),
+                    Err(e) if e.interrupted() => Err(e),
+                    _ => Ok(self.list(path).walk_at.map(|(_, at)| at).filter(|at| *at <= bit)),
+                };
+            };
             let mut best: Option<(u64, usize)> = None;
             for i in 0..n as usize {
                 p.push(i);

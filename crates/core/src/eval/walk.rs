@@ -348,6 +348,14 @@ impl Evaluator {
             if bit < start + size {
                 return Ok(Some(*j));
             }
+            // An element covering nothing would have the walk ask the same
+            // question of the same offset for ever. The bit is past this one
+            // and every one after it starts where it does, so nothing here
+            // covers it.
+            if size == 0 {
+                self.close_step(before);
+                return Ok(None);
+            }
             *j += 1;
             *at = cursor + size;
             self.list_mut(&parent).walk_at = Some((*j, *at));

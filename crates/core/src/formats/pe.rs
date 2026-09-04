@@ -366,4 +366,109 @@ mod tests {
         assert_eq!(first.offset_bits, (0x80 + 24 + 0xf0) * 8);
         assert_eq!(first.size_bits, 40 * 8);
     }
+
+    /// The same file with a code section of `code` bytes of instructions
+    /// behind it. A real program is mostly this: a page of header, and then
+    /// megabytes that only mean anything once they have been decoded.
+    fn sample_with_code(code: usize) -> Vec<u8> {
+        let mut v = sample();
+        let at = v.windows(8).position(|w| w == b".text\0\0\0").expect("the section header");
+        v[at + 16..at + 20].copy_from_slice(&(code as u32).to_le_bytes()); // raw size
+        // One-byte instructions, so a section of a few megabytes is a few
+        // million of them: the count is what must not be asked for.
+        v.resize(0x200 + code, 0x90); // nop
+        v
+    }
+
+    /// What was read, and how far into the file the reading went.
+    struct Counting {
+        bytes: Vec<u8>,
+        furthest: std::cell::Cell<u64>,
+    }
+
+    impl crate::source::Source for Counting {
+        fn len_bytes(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+        fn read_bytes(&self, offset: u64, out: &mut [u8]) -> Vec<crate::source::Missing> {
+            self.furthest.set(self.furthest.get().max(offset + out.len() as u64));
+            let o = offset as usize;
+            out.copy_from_slice(&self.bytes[o..o + out.len()]);
+            Vec::new()
+        }
+    }
+
+    /// Drawing the annotation column beside the header of a 4 MiB program must
+    /// not decode the program. The section header says how long the section
+    /// is, so nothing about where the fields of the header are depends on what
+    /// the instructions turn out to be.
+    #[test]
+    fn the_header_reads_without_decoding_the_code() {
+        const CODE: usize = 4 << 20;
+        let doc = Document::new(Counting { bytes: sample_with_code(CODE), furthest: Default::default() });
+        let mut e = Evaluator::new(pe());
+        // A small allowance, so a walk into the section would come back Busy
+        // rather than quietly finishing.
+        e.set_slice(Some(2_000));
+        e.begin_slice();
+        let spans = e.spans(&doc, 0x80 * 8, 0x200 * 8, 512).expect("the header, in one go");
+        assert!(spans.len() > 10, "the header is more than a handful of fields: {}", spans.len());
+        assert!(
+            doc.source().furthest.get() <= 0x200,
+            "read to {:#x}, which is inside the code section",
+            doc.source().furthest.get()
+        );
+    }
+
+    /// And the instructions are still there when something asks for one. The
+    /// walk to a byte a megabyte into the section is what takes the slices,
+    /// and it gets there.
+    #[test]
+    fn a_byte_inside_the_code_still_finds_its_instruction() {
+        const CODE: usize = 4 << 20;
+        let doc = Document::new(Counting { bytes: sample_with_code(CODE), furthest: Default::default() });
+        let mut e = Evaluator::new(pe());
+        e.set_slice(Some(50_000));
+        let bit = (0x200 + (1 << 20)) * 8;
+        let mut path = None;
+        for _ in 0..200 {
+            e.begin_slice();
+            match e.locate(&doc, bit) {
+                Ok(p) => {
+                    path = Some(p);
+                    break;
+                }
+                Err(e) if e.interrupted() => continue,
+                Err(e) => panic!("{e:?}"),
+            }
+        }
+        let path = path.expect("the walk gets there in a bounded number of goes");
+        assert_eq!(&path[..3], &[1, 10, 0], "inside the first section's code: {path:?}");
+        let insn = e.node(&doc, &path).expect("the instruction under the cursor");
+        assert_eq!(insn.offset_bits, bit);
+        assert_eq!(insn.size_bits, 8);
+    }
+
+    /// A run that fills its container leaves whatever will not make another
+    /// element at the end of it. Walking to a bit in that slack ends on
+    /// something that will not parse, and the answer is the run, the same as
+    /// counting the run would have concluded.
+    #[test]
+    fn a_bit_in_the_slack_after_the_last_record_lands_on_the_run() {
+        use crate::template::Until;
+        // Records of a length byte and that many bytes, filling the file, with
+        // three bytes at the end that cannot make another one.
+        // Sized, as a code section is, so that how long the run is says
+        // nothing about how many elements are in it.
+        let elem = T::structure("Record", vec![("len", T::u8()), ("body", T::bytes(E::field("len")))]);
+        let t = crate::template::Template::new(
+            "records",
+            T::structure("File", vec![("records", T::sized(E::lit(9), T::repeat(elem, Until::End)))]),
+        );
+        let bytes = vec![2, 0xaa, 0xbb, 2, 0xcc, 0xdd, 9, 0, 0];
+        let doc = Document::new(MemSource(bytes.clone()));
+        let mut e = Evaluator::new(t);
+        assert_eq!(e.locate(&doc, 0).expect("the first record"), vec![0, 0, 0]);
+        assert_eq!(e.locate(&doc, 6 * 8).expect("the slack"), vec![0], "the run, not an error");
+    }
 }
