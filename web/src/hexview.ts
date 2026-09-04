@@ -14,19 +14,8 @@
 import type { Doc, Span } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
 import { NO_TEMPLATE } from "./strings.js";
-import { fieldClass } from "./fieldstyle.js";
-import { CHIP_LINES, chipDetail, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
-import {
-  chipText,
-  continuedDetail,
-  pinnedNoteKey,
-  placeChips,
-  planRowChips,
-  rowNoteKey,
-  type Chip,
-  type ChipBlock,
-  type ChipText,
-} from "./chipplan.js";
+import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
+import { pinnedNoteKey, placeChips, planRowChips, rowNoteKey, type Chip, type ChipBlock } from "./chipplan.js";
 import {
   asciiGlyph,
   cellDraw,
@@ -36,6 +25,7 @@ import {
   setText,
   type Run,
 } from "./hexcell.js";
+import { fillNote, fillPlain, newChip, readChipFonts, SPAN_LIMIT, type ChipEl } from "./hexchips.js";
 import { cutRow, fillHeadings, headingsByRow } from "./hexheadings.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
 
@@ -70,8 +60,6 @@ export type CursorState = {
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 
-/** How many entries one screenful of the annotation column may hold. */
-const SPAN_LIMIT = 600;
 /** How many bytes one copy may carry. A selection can be the whole file, and
  *  the bytes have to be fetched and turned into a string before the clipboard
  *  sees them, so past some size the honest answer is no. */
@@ -97,10 +85,6 @@ const COPY_DONE = (bytes: number, asText: boolean): string =>
 /** What a cursor move does to the selection. An anchor extends from that bit,
  *  which is the one thing a plain "keep" cannot say. */
 type Select = "keep" | "clear" | { readonly anchor: number };
-
-/** A chip element, with the path of the field it stands for kept on it, so one
- *  click handler serves the button for as long as the button lives. */
-type ChipEl = HTMLButtonElement & { _path?: readonly number[] | undefined };
 
 /** Where the spans on screen land. See `HexView.placeSpans`. */
 type Placed = {
@@ -462,6 +446,12 @@ export class HexView {
     if (extra > 0) out.push({ row, extra });
     this.ledger.setStructural(out);
   }
+
+  /** Pick the field a chip stands for. Held as one function for the life of
+   *  the view, since every chip keeps it. */
+  private readonly pickField = (path: readonly number[]): void => {
+    this.onPickField(path);
+  };
 
   /** Go to the first byte of the part a heading names. Held as one function
    *  for the life of the view, since every heading line keeps it. */
@@ -1576,178 +1566,6 @@ export class HexView {
     return this.spanCache;
   }
 
-  /** One entry in the annotation column, coloured to match its bytes. `extra`
-   *  marks a chip drawn above the bytes it names: it shows that the field runs
-   *  on through them, and only what the chip shows changes — the title and the
-   *  aria-label already say it in words. */
-  /**
-   * An empty chip, ready to be filled.
-   *
-   * The click handler is attached once and reads the field off the element, so
-   * that filling a chip again does not mean making one again. Keeping the same
-   * button matters beyond the cost: on a touch screen a finger may be resting
-   * on it, and taking the element out from under a finger is read as the touch
-   * being cancelled, which stops the drag that is scrolling the view.
-   */
-  private newChip(): ChipEl {
-    const el = document.createElement("button") as ChipEl;
-    el.type = "button";
-    el.className = "hv-chip";
-    const nameEl = document.createElement("b");
-    const v = document.createElement("span");
-    v.className = "hv-chip-val";
-    el.append(nameEl, v);
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const path = el._path;
-      if (path !== undefined) this.onPickField(path);
-    });
-    return el;
-  }
-
-  /** A chip that is not a field: the count of what did not fit, or a note about
-   *  the column itself. */
-  private fillPlain(el: ChipEl, cls: string, text: string, title: string): void {
-    const className = `hv-chip hv-chip-gap ${cls}`.trim();
-    if (el.className !== className) el.className = className;
-    setText(el.firstElementChild as HTMLElement, text);
-    setText(el.lastElementChild as HTMLElement, "");
-    if (el.title !== title) el.title = title;
-    el._path = undefined;
-    el.disabled = true;
-    el.removeAttribute("aria-label");
-  }
-
-  private chip(c: Chip, text: ChipText, extra = false): ChipEl {
-    const el = this.newChip();
-    this.fillChip(el, c, text, extra);
-    return el;
-  }
-
-  /**
-   * Put the chips a block wants into it, reusing the elements already there and
-   * only adding or dropping one when the count changes.
-   *
-   * `tail` adds the note that the column has stopped listing fields, which
-   * belongs to the last block on the last row rather than to any one field.
-   */
-  private fillNote(
-    el: HTMLElement,
-    b: ChipBlock | null,
-    continued: boolean,
-    tail: boolean,
-  ): void {
-    const n = b === null ? 0 : b.shown;
-    const rest = b !== null && b.shown < b.entries.length;
-    const want = n + (rest ? 1 : 0) + (tail ? 1 : 0);
-    while (el.childElementCount < want) el.append(this.newChip());
-    // Spare chips are hidden rather than taken away. A row that scrolls into
-    // one with fewer fields would otherwise drop the element a finger is
-    // resting on, and a touch whose element leaves the document is one the
-    // browser calls off, which stops the drag that is scrolling the view.
-    for (let i = 0; i < el.childElementCount; i++) {
-      const c = el.children[i] as HTMLElement;
-      if (c.hidden !== i >= want) c.hidden = i >= want;
-    }
-    // A block of chips with none showing takes no room, the same as one with
-    // no children. Only above and below the bytes: the column beside them
-    // holds its width whether or not this row has a field.
-    el.classList.toggle("hv-empty", want === 0);
-    for (let i = 0; i < n && b !== null; i++) {
-      this.fillChip(el.children[i] as ChipEl, b.entries[i] as Chip, b.texts[i] as ChipText, continued);
-    }
-    let at = n;
-    if (rest && b !== null) {
-      const left = b.entries.slice(b.shown);
-      const named = left.slice(0, 8).map((c) => chipText(c).name);
-      if (left.length > named.length) named.push("…");
-      const what = left.length === 1 ? "field starts" : "fields start";
-      this.fillPlain(
-        el.children[at] as ChipEl,
-        "hv-chip-rest",
-        `+${left.length}`,
-        `${left.length} more ${what} on this row: ${named.join(", ")}`,
-      );
-      at++;
-    }
-    if (tail) {
-      this.fillPlain(
-        el.children[at] as ChipEl,
-        "",
-        "more fields below",
-        `The field column shows up to ${SPAN_LIMIT} fields at a time. Scroll down to see the rest.`,
-      );
-    }
-  }
-
-  /** Draw a field's chip into a chip element, whether or not it was one. */
-  private fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): void {
-    const s = c.span;
-    const { name, detail } = text;
-    let cls = "hv-chip";
-    if (s.gap) cls += " hv-chip-gap";
-    else cls += ` ${fieldClass(s.kind)}`;
-    if (c.carried) cls += " hv-chip-carried";
-    if (el.className !== cls) el.className = cls;
-    setText(el.firstElementChild as HTMLElement, name);
-    const shown = extra ? continuedDetail(detail) : detail;
-    setText(el.lastElementChild as HTMLElement, shown);
-    const path = [...s.trail, s.name].join(" ");
-    let title: string;
-    let label: string | null = null;
-    if (c.run.length > 0) {
-      // The first few, by number and value, so the reader can see what kind
-      // of thing the run is without opening it.
-      const first = c.run.slice(0, 6).map((e) => `${e.name} ${chipDetail(e)}`);
-      if (c.run.length > first.length) first.push("\u2026");
-      title = `${s.trail.join(" ")} \u00b7 ${s.type} \u00b7 ${detail}: ${first.join(", ")}`;
-    } else if (s.gap) {
-      title = `No field covers these ${detail}. Inside: ${path}`;
-    } else if (c.carried) {
-      // The arrow says "this began further up", which a screen reader cannot
-      // see and a first-time reader should not have to work out.
-      title = `Starts above the visible rows: ${path}, ${detail}`;
-      label = `starts above: ${name}, ${detail}`;
-    } else {
-      title = `${path} \u00b7 ${s.type}`;
-    }
-    if (el.title !== title) el.title = title;
-    if (label === null) el.removeAttribute("aria-label");
-    else el.setAttribute("aria-label", label);
-    el._path = s.gap ? undefined : s.path;
-    el.disabled = s.gap;
-  }
-
-  /**
-   * How wide the chips' own text is drawn, read off a chip that has been. A
-   * chip's name is bold sans and its value mono, so counting characters at
-   * one width was wrong for both, and wrong by enough to predict three lines
-   * where the browser drew four.
-   *
-   * Null until a chip exists to read a font from; the caller keeps the
-   * character count until then and draws once more when this arrives.
-   */
-  private readChipFonts(): ChipMeasure | null {
-    const nameEl = this.rowsEl.querySelector(".hv-chip > b") as HTMLElement | null;
-    if (nameEl === null) return null;
-    const valEl = this.rowsEl.querySelector(".hv-chip-val") as HTMLElement | null;
-    const ctx = document.createElement("canvas").getContext("2d");
-    if (ctx === null) return null;
-    // Built from the longhands: what `font` computes to is not something every
-    // browser will hand back whole.
-    const font = (el: HTMLElement): string => {
-      const s = getComputedStyle(el);
-      return `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
-    };
-    const nameFont = font(nameEl);
-    const valFont = valEl === null ? nameFont : font(valEl);
-    const width = (f: string, s: string): number => {
-      ctx.font = f;
-      return ctx.measureText(s).width;
-    };
-    return { name: (s) => width(nameFont, s), value: (s) => width(valFont, s) };
-  }
-
   /**
    * Everything one draw needs, gathered once: the shape the view is in, the
    * bytes and the spans for the rows on screen, and where the headings fall.
@@ -1948,8 +1766,8 @@ export class HexView {
         const say = r === 0 ? (f.trouble ?? NO_TEMPLATE) : null;
         while (firstNote.childElementCount > (say === null ? 0 : 1)) firstNote.lastElementChild?.remove();
         if (say !== null) {
-          if (firstNote.childElementCount === 0) firstNote.append(this.newChip());
-          this.fillPlain(firstNote.firstElementChild as ChipEl, "hv-chip-wide", say, f.trouble ?? "");
+          if (firstNote.childElementCount === 0) firstNote.append(newChip(this.pickField));
+          fillPlain(firstNote.firstElementChild as ChipEl, "hv-chip-wide", say, f.trouble ?? "");
         }
       }
       return 0;
@@ -1975,7 +1793,7 @@ export class HexView {
     if (key !== parts.noteKey) {
       parts.noteKey = key;
       for (const [j, b] of planned.blocks.entries()) {
-        this.fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1);
+        fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1, this.pickField);
       }
     }
     return planned.extraHeight;
@@ -1988,7 +1806,7 @@ export class HexView {
     const pinnedKey = pinnedNoteKey(f.pinned);
     if (pinnedKey !== this.pinnedKey) {
       this.pinnedKey = pinnedKey;
-      this.fillNote(this.pinned, f.pinned, true, false);
+      fillNote(this.pinned, f.pinned, true, false, this.pickField);
     }
   }
 
@@ -2003,7 +1821,7 @@ export class HexView {
   private measure(f: Frame): { widened: boolean; trackH: number } {
     const fields = f.fields;
     const below = f.below;
-    const fonts = fields && this.chipFonts === null ? this.readChipFonts() : null;
+    const fonts = fields && this.chipFonts === null ? readChipFonts(this.rowsEl) : null;
     let widened = false;
     if (this.metrics === null || this.arrangement === "unknown") {
       const noteEl = fields ? (this.rowEls[0]?.querySelector(".hv-note") as HTMLElement | null) : null;
