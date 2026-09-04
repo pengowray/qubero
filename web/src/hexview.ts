@@ -2287,14 +2287,6 @@ export class HexView {
       this.pinnedKey = pinnedKey;
       this.fillNote(this.pinned, pinnedBlock, true, false);
     }
-    // Beside the bytes the strip stands over the column it replaces a line of,
-    // not over the row: the bytes underneath stay readable, and the chips keep
-    // the column's hairline and indent.
-    const side = fields && !below;
-    if (this.pinned.classList.contains("hv-note-pinned-side") !== side)
-      this.pinned.classList.toggle("hv-note-pinned-side", side);
-    const pinLeft = side ? `${this.metrics?.noteLeft ?? 0}px` : "";
-    if (this.pinned.style.left !== pinLeft) this.pinned.style.left = pinLeft;
 
     // Everything the browser has to be asked, asked together: the widths and
     // the fonts the next layout is worked out from, and the heights this one
@@ -2331,6 +2323,15 @@ export class HexView {
       if (fields && w > 0 && Math.abs(w - this.noteWidth) > 4) widened = true;
       if (fields && !below) this.noteWidth = w;
     }
+    // Beside the bytes the strip stands over the column it replaces a line of,
+    // not over the row: the bytes underneath stay readable, and the chips keep
+    // the column's hairline and indent. Placed after the measurement above, so
+    // the draw that first finds where the column is puts the strip there too.
+    const side = fields && !below;
+    if (this.pinned.classList.contains("hv-note-pinned-side") !== side)
+      this.pinned.classList.toggle("hv-note-pinned-side", side);
+    const pinLeft = side ? `${this.metrics.noteLeft}px` : "";
+    if (this.pinned.style.left !== pinLeft) this.pinned.style.left = pinLeft;
     // A note below the bytes is as wide as the row, whatever the side column
     // was measured at.
     if (below) {
