@@ -463,8 +463,9 @@ export class HexView {
   setSections(sections: readonly OutlineHeading[]): void {
     this.sections = sections;
     this.rebuildStructural();
-    // The rows on screen were measured with the headings they had before.
-    this.ledger.clearMeasured();
+    // The measurements stand: what is kept is what a row's chips wrapped to,
+    // over and above the headings it was reckoned to carry, and a heading
+    // arriving or leaving changes the reckoning rather than the wrapping.
     this.render();
     this.revealCursor();
   }
@@ -2119,7 +2120,14 @@ export class HexView {
     // came to. The view does not move for it: a row that turned out taller or
     // shorter than expected changes the total, and the thumb may shift a pixel
     // for that, but the bytes the reader is looking at stay where they are.
-    for (const [i, h] of real.entries()) if (h > 0) this.ledger.measure(this.topRow + i, h);
+    // Not the top row, unless it is the first row of the file. The top row is
+    // the one that names the fields carried down from above the view, so it can
+    // be a line of chips taller there than it is anywhere else; recording that
+    // would leave the ledger holding a height the row only has while it happens
+    // to be at the top. It is measured on the draws where it is not.
+    for (const [i, h] of real.entries()) {
+      if (h > 0 && (i > 0 || this.topRow === 0)) this.ledger.measure(this.topRow + i, h);
+    }
     this.ledger.trim(this.topRow);
 
     // The top row may now be shorter than the offset into it, which is the same
