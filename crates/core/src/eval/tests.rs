@@ -2678,6 +2678,41 @@ mod json_edits {
     }
 
     #[test]
+    fn a_number_is_edited_as_the_digits_the_file_wrote() {
+        let text = r#"{"a": 1.0, "b": 1.5e10, "c": 3}"#;
+        let d = doc(text.as_bytes());
+        let mut ev = Evaluator::new(Template::new("json", T::json()));
+        let starts: Vec<_> = (0..3).map(|i| ev.node(&d, &[i]).unwrap().edit_text.unwrap()).collect();
+        assert_eq!(starts, ["1.0", "1.5e10", "3"]);
+        // Opening a field and applying it unchanged leaves the file alone,
+        // which reading the number and writing it back would not.
+        for (i, start) in starts.iter().enumerate() {
+            let w = ev.prepare_write(&d, &[i], start).unwrap();
+            assert_eq!(w.n_bits, w.old_bits, "{start}");
+            assert_eq!(w.data, start.as_bytes());
+        }
+    }
+
+    #[test]
+    fn json_inside_a_sized_record_is_as_fixed_as_json_sized_outright() {
+        let body = br#"{"a": "xy"}"#;
+        let mut bytes = vec![body.len() as u8];
+        bytes.extend_from_slice(body);
+        let t = Template::new(
+            "wrapped",
+            T::structure(
+                "Root",
+                vec![
+                    ("len", T::u8()),
+                    ("rec", T::sized(E::field("len"), T::structure("Rec", vec![("hdr", T::json())]))),
+                ],
+            ),
+        );
+        let err = write(&bytes, t, &[1, 0, 0], "longer").unwrap_err();
+        assert!(err.contains("Length is fixed here"), "{err}");
+    }
+
+    #[test]
     fn an_array_and_an_object_are_not_scalars() {
         for path in [vec![4], vec![4, 2], vec![]] {
             let err = plain(&path, "[]").unwrap_err();

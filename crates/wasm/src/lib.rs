@@ -1037,7 +1037,9 @@ fn dto(n: NodeInfo) -> NodeDto {
         offset_bits: n.offset_bits as f64,
         size_bits: n.size_bits as f64,
         value,
-        edit_text,
+        // The core's own answer where it has one: a JSON number is edited as
+        // the digits the file wrote rather than as a reading of them.
+        edit_text: n.edit_text.unwrap_or(edit_text),
         kind,
         ok,
         child_count: n.child_count as f64,

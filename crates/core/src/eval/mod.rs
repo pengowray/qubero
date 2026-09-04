@@ -187,6 +187,11 @@ pub struct NodeInfo {
     pub composite: bool,
     /// True when `write` accepts text for this field.
     pub editable: bool,
+    /// What an editor should start from, where that is not the value read back
+    /// as text. A JSON number is the digits the file wrote: reading `1.5e10`
+    /// as a number and writing the number back would leave `15000000000` in a
+    /// file nobody meant to reformat, and `1.0` would become `1`.
+    pub edit_text: Option<String>,
     /// How many bytes of the field the value occupies. Same as the field's size
     /// except for padded and terminated text, where the padding and the
     /// terminator are the format's business, not the value's.
@@ -627,6 +632,13 @@ impl Evaluator {
             // made there has nowhere to go.
             editable: r.space == 0
                 && !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
+            edit_text: match &r.ty {
+                Ty::Json(json::Shape::Number, _) => {
+                    let (at, bits) = reading.0;
+                    Some(String::from_utf8_lossy(&self.read(doc, &r, at, bits * 8)?).into_owned())
+                }
+                _ => None,
+            },
             value_offset_bits: reading.0 .0,
             value_bytes: reading.0 .1,
             read_as: reading.2,
@@ -802,18 +814,14 @@ impl Evaluator {
         Ok(Write { offset_bits: at, data, n_bits, old_bits: n_bits })
     }
 
-    /// Whether the JSON field `path` sits in has a length something else in
-    /// the file already recorded, as a safetensors header does. Text written
-    /// there may not change length: the recorded number would be wrong, and
-    /// every byte the file counts from the end of the header would have moved.
+    /// Whether anything this field sits inside has a length the file already
+    /// recorded, as a safetensors header does in the `header_len` in front of
+    /// it. Text written there may not change length: that number would be
+    /// wrong, and every byte the file counts from the end of it would have
+    /// moved. Every ancestor is asked, not only the JSON field itself: a
+    /// header inside a sized record is just as fixed as one sized outright.
     fn json_length_is_recorded(&self, path: &[usize]) -> bool {
-        (0..=path.len())
-            .rev()
-            .find_map(|k| match self.memo.get(&path[..k]) {
-                Some(r) if matches!(r.ty, Ty::Json(json::Shape::Doc, _)) => Some(r.declared_size.is_some()),
-                _ => None,
-            })
-            .unwrap_or(false)
+        (0..=path.len()).any(|k| self.memo.get(&path[..k]).is_some_and(|r| r.declared_size.is_some()))
     }
 
     /// Children `from..to` of the node at `path` (clamped to the child count).
