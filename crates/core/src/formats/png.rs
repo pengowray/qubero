@@ -13,8 +13,8 @@ const COLOR_TYPE: &[(i128, &str)] = &[
 ];
 
 /// The header chunk, which every PNG opens with and which says what shape the
-/// image is. Shared with the PICO-8 cartridge template, which reads the same
-/// chunk and then goes looking for what the picture is carrying.
+/// image is. Shared with the cartridge templates, PICO-8 and Picotron, which
+/// read the same chunk and then go looking for what the picture is carrying.
 pub(crate) fn ihdr() -> T {
     T::structure(
         "IHDR",
