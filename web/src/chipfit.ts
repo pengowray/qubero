@@ -52,7 +52,7 @@ export function runDetail(count: number, unit: string | null = null): string {
  *  say how many, since the bytes themselves are already on the left. */
 export function chipDetail(s: Span): string {
   if (s.count > 0) return runDetail(s.count, s.unit);
-  if (s.gap || s.kind === "bytes") return bitSizeText(s.size_bits);
+  if (s.gap || s.kind === "bytes" || s.value === "") return bitSizeText(s.size_bits);
   return s.value.length > CHIP_VALUE ? `${s.value.slice(0, CHIP_VALUE)}…` : s.value;
 }
 

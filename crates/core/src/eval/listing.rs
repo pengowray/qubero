@@ -513,15 +513,23 @@ impl Evaluator {
     /// thousands of symbols; every one of those is worth a row to a reader who
     /// opens the block, and none of them is worth a chip beside the bytes.
     fn traced_block_span<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
+        // A stored block codes nothing: its one "symbol" is the bytes copied
+        // through, and counting it says less than the block's size does. So
+        // no count for those, and the chip falls back to the size.
         let symbols = match (self.trace_for(path), &self.memo[path].ty) {
-            (Some((_, trace)), Ty::Traced { part: TracedPart::Block(i) }) => {
-                super::traced::BlockView::of(trace, *i).map_or(0, |v| v.symbols.len() as u64)
-            }
+            (Some((_, trace)), Ty::Traced { part: TracedPart::Block(i) }) => super::traced::BlockView::of(trace, *i)
+                .filter(|v| v.block.kind != crate::codec::BlockKind::Stored)
+                .map_or(0, |v| v.symbols.len() as u64),
             _ => 0,
         };
         let mut span = self.span_of(doc, path, info)?;
         span.count = symbols;
-        span.unit = Some("symbol".to_string());
+        span.unit = (symbols > 0).then(|| "symbol".to_string());
+        // The block's own value is its number in the stream, which beside the
+        // bytes reads as a count of something. The size says more.
+        if symbols == 0 {
+            span.value = Value::Str(String::new());
+        }
         Ok(span)
     }
 
