@@ -98,6 +98,13 @@ type Select = "keep" | "clear" | { readonly anchor: number };
  *  for a chip that is one field. */
 type Chip = { span: Span; carried: boolean; run: Span[] };
 
+/** A chip element, with the path of the field it stands for kept on it, so one
+ *  click handler serves the button for as long as the button lives. */
+type ChipEl = HTMLButtonElement & { _path?: readonly number[] | undefined };
+
+/** A heading line, with the part it names kept on it. */
+type HeadEl = HTMLButtonElement & { _head?: OutlineHeading | undefined };
+
 /** What a chip says: the name in bold and the value after it. */
 type ChipText = { readonly name: string; readonly detail: string };
 
@@ -189,6 +196,9 @@ type LineParts = {
    *  name. Only in the "below" arrangement, and only on the row's first line;
    *  empty otherwise, and hidden by `:empty`. */
   readonly above: HTMLElement;
+  /** The parts that start where this line begins, drawn above it. Always
+   *  present, and empty when none do. */
+  readonly head: HTMLElement;
   readonly hex: readonly HTMLElement[];
   readonly text: readonly HTMLElement[];
 };
@@ -224,6 +234,9 @@ export class HexView {
     /** The headings on the row and where the row is cut for them, so the lines
      *  and heading blocks are built again only when either changes. */
     layoutKey: string;
+    /** What the row's chips last said, so they are built again only when they
+     *  would say something else. Cleared whenever the lines they live in are. */
+    noteKey: string;
   }[] = [];
   private partsShape = "";
   /** What `fitParts` last built the lines for, so a line added mid-draw for a
@@ -612,6 +625,7 @@ export class HexView {
         start: -1,
         blank: false,
         layoutKey: "",
+        noteKey: "",
       };
     });
   }
@@ -631,6 +645,8 @@ export class HexView {
     note.className = below ? "hv-note hv-note-below" : "hv-note";
     const above = document.createElement("span");
     above.className = "hv-note hv-note-above";
+    const head = document.createElement("div");
+    head.className = "hv-headings";
     const hex: HTMLElement[] = [];
     const text: HTMLElement[] = [];
     for (let i = 0; i < bpr; i++) {
@@ -649,7 +665,7 @@ export class HexView {
     // Beside the bytes the note is part of the line; below them it is a block
     // of its own after the line, so that it can use the row's whole width.
     if (fields && !below) line.append(note);
-    return { line, addr, cells, asc, note, above, hex, text };
+    return { line, addr, cells, asc, note, above, head, hex, text };
   }
 
   /**
@@ -674,22 +690,46 @@ export class HexView {
   ): void {
     const { bpr, binary, fields, below } = this.lineShape;
     while (parts.lines.length < segs.length) parts.lines.push(this.makeLine());
+    // Every line the row has ever needed, in order, whether or not this
+    // drawing uses it. A row that stops being cut hides its second line rather
+    // than dropping it, so the list of things in the row only ever grows and a
+    // scroll never takes an element out from under a finger.
     const kids: HTMLElement[] = [];
-    for (const [j, at] of segs.entries()) {
-      const lp = parts.lines[j] as LineParts;
+    for (const [j, lp] of parts.lines.entries()) {
+      const on = j < segs.length;
+      const at = on ? (segs[j] as number) : 0;
       // The fields carried down from above the view name bytes the row is
       // about to draw, so they go over them rather than under: a chip below
       // the first row would sit between the bytes it names and the ones that
       // follow. Always in place while the chips are below, empty when nothing
       // is carried, so a scroll moves a chip between the two blocks without
       // building the row again.
-      if (fields && below && j === 0) kids.push(lp.above);
-      const here = heads.get(at);
-      if (here !== undefined) kids.push(this.headingBlock(here, fileBits, rowStart + at));
+      if (fields && below && j === 0) {
+        // A row coming back from past the end of the file has its pieces
+        // hidden; showing them is this pass's job. Whether the block of
+        // carried chips takes any room is the `hv-empty` class's.
+        if (lp.above.hidden) lp.above.hidden = false;
+        kids.push(lp.above);
+      }
+      // Always in place, empty when no part starts here, so that a heading
+      // arriving or leaving writes into a block that is already there.
+      this.fillHeadings(lp.head, on ? (heads.get(at) ?? []) : [], fileBits, rowStart + at);
+      kids.push(lp.head);
+      if (lp.line.hidden === on) lp.line.hidden = !on;
       kids.push(lp.line);
-      if (fields && below) kids.push(lp.note);
+      if (fields && below) {
+        if (lp.note.hidden === on) lp.note.hidden = !on;
+        kids.push(lp.note);
+      }
     }
-    row.replaceChildren(...kids);
+    // Only when the row really is made of different things. `replaceChildren`
+    // takes every child out and puts it back even when the list it is given is
+    // the one already there, and a finger resting on an element that is taken
+    // out of the document is a touch the browser calls off — which stops the
+    // drag that is scrolling the view.
+    for (const [i, kid] of kids.entries()) {
+      if (row.childNodes[i] !== kid) row.insertBefore(kid, row.childNodes[i] ?? null);
+    }
     const blankHex = binary ? "        " : "  ";
     for (const [j, from] of segs.entries()) {
       const to = segs[j + 1] ?? bpr;
@@ -1665,43 +1705,70 @@ export class HexView {
    *  colour, name, address range, size and share of the file, as the listing
    *  gives them. Pressing one goes to the part's first byte. `at` is the byte
    *  the block sits before, which is what a drag across it reads as. */
-  private headingBlock(heads: readonly OutlineHeading[], fileBits: number, at: number): HTMLElement {
-    const block = document.createElement("div");
-    block.className = "hv-headings";
-    block.dataset["segOff"] = String(at);
-    for (const h of heads) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = `hv-heading hv-heading-${h.level}`;
-      if (h.level === 0) {
-        const swatch = document.createElement("span");
-        swatch.className = "hv-swatch";
-        swatch.style.background = h.color;
-        b.append(swatch);
-      }
-      const name = headingName(h, fileBits);
-      const nameEl = document.createElement("b");
-      nameEl.className = "hv-heading-name";
-      nameEl.textContent = name;
-      const range = document.createElement("span");
-      range.className = "hv-heading-range";
-      range.textContent = rangeText(h.offsetBits, h.sizeBits);
-      const size = document.createElement("span");
-      size.className = "hv-heading-size";
-      const share = shareText(h.sizeBits, fileBits);
-      size.textContent = `${formatBytes(h.sizeBits / 8)}${share === "" ? "" : ` · ${share}`}`;
-      b.append(nameEl, range, size);
-      b.title = HEADING_TIP(name);
-      b.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.setBitCursor(h.offsetBits, { pane: "hex" });
-        // An empty path is the whole file, which is not what a heading over
-        // a run of fields at its front is for.
-        if (h.path.length > 0) this.onPickField(h.path);
-      });
-      block.append(b);
+  /** An empty heading line. Like a chip, it keeps its click handler and the
+   *  part it names, so drawing it again does not mean making it again. */
+  private newHeading(): HeadEl {
+    const b = document.createElement("button") as HeadEl;
+    b.type = "button";
+    const swatch = document.createElement("span");
+    swatch.className = "hv-swatch";
+    const nameEl = document.createElement("b");
+    nameEl.className = "hv-heading-name";
+    const range = document.createElement("span");
+    range.className = "hv-heading-range";
+    const size = document.createElement("span");
+    size.className = "hv-heading-size";
+    b.append(swatch, nameEl, range, size);
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const h = b._head;
+      if (h === undefined) return;
+      this.setBitCursor(h.offsetBits, { pane: "hex" });
+      // An empty path is the whole file, which is not what a heading over
+      // a run of fields at its front is for.
+      if (h.path.length > 0) this.onPickField(h.path);
+    });
+    return b;
+  }
+
+  /**
+   * Fill a block with the heading lines for the parts that start at one place:
+   * for each, its colour, name, address range, size and share of the file, as
+   * the listing gives them. Pressing one goes to the part's first byte. `at` is
+   * the byte the block sits before, which is what a drag across it reads as.
+   *
+   * The block and its lines are written over rather than built again, so that a
+   * scroll does not take an element out from under a finger resting on it,
+   * which the browser reads as the touch being called off.
+   */
+  private fillHeadings(block: HTMLElement, heads: readonly OutlineHeading[], fileBits: number, at: number): void {
+    const off = String(at);
+    if (block.dataset["segOff"] !== off) block.dataset["segOff"] = off;
+    // The block stays in the row whether or not a part starts here; with
+    // nothing in it, it is not a gap above the row.
+    if (block.hidden !== (heads.length === 0)) block.hidden = heads.length === 0;
+    while (block.childElementCount < heads.length) block.append(this.newHeading());
+    // Hidden rather than taken away, for the same reason the chips are.
+    for (let i = 0; i < block.childElementCount; i++) {
+      const b = block.children[i] as HTMLElement;
+      if (b.hidden !== i >= heads.length) b.hidden = i >= heads.length;
     }
-    return block;
+    for (const [i, h] of heads.entries()) {
+      const b = block.children[i] as HeadEl;
+      b._head = h;
+      const cls = `hv-heading hv-heading-${h.level}`;
+      if (b.className !== cls) b.className = cls;
+      const swatch = b.firstElementChild as HTMLElement;
+      swatch.hidden = h.level !== 0;
+      if (h.level === 0 && swatch.style.background !== h.color) swatch.style.background = h.color;
+      const name = headingName(h, fileBits);
+      setText(b.children[1] as HTMLElement, name);
+      setText(b.children[2] as HTMLElement, rangeText(h.offsetBits, h.sizeBits));
+      const share = shareText(h.sizeBits, fileBits);
+      setText(b.children[3] as HTMLElement, `${formatBytes(h.sizeBits / 8)}${share === "" ? "" : ` \u00b7 ${share}`}`);
+      const tip = HEADING_TIP(name);
+      if (b.title !== tip) b.title = tip;
+    }
   }
 
   /** Spans for the rows on screen. A pending reply leaves the column empty
@@ -1738,48 +1805,142 @@ export class HexView {
    *  marks a chip drawn above the bytes it names: it shows that the field runs
    *  on through them, and only what the chip shows changes — the title and the
    *  aria-label already say it in words. */
-  private chip(c: Chip, text: ChipText, extra = false): HTMLElement {
-    const s = c.span;
-    const { name, detail } = text;
-    const el = document.createElement("button");
+  /**
+   * An empty chip, ready to be filled.
+   *
+   * The click handler is attached once and reads the field off the element, so
+   * that filling a chip again does not mean making one again. Keeping the same
+   * button matters beyond the cost: on a touch screen a finger may be resting
+   * on it, and taking the element out from under a finger is read as the touch
+   * being cancelled, which stops the drag that is scrolling the view.
+   */
+  private newChip(): ChipEl {
+    const el = document.createElement("button") as ChipEl;
     el.type = "button";
     el.className = "hv-chip";
-    if (s.gap) el.classList.add("hv-chip-gap");
-    else el.classList.add(fieldClass(s.kind));
-    if (c.carried) el.classList.add("hv-chip-carried");
     const nameEl = document.createElement("b");
-    nameEl.textContent = name;
-    el.append(nameEl);
-    const shown = extra ? continuedDetail(detail) : detail;
-    if (shown !== "") {
-      const v = document.createElement("span");
-      v.className = "hv-chip-val";
-      v.textContent = shown;
-      el.append(v);
+    const v = document.createElement("span");
+    v.className = "hv-chip-val";
+    el.append(nameEl, v);
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const path = el._path;
+      if (path !== undefined) this.onPickField(path);
+    });
+    return el;
+  }
+
+  /** A chip that is not a field: the count of what did not fit, or a note about
+   *  the column itself. */
+  private fillPlain(el: ChipEl, cls: string, text: string, title: string): void {
+    const className = `hv-chip hv-chip-gap ${cls}`.trim();
+    if (el.className !== className) el.className = className;
+    setText(el.firstElementChild as HTMLElement, text);
+    setText(el.lastElementChild as HTMLElement, "");
+    if (el.title !== title) el.title = title;
+    el._path = undefined;
+    el.disabled = true;
+    el.removeAttribute("aria-label");
+  }
+
+  private chip(c: Chip, text: ChipText, extra = false): ChipEl {
+    const el = this.newChip();
+    this.fillChip(el, c, text, extra);
+    return el;
+  }
+
+  /**
+   * Put the chips a block wants into it, reusing the elements already there and
+   * only adding or dropping one when the count changes.
+   *
+   * `tail` adds the note that the column has stopped listing fields, which
+   * belongs to the last block on the last row rather than to any one field.
+   */
+  private fillNote(
+    el: HTMLElement,
+    b: { entries: Chip[]; texts: ChipText[]; shown: number } | null,
+    continued: boolean,
+    tail: boolean,
+  ): void {
+    const n = b === null ? 0 : b.shown;
+    const rest = b !== null && b.shown < b.entries.length;
+    const want = n + (rest ? 1 : 0) + (tail ? 1 : 0);
+    while (el.childElementCount < want) el.append(this.newChip());
+    // Spare chips are hidden rather than taken away. A row that scrolls into
+    // one with fewer fields would otherwise drop the element a finger is
+    // resting on, and a touch whose element leaves the document is one the
+    // browser calls off, which stops the drag that is scrolling the view.
+    for (let i = 0; i < el.childElementCount; i++) {
+      const c = el.children[i] as HTMLElement;
+      if (c.hidden !== i >= want) c.hidden = i >= want;
     }
+    // A block of chips with none showing takes no room, the same as one with
+    // no children. Only above and below the bytes: the column beside them
+    // holds its width whether or not this row has a field.
+    el.classList.toggle("hv-empty", want === 0);
+    for (let i = 0; i < n && b !== null; i++) {
+      this.fillChip(el.children[i] as ChipEl, b.entries[i] as Chip, b.texts[i] as ChipText, continued);
+    }
+    let at = n;
+    if (rest && b !== null) {
+      const left = b.entries.slice(b.shown);
+      const named = left.slice(0, 8).map((c) => this.chipText(c).name);
+      if (left.length > named.length) named.push("…");
+      const what = left.length === 1 ? "field starts" : "fields start";
+      this.fillPlain(
+        el.children[at] as ChipEl,
+        "hv-chip-rest",
+        `+${left.length}`,
+        `${left.length} more ${what} on this row: ${named.join(", ")}`,
+      );
+      at++;
+    }
+    if (tail) {
+      this.fillPlain(
+        el.children[at] as ChipEl,
+        "",
+        "more fields below",
+        `The field column shows up to ${SPAN_LIMIT} fields at a time. Scroll down to see the rest.`,
+      );
+    }
+  }
+
+  /** Draw a field's chip into a chip element, whether or not it was one. */
+  private fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): void {
+    const s = c.span;
+    const { name, detail } = text;
+    let cls = "hv-chip";
+    if (s.gap) cls += " hv-chip-gap";
+    else cls += ` ${fieldClass(s.kind)}`;
+    if (c.carried) cls += " hv-chip-carried";
+    if (el.className !== cls) el.className = cls;
+    setText(el.firstElementChild as HTMLElement, name);
+    const shown = extra ? continuedDetail(detail) : detail;
+    setText(el.lastElementChild as HTMLElement, shown);
     const path = [...s.trail, s.name].join(" ");
+    let title: string;
+    let label: string | null = null;
     if (c.run.length > 0) {
       // The first few, by number and value, so the reader can see what kind
       // of thing the run is without opening it.
       const first = c.run.slice(0, 6).map((e) => `${e.name} ${chipDetail(e)}`);
       if (c.run.length > first.length) first.push("\u2026");
-      el.title = `${s.trail.join(" ")} \u00b7 ${s.type} \u00b7 ${detail}: ${first.join(", ")}`;
+      title = `${s.trail.join(" ")} \u00b7 ${s.type} \u00b7 ${detail}: ${first.join(", ")}`;
     } else if (s.gap) {
-      el.title = `No field covers these ${detail}. Inside: ${path}`;
+      title = `No field covers these ${detail}. Inside: ${path}`;
     } else if (c.carried) {
       // The arrow says "this began further up", which a screen reader cannot
       // see and a first-time reader should not have to work out.
-      el.title = `Starts above the visible rows: ${path}, ${detail}`;
-      el.setAttribute("aria-label", `starts above: ${name}, ${detail}`);
+      title = `Starts above the visible rows: ${path}, ${detail}`;
+      label = `starts above: ${name}, ${detail}`;
     } else {
-      el.title = `${path} \u00b7 ${s.type}`;
+      title = `${path} \u00b7 ${s.type}`;
     }
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (!s.gap) this.onPickField(s.path);
-    });
-    if (s.gap) el.disabled = true;
-    return el;
+    if (el.title !== title) el.title = title;
+    if (label === null) el.removeAttribute("aria-label");
+    else el.setAttribute("aria-label", label);
+    el._path = s.gap ? undefined : s.path;
+    el.disabled = s.gap;
   }
 
   /**
@@ -1874,9 +2035,13 @@ export class HexView {
       const rowStart = start + r * bpr;
       if (rowStart > len) {
         if (!parts.blank) {
-          row.replaceChildren();
+          // Hidden, not emptied: a row past the end of the file can scroll back
+          // into use, and taking its elements away would drop whatever a finger
+          // is on. `layOutRow` shows them again.
+          for (const kid of row.children) (kid as HTMLElement).hidden = true;
           parts.blank = true;
           parts.layoutKey = "";
+          parts.noteKey = "";
         }
         heights.push(0);
         continue;
@@ -1898,6 +2063,7 @@ export class HexView {
       if (layoutKey !== parts.layoutKey) {
         this.layOutRow(row, parts, rowStart, segs, headsAt, len * 8, addrWidth);
         parts.layoutKey = layoutKey;
+        parts.noteKey = "";
         // Cells that changed line have to be told which byte they draw again.
         parts.start = -1;
       }
@@ -2017,17 +2183,20 @@ export class HexView {
         if (a.className !== ac) a.className = ac;
       }
       if (fields) {
-        for (let j = 0; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
         const firstLine = parts.lines[0] as LineParts;
-        firstLine.above.replaceChildren();
         const firstNote = firstLine.note;
         if (!templated || trouble !== null) {
-          if (r === 0) {
-            const none = document.createElement("span");
-            none.className = "hv-chip hv-chip-gap hv-chip-wide";
-            none.textContent = trouble ?? NO_TEMPLATE;
-            if (trouble !== null) none.title = trouble;
-            firstNote.append(none);
+          const key = `!${r === 0 ? (trouble ?? NO_TEMPLATE) : ""}`;
+          if (key !== parts.noteKey) {
+            parts.noteKey = key;
+            for (let j = 1; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
+            firstLine.above.replaceChildren();
+            const say = r === 0 ? (trouble ?? NO_TEMPLATE) : null;
+            while (firstNote.childElementCount > (say === null ? 0 : 1)) firstNote.lastElementChild?.remove();
+            if (say !== null) {
+              if (firstNote.childElementCount === 0) firstNote.append(this.newChip());
+              this.fillPlain(firstNote.firstElementChild as ChipEl, "hv-chip-wide", say, trouble ?? "");
+            }
           }
           heights.push(height);
           continue;
@@ -2045,6 +2214,14 @@ export class HexView {
           (buckets[j] as Chip[]).push(c);
         }
         const measure = this.chipFonts ?? GUESS_TEXT;
+        // What each block of chips will say, worked out before any of it is
+        // written. A redraw usually wants the very chips that are already
+        // there, and building them again costs a button apiece; worse, it
+        // destroys the element a finger may be resting on, which the browser
+        // reads as the touch being taken away and cancels the drag that is
+        // scrolling the view.
+        const plan: { entries: Chip[]; texts: ChipText[]; shown: number }[] = [];
+        let above: { entries: Chip[]; texts: ChipText[]; shown: number } | null = null;
         // Below the bytes, a field carried down from above the view is drawn
         // over the row instead of under it, so the hex it names is not split
         // in two by the chip naming it.
@@ -2058,14 +2235,12 @@ export class HexView {
             maxLines,
           );
           height += lines * this.sizes.chipLine;
-          for (let i = 0; i < shown; i++)
-            firstLine.above.append(this.chip(carried[i] as Chip, texts[i] as ChipText, true));
+          above = { entries: carried, texts, shown };
           // More carried fields than a capped block can hold: the rest are
           // named below the bytes rather than dropped.
           if (shown < carried.length) buckets[0] = [...carried.slice(shown), ...(buckets[0] as Chip[])];
         }
         for (let j = 0; j < segs.length; j++) {
-          const note = (parts.lines[j] as LineParts).note;
           const entries = buckets[j] as Chip[];
           const texts = entries.map((c) => this.chipText(c));
           const { shown, lines } = chipLayout(
@@ -2077,24 +2252,24 @@ export class HexView {
           // cells, so the line is the taller of the two. Below them the chips
           // are their own block and their lines add to it.
           height += below ? lines * this.sizes.chipLine : Math.max(0, lines * this.sizes.chipLine - this.rowHeight);
-          for (let i = 0; i < shown; i++) note.append(this.chip(entries[i] as Chip, texts[i] as ChipText));
-          if (shown < entries.length) {
-            const rest = document.createElement("span");
-            rest.className = "hv-chip hv-chip-gap hv-chip-rest";
-            const left = entries.slice(shown);
-            rest.textContent = `+${left.length}`;
-            const named = left.slice(0, 8).map((c) => this.chipText(c).name);
-            if (left.length > named.length) named.push("\u2026");
-            rest.title = `${left.length} more ${left.length === 1 ? "field starts" : "fields start"} on this row: ${named.join(", ")}`;
-            note.append(rest);
-          }
+          plan.push({ entries, texts, shown });
         }
-        if (more && r === this.rowEls.length - 1) {
-          const rest = document.createElement("span");
-          rest.className = "hv-chip hv-chip-gap";
-          rest.textContent = "more fields below";
-          rest.title = `The field column shows up to ${SPAN_LIMIT} fields at a time. Scroll down to see the rest.`;
-          (parts.lines[segs.length - 1] as LineParts).note.append(rest);
+        const trailer = more && r === this.rowEls.length - 1;
+        const block = (b: { entries: Chip[]; texts: ChipText[]; shown: number } | null): string =>
+          b === null
+            ? ""
+            : `${b.shown}/${b.entries.length}~` +
+              b.texts
+                .slice(0, b.shown)
+                .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${t.name}${t.detail}`)
+                .join("");
+        const key = `${trailer ? "+" : ""}${block(above)}${plan.map(block).join("")}`;
+        if (key !== parts.noteKey) {
+          parts.noteKey = key;
+          this.fillNote(firstLine.above, above, true, false);
+          for (const [j, b] of plan.entries()) {
+            this.fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1);
+          }
         }
       }
       heights.push(height);

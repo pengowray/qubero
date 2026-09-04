@@ -574,7 +574,9 @@ input.invalid {
   border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
   align-content: start;
 }
-.hv-note-below:empty {
+.hv-note-below:empty,
+.hv-note-below.hv-empty,
+.hv-note-above.hv-empty {
   display: none;
 }
 /* The same block above the bytes, for a field that began further up the file:
@@ -603,6 +605,12 @@ input.invalid {
    as in the listing. Heights are fixed so the view can count on them. */
 .hv-headings {
   font-family: var(--sans);
+}
+/* A row keeps its heading block whether or not a part starts there, so that a
+   scroll writes into the block instead of building one. An empty block is not
+   a gap above the row. */
+.hv-headings:empty {
+  display: none;
 }
 .hv-heading {
   display: flex;
