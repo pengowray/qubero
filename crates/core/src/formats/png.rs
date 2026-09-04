@@ -45,6 +45,59 @@ pub(crate) fn text() -> T {
     )
 }
 
+/// A PNG that carries a cartridge, as PICO-8 and Picotron both write one.
+///
+/// The same chunk stream an ordinary PNG is, with `idat` in place of the bytes
+/// an IDAT chunk would otherwise be: whatever the cartridge template wants to
+/// open over what the picture is carrying. `name` is what the file is called
+/// in the listing.
+pub(crate) fn cart_png(name: &'static str, idat: T) -> T {
+    let chunk = T::structure_named(
+        "Chunk",
+        "type",
+        "data",
+        vec![
+            ("length", T::u32(Big)),
+            ("type", T::utf8(E::lit(4))),
+            (
+                "data",
+                T::sized(
+                    E::field("length"),
+                    T::switch(
+                        E::field("type"),
+                        vec![(0x4948_4452, ihdr()), (0x7445_5874, text()), (0x4944_4154, idat)],
+                        T::bytes(E::field("length")),
+                    ),
+                ),
+            ),
+            ("crc", T::u32(Big)),
+        ],
+    );
+    T::structure(
+        name,
+        vec![
+            ("signature", T::magic(b"\x89PNG\r\n\x1a\n")),
+            ("chunks", T::repeat(chunk, Until::FieldBytes { field: "type".into(), bytes: b"IEND".to_vec() })),
+        ],
+    )
+}
+
+/// Whether a PNG's header says the image is `width` by `height`, eight bits a
+/// channel, colour type 6, which is RGBA. What tells a cartridge from a
+/// picture, since a cartridge says nothing else about itself.
+pub(crate) fn is_size(head: &[u8], width: u32, height: u32) -> bool {
+    if !head.starts_with(b"\x89PNG\r\n\x1a\n") || head.get(12..16) != Some(b"IHDR") {
+        return false;
+    }
+    let (Some(w), Some(h)) = (dword(head, 16), dword(head, 20)) else { return false };
+    w == width && h == height && head.get(24) == Some(&8) && head.get(25) == Some(&6)
+}
+
+fn dword(head: &[u8], at: usize) -> Option<u32> {
+    let bytes: [u8; 4] = head.get(at..at + 4)?.try_into().ok()?;
+    Some(u32::from_be_bytes(bytes))
+}
+
 pub fn png() -> Template {
     let (ihdr, text) = (ihdr(), text());
     let chunk = T::structure_named(

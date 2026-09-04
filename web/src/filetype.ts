@@ -21,6 +21,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   aseprite: "Aseprite",
   p8png: "PICO-8 cartridge",
   p64rom: "Picotron cartridge ROM",
+  p64png: "Picotron cartridge",
   bdb: "Berkeley DB",
   braw: "Blackmagic RAW",
   arw: "Sony ARW",

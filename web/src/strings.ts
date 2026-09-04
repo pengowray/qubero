@@ -117,6 +117,7 @@ export const UNPACKED = {
     offset: "match offset",
     frame_header: "frame header",
     block_header: "block header",
+    filter: "row filter",
     footer: "footer",
     code_len: "code-length code",
     lit_len: "literal code length",

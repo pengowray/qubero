@@ -11,6 +11,10 @@
 //! bits of the picture. Two bits of each of the four channels of a pixel carry
 //! one byte of the cart, which is what [`low_bits_argb`] pulls back out. The
 //! picture stays a picture; the cart is what the picture is carrying.
+//!
+//! Picotron does the same thing at a different width. A `.p64.png` is 512 by
+//! 384 and every pixel carries eleven bits rather than eight, which is why
+//! [`low_bits_rgba11`] hands back a bit stream and not one byte a pixel.
 
 use crate::codec::{BlockKind, Refusal, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
 
@@ -26,8 +30,8 @@ use crate::codec::{BlockKind, Refusal, StepField, StepKind, Trace, TraceBuilder,
 /// byte and the row. The row is one step rather than one per byte because a
 /// filtered byte is a function of its neighbours in both spaces, and a step
 /// per byte would claim a precision the filters do not have. The filter byte
-/// is recorded as a [`StepField::BlockHeader`], which is what it is. The five
-/// filters it can name are none, sub, up, average and paeth, numbered 0 to 4.
+/// is recorded as a [`StepField::Filter`], which names the five filters it can
+/// hold: none, sub, up, average and paeth, numbered 0 to 4.
 pub fn unfilter(data: &[u8], stride: u32, bpp: u8) -> Result<(Vec<u8>, Trace), Refusal> {
     let stride = stride as usize;
     let bpp = bpp as usize;
@@ -53,7 +57,7 @@ pub fn unfilter(data: &[u8], stride: u32, bpp: u8) -> Result<(Vec<u8>, Trace), R
         }
         let out_start = (row * stride) as u64;
         b.open_block(at as u64 * 8, out_start);
-        b.push(at as u64 * 8, out_start, StepKind::Header(StepField::BlockHeader, filter as u32));
+        b.push(at as u64 * 8, out_start, StepKind::Header(StepField::Filter, filter as u32));
         b.push((at + 1) as u64 * 8, out_start, StepKind::Opaque);
         let src = &data[at + 1..at + 1 + stride];
         for i in 0..stride {
@@ -130,7 +134,57 @@ pub fn low_bits_argb(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
         b.push(i as u64 * 32, i as u64, StepKind::Literal(byte));
         out.push(byte);
     }
-    b.close_block(data.len() as u64 * 8, out.len() as u64, BlockKind::Sequences, true);
+    b.close_block(data.len() as u64 * 8, out.len() as u64, BlockKind::Pixels, true);
+    b.finish_at(data.len() as u64 * 8, out.len() as u64);
+    Ok((out, b.done()))
+}
+
+/// Pull eleven bits out of one RGBA pixel, the way a Picotron cartridge hides
+/// a ROM inside a picture.
+///
+/// The input is pixels as PNG stores them, four bytes of red, green, blue and
+/// alpha. One pixel carries eleven bits: the low three of red are the lowest
+/// three, then the low three of green, then the low three of blue, then the
+/// low two of alpha. Those elevens are laid end to end into a byte stream,
+/// least significant bit first, so a byte of output straddles two pixels more
+/// often than not. Everything above the bits named here is the picture.
+///
+/// Whatever bits are left over at the end are dropped: eight pixels come to
+/// eleven whole bytes, and a Picotron image is 512 by 384, which divides.
+///
+/// What the trace says: one step a pixel, four bytes of input to the one or
+/// two bytes of output that pixel completed. Never zero, since eleven bits are
+/// more than a byte. A step is [`StepKind::Stored`] rather than a literal
+/// because a literal is one byte and three steps in every eight are two, and
+/// the bytes did come through as they were written.
+pub fn low_bits_rgba11(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    if data.len() % 4 != 0 {
+        return Err(Refusal::Failed);
+    }
+    let count = data.len() / 4;
+    if count * 11 / 8 > CAP_BYTES {
+        return Err(Refusal::TooLarge);
+    }
+    let mut b = TraceBuilder::default();
+    let mut out: Vec<u8> = Vec::with_capacity(count * 11 / 8);
+    b.open_block(0, 0);
+    // The bits read and not yet written out, low bits first, and how many.
+    let mut held: u32 = 0;
+    let mut bits: u32 = 0;
+    for i in 0..count {
+        let p = &data[i * 4..i * 4 + 4];
+        let word = (p[0] as u32 & 7) | (p[1] as u32 & 7) << 3 | (p[2] as u32 & 7) << 6 | (p[3] as u32 & 3) << 9;
+        let at = out.len() as u64;
+        held |= word << bits;
+        bits += 11;
+        while bits >= 8 {
+            out.push(held as u8);
+            held >>= 8;
+            bits -= 8;
+        }
+        b.push(i as u64 * 32, at, StepKind::Stored);
+    }
+    b.close_block(data.len() as u64 * 8, out.len() as u64, BlockKind::Pixels, true);
     b.finish_at(data.len() as u64 * 8, out.len() as u64);
     Ok((out, b.done()))
 }
@@ -196,5 +250,29 @@ mod tests {
     #[test]
     fn pixels_that_do_not_divide_into_four_are_refused() {
         assert_eq!(low_bits_argb(&[1, 2, 3]).err(), Some(Refusal::Failed));
+        assert_eq!(low_bits_rgba11(&[1, 2, 3]).err(), Some(Refusal::Failed));
+    }
+
+    /// Eight pixels come to eleven bytes, and the bits run r, g, b, a from the
+    /// bottom of the stream up. The first pixel here is 0b01_101_010_011, so
+    /// the first byte out is 0b0101_0011 and the next three bits are 0b011.
+    #[test]
+    fn eleven_bits_a_pixel_are_laid_end_to_end_low_bits_first() {
+        let mut px = vec![0xfb, 0xf2, 0xfd, 0xf9]; // r=3, g=2, b=5, a=1
+        px.extend(std::iter::repeat(0xf8).take(28)); // seven pixels of nothing
+        let (out, trace) = low_bits_rgba11(&px).unwrap();
+        trace.check_tiles().unwrap();
+        assert_eq!(out.len(), 11);
+        assert_eq!(out[0], 0b0101_0011);
+        assert_eq!(out[1], 0b0000_0011);
+        assert_eq!(&out[2..], &[0; 9]);
+        // One step a pixel, four bytes of input each, and one or two bytes
+        // out: the third pixel is the first to carry enough for two.
+        assert_eq!(trace.len(), 8);
+        assert_eq!(trace.step(0).unwrap().in_bits, 0..32);
+        assert_eq!(trace.step(0).unwrap().out_bytes, 0..1);
+        assert_eq!(trace.step(1).unwrap().out_bytes, 1..2);
+        assert_eq!(trace.step(2).unwrap().out_bytes, 2..4);
+        assert_eq!(trace.blocks()[0].kind, BlockKind::Pixels);
     }
 }

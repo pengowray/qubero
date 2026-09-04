@@ -200,6 +200,7 @@ const PROBES: &[Probe] = &[
     // A PICO-8 cartridge, which is a PNG of exactly one size and shape. Asked
     // before the signature table so that it wins over plain `png`.
     Probe::Is("p8png", |h, _| pico8::is_p8png(h)),
+    Probe::Is("p64png", |h, _| picotron::is_p64png(h)),
     Probe::Which(|h, _| camera_raw_format(h)),
     Probe::Is("mp4", |h, _| h.len() >= 8 && &h[4..8] == b"ftyp"),
     Probe::Is("mkv", |h, _| is_mkv(h)),

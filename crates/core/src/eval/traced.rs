@@ -104,6 +104,12 @@ fn header_ty(field: StepField, value: u32, bits: u64) -> T {
             inner,
             &[(0, "stored"), (1, "fixed Huffman"), (2, "dynamic Huffman"), (3, "reserved")],
         ),
+        // RFC 2083 section 6: how the encoder predicted this row.
+        StepField::Filter => T::enumeration(
+            "PngFilter",
+            inner,
+            &[(0, "none"), (1, "sub"), (2, "up"), (3, "average"), (4, "paeth")],
+        ),
         _ => inner,
     };
     sized(bits, named)

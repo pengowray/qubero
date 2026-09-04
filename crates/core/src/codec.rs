@@ -49,6 +49,11 @@ pub enum Codec {
     /// channel of an RGBA pixel, alpha first. How a PICO-8 cartridge is
     /// carried inside the picture of its label.
     LowBitsArgb,
+    /// The same trick at a different width: eleven bits out of one RGBA pixel,
+    /// three from red, three from green, three from blue and two from alpha,
+    /// packed into a byte stream low bits first. How a Picotron cartridge is
+    /// carried inside the picture of its label.
+    LowBitsRgba11,
 }
 
 impl Codec {
@@ -61,6 +66,7 @@ impl Codec {
             Codec::Xz => "xz",
             Codec::PngUnfilter { .. } => "png unfilter",
             Codec::LowBitsArgb => "low bits argb",
+            Codec::LowBitsRgba11 => "low bits rgba 11",
         }
     }
 }
@@ -132,6 +138,8 @@ pub enum StepField {
     FrameHeader,
     /// zstd, xz: one block's header.
     BlockHeader,
+    /// PNG: the byte in front of a scanline saying how the row was predicted.
+    Filter,
     /// xz: the index and the stream footer.
     Footer,
 }
@@ -154,6 +162,7 @@ impl StepField {
             StepField::Offset => "offset",
             StepField::FrameHeader => "frame_header",
             StepField::BlockHeader => "block_header",
+            StepField::Filter => "filter",
             StepField::Footer => "footer",
         }
     }
@@ -257,6 +266,9 @@ pub enum BlockKind {
     /// An LZ4 block, which has no blocks inside it and no tables: one run of
     /// sequences from the front of it to the back.
     Sequences,
+    /// Pixels, read for the bits somebody hid in them. Not a compressed block
+    /// at all: one run of pixels from the front of the image to the back.
+    Pixels,
     /// A block whose insides this round does not read: a zstd or xz block.
     Opaque,
 }
@@ -268,6 +280,7 @@ impl BlockKind {
             BlockKind::Fixed => "fixed",
             BlockKind::Dynamic => "dynamic",
             BlockKind::Sequences => "sequences",
+            BlockKind::Pixels => "pixels",
             BlockKind::Opaque => "opaque",
         }
     }
@@ -566,7 +579,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 15] = [
+const FIELDS: [StepField; 16] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -581,6 +594,7 @@ const FIELDS: [StepField; 15] = [
     StepField::Offset,
     StepField::FrameHeader,
     StepField::BlockHeader,
+    StepField::Filter,
     StepField::Footer,
 ];
 
@@ -603,6 +617,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Xz => frames::xz(data)?,
         Codec::PngUnfilter { stride, bpp } => pixels::unfilter(data, stride, bpp)?,
         Codec::LowBitsArgb => pixels::low_bits_argb(data)?,
+        Codec::LowBitsRgba11 => pixels::low_bits_rgba11(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -618,7 +633,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     let out = match codec {
         // One decoder, not two: the bytes a reader sees have to be the bytes
         // the trace describes, so the traced path is the only path.
-        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb => {
+        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb | Codec::LowBitsRgba11 => {
             decode_traced(codec, data)?.0
         }
         Codec::Zstd => zstd(data)?,

@@ -53,10 +53,24 @@
 //! accounted for: the header, the LZ4 block, the entry encoding, the escape at
 //! 255 and the trailing slash. Inferred: that the byte after `p64` is a version
 //! and not a flag, since every sample holds 2 and none holds anything else;
-//! that 255 is the only escape, since no sample needed another; that a path is
-//! UTF-8, since none of them left ASCII; and that a `.p64.png` carries this
-//! same ROM, which follows from the manual putting a limit on one in "ROM
-//! data" but was not read out of an image here.
+//! that 255 is the only escape, since no sample needed another; and that a
+//! path is UTF-8, since none of them left ASCII.
+//!
+//! ## The image form
+//!
+//! A `.p64.png` carries that same ROM, header and all, hidden in the picture
+//! of the cartridge's label. The image is 512 by 384, eight bits a channel,
+//! RGBA, and every pixel carries eleven bits: the low three of red, then the
+//! low three of green, the low three of blue and the low two of alpha, laid
+//! end to end into a byte stream least significant bit first. 512 by 384 at
+//! eleven bits is 270,336 bytes, which is the 256K of ROM the manual says a
+//! cartridge shared this way may hold, and a cartridge smaller than that
+//! leaves the rest zero.
+//!
+//! Read out of the encoder and decoder in `picotron_cart.py` of
+//! thisismypassport/shrinko8, and checked byte for byte against two cartridges
+//! published as images: both give `p64`, version 2, and a payload size that
+//! the LZ4 block then reads out to its last byte.
 
 use crate::codec::Codec;
 use crate::template::{Encoding, Endian::{Big, Little}, Expr as E, StrLen, Template, Until, Ty as T};
@@ -71,21 +85,55 @@ pub const HEADER_LEN: u64 = 8;
 /// A one-byte length of 255 is not a length. It says a four-byte one follows.
 const LONG_SIZE: i128 = 255;
 
+/// The image a `.p64.png` is, and the bytes one row of it comes to. Four
+/// channels a pixel, and no cartridge is any other size.
+const WIDTH: u32 = 512;
+const HEIGHT: u32 = 384;
+
 pub fn p64rom() -> Template {
-    Template::new(
-        "p64rom",
-        T::structure(
-            "P64Rom",
-            vec![
-                ("magic", T::magic(MAGIC)),
-                // 2 in everything read so far.
-                ("version", T::u8()),
-                // Of the block below, so a short file shows as one.
-                ("payload_size", T::u32(Little)),
-                ("cart", T::decoded(E::field("payload_size"), Codec::Lz4Block, cart())),
-            ],
-        ),
-    )
+    Template::new("p64rom", rom(false))
+}
+
+/// The ROM: eight bytes of header and the LZ4 block the header measures.
+///
+/// `slack` says whether to name what is left after the block. A `.p64.rom`
+/// file ends where the block ends, and an image has room the ROM did not fill.
+fn rom(slack: bool) -> T {
+    let mut fields = vec![
+        ("magic", T::magic(MAGIC)),
+        // 2 in everything read so far.
+        ("version", T::u8()),
+        // Of the block below, so a short file shows as one.
+        ("payload_size", T::u32(Little)),
+        ("cart", T::decoded(E::field("payload_size"), Codec::Lz4Block, cart())),
+    ];
+    if slack {
+        fields.push(("slack", T::bytes(E::Remaining)));
+    }
+    T::structure("P64Rom", fields)
+}
+
+/// A cartridge as it is shared: the ROM hidden in the picture of its label.
+///
+/// Four steps, the same shape a PICO-8 cartridge is read in and for the same
+/// reason: the IDAT chunk is a zlib stream, what comes out of that is PNG
+/// scanlines with a filter byte in front of each, what comes out of undoing
+/// the filters is pixels, and what comes out of the pixels' low bits is the
+/// ROM, header and all.
+pub fn p64png() -> Template {
+    let bits = T::decoded(E::Remaining, Codec::LowBitsRgba11, rom(true));
+    let scanlines = T::decoded(E::Remaining, Codec::PngUnfilter { stride: WIDTH * 4, bpp: 4 }, bits);
+    let idat = T::decoded(E::field("length"), Codec::Zlib, scanlines);
+    Template::new("p64png", super::png::cart_png("PicotronCart", idat))
+}
+
+/// Whether a PNG's header says it is the size and shape a Picotron cartridge
+/// is: 512 by 384, eight bits a channel, colour type 6, which is RGBA.
+///
+/// Not proof, the same way `is_p8png` is not: any 512 by 384 RGBA PNG passes.
+/// Nothing else in the format announces itself.
+pub fn is_p64png(head: &[u8]) -> bool {
+    super::png::is_size(head, WIDTH, HEIGHT)
 }
 
 /// The cartridge as it comes out of the block: entries to the end, with no
@@ -196,6 +244,98 @@ mod tests {
         v.extend_from_slice(&(block.len() as u32).to_le_bytes());
         v.extend_from_slice(&block);
         v
+    }
+
+    /// A cartridge image built from a ROM: eleven bits of every pixel carry
+    /// the stream, the bits above them carry a picture, and each row gets a
+    /// filter byte. The reverse of what `low_bits_rgba11` does.
+    fn cart_png(rom: &[u8]) -> Vec<u8> {
+        let (w, h) = (WIDTH as usize, HEIGHT as usize);
+        let stride = w * 4;
+        let mut raw = Vec::with_capacity(h * (stride + 1));
+        let (mut held, mut bits, mut at) = (0u32, 0u32, 0usize);
+        for row in 0..h {
+            // Filter none, so the bytes in the stream are the pixels.
+            raw.push(0u8);
+            for col in 0..w {
+                while bits < 11 {
+                    let byte = rom.get(at).copied().unwrap_or(0) as u32;
+                    held |= byte << bits;
+                    bits += 8;
+                    at += 1;
+                }
+                let word = held & 0x7ff;
+                held >>= 11;
+                bits -= 11;
+                // Something in the bits above the ones being read, so that the
+                // picture is not one colour and the low bits are demonstrably
+                // the only thing coming out.
+                let paint = ((row + col) as u8) << 3;
+                raw.push(paint | (word & 7) as u8);
+                raw.push(paint | (word >> 3 & 7) as u8);
+                raw.push(paint | (word >> 6 & 7) as u8);
+                raw.push((paint & !3) | (word >> 9 & 3) as u8);
+            }
+        }
+        let mut ihdr = WIDTH.to_be_bytes().to_vec();
+        ihdr.extend_from_slice(&HEIGHT.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&chunk(b"IHDR", &ihdr));
+        png.extend_from_slice(&chunk(b"IDAT", &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6)));
+        png.extend_from_slice(&chunk(b"IEND", b""));
+        png
+    }
+
+    fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut v = (data.len() as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(kind);
+        v.extend_from_slice(data);
+        v.extend_from_slice(&[0; 4]); // CRC, not checked by the template
+        v
+    }
+
+    /// How many bytes 512 by 384 pixels at eleven bits each come to.
+    const STREAM_LEN: u64 = (WIDTH * HEIGHT) as u64 * 11 / 8;
+
+    #[test]
+    fn the_image_carries_the_whole_rom_header_and_all() {
+        let d = Document::new(MemSource(cart_png(&rom())));
+        let mut ev = Evaluator::new(p64png());
+        // The IDAT chunk's data, and the three spaces opened under it.
+        assert_eq!(ev.node(&d, &[1, 1, 2]).unwrap().type_name, "zlib");
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0]).unwrap().type_name, "png unfilter");
+        let bits = ev.node(&d, &[1, 1, 2, 0, 0]).unwrap();
+        assert_eq!(bits.type_name, "low bits rgba 11");
+        let out = ev.node(&d, &[1, 1, 2, 0, 0, 0]).unwrap();
+        assert_eq!(out.type_name, "P64Rom");
+        assert_eq!(out.size_bits, STREAM_LEN * 8);
+
+        // The same header the bare .p64.rom form carries.
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 1]).unwrap().value, Value::UInt(2));
+        let size = rom().len() as u64 - HEADER_LEN;
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 2]).unwrap().value, Value::UInt(size as u128));
+        // And the entries read through the LZ4 block as they do from a ROM.
+        let name = ev.node(&d, &[1, 1, 2, 0, 0, 0, 3, 0, 0, 1, 1]).unwrap();
+        assert_eq!(name.value, Value::Str(".info.pod".into()));
+        // The image has far more room than this cartridge needs.
+        let slack = ev.node(&d, &[1, 1, 2, 0, 0, 0, 4]).unwrap();
+        assert_eq!(slack.size_bits, (STREAM_LEN - rom().len() as u64) * 8);
+    }
+
+    #[test]
+    fn only_a_png_of_the_right_size_and_shape_is_a_cartridge() {
+        let png = cart_png(&rom());
+        assert!(is_p64png(&png));
+        // The same header at any other size is an ordinary PNG.
+        let mut other = png.clone();
+        other[19] = 100;
+        assert!(!is_p64png(&other));
+        // Right size, eight bits, but RGB rather than RGBA.
+        let mut rgb = png.clone();
+        rgb[25] = 2;
+        assert!(!is_p64png(&rgb));
+        assert!(!is_p64png(b"\x89PNG\r\n\x1a\n"));
     }
 
     #[test]
