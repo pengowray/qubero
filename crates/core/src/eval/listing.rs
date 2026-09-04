@@ -20,6 +20,9 @@ pub struct Span {
     /// How many fields this entry stands for, when a large run of values or
     /// records is shown as one. Zero for a single field.
     pub count: u64,
+    /// What one of those is called, singular, when the format has a word for
+    /// it: a deflate block holds symbols, not values. None when it has none.
+    pub unit: Option<String>,
     /// A structure marked to read on one row, already joined: `local.get 0`
     /// rather than an `op` row and an `imm` row. None for everything else,
     /// which reads as its own value.
@@ -347,6 +350,13 @@ impl Evaluator {
             let path = self.locate(doc, at)?;
             // A structure marked to read on one row stands for its fields here.
             let path = self.inline_ancestor(&path);
+            // Everything a decoder's trace laid down stands for the block it
+            // belongs to. The cursor goes all the way to one literal, because
+            // a reader who clicks a byte of a deflate stream is asking which
+            // symbol it is; the column does not, because a screenful of them
+            // is three hundred entries reading `9 bits` and none of them says
+            // what the stream is doing.
+            let path = self.traced_block(&path);
             let inline = matches!(self.memo[&path].ty.base(), Ty::Struct(s) if s.inline);
             let info = self.node(doc, &path)?;
             let span = if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
@@ -360,6 +370,8 @@ impl Evaluator {
                 // of the file would put the stream's contents at the front of
                 // it.
                 self.decoded_run(doc, &path, &info, at)?
+            } else if matches!(self.memo[&path].ty, Ty::Traced { part: TracedPart::Block(_) }) {
+                self.traced_block_span(doc, &path, &info)?
             } else if info.composite {
                 self.gap_inside(doc, &path, &info, at)?
             } else {
@@ -481,6 +493,38 @@ impl Evaluator {
         Ok(span)
     }
 
+    /// The block of a decoder's trace this path is inside, or the path itself
+    /// when it is not inside one. The outermost such node, since a trace is
+    /// one level of blocks and the rest is what is in them.
+    fn traced_block(&self, path: &[usize]) -> Vec<usize> {
+        for k in 0..path.len() {
+            if matches!(self.memo.get(&path[..k + 1]).map(|r| &r.ty), Some(Ty::Traced { part: TracedPart::Block(_) })) {
+                return path[..k + 1].to_vec();
+            }
+        }
+        path.to_vec()
+    }
+
+    /// One block of a decoded stream, as the one entry it is: what coded it,
+    /// and how many symbols it holds.
+    ///
+    /// The whole block rather than its parts. A dynamic block's header is five
+    /// fields and then three hundred code lengths, and its payload is tens of
+    /// thousands of symbols; every one of those is worth a row to a reader who
+    /// opens the block, and none of them is worth a chip beside the bytes.
+    fn traced_block_span<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
+        let symbols = match (self.trace_for(path), &self.memo[path].ty) {
+            (Some((_, trace)), Ty::Traced { part: TracedPart::Block(i) }) => {
+                super::traced::BlockView::of(trace, *i).map_or(0, |v| v.symbols.len() as u64)
+            }
+            _ => 0,
+        };
+        let mut span = self.span_of(doc, path, info)?;
+        span.count = symbols;
+        span.unit = Some("symbol".to_string());
+        Ok(span)
+    }
+
     /// A structure marked to read on one row, as the one row it reads as.
     fn one_row<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
@@ -572,6 +616,7 @@ impl Evaluator {
             value: info.value.clone(),
             gap: false,
             count: 0,
+            unit: None,
             line: None,
             sample: Vec::new(),
             parts: Vec::new(),

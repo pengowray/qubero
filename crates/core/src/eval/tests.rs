@@ -2415,7 +2415,11 @@ fn locate_lands_on_what_the_decoder_read_and_never_on_what_it_produced() {
     // then the Adler-32.
     assert_eq!(spans.last().unwrap().name, "stream");
     assert!(spans.last().unwrap().size_bits >= 4 * 8, "the tail is shorter than the Adler-32");
-    assert!(spans.iter().any(|s| s.name == "bfinal"), "no block header in {:?}", names(&spans));
+    // A block is one entry, not its header fields and then its symbols: the
+    // column beside the bytes says which block they are in, and the reader who
+    // opens it gets `bfinal`, the tables and every symbol.
+    assert!(spans.iter().any(|s| s.name.contains("block")), "no block in {:?}", names(&spans));
+    assert!(!spans.iter().any(|s| s.name == "bfinal"), "block insides in the column: {:?}", names(&spans));
     // Nothing overlaps and nothing is skipped.
     let mut at = 2 * 8;
     for s in &spans {

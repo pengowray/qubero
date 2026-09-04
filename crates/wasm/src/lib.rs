@@ -877,6 +877,9 @@ struct SpanDto {
     gap: bool,
     /// Fields this entry stands for, when a run of numbers is shown as one.
     count: f64,
+    /// What one of those is called, singular. Null when the format has no word
+    /// for them and they read as values.
+    unit: Option<String>,
     /// A structure that reads on one row, already joined. Null for a field that
     /// reads as its own value.
     line: Option<String>,
@@ -957,6 +960,7 @@ fn span_dto(s: Span) -> SpanDto {
         kind,
         gap: s.gap,
         count: s.count as f64,
+        unit: s.unit,
         line: s.line,
         sample: s.sample,
         parts: s.parts.into_iter().map(span_part_dto).collect(),

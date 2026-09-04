@@ -334,6 +334,47 @@ mod tests {
         }
     }
 
+    /// The annotation column over a deflate run says which block the bytes are
+    /// in, not which Huffman symbol: one entry per block, each saying how many
+    /// symbols it coded. Before this every symbol was an entry of its own, and
+    /// one reading `unmapped 9 bits`.
+    #[test]
+    fn the_column_over_a_stream_names_its_blocks() {
+        let (d, mut e) = reading(&"the shape of the shape of the shape. ".repeat(2000).into_bytes());
+        let run = e.node(&d, RUN).unwrap();
+        let spans = e.spans(&d, run.offset_bits, run.offset_bits + run.size_bits, 5000).unwrap();
+        assert!(!spans.is_empty());
+        for s in &spans {
+            assert!(!s.gap, "a gap over a decoded stream: {} of {} bits", s.name, s.size_bits);
+        }
+        let blocks: Vec<_> = spans.iter().filter(|s| s.name.contains("block")).collect();
+        assert!(!blocks.is_empty(), "no block entries in {:?}", spans.iter().map(|s| &s.name).collect::<Vec<_>>());
+        for b in &blocks {
+            assert!(b.count > 0, "{} stands for no symbols", b.name);
+            assert_eq!(b.unit.as_deref(), Some("symbol"));
+        }
+        // A block is thousands of symbols, so a handful of entries covers the
+        // whole run rather than one per symbol.
+        assert!(spans.len() < 32, "{} entries over the run", spans.len());
+    }
+
+    /// And working the column out does not place a node per symbol: the whole
+    /// run costs a bounded number of them, so scrolling through a stream does
+    /// not fill memory with literals.
+    #[test]
+    fn naming_the_blocks_places_no_symbols() {
+        let (d, mut e) = reading(&"the shape of the shape of the shape. ".repeat(2000).into_bytes());
+        let run = e.node(&d, RUN).unwrap();
+        let before = e.memo.len();
+        e.spans(&d, run.offset_bits, run.offset_bits + run.size_bits, 5000).unwrap();
+        let grew = e.memo.len() - before;
+        assert!(grew < 200, "{grew} nodes placed to name the blocks of one stream");
+        // A second pass over the same window places nothing further.
+        let settled = e.memo.len();
+        e.spans(&d, run.offset_bits, run.offset_bits + run.size_bits, 5000).unwrap();
+        assert_eq!(e.memo.len(), settled, "asking again placed more nodes");
+    }
+
     #[test]
     fn a_symbol_is_as_wide_as_the_bits_it_was_coded_in() {
         let step = Step { in_bits: 3..12, out_bytes: 0..1, kind: StepKind::Literal(b'q') };
