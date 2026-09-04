@@ -272,6 +272,16 @@ export class HexView {
   private spanCache:
     | { key: string; from: number; to: number; spans: Span[]; more: boolean; error: string | null }
     | null = null;
+  /** Whether this draw is the one that asks the core for spans, rather than
+   *  the one that gets the bytes on screen first. See `spansForView`. */
+  private spansNow = false;
+  /** The frame already booked to ask for spans, so that a burst of draws books
+   *  one. Cleared when it runs. */
+  private spansSoon: number | null = null;
+  /** The window already asked about once this way. A second draw on the same
+   *  window asks outright rather than booking another frame, so a reply that
+   *  needs several goes still gets them. */
+  private spansAsked: string | null = null;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
   /**
@@ -386,6 +396,7 @@ export class HexView {
     this.track.addEventListener("pointercancel", (e) => this.onTrackUp(e));
     doc.onChange(() => {
       this.spanCache = null;
+      this.spansAsked = null;
       // An insert or a delete moves every later byte onto a different row, so
       // what those rows were measured at belongs to bytes that are no longer
       // there. The headings move too, and arrive again through `setSections`.
@@ -516,6 +527,7 @@ export class HexView {
     // has nowhere to be but the bytes.
     if (!this.showsText && this.pane === "ascii") this.pane = "hex";
     this.spanCache = null;
+    this.spansAsked = null;
     // Rows are taller while the field column is shown, so the number of rows
     // that fit has to be worked out again.
     this.el.classList.toggle("has-notes", this.showsFields);
@@ -1563,6 +1575,21 @@ export class HexView {
   private spansForView(start: number, count: number): { spans: Span[]; more: boolean; error: string | null } {
     const key = `${start}:${count}:${this.doc.template ?? ""}`;
     if (this.spanCache?.key === key) return this.spanCache;
+    // The core's answer for a window nobody has asked about yet can take
+    // longer than a frame: inside a compressed stream it has bits to decode
+    // before it can say what is there. The bytes do not wait for it. A draw
+    // that lands on an unanswered window puts the hex up with the chips the
+    // last answer left, and books the next frame to ask. That frame asks about
+    // wherever the view is by then, so a second wheel step before the first
+    // answer lands replaces the question rather than queueing behind it.
+    if (!this.spansNow && this.spanCache !== null && this.spansAsked !== key) {
+      this.askForSpansSoon();
+      const kept = this.spanCache;
+      const overlaps = kept.from < start + count && start < kept.to;
+      return overlaps ? { spans: kept.spans, more: kept.more, error: null } : { spans: [], more: false, error: null };
+    }
+    this.spansNow = false;
+    this.spansAsked = key;
     const max = Math.min(SPAN_LIMIT, count * 8);
     const r = this.doc.spans(start * 8, (start + count) * 8, max);
     // Pending: the bytes are on their way. Working: the structure is still
@@ -1588,6 +1615,21 @@ export class HexView {
       error: null,
     };
     return this.spanCache;
+  }
+
+  /** Book the next frame to ask the core for the spans of whatever is on
+   *  screen then, and draw again with them. One booking at a time. */
+  private askForSpansSoon(): void {
+    if (this.spansSoon !== null) return;
+    this.spansSoon = requestAnimationFrame(() => {
+      this.spansSoon = null;
+      this.spansNow = true;
+      try {
+        this.render();
+      } finally {
+        this.spansNow = false;
+      }
+    });
   }
 
   /**
