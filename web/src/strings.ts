@@ -217,13 +217,12 @@ export const REPORT = {
    *  read earns it. A gap past the check's size cap never gets this string,
    *  however many of its bytes were zero so far. */
   gapZeros: "verified zeros",
-  /** The same check found at least one byte that is not zero. The exact
-   *  negation of `gapZeros` and nothing more: the classifier that sorts runs
-   *  into text or high entropy does not run on gaps, so no stronger word is
-   *  honest here. The row cannot stay silent instead. With the other verdicts
-   *  speaking, a blank cell would mean "checked, nonzero" only to a reader
-   *  who has already learned the scheme. */
-  gapNonzero: "not all zeros",
+  /** The same check found at least one byte that is not zero. Nothing is
+   *  said: bytes not being all zero is the ordinary case, and a row saying
+   *  so on every gap is one more thing between the reader and the rows that
+   *  do say something. The zeros verdict and the two no-verdict rows are the
+   *  ones worth a word. */
+  gapNonzero: "",
   /** No verdict, and none coming: the gap is past the size cap on the check.
    *  Opens the same way as `gapUnread` so the two no-verdict rows read as one
    *  pattern at a scan, with the tail carrying the difference: this one does
