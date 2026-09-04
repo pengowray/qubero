@@ -2281,6 +2281,17 @@ button.insp-xrow-where:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The square beside a colour's value. Bordered, because a colour close to the
+   background would otherwise be an empty gap where a swatch should be. */
+.rp-swatch {
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-right: 0.4em;
+  vertical-align: -1px;
+  border: 1px solid var(--muted);
+  border-radius: 2px;
+}
 .rp-type {
   flex: none;
   width: 105px;

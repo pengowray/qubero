@@ -1,0 +1,16 @@
+{
+  "name": "Ember",
+  "base": "dark",
+  "overrides": {
+    "claude": "rgb(215,119,87)",
+    "permission": "#5769f7",
+    "success": "ansi256(34)",
+    "error": "ansi:red",
+    "warning": "ansi256(214)",
+    "text": "#e8e3dd",
+    "subtle": "rgb(122,116,110)",
+    "diffAdded": "#1c3a24",
+    "diffRemoved": "#3a1c1c",
+    "emberGlow": "#ff7a18"
+  }
+}

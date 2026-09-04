@@ -13,6 +13,7 @@ import type { Doc, TemplateNode } from "./doc.js";
 import { pathKey, PAGE } from "./flatten.js";
 import type { Item } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
+import { COLOUR_TYPE, swatch } from "./colour.js";
 import { byteStrip } from "./bytestrip.js";
 import { byteDump } from "./bytedump.js";
 import { drawCard } from "./contentcard.js";
@@ -229,6 +230,13 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
         ? countText(n.child_count, childWord(n))
         : n.value;
   const value = el("span", "rp-value", said);
+  // A colour written as `ansi256(34)` or `#5769f7` says nothing to read; the
+  // square says what it is. Only where the template called the field a colour,
+  // so nothing guesses at text that happens to look like one.
+  if (n.type === COLOUR_TYPE) {
+    const box = swatch(said);
+    if (box !== null) value.prepend(box);
+  }
   if (item.reads !== null) value.append(readsLink(item.reads));
   row.append(value);
   row.append(el("span", "rp-type", n.type));

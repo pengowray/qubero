@@ -3,7 +3,7 @@
 // The toolbar shows one line; everything the rules said is a click away.
 
 import { el } from "./dom.js";
-import type { Doc, Identification, ToolMatch } from "./doc.js";
+import type { Doc, Identification, TemplateNode, ToolMatch } from "./doc.js";
 import { OWN_SOURCE } from "./doc.js";
 
 const IDENTIFYING_MSG = "Identifying file type...";
@@ -27,6 +27,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   c16: "16-bit I/Q samples",
   cab: "Windows cabinet",
   cdr: "CorelDRAW CDR",
+  claudetheme: "Claude Code theme",
   cmx: "Corel Presentation Exchange CMX",
   cpio: "cpio archive (initramfs)",
   deb: "Debian package",
@@ -104,6 +105,38 @@ export const templateTypeName = (name: string): string => {
   if (name === "bardstale") return "The Bard's Tale I MS-DOS save game";
   const label = templateLabel(name);
   return label.endsWith("s") && label.includes(" ") ? label : `${label} file`;
+};
+
+/**
+ * What the file is, in a sentence, read from the fields the template found.
+ * Null for a format with nothing to add beyond its name, which is most of
+ * them, and for a read that has not finished: neither is worth waiting for,
+ * and the caller has the plain label either way.
+ *
+ * A template that has one wins over the signature rules. The rules see a theme
+ * as "JSON text data", which is true and is the least useful true thing that
+ * could be said about it; the template has read the file and can say which
+ * theme it is.
+ */
+export const templateSentence = (doc: Doc, name: string): string | null =>
+  name === "claudetheme" ? themeSentence(doc) : null;
+
+/** The plain label, or the fuller sentence where the template has one. */
+export const templateIdentity = (doc: Doc, name: string): string =>
+  templateSentence(doc, name) ?? templateTypeName(name);
+
+/** `Claude Code theme "Ember", based on dark, 10 colours changed`. */
+const themeSentence = (doc: Doc): string | null => {
+  const root = doc.templateChildren([], 0, 3);
+  if (root.status !== "ok") return null;
+  const of = (key: string): TemplateNode | undefined => root.node.find((n) => n.name === key);
+  const base = of("base")?.value;
+  const overrides = of("overrides");
+  if (base === undefined || overrides === undefined) return null;
+  const themeName = of("name")?.value;
+  const called = themeName === undefined || themeName === "" ? "Claude Code theme" : `Claude Code theme "${themeName}"`;
+  const changed = overrides.child_count;
+  return `${called}, based on ${base}, ${changed === 1 ? "1 colour" : `${changed} colours`} changed`;
 };
 
 /** Which template the Fields table is being read with: a built-in by name, the

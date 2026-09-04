@@ -12,7 +12,7 @@ import { Tabs, type Page, type Tab } from "./tabs.js";
 import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
-import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateTypeName } from "./filetype.js";
+import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence } from "./filetype.js";
 import { DUMP, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
 import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
 
@@ -475,7 +475,7 @@ function build(tab: Tab): Page {
         // rule database. Keep its answer visible when those rules have no
         // signature for the format (as with a Bard's Tale TPW record).
         if (templated && name !== null) {
-          const identity = templateTypeName(name);
+          const identity = templateIdentity(doc, name);
           kind.named(identity);
           overview.setIdentity(identity);
           kind.details(null, builtinTemplate(name));
@@ -487,8 +487,11 @@ function build(tab: Tab): Page {
         }
         return;
       }
-      kind.named(id.message);
-      overview.setIdentity(id.message);
+      // What the template read beats what the rules matched, where it has
+      // anything to say: the rules see a theme as JSON and stop there.
+      const said = (name === null ? null : templateSentence(doc, name)) ?? id.message;
+      kind.named(said);
+      overview.setIdentity(said);
       void kind.addTools(doc, id, name);
       if (name !== null) {
         kind.details(id, builtinTemplate(name));
