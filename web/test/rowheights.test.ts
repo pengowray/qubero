@@ -160,10 +160,22 @@ test("trimming keeps the rows nearest where the reader is looking", () => {
   h.trim(5000);
   assert.ok(h.hasMeasured(5000));
   assert.ok(h.hasMeasured(4000));
-  assert.ok(!h.hasMeasured(0));
+  assert.ok(!h.hasMeasured(1));
   // The total is still right for the rows that are left.
-  assert.equal(h.heightOf(0), 20);
+  assert.equal(h.heightOf(1), 20);
   assert.equal(h.heightOf(5000), 42);
+});
+
+test("the first and last rows keep their measurements however far the reader goes", () => {
+  const h = ledger(20000);
+  h.measure(0, 60);
+  h.measure(19999, 60);
+  for (let r = 1; r < 8000; r++) h.measure(r, 42);
+  h.trim(7000);
+  assert.ok(h.hasMeasured(0), "the top of the file was forgotten");
+  assert.ok(h.hasMeasured(19999), "the end of the file was forgotten");
+  assert.equal(h.heightOf(0), 60);
+  assert.equal(h.heightOf(19999), 60);
 });
 
 test("clearing the measurements leaves the structure alone", () => {

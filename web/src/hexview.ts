@@ -1236,7 +1236,10 @@ export class HexView {
     const thumbH = this.thumb.offsetHeight;
     const frac = (e.clientY - r.top - thumbH / 2) / Math.max(1, r.height - thumbH);
     // The bottom of the track is the end of the file.
-    this.scrollToY(frac >= 1 ? this.maxScrollY : Math.max(0, frac) * this.maxScrollY);
+    // Infinity rather than the limit as it stands: the end of the file is
+    // where the track's bottom means, and how far that is is only settled once
+    // the last rows have been drawn and measured.
+    this.scrollToY(frac >= 1 ? Infinity : Math.max(0, frac) * this.maxScrollY);
   }
   private onTrackUp(e: PointerEvent): void {
     if (this.track.hasPointerCapture(e.pointerId)) this.track.releasePointerCapture(e.pointerId);

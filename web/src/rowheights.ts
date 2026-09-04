@@ -125,14 +125,23 @@ export class RowHeights {
     return this.measured.has(row);
   }
 
-  /** Drop measured rows down to the cap, keeping the ones nearest `focus`.
-   *  Called by the view once a draw is over, since dropping them mid-draw
-   *  would move the ground under the row being drawn. */
+  /**
+   * Drop measured rows down to the cap, keeping the ones nearest `focus`.
+   * Called by the view once a draw is over, since dropping them mid-draw would
+   * move the ground under the row being drawn.
+   *
+   * The first and last rows are never dropped. The last one is what says how
+   * far down the file goes, so forgetting it would let the end of the scrollbar
+   * drift once the reader had been away from it; the first is what a jump back
+   * to the top of the file lands on.
+   */
   trim(focus: number): void {
     if (this.measured.size <= MEASURED_CAP) return;
-    const rows = [...this.measured.keys()];
+    const last = this.rows - 1;
+    const rows = [...this.measured.keys()].filter((r) => r !== 0 && r !== last);
     rows.sort((a, b) => Math.abs(a - focus) - Math.abs(b - focus));
-    for (let i = MEASURED_CAP; i < rows.length; i++) this.measured.delete(rows[i] as number);
+    const keep = Math.max(0, MEASURED_CAP - (this.measured.size - rows.length));
+    for (let i = keep; i < rows.length; i++) this.measured.delete(rows[i] as number);
     this.measuredDirty = true;
   }
 
