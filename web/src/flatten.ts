@@ -30,6 +30,18 @@ export const SECTION_SHARE = 0.25;
  *  point of rule 7, and a reader who has to know to open it will not find it;
  *  a table of a hundred thousand rows is a different problem, and waits. */
 export const RECORD_OPEN_MAX = 200;
+/** How long a list can be before its elements arrive closed. Four program
+ *  headers and ten sections are the file, and a reader opening it wants them
+ *  open; a hundred thousand tensors are a list, and open they would be half a
+ *  million rows of the same five fields. Everything else arrives open: a
+ *  structure the reader has to click to see is a structure they will not
+ *  see. */
+export const LIST_OPEN_MAX = 64;
+/** Bytes a gap or an opaque field can hold before its value column cannot
+ *  show them, which is when the bytes arrive as a scrolling dump under the
+ *  row instead of behind a control. Sixteen is a line of the dump and the
+ *  preview the value column keeps. */
+export const DUMP_MIN_BYTES = 16;
 
 export type TreeSource = {
   node(path: readonly number[]): TemplateReply<TemplateNode>;
@@ -44,8 +56,13 @@ export type Window = { readonly from: number; readonly to: number };
 /** What the reader has opened. Keys are `pathKey` strings so that the state
  *  survives a re-flatten, which happens on every scroll and every chunk. */
 export type ListingState = {
-  /** Structures showing their children, and headings showing their bytes. */
+  /** Structures the reader opened that arrive closed: the elements of a long
+   *  list. Everything else arrives open and is not in here. */
   readonly open: ReadonlySet<string>;
+  /** What the reader shut: a fold key of a structure that arrives open, or
+   *  the bytes key of a dump that arrives showing. Wins over `open` and over
+   *  every default, so a thing shut stays shut through every re-flatten. */
+  readonly closed: ReadonlySet<string>;
   /** Which stretch of a long list is drawn, for the lists that have been
    *  moved off their first page. */
   readonly shown: ReadonlyMap<string, Window>;
@@ -53,7 +70,7 @@ export type ListingState = {
   readonly bytes: ReadonlySet<string>;
 };
 
-export const emptyState: ListingState = { open: new Set(), shown: new Map(), bytes: new Set() };
+export const emptyState: ListingState = { open: new Set(), closed: new Set(), shown: new Map(), bytes: new Set() };
 
 /** The children of a list that are drawn, and where in it they start. */
 export type Slice = { readonly from: number; readonly nodes: readonly TemplateNode[] };
@@ -141,6 +158,10 @@ export type Item = Common &
         /** The item the strip belongs to, so closing it finds its own key. */
         readonly owner: string;
         readonly name: string;
+        /** True for a stretch with no fields worth a strip of chips: a gap,
+         *  or one opaque field. Its bytes are drawn as a scrolling dump, all
+         *  of them, sixteen a line. */
+        readonly dump: boolean;
       }
     | {
         /** The bytes behind this stretch have not been read yet. */
@@ -313,15 +334,27 @@ class Walk {
     this.sectionListMax = opts.sectionListMax ?? SECTION_LIST_MAX;
   }
 
-  isOpen(key: string): boolean {
-    return this.state.open.has(key);
+  /** Whether a fold is open: what the reader did, or failing that what the
+   *  fold does on arrival. Shut by the reader beats everything. */
+  isOpen(key: string, arrivesOpen: boolean): boolean {
+    if (this.state.closed.has(key)) return false;
+    return arrivesOpen || this.state.open.has(key);
   }
 
-  /** The strip under an item, when the reader has asked for its bytes.
+  /** The strip under an item, when its bytes are showing: because the reader
+   *  asked, or because they arrive showing and the reader has not shut them.
    *  `over` is the stretch it covers, which the caller works out: an item and
    *  the bytes worth opening it on are not always the same. */
-  strip(owner: string, path: readonly number[], name: string, over: { readonly start: number; readonly end: number }, depth: number): void {
-    if (!this.state.bytes.has(owner)) return;
+  strip(
+    owner: string,
+    path: readonly number[],
+    name: string,
+    over: { readonly start: number; readonly end: number },
+    depth: number,
+    how: { readonly arrivesShowing?: boolean; readonly dump?: boolean } = {},
+  ): void {
+    if (this.state.closed.has(owner)) return;
+    if (!(how.arrivesShowing ?? false) && !this.state.bytes.has(owner)) return;
     this.push({
       kind: "bytes",
       key: `bytes:${owner}`,
@@ -332,6 +365,7 @@ class Walk {
       path,
       owner,
       name,
+      dump: how.dump ?? false,
     });
   }
 
@@ -435,12 +469,18 @@ export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, 
   if (item === undefined) return null;
   const w = new Walk(src, state, opts);
   w.section = item.section;
+  // Whether the item arrives open turns on how long the list it is in is,
+  // which is its parent's to say. One read, on a click.
+  const total = (): number => {
+    const parent = src.node(item.path.slice(0, -1));
+    return parent.status === "ok" ? parent.node.child_count : 0;
+  };
   if (item.kind === "row") {
-    child(w, item.node, item.depth, item.reads);
+    child(w, item.node, item.depth, total(), item.reads);
   } else if (item.kind === "heading" && item.node !== null && item.level === 1) {
     // A heading at this level is what `child` makes of a composite nothing
     // reads, so that is what to hand back to it.
-    child(w, item.node, item.depth, null);
+    child(w, item.node, item.depth, total(), null);
   } else if (item.kind === "heading" && item.node !== null) {
     // A top-level part, which `sections` made by reading its children and
     // handing them to `heading`. Reading them again is the same question with
@@ -585,13 +625,10 @@ function heading(
   to: number,
   inner: Slice | null,
   title: string = node.name,
+  wanted = true,
 ): void {
   const key = pathKey(path);
-  const open =
-    level === 0 ||
-    w.isOpen(key) ||
-    (node !== null && w.opts.isRecord?.(node) === true && node.child_count <= RECORD_OPEN_MAX) ||
-    w.opts.formatCard?.(node) != null;
+  const open = level === 0 || wanted;
   const covers = pointee(w, path, node, inner);
   w.push({
     kind: "heading",
@@ -686,7 +723,7 @@ function runHeading(
   // The run is a slice of a slice, so what reads one of its fields may be a
   // sibling outside it: SQLite's `page_size` is written in the header and read
   // by a page. The whole of the parent's children go along for that lookup.
-  rows(w, path, run, base + from, breaks, 1, null, kids, base);
+  rows(w, path, run, base + from, breaks, 1, null, kids.length, kids, base);
 }
 
 /** What is inside one heading. */
@@ -790,7 +827,7 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   // byte between them. Measuring the members against the object's edges would
   // draw an unmapped row over each brace, so the edges are nobody's here.
   const bounds = elsewhere || node.framed ? null : { start, end };
-  rows(w, path, slice.nodes, slice.from, [], depth, bounds);
+  rows(w, path, slice.nodes, slice.from, [], depth, bounds, node.child_count);
   if (after > 0 && !elsewhere) {
     edge(w, "later", path, depth, after, slice.from, to, { start: end, end: outer.end });
   }
@@ -814,6 +851,7 @@ function rows(
   breaks: readonly number[],
   depth: number,
   bounds: { readonly start: number; readonly end: number } | null,
+  total: number,
   siblings: readonly TemplateNode[] = kids,
   sibBase: number = base,
 ): void {
@@ -829,7 +867,7 @@ function rows(
     // A field that is only its parent's contents has no name worth a level of
     // structure: its children stand in its place, at its depth.
     if (!kid.contents || !kid.composite || kid.child_count === 0) {
-      child(w, kid, depth, consumerOf(kid, siblings, sibBase));
+      child(w, kid, depth, total, consumerOf(kid, siblings, sibBase));
       continue;
     }
     const inner = w.kids(kid.path, kid.child_count);
@@ -852,9 +890,12 @@ function gap(w: Walk, path: readonly number[], from: number, to: number, depth: 
     unmapped,
   });
   // A gap the reader can look into. What is in bytes nothing describes is the
-  // one question the row cannot answer for them, and the verdict beside it is
-  // a summary of exactly the thing they would want to read.
-  w.strip(key, path, "", { start: from, end: to }, depth + 1);
+  // one question the row cannot answer for them, so a gap longer than the row
+  // can show arrives with its bytes under it, as a dump that scrolls: only
+  // the lines on screen are read, so it costs the same however long it is.
+  // A shorter one shows its bytes on the row itself.
+  const whole = isWholeBytes(from, to - from);
+  w.strip(key, path, "", { start: from, end: to }, depth + 1, { arrivesShowing: whole && to - from > DUMP_MIN_BYTES * 8, dump: whole });
 }
 
 /** One child of a structure: a heading when it is a named part with something
@@ -871,7 +912,26 @@ function consumerOf(node: TemplateNode, kids: readonly TemplateNode[], base: num
   return { name: owner.name, path: owner.path };
 }
 
-function child(w: Walk, node: TemplateNode, depth: number, reads: { readonly name: string; readonly path: readonly number[] } | null = null): void {
+/** Whether a structure arrives open. Every one does except an element of a
+ *  list longer than `LIST_OPEN_MAX`, where `total` is how long the list is:
+ *  its element count, not the page of it that is drawn. */
+function arrivesOpen(node: TemplateNode, total: number): boolean {
+  return !(total > LIST_OPEN_MAX && /^\[\d+\]$/.test(node.name));
+}
+
+/** Whether a field's bytes arrive as a dump under its row: only a field the
+ *  row cannot show, which is an opaque one past the preview's length. A
+ *  number, a string or a magic reads from its value; a run of bytes does
+ *  not, and the value column keeps sixteen of it. */
+function arrivesDumped(node: TemplateNode): boolean {
+  return (node.kind === "bytes" || node.kind === "unread") && node.space === 0 && isWholeBytes(node.offset_bits, node.size_bits) && node.size_bits > DUMP_MIN_BYTES * 8;
+}
+
+function isWholeBytes(offsetBits: number, sizeBits: number): boolean {
+  return offsetBits % 8 === 0 && sizeBits % 8 === 0;
+}
+
+function child(w: Walk, node: TemplateNode, depth: number, total: number, reads: { readonly name: string; readonly path: readonly number[] } | null = null): void {
   const key = pathKey(node.path);
   // A structure that places another field is not a division of the file, so it
   // stays a row: an array of cell pointers belongs beside the fields it was
@@ -879,13 +939,15 @@ function child(w: Walk, node: TemplateNode, depth: number, reads: { readonly nam
   if (node.composite && node.child_count > 0 && depth === 1 && reads === null) {
     // A short table opens itself, since the table is what it is for.
     const open =
-      w.isOpen(key) || (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true) || w.opts.formatCard?.(node) != null;
+      w.isOpen(key, arrivesOpen(node, total)) ||
+      (node.child_count <= RECORD_OPEN_MAX && w.opts.isRecord?.(node) === true) ||
+      w.opts.formatCard?.(node) != null;
     // Null rather than an empty slice: "not read" and "read, and empty" are
     // different answers, and the strip's extent turns on which it is.
-    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null);
+    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null, node.name, open);
     return;
   }
-  const open = node.composite && node.child_count > 0 && w.isOpen(key);
+  const open = node.composite && node.child_count > 0 && w.isOpen(key, arrivesOpen(node, total));
   w.push({
     kind: "row",
     key: `r:${key}`,
@@ -898,7 +960,8 @@ function child(w: Walk, node: TemplateNode, depth: number, reads: { readonly nam
     open,
     reads,
   });
-  w.strip(`r:${key}`, node.path, node.name, { start: node.offset_bits, end: endBits(node) }, depth);
+  const dump = !node.composite && arrivesDumped(node);
+  w.strip(`r:${key}`, node.path, node.name, { start: node.offset_bits, end: endBits(node) }, depth, { arrivesShowing: dump, dump });
   if (!open) return;
   const inner = w.kids(node.path, node.child_count);
   if (inner === null) {

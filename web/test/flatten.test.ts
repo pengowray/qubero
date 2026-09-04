@@ -28,6 +28,8 @@ type Spec = {
   /** The type name, where the rules turn on it: `computed` for a value the
    *  template works out rather than reads. */
   type?: string;
+  /** What kind of leaf, where the rules turn on it: `bytes` for an opaque run. */
+  kind?: TemplateNode["kind"];
 };
 
 type Fixture = { node: TemplateNode; kids: Fixture[] };
@@ -50,7 +52,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     size_bits: spec.bytes * 8,
     value: "",
     edit_text: "",
-    kind: composite ? "composite" : "uint",
+    kind: composite ? "composite" : (spec.kind ?? "uint"),
     ok: true,
     child_count: spec.count ?? kids.length,
     composite,
@@ -206,7 +208,9 @@ test("the template's word beats what the shapes say, either way", () => {
       ] },
     ],
   };
-  const items = run(both, { ...emptyState, open: new Set(["0"]) }).items;
+  // `rows` arrives open like everything else; shut, so its one field does
+  // not join the page's.
+  const items = run(both, { ...emptyState, closed: new Set(["0.3"]) }).items;
   const rows = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? [i.node.name, i.reads?.name ?? null] : []));
   assert.deepEqual(rows, [
     ["width", "rows"],
@@ -270,7 +274,7 @@ test("two lengths for two fields are two rows", () => {
 test("asking for a part's bytes opens on its machinery, not on all of it", () => {
   const page = run(SQLITE).items.find((i) => i.kind === "heading" && i.level === 0 && i.offsetBits === 4096 * 8);
   assert.ok(page?.kind === "heading");
-  const strip = run(SQLITE, { ...emptyState, bytes: new Set([page.key]) }).items.find((i) => i.kind === "bytes");
+  const strip = run(SQLITE, { ...emptyState, bytes: new Set([page.key]) }).items.find((i) => i.kind === "bytes" && i.owner === page.key);
   assert.ok(strip?.kind === "bytes");
   // The strip runs from the page's start to where its cells begin, which is
   // less than the page. This fixture declares the cells at the back of the
@@ -327,8 +331,9 @@ test("a strip sits directly under the item it belongs to", () => {
   const items = run(SQLITE, { ...emptyState, bytes: new Set([row.key]) }).items;
   const at = items.findIndex((i) => i.key === row.key);
   assert.equal(items[at + 1]?.kind, "bytes");
-  // And nothing opens a strip nobody asked for.
-  assert.equal(run(SQLITE).items.some((i) => i.kind === "bytes"), false);
+  // And no field opens a strip of chips nobody asked for. A gap's dump is
+  // the one thing that arrives showing, and that is a dump, not a strip.
+  assert.equal(run(SQLITE).items.some((i) => i.kind === "bytes" && !i.dump), false);
 });
 
 test("bytes no field covers are an item of their own", () => {
@@ -385,12 +390,84 @@ test("the rows of a page are a part of it, not another indent", () => {
   assert.deepEqual(subs.map((s) => s.depth), [1, 1, 1]);
 });
 
-test("opening a part lists what is in it", () => {
-  const closed = run(SQLITE);
-  const open = run(SQLITE, { ...emptyState, open: new Set(["4.6"]) });
+test("a part arrives open, and shutting it takes its rows away", () => {
+  const open = run(SQLITE);
+  const closed = run(SQLITE, { ...emptyState, closed: new Set(["4.6"]) });
   assert.ok(open.items.length > closed.items.length);
   const names = open.items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
   assert.ok(names.includes("[0]"));
+  // Its one cell is gone; other lists' `[0]`s are their own.
+  assert.equal(open.items.some((i) => i.kind === "row" && pathKey(i.path) === "4.6.0"), true);
+  assert.equal(closed.items.some((i) => i.kind === "row" && pathKey(i.path) === "4.6.0"), false);
+  // Shut beats opened: the reader's last word on a fold is the one that counts.
+  const both = run(SQLITE, { ...emptyState, open: new Set(["4.6"]), closed: new Set(["4.6"]) });
+  assert.equal(both.items.length, closed.items.length);
+});
+
+test("the elements of a long list arrive closed, and one of a short one open", () => {
+  const element = (n: number): Spec => ({ name: `[${n}]`, bytes: 4, kids: [{ name: "a", bytes: 2 }, { name: "b", bytes: 2 }] });
+  const many = (count: number): Spec => ({
+    name: "file",
+    bytes: 4 * count,
+    kids: [{ name: "list", bytes: 4 * count, kids: Array.from({ length: count }, (_, n) => element(n)) }],
+  });
+  const short = run(many(4)).items;
+  assert.equal(short.filter((i) => i.kind === "row" && i.node.name === "a").length, 4);
+  const long = run(many(65)).items;
+  assert.equal(long.filter((i) => i.kind === "row" && i.node.name === "a").length, 0);
+  // Each element is still there to be seen, as a heading of its own.
+  assert.equal(long.filter((i) => i.kind === "heading" && i.level === 1).length, 65);
+  assert.equal(long.filter((i) => i.kind === "heading" && i.level === 1 && i.open).length, 0);
+  // Asked for, one of them opens.
+  const one = run(many(65), { ...emptyState, open: new Set(["0.7"]) }).items;
+  assert.equal(one.filter((i) => i.kind === "row" && i.node.name === "a").length, 1);
+});
+
+test("a gap longer than a row can show arrives with its dump, a shorter one does not", () => {
+  const holes: Spec = {
+    name: "file",
+    bytes: 100,
+    kids: [
+      { name: "a", bytes: 4 },
+      { name: "b", bytes: 4, at: 20 },
+      { name: "c", bytes: 4, at: 60 },
+    ],
+  };
+  const items = run(holes).items;
+  const dumps = items.filter((i) => i.kind === "bytes");
+  // 4..20 is sixteen bytes and fits on its row; 24..60 and 64..100 do not.
+  assert.deepEqual(dumps.map((d) => [d.offsetBits / 8, d.sizeBits / 8, d.kind === "bytes" && d.dump]), [[24, 36, true], [64, 36, true]]);
+  // Each sits under its own gap.
+  for (const d of dumps) {
+    const at = items.indexOf(d);
+    assert.equal(items[at - 1]?.kind, "gap");
+    assert.equal(items[at - 1]?.offsetBits, d.offsetBits);
+  }
+  // Shut, it stays shut; and the short gap's bytes can still be asked for.
+  const shut = run(holes, { ...emptyState, closed: new Set(["gap:@192"]) }).items;
+  assert.equal(shut.filter((i) => i.kind === "bytes").length, 1);
+  const asked = run(holes, { ...emptyState, bytes: new Set(["gap:@32"]) }).items;
+  assert.equal(asked.filter((i) => i.kind === "bytes").length, 3);
+});
+
+test("an opaque field longer than its preview arrives as a dump, a number does not", () => {
+  const blobs: Spec = {
+    name: "file",
+    bytes: 200,
+    kids: [
+      { name: "count", bytes: 4 },
+      { name: "short", bytes: 16, kind: "bytes" },
+      { name: "payload", bytes: 180, kind: "bytes" },
+    ],
+  };
+  const items = run(blobs).items;
+  const dumps = items.filter((i) => i.kind === "bytes");
+  assert.deepEqual(dumps.map((d) => [d.name, d.sizeBits / 8, d.kind === "bytes" && d.dump]), [["payload", 180, true]]);
+  const at = items.indexOf(dumps[0] as Item);
+  const under = items[at - 1];
+  assert.equal(under?.kind === "row" ? under.node.name : null, "payload");
+  // Shut by the reader, it stays shut.
+  assert.equal(run(blobs, { ...emptyState, closed: new Set(["r:2"]) }).items.some((i) => i.kind === "bytes"), false);
 });
 
 test("children are listed where their bytes are, not where they are declared", () => {
@@ -763,7 +840,9 @@ test("a root smaller than its file still accounts for the whole file", () => {
   };
   const root = build(h5, [], 0);
   const { items } = flatten(source(root), emptyState, { fileBits: 113_705_336 * 8 });
-  const tail = items[items.length - 1];
+  // The tail is the gap; its dump sits under it, being the last thing drawn.
+  assert.equal(items[items.length - 1]?.kind, "bytes");
+  const tail = items[items.length - 2];
   assert.equal(tail?.kind, "gap");
   assert.equal(tail?.kind === "gap" ? tail.unmapped : null, true);
   assert.equal(tail?.offsetBits, 96 * 8);

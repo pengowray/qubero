@@ -32,7 +32,11 @@ import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./string
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
  *  measured at would slide out from under its own place. */
-const HEIGHT = { section: 54, part: 36, row: 22, strip: 96, card: 400 } as const;
+const HEIGHT = { section: 54, part: 36, row: 22, strip: 96, card: 400, dumpFrame: 86 } as const;
+/** A dump's line height and how many lines it shows, which must match
+ *  `--bd-line` in the stylesheet and `VIEW_LINES` in `bytedump.ts`. */
+const DUMP_LINE = 18;
+const DUMP_LINES = 10;
 /** Items drawn above and below the window, so a wheel notch has somewhere to
  *  go before the next paint. */
 const OVERSCAN = 6;
@@ -45,6 +49,9 @@ const HIDDEN_WALK_MS = 300;
  *  in the document; this is the guess the first layout uses, and `measured`
  *  replaces it. */
 function heightOf(item: Item): number {
+  // A dump is a caption, a head and up to ten lines of sixteen bytes; its
+  // height is arithmetic, and guessing it right spares a relayout per dump.
+  if (item.kind === "bytes" && item.dump) return HEIGHT.dumpFrame + Math.min(DUMP_LINES, Math.ceil(item.sizeBits / 8 / 16)) * DUMP_LINE;
   if (item.kind === "bytes" || item.kind === "record" || item.kind === "formatcard") return HEIGHT.strip;
   if (item.kind === "card") return HEIGHT.card;
   if (item.kind !== "heading") return HEIGHT.row;
@@ -80,6 +87,9 @@ export class ListingReport {
   /** Where each item starts, in pixels, and one past the last: `tops[i + 1]`
    *  is always there. */
   private tops: number[] = [0];
+  /** The owners of the byte strips and dumps on the list, worked out with the
+   *  layout. */
+  private showing: ReadonlySet<string> = new Set();
   private drawn: { from: number; to: number } | null = null;
   /** The file's top-level parts, which every strip of the map is drawn from.
    *  Worked out once per flatten so that every strip has the same geometry. */
@@ -418,6 +428,7 @@ export class ListingReport {
    *  document and is only told its new top. */
   private place(): void {
     this.byKey = new Map(this.items.map((item) => [item.key, item]));
+    this.showing = new Set(this.items.flatMap((item) => (item.kind === "bytes" ? [item.owner] : [])));
     this.nesting = buildNesting(this.items);
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
@@ -494,8 +505,7 @@ export class ListingReport {
         // is on is said by `aria-activedescendant`, so a screen reader hears the
         // row without the focus ever leaving the one scrolling element.
         node.setAttribute("role", "treeitem");
-        const opens = openKeyOf(item);
-        if (opens !== null) node.setAttribute("aria-expanded", String(this.state.open.has(opens)));
+        if (openKeyOf(item) !== null && (item.kind === "heading" || item.kind === "row")) node.setAttribute("aria-expanded", String(item.open));
         if (item.key === this.cursor) node.classList.add("is-cursor");
         this.mounted.set(item.key, node);
         this.canvas.append(node);
@@ -594,7 +604,10 @@ export class ListingReport {
       segments: this.segments,
       selected: this.selected,
       nearest: this.nearest,
-      bytes: this.state.bytes,
+      // Which items have their bytes showing is what the list says: a dump
+      // that arrived showing is in no set, and its button is pressed all the
+      // same.
+      bytes: this.showing,
       dumps: this.dumps,
       dumpTops: this.dumpTops,
       cards: this.cards,
@@ -647,18 +660,28 @@ export class ListingReport {
     // is, so that item is the one the splice walks again — the same run of the
     // list a fold on it would have replaced.
     const at = this.items.findIndex((item) => item.key === key);
-    if (bytes.has(key)) {
+    const closed = new Set(this.state.closed);
+    // Showing or not is what the list says, not what the sets say: a dump
+    // that arrives showing is in neither until the reader touches it.
+    const showing = this.items.some((item) => item.kind === "bytes" && item.owner === key);
+    if (showing) {
       bytes.delete(key);
+      // Shut by the reader, which beats arriving showing.
+      closed.add(key);
       this.pruneDumps(key);
     } else {
       bytes.add(key);
+      closed.delete(key);
       // A strip is part of what its item opens into, not a second expansion
       // beside it: asking a closed item for its bytes opens the item, so a
       // strip never stands over rows that are hidden.
       const target = openTargetOf(key);
-      if (target !== null && !open.has(target)) open = new Set([...open, target]);
+      if (target !== null) {
+        closed.delete(target);
+        if (!open.has(target)) open = new Set([...open, target]);
+      }
     }
-    this.state = { ...this.state, bytes, open };
+    this.state = { ...this.state, bytes, open, closed };
     if (at >= 0 && this.splice(at)) return;
     this.rebuild();
   }
@@ -773,7 +796,7 @@ export class ListingReport {
       return;
     }
     const openKey = openKeyOf(item);
-    if (openKey !== null) this.setOpen(openKey, !this.state.open.has(openKey));
+    if (openKey !== null && (item.kind === "heading" || item.kind === "row")) this.setOpen(openKey, !item.open);
     if (item.kind === "row" || item.kind === "gap") this.pick(item);
   }
 
@@ -786,15 +809,24 @@ export class ListingReport {
   }
 
   private setOpen(key: string, want: boolean): void {
-    if (this.state.open.has(key) === want) return;
     // Found before the state moves, since it is this list that the new one is
     // spliced into.
     const at = this.items.findIndex((item) => openKeyOf(item) === key);
+    const item = this.items[at];
+    // Whether it is open is the item's to say: most arrive open without being
+    // in any set. An item not on the list is being opened from outside, and
+    // the sets are all there is to go on.
+    const isOpen = item !== undefined && (item.kind === "heading" || item.kind === "row") ? item.open : this.state.open.has(key) && !this.state.closed.has(key);
+    if (isOpen === want) return;
     const open = new Set(this.state.open);
+    const closed = new Set(this.state.closed);
     let bytes = this.state.bytes;
-    if (want) open.add(key);
-    else {
+    if (want) {
+      open.add(key);
+      closed.delete(key);
+    } else {
       open.delete(key);
+      closed.add(key);
       // Closing an item takes its strip with it: closed, open, and open with
       // bytes are the only states there are.
       const owned = [`h:${key}`, `r:${key}`].filter((k) => bytes.has(k));
@@ -807,7 +839,7 @@ export class ListingReport {
         bytes = next;
       }
     }
-    this.state = { ...this.state, open, bytes };
+    this.state = { ...this.state, open, bytes, closed };
     if (at >= 0 && this.splice(at)) return;
     this.rebuild();
   }
@@ -962,8 +994,15 @@ export class ListingReport {
       // and move the window of every long list on the way so that the step
       // through it is one of the elements drawn.
       const open = new Set(this.state.open);
-      for (let n = 1; n <= path.length; n++) open.add(pathString(path.slice(0, n)));
-      this.state = { ...this.state, open, shown: this.framed(path) };
+      const closed = new Set(this.state.closed);
+      for (let n = 1; n <= path.length; n++) {
+        const step = pathString(path.slice(0, n));
+        open.add(step);
+        // A step the reader shut is opened again: they asked to be taken to
+        // the field, and it is inside.
+        closed.delete(step);
+      }
+      this.state = { ...this.state, open, closed, shown: this.framed(path) };
       this.rebuild();
       i = this.items.findIndex((item) => item.key === key);
     }

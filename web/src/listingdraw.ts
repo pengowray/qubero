@@ -10,7 +10,7 @@
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { Doc, TemplateNode } from "./doc.js";
-import { pathKey, PAGE } from "./flatten.js";
+import { DUMP_MIN_BYTES, pathKey, PAGE } from "./flatten.js";
 import type { Item } from "./flatten.js";
 import { fieldClass, sectionColor } from "./fieldstyle.js";
 import { COLOUR_TYPE, swatch } from "./colour.js";
@@ -256,13 +256,25 @@ function drawGap(c: DrawContext, item: Extract<Item, { kind: "gap" }>): HTMLElem
   row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
   row.append(el("span", "rp-twist", ""));
   row.append(el("span", "rp-field", item.unmapped ? GAP_LABEL : REPORT.gap));
-  row.append(el("span", "rp-value", GAP_VERDICT[c.verdict(item)]));
+  // A gap short enough to read is shown, the way a `reserved` field's bytes
+  // are; a longer one gets a word about what is in it, and its dump below.
+  row.append(el("span", "rp-value", gapBytes(c, item) ?? GAP_VERDICT[c.verdict(item)]));
   row.append(el("span", "rp-type", ""));
   row.append(el("span", "rp-size", bitSizeText(item.sizeBits)));
   // The one question a gap row cannot answer in a word: what is actually in
   // there. Same control as a field's, and it opens on the same bytes.
   if (item.sizeBits > 0) row.append(bytesButton(c, item.key));
   return row;
+}
+
+/** The hex of a gap the row itself can show: whole bytes, no more than the
+ *  value column's preview holds. Null for a longer or an unaligned one, and
+ *  while the bytes are still arriving. */
+function gapBytes(c: DrawContext, item: Extract<Item, { kind: "gap" }>): string | null {
+  if (item.offsetBits % 8 !== 0 || item.sizeBits % 8 !== 0 || item.sizeBits > DUMP_MIN_BYTES * 8 || item.sizeBits === 0) return null;
+  const { bytes, complete } = c.doc.read(item.offsetBits / 8, item.sizeBits / 8);
+  if (!complete) return null;
+  return Array.from(bytes.subarray(0, item.sizeBits / 8), (b) => b.toString(16).padStart(2, "0")).join(" ");
 }
 
 /** A structure the format keeps as a table, drawn as one: the format's own
@@ -333,13 +345,14 @@ function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTML
   indent(host, item.depth);
   // A gap has no field to take a name from, so the row's own word names it.
   const gap = item.owner.startsWith("gap:");
-  const caption = `${gap ? GAP_LABEL : item.name} ${rangeText(item.offsetBits, item.sizeBits)}`;
-  // A strip is a map of the fields in a stretch, and a gap has none: its
-  // columns would be one column called "unmapped". What the reader wants
-  // there is the bytes, so a gap opens straight into the dump. It costs
-  // nothing however long the gap is, since only the lines on screen are read.
-  if (gap && item.offsetBits % 8 === 0 && item.sizeBits % 8 === 0) {
-    host.append(gapDump(c, item, caption));
+  const name = gap ? GAP_LABEL : item.name;
+  const caption = `${name} ${rangeText(item.offsetBits, item.sizeBits)}`;
+  // A strip is a map of the fields in a stretch, and a gap or one opaque
+  // field has none: its columns would be one column. What the reader wants
+  // there is the bytes, so it opens straight into the dump. It costs nothing
+  // however long the stretch is, since only the lines on screen are read.
+  if (item.dump && item.offsetBits % 8 === 0 && item.sizeBits % 8 === 0) {
+    host.append(dumpOf(c, item, name, caption));
     return host;
   }
   host.append(
@@ -352,9 +365,10 @@ function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTML
   return host;
 }
 
-/** A run of unclaimed bytes, opened. The same caption and the same way out as
- *  a byte strip has, so one control closes either. */
-function gapDump(c: DrawContext, item: Extract<Item, { kind: "bytes" }>, caption: string): HTMLElement {
+/** A run of bytes with no fields in it, opened: a gap, or one opaque field.
+ *  The same caption and the same way out as a byte strip has, so one control
+ *  closes either. */
+function dumpOf(c: DrawContext, item: Extract<Item, { kind: "bytes" }>, name: string, caption: string): HTMLElement {
   const strip = el("div", "bstrip");
   const cap = el("div", "bs-cap");
   cap.append(el("span", "bs-cap-text", caption), mapFor(c, item));
@@ -368,7 +382,7 @@ function gapDump(c: DrawContext, item: Extract<Item, { kind: "bytes" }>, caption
   strip.append(cap);
   const at = item.offsetBits;
   strip.append(
-    byteDump(c.doc, at / 8, item.sizeBits / 8, GAP_LABEL, {
+    byteDump(c.doc, at / 8, item.sizeBits / 8, name, {
       get: () => c.dumpTops.get(at) ?? 0,
       set: (top) => c.dumpTops.set(at, top),
     }),

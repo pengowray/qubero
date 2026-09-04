@@ -375,12 +375,46 @@ would say the same thing twice.
 
 The listing is a flat list of items (`web/src/flatten.ts`) drawn a screenful
 at a time (`web/src/listingreport.ts`, the drawing in `web/src/listingdraw.ts`).
-Only what is open is walked, so the list's length follows what the reader has
-opened rather than how big the file is, and a list scrolls by index. Every
+Only what is open is walked, so the list's length follows what is open rather
+than how big the file is, and a list scrolls by index. Every
 item's height is fixed by its kind, and a byte strip, a record table or the
 content card, whose height depends on its contents, is measured once it is
 in the document and laid out again; the tops are a running total, so a row
 drawn taller than it was measured at would slide out from under its place.
+
+#### What arrives open
+The listing exists to show the file, so it arrives showing it. A reader who
+has to click through folds to reach the bytes will not, and the view is a
+table of contents rather than a listing. The rules, with their constants in
+`web/src/flatten.ts`:
+
+- Every structure arrives open, at any depth, except an element of a list
+  longer than `LIST_OPEN_MAX` (64). Four program headers and ten sections are
+  the file and arrive open; a hundred thousand tensors are a list, and each
+  arrives as one row that opens on a click. Long lists are still paged at
+  `PAGE` elements.
+- Bytes nothing describes arrive as bytes. A gap longer than `DUMP_MIN_BYTES`
+  (16) arrives with a scrolling dump under it: sixteen bytes a line, only the
+  lines on screen read, so a four-hundred-megabyte payload costs the same as a
+  twenty-byte pad. A gap of sixteen bytes or fewer shows its hex on its own
+  row, the way a `reserved` field does. The verdict (`verified zeros`, and so
+  on) stays beside the longer ones.
+- An opaque field arrives the same way: a `bytes` or `unread` leaf longer than
+  the value column's sixteen-byte preview gets the dump under its row. A
+  number, a string or a magic reads from its value and gets nothing extra.
+- Byte strips of chips, the map of which field is where in a stretch, still
+  wait to be asked for: the rows already say that.
+
+What the reader does wins over all of this, and lasts. `ListingState.closed`
+holds every fold and every dump the reader shut, `open` every fold the reader
+opened that arrives closed, and `bytes` every strip asked for. A key in
+`closed` stays closed through every re-flatten, and going to a field inside a
+shut fold reopens it. Nothing else reads the raw sets to decide what is open:
+the item says, and the report reads the item.
+
+Do not undo this by defaulting things closed again when something gets slow.
+The cost of arriving open is one `children` read per open composite per walk,
+and the walk runs on change, not on scroll; the lever is `LIST_OPEN_MAX`.
 
 The hierarchy has two heading sizes and then rows. A top-level part gets the
 most space above it, a title a size larger than anything under it, its swatch,
