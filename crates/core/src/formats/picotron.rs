@@ -127,13 +127,37 @@ pub fn p64png() -> Template {
     Template::new("p64png", super::png::cart_png("PicotronCart", idat))
 }
 
-/// Whether a PNG's header says it is the size and shape a Picotron cartridge
-/// is: 512 by 384, eight bits a channel, colour type 6, which is RGBA.
+/// How much a Picotron image holds: 512 by 384 pixels at eleven bits each.
+const ROM_CAPACITY: u32 = WIDTH * HEIGHT * 11 / 8;
+
+/// Whether a PNG is a Picotron cartridge: 512 by 384, eight bits a channel,
+/// colour type 6, which is RGBA, and a ROM header hidden in the pixels.
 ///
-/// Not proof, the same way `is_p8png` is not: any 512 by 384 RGBA PNG passes.
-/// Nothing else in the format announces itself.
+/// The size is where it starts and not where it ends, since a holiday snap can
+/// be 512 by 384 as easily as a cartridge can. So the first row of the image is
+/// read the way the template reads it, through the zlib stream, the filters and
+/// the low bits, and the eight bytes of ROM header it yields have to say what a
+/// header says: `p64`, a version, and a payload no bigger than the picture can
+/// carry. One row is 704 bytes of ROM, so a cartridge is always decided here
+/// and never falls back to the size alone.
 pub fn is_p64png(head: &[u8]) -> bool {
-    super::png::is_size(head, WIDTH, HEIGHT)
+    let pixels = super::png::cart_pixels(head, WIDTH, HEIGHT);
+    let stride = WIDTH as usize * 4;
+    if pixels.len() < stride {
+        return false;
+    }
+    let Ok((rom, _)) = crate::codec::pixels::low_bits_rgba11(&pixels[..stride]) else { return false };
+    if rom.len() < HEADER_LEN as usize || !rom.starts_with(MAGIC) {
+        return false;
+    }
+    // 2 in every cartridge read so far. The range is wider than that because
+    // one observation is not a rule, and narrow enough that a picture whose
+    // pixels happen to spell `p64` still has to get this byte right too.
+    if !(1..=15).contains(&rom[3]) {
+        return false;
+    }
+    let size = u32::from_le_bytes([rom[4], rom[5], rom[6], rom[7]]);
+    size <= ROM_CAPACITY - HEADER_LEN as u32
 }
 
 /// The cartridge as it comes out of the block: entries to the end, with no
@@ -188,6 +212,7 @@ fn not(e: E) -> E {
 
 #[cfg(test)]
 mod tests {
+    use super::super::recognise::sniff;
     use super::*;
     use crate::document::Document;
     use crate::eval::{Evaluator, Value};
@@ -336,6 +361,30 @@ mod tests {
         rgb[25] = 2;
         assert!(!is_p64png(&rgb));
         assert!(!is_p64png(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    /// The size is not enough on its own: the header hidden in the first row
+    /// has to read like a header. One row is 704 bytes of ROM, so this is
+    /// always decided and never falls back to the size.
+    #[test]
+    fn a_picture_of_the_right_size_carrying_nothing_is_only_a_picture() {
+        let cart = cart_png(&rom());
+        assert_eq!(sniff(&cart, cart.len() as u64), Some("p64png"));
+
+        let empty = cart_png(&[]);
+        assert!(!is_p64png(&empty));
+        assert_eq!(sniff(&empty, empty.len() as u64), Some("png"));
+
+        // The magic without a version anybody wrote.
+        let mut bad_version = rom();
+        bad_version[3] = 0;
+        assert!(!is_p64png(&cart_png(&bad_version)));
+
+        // The magic and a version, but a payload longer than the picture can
+        // carry, so the header is a coincidence rather than a header.
+        let mut too_big = rom();
+        too_big[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(!is_p64png(&cart_png(&too_big)));
     }
 
     #[test]

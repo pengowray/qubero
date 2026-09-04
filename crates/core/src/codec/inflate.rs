@@ -168,7 +168,8 @@ fn fixed_codes() -> (Code, Code) {
 /// A whole raw deflate stream: the bytes it comes to and what was read where.
 pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut b = TraceBuilder::default();
-    let out = run(data, 0, data.len() as u64 * 8, &mut b)?;
+    let mut out = Vec::new();
+    run(data, 0, data.len() as u64 * 8, CAP_BYTES, &mut out, &mut b)?;
     Ok((out, b.done()))
 }
 
@@ -176,7 +177,8 @@ pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 #[cfg(test)]
 fn inflate_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut b = TraceBuilder::with_budget(budget);
-    let out = run(data, 0, data.len() as u64 * 8, &mut b)?;
+    let mut out = Vec::new();
+    run(data, 0, data.len() as u64 * 8, CAP_BYTES, &mut out, &mut b)?;
     Ok((out, b.done()))
 }
 
@@ -195,7 +197,8 @@ pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut b = TraceBuilder::default();
     b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
     let end = (data.len() as u64 - 4) * 8;
-    let out = run(data, 16, end, &mut b)?;
+    let mut out = Vec::new();
+    run(data, 16, end, CAP_BYTES, &mut out, &mut b)?;
     let adler = u32::from_be_bytes([data[data.len() - 4], data[data.len() - 3], data[data.len() - 2], data[data.len() - 1]]);
     if adler != adler32(&out) {
         return Err(Refusal::Failed);
@@ -203,6 +206,37 @@ pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     b.push(end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
     b.finish_at(data.len() as u64 * 8, out.len() as u64);
     Ok((out, b.done()))
+}
+
+/// As much of a zlib stream as the bytes on hand come to, with no complaint
+/// about the bytes that are not there.
+///
+/// A sniff sees the front of a file and no more, so a zlib stream inside it is
+/// nearly always cut off partway through a block. [`zlib`] calls that a
+/// refusal, and rightly: the Adler-32 is missing and no block ever said it was
+/// the last. This entry point runs the same decoder and hands back whatever the
+/// stream had produced by the time it ran out, which is what a caller wanting
+/// the first rows of an image is after. The trace is dropped; there is nothing
+/// worth pointing at in a file only partly read.
+///
+/// `cap` is the most output to keep. Deflate packs a 258-byte match into two
+/// bits, so a few tens of kilobytes of hostile input come to tens of megabytes
+/// of output, and a caller which knows how big the whole thing should be says
+/// so here rather than paying for that.
+///
+/// An empty vector comes back if the two header bytes are not a zlib header.
+pub fn inflate_prefix(data: &[u8], cap: usize) -> Vec<u8> {
+    if data.len() < 2 {
+        return Vec::new();
+    }
+    let (cmf, flg) = (data[0], data[1]);
+    if cmf & 0x0f != 8 || (cmf as u16 * 256 + flg as u16) % 31 != 0 || flg & 0x20 != 0 {
+        return Vec::new();
+    }
+    let mut b = TraceBuilder::default();
+    let mut out = Vec::new();
+    let _ = run(data, 16, data.len() as u64 * 8, cap, &mut out, &mut b);
+    out
 }
 
 fn adler32(data: &[u8]) -> u32 {
@@ -218,13 +252,24 @@ fn adler32(data: &[u8]) -> u32 {
     (b << 16) | a
 }
 
-/// The blocks between `start` and `end`, bits of `data`.
-fn run(data: &[u8], start: u64, end: u64, b: &mut TraceBuilder) -> Result<Vec<u8>, Refusal> {
+/// The blocks between `start` and `end`, bits of `data`, written into `out`.
+///
+/// The bytes go into a vector the caller owns rather than one made here, so
+/// that a caller reading a stream which stops early keeps what came out before
+/// it stopped. `cap` is the most output the run may produce; past it the run is
+/// refused as [`Refusal::TooLarge`].
+fn run(
+    data: &[u8],
+    start: u64,
+    end: u64,
+    cap: usize,
+    out: &mut Vec<u8>,
+    b: &mut TraceBuilder,
+) -> Result<(), Refusal> {
     if end > data.len() as u64 * 8 || start > end {
         return Err(Refusal::Failed);
     }
     let mut bits = Bits { data, pos: start, end };
-    let mut out: Vec<u8> = Vec::new();
     let mut coarse = false;
     loop {
         let block_in = bits.pos;
@@ -238,17 +283,17 @@ fn run(data: &[u8], start: u64, end: u64, b: &mut TraceBuilder) -> Result<Vec<u8
         b.push(at, out.len() as u64, StepKind::Header(StepField::Btype, btype));
         let kind = match btype {
             0 => {
-                stored(&mut bits, &mut out, b)?;
+                stored(&mut bits, out, cap, b)?;
                 BlockKind::Stored
             }
             1 => {
                 let (lit, dist) = fixed_codes();
-                symbols(&mut bits, &mut out, b, &lit, &dist, &mut coarse)?;
+                symbols(&mut bits, out, cap, b, &lit, &dist, &mut coarse)?;
                 BlockKind::Fixed
             }
             2 => {
                 let (lit, dist) = dynamic_tables(&mut bits, out.len() as u64, b)?;
-                symbols(&mut bits, &mut out, b, &lit, &dist, &mut coarse)?;
+                symbols(&mut bits, out, cap, b, &lit, &dist, &mut coarse)?;
                 BlockKind::Dynamic
             }
             _ => return Err(Refusal::Failed),
@@ -272,12 +317,12 @@ fn run(data: &[u8], start: u64, end: u64, b: &mut TraceBuilder) -> Result<Vec<u8
         b.push(bits.pos, out.len() as u64, StepKind::Opaque);
     }
     b.finish_at(end.max(bits.pos), out.len() as u64);
-    Ok(out)
+    Ok(())
 }
 
 /// A stored block: the rest of the byte, a length, its complement, and that
 /// many bytes as they are.
-fn stored(bits: &mut Bits, out: &mut Vec<u8>, b: &mut TraceBuilder) -> Result<(), Refusal> {
+fn stored(bits: &mut Bits, out: &mut Vec<u8>, cap: usize, b: &mut TraceBuilder) -> Result<(), Refusal> {
     let at = bits.pos;
     if bits.align() > 0 {
         b.push(at, out.len() as u64, StepKind::Header(StepField::Padding, 0));
@@ -296,7 +341,7 @@ fn stored(bits: &mut Bits, out: &mut Vec<u8>, b: &mut TraceBuilder) -> Result<()
     if stop as u64 * 8 > bits.end {
         return Err(Refusal::Failed);
     }
-    if out.len() + len as usize > CAP_BYTES {
+    if out.len() + len as usize > cap {
         return Err(Refusal::TooLarge);
     }
     if len > 0 {
@@ -384,6 +429,7 @@ fn dynamic_tables(bits: &mut Bits, out_at: u64, b: &mut TraceBuilder) -> Result<
 fn symbols(
     bits: &mut Bits,
     out: &mut Vec<u8>,
+    cap: usize,
     b: &mut TraceBuilder,
     lit: &Code,
     dist: &Code,
@@ -408,7 +454,7 @@ fn symbols(
         let sym = lit.decode(bits)?;
         match sym {
             0..=255 => {
-                if out.len() >= CAP_BYTES {
+                if out.len() >= cap {
                     return Err(Refusal::TooLarge);
                 }
                 out.push(sym as u8);
@@ -433,7 +479,7 @@ fn symbols(
                 if d as usize > out.len() {
                     return Err(Refusal::Failed);
                 }
-                if out.len() + len as usize > CAP_BYTES {
+                if out.len() + len as usize > cap {
                     return Err(Refusal::TooLarge);
                 }
                 let from = out.len() - d as usize;

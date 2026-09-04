@@ -126,19 +126,92 @@ pub fn p8png() -> Template {
     Template::new("p8png", super::png::cart_png("Pico8Cart", idat))
 }
 
-/// Whether a PNG's header says it is the size and shape a cart is: 160 by 205,
-/// eight bits a channel, colour type 6, which is RGBA.
+/// Where the code lives in the cart, and the row of the image the byte at that
+/// offset falls in: 0x4300 is pixel 17,152, which is row 107 column 32.
+const CODE_AT: usize = 0x4300;
+const CODE_ROW: usize = CODE_AT / WIDTH as usize;
+
+/// The byte saying which release of PICO-8 wrote the file, and its row, which
+/// is the last one in the image.
+const VERSION_AT: usize = 0x8000;
+const VERSION_ROW: usize = VERSION_AT / WIDTH as usize;
+
+/// Whether a PNG is a PICO-8 cartridge: 160 by 205, eight bits a channel,
+/// colour type 6, which is RGBA, and code where a cart keeps its code.
 ///
-/// Not proof. Any 160 by 205 RGBA PNG passes, and the template reads one as a
-/// cart full of nothing much. Nothing else in the format announces itself, and
-/// PICO-8 itself decides the same way.
+/// The size is where it starts. Any picture can be 160 by 205, so the pixels
+/// are read the way the template reads them, through the zlib stream, the
+/// filters and the low bits, and the cart's own landmarks are checked in what
+/// comes out: 0x4300 has to open one of the three ways code is stored, and the
+/// version byte at 0x8000 has to be a release number rather than anything at
+/// all.
+///
+/// ## When the code is out of reach
+///
+/// A sniff sees the first [`SNIFF_WINDOW`](super::recognise::SNIFF_WINDOW)
+/// bytes of the file, 36 KB of it, and 0x4300 is most of the way down the
+/// image. A cart whose picture packs well is decided here; one whose picture is
+/// noisy enough that its IDAT runs past the window is accepted on its size
+/// alone, the way this test worked before. That is the wrong way to be wrong
+/// for a probe, and it is the way round to be wrong: refusing a real cart makes
+/// the editor unable to open a file it understands, while accepting a busy
+/// picture of exactly this size costs a reader one wrong guess they can correct
+/// from the type list.
 pub fn is_p8png(head: &[u8]) -> bool {
-    super::png::is_size(head, WIDTH, HEIGHT)
+    if !super::png::is_size(head, WIDTH, HEIGHT) {
+        return false;
+    }
+    let pixels = super::png::cart_pixels(head, WIDTH, HEIGHT);
+    let stride = WIDTH as usize * 4;
+    let rows = pixels.len() / stride;
+    if rows <= CODE_ROW {
+        // The picture did not fit in the window. Nothing was read that could
+        // say no, so the size has the last word.
+        return true;
+    }
+    let Ok((cart, _)) = crate::codec::pixels::low_bits_argb(&pixels[..rows * stride]) else { return true };
+    if cart.len() < CODE_AT + 16 || !is_code(&cart[CODE_AT..CODE_AT + 16]) {
+        return false;
+    }
+    // Only when the whole image came out, since 0x8000 is in the last row.
+    if rows > VERSION_ROW && cart[VERSION_AT] > 64 {
+        return false;
+    }
+    true
+}
+
+/// Whether sixteen bytes at 0x4300 are the start of a cart's code.
+///
+/// Two of the three shapes name themselves. The third is Lua as it was typed,
+/// and a cart with less of it than sixteen bytes pads the rest with NULs, so
+/// what is asked of plain text is: a printable first byte, printable or
+/// whitespace up to the first NUL, and nothing but NULs after that.
+fn is_code(bytes: &[u8]) -> bool {
+    if bytes.starts_with(b":c:\0") || bytes.starts_with(b"\0pxa") {
+        return true;
+    }
+    let mut ended = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if ended {
+            if b != 0 {
+                return false;
+            }
+            continue;
+        }
+        match b {
+            0 if i > 0 => ended = true,
+            b'\n' | b'\r' | b'\t' => {}
+            0x20..=0x7e => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::recognise::{sniff, SNIFF_WINDOW};
     use crate::document::Document;
     use crate::eval::{Evaluator, Value};
     use crate::source::MemSource;
@@ -154,9 +227,17 @@ mod tests {
     /// A cart PNG built from a cart: the low bits of every channel carry the
     /// bytes, the high bits carry a picture, and each row gets a filter byte.
     fn cart_png(cart: &[u8]) -> Vec<u8> {
+        cart_png_painted(cart, false)
+    }
+
+    /// The same, with `noisy` saying whether the picture is a gradient, which
+    /// packs into a few kilobytes, or random, which packs into none at all and
+    /// gives an IDAT longer than a sniff ever sees.
+    fn cart_png_painted(cart: &[u8], noisy: bool) -> Vec<u8> {
         assert_eq!(cart.len(), (WIDTH * HEIGHT) as usize);
         let stride = (WIDTH * 4) as usize;
         let mut raw = Vec::with_capacity(HEIGHT as usize * (stride + 1));
+        let mut seed = 0x1234_5678u32;
         for row in 0..HEIGHT as usize {
             // Filter none, so the bytes in the stream are the pixels. The
             // unfilter tests upstream cover the other four.
@@ -166,12 +247,19 @@ mod tests {
                 // Something in the high six bits so that the picture is not
                 // all one colour and the low bits are demonstrably the only
                 // thing being read.
-                let paint = ((row + col) as u8) << 2;
-                let ch = |bits: u8| paint | bits;
-                raw.push(ch(byte >> 4 & 3)); // red
-                raw.push(ch(byte >> 2 & 3)); // green
-                raw.push(ch(byte & 3)); // blue
-                raw.push(ch(byte >> 6 & 3)); // alpha
+                let mut paint = [((row + col) as u8) << 2; 4];
+                if noisy {
+                    // A different value in every channel of every pixel, so
+                    // that the picture packs into more than the sniff window.
+                    for p in paint.iter_mut() {
+                        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                        *p = (seed >> 24) as u8 & !3;
+                    }
+                }
+                raw.push(paint[0] | (byte >> 4 & 3)); // red
+                raw.push(paint[1] | (byte >> 2 & 3)); // green
+                raw.push(paint[2] | (byte & 3)); // blue
+                raw.push(paint[3] | (byte >> 6 & 3)); // alpha
             }
         }
         let mut ihdr = WIDTH.to_be_bytes().to_vec();
@@ -260,5 +348,48 @@ mod tests {
         rgb[25] = 2;
         assert!(!is_p8png(&rgb));
         assert!(!is_p8png(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    /// The size is not enough on its own: a picture of the right size whose
+    /// pixels carry nothing is a PNG, and one carrying a cart is a cart.
+    #[test]
+    fn a_picture_of_the_right_size_carrying_nothing_is_only_a_picture() {
+        let cart = cart_png(&a_cart());
+        // If the picture ever stops fitting in the window this test starts
+        // passing through the fallback, and would prove nothing.
+        assert!(cart.len() < SNIFF_WINDOW, "the cart PNG no longer fits in the sniff window");
+        assert!(is_p8png(&cart));
+        assert_eq!(sniff(&cart, cart.len() as u64), Some("p8png"));
+
+        let empty = cart_png(&vec![0u8; (WIDTH * HEIGHT) as usize]);
+        assert!(empty.len() < SNIFF_WINDOW);
+        assert!(!is_p8png(&empty));
+        assert_eq!(sniff(&empty, empty.len() as u64), Some("png"));
+
+        // Noise at 0x4300 is not code either.
+        let mut noise = a_cart();
+        for (i, b) in noise[CODE_AT..CODE_AT + 16].iter_mut().enumerate() {
+            *b = 0x80 | i as u8;
+        }
+        assert!(!is_p8png(&cart_png(&noise)));
+
+        // And a version byte no release of PICO-8 ever wrote.
+        let mut future = a_cart();
+        future[VERSION_AT] = 200;
+        assert!(!is_p8png(&cart_png(&future)));
+    }
+
+    /// A cart whose picture is too busy to pack into the sniff window is taken
+    /// on its size, since the bytes that would say otherwise are not there.
+    #[test]
+    fn a_cart_whose_idat_outruns_the_window_is_taken_on_its_size() {
+        let png = cart_png_painted(&a_cart(), true);
+        assert!(png.len() > SNIFF_WINDOW, "the noisy picture packed too well to test the fallback");
+        let head = &png[..SNIFF_WINDOW];
+        // Well short of row 107, so nothing was read that could say no.
+        let rows = super::super::png::cart_pixels(head, WIDTH, HEIGHT).len() / (WIDTH as usize * 4);
+        assert!(rows > 0 && rows <= CODE_ROW, "{rows} rows came out of the window");
+        assert!(is_p8png(head));
+        assert_eq!(sniff(head, png.len() as u64), Some("p8png"));
     }
 }

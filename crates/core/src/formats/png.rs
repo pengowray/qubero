@@ -93,6 +93,72 @@ pub(crate) fn is_size(head: &[u8], width: u32, height: u32) -> bool {
     w == width && h == height && head.get(24) == Some(&8) && head.get(25) == Some(&6)
 }
 
+/// The pixel bytes a cartridge image hides its payload in, as far as the bytes
+/// of the file a sniff has been given reach.
+///
+/// A cartridge announces nothing about itself in the file: the only way to tell
+/// one from a holiday snap of the same size is to go and read what is hidden in
+/// the pixels, and that means running the front of the image through the same
+/// three steps the template does. The chunks inside `head` are walked, the IDAT
+/// data in them gathered, that stream partly inflated, and the whole rows which
+/// came out unfiltered. A row cut off in the middle is dropped, since a filter
+/// needs a whole row above it.
+///
+/// The result is the unfiltered pixels: `width * 4` bytes a row, and however
+/// many rows the head reached. Empty if the header is not the right size and
+/// shape, or if what came out is not scanlines. A caller reads its own payload
+/// out of the rows it was given and decides on those; the rows past the end of
+/// the head are the caller's problem, not this function's.
+pub(crate) fn cart_pixels(head: &[u8], width: u32, height: u32) -> Vec<u8> {
+    if !is_size(head, width, height) {
+        return Vec::new();
+    }
+    // Adam7 lays the image out in seven passes, so a row of the stream is not a
+    // row of the image and none of the arithmetic below holds. No cartridge is
+    // interlaced.
+    if head.get(28) != Some(&0) {
+        return Vec::new();
+    }
+    let stride = width as usize * 4;
+    // What a complete image comes to, filter bytes and all, which is the most
+    // output worth keeping and far less than a hostile stream would produce.
+    let cap = height as usize * (stride + 1);
+    // The chunk stream starts after the eight-byte signature. IHDR is the first
+    // chunk in it and is walked past like any other chunk which is not an IDAT.
+    let mut at = 8;
+    let mut idat: Vec<u8> = Vec::new();
+    while at + 8 <= head.len() {
+        let Some(len) = dword(head, at) else { break };
+        let kind = &head[at + 4..at + 8];
+        if kind == b"IEND" {
+            break;
+        }
+        let start = at + 8;
+        // A length is four bytes wide and says whatever it likes, so the end of
+        // the chunk is worked out in a width that cannot wrap.
+        let Some(end) = start.checked_add(len as usize) else { break };
+        if kind == b"IDAT" {
+            // The last IDAT in the head is the one running past its end, and
+            // the bytes of it which are here are the point of the exercise.
+            idat.extend_from_slice(&head[start..end.min(head.len())]);
+        }
+        let Some(next) = end.checked_add(4) else { break };
+        if next > head.len() {
+            break;
+        }
+        at = next;
+    }
+    let raw = crate::codec::inflate::inflate_prefix(&idat, cap);
+    let rows = raw.len() / (stride + 1);
+    if rows == 0 {
+        return Vec::new();
+    }
+    match crate::codec::pixels::unfilter(&raw[..rows * (stride + 1)], width * 4, 4) {
+        Ok((pixels, _)) => pixels,
+        Err(_) => Vec::new(),
+    }
+}
+
 fn dword(head: &[u8], at: usize) -> Option<u32> {
     let bytes: [u8; 4] = head.get(at..at + 4)?.try_into().ok()?;
     Some(u32::from_be_bytes(bytes))
