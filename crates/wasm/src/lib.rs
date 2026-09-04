@@ -1155,8 +1155,8 @@ struct MapStepDto {
     out_start: f64,
     out_end: f64,
     /// The word the interface looks the step's message up by: `literal`,
-    /// `match`, `stored`, `header`, `table`, `end-of-block`, `block` or
-    /// `opaque`. [`StepKind::as_str`] is the one place these are named.
+    /// `match`, `stored`, `pixel`, `header`, `table`, `end-of-block`, `block`
+    /// or `opaque`. [`StepKind::as_str`] is the one place these are named.
     kind: &'static str,
     /// Which named field, for a header or a table step: `bfinal`, `hlit`,
     /// `code_len` and the rest.
@@ -1221,7 +1221,7 @@ fn step_dto(s: MapStep) -> MapStepDto {
             dto.len = Some(len as f64);
             dto.dist = Some(dist as f64);
         }
-        StepKind::Stored | StepKind::EndOfBlock | StepKind::Block | StepKind::Opaque => {}
+        StepKind::Stored | StepKind::Pixel | StepKind::EndOfBlock | StepKind::Block | StepKind::Opaque => {}
     }
     dto
 }

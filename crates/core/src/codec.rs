@@ -17,6 +17,7 @@
 pub mod frames;
 pub mod inflate;
 pub mod lz4;
+pub mod pico8;
 pub mod pixels;
 
 use std::ops::Range;
@@ -54,6 +55,16 @@ pub enum Codec {
     /// packed into a byte stream low bits first. How a Picotron cartridge is
     /// carried inside the picture of its label.
     LowBitsRgba11,
+    /// PICO-8's `\0pxa` code compression, written by PICO-8 0.2.0 and after.
+    /// A bit stream of move-to-front literals and back-references. The run
+    /// handed here is the stream alone: the eight header bytes in front of it
+    /// are fields of the cart and are read by the template, not by this.
+    Pico8Pxa,
+    /// PICO-8's older `:c:\0` code compression: a byte stream of table
+    /// indices, escaped bytes and two-byte back-references, ending at a pair
+    /// of zero bytes. The run handed here starts after the same eight header
+    /// bytes.
+    Pico8Old,
 }
 
 impl Codec {
@@ -67,6 +78,8 @@ impl Codec {
             Codec::PngUnfilter { .. } => "png unfilter",
             Codec::LowBitsArgb => "low bits argb",
             Codec::LowBitsRgba11 => "low bits rgba 11",
+            Codec::Pico8Pxa => "pico-8 pxa",
+            Codec::Pico8Old => "pico-8 :c:",
         }
     }
 }
@@ -207,6 +220,10 @@ pub enum StepKind {
     Block,
     /// Input the decoder read and this trace does not name.
     Opaque,
+    /// One pixel, read for the bits somebody hid in it. Its output range is
+    /// the bytes that pixel completed, which is one for a cart's pixels and
+    /// one or two where a pixel carries eleven bits.
+    Pixel,
 }
 
 impl StepKind {
@@ -221,6 +238,7 @@ impl StepKind {
             StepKind::EndOfBlock => "end-of-block",
             StepKind::Block => "block",
             StepKind::Opaque => "opaque",
+            StepKind::Pixel => "pixel",
         }
     }
 }
@@ -535,6 +553,7 @@ const TAG_STORED: u8 = 8;
 const TAG_END: u8 = 9;
 const TAG_BLOCK: u8 = 10;
 const TAG_OPAQUE: u8 = 11;
+const TAG_PIXEL: u8 = 12;
 
 fn pack(in_start: u64, out_start: u64, kind: StepKind) -> RawStep {
     let (tag, a, b) = match kind {
@@ -551,6 +570,7 @@ fn pack(in_start: u64, out_start: u64, kind: StepKind) -> RawStep {
         StepKind::EndOfBlock => (TAG_END, 0, 0),
         StepKind::Block => (TAG_BLOCK, 0, 0),
         StepKind::Opaque => (TAG_OPAQUE, 0, 0),
+        StepKind::Pixel => (TAG_PIXEL, 0, 0),
     };
     RawStep { in_start: in_start as u32, out_start: out_start as u32, a, b, tag }
 }
@@ -572,6 +592,7 @@ fn unpack(raw: RawStep) -> StepKind {
         TAG_STORED => StepKind::Stored,
         TAG_END => StepKind::EndOfBlock,
         TAG_BLOCK => StepKind::Block,
+        TAG_PIXEL => StepKind::Pixel,
         _ => StepKind::Opaque,
     }
 }
@@ -618,6 +639,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::PngUnfilter { stride, bpp } => pixels::unfilter(data, stride, bpp)?,
         Codec::LowBitsArgb => pixels::low_bits_argb(data)?,
         Codec::LowBitsRgba11 => pixels::low_bits_rgba11(data)?,
+        Codec::Pico8Pxa => pico8::pxa(data)?,
+        Codec::Pico8Old => pico8::old(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -633,7 +656,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     let out = match codec {
         // One decoder, not two: the bytes a reader sees have to be the bytes
         // the trace describes, so the traced path is the only path.
-        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb | Codec::LowBitsRgba11 => {
+        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb | Codec::LowBitsRgba11 | Codec::Pico8Pxa | Codec::Pico8Old => {
             decode_traced(codec, data)?.0
         }
         Codec::Zstd => zstd(data)?,

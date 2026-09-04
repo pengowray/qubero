@@ -90,6 +90,7 @@ export const UNPACKED = {
   stepName: {
     literal: "literal",
     stored: "stored",
+    pixel: "pixel",
     block: "block header",
     header: "block header",
     table: "Huffman table",

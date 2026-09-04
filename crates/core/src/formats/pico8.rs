@@ -21,18 +21,17 @@
 //! effects at 0x3200, the Lua at 0x4300, and one byte at 0x8000 saying which
 //! release of PICO-8 wrote the file.
 //!
-//! ## The code, which this round does not open
+//! ## The code
 //!
 //! The Lua at 0x4300 is stored one of three ways, told apart by the first four
 //! bytes:
 //!
 //! - `\0pxa`, from PICO-8 0.2.0 on. Two big-endian 16-bit lengths follow, the
-//!   text's length and the compressed run's, and then a bit stream. A literal
-//!   is a position in a 256-entry table, written as a unary prefix and then
-//!   that many bits, and the byte it names moves to the front of the table. A
-//!   back-reference writes its offset in 5, 10 or 15 bits and its length as a
-//!   chain of three-bit groups. Taken from the decoder in `src/pxa.rs` of
-//!   shanecelis/pico8_decompress, since no published document says it.
+//!   text's length and the whole run's including these eight bytes, and then a
+//!   bit stream. A literal is a position in a 256-entry table, written as a
+//!   unary prefix and then that many bits, and the byte it names moves to the
+//!   front of the table. A back-reference writes its offset in 5, 10 or 15
+//!   bits and its length as a chain of three-bit groups.
 //! - `:c:\0`, from before that. A big-endian 16-bit length of the text, two
 //!   bytes that say nothing, and then a byte stream: a byte of zero escapes a
 //!   literal, a byte up to 0x3b indexes a table of the characters Lua source
@@ -41,8 +40,10 @@
 //! - Anything else, in which case the region is the Lua source as it stands,
 //!   ASCII, ending at the first zero byte.
 //!
-//! Both schemes are read here as the header and then the bytes. Unpacking them
-//! wants two more decoders, and they are not written yet.
+//! The first two are opened, so the code reads as its text either way, with
+//! every literal and every back-reference named. Neither scheme is written
+//! down anywhere Lexaloffle publishes; see [`crate::codec::pico8`] for what
+//! the decoders were written against.
 
 use crate::codec::Codec;
 use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T};
@@ -92,7 +93,16 @@ fn code() -> T {
             ("magic", T::magic(b"\0pxa")),
             ("text_len", T::u16(Big)),
             ("packed_len", T::u16(Big)),
-            ("packed", T::bytes(E::field("packed_len"))),
+            // `packed_len` counts the eight header bytes above as well, so
+            // the stream itself is that much shorter.
+            (
+                "packed",
+                T::decoded(
+                    E::field("packed_len").sub(E::lit(8)),
+                    Codec::Pico8Pxa,
+                    super::decoded_text(),
+                ),
+            ),
             ("unused", T::bytes(E::Remaining)),
         ],
     );
@@ -102,7 +112,9 @@ fn code() -> T {
             ("magic", T::magic(b":c:\0")),
             ("text_len", T::u16(Big)),
             ("reserved", T::bytes(E::lit(2))),
-            ("packed", T::bytes(E::Remaining)),
+            // Nothing says how long this one is: it ends at a pair of zero
+            // bytes, and the rest of the region is room it did not need.
+            ("packed", T::decoded(E::Remaining, Codec::Pico8Old, super::decoded_text())),
         ],
     );
     let plain = T::structure_named(
@@ -184,13 +196,28 @@ mod tests {
         png
     }
 
+    /// `print("hi")` as a pxa stream: eleven literals, each a table position
+    /// written narrow and moved to the front. Written out rather than built,
+    /// because building it would mean an encoder nothing else needs; the
+    /// decoder's own tests cover the shapes this does not.
+    const PXA_PRINT_HI: [u8; 13] =
+        [15, 240, 4, 183, 63, 192, 35, 172, 15, 95, 95, 37, 251];
+
+    /// The same text in the older scheme: table indices, an escape apiece for
+    /// the two quotes and the round brackets, and the pair of zeroes that ends
+    /// it.
+    const OLD_PRINT_HI: [u8; 15] =
+        [28, 30, 21, 26, 32, 42, 0, 34, 20, 21, 0, 34, 43, 0, 0];
+
     /// A cart with something recognisable at each landmark.
     fn a_cart() -> Vec<u8> {
         let mut c = vec![0u8; (WIDTH * HEIGHT) as usize];
         c[0] = 0x5a; // first byte of the sprite sheet
         c[0x2000] = 0x77; // first byte of the map
-        c[0x4300..0x4308].copy_from_slice(b"\0pxa\x00\x42\x00\x0a");
-        c[0x4308..0x4312].copy_from_slice(b"packedcode");
+        // Eleven characters of text, and eight header bytes over thirteen of
+        // stream, which is what `packed_len` counts.
+        c[0x4300..0x4308].copy_from_slice(b"\0pxa\x00\x0b\x00\x15");
+        c[0x4308..0x4308 + PXA_PRINT_HI.len()].copy_from_slice(&PXA_PRINT_HI);
         c[0x8000] = 41; // what the carts in the sample collection say
         c
     }
@@ -224,9 +251,17 @@ mod tests {
         let code = ev.node(&d, &[1, 1, 2, 0, 0, 0, 6]).unwrap();
         assert_eq!(code.type_name, "Pxa");
         assert_eq!(code.offset_bits, 0x4300 * 8);
-        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 1]).unwrap().value, Value::UInt(0x42));
-        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 2]).unwrap().value, Value::UInt(10));
-        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3]).unwrap().size_bits, 10 * 8);
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 1]).unwrap().value, Value::UInt(11));
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 2]).unwrap().value, Value::UInt(21));
+        // The run is the stream alone, the eight header bytes taken off.
+        let packed = ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3]).unwrap();
+        assert_eq!(packed.size_bits, 13 * 8);
+        assert_eq!(packed.type_name, "pico-8 pxa");
+        // And what it comes to is the Lua, in a space of its own.
+        assert_eq!(
+            ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3, 0, 0]).unwrap().value,
+            Value::Str("print(\"hi\")".into())
+        );
 
         // Uncompressed Lua, which is what a cart written before 0.2.0 without
         // enough code to be worth packing holds.
@@ -240,11 +275,18 @@ mod tests {
 
         // And the scheme before pxa.
         let mut c = a_cart();
-        c[0x4300..0x4308].copy_from_slice(b":c:\0\x01\x00\0\0");
+        c[0x4300..0x4400].fill(0);
+        c[0x4300..0x4308].copy_from_slice(b":c:\0\x00\x0b\0\0");
+        c[0x4308..0x4308 + OLD_PRINT_HI.len()].copy_from_slice(&OLD_PRINT_HI);
         let d = Document::new(MemSource(cart_png(&c)));
         let mut ev = Evaluator::new(p8png());
         assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6]).unwrap().type_name, "OldCompressed");
-        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 1]).unwrap().value, Value::UInt(256));
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 1]).unwrap().value, Value::UInt(11));
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3]).unwrap().type_name, "pico-8 :c:");
+        assert_eq!(
+            ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3, 0, 0]).unwrap().value,
+            Value::Str("print(\"hi\")".into())
+        );
     }
 
     #[test]

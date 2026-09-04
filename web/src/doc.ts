@@ -751,6 +751,7 @@ export type MapStep = {
     | "literal"
     | "match"
     | "stored"
+    | "pixel"
     | "block"
     | "header"
     | "table"

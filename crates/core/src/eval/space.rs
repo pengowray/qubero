@@ -264,7 +264,7 @@ mod tests {
         for byte in 0..text.len() as u64 {
             let step = space.map_out(byte).unwrap_or_else(|| panic!("byte {byte} came from nowhere"));
             assert!(step.out_bytes.contains(&byte));
-            assert!(matches!(step.kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::Stored));
+            assert!(matches!(step.kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::Stored | StepKind::Pixel));
             // And the bits it read lead back to it.
             assert_eq!(space.map_in(step.in_bits.start).map(|s| s.kind), Some(step.kind));
         }

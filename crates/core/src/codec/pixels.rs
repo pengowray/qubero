@@ -114,9 +114,9 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 /// red 5 and 4, green 3 and 2, blue 1 and 0. Everything above the low two bits
 /// of a channel is the picture and is dropped here.
 ///
-/// The trace names every byte: four input bytes in, one out, recorded as the
-/// literal it came to. No coarsening, since the largest run this is ever asked
-/// about is a 160x205 image and 32,800 steps.
+/// The trace names every byte: one step a pixel, four bytes of input to the
+/// one byte it carried. No coarsening, since the largest run this is ever
+/// asked about is a 160x205 image and 32,800 steps.
 pub fn low_bits_argb(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     if data.len() % 4 != 0 {
         return Err(Refusal::Failed);
@@ -131,7 +131,7 @@ pub fn low_bits_argb(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     for i in 0..count {
         let p = &data[i * 4..i * 4 + 4];
         let byte = (p[3] & 3) << 6 | (p[0] & 3) << 4 | (p[1] & 3) << 2 | (p[2] & 3);
-        b.push(i as u64 * 32, i as u64, StepKind::Literal(byte));
+        b.push(i as u64 * 32, i as u64, StepKind::Pixel);
         out.push(byte);
     }
     b.close_block(data.len() as u64 * 8, out.len() as u64, BlockKind::Pixels, true);
@@ -154,9 +154,7 @@ pub fn low_bits_argb(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 ///
 /// What the trace says: one step a pixel, four bytes of input to the one or
 /// two bytes of output that pixel completed. Never zero, since eleven bits are
-/// more than a byte. A step is [`StepKind::Stored`] rather than a literal
-/// because a literal is one byte and three steps in every eight are two, and
-/// the bytes did come through as they were written.
+/// more than a byte.
 pub fn low_bits_rgba11(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     if data.len() % 4 != 0 {
         return Err(Refusal::Failed);
@@ -182,7 +180,7 @@ pub fn low_bits_rgba11(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             held >>= 8;
             bits -= 8;
         }
-        b.push(i as u64 * 32, at, StepKind::Stored);
+        b.push(i as u64 * 32, at, StepKind::Pixel);
     }
     b.close_block(data.len() as u64 * 8, out.len() as u64, BlockKind::Pixels, true);
     b.finish_at(data.len() as u64 * 8, out.len() as u64);
@@ -244,7 +242,7 @@ mod tests {
         trace.check_tiles().unwrap();
         assert_eq!(trace.len(), 1);
         assert_eq!(trace.step(0).unwrap().in_bits, 0..32);
-        assert_eq!(trace.map_out(0).unwrap().kind, StepKind::Literal(0b1001_0011));
+        assert_eq!(trace.map_out(0).unwrap().kind, StepKind::Pixel);
     }
 
     #[test]
