@@ -109,6 +109,12 @@ function carriedName(name: string, c: Chip | undefined): string {
   return c?.carried === true ? `↑ ${name}` : name;
 }
 
+/** What a chip says when it is drawn above the bytes it names, after its own
+ *  value: the field started further up and runs on through this row. */
+function continuedDetail(detail: string): string {
+  return detail === "" ? "continued" : `${detail} · continued`;
+}
+
 /** The name a list gives its elements. */
 const ELEMENT = /^\[\d+\]$/;
 
@@ -178,6 +184,11 @@ type LineParts = {
   readonly cells: HTMLElement;
   readonly asc: HTMLElement;
   readonly note: HTMLElement;
+  /** The chips for fields that began above the visible rows, drawn above the
+   *  line rather than below it so they read as a heading over the bytes they
+   *  name. Only in the "below" arrangement, and only on the row's first line;
+   *  empty otherwise, and hidden by `:empty`. */
+  readonly above: HTMLElement;
   readonly hex: readonly HTMLElement[];
   readonly text: readonly HTMLElement[];
 };
@@ -618,6 +629,8 @@ export class HexView {
     asc.className = "hv-ascii";
     const note = document.createElement("span");
     note.className = below ? "hv-note hv-note-below" : "hv-note";
+    const above = document.createElement("span");
+    above.className = "hv-note hv-note-above";
     const hex: HTMLElement[] = [];
     const text: HTMLElement[] = [];
     for (let i = 0; i < bpr; i++) {
@@ -636,7 +649,7 @@ export class HexView {
     // Beside the bytes the note is part of the line; below them it is a block
     // of its own after the line, so that it can use the row's whole width.
     if (fields && !below) line.append(note);
-    return { line, addr, cells, asc, note, hex, text };
+    return { line, addr, cells, asc, note, above, hex, text };
   }
 
   /**
@@ -663,9 +676,16 @@ export class HexView {
     while (parts.lines.length < segs.length) parts.lines.push(this.makeLine());
     const kids: HTMLElement[] = [];
     for (const [j, at] of segs.entries()) {
+      const lp = parts.lines[j] as LineParts;
+      // The fields carried down from above the view name bytes the row is
+      // about to draw, so they go over them rather than under: a chip below
+      // the first row would sit between the bytes it names and the ones that
+      // follow. Always in place while the chips are below, empty when nothing
+      // is carried, so a scroll moves a chip between the two blocks without
+      // building the row again.
+      if (fields && below && j === 0) kids.push(lp.above);
       const here = heads.get(at);
       if (here !== undefined) kids.push(this.headingBlock(here, fileBits, rowStart + at));
-      const lp = parts.lines[j] as LineParts;
       kids.push(lp.line);
       if (fields && below) kids.push(lp.note);
     }
@@ -1714,8 +1734,11 @@ export class HexView {
     return { name: s.name, detail: chipDetail(s) };
   }
 
-  /** One entry in the annotation column, coloured to match its bytes. */
-  private chip(c: Chip, text: ChipText): HTMLElement {
+  /** One entry in the annotation column, coloured to match its bytes. `extra`
+   *  marks a chip drawn above the bytes it names: it shows that the field runs
+   *  on through them, and only what the chip shows changes — the title and the
+   *  aria-label already say it in words. */
+  private chip(c: Chip, text: ChipText, extra = false): HTMLElement {
     const s = c.span;
     const { name, detail } = text;
     const el = document.createElement("button");
@@ -1727,10 +1750,11 @@ export class HexView {
     const nameEl = document.createElement("b");
     nameEl.textContent = name;
     el.append(nameEl);
-    if (detail !== "") {
+    const shown = extra ? continuedDetail(detail) : detail;
+    if (shown !== "") {
       const v = document.createElement("span");
       v.className = "hv-chip-val";
-      v.textContent = detail;
+      v.textContent = shown;
       el.append(v);
     }
     const path = [...s.trail, s.name].join(" ");
@@ -1994,7 +2018,9 @@ export class HexView {
       }
       if (fields) {
         for (let j = 0; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
-        const firstNote = (parts.lines[0] as LineParts).note;
+        const firstLine = parts.lines[0] as LineParts;
+        firstLine.above.replaceChildren();
+        const firstNote = firstLine.note;
         if (!templated || trouble !== null) {
           if (r === 0) {
             const none = document.createElement("span");
@@ -2019,6 +2045,25 @@ export class HexView {
           (buckets[j] as Chip[]).push(c);
         }
         const measure = this.chipFonts ?? GUESS_TEXT;
+        // Below the bytes, a field carried down from above the view is drawn
+        // over the row instead of under it, so the hex it names is not split
+        // in two by the chip naming it.
+        if (below) {
+          const carried = (buckets[0] as Chip[]).filter((c) => c.carried);
+          buckets[0] = (buckets[0] as Chip[]).filter((c) => !c.carried);
+          const texts = carried.map((c) => this.chipText(c));
+          const { shown, lines } = chipLayout(
+            texts.map((t, i) => chipWidth(carriedName(t.name, carried[i]), continuedDetail(t.detail), measure)),
+            this.noteWidth,
+            maxLines,
+          );
+          height += lines * this.sizes.chipLine;
+          for (let i = 0; i < shown; i++)
+            firstLine.above.append(this.chip(carried[i] as Chip, texts[i] as ChipText, true));
+          // More carried fields than a capped block can hold: the rest are
+          // named below the bytes rather than dropped.
+          if (shown < carried.length) buckets[0] = [...carried.slice(shown), ...(buckets[0] as Chip[])];
+        }
         for (let j = 0; j < segs.length; j++) {
           const note = (parts.lines[j] as LineParts).note;
           const entries = buckets[j] as Chip[];

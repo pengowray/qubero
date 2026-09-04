@@ -577,6 +577,20 @@ input.invalid {
 .hv-note-below:empty {
   display: none;
 }
+/* The same block above the bytes, for a field that began further up the file:
+   naming it under the row would put it between the bytes it covers and the
+   ones after them. The hairline goes underneath, since what it divides the
+   chips from is below them. */
+.hv-note-above {
+  margin-left: 0;
+  padding: 1px 0;
+  border-left: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  align-content: start;
+}
+.hv-note-above:empty {
+  display: none;
+}
 .hexview.has-notes {
   line-height: 24px;
 }
