@@ -48,3 +48,19 @@ What the numbers say:
 
 After the fix, expect the ratio near 1.00, mean deviation near zero, stalls near
 zero, and a glide that decelerates in sub-row steps.
+
+## After (main at 2026-09-04, pixel scrolling over the row-height ledger)
+
+Same drag (1500 px, 12 px steps). Content tracks the finger exactly in every case.
+
+| File | Viewport | Finger | Content | Jumpy | Max dev | Mean dev | Stalls | Glide max step |
+|---|---|---|---|---|---|---|---|---|
+| notes.sqlite | 390x844 | 1488 | 1488 | 0/124 | 0 | 0.0 | 0 | 5 |
+| hello.exe | 390x844 | 1488 | 1488 | 0/124 | 0 | 0.0 | 0 | 5 |
+| bat.wav | 390x844 | 1488 | 1488 | 0/124 | 0 | 0.0 | 0 | 5 |
+| notes.sqlite | 1200x800 | 1488 | 1488 | 0/124 | 0 | 0.0 | 0 | 4 |
+
+Two things bit on the way: a redraw that detaches the element under the finger makes
+Chromium fire `pointercancel` and end the drag (so rows are now refilled in place, never
+rebuilt), and a chip carried in from above the view must not change the top row's height
+(so it is drawn in a strip pinned over the rows instead).
