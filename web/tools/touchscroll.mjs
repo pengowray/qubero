@@ -43,7 +43,7 @@ function parseArgs(argv) {
 const SAMPLER = () => {
   const w = window;
   const rowsEl = document.querySelector(".hexview .hv-rows") || document.querySelector(".hv-rows");
-  const state = { samples: [], travel: 0, step: -1, prev: null, cum: 0, stop: false, phase: "idle", lost: 0 };
+  const state = { samples: [], travel: 0, step: -1, prev: null, cum: 0, seam: 0, stop: false, phase: "idle", lost: 0 };
   w.__ts = state;
   // Every row on screen is an anchor, not one: displacement is the median of
   // how far the rows that survived the frame moved. A row leaving the top or
@@ -68,9 +68,13 @@ const SAMPLER = () => {
       else { ds.sort((a, b) => a - b); delta = ds[ds.length >> 1]; }
     }
     state.cum += delta;
+    // Lifting the finger to reach for more screen throws a flick, and the frames
+    // between that lift and the next touch are momentum, not tracking. Bank them
+    // in `seam` so the step either side of the seam is scored on drag alone.
+    if (state.phase === "restart") state.seam += delta;
     state.prev = now2;
     const view = w.__qubero && w.__qubero.view;
-    state.samples.push({ t: now, phase: state.phase, content: delta, cum: state.cum, travel: state.travel, step: state.step, topRow: view ? view.topRow : null, rows: now2.size });
+    state.samples.push({ t: now, phase: state.phase, content: delta, cum: state.cum - state.seam, travel: state.travel, step: state.step, topRow: view ? view.topRow : null, rows: now2.size });
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
@@ -155,11 +159,13 @@ async function main() {
   for (let i = 0; i < frames; i++) {
     if (y - args.step < minY) { // The finger ran out of screen; lift and start again lower down.
       if (process.env.TS_DEBUG) console.error(`restart at step ${i}, y=${y}, topRow=${await page.evaluate(() => window.__qubero?.view?.topRow)}`);
+      await page.evaluate(() => { window.__ts.phase = "restart"; });
       await touch("touchEnd", y);
       y = Math.round(box.y + Math.min(box.h - 20, box.h * 0.8));
       await nextFrame();
       await touch("touchStart", y);
       await nextFrame();
+      await page.evaluate(() => { window.__ts.phase = "drag"; });
     }
     y -= args.step;
     await page.evaluate(([i, d]) => { window.__ts.step = i; window.__ts.travel += d; }, [i, args.step]);

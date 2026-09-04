@@ -333,7 +333,7 @@ export class HexView {
    *  to the document, so each one costs a fresh layout of the whole view. Only
    *  a resize or a change of shape moves them, and `relayout` — which every one
    *  of those goes through — throws them away. */
-  private metrics: { readonly noteWidth: number; readonly trackH: number } | null = null;
+  private metrics: { readonly noteWidth: number; readonly noteLeft: number; readonly trackH: number } | null = null;
   /** The third size only the browser can answer: how tall a row is and how
    *  many of them fit. Measuring it reads `clientHeight` and a computed style,
    *  which forces a layout of everything the draw just wrote, so it is held
@@ -2019,8 +2019,8 @@ export class HexView {
     // row past the end of the file.
     const heights: number[] = [];
     // The carried chips for the top row, filled into the pinned strip once the
-    // rows are drawn. Null unless the chips are below the bytes and something
-    // carries over the top edge, which empties the strip.
+    // rows are drawn. Null unless something carries over the top edge, which
+    // empties the strip.
     let pinnedBlock: { entries: Chip[]; texts: ChipText[]; shown: number } | null = null;
     for (let r = 0; r < this.rowEls.length; r++) {
       const row = this.rowEls[r];
@@ -2214,12 +2214,14 @@ export class HexView {
         // reads as the touch being taken away and cancels the drag that is
         // scrolling the view.
         const plan: { entries: Chip[]; texts: ChipText[]; shown: number }[] = [];
-        // Below the bytes, a field carried down from above the view is named
-        // by the strip pinned over the top of the rows, not by the row itself:
-        // a chip under the top row would sit between the bytes it covers and
-        // the ones after them, and a chip inside it would make that row taller
-        // than it is anywhere else.
-        if (below && r === 0) {
+        // A field carried down from above the view is named by the strip
+        // pinned over the top of the rows, not by the top row itself: a chip
+        // under the top row would sit between the bytes it covers and the ones
+        // after them, and a chip inside it would make that row taller than the
+        // same row is anywhere else, so every row below it jumped a chip line
+        // as the top row changed. Only the top row can carry anything, so this
+        // is the one place a row's height would depend on where it fell.
+        if (r === 0) {
           const carried = (buckets[0] as Chip[]).filter((c) => c.carried);
           buckets[0] = (buckets[0] as Chip[]).filter((c) => !c.carried);
           const texts = carried.map((c) => this.chipText(c));
@@ -2285,6 +2287,14 @@ export class HexView {
       this.pinnedKey = pinnedKey;
       this.fillNote(this.pinned, pinnedBlock, true, false);
     }
+    // Beside the bytes the strip stands over the column it replaces a line of,
+    // not over the row: the bytes underneath stay readable, and the chips keep
+    // the column's hairline and indent.
+    const side = fields && !below;
+    if (this.pinned.classList.contains("hv-note-pinned-side") !== side)
+      this.pinned.classList.toggle("hv-note-pinned-side", side);
+    const pinLeft = side ? `${this.metrics?.noteLeft ?? 0}px` : "";
+    if (this.pinned.style.left !== pinLeft) this.pinned.style.left = pinLeft;
 
     // Everything the browser has to be asked, asked together: the widths and
     // the fonts the next layout is worked out from, and the heights this one
@@ -2310,7 +2320,12 @@ export class HexView {
         // bytes has to be measured again, in the place it will be drawn.
         if (this.arrangement === "below") widened = true;
       }
-      this.metrics = { noteWidth: w, trackH: this.track.clientHeight };
+      // Where the side column starts, so the pinned strip can sit over it
+      // rather than over the whole row. Read in the same forced layout as the
+      // width above.
+      const noteLeft =
+        noteEl === null ? 0 : noteEl.getBoundingClientRect().left - this.rowsEl.getBoundingClientRect().left;
+      this.metrics = { noteWidth: w, noteLeft, trackH: this.track.clientHeight };
       // One redraw when the measured width first disagrees with the guess, so
       // the count of what did not fit is right rather than nearly right.
       if (fields && w > 0 && Math.abs(w - this.noteWidth) > 4) widened = true;
@@ -2351,14 +2366,12 @@ export class HexView {
     // came to. The view does not move for it: a row that turned out taller or
     // shorter than expected changes the total, and the thumb may shift a pixel
     // for that, but the bytes the reader is looking at stay where they are.
-    // Every row while the chips are below the bytes: a row is drawn the same
-    // height wherever it falls, now that the fields carried down from above the
-    // view are named by the strip pinned over the rows rather than inside the
-    // top one. Beside the bytes those chips still join the top row's column and
-    // can wrap it a line taller than the row is anywhere else, so there the top
-    // row is measured only on the draws where it is not the top one.
+    // Every row: a row is drawn the same height wherever it falls, now that
+    // the fields carried down from above the view are named by the strip
+    // pinned over the rows rather than inside the top one, beside the bytes as
+    // well as below them.
     for (const [i, h] of real.entries()) {
-      if (h > 0 && (below || i > 0 || this.topRow === 0)) this.ledger.measure(this.topRow + i, h);
+      if (h > 0) this.ledger.measure(this.topRow + i, h);
     }
     this.ledger.trim(this.topRow);
 

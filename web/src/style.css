@@ -661,6 +661,15 @@ input.invalid {
 .hv-row:first-child > .hv-headings:first-child > .hv-heading:first-child {
   border-top-color: transparent;
 }
+/* Beside the bytes the strip stands over the top of the side column, so it
+   keeps that column's hairline and indent and needs no rule under it: what it
+   is divided from is to its left, not below. `left` is set from the measured
+   column. */
+.hv-note-pinned-side {
+  padding: 1px 0 1px 1ch;
+  border-bottom: 0;
+  border-left: 1px solid var(--line);
+}
 .hv-swatch {
   width: 10px;
   height: 10px;
