@@ -14,9 +14,20 @@
 import type { Doc, Span } from "./doc.js";
 import { formatBytes } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
-import { GAP_LABEL, NO_TEMPLATE, REPORT } from "./strings.js";
+import { NO_TEMPLATE, REPORT } from "./strings.js";
 import { fieldClass } from "./fieldstyle.js";
-import { CHIP_LINES, chipDetail, chipLayout, chipWidth, GUESS_TEXT, runDetail, type ChipMeasure } from "./chipfit.js";
+import { CHIP_LINES, chipDetail, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
+import {
+  chipText,
+  continuedDetail,
+  pinnedNoteKey,
+  placeChips,
+  planRowChips,
+  rowNoteKey,
+  type Chip,
+  type ChipBlock,
+  type ChipText,
+} from "./chipplan.js";
 import { rangeText, shareText } from "./listingdraw.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
 
@@ -93,55 +104,12 @@ const COPY_DONE = (bytes: number, asText: boolean): string =>
  *  which is the one thing a plain "keep" cannot say. */
 type Select = "keep" | "clear" | { readonly anchor: number };
 
-/** A span named on a row, whether it started above the view, and the elements
- *  of its list it stands for when a run of them is drawn as one chip: empty
- *  for a chip that is one field. */
-type Chip = { span: Span; carried: boolean; run: Span[] };
-
 /** A chip element, with the path of the field it stands for kept on it, so one
  *  click handler serves the button for as long as the button lives. */
 type ChipEl = HTMLButtonElement & { _path?: readonly number[] | undefined };
 
 /** A heading line, with the part it names kept on it. */
 type HeadEl = HTMLButtonElement & { _head?: OutlineHeading | undefined };
-
-/** What a chip says: the name in bold and the value after it. */
-type ChipText = { readonly name: string; readonly detail: string };
-
-/** The name as it is actually drawn. A chip for a field that began above the
- *  view is marked with an arrow by `.hv-chip-carried`, which is a CSS
- *  `::before` and so invisible to measuring the name's own text. Without it
- *  every carried chip is measured a character and a half short. */
-function carriedName(name: string, c: Chip | undefined): string {
-  return c?.carried === true ? `↑ ${name}` : name;
-}
-
-/** What a chip says when it is drawn above the bytes it names, after its own
- *  value: the field started further up and runs on through this row. */
-function continuedDetail(detail: string): string {
-  return detail === "" ? "continued" : `${detail} · continued`;
-}
-
-/** The name a list gives its elements. */
-const ELEMENT = /^\[\d+\]$/;
-
-/** Whether a span is an element of a list that reads as one of many, so that
- *  a run of its siblings on one row can be one chip. Text is not: each string
- *  is worth reading. Nor is a structure that reads on one line, for the same
- *  reason, or a run the core has already folded. */
-function foldable(s: Span): boolean {
-  return !s.gap && s.count === 0 && s.line === null && s.kind !== "str" && ELEMENT.test(s.name);
-}
-
-/** Whether two spans are elements of the same list, read the same way. */
-function sameList(a: Span, b: Span): boolean {
-  return a.type === b.type && a.trail.length === b.trail.length && a.trail.every((t, i) => t === b.trail[i]);
-}
-
-/** The list an element belongs to, by name. */
-function listName(s: Span): string {
-  return s.trail[s.trail.length - 1] ?? s.name;
-}
 
 /** What a heading calls a part with no name of its own: the listing's word
  *  for a run of fields at the front, the back or the middle of the file. */
@@ -1637,30 +1605,7 @@ export class HexView {
    *  left unexplained. */
   private placeSpans(start: number, windowBytes: number, bpr: number): Placed {
     const { spans, more, error: trouble } = this.spansForView(start, windowBytes);
-    const byteSpan = new Int32Array(windowBytes).fill(-1);
-    const byRow: Chip[][] = Array.from({ length: this.visibleRows }, () => []);
-    for (const [i, s] of spans.entries()) {
-      const from = Math.floor(s.offset_bits / 8);
-      const to = Math.ceil((s.offset_bits + s.size_bits) / 8);
-      for (let b = Math.max(from, start); b < Math.min(to, start + windowBytes); b++) {
-        byteSpan[b - start] = i;
-      }
-      const row = from < start ? 0 : Math.floor((from - start) / bpr);
-      if (row >= 0 && row < this.visibleRows && to > start) {
-        const chips = byRow[row] as Chip[];
-        const prev = chips[chips.length - 1];
-        // Elements of one list, one after another on the row, are one chip
-        // saying how many: `[0]`, `[1]`, `[2]` say less than `cell_pointers
-        // 3 values`. A chip carried from above the view stays its own, since
-        // its arrow is about where it started.
-        if (prev !== undefined && !prev.carried && from >= start && foldable(s) && foldable(prev.span) && sameList(prev.span, s)) {
-          if (prev.run.length === 0) prev.run.push(prev.span);
-          prev.run.push(s);
-        } else {
-          chips.push({ span: s, carried: from < start, run: [] });
-        }
-      }
-    }
+    const { byteSpan, byRow } = placeChips(spans, start, windowBytes, bpr, this.visibleRows);
     return { spans, more, trouble, byteSpan, byRow };
   }
 
@@ -1779,18 +1724,6 @@ export class HexView {
     return this.spanCache;
   }
 
-  /** What a chip says. A run of list elements is named for the list and says
-   *  how many; a structure that reads on one line is the whole chip, since
-   *  `[47]` is the element's number in a repeat and says nothing, and the
-   *  line says everything. */
-  private chipText(c: Chip): ChipText {
-    const s = c.span;
-    if (c.run.length > 0) return { name: listName(s), detail: runDetail(c.run.length) };
-    if (s.gap) return { name: GAP_LABEL, detail: chipDetail(s) };
-    if (s.line !== null) return { name: s.line, detail: "" };
-    return { name: s.name, detail: chipDetail(s) };
-  }
-
   /** One entry in the annotation column, coloured to match its bytes. `extra`
    *  marks a chip drawn above the bytes it names: it shows that the field runs
    *  on through them, and only what the chip shows changes — the title and the
@@ -1848,7 +1781,7 @@ export class HexView {
    */
   private fillNote(
     el: HTMLElement,
-    b: { entries: Chip[]; texts: ChipText[]; shown: number } | null,
+    b: ChipBlock | null,
     continued: boolean,
     tail: boolean,
   ): void {
@@ -1874,7 +1807,7 @@ export class HexView {
     let at = n;
     if (rest && b !== null) {
       const left = b.entries.slice(b.shown);
-      const named = left.slice(0, 8).map((c) => this.chipText(c).name);
+      const named = left.slice(0, 8).map((c) => chipText(c).name);
       if (left.length > named.length) named.push("…");
       const what = left.length === 1 ? "field starts" : "fields start";
       this.fillPlain(
@@ -2021,7 +1954,7 @@ export class HexView {
     // The carried chips for the top row, filled into the pinned strip once the
     // rows are drawn. Null unless something carries over the top edge, which
     // empties the strip.
-    let pinnedBlock: { entries: Chip[]; texts: ChipText[]; shown: number } | null = null;
+    let pinnedBlock: ChipBlock | null = null;
     for (let r = 0; r < this.rowEls.length; r++) {
       const row = this.rowEls[r];
       const parts = this.parts[r];
@@ -2194,77 +2127,28 @@ export class HexView {
           heights.push(height);
           continue;
         }
-        // A cut row's chips go beside the bytes they name. A run of list
-        // elements folded into one chip goes with the first of them, since
-        // that is the byte the chip's arrow points at.
-        const buckets: Chip[][] = segs.map(() => []);
-        for (const c of byRow[r] ?? []) {
-          let j = 0;
-          if (!c.carried) {
-            const at = Math.floor(c.span.offset_bits / 8) - rowStart;
-            while (j + 1 < segs.length && (segs[j + 1] as number) <= at) j++;
-          }
-          (buckets[j] as Chip[]).push(c);
-        }
-        const measure = this.chipFonts ?? GUESS_TEXT;
         // What each block of chips will say, worked out before any of it is
-        // written. A redraw usually wants the very chips that are already
-        // there, and building them again costs a button apiece; worse, it
-        // destroys the element a finger may be resting on, which the browser
-        // reads as the touch being taken away and cancels the drag that is
-        // scrolling the view.
-        const plan: { entries: Chip[]; texts: ChipText[]; shown: number }[] = [];
-        // A field carried down from above the view is named by the strip
-        // pinned over the top of the rows, not by the top row itself: a chip
-        // under the top row would sit between the bytes it covers and the ones
-        // after them, and a chip inside it would make that row taller than the
-        // same row is anywhere else, so every row below it jumped a chip line
-        // as the top row changed. Only the top row can carry anything, so this
-        // is the one place a row's height would depend on where it fell.
-        if (r === 0) {
-          const carried = (buckets[0] as Chip[]).filter((c) => c.carried);
-          buckets[0] = (buckets[0] as Chip[]).filter((c) => !c.carried);
-          const texts = carried.map((c) => this.chipText(c));
-          const { shown, lines } = chipLayout(
-            texts.map((t, i) => chipWidth(carriedName(t.name, carried[i]), continuedDetail(t.detail), measure)),
-            this.noteWidth,
-            maxLines,
-          );
-          pinnedBlock = { entries: carried, texts, shown };
-          // More carried fields than a capped block can hold: the rest are
-          // named below the bytes rather than dropped.
-          if (shown < carried.length) buckets[0] = [...carried.slice(shown), ...(buckets[0] as Chip[])];
-        }
-        for (let j = 0; j < segs.length; j++) {
-          const entries = buckets[j] as Chip[];
-          const texts = entries.map((c) => this.chipText(c));
-          const { shown, lines } = chipLayout(
-            texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, measure)),
-            this.noteWidth,
-            maxLines,
-          );
-          // Beside the bytes the chips share their line's height with the
-          // cells, so the line is the taller of the two. Below them the chips
-          // are their own block and their lines add to it.
-          height += below ? lines * this.sizes.chipLine : Math.max(0, lines * this.sizes.chipLine - this.rowHeight);
-          plan.push({ entries, texts, shown });
-        }
+        // written, and where each goes on a row a heading has cut. See
+        // `chipplan.ts`, which holds the reasoning and the arithmetic.
+        const planned = planRowChips({
+          chips: byRow[r] ?? [],
+          segs,
+          rowStart,
+          top: r === 0,
+          noteWidth: this.noteWidth,
+          maxLines,
+          measure: this.chipFonts ?? GUESS_TEXT,
+          below,
+          rowHeight: this.rowHeight,
+          chipLine: this.sizes.chipLine,
+        });
+        if (planned.pinned !== null) pinnedBlock = planned.pinned;
+        height += planned.extraHeight;
         const trailer = more && r === this.rowEls.length - 1;
-        const block = (b: { entries: Chip[]; texts: ChipText[]; shown: number } | null): string =>
-          b === null
-            ? ""
-            : // The first field that did not fit is named in the key too: the
-              // count of them can stay the same while the names the "+N" chip
-              // lists in its tooltip change.
-              `${b.shown}/${b.entries.length}/${b.texts[b.shown]?.name ?? ""}~` +
-              b.texts
-                .slice(0, b.shown)
-                .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${t.name}${t.detail}`)
-                .join("");
-        const key = `${trailer ? "+" : ""}${plan.map(block).join("")}`;
+        const key = rowNoteKey(planned.blocks, trailer);
         if (key !== parts.noteKey) {
           parts.noteKey = key;
-          for (const [j, b] of plan.entries()) {
+          for (const [j, b] of planned.blocks.entries()) {
             this.fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1);
           }
         }
@@ -2275,14 +2159,7 @@ export class HexView {
     // The strip over the top edge, filled in place: it is inside `.hv-rows`,
     // which is where a touch drag is captured, so it is emptied and hidden
     // rather than taken away.
-    const pinnedKey =
-      pinnedBlock === null
-        ? ""
-        : `${pinnedBlock.shown}/${pinnedBlock.entries.length}~` +
-          pinnedBlock.texts
-            .slice(0, pinnedBlock.shown)
-            .map((t) => `${t.name}${t.detail}`)
-            .join("");
+    const pinnedKey = pinnedNoteKey(pinnedBlock);
     if (pinnedKey !== this.pinnedKey) {
       this.pinnedKey = pinnedKey;
       this.fillNote(this.pinned, pinnedBlock, true, false);
