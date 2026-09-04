@@ -30,7 +30,7 @@ const OVERSCAN = 8;
  *  enough to hit that would scroll wrong in a way nothing on screen explains.
  *  A quarter of a million rows is five and a half million pixels, so this is
  *  headroom rather than a limit anybody meets. */
-const MAX_CANVAS = 30_000_000;
+const MAX_CANVAS = 16_000_000;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);

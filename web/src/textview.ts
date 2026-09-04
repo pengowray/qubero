@@ -45,8 +45,10 @@ import { TEXTVIEW } from "./strings.js";
 const ROW = 20;
 /** How tall the scrolling canvas is allowed to get. Browsers stop honouring an
  *  element's height past a few tens of millions of pixels, so past this the
- *  canvas is scaled down and a pixel of scrollbar is worth more than a row. */
-const MAX_CANVAS = 20_000_000;
+ *  canvas is scaled down and a pixel of scrollbar is worth more than a row.
+ *  Firefox's limit is the lowest, about 17.9 million, and a canvas past it
+ *  draws nothing at all rather than less. */
+const MAX_CANVAS = 16_000_000;
 /** Characters drawn on one line before the rest is left off. The core cuts a
  *  line at 4 KiB; this is what fits across a screen with room to spare. */
 const MAX_CHARS = 2000;
