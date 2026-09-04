@@ -120,6 +120,45 @@ const NO_SPANS = (windowBytes: number): Placed => ({
   byRow: [],
 });
 
+/**
+ * What one draw is drawing: the shape the view is in, the bytes and the spans
+ * for the rows on screen, and where the headings fall.
+ *
+ * Read once at the top of `render` and handed down, so that the steps of a
+ * draw agree about what they are drawing however many of them there are, and
+ * so that none of them asks the document for the same answer twice.
+ */
+type Frame = {
+  readonly bpr: number;
+  readonly len: number;
+  readonly addrWidth: number;
+  /** The first byte on screen, and how many the rows hold between them. */
+  readonly start: number;
+  readonly windowBytes: number;
+  readonly bytes: Uint8Array;
+  /** False while some of those bytes are still on their way. */
+  readonly complete: boolean;
+  readonly binary: boolean;
+  readonly fields: boolean;
+  readonly showText: boolean;
+  /** True when the chips are drawn under the bytes rather than beside them. */
+  readonly below: boolean;
+  readonly templated: boolean;
+  /** How many lines of chips a row may hold before the rest is counted. */
+  readonly maxLines: number;
+  readonly selection: BitRange | null;
+  readonly spans: Span[];
+  /** True when the column stopped short of naming every field on screen. */
+  readonly more: boolean;
+  readonly trouble: string | null;
+  readonly byteSpan: Int32Array;
+  readonly byRow: Chip[][];
+  readonly headsByRow: OutlineHeading[][];
+  /** What the top row carries in from above, put here by the row that finds
+   *  it and read by the strip pinned over the rows. */
+  pinned: ChipBlock | null;
+};
+
 /** One line of cells: an address, the bytes, their text and their fields. A row
  *  is one of these unless a part starts part-way along it. */
 type LineParts = {
@@ -1709,214 +1748,261 @@ export class HexView {
     return { name: (s) => width(nameFont, s), value: (s) => width(valFont, s) };
   }
 
-  render(): void {
-    // A move draws once, when it has finished moving.
-    if (this.settling) return;
-    this.fitRows();
+  /**
+   * Everything one draw needs, gathered once: the shape the view is in, the
+   * bytes and the spans for the rows on screen, and where the headings fall.
+   *
+   * Held together so a row can be drawn from it without asking the document
+   * anything of its own.
+   */
+  private frame(): Frame {
     const bpr = this.bytesPerRow;
     const len = this.doc.lengthBytes;
-    const addrWidth = Math.max(8, len.toString(16).length);
     const start = this.topRow * bpr;
     const windowBytes = this.visibleRows * bpr;
     const { bytes, complete } = this.doc.read(start, windowBytes);
-    const binary = this.mode === "binary";
     const fields = this.showsFields;
-    const showText = this.showsText;
-    // Below the bytes once the side column has been squeezed too narrow to
-    // hold a chip. Until it has been measured the chips go beside the bytes,
-    // which is what the measurement is taken from.
-    const below = fields && this.arrangement === "below";
-    // Full rows grow to hold every chip; condensed ones stop at three lines
-    // and count the rest.
-    const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
     const templated = this.doc.template !== null;
-    const selection = this.selectionRange;
-
     const { spans, more, trouble, byteSpan, byRow } =
       fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
+    return {
+      bpr,
+      len,
+      addrWidth: Math.max(8, len.toString(16).length),
+      start,
+      windowBytes,
+      bytes,
+      complete,
+      binary: this.mode === "binary",
+      fields,
+      showText: this.showsText,
+      // Below the bytes once the side column has been squeezed too narrow to
+      // hold a chip. Until it has been measured the chips go beside the bytes,
+      // which is what the measurement is taken from.
+      below: fields && this.arrangement === "below",
+      templated,
+      // Full rows grow to hold every chip; condensed ones stop at three lines
+      // and count the rest.
+      maxLines: this.isCondensed ? CHIP_LINES : Infinity,
+      selection: this.selectionRange,
+      spans,
+      more,
+      trouble,
+      byteSpan,
+      byRow,
+      headsByRow: headingsByRow(this.sections, start, windowBytes, bpr),
+      pinned: null,
+    };
+  }
 
+  /** The row of column numbers over the bytes, and the word over the column
+   *  beside them. */
+  private drawHeader(f: Frame): void {
     const columns = document.createElement("span");
     columns.textContent =
-      " ".repeat(addrWidth) +
+      " ".repeat(f.addrWidth) +
       "  " +
-      Array.from({ length: bpr }, (_, i) => (binary ? (HEX[i] ?? "").padEnd(8) : HEX[i])).join(" ");
+      Array.from({ length: f.bpr }, (_, i) => (f.binary ? (HEX[i] ?? "").padEnd(8) : HEX[i])).join(" ");
     this.header.replaceChildren(columns);
-    if (showText) {
+    if (f.showText) {
       // Nothing to label, but the width has to be held so the heading over the
       // fields lands over the fields.
       const gap = document.createElement("span");
       gap.className = "hv-ascii";
-      gap.textContent = " ".repeat(bpr);
+      gap.textContent = " ".repeat(f.bpr);
       this.header.append(gap);
     }
     // Nothing to head when the chips are below the bytes: the header sits over
     // the bytes, and the fields no longer do.
-    if (fields && !below) {
+    if (f.fields && !f.below) {
       const title = document.createElement("span");
       title.className = "hv-note hv-head-note";
       title.textContent = "Fields";
       this.header.append(title);
     }
+  }
 
-    this.fitParts(bpr, binary, showText, fields, below);
-    const headsByRow = headingsByRow(this.sections, start, windowBytes, bpr);
-    // What each row will be tall once the browser has laid it out, from what
-    // was put in it: its lines of chips and the headings above it. Zero for a
-    // row past the end of the file.
-    const heights: number[] = [];
-    // The carried chips for the top row, filled into the pinned strip once the
-    // rows are drawn. Null unless something carries over the top edge, which
-    // empties the strip.
-    let pinnedBlock: ChipBlock | null = null;
-    for (let r = 0; r < this.rowEls.length; r++) {
-      const row = this.rowEls[r];
-      const parts = this.parts[r];
-      if (!row || parts === undefined) continue;
-      const rowStart = start + r * bpr;
-      if (rowStart > len) {
-        if (!parts.blank) {
-          // Hidden, not emptied: a row past the end of the file can scroll back
-          // into use, and taking its elements away would drop whatever a finger
-          // is on. `layOutRow` shows them again.
-          for (const kid of row.children) (kid as HTMLElement).hidden = true;
-          parts.blank = true;
-          parts.layoutKey = "";
-          parts.noteKey = "";
-        }
-        heights.push(0);
-        continue;
-      }
-      parts.blank = false;
-      const heads = headsByRow[r] ?? [];
-      const { headsAt, segs } = cutRow(heads, rowStart, bpr, this.isCondensed);
-      // The share of the file changes with its length, so the key does too.
-      const layoutKey = `${segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
-      if (layoutKey !== parts.layoutKey) {
-        this.layOutRow(row, parts, rowStart, segs, headsAt, len * 8, addrWidth);
-        parts.layoutKey = layoutKey;
+  /**
+   * Draw one row and say what it will be tall, or null for a row there is
+   * nothing to draw into.
+   *
+   * The height is worked out from what was put in the row rather than read
+   * back off it: reading would force a layout per row, and the draw is
+   * arranged so the browser is asked once, at the end.
+   */
+  private drawRow(r: number, f: Frame): number | null {
+    const row = this.rowEls[r];
+    const parts = this.parts[r];
+    if (!row || parts === undefined) return null;
+    const { bpr, len, start } = f;
+    const rowStart = start + r * bpr;
+    if (rowStart > len) {
+      if (!parts.blank) {
+        // Hidden, not emptied: a row past the end of the file can scroll back
+        // into use, and taking its elements away would drop whatever a finger
+        // is on. `layOutRow` shows them again.
+        for (const kid of row.children) (kid as HTMLElement).hidden = true;
+        parts.blank = true;
+        parts.layoutKey = "";
         parts.noteKey = "";
-        // Cells that changed line have to be told which byte they draw again.
-        parts.start = -1;
       }
-      let height = this.rowHeight * segs.length;
-      for (const h of heads) height += this.sizes.heading[h.level];
-      const addr = (parts.lines[0] as LineParts).addr;
-      setText(addr, rowStart.toString(16).padStart(addrWidth, "0"));
-      // Which bytes a row stands for only changes when the view moves. A
-      // cursor key leaves every address where it was, and writing them all
-      // again would be the largest part of the redraw it causes.
-      const moved = parts.start !== rowStart;
-      parts.start = rowStart;
-      for (let i = 0; i < bpr; i++) {
-        const off = rowStart + i;
-        const h = parts.hexCells[i] as HTMLElement;
-        const a = parts.textCells[i] as HTMLElement;
-        // What each cell is, gathered as strings by `cellDraw` and written
-        // only where it is not what the cell already says. Most of a redraw
-        // changes nothing — a cursor key moves a mark two cells — and a class
-        // written back unchanged still costs the browser the styling of that
-        // cell.
-        if (binary && h.firstChild !== null) h.textContent = "";
-        if (moved) {
-          // `setAttribute` rather than `dataset`: they write the same
-          // attribute and read back the same way, but the property setter
-          // goes through a proxy per write.
-          const at = String(off);
-          h.setAttribute("data-off", at);
-          a.setAttribute("data-off", at);
-        }
-        // A user-selected range temporarily replaces the active-field mark.
-        // Keeping both over the same bytes made adjacent or overlapping state
-        // impossible to parse; clearing the selection reveals the field again.
-        const hl = selection === null ? highlightBits(this.highlight, off) : [];
-        const sb = selection === null ? null : selectionBits(selection, off);
-        const si = fields && off >= start && off < start + windowBytes ? byteSpan[off - start] ?? -1 : -1;
-        const s = si >= 0 ? spans[si] : undefined;
-        const draw = cellDraw({
-          off,
-          len,
-          binary,
-          complete,
-          byte: bytes[off - start] ?? 0,
-          span:
-            s === undefined || s.gap ? null : { kind: s.kind, startsHere: off === Math.floor(s.offset_bits / 8) },
-          hl,
-          sel: sb,
-          link: this.linked,
-          cursor: this.cursor,
-          pane: this.pane,
-          nibble: this.nibble,
-          insertMode: this.insertMode,
-        });
-        if (h.style.backgroundImage !== draw.bits) h.style.backgroundImage = draw.bits;
-        setText(a, draw.asciiText);
-        if (draw.hexText !== null) setText(h, draw.hexText);
-        // The bits inside a cell carry their own marks, so in binary the cell
-        // has only what `fillBits` puts on it.
-        if (h.className !== draw.hex) h.className = draw.hex;
-        if (binary && off < len) this.fillBits(h, complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
-        if (a.className !== draw.ascii) a.className = draw.ascii;
-      }
-      if (fields) {
-        const firstLine = parts.lines[0] as LineParts;
-        const firstNote = firstLine.note;
-        if (!templated || trouble !== null) {
-          const key = `!${r === 0 ? (trouble ?? NO_TEMPLATE) : ""}`;
-          if (key !== parts.noteKey) {
-            parts.noteKey = key;
-            for (let j = 1; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
-            const say = r === 0 ? (trouble ?? NO_TEMPLATE) : null;
-            while (firstNote.childElementCount > (say === null ? 0 : 1)) firstNote.lastElementChild?.remove();
-            if (say !== null) {
-              if (firstNote.childElementCount === 0) firstNote.append(this.newChip());
-              this.fillPlain(firstNote.firstElementChild as ChipEl, "hv-chip-wide", say, trouble ?? "");
-            }
-          }
-          heights.push(height);
-          continue;
-        }
-        // What each block of chips will say, worked out before any of it is
-        // written, and where each goes on a row a heading has cut. See
-        // `chipplan.ts`, which holds the reasoning and the arithmetic.
-        const planned = planRowChips({
-          chips: byRow[r] ?? [],
-          segs,
-          rowStart,
-          top: r === 0,
-          noteWidth: this.noteWidth,
-          maxLines,
-          measure: this.chipFonts ?? GUESS_TEXT,
-          below,
-          rowHeight: this.rowHeight,
-          chipLine: this.sizes.chipLine,
-        });
-        if (planned.pinned !== null) pinnedBlock = planned.pinned;
-        height += planned.extraHeight;
-        const trailer = more && r === this.rowEls.length - 1;
-        const key = rowNoteKey(planned.blocks, trailer);
-        if (key !== parts.noteKey) {
-          parts.noteKey = key;
-          for (const [j, b] of planned.blocks.entries()) {
-            this.fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1);
-          }
-        }
-      }
-      heights.push(height);
+      return 0;
     }
+    parts.blank = false;
+    const heads = f.headsByRow[r] ?? [];
+    const { headsAt, segs } = cutRow(heads, rowStart, bpr, this.isCondensed);
+    // The share of the file changes with its length, so the key does too.
+    const layoutKey = `${segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
+    if (layoutKey !== parts.layoutKey) {
+      this.layOutRow(row, parts, rowStart, segs, headsAt, len * 8, f.addrWidth);
+      parts.layoutKey = layoutKey;
+      parts.noteKey = "";
+      // Cells that changed line have to be told which byte they draw again.
+      parts.start = -1;
+    }
+    let height = this.rowHeight * segs.length;
+    for (const h of heads) height += this.sizes.heading[h.level];
+    const addr = (parts.lines[0] as LineParts).addr;
+    setText(addr, rowStart.toString(16).padStart(f.addrWidth, "0"));
+    // Which bytes a row stands for only changes when the view moves. A
+    // cursor key leaves every address where it was, and writing them all
+    // again would be the largest part of the redraw it causes.
+    const moved = parts.start !== rowStart;
+    parts.start = rowStart;
+    this.drawCells(parts, rowStart, moved, f);
+    if (f.fields) height += this.drawNotes(r, parts, rowStart, segs, f);
+    return height;
+  }
 
-    // The strip over the top edge, filled in place: it is inside `.hv-rows`,
-    // which is where a touch drag is captured, so it is emptied and hidden
-    // rather than taken away.
-    const pinnedKey = pinnedNoteKey(pinnedBlock);
+  /** Write one row's bytes, and their text, into the cells they are drawn
+   *  in. */
+  private drawCells(parts: HexView["parts"][number], rowStart: number, moved: boolean, f: Frame): void {
+    const { bpr, len, start, binary, complete, bytes, fields, selection, windowBytes, spans, byteSpan } = f;
+    for (let i = 0; i < bpr; i++) {
+      const off = rowStart + i;
+      const h = parts.hexCells[i] as HTMLElement;
+      const a = parts.textCells[i] as HTMLElement;
+      // What each cell is, gathered as strings by `cellDraw` and written
+      // only where it is not what the cell already says. Most of a redraw
+      // changes nothing — a cursor key moves a mark two cells — and a class
+      // written back unchanged still costs the browser the styling of that
+      // cell.
+      if (binary && h.firstChild !== null) h.textContent = "";
+      if (moved) {
+        // `setAttribute` rather than `dataset`: they write the same
+        // attribute and read back the same way, but the property setter
+        // goes through a proxy per write.
+        const at = String(off);
+        h.setAttribute("data-off", at);
+        a.setAttribute("data-off", at);
+      }
+      // A user-selected range temporarily replaces the active-field mark.
+      // Keeping both over the same bytes made adjacent or overlapping state
+      // impossible to parse; clearing the selection reveals the field again.
+      const hl = selection === null ? highlightBits(this.highlight, off) : [];
+      const sb = selection === null ? null : selectionBits(selection, off);
+      const si = fields && off >= start && off < start + windowBytes ? byteSpan[off - start] ?? -1 : -1;
+      const s = si >= 0 ? spans[si] : undefined;
+      const draw = cellDraw({
+        off,
+        len,
+        binary,
+        complete,
+        byte: bytes[off - start] ?? 0,
+        span: s === undefined || s.gap ? null : { kind: s.kind, startsHere: off === Math.floor(s.offset_bits / 8) },
+        hl,
+        sel: sb,
+        link: this.linked,
+        cursor: this.cursor,
+        pane: this.pane,
+        nibble: this.nibble,
+        insertMode: this.insertMode,
+      });
+      if (h.style.backgroundImage !== draw.bits) h.style.backgroundImage = draw.bits;
+      setText(a, draw.asciiText);
+      if (draw.hexText !== null) setText(h, draw.hexText);
+      // The bits inside a cell carry their own marks, so in binary the cell
+      // has only what `fillBits` puts on it.
+      if (h.className !== draw.hex) h.className = draw.hex;
+      if (binary && off < len) this.fillBits(h, complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
+      if (a.className !== draw.ascii) a.className = draw.ascii;
+    }
+  }
+
+  /** Put a row's chips in the blocks beside or below its bytes, and say what
+   *  they add to its height. What the top row carries goes on the frame, for
+   *  the strip pinned over the rows. */
+  private drawNotes(
+    r: number,
+    parts: HexView["parts"][number],
+    rowStart: number,
+    segs: readonly number[],
+    f: Frame,
+  ): number {
+    const firstNote = (parts.lines[0] as LineParts).note;
+    if (!f.templated || f.trouble !== null) {
+      const key = `!${r === 0 ? (f.trouble ?? NO_TEMPLATE) : ""}`;
+      if (key !== parts.noteKey) {
+        parts.noteKey = key;
+        for (let j = 1; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
+        const say = r === 0 ? (f.trouble ?? NO_TEMPLATE) : null;
+        while (firstNote.childElementCount > (say === null ? 0 : 1)) firstNote.lastElementChild?.remove();
+        if (say !== null) {
+          if (firstNote.childElementCount === 0) firstNote.append(this.newChip());
+          this.fillPlain(firstNote.firstElementChild as ChipEl, "hv-chip-wide", say, f.trouble ?? "");
+        }
+      }
+      return 0;
+    }
+    // What each block of chips will say, worked out before any of it is
+    // written, and where each goes on a row a heading has cut. See
+    // `chipplan.ts`, which holds the reasoning and the arithmetic.
+    const planned = planRowChips({
+      chips: f.byRow[r] ?? [],
+      segs,
+      rowStart,
+      top: r === 0,
+      noteWidth: this.noteWidth,
+      maxLines: f.maxLines,
+      measure: this.chipFonts ?? GUESS_TEXT,
+      below: f.below,
+      rowHeight: this.rowHeight,
+      chipLine: this.sizes.chipLine,
+    });
+    if (planned.pinned !== null) f.pinned = planned.pinned;
+    const trailer = f.more && r === this.rowEls.length - 1;
+    const key = rowNoteKey(planned.blocks, trailer);
+    if (key !== parts.noteKey) {
+      parts.noteKey = key;
+      for (const [j, b] of planned.blocks.entries()) {
+        this.fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1);
+      }
+    }
+    return planned.extraHeight;
+  }
+
+  /** The strip over the top edge, filled in place: it is inside `.hv-rows`,
+   *  which is where a touch drag is captured, so it is emptied and hidden
+   *  rather than taken away. */
+  private drawPinned(f: Frame): void {
+    const pinnedKey = pinnedNoteKey(f.pinned);
     if (pinnedKey !== this.pinnedKey) {
       this.pinnedKey = pinnedKey;
-      this.fillNote(this.pinned, pinnedBlock, true, false);
+      this.fillNote(this.pinned, f.pinned, true, false);
     }
+  }
 
-    // Everything the browser has to be asked, asked together: the widths and
-    // the fonts the next layout is worked out from, and the heights this one
-    // actually came to. One forced layout for the lot, at the end of the draw,
-    // rather than one per row.
+  /**
+   * Everything the browser has to be asked, asked together: the widths and
+   * the fonts the next layout is worked out from. One forced layout for the
+   * lot, at the end of the draw, rather than one per row.
+   *
+   * `widened` says the rows were drawn against a column width that has since
+   * changed, so the caller draws them again.
+   */
+  private measure(f: Frame): { widened: boolean; trackH: number } {
+    const fields = f.fields;
+    const below = f.below;
     const fonts = fields && this.chipFonts === null ? this.readChipFonts() : null;
     let widened = false;
     if (this.metrics === null || this.arrangement === "unknown") {
@@ -1972,30 +2058,22 @@ export class HexView {
       this.chipFonts = fonts;
       widened = true;
     }
-    if (widened) {
-      // Those rows were drawn against a column width that has just changed, so
-      // how tall they came out says nothing about how tall they will be.
-      this.ledger.clearMeasured();
-      this.render();
-      return;
-    }
+    return { widened, trackH: this.metrics.trackH };
+  }
 
-    // How tall each row actually came out. The prediction above decides how
-    // many lines of chips a row holds and what it counts as left over; what
-    // the view scrolls by has to be what the browser drew, or a row taller
-    // than it was reckoned to be spills over the one below it. A row past the
-    // end of the file is still a box with a minimum height, so the prediction
-    // is what says which rows are there at all.
-    const real = heights.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));
-
-    // What the ledger guessed these rows were worth, corrected by what they
-    // came to. The view does not move for it: a row that turned out taller or
-    // shorter than expected changes the total, and the thumb may shift a pixel
-    // for that, but the bytes the reader is looking at stay where they are.
-    // Every row: a row is drawn the same height wherever it falls, now that
-    // the fields carried down from above the view are named by the strip
-    // pinned over the rows rather than inside the top one, beside the bytes as
-    // well as below them.
+  /**
+   * Take what the rows actually came out at into the ledger, and say whether
+   * the top row had to move for it.
+   *
+   * The view does not move for it: a row that turned out taller or shorter
+   * than expected changes the total, and the thumb may shift a pixel for that,
+   * but the bytes the reader is looking at stay where they are. Every row: a
+   * row is drawn the same height wherever it falls, now that the fields
+   * carried down from above the view are named by the strip pinned over the
+   * rows rather than inside the top one, beside the bytes as well as below
+   * them.
+   */
+  private settleHeights(real: readonly number[]): boolean {
     for (const [i, h] of real.entries()) {
       if (h > 0) this.ledger.measure(this.topRow + i, h);
     }
@@ -2011,12 +2089,12 @@ export class HexView {
       moved = true;
     }
     if (this.topRow + 1 >= this.totalRows) this.topPx = Math.min(this.topPx, this.ledger.heightOf(this.topRow));
-    if (moved && this.renormPasses < 3) {
-      this.renormPasses++;
-      this.render();
-      this.renormPasses--;
-      return;
-    }
+    return moved;
+  }
+
+  /** Put the rows at the scroll position, size the scrollbar thumb, and say
+   *  what stretch of the file is on screen. */
+  private finish(real: readonly number[], trackH: number, f: Frame): void {
     this.rowsInner.style.transform = this.topPx === 0 ? "" : `translateY(${-this.topPx}px)`;
 
     // Which rows are on screen, by the heights measured above: a row whose
@@ -2032,13 +2110,52 @@ export class HexView {
 
     // Scrollbar thumb: as long a share of the track as the screen is of the
     // file, and as far down it as the view is through the file.
-    const trackH = this.metrics.trackH;
     const total = Math.max(1, this.ledger.totalHeight());
     const thumbH = Math.min(trackH, Math.max(24, Math.round((this.viewH / total) * trackH)));
     const limit = this.maxScrollY;
     const top = limit === 0 ? 0 : Math.round((Math.min(this.scrollY, limit) / limit) * (trackH - thumbH));
     this.thumb.style.height = `${thumbH}px`;
     this.thumb.style.transform = `translateY(${top}px)`;
-    this.onViewport({ startBit: start * 8, endBit: Math.min(len, start + onScreen * bpr) * 8 });
+    this.onViewport({ startBit: f.start * 8, endBit: Math.min(f.len, f.start + onScreen * f.bpr) * 8 });
+  }
+
+  render(): void {
+    // A move draws once, when it has finished moving.
+    if (this.settling) return;
+    this.fitRows();
+    const f = this.frame();
+    this.drawHeader(f);
+    this.fitParts(f.bpr, f.binary, f.showText, f.fields, f.below);
+    // What each row will be tall once the browser has laid it out, from what
+    // was put in it: its lines of chips and the headings above it. Zero for a
+    // row past the end of the file.
+    const heights: number[] = [];
+    for (let r = 0; r < this.rowEls.length; r++) {
+      const h = this.drawRow(r, f);
+      if (h !== null) heights.push(h);
+    }
+    this.drawPinned(f);
+    const { widened, trackH } = this.measure(f);
+    if (widened) {
+      // Those rows were drawn against a column width that has just changed, so
+      // how tall they came out says nothing about how tall they will be.
+      this.ledger.clearMeasured();
+      this.render();
+      return;
+    }
+    // How tall each row actually came out. The prediction above decides how
+    // many lines of chips a row holds and what it counts as left over; what
+    // the view scrolls by has to be what the browser drew, or a row taller
+    // than it was reckoned to be spills over the one below it. A row past the
+    // end of the file is still a box with a minimum height, so the prediction
+    // is what says which rows are there at all.
+    const real = heights.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));
+    if (this.settleHeights(real) && this.renormPasses < 3) {
+      this.renormPasses++;
+      this.render();
+      this.renormPasses--;
+      return;
+    }
+    this.finish(real, trackH, f);
   }
 }
