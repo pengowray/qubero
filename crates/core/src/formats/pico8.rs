@@ -27,9 +27,12 @@
 //! bytes:
 //!
 //! - `\0pxa`, from PICO-8 0.2.0 on. Two big-endian 16-bit lengths follow, the
-//!   text's length and the compressed run's, and then a bit-packed stream: a
-//!   move-to-front table of recently seen characters, and back-references
-//!   whose offset and length are written in a variable number of bits.
+//!   text's length and the compressed run's, and then a bit stream. A literal
+//!   is a position in a 256-entry table, written as a unary prefix and then
+//!   that many bits, and the byte it names moves to the front of the table. A
+//!   back-reference writes its offset in 5, 10 or 15 bits and its length as a
+//!   chain of three-bit groups. Taken from the decoder in `src/pxa.rs` of
+//!   shanecelis/pico8_decompress, since no published document says it.
 //! - `:c:\0`, from before that. A big-endian 16-bit length of the text, two
 //!   bytes that say nothing, and then a byte stream: a byte of zero escapes a
 //!   literal, a byte up to 0x3b indexes a table of the characters Lua source
@@ -71,8 +74,9 @@ fn cart() -> T {
             // Which release wrote the file. A number PICO-8 counts up itself,
             // not the version string the .p8 text form carries.
             ("version", T::u8()),
-            // 160 by 205 is 31 bytes more than the cart needs. PICO-8 writes
-            // nothing here and reads nothing back.
+            // 160 by 205 is 31 bytes more than the cart's 0x8001. Nothing
+            // documents what is in them, and they are not zero: both carts in
+            // the sample collection carry bytes here that nobody has explained.
             ("slack", T::bytes(E::Remaining)),
         ],
     )
@@ -113,18 +117,6 @@ fn code() -> T {
 }
 
 pub fn p8png() -> Template {
-    let ihdr = T::structure(
-        "IHDR",
-        vec![
-            ("width", T::u32(Big)),
-            ("height", T::u32(Big)),
-            ("bit_depth", T::u8()),
-            ("color_type", T::u8()),
-            ("compression", T::u8()),
-            ("filter", T::u8()),
-            ("interlace", T::u8()),
-        ],
-    );
     // The four steps, innermost last. Every one of them is a run of bytes that
     // stays where it is, with a space of its own opened over what it produces.
     let pixels = T::decoded(E::Remaining, Codec::LowBitsArgb, cart());
@@ -144,7 +136,11 @@ pub fn p8png() -> Template {
                     E::field("length"),
                     T::switch(
                         E::field("type"),
-                        vec![(0x4948_4452, ihdr), (0x4944_4154, idat)],
+                        vec![
+                            (0x4948_4452, super::png::ihdr()),
+                            (0x7445_5874, super::png::text()),
+                            (0x4944_4154, idat),
+                        ],
                         T::bytes(E::field("length")),
                     ),
                 ),
@@ -241,7 +237,7 @@ mod tests {
         c[0x2000] = 0x77; // first byte of the map
         c[0x4300..0x4308].copy_from_slice(b"\0pxa\x00\x42\x00\x0a");
         c[0x4308..0x4312].copy_from_slice(b"packedcode");
-        c[0x8000] = 41; // the version PICO-8 0.2.4 writes
+        c[0x8000] = 41; // what the carts in the sample collection say
         c
     }
 
