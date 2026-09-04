@@ -10,6 +10,13 @@
 // `.js` specifier back to the file it came from.
 import { fieldClass } from "./fieldstyle.ts";
 
+/** Write a cell's characters, unless they are already the ones it shows.
+ *  Scrolling changes every one of them and a cursor key changes none, and the
+ *  browser charges for a write either way. */
+export function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
+}
+
 /** The part of one byte a run covers, as bit positions 0 to 8 counting from the
  *  top of the byte. */
 export type Run = { from: number; to: number };

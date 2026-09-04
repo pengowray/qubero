@@ -12,9 +12,8 @@
 // it is passing over.
 
 import type { Doc, Span } from "./doc.js";
-import { formatBytes } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
-import { NO_TEMPLATE, REPORT } from "./strings.js";
+import { NO_TEMPLATE } from "./strings.js";
 import { fieldClass } from "./fieldstyle.js";
 import { CHIP_LINES, chipDetail, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
 import {
@@ -34,9 +33,10 @@ import {
   covers,
   highlightBits,
   selectionBits,
+  setText,
   type Run,
 } from "./hexcell.js";
-import { rangeText, shareText } from "./listingdraw.js";
+import { cutRow, fillHeadings, headingsByRow } from "./hexheadings.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
 
 export type Pane = "hex" | "ascii";
@@ -102,20 +102,6 @@ type Select = "keep" | "clear" | { readonly anchor: number };
  *  click handler serves the button for as long as the button lives. */
 type ChipEl = HTMLButtonElement & { _path?: readonly number[] | undefined };
 
-/** A heading line, with the part it names kept on it. */
-type HeadEl = HTMLButtonElement & { _head?: OutlineHeading | undefined };
-
-/** What a heading calls a part with no name of its own: the listing's word
- *  for a run of fields at the front, the back or the middle of the file. */
-function headingName(h: OutlineHeading, fileBits: number): string {
-  if (h.name !== "") return h.name;
-  const where = h.offsetBits === 0 ? "start" : fileBits > 0 && h.offsetBits + h.sizeBits >= fileBits ? "end" : "middle";
-  return REPORT.unnamedPart(where);
-}
-
-/** What pressing a heading does, for a reader who cannot guess. */
-const HEADING_TIP = (name: string): string => `Move the cursor to the first byte of ${name}`;
-
 /** Where the spans on screen land. See `HexView.placeSpans`. */
 type Placed = {
   spans: Span[];
@@ -133,13 +119,6 @@ const NO_SPANS = (windowBytes: number): Placed => ({
   byteSpan: new Int32Array(windowBytes).fill(-1),
   byRow: [],
 });
-
-/** Write a cell's characters, unless they are already the ones it shows.
- *  Scrolling changes every one of them and a cursor key changes none, and the
- *  browser charges for a write either way. */
-function setText(el: HTMLElement, text: string): void {
-  if (el.textContent !== text) el.textContent = text;
-}
 
 /** One line of cells: an address, the bytes, their text and their fields. A row
  *  is one of these unless a part starts part-way along it. */
@@ -445,6 +424,15 @@ export class HexView {
     this.ledger.setStructural(out);
   }
 
+  /** Go to the first byte of the part a heading names. Held as one function
+   *  for the life of the view, since every heading line keeps it. */
+  private readonly pressHeading = (h: OutlineHeading): void => {
+    this.setBitCursor(h.offsetBits, { pane: "hex" });
+    // An empty path is the whole file, which is not what a heading over
+    // a run of fields at its front is for.
+    if (h.path.length > 0) this.onPickField(h.path);
+  };
+
   /** Take the parts of the file to draw headings for. Headings above the
    *  cursor's row push it down, so it is brought back on screen if that
    *  pushed it off; a cursor that was already off screen is left there. */
@@ -662,7 +650,7 @@ export class HexView {
       const at = on ? (segs[j] as number) : 0;
       // Always in place, empty when no part starts here, so that a heading
       // arriving or leaving writes into a block that is already there.
-      this.fillHeadings(lp.head, on ? (heads.get(at) ?? []) : [], fileBits, rowStart + at);
+      fillHeadings(lp.head, on ? (heads.get(at) ?? []) : [], fileBits, rowStart + at, this.pressHeading);
       kids.push(lp.head);
       if (lp.line.hidden === on) lp.line.hidden = !on;
       kids.push(lp.line);
@@ -1531,103 +1519,6 @@ export class HexView {
     return { spans, more, trouble, byteSpan, byRow };
   }
 
-  /**
-   * The headings that fall on each row on screen. The sections are sorted by
-   * offset and a file of a hundred thousand pages has a heading for each, so
-   * the first one on screen is found by bisection and the rest read off in
-   * order.
-   */
-  private headingsByRow(start: number, windowBytes: number, bpr: number): OutlineHeading[][] {
-    const byRow: OutlineHeading[][] = [];
-    const secs = this.sections;
-    const fromBit = start * 8;
-    const toBit = (start + windowBytes) * 8;
-    let lo = 0;
-    let hi = secs.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if ((secs[mid] as OutlineHeading).offsetBits < fromBit) lo = mid + 1;
-      else hi = mid;
-    }
-    for (let i = lo; i < secs.length; i++) {
-      const h = secs[i] as OutlineHeading;
-      if (h.offsetBits >= toBit) break;
-      const row = Math.floor((Math.floor(h.offsetBits / 8) - start) / bpr);
-      (byRow[row] ??= []).push(h);
-    }
-    return byRow;
-  }
-
-  /** The heading lines for the parts that start at one place: for each, its
-   *  colour, name, address range, size and share of the file, as the listing
-   *  gives them. Pressing one goes to the part's first byte. `at` is the byte
-   *  the block sits before, which is what a drag across it reads as. */
-  /** An empty heading line. Like a chip, it keeps its click handler and the
-   *  part it names, so drawing it again does not mean making it again. */
-  private newHeading(): HeadEl {
-    const b = document.createElement("button") as HeadEl;
-    b.type = "button";
-    const swatch = document.createElement("span");
-    swatch.className = "hv-swatch";
-    const nameEl = document.createElement("b");
-    nameEl.className = "hv-heading-name";
-    const range = document.createElement("span");
-    range.className = "hv-heading-range";
-    const size = document.createElement("span");
-    size.className = "hv-heading-size";
-    b.append(swatch, nameEl, range, size);
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const h = b._head;
-      if (h === undefined) return;
-      this.setBitCursor(h.offsetBits, { pane: "hex" });
-      // An empty path is the whole file, which is not what a heading over
-      // a run of fields at its front is for.
-      if (h.path.length > 0) this.onPickField(h.path);
-    });
-    return b;
-  }
-
-  /**
-   * Fill a block with the heading lines for the parts that start at one place:
-   * for each, its colour, name, address range, size and share of the file, as
-   * the listing gives them. Pressing one goes to the part's first byte. `at` is
-   * the byte the block sits before, which is what a drag across it reads as.
-   *
-   * The block and its lines are written over rather than built again, so that a
-   * scroll does not take an element out from under a finger resting on it,
-   * which the browser reads as the touch being called off.
-   */
-  private fillHeadings(block: HTMLElement, heads: readonly OutlineHeading[], fileBits: number, at: number): void {
-    const off = String(at);
-    if (block.dataset["segOff"] !== off) block.dataset["segOff"] = off;
-    // The block stays in the row whether or not a part starts here; with
-    // nothing in it, it is not a gap above the row.
-    if (block.hidden !== (heads.length === 0)) block.hidden = heads.length === 0;
-    while (block.childElementCount < heads.length) block.append(this.newHeading());
-    // Hidden rather than taken away, for the same reason the chips are.
-    for (let i = 0; i < block.childElementCount; i++) {
-      const b = block.children[i] as HTMLElement;
-      if (b.hidden !== i >= heads.length) b.hidden = i >= heads.length;
-    }
-    for (const [i, h] of heads.entries()) {
-      const b = block.children[i] as HeadEl;
-      b._head = h;
-      const cls = `hv-heading hv-heading-${h.level}`;
-      if (b.className !== cls) b.className = cls;
-      const swatch = b.firstElementChild as HTMLElement;
-      swatch.hidden = h.level !== 0;
-      if (h.level === 0 && swatch.style.background !== h.color) swatch.style.background = h.color;
-      const name = headingName(h, fileBits);
-      setText(b.children[1] as HTMLElement, name);
-      setText(b.children[2] as HTMLElement, rangeText(h.offsetBits, h.sizeBits));
-      const share = shareText(h.sizeBits, fileBits);
-      setText(b.children[3] as HTMLElement, `${formatBytes(h.sizeBits / 8)}${share === "" ? "" : ` \u00b7 ${share}`}`);
-      const tip = HEADING_TIP(name);
-      if (b.title !== tip) b.title = tip;
-    }
-  }
-
   /** Spans for the rows on screen. A pending reply leaves the column empty
    *  for one frame; the fetched chunks trigger another render. */
   private spansForView(start: number, count: number): { spans: Span[]; more: boolean; error: string | null } {
@@ -1868,7 +1759,7 @@ export class HexView {
     }
 
     this.fitParts(bpr, binary, showText, fields, below);
-    const headsByRow = this.headingsByRow(start, windowBytes, bpr);
+    const headsByRow = headingsByRow(this.sections, start, windowBytes, bpr);
     // What each row will be tall once the browser has laid it out, from what
     // was put in it: its lines of chips and the headings above it. Zero for a
     // row past the end of the file.
@@ -1897,16 +1788,7 @@ export class HexView {
       }
       parts.blank = false;
       const heads = headsByRow[r] ?? [];
-      // Where each heading goes, as a position in the row. A part that starts
-      // part-way along cuts the row there, so the heading sits between the
-      // bytes before it and the bytes after. Condensed readings keep every
-      // heading above the row: they are the readings that trade room for rows.
-      const headsAt = new Map<number, OutlineHeading[]>();
-      for (const h of heads) {
-        const at = this.isCondensed ? 0 : Math.min(bpr - 1, Math.max(0, Math.floor(h.offsetBits / 8) - rowStart));
-        (headsAt.get(at) ?? (headsAt.set(at, []), headsAt.get(at) as OutlineHeading[])).push(h);
-      }
-      const segs = [...new Set([0, ...headsAt.keys()])].sort((a, b) => a - b);
+      const { headsAt, segs } = cutRow(heads, rowStart, bpr, this.isCondensed);
       // The share of the file changes with its length, so the key does too.
       const layoutKey = `${segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
       if (layoutKey !== parts.layoutKey) {
