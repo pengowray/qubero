@@ -11,6 +11,9 @@
 // Nothing in this file touches the document, which is what lets it be tested
 // without one.
 
+// `.ts` rather than the `.js` the rest of `src` writes: the tests run this
+// file under `node --test`, which strips the types but does not rewrite a
+// `.js` specifier back to the file it came from.
 import type { Span } from "./doc.ts";
 import { GAP_LABEL } from "./strings.ts";
 import { chipDetail, chipLayout, chipWidth, runDetail, type ChipMeasure } from "./chipfit.ts";

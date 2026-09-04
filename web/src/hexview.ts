@@ -28,6 +28,14 @@ import {
   type ChipBlock,
   type ChipText,
 } from "./chipplan.js";
+import {
+  asciiGlyph,
+  cellDraw,
+  covers,
+  highlightBits,
+  selectionBits,
+  type Run,
+} from "./hexcell.js";
 import { rangeText, shareText } from "./listingdraw.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
 
@@ -47,20 +55,6 @@ export function isRightColumn(v: string | null): v is RightColumn {
 /** A run of bits, `[startBit, endBit)`. A run of no bits is a place rather than
  *  a stretch, which is what a field of no length has. */
 export type BitRange = { readonly startBit: number; readonly endBit: number };
-
-/** The part of one byte a run covers, as bit positions 0 to 8 counting from the
- *  top of the byte. */
-type Run = { from: number; to: number };
-
-/** Whether the runs together cover every bit from `from` to `to`. */
-function covers(runs: readonly Run[], from: number, to: number): boolean {
-  let at = from;
-  for (const r of runs) {
-    if (r.from > at) return false;
-    at = Math.max(at, r.to);
-  }
-  return at >= to;
-}
 
 /** Hex shows two digits per byte; binary shows the eight bits. */
 export type ViewMode = "hex" | "binary";
@@ -145,10 +139,6 @@ const NO_SPANS = (windowBytes: number): Placed => ({
  *  browser charges for a write either way. */
 function setText(el: HTMLElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;
-}
-
-function asciiGlyph(b: number): string {
-  return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
 }
 
 /** One line of cells: an address, the bytes, their text and their fields. A row
@@ -1499,74 +1489,6 @@ export class HexView {
 
   // ----- rendering -----
 
-  /**
-   * Which bits of byte `off` the highlight covers, as [from, to) runs within
-   * 0..8, in order and not touching. Empty where the byte is not covered.
-   *
-   * A run of no bits is kept rather than dropped: a field of no length still
-   * has a place, and marking the byte it sits in front of would say it covers
-   * that byte, which it does not.
-   */
-  private highlightBits(off: number): Run[] {
-    const out: Run[] = [];
-    for (const h of this.highlight) {
-      const from = Math.max(h.startBit, off * 8) - off * 8;
-      const to = Math.min(h.endBit, off * 8 + 8) - off * 8;
-      if (to < from || from > 8 || to < 0) continue;
-      // An empty run belongs to the byte it starts in, and to that byte only,
-      // so the one past the end of a previous byte is not counted twice.
-      if (to === from && (from === 8 || h.endBit !== h.startBit)) continue;
-      out.push({ from, to });
-    }
-    if (out.length < 2) return out;
-    out.sort((a, b) => a.from - b.from || a.to - b.to);
-    const merged: Run[] = [];
-    for (const r of out) {
-      const last = merged[merged.length - 1];
-      // Two empty runs at the same place are one mark, not two.
-      if (last !== undefined && r.from <= last.to) last.to = Math.max(last.to, r.to);
-      else merged.push(r);
-    }
-    return merged;
-  }
-
-  /** Mark part of a byte in hex mode: a bar under the bits the field covers,
-   *  one length of bar per run, or a tick where a run has no bits. */
-  private markBits(el: HTMLElement, runs: readonly Run[]): string {
-    // The cell is 3ch wide: half a character of padding, two digits, half again.
-    const pad = 100 / 6;
-    const step = (100 - 2 * pad) / 8;
-    const stops: string[] = [];
-    let at = 0;
-    for (const r of runs) {
-      // A run of no bits still shows, as a mark a fraction of a bit wide, so
-      // that a field of no length is visible where it sits.
-      const from = pad + r.from * step;
-      const to = pad + Math.max(r.to, r.from + 0.15) * step;
-      stops.push(`transparent ${at}%`, `transparent ${from}%`, `var(--accent) ${from}%`, `var(--accent) ${to}%`);
-      at = to;
-    }
-    if (stops.length === 0) return "";
-    stops.push(`transparent ${at}%`, "transparent 100%");
-    el.style.backgroundImage = `linear-gradient(to right, ${stops.join(", ")})`;
-    // The class goes back to the caller, which writes every class this cell
-    // wants in one go.
-    return " hv-hlbits";
-  }
-
-  /**
-   * The part of byte `off` the selection covers, as one [from, to) run within
-   * 0..8, or null.
-   *
-   * Asked per byte on screen, so a selection of a whole four gigabyte file
-   * costs what a selection of one row costs.
-   */
-  private selectionBits(sel: BitRange, off: number): Run | null {
-    const from = Math.max(sel.startBit, off * 8) - off * 8;
-    const to = Math.min(sel.endBit, off * 8 + 8) - off * 8;
-    return to > from && from < 8 && to > 0 ? { from, to } : null;
-  }
-
   /** The eight bits of one byte, split into spans only where that is needed. */
   private fillBits(cell: HTMLElement, byte: number | null, off: number, hl: readonly Run[], sel: Run | null): void {
     const text = byte === null ? "········" : byte.toString(2).padStart(8, "0");
@@ -2007,13 +1929,11 @@ export class HexView {
         const off = rowStart + i;
         const h = parts.hexCells[i] as HTMLElement;
         const a = parts.textCells[i] as HTMLElement;
-        // What each cell is, gathered as a string and written only if it is
-        // not what the cell already says. Most of a redraw changes nothing —
-        // a cursor key moves a mark two cells — and a class written back
-        // unchanged still costs the browser the styling of that cell.
-        let hc = "";
-        let ac = "";
-        if (h.style.backgroundImage !== "") h.style.backgroundImage = "";
+        // What each cell is, gathered as strings by `cellDraw` and written
+        // only where it is not what the cell already says. Most of a redraw
+        // changes nothing — a cursor key moves a mark two cells — and a class
+        // written back unchanged still costs the browser the styling of that
+        // cell.
         if (binary && h.firstChild !== null) h.textContent = "";
         if (moved) {
           // `setAttribute` rather than `dataset`: they write the same
@@ -2026,88 +1946,34 @@ export class HexView {
         // A user-selected range temporarily replaces the active-field mark.
         // Keeping both over the same bytes made adjacent or overlapping state
         // impossible to parse; clearing the selection reveals the field again.
-        // The linked stretch is marked by the byte, not by the bit: it stands
-        // for a place in another document, and half a byte of one is not a
-        // finer answer, only a smaller one.
-        const link = this.linked;
-        const linked = link !== null && off * 8 < link.endBit && (off + 1) * 8 > link.startBit;
-        const hl = selection === null ? this.highlightBits(off) : [];
-        const sb = selection === null ? null : this.selectionBits(selection, off);
-        let text = binary ? "        " : "  ";
-        if (off < len) {
-          const b = bytes[off - start] ?? 0;
-          setText(a, complete ? asciiGlyph(b) : " ");
-          if (complete && !(b >= 0x20 && b < 0x7f)) ac += " hv-np";
-          if (!binary) {
-            text = complete ? HEX[b] ?? "" : "··";
-            if (!complete) hc += " hv-pending";
-          }
-        } else {
-          setText(a, " ");
-          if (off === len) hc += " hv-end";
-        }
-        if (!binary || off >= len) setText(h, text);
-
+        const hl = selection === null ? highlightBits(this.highlight, off) : [];
+        const sb = selection === null ? null : selectionBits(selection, off);
         const si = fields && off >= start && off < start + windowBytes ? byteSpan[off - start] ?? -1 : -1;
-        if (si >= 0) {
-          const s = spans[si];
-          if (s !== undefined && !s.gap) {
-            hc += ` hv-tint ${fieldClass(s.kind)}`;
-            if (off === Math.floor(s.offset_bits / 8)) hc += " hv-field-start";
-          }
-        }
-        if (hl.length > 0) {
-          // The text column cannot show part of a byte, so a partly covered
-          // byte is marked more faintly there than a fully covered one, and a
-          // run of no bits is not marked there at all: one character standing
-          // for a whole byte cannot say "between two of these".
-          const whole = covers(hl, 0, 8);
-          const any = hl.some((r) => r.to > r.from);
-          if (any) ac += whole ? " hv-hl" : " hv-hl-weak";
-          if (!binary && off < len) {
-            if (whole) hc += " hv-hl";
-            else hc += this.markBits(h, hl);
-          }
-        }
-        if (sb !== null) {
-          // A byte only partly selected is marked weakly in both columns: two
-          // hex digits and one text character each stand for the whole byte,
-          // and a full mark would say the whole byte is in.
-          const whole = sb.from <= 0 && sb.to >= 8;
-          if (!binary && off < len) hc += whole && this.pane === "hex" ? " hv-sel" : " hv-sel-weak";
-          ac += whole && this.pane === "ascii" ? " hv-sel" : " hv-sel-weak";
-        }
-        if (linked && link !== null) {
-          hc += " hv-linked";
-          ac += " hv-linked";
-          // The ends of the run get the ends of the outline, so a mark that
-          // runs off a row still reads as one stretch rather than as a box per
-          // byte.
-          if (off * 8 <= link.startBit) {
-            hc += " hv-linked-first";
-            ac += " hv-linked-first";
-          }
-          if ((off + 1) * 8 >= link.endBit) {
-            hc += " hv-linked-last";
-            ac += " hv-linked-last";
-          }
-        }
-        if (off === this.cursor) {
-          // In binary the bits carry the cursor, except past the end of the
-          // file where there are no bits to carry it.
-          if (!binary || off >= len) {
-            hc += this.pane === "hex" ? " hv-cur hv-focus" : " hv-cur hv-dim";
-            if (!binary && this.pane === "hex" && this.nibble === 1) hc += " hv-nib1";
-            if (this.insertMode) hc += " hv-ins";
-          }
-          ac += this.pane === "ascii" ? " hv-cur hv-focus" : " hv-cur hv-dim";
-          if (this.insertMode) ac += " hv-ins";
-        }
+        const s = si >= 0 ? spans[si] : undefined;
+        const draw = cellDraw({
+          off,
+          len,
+          binary,
+          complete,
+          byte: bytes[off - start] ?? 0,
+          span:
+            s === undefined || s.gap ? null : { kind: s.kind, startsHere: off === Math.floor(s.offset_bits / 8) },
+          hl,
+          sel: sb,
+          link: this.linked,
+          cursor: this.cursor,
+          pane: this.pane,
+          nibble: this.nibble,
+          insertMode: this.insertMode,
+        });
+        if (h.style.backgroundImage !== draw.bits) h.style.backgroundImage = draw.bits;
+        setText(a, draw.asciiText);
+        if (draw.hexText !== null) setText(h, draw.hexText);
         // The bits inside a cell carry their own marks, so in binary the cell
         // has only what `fillBits` puts on it.
-        if (h.className !== hc) h.className = hc;
+        if (h.className !== draw.hex) h.className = draw.hex;
         if (binary && off < len) this.fillBits(h, complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
-        if (a.className !== ac) a.className = ac;
+        if (a.className !== draw.ascii) a.className = draw.ascii;
       }
       if (fields) {
         const firstLine = parts.lines[0] as LineParts;
