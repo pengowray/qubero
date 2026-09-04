@@ -142,6 +142,119 @@ impl Val {
     }
 }
 
+/// Write `s` as a JSON string literal, quotes and all.
+///
+/// Only what JSON has no other way of holding is escaped: the quote, the
+/// backslash, and the control characters, which get their short names where
+/// they have one and `\u00XX` where they do not. Everything else is left as
+/// the UTF-8 it already is, so a file whose strings hold accented letters or
+/// emoji keeps holding them after an edit rather than growing a screenful of
+/// escapes nobody asked for.
+pub fn quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The text to write in place of a scalar value of `shape`, for the `text` a
+/// reader typed. The shape is the one the file already has: a member that
+/// holds a string goes on holding a string, so `true` typed into one is the
+/// four-letter word rather than a boolean.
+///
+/// Objects and arrays are not scalars and have no answer here; the caller
+/// turns `None` into whatever it says about a value too big to retype.
+pub fn scalar_literal(shape: Shape, text: &str, msgs: &ScalarMsgs) -> Option<Result<String, String>> {
+    Some(match shape {
+        Shape::Text => Ok(quote(text)),
+        // Written as typed when it parses, so an integer stays an integer and
+        // `1e6` stays `1e6`: the file said what it said, and an edit that
+        // reformatted the neighbouring digits would be an edit nobody made.
+        Shape::Number => {
+            let t = text.trim();
+            if is_number(t.as_bytes()) {
+                Ok(t.to_string())
+            } else {
+                Err(msgs.number.to_string())
+            }
+        }
+        Shape::Bool => match text.trim() {
+            "true" => Ok("true".to_string()),
+            "false" => Ok("false".to_string()),
+            _ => Err(msgs.bool.to_string()),
+        },
+        Shape::Null => match text.trim() {
+            "null" => Ok("null".to_string()),
+            _ => Err(msgs.null.to_string()),
+        },
+        Shape::Doc | Shape::Object | Shape::Array => return None,
+    })
+}
+
+/// Whether `b` is a JSON number and nothing else, to the letter of the
+/// grammar: an optional minus, then either a single zero or digits that do not
+/// begin with one, then an optional fraction of at least one digit, then an
+/// optional exponent of at least one digit. This is stricter than the reader,
+/// which takes what a file gives it; what goes back into a file is written the
+/// way the grammar says.
+fn is_number(b: &[u8]) -> bool {
+    let mut at = 0;
+    let digits = |at: &mut usize| {
+        let from = *at;
+        while b.get(*at).is_some_and(u8::is_ascii_digit) {
+            *at += 1;
+        }
+        *at > from
+    };
+    if b.get(at) == Some(&b'-') {
+        at += 1;
+    }
+    match b.get(at) {
+        Some(b'0') => at += 1,
+        Some(c) if c.is_ascii_digit() => {
+            digits(&mut at);
+        }
+        _ => return false,
+    }
+    if b.get(at) == Some(&b'.') {
+        at += 1;
+        if !digits(&mut at) {
+            return false;
+        }
+    }
+    if matches!(b.get(at), Some(b'e' | b'E')) {
+        at += 1;
+        if matches!(b.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        if !digits(&mut at) {
+            return false;
+        }
+    }
+    at == b.len()
+}
+
+/// What to say when the text does not fit the shape. The wording belongs with
+/// the rest of the editor's, so it is passed in rather than written here.
+pub struct ScalarMsgs {
+    pub number: &'static str,
+    pub bool: &'static str,
+    pub null: &'static str,
+}
+
 /// How deep one value may sit inside another. Deeper than this is beyond
 /// anything a file format writes, and following it would run the stack out.
 const MAX_DEPTH: u32 = 64;
@@ -446,6 +559,35 @@ mod tests {
         let arr = v.child(1).unwrap();
         assert_eq!(arr.child_outer_start(0), Some(arr.child(0).unwrap().start));
         assert_eq!(arr.child_outer_start(1), Some(arr.child(1).unwrap().start));
+    }
+
+    #[test]
+    fn a_quoted_string_reads_back_as_itself() {
+        for s in ["", "plain", "a \"quote\"", "back\\slash", "line\nbreak\ttab", "bell\u{7}", "caf\u{e9} \u{1f600}"] {
+            let text = quote(s);
+            assert_eq!(parse(text.as_bytes()).unwrap().kind, Kind::Text(s.to_string()), "{s:?}");
+        }
+        // Letters outside ASCII stay the bytes they are rather than becoming
+        // escapes, so a file keeps reading the way it read.
+        assert_eq!(quote("caf\u{e9}"), "\"caf\u{e9}\"");
+        assert_eq!(quote("\u{1}"), "\"\\u0001\"");
+    }
+
+    #[test]
+    fn a_scalar_is_written_as_the_shape_it_already_is() {
+        let msgs = ScalarMsgs { number: "num", bool: "bool", null: "null" };
+        let lit = |shape, text| scalar_literal(shape, text, &msgs).unwrap();
+        assert_eq!(lit(Shape::Text, "true"), Ok("\"true\"".into()));
+        assert_eq!(lit(Shape::Number, " 12 "), Ok("12".into()));
+        assert_eq!(lit(Shape::Number, "1e6"), Ok("1e6".into()));
+        assert_eq!(lit(Shape::Number, "05"), Err("num".into()));
+        assert_eq!(lit(Shape::Bool, "false"), Ok("false".into()));
+        assert_eq!(lit(Shape::Bool, "False"), Err("bool".into()));
+        assert_eq!(lit(Shape::Null, "null"), Ok("null".into()));
+        // What holds other values is edited by those values, not as text.
+        assert!(scalar_literal(Shape::Object, "{}", &msgs).is_none());
+        assert!(scalar_literal(Shape::Array, "[]", &msgs).is_none());
+        assert!(scalar_literal(Shape::Doc, "{}", &msgs).is_none());
     }
 
     #[test]

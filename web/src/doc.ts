@@ -1353,8 +1353,10 @@ export class Doc {
   }
 
   /**
-   * Write `text` into the field at `path`, encoded as that field's type. The
-   * core writes exactly the field's own bits, so nothing after it shifts.
+   * Write `text` into the field at `path`, encoded as that field's type. A
+   * fixed-width field is written over in place, so nothing after it shifts;
+   * a JSON value is as long as the text it holds, so a longer or shorter one
+   * moves everything after it along, as one undo step.
    * A "pending" reply means the field's position could not be worked out yet;
    * the chunks are on their way and the caller should ask again.
    */

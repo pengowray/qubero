@@ -29,9 +29,27 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => editable(inner, size_bits),
         Ty::UInt { .. } | Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::UIntExpr { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
+        // A scalar inside a JSON field is written back as the literal it is.
+        // An object or an array is its members, and editing those is editing
+        // them one at a time.
+        Ty::Json(shape, _) => !shape.composite() && size_bits <= EDIT_LIMIT_BYTES * 8,
         _ => false,
     }
 }
+
+/// What the editor says when text will not fit a JSON scalar's shape. The
+/// shape is the file's: a member that holds a number goes on holding one, and
+/// these are the three ways of missing that.
+pub const JSON_SCALAR_MSGS: crate::json::ScalarMsgs = crate::json::ScalarMsgs {
+    number: "Not a JSON number. JSON allows no leading zeros, no leading +, no bare .5, and no NaN or Infinity.",
+    bool: "Expected true or false.",
+    null: "Expected null. This value can't be changed to another type here.",
+};
+
+/// What the editor says when a JSON value would change length inside a field
+/// whose length another field already recorded.
+pub const JSON_FIXED_LENGTH: &str =
+    "Length is fixed here: a field earlier in the file stores this JSON's byte length. Type a value of the same length, or use the hex view.";
 
 /// What a text field currently holds, which decides how new text is written:
 /// the encoding it was read as, and the byte-order mark to keep in front of it.

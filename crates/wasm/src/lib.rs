@@ -1037,7 +1037,9 @@ fn dto(n: NodeInfo) -> NodeDto {
         offset_bits: n.offset_bits as f64,
         size_bits: n.size_bits as f64,
         value,
-        edit_text,
+        // The core's own answer where it has one: a JSON number is edited as
+        // the digits the file wrote rather than as a reading of them.
+        edit_text: n.edit_text.unwrap_or(edit_text),
         kind,
         ok,
         child_count: n.child_count as f64,
@@ -2227,8 +2229,16 @@ impl Editor {
         };
         match prepared {
             Ok(w) => {
-                sh.doc.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
-                self.changed_at(w.offset_bits);
+                let resized = w.n_bits != w.old_bits;
+                sh.doc.replace_bits(w.offset_bits, &w.data, w.n_bits, w.old_bits);
+                // Bytes that moved are bytes the template read at an offset
+                // they no longer sit at, so nothing worked out before still
+                // stands. An in-place write keeps everything up to it.
+                if resized {
+                    self.changed();
+                } else {
+                    self.changed_at(w.offset_bits);
+                }
                 reply(Ok(WriteDto { offset_bits: w.offset_bits as f64, size_bits: w.n_bits as f64 }))
             }
             Err(e) => reply::<WriteDto>(Err(e)),

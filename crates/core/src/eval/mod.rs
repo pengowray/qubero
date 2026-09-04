@@ -10,6 +10,7 @@ use crate::codec::Refusal;
 use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_sign_magnitude, read_uint};
 use crate::document::Document;
 use crate::encode;
+use crate::json;
 use crate::machinery;
 use crate::source::{Missing, Source};
 use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
@@ -186,6 +187,11 @@ pub struct NodeInfo {
     pub composite: bool,
     /// True when `write` accepts text for this field.
     pub editable: bool,
+    /// What an editor should start from, where that is not the value read back
+    /// as text. A JSON number is the digits the file wrote: reading `1.5e10`
+    /// as a number and writing the number back would leave `15000000000` in a
+    /// file nobody meant to reformat, and `1.0` would become `1`.
+    pub edit_text: Option<String>,
     /// How many bytes of the field the value occupies. Same as the field's size
     /// except for padded and terminated text, where the padding and the
     /// terminator are the format's business, not the value's.
@@ -248,6 +254,11 @@ pub struct Write {
     /// MSB-first packed, `n_bits` long.
     pub data: Vec<u8>,
     pub n_bits: u64,
+    /// How many bits at `offset_bits` this replaces. The same as `n_bits` for
+    /// every fixed-width field, which is all of them bar a JSON scalar: a
+    /// shorter or longer literal takes the place of the old one and everything
+    /// after it moves, so the caller splices rather than overwrites.
+    pub old_bits: u64,
 }
 
 /// Where a text field's value sits inside it, and what its bytes mean.
@@ -621,6 +632,13 @@ impl Evaluator {
             // made there has nowhere to go.
             editable: r.space == 0
                 && !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
+            edit_text: match &r.ty {
+                Ty::Json(json::Shape::Number, _) => {
+                    let (at, bits) = reading.0;
+                    Some(String::from_utf8_lossy(&self.read(doc, &r, at, bits * 8)?).into_owned())
+                }
+                _ => None,
+            },
             value_offset_bits: reading.0 .0,
             value_bytes: reading.0 .1,
             read_as: reading.2,
@@ -669,6 +687,29 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
         let r = self.memo[path].clone();
+        // A JSON value is offered as the value rather than as the literal: a
+        // string without the quotes and escapes that hold it in the file, and
+        // everything else as the digits or the word the file wrote. That is
+        // what an editor takes back, so what it shows and what it accepts are
+        // the same thing.
+        if let Ty::Json(shape, _) = r.ty.clone() {
+            if shape.composite() {
+                return fail("not a text field");
+            }
+            let text = if shape == json::Shape::Text {
+                match self.json_value(doc, path)? {
+                    Value::Str(s) => s,
+                    _ => return fail("not a text field"),
+                }
+            } else {
+                let (at, bits) = r.payload.unwrap_or((r.offset, size));
+                let shown = (bits / 8).min(crate::encode::EDIT_LIMIT_BYTES);
+                String::from_utf8_lossy(&self.read(doc, &r, at, shown * 8)?).into_owned()
+            };
+            let limit = crate::encode::EDIT_LIMIT_BYTES as usize;
+            let cut = text.len() > limit;
+            return Ok((if cut { text.chars().take(limit).collect() } else { text }, cut));
+        }
         let Some(span) = self.str_span(doc, &r, size)? else { return fail("not a text field") };
         let shown = span.len.min(crate::encode::EDIT_LIMIT_BYTES);
         let bytes = self.read(doc, &r, r.offset + span.start * 8, shown * 8)?;
@@ -754,8 +795,33 @@ impl Evaluator {
         // has bytes the format owns on either side, and an edit that took the
         // field's whole run would write over them.
         let (at, n_bits) = r.payload.unwrap_or((r.offset, size));
+        // A JSON scalar is written as the literal it is, which is as long as
+        // the value needs rather than as long as the old one was.
+        if let Ty::Json(shape, _) = &r.ty {
+            let literal = match json::scalar_literal(*shape, text, &encode::JSON_SCALAR_MSGS) {
+                Some(Ok(s)) => s,
+                Some(Err(why)) => return fail(why),
+                None => return fail("This field can't be edited here. Use the hex view."),
+            };
+            let data = literal.into_bytes();
+            let new_bits = data.len() as u64 * 8;
+            if new_bits != n_bits && self.json_length_is_recorded(path) {
+                return fail(encode::JSON_FIXED_LENGTH.to_string());
+            }
+            return Ok(Write { offset_bits: at, data, n_bits: new_bits, old_bits: n_bits });
+        }
         let data = encode::encode(&r.ty, text, n_bits, &state).map_err(EvalError::Failed)?;
-        Ok(Write { offset_bits: at, data, n_bits })
+        Ok(Write { offset_bits: at, data, n_bits, old_bits: n_bits })
+    }
+
+    /// Whether anything this field sits inside has a length the file already
+    /// recorded, as a safetensors header does in the `header_len` in front of
+    /// it. Text written there may not change length: that number would be
+    /// wrong, and every byte the file counts from the end of it would have
+    /// moved. Every ancestor is asked, not only the JSON field itself: a
+    /// header inside a sized record is just as fixed as one sized outright.
+    fn json_length_is_recorded(&self, path: &[usize]) -> bool {
+        (0..=path.len()).any(|k| self.memo.get(&path[..k]).is_some_and(|r| r.declared_size.is_some()))
     }
 
     /// Children `from..to` of the node at `path` (clamped to the child count).

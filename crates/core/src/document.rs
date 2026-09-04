@@ -142,6 +142,30 @@ impl<S: Source> Document<S> {
         self.table.insert(at, Piece { src: Src::Add, bit_off: off, bit_len: n });
     }
 
+    /// Replace `old` bits at `at` with `n` bits of `data`, of any length: what
+    /// follows moves. One undo step, even though it is a delete and an insert,
+    /// because it is one thing the reader did.
+    ///
+    /// An overwrite is the same thing where the two lengths agree, and is
+    /// cheaper and kinder to the memo, so it is what happens then.
+    pub fn replace_bits(&mut self, at: u64, data: &[u8], n: u64, old: u64) {
+        if n == old {
+            self.overwrite_bits(at, data, n);
+            return;
+        }
+        // A batch already open is the caller's, and closing it here would end
+        // an undo step somebody else is still filling.
+        let outer = self.batching;
+        if !outer {
+            self.begin_batch();
+        }
+        self.delete_bits(at, old);
+        self.insert_bits(at, data, n);
+        if !outer {
+            self.end_batch();
+        }
+    }
+
     pub fn insert_bytes(&mut self, at_byte: u64, data: &[u8]) {
         self.insert_bits(at_byte * 8, data, data.len() as u64 * 8);
     }
