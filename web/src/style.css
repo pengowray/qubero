@@ -364,6 +364,13 @@ input.invalid {
   min-height: 0;
   overflow: hidden;
 }
+/* The rows sit inside this and it is shifted up by however much of the top row
+   is above the edge, so the view scrolls by pixels rather than by whole rows.
+   `will-change` keeps the shift on the compositor: without it a touch drag
+   repaints every row of text on every frame. */
+.hv-rows-inner {
+  will-change: transform;
+}
 /* A row is at least one line of cells tall and grows to hold its chips and
    the headings above it; the view counts rows by the minimum and lets the
    ones that grow push the last rows off the bottom, where `.hv-rows` clips
