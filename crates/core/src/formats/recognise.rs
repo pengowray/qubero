@@ -185,6 +185,10 @@ const PROBES: &[Probe] = &[
     Probe::Is("bardstale", is_bards_tale),
     Probe::Is("whisper", |h, _| is_whisper(h)),
     Probe::Is("safetensors", |h, _| is_safetensors(h)),
+    // A Claude Code colour theme, which is JSON and has to be told from the
+    // rest of JSON by what is in it. Asked before the `{"` in the table of
+    // signatures, which would otherwise take every JSON file as plain json.
+    Probe::Is("claudetheme", claudetheme::is_claude_theme),
     Probe::Is("hackrffw", |h, _| is_hackrf_firmware(h)),
     Probe::Is("gdbm", |h, _| gdbm::is_gdbm(h)),
     Probe::Is("bdb", |h, _| bdb::is_bdb(h)),
@@ -1631,6 +1635,27 @@ mod tests {
         assert_eq!(sniffed(b"{\"-lh5-\0\0\0\0"), Some("lha"));
         // And an ordinary JSON file is still JSON.
         assert_eq!(sniffed(b"{\"name\": 1}"), Some("json"));
+    }
+
+    #[test]
+    fn a_claude_code_theme_is_told_from_the_rest_of_json_by_its_base_and_overrides() {
+        let theme = br##"{"name":"Ember","base":"dark","overrides":{"claude":"#5769f7"}}"##;
+        assert_eq!(sniffed(theme), Some("claudetheme"));
+        // Pretty-printed, which is how the tool writes one.
+        let written = b"{\n  \"name\": \"Ember\",\n  \"base\": \"light-ansi\",\n  \"overrides\": {}\n}\n";
+        assert_eq!(sniffed(written), Some("claudetheme"));
+        // A base the tool does not ship, and a file with the keys but no
+        // overrides: both are JSON and nothing more.
+        assert_eq!(sniffed(br#"{"name":"x","base":"midnight","overrides":{}}"#), Some("json"));
+        assert_eq!(sniffed(br#"{"name":"x","base":"dark"}"#), Some("json"));
+        assert_eq!(sniffed(br#"{"name":1}"#), Some("json"));
+        // A safetensors header opens with the same two characters after its
+        // length and is still safetensors.
+        let header = br#"{"a":{"dtype":"F16","shape":[2],"data_offsets":[0,4]}}"#;
+        let mut file = (header.len() as u64).to_le_bytes().to_vec();
+        file.extend_from_slice(header);
+        file.extend_from_slice(&[0; 4]);
+        assert_eq!(sniffed(&file), Some("safetensors"));
     }
 
     #[test]

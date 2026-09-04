@@ -258,7 +258,7 @@ impl Evaluator {
                 // A JSON field is as long as the text it was given: what the
                 // values inside it come to is what the parse says, and any
                 // room left over is padding the format put there.
-                Ty::Json(_) => r.limit - r.offset,
+                Ty::Json(..) => r.limit - r.offset,
                 // A pointer list holds the stretch its offsets point into,
                 // which runs to the end of its container.
                 Ty::PointerList { .. } => r.limit - r.offset,
@@ -340,7 +340,7 @@ impl Evaluator {
                     },
                 })
             }
-            Ty::Json(shape) if shape.composite() => self.json_child_count(doc, path),
+            Ty::Json(shape, _) if shape.composite() => self.json_child_count(doc, path),
             _ => Ok(0),
         }
     }

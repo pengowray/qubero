@@ -143,7 +143,7 @@ pub(super) fn plain(ty: &Ty) -> bool {
         | Ty::Insn { .. } => true,
         // A number or a piece of text inside JSON is a value like any other;
         // an object or an array holds them.
-        Ty::Json(shape) => !shape.composite(),
+        Ty::Json(shape, _) => !shape.composite(),
         _ => false,
     }
 }

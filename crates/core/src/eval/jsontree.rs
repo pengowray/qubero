@@ -19,7 +19,7 @@ impl Evaluator {
     pub(super) fn json_doc<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<(Vec<usize>, Arc<Val>)> {
         let root = (0..=path.len())
             .rev()
-            .find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Json(Shape::Doc))));
+            .find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Json(Shape::Doc, _))));
         let Some(k) = root else { return fail("not inside a JSON field") };
         let root = path[..k].to_vec();
         if let Some(v) = self.memo.json(&root) {
@@ -57,11 +57,18 @@ impl Evaluator {
         let (Some(child), Some(name)) = (val.child(idx), val.child_name(idx)) else {
             return fail("no such value");
         };
+        // What the template said this value would be, if it said anything.
+        // The schema walks down with the tree: the parent's entry for this
+        // key is the child's whole schema.
+        let schema = match &self.memo[parent].ty {
+            Ty::Json(_, Some(s)) => s.member(&name),
+            _ => None,
+        };
         let offset = base + child.start as u64 * 8;
         let end = base + child.end as u64 * 8;
         let r = Resolved {
             name: Name::Field(name.into()),
-            ty: Ty::Json(child.kind.shape()),
+            ty: Ty::Json(child.kind.shape(), schema),
             offset,
             cursor: offset,
             limit: end,

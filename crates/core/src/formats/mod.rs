@@ -45,6 +45,7 @@ mod cab;
 mod braw;
 mod bards_tale;
 mod cbor;
+mod claudetheme;
 mod cdf;
 mod coff;
 mod compress;
@@ -160,6 +161,7 @@ pub use braw::braw;
 pub use bards_tale::bards_tale;
 pub use bencode::bencode;
 pub use cbor::cbor;
+pub use claudetheme::claudetheme;
 pub use cdf::cdf;
 pub use coff::coff;
 pub use compress::compress;
@@ -320,6 +322,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("root", |_| root()),
     ("whisper", |_| whisper()),
     ("safetensors", |_| safetensors()),
+    ("claudetheme", |_| claudetheme()),
     ("json", |_| json()),
     ("omezarr", |_| omezarr()),
     ("zarrzip", |_| zarrzip()),

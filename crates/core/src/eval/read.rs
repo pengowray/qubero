@@ -358,7 +358,7 @@ impl Evaluator {
     pub(super) fn primitive_value<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             // A value inside JSON was read when its text was parsed.
-            Ty::Json(_) => self.json_value(doc, at)?,
+            Ty::Json(..) => self.json_value(doc, at)?,
             Ty::UInt { bits, endian } => Value::UInt(read_uint(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
             Ty::Int { bits, endian } => Value::Int(read_int(&self.read(doc, r, r.offset, size)?, *bits, *endian)),
             Ty::SignMagnitude { bits, endian } => {

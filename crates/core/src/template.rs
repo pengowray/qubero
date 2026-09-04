@@ -630,6 +630,61 @@ pub enum Until {
     FieldValue { field: String, value: i128 },
 }
 
+/// What a format knows about the values inside a JSON field, laid over the
+/// text once it is parsed.
+///
+/// JSON has no fixed layout, so a template cannot declare its fields the way
+/// it declares a structure: the keys are whatever the file wrote. What a
+/// template can say is what a key it recognises means, and that is this. Each
+/// schema covers one value, names the type it should be shown as, and says
+/// what the values inside it are.
+///
+/// A key nobody named is still read, still placed, and still shown; it just
+/// keeps the generic type its shape gives it, unless `rest` says otherwise.
+#[derive(Debug, Default)]
+pub struct JsonSchema {
+    /// What the type column says for this value, in place of the generic
+    /// `string` or `object` its shape would give it.
+    pub type_name: Option<String>,
+    /// What the members named here are, by key.
+    pub members: Vec<(String, Arc<JsonSchema>)>,
+    /// What a member not named above is. This is how a table whose keys the
+    /// file chooses is described: a theme's `overrides` holds colours whatever
+    /// the tokens it names are called.
+    pub rest: Option<Arc<JsonSchema>>,
+}
+
+impl JsonSchema {
+    /// A schema that only renames the type: a leaf, such as one colour.
+    pub fn named(type_name: &str) -> JsonSchema {
+        JsonSchema { type_name: Some(type_name.to_string()), ..JsonSchema::default() }
+    }
+    /// A schema for an object: what it is called, and what its members are.
+    pub fn object(type_name: Option<&str>, members: Vec<(&str, JsonSchema)>) -> JsonSchema {
+        JsonSchema {
+            type_name: type_name.map(str::to_string),
+            members: members.into_iter().map(|(k, s)| (k.to_string(), Arc::new(s))).collect(),
+            rest: None,
+        }
+    }
+    /// The same, with every member the file wrote for itself reading as `rest`.
+    pub fn table(type_name: &str, rest: JsonSchema) -> JsonSchema {
+        JsonSchema {
+            type_name: Some(type_name.to_string()),
+            members: Vec::new(),
+            rest: Some(Arc::new(rest)),
+        }
+    }
+    /// What the value called `key` inside this one is, if anything says.
+    pub fn member(&self, key: &str) -> Option<Arc<JsonSchema>> {
+        self.members
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, s)| s.clone())
+            .or_else(|| self.rest.clone())
+    }
+}
+
 /// Names for the individual bits of an integer field: a PE's `characteristics`
 /// is eight independent answers packed into sixteen bits, and reading it as the
 /// number 550 asks the reader to do the unpacking. Bits with no name still
@@ -1099,7 +1154,11 @@ pub enum Ty {
     ///
     /// A template writes `Ty::json()`, which is the whole text; the shapes
     /// below that are what the values found inside it are given.
-    Json(json::Shape),
+    /// The schema is what the format knows about the values it will find:
+    /// a Claude Code theme's `overrides` holds colours, and saying so is the
+    /// difference between a row typed `colour` and a row typed `string`.
+    /// Nothing about the parse changes; only the name the type column shows.
+    Json(json::Shape, Option<Arc<JsonSchema>>),
     /// Pick a type by the text of an earlier field, for a format that names
     /// its types in words rather than in numbers: a safetensors tensor says
     /// `"dtype": "F8_E4M3"`. `on` names the field, the way `Switch` does with
@@ -1326,7 +1385,11 @@ impl Ty {
     }
     /// The text in this field, read as the JSON it holds.
     pub fn json() -> Ty {
-        Ty::Json(json::Shape::Doc)
+        Ty::Json(json::Shape::Doc, None)
+    }
+    /// The same, with what the format knows about the values inside it.
+    pub fn json_as(schema: JsonSchema) -> Ty {
+        Ty::Json(json::Shape::Doc, Some(Arc::new(schema)))
     }
     /// Pick a type by the text of the field `on` names.
     pub fn matches(on: Expr, cases: Vec<(&str, Ty)>, default: Ty) -> Ty {
@@ -1697,7 +1760,10 @@ impl Ty {
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Match { .. } => "switch".into(),
-            Ty::Json(shape) => shape.name().to_string(),
+            Ty::Json(shape, schema) => match schema.as_ref().and_then(|s| s.type_name.clone()) {
+                Some(name) => name,
+                None => shape.name().to_string(),
+            },
             Ty::Enum { def, .. } => def.name.clone(),
             Ty::Flags { def, .. } => def.name.clone(),
             Ty::Named(n) => n.to_string(),

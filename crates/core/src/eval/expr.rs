@@ -550,7 +550,7 @@ impl Evaluator {
     /// as a number. None when it has no such child.
     pub(super) fn child_index<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<usize>> {
         self.resolve(doc, path)?;
-        if matches!(self.memo[path].ty, Ty::Json(_)) {
+        if matches!(self.memo[path].ty, Ty::Json(..)) {
             return self.json_index(doc, path, name);
         }
         // A list has no named children, so a number is the only thing a path

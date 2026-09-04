@@ -561,7 +561,7 @@ impl Evaluator {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
-            Ty::Json(shape) if shape.composite() => {
+            Ty::Json(shape, _) if shape.composite() => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -768,7 +768,7 @@ impl Evaluator {
         // JSON counts what it holds: an object holds entries, an array holds
         // values. The whole text holds whichever of the two it turned out to
         // be, which is known once it has been read.
-        if let Ty::Json(shape) = ty {
+        if let Ty::Json(shape, _) = ty {
             let shape = match shape {
                 crate::json::Shape::Doc => self.memo.json(path)?.kind.shape(),
                 other => *other,
@@ -847,7 +847,7 @@ impl Evaluator {
         let pr = self.memo.get(parent).expect("parent resolved").clone();
         // A value inside JSON is placed where its text is, which the parse
         // already knows. Nothing below applies to it.
-        if matches!(pr.ty, Ty::Json(_)) {
+        if matches!(pr.ty, Ty::Json(..)) {
             self.resolve_json_child(doc, path)?;
             return Ok(None);
         }
