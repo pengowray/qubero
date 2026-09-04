@@ -198,6 +198,9 @@ export type Span = {
   readonly gap: boolean;
   /** Fields this entry stands for, when a large run is shown as one. */
   readonly count: number;
+  /** What one of those is called, singular, when the format has a word for it:
+   *  a deflate block holds symbols. Null when they read as values. */
+  readonly unit: string | null;
   /** A structure that reads on one row, already joined: an instruction rather
    *  than its opcode and its immediate. Null for a field that reads as its own
    *  value. */

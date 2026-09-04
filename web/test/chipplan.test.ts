@@ -34,6 +34,7 @@ function span(o: Partial<Span> & { offset_bits: number; size_bits: number }): Sp
     kind: "int",
     gap: false,
     count: 0,
+    unit: null,
     line: null,
     sample: [],
     parts: [],

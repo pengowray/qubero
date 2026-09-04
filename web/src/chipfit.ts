@@ -10,7 +10,11 @@
  * itself is measured by the caller, which is the one that can see the fonts.
  */
 
+// `.ts` on the strings import for the same reason `chipplan.ts` does it: the
+// tests run this file under `node --test`, which strips types but does not
+// rewrite a `.js` specifier back to the file it came from.
 import type { Span } from "./doc.js";
+import { bitSizeText, countText } from "./strings.ts";
 
 /** Longest value shown on a chip before it is cut short. */
 const CHIP_VALUE = 32;
@@ -37,20 +41,18 @@ const CHIP_COLUMN_GUESS = 320;
 export const CHIP_LINES = 3;
 
 /** What a chip says for a run of fields shown as one entry. The same words
- *  whether the core folded the run or the view did. */
-export function runDetail(count: number): string {
-  return `${count.toLocaleString()} values`;
+ *  whether the core folded the run or the view did. `unit` is the format's own
+ *  word for what it holds, where it has one: a deflate block coded symbols,
+ *  and calling them values says less. */
+export function runDetail(count: number, unit: string | null = null): string {
+  return countText(count, unit ?? "value");
 }
 
 /** What a chip says after the name. A run of numbers says how many; raw bytes
  *  say how many, since the bytes themselves are already on the left. */
 export function chipDetail(s: Span): string {
-  if (s.count > 0) return runDetail(s.count);
-  if (s.gap || s.kind === "bytes") {
-    return s.size_bits % 8 === 0
-      ? `${(s.size_bits / 8).toLocaleString()} bytes`
-      : `${s.size_bits.toLocaleString()} bits`;
-  }
+  if (s.count > 0) return runDetail(s.count, s.unit);
+  if (s.gap || s.kind === "bytes") return bitSizeText(s.size_bits);
   return s.value.length > CHIP_VALUE ? `${s.value.slice(0, CHIP_VALUE)}…` : s.value;
 }
 
