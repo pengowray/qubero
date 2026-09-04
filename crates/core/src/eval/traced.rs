@@ -63,7 +63,12 @@ impl<'a> BlockView<'a> {
 pub(super) fn is_payload(kind: &StepKind) -> bool {
     matches!(
         kind,
-        StepKind::Literal(_) | StepKind::Match { .. } | StepKind::Stored | StepKind::EndOfBlock | StepKind::Opaque
+        StepKind::Literal(_)
+            | StepKind::Match { .. }
+            | StepKind::Stored
+            | StepKind::Pixel
+            | StepKind::EndOfBlock
+            | StepKind::Opaque
     )
 }
 
@@ -149,7 +154,14 @@ pub(super) fn symbol_ty(step: &Step) -> (String, T) {
         T::enumeration(
             "SymbolKind",
             T::computed(E::lit(k)),
-            &[(0, "literal"), (1, "match"), (2, "end of block"), (3, "stored"), (4, "not named")],
+            &[
+                (0, "literal"),
+                (1, "match"),
+                (2, "end of block"),
+                (3, "stored"),
+                (4, "not named"),
+                (5, "pixel"),
+            ],
         )
     };
     let (name, fields) = match step.kind {
@@ -169,6 +181,16 @@ pub(super) fn symbol_ty(step: &Step) -> (String, T) {
         StepKind::Stored => (
             "literals".to_string(),
             vec![("kind", kind(3)), ("length", T::computed(E::lit(bytes as i128)))],
+        ),
+        // One pixel read for the bits hidden in it. It yields one byte, or two
+        // where a pixel carries more than eight bits, so the count is worth
+        // saying even though it is nearly always one.
+        StepKind::Pixel => (
+            match bytes {
+                1 => "pixel".to_string(),
+                n => format!("pixel, {n} bytes"),
+            },
+            vec![("kind", kind(5)), ("length", T::computed(E::lit(bytes as i128)))],
         ),
         // A run the trace stopped naming, because there were too many of them
         // to name. See `codec::MAX_STEPS`.
