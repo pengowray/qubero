@@ -5,8 +5,8 @@
 // them again costs a button apiece; worse, it destroys the element a finger may
 // be resting on, which the browser reads as the touch being taken away and
 // cancels the drag that is scrolling the view. So the plan is settled here, as
-// values, and the view writes it into the elements it already has — and the
-// keys below say when even that is not needed.
+// values, and the view writes it into the elements it already has. The keys
+// below say when even that is not needed.
 //
 // Nothing in this file touches the document, which is what lets it be tested
 // without one.
