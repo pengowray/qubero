@@ -272,6 +272,25 @@ impl Evaluator {
         })
     }
 
+    /// How many children the node at `path` has, when answering does not mean
+    /// walking the whole of it.
+    ///
+    /// A run that fills its container with elements whose length their own
+    /// bytes give is the one case where it does: a code section is a repeat of
+    /// instructions until the end, and counting them means decoding every one,
+    /// which for a 66 MiB section is a minute of work for a number nothing on
+    /// screen shows. None says so, and the caller finds what it wanted another
+    /// way. Every other list either divides, or ends on something it reads and
+    /// so stops of its own accord.
+    pub(super) fn count_unless_walk<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<u64>> {
+        self.resolve(doc, path)?;
+        let ty = self.memo[path].ty.clone();
+        if matches!(ty, Ty::Repeat { until: Until::End, .. }) && self.stride(doc, path, &ty)?.is_none() {
+            return Ok(None);
+        }
+        self.child_count(doc, path).map(Some)
+    }
+
     pub(super) fn child_count<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
         self.resolve(doc, path)?;
         let r = self.memo[path].clone();

@@ -266,8 +266,12 @@ export class HexView {
    */
   private linked: BitRange | null = null;
   private rightColumn: RightColumn = "text";
-  /** Spans for the rows on screen, kept until the view or the file moves. */
-  private spanCache: { key: string; spans: Span[]; more: boolean; error: string | null } | null = null;
+  /** The last answered spans, and the stretch of file they were asked for.
+   *  Kept past the view moving: while the next answer is still being worked
+   *  out, the rows these still cover keep their chips. */
+  private spanCache:
+    | { key: string; from: number; to: number; spans: Span[]; more: boolean; error: string | null }
+    | null = null;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
   /**
@@ -1548,21 +1552,41 @@ export class HexView {
     return { spans, more, trouble, byteSpan, byRow };
   }
 
-  /** Spans for the rows on screen. A pending reply leaves the column empty
-   *  for one frame; the fetched chunks trigger another render. */
+  /** Spans for the rows on screen.
+   *
+   *  An answer that is not ready yet leaves the last one on screen for the
+   *  rows it still covers, and only the rows past it empty. Scrolling one
+   *  step through a program is what this is for: the file below the view is
+   *  megabytes of instructions, the reply for the new window takes several
+   *  goes, and blanking the column for every one of them makes the whole
+   *  column flicker off for as long as the reading takes. */
   private spansForView(start: number, count: number): { spans: Span[]; more: boolean; error: string | null } {
     const key = `${start}:${count}:${this.doc.template ?? ""}`;
     if (this.spanCache?.key === key) return this.spanCache;
     const max = Math.min(SPAN_LIMIT, count * 8);
     const r = this.doc.spans(start * 8, (start + count) * 8, max);
-    // Pending: the bytes are on their way and another render follows. Error:
-    // the template cannot read what is here, usually after an edit that
+    // Pending: the bytes are on their way. Working: the structure is still
+    // being worked out. Both come back on their own, and until they do the
+    // last answer stands wherever it reaches. `placeChips` draws only the
+    // spans that fall on screen, so the rows past it are left empty.
+    if (r.status === "pending" || r.status === "working") {
+      const kept = this.spanCache;
+      if (kept === null || kept.to <= start || start + count <= kept.from) {
+        return { spans: [], more: false, error: null };
+      }
+      return { spans: kept.spans, more: kept.more, error: null };
+    }
+    // The template cannot read what is here, usually after an edit that
     // changed a length, and an empty column would not say that.
-    // Nothing to annotate yet, whether the bytes are on their way or the
-    // structure is still being worked out. Both come back on their own.
-    if (r.status === "pending" || r.status === "working") return { spans: [], more: false, error: null };
     if (r.status === "error") return { spans: [], more: false, error: r.message };
-    this.spanCache = { key, spans: r.node, more: r.node.length >= max, error: null };
+    this.spanCache = {
+      key,
+      from: start,
+      to: start + count,
+      spans: r.node,
+      more: r.node.length >= max,
+      error: null,
+    };
     return this.spanCache;
   }
 
