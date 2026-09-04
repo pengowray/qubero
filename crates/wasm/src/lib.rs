@@ -174,6 +174,11 @@ struct NodeDto {
     /// True when this field is only its parent's contents, and so has no name
     /// of its own worth a level of structure.
     contents: bool,
+    /// True when the node's own bytes include punctuation its children do not
+    /// account for: the braces of a JSON object, the brackets of an array.
+    /// What the children leave over is the node's own syntax, not bytes
+    /// nothing describes.
+    framed: bool,
     /// Which address space `offset_bits` counts in: 0 for the file, and a
     /// number of its own for each decoded stream. A field in a space other
     /// than the file has no place in the hex view, and its offset is drawn as
@@ -1045,6 +1050,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         consumed_by: n.consumed_by.map(|i| i as f64),
         machinery: n.machinery,
         contents: n.contents,
+        framed: n.framed,
         space: n.space as f64,
         refused: n.refused,
         decoded: n.decoded,

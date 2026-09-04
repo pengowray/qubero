@@ -64,16 +64,28 @@ impl Evaluator {
             Ty::Json(_, Some(s)) => s.member(&name),
             _ => None,
         };
+        // What the member covers, rather than what its value covers: from its
+        // key to the start of the next member, which takes the colon, the
+        // comma and the whitespace between them with it. The members of an
+        // object then tile the whole of it bar its braces, so nothing between
+        // two of them falls through as bytes nobody accounts for. The last
+        // one stops at its value: the closing brace is the object's own.
+        let outer = base + val.child_outer_start(idx).unwrap_or(child.start) as u64 * 8;
+        let next = match val.child_outer_start(idx + 1) {
+            Some(at) => base + at as u64 * 8,
+            None => base + child.end as u64 * 8,
+        };
         let offset = base + child.start as u64 * 8;
         let end = base + child.end as u64 * 8;
         let r = Resolved {
             name: Name::Field(name.into()),
             ty: Ty::Json(child.kind.shape(), schema),
-            offset,
-            cursor: offset,
-            limit: end,
+            offset: outer,
+            cursor: outer,
+            limit: next,
             declared_size: None,
-            size: Some(end - offset),
+            size: Some(next - outer),
+            payload: Some((offset, end - offset)),
             computed: None,
             // JSON is parsed out of the bytes the field covers, wherever those
             // bytes are: a header inside a decoded stream holds its values

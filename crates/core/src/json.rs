@@ -13,11 +13,19 @@
 /// One JSON value and where its text sits: `start..end` are byte offsets from
 /// the start of the text parsed, and cover the value alone. A member's key and
 /// the punctuation around it are outside its value's range.
+///
+/// `outer_start` is where the member this value belongs to begins, which is
+/// the quote of its key for a member of an object and the value itself for
+/// everything else. That is what lets a listing give a member the bytes a
+/// reader would point at and call the member: the key, the colon, the value,
+/// and the comma after it, rather than the value alone with the syntax around
+/// it falling through as bytes nothing describes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Val {
     pub kind: Kind,
     pub start: usize,
     pub end: usize,
+    pub outer_start: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +115,12 @@ impl Val {
         }
     }
 
+    /// Where child `i` begins as a member: its key for an object, its value
+    /// for an element of an array.
+    pub fn child_outer_start(&self, i: usize) -> Option<usize> {
+        self.child(i).map(|v| v.outer_start)
+    }
+
     /// What child `i` is called: its key, or its index written out.
     pub fn child_name(&self, i: usize) -> Option<String> {
         match &self.kind {
@@ -186,7 +200,7 @@ impl Parser<'_> {
             Some(b'n') => self.word(b"null", Kind::Null)?,
             _ => self.number()?,
         };
-        Ok(Val { kind, start, end: self.at })
+        Ok(Val { kind, start, end: self.at, outer_start: start })
     }
 
     fn word(&mut self, want: &[u8], kind: Kind) -> Result<Kind, String> {
@@ -206,12 +220,17 @@ impl Parser<'_> {
         }
         loop {
             self.spaces();
+            let at_key = self.at;
             let key = self.string()?;
             self.spaces();
             if !self.eat(b':') {
                 return Err(self.wrong("a colon after the key"));
             }
-            members.push((key, self.value(depth + 1)?));
+            let mut val = self.value(depth + 1)?;
+            // The member starts at its key, not at its value: everything from
+            // the quote onwards is this member and nobody else's.
+            val.outer_start = at_key;
+            members.push((key, val));
             self.spaces();
             if self.eat(b',') {
                 continue;
@@ -413,6 +432,20 @@ mod tests {
         assert!(e.contains("comma"), "{e}");
         let e = parse(br#"{"a": 1} tail"#).expect_err("trailing");
         assert!(e.contains("nothing after"), "{e}");
+    }
+
+    #[test]
+    fn a_member_begins_at_its_key_and_an_element_at_itself() {
+        let text = r#"{ "a": 1, "b": [2, 3] }"#;
+        let v = parse(text.as_bytes()).unwrap();
+        // The value of "a" is the 1; the member is everything from its quote.
+        assert_eq!(v.child(0).unwrap().start, text.find('1').unwrap());
+        assert_eq!(v.child_outer_start(0), Some(text.find("\"a\"").unwrap()));
+        assert_eq!(v.child_outer_start(1), Some(text.find("\"b\"").unwrap()));
+        // An element of an array has no key, so it begins where it begins.
+        let arr = v.child(1).unwrap();
+        assert_eq!(arr.child_outer_start(0), Some(arr.child(0).unwrap().start));
+        assert_eq!(arr.child_outer_start(1), Some(arr.child(1).unwrap().start));
     }
 
     #[test]

@@ -411,7 +411,10 @@ impl Evaluator {
         if let Some(next) = self.placement_after(doc, at)? {
             ends = ends.min(next);
         }
-        span.gap = true;
+        // A framed structure's leftovers are its own punctuation rather than
+        // bytes nothing describes: the braces of a JSON object are the object,
+        // and the column says so instead of calling them unmapped.
+        span.gap = !info.framed;
         span.offset_bits = begins;
         span.size_bits = ends - begins;
         span.count = 0;

@@ -135,8 +135,13 @@ mod tests {
         let (d, mut ev) = eval();
         let dtype = ev.node(&d, &[1, 1, 0]).unwrap();
         let at = (dtype.offset_bits / 8) as usize;
-        // The quotes are part of the value's text, so this is `"F16"`.
-        assert_eq!(&file()[at..at + (dtype.size_bits / 8) as usize], b"\"F16\"");
+        // The member runs from its key to the next one: key, colon, value and
+        // the comma after it.
+        assert_eq!(&file()[at..at + (dtype.size_bits / 8) as usize], b"\"dtype\":\"F16\",");
+        // The value alone is still known. The quotes are part of its text, so
+        // this is `"F16"`.
+        let val = (dtype.value_offset_bits / 8) as usize;
+        assert_eq!(&file()[val..val + dtype.value_bytes as usize], b"\"F16\"");
     }
 
     #[test]

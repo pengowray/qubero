@@ -497,7 +497,15 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
   // The root's end is the file's end, whatever the root structure says its
   // own size is; anything inside the root ends where it ends.
   const end = path.length === 0 ? Math.max(endBits(parent), w.fileBits) : endBits(parent);
-  const holes = uncovered(parent.offset_bits, end, parts.map((p) => p.extent));
+  // A framed structure keeps its own punctuation: the braces of a JSON object
+  // and the whitespace inside them are the object, and its members account for
+  // everything between them. So the stretch the parts have to cover runs from
+  // the first of them to the last, and not from brace to brace.
+  const spans = parts.map((p) => p.extent).filter((e): e is Span => e !== null);
+  const framed = parent.framed && spans.length > 0;
+  const from = framed ? Math.min(...spans.map((s) => s.start)) : parent.offset_bits;
+  const to = framed ? Math.max(...spans.map((s) => s.end)) : end;
+  const holes = uncovered(from, to, parts.map((p) => p.extent));
   // Every hole starts either where the parent does or where some part ends,
   // so each one has a place in the list without the parts being reordered.
   const drawnHoles = new Set<number>();
@@ -778,7 +786,11 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   if (before > 0 && !elsewhere) {
     edge(w, "earlier", path, depth, before, slice.from, to, { start: outer.start, end: start });
   }
-  rows(w, path, slice.nodes, slice.from, [], depth, elsewhere ? null : { start, end });
+  // A JSON object's braces are its own, and its members account for every
+  // byte between them. Measuring the members against the object's edges would
+  // draw an unmapped row over each brace, so the edges are nobody's here.
+  const bounds = elsewhere || node.framed ? null : { start, end };
+  rows(w, path, slice.nodes, slice.from, [], depth, bounds);
   if (after > 0 && !elsewhere) {
     edge(w, "later", path, depth, after, slice.from, to, { start: end, end: outer.end });
   }
