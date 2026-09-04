@@ -363,6 +363,9 @@ input.invalid {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* The strip naming the fields carried down from above the view is pinned to
+     this box's top edge. */
+  position: relative;
 }
 /* The rows sit inside this and it is shifted up by however much of the top row
    is above the edge, so the view scrolls by pixels rather than by whole rows.
@@ -576,22 +579,29 @@ input.invalid {
 }
 .hv-note-below:empty,
 .hv-note-below.hv-empty,
-.hv-note-above.hv-empty {
+.hv-note-pinned.hv-empty,
+.hv-note-pinned:empty {
   display: none;
 }
-/* The same block above the bytes, for a field that began further up the file:
-   naming it under the row would put it between the bytes it covers and the
-   ones after them. The hairline goes underneath, since what it divides the
-   chips from is below them. */
-.hv-note-above {
+/* The same block for a field that began further up the file, pinned over the
+   top edge of the rows rather than drawn in the top one: naming it under the
+   row would put it between the bytes it covers and the ones after them, and
+   naming it inside the row would make that row taller than the same row is
+   anywhere else, so every row below it moved as a long field scrolled past.
+   It covers the first bytes; the hairline goes underneath, since what it
+   divides the chips from is below them. */
+.hv-note-pinned {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
   margin-left: 0;
   padding: 1px 0;
   border-left: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  background: var(--panel);
   align-content: start;
-}
-.hv-note-above:empty {
-  display: none;
 }
 .hexview.has-notes {
   line-height: 24px;

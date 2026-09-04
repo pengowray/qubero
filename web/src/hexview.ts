@@ -191,11 +191,6 @@ type LineParts = {
   readonly cells: HTMLElement;
   readonly asc: HTMLElement;
   readonly note: HTMLElement;
-  /** The chips for fields that began above the visible rows, drawn above the
-   *  line rather than below it so they read as a heading over the bytes they
-   *  name. Only in the "below" arrangement, and only on the row's first line;
-   *  empty otherwise, and hidden by `:empty`. */
-  readonly above: HTMLElement;
   /** The parts that start where this line begins, drawn above it. Always
    *  present, and empty when none do. */
   readonly head: HTMLElement;
@@ -210,6 +205,15 @@ export class HexView {
   /** The rows themselves, inside `rowsEl` and shifted up by `topPx` so the top
    *  row can be partly above the edge. `rowsEl` clips it. */
   private readonly rowsInner: HTMLElement;
+  /** The chips for fields that began above the visible rows, pinned over the
+   *  top edge of the rows rather than drawn inside the top one. In the flow it
+   *  made the top row a line of chips taller than the same row is anywhere
+   *  else, so every row below it jumped as a long field scrolled past. Only in
+   *  the "below" arrangement; hidden when nothing is carried. */
+  private readonly pinned: HTMLElement;
+  /** What the pinned strip last said, so it is filled again only when it would
+   *  say something else. */
+  private pinnedKey = "";
   private readonly track: HTMLElement;
   private readonly thumb: HTMLElement;
   private rowEls: HTMLElement[] = [];
@@ -378,7 +382,9 @@ export class HexView {
     this.rowsEl.className = "hv-rows";
     this.rowsInner = document.createElement("div");
     this.rowsInner.className = "hv-rows-inner";
-    this.rowsEl.append(this.rowsInner);
+    this.pinned = document.createElement("span");
+    this.pinned.className = "hv-note hv-note-pinned hv-empty";
+    this.rowsEl.append(this.rowsInner, this.pinned);
     const body = document.createElement("div");
     body.className = "hv-body";
     body.append(this.header, this.rowsEl);
@@ -643,8 +649,6 @@ export class HexView {
     asc.className = "hv-ascii";
     const note = document.createElement("span");
     note.className = below ? "hv-note hv-note-below" : "hv-note";
-    const above = document.createElement("span");
-    above.className = "hv-note hv-note-above";
     const head = document.createElement("div");
     head.className = "hv-headings";
     const hex: HTMLElement[] = [];
@@ -665,7 +669,7 @@ export class HexView {
     // Beside the bytes the note is part of the line; below them it is a block
     // of its own after the line, so that it can use the row's whole width.
     if (fields && !below) line.append(note);
-    return { line, addr, cells, asc, note, above, head, hex, text };
+    return { line, addr, cells, asc, note, head, hex, text };
   }
 
   /**
@@ -698,19 +702,6 @@ export class HexView {
     for (const [j, lp] of parts.lines.entries()) {
       const on = j < segs.length;
       const at = on ? (segs[j] as number) : 0;
-      // The fields carried down from above the view name bytes the row is
-      // about to draw, so they go over them rather than under: a chip below
-      // the first row would sit between the bytes it names and the ones that
-      // follow. Always in place while the chips are below, empty when nothing
-      // is carried, so a scroll moves a chip between the two blocks without
-      // building the row again.
-      if (fields && below && j === 0) {
-        // A row coming back from past the end of the file has its pieces
-        // hidden; showing them is this pass's job. Whether the block of
-        // carried chips takes any room is the `hv-empty` class's.
-        if (lp.above.hidden) lp.above.hidden = false;
-        kids.push(lp.above);
-      }
       // Always in place, empty when no part starts here, so that a heading
       // arriving or leaving writes into a block that is already there.
       this.fillHeadings(lp.head, on ? (heads.get(at) ?? []) : [], fileBits, rowStart + at);
@@ -882,8 +873,7 @@ export class HexView {
    * Bring the cursor's cell onto the screen by where it was drawn, not by its
    * row number. Rows are not all one height, so a row inside the count that
    * fits can still sit below the bottom edge. The view moves down by the rows
-   * the shortfall is worth and looks again: the row that becomes the top one
-   * takes on the chips carried from above it, and can grow.
+   * the shortfall is worth and looks again.
    *
    * Not during a drag that is selecting: that scrolls at its own pace, and a
    * second hand on the view would double it.
@@ -2028,6 +2018,10 @@ export class HexView {
     // was put in it: its lines of chips and the headings above it. Zero for a
     // row past the end of the file.
     const heights: number[] = [];
+    // The carried chips for the top row, filled into the pinned strip once the
+    // rows are drawn. Null unless the chips are below the bytes and something
+    // carries over the top edge, which empties the strip.
+    let pinnedBlock: { entries: Chip[]; texts: ChipText[]; shown: number } | null = null;
     for (let r = 0; r < this.rowEls.length; r++) {
       const row = this.rowEls[r];
       const parts = this.parts[r];
@@ -2190,7 +2184,6 @@ export class HexView {
           if (key !== parts.noteKey) {
             parts.noteKey = key;
             for (let j = 1; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
-            firstLine.above.replaceChildren();
             const say = r === 0 ? (trouble ?? NO_TEMPLATE) : null;
             while (firstNote.childElementCount > (say === null ? 0 : 1)) firstNote.lastElementChild?.remove();
             if (say !== null) {
@@ -2221,11 +2214,12 @@ export class HexView {
         // reads as the touch being taken away and cancels the drag that is
         // scrolling the view.
         const plan: { entries: Chip[]; texts: ChipText[]; shown: number }[] = [];
-        let above: { entries: Chip[]; texts: ChipText[]; shown: number } | null = null;
-        // Below the bytes, a field carried down from above the view is drawn
-        // over the row instead of under it, so the hex it names is not split
-        // in two by the chip naming it.
-        if (below) {
+        // Below the bytes, a field carried down from above the view is named
+        // by the strip pinned over the top of the rows, not by the row itself:
+        // a chip under the top row would sit between the bytes it covers and
+        // the ones after them, and a chip inside it would make that row taller
+        // than it is anywhere else.
+        if (below && r === 0) {
           const carried = (buckets[0] as Chip[]).filter((c) => c.carried);
           buckets[0] = (buckets[0] as Chip[]).filter((c) => !c.carried);
           const texts = carried.map((c) => this.chipText(c));
@@ -2234,8 +2228,7 @@ export class HexView {
             this.noteWidth,
             maxLines,
           );
-          height += lines * this.sizes.chipLine;
-          above = { entries: carried, texts, shown };
+          pinnedBlock = { entries: carried, texts, shown };
           // More carried fields than a capped block can hold: the rest are
           // named below the bytes rather than dropped.
           if (shown < carried.length) buckets[0] = [...carried.slice(shown), ...(buckets[0] as Chip[])];
@@ -2266,16 +2259,31 @@ export class HexView {
                 .slice(0, b.shown)
                 .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${t.name}${t.detail}`)
                 .join("");
-        const key = `${trailer ? "+" : ""}${block(above)}${plan.map(block).join("")}`;
+        const key = `${trailer ? "+" : ""}${plan.map(block).join("")}`;
         if (key !== parts.noteKey) {
           parts.noteKey = key;
-          this.fillNote(firstLine.above, above, true, false);
           for (const [j, b] of plan.entries()) {
             this.fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1);
           }
         }
       }
       heights.push(height);
+    }
+
+    // The strip over the top edge, filled in place: it is inside `.hv-rows`,
+    // which is where a touch drag is captured, so it is emptied and hidden
+    // rather than taken away.
+    const pinnedKey =
+      pinnedBlock === null
+        ? ""
+        : `${pinnedBlock.shown}/${pinnedBlock.entries.length}~` +
+          pinnedBlock.texts
+            .slice(0, pinnedBlock.shown)
+            .map((t) => `${t.name}${t.detail}`)
+            .join("");
+    if (pinnedKey !== this.pinnedKey) {
+      this.pinnedKey = pinnedKey;
+      this.fillNote(this.pinned, pinnedBlock, true, false);
     }
 
     // Everything the browser has to be asked, asked together: the widths and
@@ -2343,13 +2351,11 @@ export class HexView {
     // came to. The view does not move for it: a row that turned out taller or
     // shorter than expected changes the total, and the thumb may shift a pixel
     // for that, but the bytes the reader is looking at stay where they are.
-    // Not the top row, unless it is the first row of the file. The top row is
-    // the one that names the fields carried down from above the view, so it can
-    // be a line of chips taller there than it is anywhere else; recording that
-    // would leave the ledger holding a height the row only has while it happens
-    // to be at the top. It is measured on the draws where it is not.
+    // Every row, the top one included: a row is drawn the same height wherever
+    // it falls, now that the chips carried from above the view are pinned over
+    // the rows rather than drawn inside the top one.
     for (const [i, h] of real.entries()) {
-      if (h > 0 && (i > 0 || this.topRow === 0)) this.ledger.measure(this.topRow + i, h);
+      if (h > 0) this.ledger.measure(this.topRow + i, h);
     }
     this.ledger.trim(this.topRow);
 
