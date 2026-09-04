@@ -360,6 +360,10 @@ mod tests {
         let mut rgb = png.clone();
         rgb[25] = 2;
         assert!(!is_p64png(&rgb));
+        // Right size and shape, but interlaced, which no cartridge is.
+        let mut adam7 = png.clone();
+        adam7[28] = 1;
+        assert!(!is_p64png(&adam7));
         assert!(!is_p64png(b"\x89PNG\r\n\x1a\n"));
     }
 

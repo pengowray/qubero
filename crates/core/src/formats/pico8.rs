@@ -152,11 +152,11 @@ const VERSION_ROW: usize = VERSION_AT / WIDTH as usize;
 /// bytes of the file, 36 KB of it, and 0x4300 is most of the way down the
 /// image. A cart whose picture packs well is decided here; one whose picture is
 /// noisy enough that its IDAT runs past the window is accepted on its size
-/// alone, the way this test worked before. That is the wrong way to be wrong
-/// for a probe, and it is the way round to be wrong: refusing a real cart makes
-/// the editor unable to open a file it understands, while accepting a busy
-/// picture of exactly this size costs a reader one wrong guess they can correct
-/// from the type list.
+/// alone, the way this test worked before. Accepting too much is the right way
+/// round for a probe to be wrong: refusing a real cart leaves the editor unable
+/// to open a file it understands, while accepting a busy picture of exactly
+/// this size costs the reader one wrong guess they can correct from the type
+/// list.
 pub fn is_p8png(head: &[u8]) -> bool {
     if !super::png::is_size(head, WIDTH, HEIGHT) {
         return false;
@@ -347,6 +347,10 @@ mod tests {
         let mut rgb = png.clone();
         rgb[25] = 2;
         assert!(!is_p8png(&rgb));
+        // Right size and shape, but interlaced, which no cart is.
+        let mut adam7 = png.clone();
+        adam7[28] = 1;
+        assert!(!is_p8png(&adam7));
         assert!(!is_p8png(b"\x89PNG\r\n\x1a\n"));
     }
 

@@ -83,14 +83,23 @@ pub(crate) fn cart_png(name: &'static str, idat: T) -> T {
 }
 
 /// Whether a PNG's header says the image is `width` by `height`, eight bits a
-/// channel, colour type 6, which is RGBA. What tells a cartridge from a
-/// picture, since a cartridge says nothing else about itself.
+/// channel, colour type 6, which is RGBA, and not interlaced. The shape both
+/// cartridge formats are written in, and the first of the two questions asked
+/// of a picture that might be one.
+///
+/// Interlacing is in here because Adam7 lays an image out in seven passes, so a
+/// row of the stream is not a row of the image and none of the arithmetic in
+/// [`cart_pixels`] holds. No cartridge is interlaced.
 pub(crate) fn is_size(head: &[u8], width: u32, height: u32) -> bool {
     if !head.starts_with(b"\x89PNG\r\n\x1a\n") || head.get(12..16) != Some(b"IHDR") {
         return false;
     }
     let (Some(w), Some(h)) = (dword(head, 16), dword(head, 20)) else { return false };
-    w == width && h == height && head.get(24) == Some(&8) && head.get(25) == Some(&6)
+    w == width
+        && h == height
+        && head.get(24) == Some(&8)
+        && head.get(25) == Some(&6)
+        && head.get(28) == Some(&0)
 }
 
 /// The pixel bytes a cartridge image hides its payload in, as far as the bytes
@@ -111,12 +120,6 @@ pub(crate) fn is_size(head: &[u8], width: u32, height: u32) -> bool {
 /// the head are the caller's problem, not this function's.
 pub(crate) fn cart_pixels(head: &[u8], width: u32, height: u32) -> Vec<u8> {
     if !is_size(head, width, height) {
-        return Vec::new();
-    }
-    // Adam7 lays the image out in seven passes, so a row of the stream is not a
-    // row of the image and none of the arithmetic below holds. No cartridge is
-    // interlaced.
-    if head.get(28) != Some(&0) {
         return Vec::new();
     }
     let stride = width as usize * 4;
