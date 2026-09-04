@@ -17,6 +17,7 @@
 pub mod frames;
 pub mod inflate;
 pub mod lz4;
+pub mod pixels;
 
 use std::ops::Range;
 
@@ -38,6 +39,16 @@ pub enum Codec {
     /// ROOT hands to LZ4 and what an LZ4 frame's blocks hold.
     Lz4Block,
     Xz,
+    /// Not compression: PNG's per-row filtering, undone. What comes out of an
+    /// IDAT's zlib stream is rows of `1 + stride` bytes, a filter byte and a
+    /// row predicted from its neighbours; what comes out of this is the
+    /// pixels. `bpp` is the bytes in a pixel, which is how far back a filter
+    /// looks for the byte to its left.
+    PngUnfilter { stride: u32, bpp: u8 },
+    /// Not compression either: one byte out of the low two bits of each
+    /// channel of an RGBA pixel, alpha first. How a PICO-8 cartridge is
+    /// carried inside the picture of its label.
+    LowBitsArgb,
 }
 
 impl Codec {
@@ -48,6 +59,8 @@ impl Codec {
             Codec::Zstd => "zstd",
             Codec::Lz4Block => "lz4",
             Codec::Xz => "xz",
+            Codec::PngUnfilter { .. } => "png unfilter",
+            Codec::LowBitsArgb => "low bits argb",
         }
     }
 }
@@ -588,6 +601,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Lz4Block => lz4::block(data)?,
         Codec::Zstd => frames::zstd(data)?,
         Codec::Xz => frames::xz(data)?,
+        Codec::PngUnfilter { stride, bpp } => pixels::unfilter(data, stride, bpp)?,
+        Codec::LowBitsArgb => pixels::low_bits_argb(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -603,7 +618,9 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     let out = match codec {
         // One decoder, not two: the bytes a reader sees have to be the bytes
         // the trace describes, so the traced path is the only path.
-        Codec::Zlib | Codec::Deflate | Codec::Lz4Block => decode_traced(codec, data)?.0,
+        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb => {
+            decode_traced(codec, data)?.0
+        }
         Codec::Zstd => zstd(data)?,
         Codec::Xz => xz(data)?,
     };
