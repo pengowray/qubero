@@ -19,6 +19,8 @@ const SIGNATURE_ONLY = "signature only";
 const TEMPLATE_LABEL: Record<string, string> = {
   ar: "Unix archive",
   aseprite: "Aseprite",
+  p8png: "PICO-8 cartridge",
+  p64rom: "Picotron cartridge ROM",
   bdb: "Berkeley DB",
   braw: "Blackmagic RAW",
   arw: "Sony ARW",
