@@ -2351,11 +2351,14 @@ export class HexView {
     // came to. The view does not move for it: a row that turned out taller or
     // shorter than expected changes the total, and the thumb may shift a pixel
     // for that, but the bytes the reader is looking at stay where they are.
-    // Every row, the top one included: a row is drawn the same height wherever
-    // it falls, now that the chips carried from above the view are pinned over
-    // the rows rather than drawn inside the top one.
+    // Every row while the chips are below the bytes: a row is drawn the same
+    // height wherever it falls, now that the fields carried down from above the
+    // view are named by the strip pinned over the rows rather than inside the
+    // top one. Beside the bytes those chips still join the top row's column and
+    // can wrap it a line taller than the row is anywhere else, so there the top
+    // row is measured only on the draws where it is not the top one.
     for (const [i, h] of real.entries()) {
-      if (h > 0) this.ledger.measure(this.topRow + i, h);
+      if (h > 0 && (below || i > 0 || this.topRow === 0)) this.ledger.measure(this.topRow + i, h);
     }
     this.ledger.trim(this.topRow);
 
