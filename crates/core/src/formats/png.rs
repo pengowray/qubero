@@ -12,8 +12,11 @@ const COLOR_TYPE: &[(i128, &str)] = &[
     (6, "rgba"),
 ];
 
-pub fn png() -> Template {
-    let ihdr = T::structure(
+/// The header chunk, which every PNG opens with and which says what shape the
+/// image is. Shared with the PICO-8 cartridge template, which reads the same
+/// chunk and then goes looking for what the picture is carrying.
+pub(crate) fn ihdr() -> T {
+    T::structure(
         "IHDR",
         vec![
             ("width", T::u32(Big)),
@@ -24,10 +27,13 @@ pub fn png() -> Template {
             ("filter", T::enumeration("FilterMethod", T::u8(), &[(0, "adaptive")])),
             ("interlace", T::enumeration("Interlace", T::u8(), &[(0, "none"), (1, "adam7")])),
         ],
-    );
-    // tEXt: a NUL-terminated keyword, then the text filling the rest. Both are
-    // Latin-1 by the spec, not UTF-8; iTXt is the chunk that carries UTF-8.
-    let text = T::structure(
+    )
+}
+
+/// tEXt: a NUL-terminated keyword, then the text filling the rest. Both are
+/// Latin-1 by the spec, not UTF-8; iTXt is the chunk that carries UTF-8.
+pub(crate) fn text() -> T {
+    T::structure(
         "tEXt",
         vec![
             ("keyword", T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Latin1)),
@@ -36,7 +42,11 @@ pub fn png() -> Template {
                 T::text(StrLen::Fixed(E::field("length").sub(E::size_of("keyword"))), Encoding::Latin1),
             ),
         ],
-    );
+    )
+}
+
+pub fn png() -> Template {
+    let (ihdr, text) = (ihdr(), text());
     let chunk = T::structure_named(
         "Chunk",
         "type",

@@ -107,6 +107,7 @@ mod omf;
 mod pak;
 mod parquet;
 mod pcx;
+mod pico8;
 mod pdf;
 pub mod pdf_objstm;
 pub mod pdf_xref;
@@ -227,6 +228,7 @@ pub use qoi::qoi;
 pub use rar5::rar5;
 pub use rpm::rpm;
 pub use sac::sac;
+pub use pico8::p8png;
 pub use png::png;
 pub use root::root;
 pub use safetensors::safetensors;
@@ -289,6 +291,8 @@ pub fn omezarr() -> Template {
 /// maker chose, and the template says which maker on the strength of the name.
 const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("png", |_| png()),
+    // A PICO-8 cartridge: a PNG with the program in the low bits of the picture.
+    ("p8png", |_| p8png()),
     ("aseprite", |_| aseprite()),
     ("braw", |_| braw()),
     ("swf", |_| swf()),
