@@ -411,11 +411,21 @@ mod tests {
         // rather than quietly finishing.
         e.set_slice(Some(2_000));
         e.begin_slice();
-        let spans = e.spans(&doc, 0x80 * 8, 0x200 * 8, 512).expect("the header, in one go");
+        // The section table, and on into the first few instructions: the byte
+        // the walk stops at has to be inside the section, since that is what
+        // used to ask how many instructions the whole section holds.
+        let spans = e.spans(&doc, 0x188 * 8, 0x210 * 8, 512).expect("the header, in one go");
         assert!(spans.len() > 10, "the header is more than a handful of fields: {}", spans.len());
         assert!(
-            doc.source().furthest.get() <= 0x200,
-            "read to {:#x}, which is inside the code section",
+            spans.iter().any(|s| s.offset_bits == 0x200 * 8),
+            "the first instruction of the section was reached: {spans:?}"
+        );
+        // An instruction is read up to fifteen bytes at a time, so the last
+        // one asked for reaches a little past the range. Megabytes past it is
+        // the section being counted.
+        assert!(
+            doc.source().furthest.get() < 0x300,
+            "read to {:#x}, which is further into the code than the rows on screen",
             doc.source().furthest.get()
         );
     }
