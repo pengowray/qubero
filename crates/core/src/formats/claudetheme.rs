@@ -39,7 +39,6 @@ fn schema() -> JsonSchema {
     JsonSchema::object(
         None,
         vec![
-            ("name", JsonSchema::named("theme name")),
             // One of `BASES`. A string has no names for its values the way an
             // integer field has an enum, so which six they are is said in the
             // module's own notes and in the recogniser that checks them.
@@ -142,7 +141,8 @@ mod tests {
     #[test]
     fn a_key_the_template_knows_is_typed_as_what_it_is() {
         let (d, mut ev) = eval();
-        assert_eq!(ev.node(&d, &[0]).unwrap().type_name, "theme name");
+        // Nothing renames the display name: a string is what it is.
+        assert_eq!(ev.node(&d, &[0]).unwrap().type_name, "string");
         let base = ev.node(&d, &[1]).unwrap();
         assert_eq!(base.type_name, "base theme");
         assert_eq!(base.value, Value::Str("dark".into()));
