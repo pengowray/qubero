@@ -236,6 +236,83 @@ mod tests {
         assert_eq!(spans[0].name, "file");
     }
 
+    /// Write `text` into the member at `path` and hand back what the file
+    /// then holds, or what the editor refused to do.
+    fn write(path: &[usize], text: &str) -> Result<String, String> {
+        let (mut d, mut ev) = eval();
+        let w = match ev.prepare_write(&d, path, text) {
+            Ok(w) => w,
+            Err(crate::eval::EvalError::Failed(why)) => return Err(why),
+            Err(other) => panic!("{other:?}"),
+        };
+        d.replace_bits(w.offset_bits, &w.data, w.n_bits, w.old_bits);
+        ev.invalidate();
+        let mut out = vec![0u8; (d.len_bits() / 8) as usize];
+        d.read_bytes(0, &mut out);
+        Ok(String::from_utf8(out).unwrap())
+    }
+
+    /// The members of the file after an edit, read back through the template.
+    fn members(text: &str) -> Vec<(String, Value)> {
+        let d = Document::new(MemSource(text.as_bytes().to_vec()));
+        let mut ev = Evaluator::new(claudetheme());
+        let n = ev.node(&d, &[2]).unwrap().child_count;
+        (0..n as usize).map(|i| ev.node(&d, &[2, i]).unwrap()).map(|n| (n.name, n.value)).collect()
+    }
+
+    #[test]
+    fn a_longer_string_pushes_the_members_after_it_along() {
+        let after = write(&[2, 1], "rgb(87,105,247)").unwrap();
+        assert!(after.contains("\"permission\": \"rgb(87,105,247)\","), "{after}");
+        // Nothing else moved into anything else: every member is still there,
+        // still named what it was, and still worth what it was.
+        let seen = members(&after);
+        assert_eq!(seen.len(), 5);
+        assert_eq!(seen[1], ("permission".into(), Value::Str("rgb(87,105,247)".into())));
+        assert_eq!(seen[4], ("emberGlow".into(), Value::Str("#ff7a18".into())));
+    }
+
+    #[test]
+    fn a_shorter_string_pulls_them_back() {
+        let after = write(&[2, 1], "red").unwrap();
+        assert!(after.contains("\"permission\": \"red\","), "{after}");
+        let seen = members(&after);
+        assert_eq!(seen[1], ("permission".into(), Value::Str("red".into())));
+        assert_eq!(seen[2], ("success".into(), Value::Str("ansi256(34)".into())));
+    }
+
+    #[test]
+    fn a_string_of_the_same_length_leaves_everything_where_it_was() {
+        let after = write(&[2, 1], "#123456").unwrap();
+        assert_eq!(after, SAMPLE.replace("#5769f7", "#123456"));
+    }
+
+    #[test]
+    fn what_json_has_no_other_way_of_holding_is_escaped() {
+        let after = write(&[0], "a \"quoted\" \\ line\nbreak\u{1}\u{e9}").unwrap();
+        let acc = char::from_u32(0xe9).unwrap();
+        let want = format!("{}{}{}", r#""name": "a \"quoted\" \\ line\nbreak\u0001"#, acc, '"');
+        assert!(after.contains(&want), "{after}");
+        // And reads back as exactly what was typed.
+        let d = Document::new(MemSource(after.as_bytes().to_vec()));
+        let mut ev = Evaluator::new(claudetheme());
+        assert_eq!(ev.node(&d, &[0]).unwrap().value, Value::Str("a \"quoted\" \\ line\nbreak\u{1}\u{e9}".into()));
+    }
+
+    #[test]
+    fn an_object_is_edited_by_its_members_rather_than_whole() {
+        let err = write(&[2], "{}").unwrap_err();
+        assert!(err.contains("can't be edited here"), "{err}");
+        assert!(write(&[], "{}").is_err());
+    }
+
+    #[test]
+    fn a_string_holds_a_string_whatever_it_says() {
+        // Typing a word that means something else in JSON writes the word.
+        let after = write(&[1], "true").unwrap();
+        assert!(after.contains("\"base\": \"true\","), "{after}");
+    }
+
     #[test]
     fn the_six_base_themes_are_what_a_theme_is_recognised_by() {
         for base in BASES {

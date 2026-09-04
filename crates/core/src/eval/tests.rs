@@ -2596,3 +2596,120 @@ fn a_fields_bytes_come_from_the_space_it_is_in() {
     let (some, cut) = ev.field_bytes(&d, &[1, 0], 3).unwrap();
     assert_eq!((some.as_slice(), cut), (&inner[..3], true));
 }
+
+/// Writing a scalar inside a JSON field: the numbers, the words, and a header
+/// whose length another field already recorded.
+mod json_edits {
+    use super::*;
+
+    const TEXT: &str = r#"{"n": 12, "f": 1.5, "on": true, "gone": null, "xs": [1, 2, [3, "four"]]}"#;
+
+    /// Write into the JSON at `path` and hand back the file, or the refusal.
+    fn write(text: &[u8], t: Template, path: &[usize], typed: &str) -> Result<Vec<u8>, String> {
+        let mut d = doc(text);
+        let mut ev = Evaluator::new(t);
+        let w = ev.prepare_write(&d, path, typed).map_err(|e| match e {
+            EvalError::Failed(why) => why,
+            other => panic!("{other:?}"),
+        })?;
+        d.replace_bits(w.offset_bits, &w.data, w.n_bits, w.old_bits);
+        let mut out = vec![0u8; (d.len_bits() / 8) as usize];
+        d.read_bytes(0, &mut out);
+        Ok(out)
+    }
+
+    fn plain(path: &[usize], typed: &str) -> Result<String, String> {
+        let out = write(TEXT.as_bytes(), Template::new("json", T::json()), path, typed)?;
+        Ok(String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn a_number_is_written_as_it_was_typed() {
+        assert!(plain(&[0], "4096").unwrap().starts_with(r#"{"n": 4096,"#));
+        // An integer stays an integer, and a float keeps the form it was given.
+        assert!(plain(&[1], "1.5e10").unwrap().contains(r#""f": 1.5e10,"#));
+        assert!(plain(&[0], "-7").unwrap().starts_with(r#"{"n": -7,"#));
+    }
+
+    #[test]
+    fn what_json_would_not_call_a_number_is_refused() {
+        for bad in ["05", "+1", ".5", "NaN", "Infinity", "0x10", "twelve", ""] {
+            let err = plain(&[0], bad).unwrap_err();
+            assert!(err.contains("Not a JSON number"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_boolean_is_one_of_two_words() {
+        assert!(plain(&[2], "false").unwrap().contains(r#""on": false,"#));
+        assert!(plain(&[2], "0").unwrap_err().contains("Expected true or false."));
+    }
+
+    #[test]
+    fn null_stays_null() {
+        assert_eq!(plain(&[3], "null").unwrap(), TEXT);
+        assert!(plain(&[3], "0").unwrap_err().contains("Expected null."));
+    }
+
+    #[test]
+    fn an_element_deep_in_an_array_moves_the_rest_along() {
+        let after = plain(&[4, 2, 1], "a much longer string").unwrap();
+        assert!(after.contains(r#"[3, "a much longer string"]"#), "{after}");
+        // And the file still parses as the shape it was.
+        let d = doc(after.as_bytes());
+        let mut ev = Evaluator::new(Template::new("json", T::json()));
+        assert_eq!(ev.node(&d, &[4]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[4, 2, 0]).unwrap().value, Value::Int(3));
+        assert_eq!(ev.node(&d, &[3]).unwrap().name, "gone");
+    }
+
+    #[test]
+    fn a_value_is_offered_for_editing_as_the_value_rather_than_the_literal() {
+        let text = r#"{"s": "a \"quoted\" é", "n": 1.5e10, "on": true, "gone": null, "o": {}}"#;
+        let d = doc(text.as_bytes());
+        let mut ev = Evaluator::new(Template::new("json", T::json()));
+        assert_eq!(ev.text_value(&d, &[0]).unwrap().0, "a \"quoted\" \u{e9}");
+        // A number keeps the form the file gave it rather than being rounded
+        // through a reading of it.
+        assert_eq!(ev.text_value(&d, &[1]).unwrap().0, "1.5e10");
+        assert_eq!(ev.text_value(&d, &[2]).unwrap().0, "true");
+        assert_eq!(ev.text_value(&d, &[3]).unwrap().0, "null");
+        assert!(ev.text_value(&d, &[4]).is_err(), "an object is its members");
+    }
+
+    #[test]
+    fn an_array_and_an_object_are_not_scalars() {
+        for path in [vec![4], vec![4, 2], vec![]] {
+            let err = plain(&path, "[]").unwrap_err();
+            assert!(err.contains("can't be edited here"), "{path:?}: {err}");
+        }
+    }
+
+    /// A header whose length sits in front of it, the way safetensors writes
+    /// one. Changing the length would leave that number wrong.
+    fn sized() -> (Vec<u8>, Template) {
+        let body = br#"{"a": 1, "b": "xy"}"#;
+        let mut bytes = (body.len() as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(body);
+        let t = Template::new(
+            "sized",
+            T::structure("Root", vec![("len", T::u32(Big)), ("header", T::sized(E::field("len"), T::json()))]),
+        );
+        (bytes, t)
+    }
+
+    #[test]
+    fn a_json_field_with_a_recorded_length_keeps_it() {
+        let (bytes, t) = sized();
+        let err = write(&bytes, t, &[1, 1], "longer").unwrap_err();
+        assert!(err.contains("Length is fixed here"), "{err}");
+    }
+
+    #[test]
+    fn the_same_length_is_still_written_there() {
+        let (bytes, t) = sized();
+        let after = write(&bytes, t, &[1, 1], "ab").unwrap();
+        assert!(after.ends_with(br#"{"a": 1, "b": "ab"}"#), "{after:?}");
+        assert_eq!(after.len(), bytes.len());
+    }
+}

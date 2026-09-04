@@ -2227,8 +2227,16 @@ impl Editor {
         };
         match prepared {
             Ok(w) => {
-                sh.doc.overwrite_bits(w.offset_bits, &w.data, w.n_bits);
-                self.changed_at(w.offset_bits);
+                let resized = w.n_bits != w.old_bits;
+                sh.doc.replace_bits(w.offset_bits, &w.data, w.n_bits, w.old_bits);
+                // Bytes that moved are bytes the template read at an offset
+                // they no longer sit at, so nothing worked out before still
+                // stands. An in-place write keeps everything up to it.
+                if resized {
+                    self.changed();
+                } else {
+                    self.changed_at(w.offset_bits);
+                }
                 reply(Ok(WriteDto { offset_bits: w.offset_bits as f64, size_bits: w.n_bits as f64 }))
             }
             Err(e) => reply::<WriteDto>(Err(e)),
