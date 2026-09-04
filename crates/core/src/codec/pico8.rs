@@ -5,9 +5,10 @@
 //! `src/pxa.rs` of <https://github.com/shanecelis/pico8_decompress> (MIT), a
 //! Rust port of the snippet Lexaloffle circulated, and `pico_compress.py` of
 //! <https://github.com/thisismypassport/shrinko8> (MIT), which reads both
-//! schemes and writes them back. Where the two differ in shape they agree in
-//! result; the loop bounds here follow shrinko8's, which stop on the output
-//! rather than on a byte count.
+//! schemes and writes them back. The two differ in shape and agree on every
+//! symbol. Where they do not help is the end of a pxa stream: both know how
+//! long the text will be because both read the header, and these decoders do
+//! not, so the rule below is this file's own.
 //!
 //! ## What each is handed
 //!
@@ -52,10 +53,10 @@ const PXA_LEN_LINK_BITS: u32 = 3;
 /// prefix widens it.
 const PXA_INDEX_BITS: u32 = 4;
 
-/// A literal index may not be wider than this many extra bits. Twelve extra on
-/// top of four would already be past the 256 entries there are, so a longer
-/// prefix is a stream that is not a stream.
-const PXA_MAX_EXTRA: u32 = 16;
+/// A literal index may not be wider than this many extra bits. Four extra on
+/// top of the base four already reach index 495, past the 256 entries there
+/// are, so a longer prefix is a stream that is not a stream.
+const PXA_MAX_EXTRA: u32 = 4;
 
 /// Reading a bit at a time from the low end of each byte upwards.
 struct Bits<'a> {

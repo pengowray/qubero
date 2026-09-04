@@ -273,6 +273,17 @@ mod tests {
         assert_eq!(code.type_name, "PlainCode");
         assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 0]).unwrap().value, Value::Str("print(\"hi\")".into()));
 
+        // A `packed_len` smaller than the eight header bytes it counts, which
+        // no encoder writes and a damaged cart may hold. The field says it
+        // cannot be read rather than wrapping round to an enormous run, and
+        // everything after it in the cart still reads.
+        let mut c = a_cart();
+        c[0x4306..0x4308].copy_from_slice(&3u16.to_be_bytes());
+        let d = Document::new(MemSource(cart_png(&c)));
+        let mut ev = Evaluator::new(p8png());
+        assert!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3]).is_err());
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 7]).unwrap().value, Value::UInt(41));
+
         // And the scheme before pxa.
         let mut c = a_cart();
         c[0x4300..0x4400].fill(0);
