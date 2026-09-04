@@ -5,9 +5,9 @@
 //! plainly: "Cartridge files (.p64, .p64.png) in Picotron are logically
 //! folders", and the shell copies things out of one with `cp`, so what a
 //! cartridge holds is a tree of paths, each with bytes under it. The `.p64`
-//! form writes that tree as a text file and the `.p64.png` form hides it in an
-//! image. The `.rom` form is the tree on its own, with nothing wrapped around
-//! it, which is what the exporters carry and what this reads.
+//! form writes that tree as a text file and the `.p64.png` form carries it in
+//! an image. The `.rom` form is the tree on its own, with nothing wrapped
+//! around it, which is what the exporters carry and what this reads.
 //!
 //! The header is the three letters `p64`, a version byte, and a four-byte
 //! little-endian count of the bytes after it. Then that many bytes of one raw
@@ -53,8 +53,10 @@
 //! accounted for: the header, the LZ4 block, the entry encoding, the escape at
 //! 255 and the trailing slash. Inferred: that the byte after `p64` is a version
 //! and not a flag, since every sample holds 2 and none holds anything else;
-//! that 255 is the only escape, since no sample needed another; and that a path
-//! is UTF-8, since none of them left ASCII.
+//! that 255 is the only escape, since no sample needed another; that a path is
+//! UTF-8, since none of them left ASCII; and that a `.p64.png` carries this
+//! same ROM, which follows from the manual putting a limit on one in "ROM
+//! data" but was not read out of an image here.
 
 use crate::codec::Codec;
 use crate::template::{Encoding, Endian::{Big, Little}, Expr as E, StrLen, Template, Until, Ty as T};
@@ -89,13 +91,13 @@ pub fn p64rom() -> Template {
 /// The cartridge as it comes out of the block: entries to the end, with no
 /// count anywhere and nothing between them.
 fn cart() -> T {
-    T::structure("PicotronCart", vec![("files", T::repeat(entry(), Until::End))])
+    T::structure("PicotronCart", vec![("entries", T::repeat(entry(), Until::End))])
 }
 
 /// One path and, unless it is a folder, its bytes.
 fn entry() -> T {
     T::structure_named(
-        "PicotronFile",
+        "PicotronEntry",
         "name",
         "",
         vec![
@@ -121,7 +123,7 @@ fn entry() -> T {
             ("data", T::present_if(not(E::field("is_folder")), T::bytes(E::field("size")))),
         ],
     )
-    .counted_as("file")
+    .counted_as("entry")
 }
 
 /// Whether the name starting here ends in a `/`.
