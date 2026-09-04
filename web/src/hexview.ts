@@ -1,8 +1,15 @@
 // Virtualised address + hex + ascii view.
 //
 // The browser cannot host a scroll container billions of pixels tall, so this view
-// does not use native scrolling for the document. It keeps a `topRow` and renders
-// only the rows that fit, with its own scrollbar mapped row <-> file offset.
+// does not use native scrolling for the document. It keeps a place in the file —
+// a top row and how far into that row the top edge falls — and renders only the
+// rows that fit, with its own scrollbar mapped pixel <-> file offset.
+//
+// Rows are not all one height: a heading above a part, the extra line a heading
+// inside a row cuts it into, and chips that wrap all make a row taller. So the
+// view scrolls in pixels over `RowHeights`, a ledger of what each row is worth,
+// and a finger that moves twenty pixels moves the bytes twenty pixels whatever
+// it is passing over.
 
 import type { Doc, Span } from "./doc.js";
 import { formatBytes } from "./doc.js";
@@ -11,6 +18,7 @@ import { GAP_LABEL, NO_TEMPLATE, REPORT } from "./strings.js";
 import { fieldClass } from "./fieldstyle.js";
 import { CHIP_LINES, chipDetail, chipLayout, chipWidth, GUESS_TEXT, runDetail, type ChipMeasure } from "./chipfit.js";
 import { rangeText, shareText } from "./listingdraw.js";
+import { RowHeights, type StructuralExtra } from "./rowheights.js";
 
 export type Pane = "hex" | "ascii";
 /**
@@ -70,9 +78,9 @@ const NOTICE_MS = 5000;
 /** What is left of a throw's speed after a millisecond: about half of it every
  *  350ms, so a hard flick covers tens of rows and a gentle one a handful. */
 const GLIDE_DECAY = 0.998;
-/** Rows per millisecond below which a throw is over. One row every four
- *  seconds is not scrolling. */
-const GLIDE_STOP = 0.004;
+/** Pixels per millisecond below which a throw is over. Five pixels a second is
+ *  not scrolling. */
+const GLIDE_STOP = 0.08;
 
 const COPY_TOO_BIG = (bytes: number): string =>
   `Selection too large to copy: ${Math.round(bytes / 1024).toLocaleString()} KB, limit ${COPY_LIMIT_BYTES / 1024} KB.`;
@@ -178,6 +186,9 @@ export class HexView {
   readonly el: HTMLElement;
   private readonly header: HTMLElement;
   private readonly rowsEl: HTMLElement;
+  /** The rows themselves, inside `rowsEl` and shifted up by `topPx` so the top
+   *  row can be partly above the edge. `rowsEl` clips it. */
+  private readonly rowsInner: HTMLElement;
   private readonly track: HTMLElement;
   private readonly thumb: HTMLElement;
   private rowEls: HTMLElement[] = [];
@@ -209,6 +220,14 @@ export class HexView {
   private lineShape = { bpr: 16, binary: false, showText: true, fields: false, below: false };
 
   private topRow = 0;
+  /** How far into the top row the top edge of the view falls, in pixels. Always
+   *  less than that row's height: `render` normalises it after measuring. */
+  private topPx = 0;
+  /** What each row is worth in pixels, so a scroll can be one. */
+  private readonly ledger = new RowHeights();
+  /** How many times in a row a draw has moved the top row while keeping its
+   *  place, so a file whose rows keep changing height cannot draw forever. */
+  private renormPasses = 0;
   private visibleRows = 1;
   private rowHeight = 20;
   private bytesPerRow = 16;
@@ -224,7 +243,7 @@ export class HexView {
    * A touch drag that is scrolling. Enough of the recent movement is kept to
    * throw the view when the finger lifts.
    */
-  private dragging: { startY: number; startRow: number; lastY: number; lastT: number; velocity: number } | null = null;
+  private dragging: { startY: number; startPx: number; lastY: number; lastT: number; velocity: number } | null = null;
   /** The frame request of a throw still slowing down, if one is running. */
   private glide: number | null = null;
   /**
@@ -298,16 +317,6 @@ export class HexView {
    *  chips are tall, so a row's height can be worked out before it is drawn.
    *  Read with `fit`, since only a change of style moves them. */
   private sizes = { heading: [26, 20] as readonly [number, number], chipLine: 22 };
-  /** Rows the view may scroll past the usual last top row. Rows are not all
-   *  one height, so a screenful counted in rows can be taller than the screen,
-   *  and at the end of the file that would leave the last rows unreachable.
-   *  Worked out from the rows' heights whenever the end is drawn. */
-  private endSlack = 0;
-  /** The last PageDown: the top row it left and the one it landed on, and how
-   *  far the cursor went. A PageUp straight after goes back the same way, which
-   *  counting a screenful of rows again cannot promise when the rows are not
-   *  all one height. */
-  private lastPage: { from: number; to: number; rows: number } | null = null;
   /** True while a move is still settling, so `render` puts the work off to the
    *  end of it. Moving the cursor draws the rows, then tells the rest of the
    *  app, which comes straight back with the field to highlight and draws them
@@ -343,6 +352,9 @@ export class HexView {
     this.header.className = "hv-header";
     this.rowsEl = document.createElement("div");
     this.rowsEl.className = "hv-rows";
+    this.rowsInner = document.createElement("div");
+    this.rowsInner.className = "hv-rows-inner";
+    this.rowsEl.append(this.rowsInner);
     const body = document.createElement("div");
     body.className = "hv-body";
     body.append(this.header, this.rowsEl);
@@ -380,7 +392,11 @@ export class HexView {
     this.track.addEventListener("pointercancel", (e) => this.onTrackUp(e));
     doc.onChange(() => {
       this.spanCache = null;
-      this.endSlack = 0;
+      // An insert or a delete moves every later byte onto a different row, so
+      // what those rows were measured at belongs to bytes that are no longer
+      // there. The headings move too, and arrive again through `setSections`.
+      this.ledger.setRows(this.totalRows);
+      this.ledger.clearMeasured();
       this.render();
     });
   }
@@ -390,8 +406,55 @@ export class HexView {
   private get totalRows(): number {
     return Math.max(1, Math.ceil((this.doc.lengthBytes + 1) / this.bytesPerRow));
   }
-  private get maxTopRow(): number {
-    return Math.max(0, this.totalRows - this.visibleRows + this.endSlack);
+  /** Where the top edge of the view sits, in pixels from the top of the file. */
+  private get scrollY(): number {
+    return this.ledger.heightBefore(this.topRow) + this.topPx;
+  }
+  /** The furthest down the view may go: far enough for the last row to be
+   *  whole, and no further. */
+  private get maxScrollY(): number {
+    return Math.max(0, this.ledger.totalHeight() - this.viewH);
+  }
+
+  /**
+   * What the headings add to the rows they fall on, worked out before anything
+   * is drawn: the height of each heading line, plus one more line of cells per
+   * place a heading cuts a row part-way along. Condensed readings put every
+   * heading above the row, so they cut nothing.
+   *
+   * The sections are in order of offset, so the rows come out in order too and
+   * one pass builds the lot.
+   */
+  private rebuildStructural(): void {
+    this.ledger.setBase(this.rowHeight);
+    this.ledger.setRows(this.totalRows);
+    const bpr = this.bytesPerRow;
+    const condensed = this.isCondensed;
+    const out: StructuralExtra[] = [];
+    let row = -1;
+    let extra = 0;
+    let cuts = new Set<number>();
+    for (const h of this.sections) {
+      const byte = Math.floor(h.offsetBits / 8);
+      const r = Math.floor(byte / bpr);
+      if (r !== row) {
+        if (extra > 0) out.push({ row, extra });
+        row = r;
+        extra = 0;
+        cuts = new Set<number>();
+      }
+      extra += this.sizes.heading[h.level] ?? this.sizes.heading[1] ?? this.rowHeight;
+      if (!condensed) {
+        const at = Math.min(bpr - 1, Math.max(0, byte - r * bpr));
+        // Position zero is the row's own start, not a cut in it.
+        if (at > 0 && !cuts.has(at)) {
+          cuts.add(at);
+          extra += this.rowHeight;
+        }
+      }
+    }
+    if (extra > 0) out.push({ row, extra });
+    this.ledger.setStructural(out);
   }
 
   /** Take the parts of the file to draw headings for. Headings above the
@@ -399,7 +462,9 @@ export class HexView {
    *  pushed it off; a cursor that was already off screen is left there. */
   setSections(sections: readonly OutlineHeading[]): void {
     this.sections = sections;
-    this.endSlack = 0;
+    this.rebuildStructural();
+    // The rows on screen were measured with the headings they had before.
+    this.ledger.clearMeasured();
     this.render();
     this.revealCursor();
   }
@@ -427,7 +492,8 @@ export class HexView {
   private remeasure(): void {
     this.metrics = null;
     this.fit = null;
-    this.endSlack = 0;
+    // Every measured height was taken at the old shape, so none of them stand.
+    this.ledger.clearMeasured();
     // Where the chips go is decided from a measurement that has just been
     // thrown away, so it is decided again.
     this.arrangement = "unknown";
@@ -450,18 +516,13 @@ export class HexView {
 
   relayout(): void {
     this.remeasure();
-    // The slack past the last screenful was thrown away with the other sizes,
-    // so the limit is not known until the end has been drawn again. Clamping
-    // first would pull a view sitting at the end back up by that slack, and
-    // the next scroll would put it back: a view that jumps while the reader
-    // holds the wheel. So draw where it was, then clamp by what was found.
+    // Draw where the view was, then pull it back if that turns out to be past
+    // the end: the total is an estimate until the rows around here have been
+    // measured, and clamping by the old one would jog the view while the
+    // reader is only resizing the window.
     this.topRow = Math.min(this.topRow, Math.max(0, this.totalRows - 1));
     this.render();
-    const limit = this.maxTopRow;
-    if (this.topRow > limit) {
-      this.topRow = limit;
-      this.render();
-    }
+    if (this.scrollY > this.maxScrollY) this.scrollToY(this.maxScrollY);
   }
 
   /**
@@ -497,13 +558,17 @@ export class HexView {
     };
     this.sizes = { heading: [px("--hv-heading", 26), px("--hv-subheading", 20)], chipLine: px("--hv-chip-line", 22) };
     this.viewH = this.rowsEl.clientHeight;
-    const fit = Math.max(1, Math.floor(this.viewH / this.rowHeight));
+    // One more than fills the space: the top row is usually cut off by the
+    // scroll position, and without the spare there would be a strip of nothing
+    // at the bottom for however much of it is above the edge.
+    const fit = Math.max(1, Math.ceil(this.viewH / this.rowHeight) + 1);
     if (fit !== this.visibleRows) {
       this.visibleRows = fit;
-      // Only as far as the file goes: how far past the last screenful the
-      // view may sit is found by drawing the end, which `relayout` clamps by.
       this.topRow = Math.min(this.topRow, Math.max(0, this.totalRows - 1));
     }
+    // The heading sizes and the base height have just been read, and both are
+    // what a row's known height is built from.
+    this.rebuildStructural();
     if (probe !== undefined) this.fit = { rowHeight: this.rowHeight, visibleRows: fit };
     // Unconditional: on the first pass there are no row elements yet, however
     // many of them fit.
@@ -638,7 +703,7 @@ export class HexView {
       const r = document.createElement("div");
       r.className = "hv-row";
       r.setAttribute("role", "row");
-      this.rowsEl.append(r);
+      this.rowsInner.append(r);
       this.rowEls.push(r);
     }
     while (this.rowEls.length > this.visibleRows) {
@@ -771,63 +836,33 @@ export class HexView {
       if (cursorRow < this.topRow || cell === undefined) return;
       const deficit = cell.getBoundingClientRect().bottom - this.rowsEl.getBoundingClientRect().bottom;
       if (deficit <= 0.5) return;
-      const next = Math.min(cursorRow, this.maxTopRow, this.topRow + Math.max(1, Math.ceil(deficit / this.rowHeight)));
-      if (next === this.topRow) return;
-      this.topRow = next;
-      this.render();
+      const was = this.scrollY;
+      this.scrollToY(was + deficit);
+      if (this.scrollY === was) return;
     }
   }
 
-  /** How many rows are wholly on screen, measured. At least one. */
-  private rowsInView(): number {
-    const bottom = this.rowsEl.getBoundingClientRect().bottom;
-    let n = 0;
-    for (const row of this.rowEls) {
-      if (row.getBoundingClientRect().bottom > bottom + 0.5) break;
-      n++;
-    }
-    return Math.max(1, n);
+  /** How far a page key moves, in pixels: everything on screen but nothing
+   *  that is not, which for one screenful is the screen itself. */
+  private pageStep(): number {
+    return Math.max(this.rowHeight, this.viewH);
   }
 
-  /** Scroll down a screenful. Returns how many rows the cursor should move. */
+  /** Scroll down a screenful. Returns how many rows the cursor should move, so
+   *  it keeps its place on screen. */
   private pageDown(): number {
-    const rows = this.rowsInView();
     const from = this.topRow;
-    this.topRow = Math.min(this.maxTopRow, from + rows);
-    this.lastPage = { from, to: this.topRow, rows };
-    return rows;
+    this.scrollToY(this.scrollY + this.pageStep());
+    const moved = this.topRow - from;
+    return moved > 0 ? moved : Math.max(1, Math.floor(this.viewH / this.rowHeight));
   }
 
-  /**
-   * Scroll up a screenful: the row above the old top row becomes the bottom
-   * one. Returns how many rows the cursor should move, which is how far the
-   * view went, so the cursor keeps its place on screen.
-   */
+  /** Scroll up a screenful. Returns how many rows the cursor should move. */
   private pageUp(): number {
     const from = this.topRow;
-    const back = this.lastPage;
-    this.lastPage = null;
-    if (back !== null && back.to === from) {
-      this.topRow = back.from;
-      return back.rows;
-    }
-    if (from === 0) return this.rowsInView();
-    const target = from - 1;
-    this.topRow = Math.max(0, target - this.visibleRows + 1);
-    this.render();
-    // The rows above the old top were not on screen, so how many of them fit
-    // is found by drawing them and looking, the same way the cursor is.
-    for (let pass = 0; pass < 6; pass++) {
-      const row = this.rowEls[target - this.topRow];
-      if (row === undefined) break;
-      const deficit = row.getBoundingClientRect().bottom - this.rowsEl.getBoundingClientRect().bottom;
-      if (deficit <= 0.5) break;
-      const next = Math.min(target, this.topRow + Math.max(1, Math.ceil(deficit / this.rowHeight)));
-      if (next === this.topRow) break;
-      this.topRow = next;
-      this.render();
-    }
-    return from - this.topRow;
+    this.scrollToY(this.scrollY - this.pageStep());
+    const moved = from - this.topRow;
+    return moved > 0 ? moved : Math.max(1, Math.floor(this.viewH / this.rowHeight));
   }
 
   /** Move the cursor to an absolute bit. Bit 0 is the top bit of byte 0. */
@@ -899,38 +934,69 @@ export class HexView {
     this.render();
   }
 
+  /** Put a row at the top of the view, its first pixel against the top edge. */
   scrollTo(row: number): void {
-    const want = Math.max(0, Math.floor(row));
-    // Drawing the end of the file is what finds out how much further than a
-    // screenful of rows the view has to go for the last row to be whole, so
-    // a scroll that asked for more than it was given asks again.
+    this.scrollToY(this.ledger.heightBefore(Math.max(0, Math.floor(row))));
+  }
+
+  /**
+   * Put the view at a pixel and draw it there.
+   *
+   * Rounded, because a row drawn at half a pixel is a row of blurred text. The
+   * clamp is by the total the ledger holds, which is an estimate for the rows
+   * that have never been drawn; near the end of the file drawing it is what
+   * corrects the estimate, so a scroll that landed there asks once more.
+   */
+  private scrollToY(y: number): void {
     for (let pass = 0; pass < 3; pass++) {
-      const next = Math.min(this.maxTopRow, want);
-      if (pass > 0 && next === this.topRow) break;
-      this.topRow = next;
+      const want = Math.round(Math.max(0, Math.min(this.maxScrollY, y)));
+      const at = this.ledger.rowAtY(want);
+      if (pass > 0 && at.row === this.topRow && at.offsetPx === this.topPx) break;
+      this.topRow = at.row;
+      this.topPx = at.offsetPx;
       this.render();
+      // Away from the end the total does not move enough to be worth a second
+      // draw, and asking again on every wheel tick would double the cost of
+      // scrolling.
+      if (this.topRow + this.rowEls.length < this.totalRows) break;
     }
   }
 
   private scrollCursorIntoView(): void {
     const row = Math.floor(this.cursor / this.bytesPerRow);
-    if (row < this.topRow) this.topRow = row;
-    else if (row >= this.topRow + this.visibleRows) this.topRow = row - this.visibleRows + 1;
-    this.topRow = Math.max(0, Math.min(this.maxTopRow, this.topRow));
+    const top = this.ledger.heightBefore(row);
+    const bottom = top + this.ledger.heightOf(row);
+    const y = this.scrollY;
+    // Above the top edge — which includes a cursor in the row the edge cuts
+    // through, so a step up onto it brings the whole row down.
+    if (top < y) {
+      this.topRow = row;
+      this.topPx = 0;
+      return;
+    }
+    if (bottom <= y + this.viewH) return;
+    const at = this.ledger.rowAtY(Math.round(Math.max(0, Math.min(this.maxScrollY, bottom - this.viewH))));
+    this.topRow = at.row;
+    this.topPx = at.offsetPx;
   }
 
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
     this.stopGlide();
-    const rows = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY : e.deltaY / this.rowHeight;
-    this.scrollTo(this.topRow + (rows > 0 ? Math.max(1, Math.round(rows)) : Math.min(-1, Math.round(rows))));
+    const px =
+      e.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? e.deltaY * this.rowHeight
+        : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? e.deltaY * this.viewH
+          : e.deltaY;
+    this.scrollToY(this.scrollY + px);
   }
 
   private onPointerDown(e: PointerEvent): void {
     this.el.focus();
     this.stopGlide();
     if (e.pointerType === "touch") {
-      this.dragging = { startY: e.clientY, startRow: this.topRow, lastY: e.clientY, lastT: e.timeStamp, velocity: 0 };
+      this.dragging = { startY: e.clientY, startPx: this.scrollY, lastY: e.clientY, lastT: e.timeStamp, velocity: 0 };
       this.rowsEl.setPointerCapture(e.pointerId);
       return;
     }
@@ -976,12 +1042,12 @@ export class HexView {
     if (dt > 0) {
       // Smoothed, because the last sample before a finger lifts is often a
       // stumble, and on its own it would decide the whole throw.
-      const v = (this.dragging.lastY - e.clientY) / this.rowHeight / dt;
+      const v = (this.dragging.lastY - e.clientY) / dt;
       this.dragging.velocity = this.dragging.velocity === 0 ? v : this.dragging.velocity * 0.7 + v * 0.3;
       this.dragging.lastY = e.clientY;
       this.dragging.lastT = e.timeStamp;
     }
-    this.scrollTo(this.dragging.startRow + (this.dragging.startY - e.clientY) / this.rowHeight);
+    this.scrollToY(this.dragging.startPx + (this.dragging.startY - e.clientY));
   }
 
   private onPointerUp(e: PointerEvent): void {
@@ -992,17 +1058,18 @@ export class HexView {
       return;
     }
     if (!this.dragging) return;
-    const { startY, startRow, lastT, velocity } = this.dragging;
+    const { startY, startPx, lastT, velocity } = this.dragging;
     this.dragging = null;
     if (Math.abs(startY - e.clientY) <= 6) return void this.clickCell(e.target);
     // A finger that came to rest before lifting was placing the view, not
     // throwing it, however fast it was moving a moment earlier.
     if (e.type === "pointerup" && e.timeStamp - lastT < 80 && Math.abs(velocity) > GLIDE_STOP)
-      this.startGlide(startRow + (startY - e.clientY) / this.rowHeight, velocity);
+      this.startGlide(startPx + (startY - e.clientY), velocity);
   }
 
   /** Keep scrolling after the finger lifts, slowing to a stop. A file is long
-   *  and a screen is short, and without a throw every screenful costs a drag. */
+   *  and a screen is short, and without a throw every screenful costs a drag.
+   *  `pos` is where the view is in pixels, `velocity` pixels per millisecond. */
   private startGlide(pos: number, velocity: number): void {
     let last = -1;
     const step = (now: number): void => {
@@ -1012,8 +1079,8 @@ export class HexView {
       last = now;
       pos += velocity * dt;
       velocity *= Math.pow(GLIDE_DECAY, dt);
-      const stopped = pos < 0 || pos > this.maxTopRow || Math.abs(velocity) < GLIDE_STOP;
-      this.scrollTo(pos);
+      const stopped = pos < 0 || pos > this.maxScrollY || Math.abs(velocity) < GLIDE_STOP;
+      this.scrollToY(pos);
       this.glide = stopped ? null : requestAnimationFrame(step);
     };
     this.glide = requestAnimationFrame(step);
@@ -1116,13 +1183,15 @@ export class HexView {
     const d = this.selDrag;
     if (d === null) return;
     const r = this.rowsEl.getBoundingClientRect();
-    const before = this.topRow;
+    const before = this.scrollY;
     const above = d.y < r.top;
     const below = d.y > r.bottom;
     if (above || below) {
       const over = above ? r.top - d.y : d.y - r.bottom;
-      const rows = Math.min(8, 1 + Math.floor(over / 24));
-      this.topRow = Math.max(0, Math.min(this.maxTopRow, this.topRow + (above ? -rows : rows)));
+      const step = Math.min(8, 1 + Math.floor(over / 24)) * this.rowHeight;
+      const at = this.ledger.rowAtY(Math.max(0, Math.min(this.maxScrollY, before + (above ? -step : step))));
+      this.topRow = at.row;
+      this.topPx = at.offsetPx;
       if (d.raf === null) {
         d.raf = requestAnimationFrame(() => {
           if (this.selDrag === null) return;
@@ -1135,13 +1204,13 @@ export class HexView {
     }
     // Pinned to the last row rather than the bottom edge: the rows do not
     // always fill the space, and a point in the slack under them is nowhere.
-    const last = this.rowsEl.lastElementChild?.getBoundingClientRect().bottom ?? r.bottom;
+    const last = this.rowsInner.lastElementChild?.getBoundingClientRect().bottom ?? r.bottom;
     const y = Math.min(r.bottom - 1, last - 1, Math.max(r.top + 1, d.y));
     const hit = this.hitAt(d.x, y, d.pane);
     const anchor = hit === null ? 0 : hit.bit >= d.anchor ? d.anchor : d.anchor + d.unit;
     const focus = hit === null ? 0 : hit.bit >= d.anchor ? hit.bit + hit.unit : hit.bit;
     if (hit === null || (this.selAnchor === anchor && this.selFocus === focus)) {
-      if (this.topRow !== before) this.render();
+      if (this.scrollY !== before) this.render();
       return;
     }
     this.setSelection(anchor, focus);
@@ -1166,9 +1235,8 @@ export class HexView {
     const r = this.track.getBoundingClientRect();
     const thumbH = this.thumb.offsetHeight;
     const frac = (e.clientY - r.top - thumbH / 2) / Math.max(1, r.height - thumbH);
-    // The bottom of the track is the end of the file, however many rows past
-    // the usual last top row that turns out to be.
-    this.scrollTo(frac >= 1 ? Infinity : Math.max(0, frac) * this.maxTopRow);
+    // The bottom of the track is the end of the file.
+    this.scrollToY(frac >= 1 ? this.maxScrollY : Math.max(0, frac) * this.maxScrollY);
   }
   private onTrackUp(e: PointerEvent): void {
     if (this.track.hasPointerCapture(e.pointerId)) this.track.releasePointerCapture(e.pointerId);
@@ -2029,6 +2097,9 @@ export class HexView {
       widened = true;
     }
     if (widened) {
+      // Those rows were drawn against a column width that has just changed, so
+      // how tall they came out says nothing about how tall they will be.
+      this.ledger.clearMeasured();
       this.render();
       return;
     }
@@ -2041,34 +2112,49 @@ export class HexView {
     // is what says which rows are there at all.
     const real = heights.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));
 
+    // What the ledger guessed these rows were worth, corrected by what they
+    // came to. The view does not move for it: a row that turned out taller or
+    // shorter than expected changes the total, and the thumb may shift a pixel
+    // for that, but the bytes the reader is looking at stay where they are.
+    for (const [i, h] of real.entries()) if (h > 0) this.ledger.measure(this.topRow + i, h);
+    this.ledger.trim(this.topRow);
+
+    // The top row may now be shorter than the offset into it, which is the same
+    // place in the file said a different way. Saying it the other way costs a
+    // second draw, since the row elements would be standing for the wrong rows.
+    let moved = false;
+    while (this.topPx >= this.ledger.heightOf(this.topRow) && this.topRow + 1 < this.totalRows) {
+      this.topPx -= this.ledger.heightOf(this.topRow);
+      this.topRow++;
+      moved = true;
+    }
+    if (this.topRow + 1 >= this.totalRows) this.topPx = Math.min(this.topPx, this.ledger.heightOf(this.topRow));
+    if (moved && this.renormPasses < 3) {
+      this.renormPasses++;
+      this.render();
+      this.renormPasses--;
+      return;
+    }
+    this.rowsInner.style.transform = this.topPx === 0 ? "" : `translateY(${-this.topPx}px)`;
+
     // Which rows are on screen, by the heights measured above: a row whose
     // top is inside the view is on screen, whatever of it is cut off below.
+    // The first one starts above the edge by however much of it is hidden.
     let onScreen = 0;
-    let y = 0;
+    let y = -this.topPx;
     for (const h of real) {
       if (h === 0) break;
       if (y < this.viewH) onScreen++;
       y += h;
     }
-    // When the end of the file is drawn, how many rows further than usual the
-    // view has to go for the last row to be wholly on screen. Counted back
-    // from the last row while the rows still fit.
-    if (this.topRow + this.rowEls.length >= this.totalRows) {
-      const lastIdx = Math.min(real.length - 1, this.totalRows - 1 - this.topRow);
-      let sum = 0;
-      let first = lastIdx;
-      for (let i = lastIdx; i >= 0; i--) {
-        sum += real[i] ?? 0;
-        if (sum > this.viewH) break;
-        first = i;
-      }
-      this.endSlack = Math.max(0, this.topRow + first - (this.totalRows - this.visibleRows));
-    }
 
-    // Scrollbar thumb: position is the fraction of rows above the viewport.
+    // Scrollbar thumb: as long a share of the track as the screen is of the
+    // file, and as far down it as the view is through the file.
     const trackH = this.metrics.trackH;
-    const thumbH = Math.max(24, Math.round((this.visibleRows / this.totalRows) * trackH));
-    const top = this.maxTopRow === 0 ? 0 : Math.round((this.topRow / this.maxTopRow) * (trackH - thumbH));
+    const total = Math.max(1, this.ledger.totalHeight());
+    const thumbH = Math.min(trackH, Math.max(24, Math.round((this.viewH / total) * trackH)));
+    const limit = this.maxScrollY;
+    const top = limit === 0 ? 0 : Math.round((Math.min(this.scrollY, limit) / limit) * (trackH - thumbH));
     this.thumb.style.height = `${thumbH}px`;
     this.thumb.style.transform = `translateY(${top}px)`;
     this.onViewport({ startBit: start * 8, endBit: Math.min(len, start + onScreen * bpr) * 8 });
