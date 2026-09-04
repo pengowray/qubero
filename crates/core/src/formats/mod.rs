@@ -113,6 +113,7 @@ pub mod pdf_xref;
 mod pe;
 pub mod pe_tables;
 mod pi1;
+mod picotron;
 mod psd;
 mod pnm;
 mod qoi;
@@ -217,6 +218,7 @@ pub use parquet::parquet;
 pub use pcx::pcx;
 pub use pdf::pdf;
 pub use pi1::pi1;
+pub use picotron::p64rom;
 pub use psd::psd;
 pub use bdb::bdb;
 pub use c16::c16;
@@ -332,6 +334,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("au", |_| au()),
     ("pi1", |_| pi1()),
     ("nes", |_| nes()),
+    ("p64rom", |_| p64rom()),
     ("netcdf", |_| netcdf()),
     ("grib", |_| grib()),
     ("npy", |_| npy()),

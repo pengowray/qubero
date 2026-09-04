@@ -253,6 +253,11 @@ const PROBES: &[Probe] = &[
     // whose parse covers the whole file. Nothing marks the front of one, so
     // what recognises it is reading all of it.
     Probe::Is("bencode", bencode::is_bencode),
+    // A Picotron cartridge. Three lower-case letters would recognise half the
+    // text files there are, so what settles it is the length written after
+    // them: it counts the compressed bytes, and so is the file less its
+    // header.
+    Probe::Is("p64rom", is_p64rom),
     Probe::Is("cdr", |h, _| h.starts_with(b"RIFF") && h.len() >= 12 && h[8..11] == *b"CDR"),
     Probe::Is("cmx", |h, _| h.starts_with(b"RIFF") && h.get(8..12) == Some(b"CMX1")),
     // A sound file, and the one variant of it that is marked by a tag inside
@@ -353,6 +358,21 @@ fn is_unity_assets(head: &[u8], len: u64) -> bool {
 /// A Debian package: an `ar` archive whose first member is the version stamp
 /// that says it is one. Every other archive of this shape is a library, and
 /// only the name of that first member tells the two apart.
+/// A Picotron cartridge ROM: `p64`, a version byte, and the length of the LZ4
+/// block that is the rest of the file.
+fn is_p64rom(head: &[u8], len: u64) -> bool {
+    if !head.starts_with(picotron::MAGIC) || head.len() < 8 {
+        return false;
+    }
+    // Every one of these written so far says 2. Allow a little room above it,
+    // and none below: a version of 0 is a byte nobody wrote.
+    if !(1..=8).contains(&head[3]) {
+        return false;
+    }
+    let payload = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as u64;
+    payload == len.saturating_sub(picotron::HEADER_LEN)
+}
+
 fn is_deb(head: &[u8]) -> bool {
     head.starts_with(ar::MAGIC) && head.get(8..8 + ar::DEBIAN_BINARY.len()) == Some(ar::DEBIAN_BINARY.as_bytes())
 }
