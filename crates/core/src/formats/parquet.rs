@@ -43,7 +43,8 @@
 //! at the end count that structure and the footer together.
 
 use crate::formats::thrift::{self, Field, Struct, What::{Enum, Plain, Struct as Sub, Text}};
-use crate::template::{Endian::{Big, Little}, Expr as E, Template, Ty as T};
+use crate::template::{Endian::{Big, Little}, Expr as E, Template, Ty as T, Until};
+use std::sync::Arc;
 
 /// What one of these opens with, and what an unencrypted one closes with.
 pub const MAGIC: &[u8] = b"PAR1";
@@ -389,6 +390,18 @@ pub const SCHEMA: &[Struct] = &[
 /// missing for the pages is arithmetic over the footer rather than any of
 /// this.
 pub const PAGE_SCHEMA: &[Struct] = &[
+    Struct { name: "BloomFilterHeader", fields: &[
+        f(1, "numBytes", Plain),
+        f(2, "algorithm", Sub("BloomFilterAlgorithm")),
+        f(3, "hash", Sub("BloomFilterHash")),
+        f(4, "compression", Sub("BloomFilterCompression")),
+    ] },
+    Struct { name: "BloomFilterAlgorithm", fields: &[f(1, "BLOCK", Sub("SplitBlockAlgorithm"))] },
+    Struct { name: "BloomFilterHash", fields: &[f(1, "XXHASH", Sub("XxHash"))] },
+    Struct { name: "BloomFilterCompression", fields: &[f(1, "UNCOMPRESSED", Sub("Uncompressed"))] },
+    empty("SplitBlockAlgorithm"),
+    empty("XxHash"),
+    empty("Uncompressed"),
     Struct {
         name: "PageHeader",
         fields: &[
@@ -469,6 +482,60 @@ fn footer_length() -> E {
     E::peek_at(E::lit(-64), 32, Little)
 }
 
+/// A numbered field of the current ColumnChunk, or of its nested metadata.
+fn chunk_field(id: i128) -> E {
+    E::tagged("fields", &["id"], id, &["value"])
+}
+
+fn metadata_field(id: i128) -> E {
+    E::tagged_in(E::tagged("fields", &["id"], 3, &["value", "fields"]), &["id"], id, &["value"])
+}
+
+fn header_field(id: i128) -> E {
+    E::tagged_in(E::within(&["header", "fields"]), &["id"], id, &["value"])
+}
+
+fn page() -> T {
+    T::structure_named("Page", "type", "payload", vec![
+        ("header", T::Named("parquet.PageHeader".into())),
+        ("type", T::enumeration("PageType", T::computed(header_field(1)), PAGE_TYPE)),
+        ("payload", T::bytes(header_field(3))),
+    ])
+}
+
+/// A pointer with a declared length. Never let its window include the footer.
+/// The structure around a page repeat also prevents truncated-page recovery
+/// from borrowing bytes beyond this explicitly sized column chunk.
+fn pointed(at: E, length: E, inner: T) -> T {
+    T::switch(at.clone().less_than(E::lit(4)), vec![(1, T::bytes(E::lit(0)))],
+        T::at(at, T::sized(length.at_most(E::Remaining.sub(E::lit(8)).sub(footer_length()).at_least(E::lit(0))), inner)))
+}
+
+fn column_data() -> T {
+    let data = metadata_field(9);
+    let first = metadata_field(11).or(data.clone()).at_most(data);
+    let bloom = T::structure("BloomFilter", vec![
+        ("header", T::Named("parquet.BloomFilterHeader".into())),
+        ("bitset", T::bytes(header_field(1))),
+    ]);
+    let refs = T::structure("ColumnData", vec![
+        ("pages", pointed(first, metadata_field(7), T::structure("ColumnPages", vec![
+            ("pages", T::repeat(page(), Until::End)),
+        ]))),
+        ("offset_index", pointed(chunk_field(4), chunk_field(5), T::Named("parquet.OffsetIndex".into()))),
+        ("column_index", pointed(chunk_field(6), chunk_field(7), T::Named("parquet.ColumnIndex".into()))),
+        // Older writers omit bloom_filter_length. Its own header still gives
+        // the bitset size, so the file boundary is the fallback window.
+        ("bloom_filter", pointed(metadata_field(14), metadata_field(15).or(E::Remaining), bloom)),
+    ]);
+    // A summary file points into other files. Encrypted column headers are
+    // not compact Thrift. Keep their metadata without interpreting local bytes
+    // as the pages of either kind of column.
+    let external = E::tagged("fields", &["id"], 1, &["id"]);
+    let encrypted = E::tagged("fields", &["id"], 8, &["id"]);
+    T::switch(external.or(encrypted), vec![(0, refs)], T::bytes(E::lit(0)))
+}
+
 /// The bytes of a plain file: the row groups, the footer, and the trailer that
 /// found the footer.
 ///
@@ -481,19 +548,17 @@ fn plain() -> T {
         "Parquet",
         vec![
             ("magic", T::magic(MAGIC)),
-            // Every page of every column, undecoded: the footer is what says
-            // where one row group ends and the next begins.
-            ("row_groups", T::bytes(E::Remaining.sub(E::lit(8)).sub(footer_length()).at_least(E::lit(0)))),
             // The Thrift `FileMetaData`, which runs from here to the eight
             // bytes that measured it. Sized by what is left rather than by the
             // length field, so a length larger than the file still places the
             // bytes that are there.
             (
                 "footer",
-                T::sized(E::Remaining.sub(E::lit(8)).at_least(E::lit(0)), T::Named("parquet.FileMetaData".into())),
+                T::at(E::Remaining.sub(E::lit(8)).sub(footer_length()).at_least(E::lit(0)).add(E::lit(4)),
+                    T::sized(E::Remaining.sub(E::lit(8)).at_least(E::lit(0)), T::Named("parquet.FileMetaData".into()))),
             ),
-            ("footer_length", T::u32(Little)),
-            ("footer_magic", T::magic(MAGIC)),
+            ("footer_length", T::at(E::Remaining.sub(E::lit(4)), T::u32(Little))),
+            ("footer_magic", T::at(E::Remaining, T::magic(MAGIC))),
         ],
     )
 }
@@ -530,7 +595,14 @@ pub fn parquet() -> Template {
     let mut structs: Vec<&Struct> = SCHEMA.iter().collect();
     structs.extend(PAGE_SCHEMA.iter());
     let owned: Vec<Struct> = structs.into_iter().map(|s| Struct { name: s.name, fields: s.fields }).collect();
-    for (name, ty) in thrift::types("parquet", &owned) {
+    for (name, mut ty) in thrift::types("parquet", &owned) {
+        if name == "parquet.ColumnChunk" {
+            let T::Struct(ref mut definition) = ty else { unreachable!() };
+            let T::Struct(additions) = T::structure("", vec![("data", column_data())]) else { unreachable!() };
+            let definition = Arc::make_mut(definition);
+            definition.fields.extend(additions.fields.iter().cloned());
+            definition.contents = None;
+        }
         t = t.with_type(&name, ty);
     }
     t
@@ -556,17 +628,18 @@ mod tests {
     fn the_footer_is_measured_back_from_the_end() {
         let d = Document::new(MemSource(file(40, 12, MAGIC)));
         let mut e = Evaluator::new(parquet());
-        assert_eq!(e.node(&d, &[1]).unwrap().size_bits, 40 * 8);
-        assert_eq!(e.node(&d, &[2]).unwrap().size_bits, 12 * 8);
-        assert_eq!(e.node(&d, &[3]).unwrap().value, Value::UInt(12));
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().offset_bits, 44 * 8);
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().size_bits, 12 * 8);
+        assert_eq!(e.node(&d, &[2, 0]).unwrap().value, Value::UInt(12));
+        assert_eq!(e.node(&d, &[3, 0]).unwrap().offset_bits, d.len_bits() - 32);
     }
 
     #[test]
     fn a_file_with_no_row_groups_still_reads() {
         let d = Document::new(MemSource(file(0, 4, MAGIC)));
         let mut e = Evaluator::new(parquet());
-        assert_eq!(e.node(&d, &[1]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[2]).unwrap().size_bits, 4 * 8);
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().offset_bits, 4 * 8);
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().size_bits, 4 * 8);
     }
 
     #[test]
@@ -576,8 +649,8 @@ mod tests {
         bytes[n - 8..n - 4].copy_from_slice(&0xFFFF_u32.to_le_bytes());
         let d = Document::new(MemSource(bytes));
         let mut e = Evaluator::new(parquet());
-        assert_eq!(e.node(&d, &[1]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[2]).unwrap().size_bits, 12 * 8);
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().offset_bits, 4 * 8);
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().size_bits, 12 * 8);
     }
 
     /// A footer holding the fields `bytes` says, wrapped in what finds it.
@@ -589,19 +662,142 @@ mod tests {
         v
     }
 
+    fn varint(mut n: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        while n >= 128 { out.push(n as u8 | 128); n >>= 7; }
+        out.push(n as u8);
+        out
+    }
+
+    // Explicit ids (delta zero) let every level be permuted independently.
+    fn field(id: u64, kind: u8, body: Vec<u8>) -> Vec<u8> {
+        let mut out = vec![kind];
+        out.extend(varint(id * 2)); out.extend(body); out
+    }
+
+    fn integer(id: u64, n: u64) -> Vec<u8> { field(id, 6, varint(n * 2)) }
+
+    fn object(fields: Vec<Vec<u8>>, reverse: bool) -> Vec<u8> {
+        let mut fields = fields;
+        if reverse { fields.reverse(); }
+        let mut out: Vec<u8> = fields.into_iter().flatten().collect();
+        out.push(0); out
+    }
+
+    fn one(id: u64, element: Vec<u8>) -> Vec<u8> {
+        let mut list = vec![0x1c]; list.extend(element); field(id, 9, list)
+    }
+
+    fn fixture(reverse: bool, external: bool, encrypted: bool, oversized: bool) -> (Vec<u8>, u64) {
+        let page = |kind, oversized| {
+            let mut bytes = object(vec![integer(1, kind), integer(2, 2), integer(3, if oversized { 1000 } else { 2 })], reverse);
+            bytes.extend([0xab, 0xcd]); bytes
+        };
+        let dict = page(2, oversized);
+        let data = page(0, false);
+        let size = dict.len() + data.len();
+        let metadata = object(vec![integer(9, 4 + dict.len() as u64), integer(11, 4), integer(7, size as u64)], reverse);
+        let mut fields = vec![integer(2, 0), field(3, 12, metadata)];
+        if external { fields.push(field(1, 8, vec![1, b'x'])); }
+        if encrypted { fields.push(field(8, 12, vec![0])); }
+        let column = object(fields, reverse);
+        let row = object(vec![one(1, column), integer(3, 1)], reverse);
+        let footer = object(vec![integer(1, 1), one(4, row), integer(3, 1)], reverse);
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend(dict); bytes.extend(data);
+        let end = bytes.len() as u64;
+        // Not page headers: bytes outside the declared chunk must stay a gap.
+        bytes.extend([0xff; 16]);
+        bytes.extend_from_slice(&footer);
+        bytes.extend_from_slice(&(footer.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(MAGIC);
+        (bytes, end)
+    }
+
+    fn nodes_of(e: &mut Evaluator, d: &Document<MemSource>, ty: &str) -> Vec<(Vec<usize>, crate::eval::NodeInfo)> {
+        let mut stack = vec![Vec::new()];
+        let mut out = Vec::new();
+        while let Some(path) = stack.pop() {
+            let n = e.node(d, &path).unwrap();
+            for i in (0..n.child_count as usize).rev() {
+                let mut p = path.clone(); p.push(i); stack.push(p);
+            }
+            if n.type_name == ty { out.push((path, n)); }
+        }
+        out
+    }
+
+    #[test]
+    fn reordered_footer_column_and_page_fields_keep_their_meaning() {
+        for reverse in [false, true] {
+            let (bytes, end) = fixture(reverse, false, false, false);
+            let d = Document::new(MemSource(bytes));
+            let mut e = Evaluator::new(parquet());
+            let pages = nodes_of(&mut e, &d, "Page");
+            assert_eq!(pages.len(), 2);
+            assert_eq!(pages[0].1.offset_bits, 32);
+            assert_eq!(pages[1].1.offset_bits + pages[1].1.size_bits, end * 8);
+            for (path, page) in &pages {
+                assert!(e.locate(&d, page.offset_bits).unwrap().starts_with(path));
+            }
+            let gap = e.spans(&d, end * 8, (end + 16) * 8, 8).unwrap();
+            assert_eq!(gap.len(), 1);
+            assert!(gap[0].gap);
+            assert_eq!(gap[0].size_bits, 16 * 8);
+        }
+    }
+
+    #[test]
+    fn external_and_encrypted_columns_do_not_parse_local_pages() {
+        for (external, encrypted) in [(true, false), (false, true)] {
+            let (bytes, _) = fixture(true, external, encrypted, false);
+            let d = Document::new(MemSource(bytes));
+            let mut e = Evaluator::new(parquet());
+            assert!(nodes_of(&mut e, &d, "Page").is_empty());
+            assert!(e.spans(&d, 32, 40, 8).unwrap()[0].gap);
+        }
+    }
+
+    #[test]
+    fn a_page_cannot_borrow_bytes_past_its_column() {
+        let (bytes, end) = fixture(true, false, false, true);
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        assert!(e.locate(&d, 32).is_err());
+        let spans = e.spans(&d, end * 8, (end + 16) * 8, 8).unwrap();
+        assert!(spans.iter().all(|s| s.gap));
+    }
+
+    #[test]
+    fn footer_directed_lookup_resumes_after_yielding() {
+        let (bytes, _) = fixture(true, false, false, false);
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        e.set_slice(Some(8));
+        for _ in 0..1000 {
+            e.begin_slice();
+            match e.spans(&d, 32, 48, 16) {
+                Ok(spans) => { assert!(!spans.is_empty()); assert!(!spans[0].gap); return; }
+                Err(crate::eval::EvalError::Busy { .. }) => {}
+                Err(e) => panic!("{e:?}"),
+            }
+        }
+        panic!("page lookup failed to make progress");
+    }
+
     #[test]
     fn the_footer_reads_as_its_fields() {
         // version = 1, num_rows = 8 (delta 2 from field 1), created_by = "me".
         let d = Document::new(MemSource(footed(&[0x15, 0x02, 0x26, 0x10, 0x38, 0x02, b'm', b'e', 0x00])));
         let mut e = Evaluator::new(parquet());
         // footer.fields[0]: the id names it and the value is the number.
-        let id = e.node(&d, &[2, 0, 0, 2]).unwrap().value;
+        let id = e.node(&d, &[1, 0, 0, 0, 2]).unwrap().value;
         assert!(matches!(id, Value::Enum { name: Some(ref n), .. } if n == "version"), "got {id:?}");
-        assert_eq!(e.node(&d, &[2, 0, 0, 3]).unwrap().value.as_int(), Some(1));
-        let rows = e.node(&d, &[2, 0, 1, 2]).unwrap().value;
+        assert_eq!(e.node(&d, &[1, 0, 0, 0, 3]).unwrap().value.as_int(), Some(1));
+        let rows = e.node(&d, &[1, 0, 0, 1, 2]).unwrap().value;
         assert!(matches!(rows, Value::Enum { name: Some(ref n), .. } if n == "num_rows"), "got {rows:?}");
-        assert_eq!(e.node(&d, &[2, 0, 1, 3]).unwrap().value.as_int(), Some(8));
-        assert_eq!(e.node(&d, &[2, 0, 2, 3, 1]).unwrap().value, Value::Str("me".into()));
+        assert_eq!(e.node(&d, &[1, 0, 0, 1, 3]).unwrap().value.as_int(), Some(8));
+        assert_eq!(e.node(&d, &[1, 0, 0, 2, 3, 1]).unwrap().value, Value::Str("me".into()));
     }
 
     /// The footer's length is `remaining - 8`, worked out in the room the
@@ -613,8 +809,8 @@ mod tests {
     fn the_footers_length_is_written_out_in_the_room_it_measured() {
         let d = Document::new(MemSource(footed(&[0x15, 0x02, 0x26, 0x10, 0x38, 0x02, b'm', b'e', 0x00])));
         let mut e = Evaluator::new(parquet());
-        assert_eq!(e.node(&d, &[2]).unwrap().size_bits, 9 * 8);
-        let rel = e.relations(&d, &[2]).unwrap();
+        assert_eq!(e.node(&d, &[1, 0]).unwrap().size_bits, 9 * 8);
+        let rel = e.relations(&d, &[1, 0]).unwrap();
         assert_eq!(rel[0].written, "max(remaining - 8, 0)");
         assert_eq!(rel[0].substituted, "max(17 - 8, 0)");
         assert_eq!(rel[0].result, "9");

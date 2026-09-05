@@ -223,7 +223,8 @@ impl Evaluator {
                 let Some(tag) = tag else { return Ok(None) };
                 let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
                 *named = true;
-                Some(format!("{}[{} = {tag}]{field}", t.array.as_deref().unwrap_or("earlier"), t.key.join(".")))
+                let array = t.array.as_ref().and_then(write_expr).unwrap_or_else(|| "earlier".into());
+                Some(format!("{array}[{} = {tag}]{field}", t.key.join(".")))
             }
             // Everything left that this can write at all is a leaf that reads
             // the file. What it reads is the whole of what substituting it
@@ -287,7 +288,7 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::Tagged(t) => {
             let key = t.key.join(".");
             let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
-            let array = t.array.as_deref().unwrap_or("earlier");
+            let array = match &t.array { Some(array) => write_expr(array)?, None => "earlier".into() };
             format!("{array}[{key} = {}]{field}", t.tag.written()?)
         }
         Expr::Or(a, b) => two(a, b, "or")?,

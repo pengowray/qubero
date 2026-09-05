@@ -298,42 +298,45 @@ impl Evaluator {
     /// Whether anything inside this type places its contents elsewhere. False
     /// prunes the whole branch without reading a byte of it.
     fn may_place(&self, ty: &Ty) -> bool {
-        let mut seen = Vec::new();
-        self.places(ty, &mut seen)
+        // Schema-generated types share a large, recursive graph. Walking all
+        // branches again for each field is exponential even for a tiny footer.
+        // Compute the least fixed point once: a recursive cycle places nothing
+        // until one of its members reaches an actual pointer. Caching DFS
+        // negatives instead would incorrectly prune cycles with an exit.
+        let named = self.placing_types.get_or_init(|| {
+            let mut named = rustc_hash::FxHashSet::default();
+            loop {
+                let before = named.len();
+                for (name, definition) in &self.template.types {
+                    if Self::places(definition, &named) { named.insert(name.clone()); }
+                }
+                if named.len() == before { return named; }
+            }
+        });
+        Self::places(ty, named)
     }
 
-    fn places(&self, ty: &Ty, seen: &mut Vec<String>) -> bool {
+    fn places(ty: &Ty, named: &rustc_hash::FxHashSet<String>) -> bool {
         match ty {
             // Both types that put something somewhere other than where it was
             // declared. A chain's elements are all elsewhere.
             Ty::At { .. } | Ty::Chain { .. } => true,
-            Ty::Named(name) => {
-                // A type that refers to itself is answered by its other
-                // fields: saying no for the loop is safe, since a type whose
-                // only way to an `At` is through itself never reaches one.
-                if seen.iter().any(|s| s == &**name) {
-                    return false;
-                }
-                seen.push(name.to_string());
-                let answer = self.template.types.get(&**name).is_some_and(|t| self.places(t, seen));
-                seen.pop();
-                answer
-            }
-            Ty::Struct(s) => s.fields.iter().any(|f| self.places(&f.ty, seen)),
+            Ty::Named(name) => named.contains(&**name),
+            Ty::Struct(s) => s.fields.iter().any(|f| Self::places(&f.ty, named)),
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
-                self.places(elem, seen)
+                Self::places(elem, named)
             }
-            Ty::Sized { inner, .. } => self.places(inner, seen),
+            Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => Self::places(inner, named),
             // A stream is walked into only when something inside it points
             // back at the file, which is exactly the RNTuple case: the anchor
             // is compressed and the envelopes it names are at file offsets.
             // Every other stream is pruned here and never unpacked by this
             // walk.
-            Ty::Decoded { inner, .. } => self.places(inner, seen),
+            Ty::Decoded { inner, .. } => Self::places(inner, named),
             Ty::Switch { cases, default, .. } => {
-                cases.iter().any(|(_, t)| self.places(t, seen)) || self.places(default, seen)
+                cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
             }
-            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => self.places(inner, seen),
+            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => Self::places(inner, named),
             _ => false,
         }
     }

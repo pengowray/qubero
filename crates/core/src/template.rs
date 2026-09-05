@@ -308,7 +308,7 @@ pub struct TaggedRef {
     /// search over later ones would have to place them, and placing them is
     /// what is asking. Every format that writes a table of definitions writes
     /// it before what it defines, for the same reason.
-    pub array: Option<Arc<str>>,
+    pub array: Option<Expr>,
     /// The path to the field of an element that holds its label.
     pub key: Arc<[String]>,
     /// The label to look for.
@@ -425,6 +425,17 @@ impl Expr {
     pub fn tagged(array: &str, key: &[&str], tag: i128, field: &[&str]) -> Expr {
         Expr::tagged_by(Some(array), key, Tag::Int(tag), field)
     }
+    /// Search a collection reached by another field reference, including a
+    /// tagged lookup. Thrift structs nest unordered lists of numbered fields;
+    /// the list to search need not itself have a fixed field name.
+    pub fn tagged_in(array: Expr, key: &[&str], tag: i128, field: &[&str]) -> Expr {
+        Expr::Tagged(Arc::new(TaggedRef {
+            array: Some(array),
+            key: key.iter().map(|s| s.to_string()).collect(),
+            tag: Tag::Int(tag),
+            field: field.iter().map(|s| s.to_string()).collect(),
+        }))
+    }
     /// The same, for a list whose elements are labelled in text: `field` of the
     /// first element of `array` whose `key` holds exactly these bytes.
     pub fn tagged_bytes(array: &str, key: &[&str], tag: &[u8], field: &[&str]) -> Expr {
@@ -461,7 +472,7 @@ impl Expr {
     }
     fn tagged_by(array: Option<&str>, key: &[&str], tag: Tag, field: &[&str]) -> Expr {
         Expr::Tagged(Arc::new(TaggedRef {
-            array: array.map(Arc::from),
+            array: array.map(Expr::field),
             key: key.iter().map(|s| s.to_string()).collect(),
             tag,
             field: field.iter().map(|s| s.to_string()).collect(),

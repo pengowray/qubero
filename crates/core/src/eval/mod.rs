@@ -396,6 +396,8 @@ pub struct Evaluator {
     /// was declared, so a bit outside what the root covers can still be named,
     /// and how far the walk that finds them has got. See [`placed`].
     placed: placed::Index,
+    /// Reachability in the template's named-type graph, independent of bytes.
+    placing_types: std::cell::OnceCell<rustc_hash::FxHashSet<String>>,
     /// The decoded streams this reading has opened, and what each one came to.
     spaces: space::Spaces,
     /// The streams opened as documents of their own, which is what a tab is.
@@ -414,6 +416,7 @@ impl Evaluator {
             journals: Vec::new(),
             go: go::Go::default(),
             placed: placed::Index::default(),
+            placing_types: std::cell::OnceCell::new(),
             spaces: space::Spaces::default(),
             open: Vec::new(),
         }

@@ -158,7 +158,7 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         // element is not a sibling of the field asking.
         Expr::Tagged(t) => {
             if let Some(array) = &t.array {
-                out.push(array.clone());
+                expr_refs(array, out);
             }
             if let crate::template::Tag::Computed(e) | crate::template::Tag::ComputedText(e) = &t.tag {
                 expr_refs(e, out);

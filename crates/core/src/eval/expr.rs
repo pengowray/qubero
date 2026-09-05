@@ -511,7 +511,7 @@ impl Evaluator {
         let mut tried: Vec<(Vec<usize>, usize)> = Vec::new();
         match &t.array {
             Some(array) => {
-                let Some(list) = self.find_field(at, array) else { return fail(format!("unknown field {array}")) };
+                let Some(list) = self.text_path(doc, at, array, here)? else { return Ok(None) };
                 let n = self.child_count(doc, &list)?;
                 tried.extend((0..n as usize).map(|i| (list.clone(), i)));
             }
@@ -530,7 +530,7 @@ impl Evaluator {
             // Named for the list it was found in, which for the enclosing list
             // is whatever that list is called where it was declared.
             let name = match &t.array {
-                Some(array) => array.to_string(),
+                Some(array) => write_expr(array).unwrap_or_else(|| "collection".into()),
                 None => self.memo.get(&list).map_or_else(String::new, |r| r.name.text()),
             };
             let mut label = format!("{name}[{i}]");
