@@ -135,6 +135,7 @@ pub(super) fn plain(ty: &Ty) -> bool {
         | Ty::F64(_)
         | Ty::Fixed { .. }
         | Ty::Leb128 { .. }
+        | Ty::Zigzag
         | Ty::EbmlVint { .. }
         | Ty::Vlq
         | Ty::SqliteVarint

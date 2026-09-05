@@ -994,6 +994,21 @@ pub enum Ty {
     ComputedText(Expr),
     /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
     Leb128 { signed: bool },
+    /// LEB128 groups holding a zigzagged number: the sign is in the bottom bit
+    /// and the magnitude above it, so -1 is 1, 1 is 2, -2 is 3.
+    ///
+    /// The same bytes as an unsigned LEB128 and a different number in them.
+    /// `Leb128 { signed: true }` sign-extends instead, which is a third
+    /// answer again: the three read 0x01 as 1, -1 and 1, and 0x03 as 3, 3 and
+    /// -2. Nothing but the type says which a file meant, so a format that
+    /// zigzags has to say so.
+    ///
+    /// What Thrift's compact protocol writes every i16, i32 and i64 as, and
+    /// what protobuf calls `sint32` and `sint64`. Both do it for the same
+    /// reason: LEB128 spends a byte per seven bits of magnitude, and a small
+    /// negative number sign-extended is every bit set, which is ten bytes to
+    /// say -1.
+    Zigzag,
     /// EBML's big-endian variable-size integer. The first set bit says how
     /// many bytes the field occupies. Element IDs keep that marker as part of
     /// their value; element sizes remove it.
@@ -1337,6 +1352,10 @@ impl Ty {
     }
     pub fn leb_u() -> Ty {
         Ty::Leb128 { signed: false }
+    }
+    /// A zigzagged LEB128. See [`Ty::Zigzag`].
+    pub fn zigzag() -> Ty {
+        Ty::Zigzag
     }
     pub fn ebml_id() -> Ty {
         Ty::EbmlVint { strip_marker: false }
@@ -1735,6 +1754,7 @@ impl Ty {
             Ty::SqliteVarint => "varint".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),
+            Ty::Zigzag => "zigzag".into(),
             Ty::Insn { isa } => isa.name().to_string(),
             Ty::Magic(b) => format!("magic[{}]", b.len()),
             Ty::Bytes(_) => "bytes[]".into(),

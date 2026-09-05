@@ -79,7 +79,7 @@ fn bits_of(b: u8, from: u32, count: u32) -> String {
 /// Whether a field of this type has a split worth drawing at all. Asked before
 /// its bytes are fetched, so that a plain integer never causes a read.
 pub fn splits(ty: &Ty) -> bool {
-    matches!(ty.base(), Ty::Leb128 { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::EbmlVint { .. })
+    matches!(ty.base(), Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::EbmlVint { .. })
 }
 
 /// How the bytes of one field of this type divide into framing and value.
@@ -90,7 +90,7 @@ pub fn bit_roles(ty: &Ty, bytes: &[u8]) -> Option<BitRoles> {
         return None;
     }
     match ty.base() {
-        Ty::Leb128 { .. } | Ty::Vlq => Some(continuation(bytes, false)),
+        Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq => Some(continuation(bytes, false)),
         Ty::SqliteVarint => Some(continuation(bytes, true)),
         Ty::EbmlVint { strip_marker } => ebml(bytes, *strip_marker),
         _ => None,

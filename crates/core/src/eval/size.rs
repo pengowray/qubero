@@ -210,7 +210,7 @@ impl Evaluator {
                     let _ = base;
                     span
                 }
-                Ty::Leb128 { .. } => {
+                Ty::Leb128 { .. } | Ty::Zigzag => {
                     let (_, n) = self.read_leb(doc, &r)?;
                     n * 8
                 }

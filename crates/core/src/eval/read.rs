@@ -36,6 +36,19 @@ impl Skipping {
     }
 }
 
+/// The number a zigzagged one holds: the bottom bit is the sign and the bits
+/// above it are the magnitude, so the values run 0, -1, 1, -2, 2. See
+/// [`crate::template::Ty::Zigzag`].
+///
+/// Written the arithmetic way rather than with a shift and an exclusive or,
+/// because the value arrives as a `u128` and the magnitude of the most
+/// negative 64-bit number does not fit back into an `i128` the other way
+/// round. It does this way: the halves are subtracted, not negated.
+pub(super) fn unzigzag(v: u128) -> i128 {
+    let half = (v >> 1) as i128;
+    if v & 1 == 1 { -half - 1 } else { half }
+}
+
 /// Index of `term` in `hay`, aligned to whole units of its length.
 pub(super) fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
     let unit = term.len();
@@ -390,6 +403,10 @@ impl Evaluator {
                 let (v, _) = self.read_leb(doc, r)?;
                 if *signed { Value::Int(v as i128) } else { Value::UInt(v) }
             }
+            // The groups are read unsigned (`read_leb` only sign-extends for a
+            // `Leb128` that says it is signed), and the sign comes off the
+            // bottom bit here.
+            Ty::Zigzag => Value::Int(unzigzag(self.read_leb(doc, r)?.0)),
             Ty::Vlq => Value::UInt(self.read_vlq(doc, r)?.0),
             Ty::Insn { isa } => Value::Str(self.read_insn(doc, r, *isa)?.text),
             Ty::EbmlVint { strip_marker } => Value::UInt(self.read_ebml_vint(doc, r, *strip_marker)?.0),

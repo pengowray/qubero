@@ -27,7 +27,7 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
         // A sentinel and a set of names are both readings of the number, so a
         // field keeps whatever editability the number under them has.
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::UIntExpr { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::UIntExpr { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::Zigzag | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         // A scalar inside a JSON field is written back as the literal it is.
         // An object or an array is its members, and editing those is editing
@@ -160,6 +160,20 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
             };
             bytes.ok_or_else(|| {
                 let (min, max) = leb_limits(room, *signed);
+                format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
+            })
+        }
+        // Zigzagged, then packed as LEB128 groups. The field keeps its size the
+        // way an unsigned one does, by padding at the front with empty groups
+        // that say "more follows".
+        Ty::Zigzag => {
+            let room = (size_bits / 8) as usize;
+            let v = parse_int(text).ok_or_else(|| whole_number_msg(true))?;
+            leb_unsigned(zigzag(v), room).ok_or_else(|| {
+                // The same range a sign-extended LEB128 of that many bytes
+                // has: zigzagging moves which value each pattern means, not
+                // how many patterns there are.
+                let (min, max) = leb_limits(room, true);
                 format!("{room}-byte {} range is {min} to {max}. Field sizes can't change yet.", ty.display_name())
             })
         }
@@ -474,6 +488,13 @@ fn parse_hex(text: &str) -> Option<Vec<u8>> {
 /// LEB128 padded to exactly `room` bytes. Padding a value out with redundant
 /// continuation bytes is legal LEB128, and it is what keeps the field's size
 /// stable so the rest of the file does not shift.
+/// A number zigzagged: the sign moves to the bottom bit and the magnitude
+/// sits above it, so the values 0, -1, 1, -2, 2 become 0, 1, 2, 3, 4. The
+/// inverse of [`crate::eval::read::unzigzag`].
+fn zigzag(v: i128) -> u128 {
+    ((v as u128) << 1) ^ (v >> 127) as u128
+}
+
 fn leb_unsigned(mut v: u128, room: usize) -> Option<Vec<u8>> {
     if room == 0 || room > 19 {
         return None;
