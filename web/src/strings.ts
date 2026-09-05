@@ -510,6 +510,10 @@ export const VALUES = {
    *  with its text where it started. */
   continued: (run: string, index: number): string => `${run}[${index}] · continued from the row above`,
   continuedLabel: "continued from the row above",
+  /** The other half of a value the row edge cuts: this is the earlier piece,
+   *  and the value is on the row below because that is where more of it is. */
+  continues: (run: string, index: number): string => `${run}[${index}] · continues on the row below`,
+  continuesLabel: "continues on the row below",
   rest: (n: number): string => `+${n}`,
   restTip: (n: number): string => `${n} more values on this row`,
 } as const;

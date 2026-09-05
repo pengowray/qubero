@@ -801,6 +801,20 @@ input.invalid {
 .hv-vals-uniform > .hv-val {
   width: var(--hv-val-w, auto);
 }
+/* Flow: a run of a decoder's symbols, each cell as wide as what it says. A
+   literal reads as the byte it decodes to, so a line of these is a line of the
+   file being unpacked, with the matches sitting inline as the wider cells they
+   are. The width of each is set by the view, so the wrap is the one the row's
+   height was counted from. */
+.hv-vals-flow > .hv-val {
+  text-align: center;
+}
+/* A match, or the end of a block: the places a copy happens rather than a byte
+   being spelled out, which is what there is to see in a block of symbols. */
+.hv-vals-flow > .field-marker {
+  background: color-mix(in srgb, var(--field-color) 26%, transparent);
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--field-color) 45%, transparent);
+}
 .hv-val {
   box-sizing: border-box;
   min-width: 0;
@@ -836,11 +850,17 @@ input.invalid {
   text-overflow: clip;
   text-align: left;
 }
-/* The tail of a value that began on the row above: the same tint over the bits
-   it ends in, with its text where it started. */
+/* A piece of a value whose text is on another row: the same tint over the bits
+   it covers, and no text, because the value is said once and said where most
+   of it is. The dash is on the side the rest of the value lies, so the two
+   pieces point at each other across the row edge. */
 .hv-val-continued {
   background: color-mix(in srgb, var(--field-color) 4%, transparent);
   border-left: 1px dashed color-mix(in srgb, var(--field-color) 30%, transparent);
+}
+.hv-val-before {
+  border-left: 0;
+  border-right: 1px dashed color-mix(in srgb, var(--field-color) 30%, transparent);
 }
 /* The cell the cursor is in, marked as the hex cell it names is marked. */
 .hv-val-at {

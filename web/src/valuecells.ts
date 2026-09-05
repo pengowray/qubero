@@ -52,29 +52,41 @@ export function newVals(onPick: (path: readonly number[]) => void): ValsEl {
 }
 
 /** What one cell says, drawn into the element already there. */
-function fillCell(el: HTMLElement, c: PlacedCell, aligned: boolean): void {
-  let cls = `hv-val ${fieldClass(c.kind)}`;
-  if (c.continued) cls += " hv-val-continued";
+function fillCell(el: HTMLElement, c: PlacedCell, layout: RowValues["layout"]): void {
+  const aligned = layout === "aligned";
+  let cls = `hv-val ${c.copy ? "field-marker" : fieldClass(c.kind)}`;
+  if (c.carried !== null) cls += " hv-val-continued";
+  if (c.carried === "below") cls += " hv-val-before";
   if (c.numeric) cls += " hv-val-num";
-  if (c.cut) cls += " hv-val-cut";
+  if (c.cut && c.carried === null) cls += " hv-val-cut";
   if (el.className !== cls) el.className = cls;
   setText(el, c.text);
   const path = c.path.join(",");
   if (el.dataset["path"] !== path) el.dataset["path"] = path;
   const index = String(c.index);
   if (el.dataset["index"] !== index) el.dataset["index"] = index;
-  const title = c.continued
-    ? VALUES.continued(c.run, c.index)
-    : c.symbol
-      ? VALUES.symbol(c.index, c.text, c.sizeBits)
-      : VALUES.cell(c.run, c.index, c.type, c.text);
+  const title =
+    c.carried === "above"
+      ? VALUES.continued(c.run, c.index)
+      : c.carried === "below"
+        ? VALUES.continues(c.run, c.index)
+        : c.symbol
+          ? VALUES.symbol(c.index, c.tip, c.sizeBits)
+          : VALUES.cell(c.run, c.index, c.type, c.tip);
   if (el.title !== title) el.title = title;
-  // The tint says a cell is the tail of one that started above; a screen
-  // reader has only the words.
-  if (c.continued) el.setAttribute("aria-label", VALUES.continuedLabel);
+  // The tint says a cell is a piece of one whose value is on another row; a
+  // screen reader has only the words.
+  if (c.carried === "above") el.setAttribute("aria-label", VALUES.continuedLabel);
+  else if (c.carried === "below") el.setAttribute("aria-label", VALUES.continuesLabel);
   else el.removeAttribute("aria-label");
   const column = aligned ? `${c.from} / ${c.to}` : "";
   if (el.style.gridColumn !== column) el.style.gridColumn = column;
+  // Flow cells are each as wide as their own text, and the width is set here
+  // rather than left to the browser so that the wrap the plan counted lines
+  // from is the wrap the browser does. Cleared on the other two layouts: the
+  // element may have been a flow cell a draw ago.
+  const width = layout === "flow" ? `${c.width}px` : "";
+  if (el.style.width !== width) el.style.width = width;
 }
 
 /** The `+N` that counts what the condensed cap left over. */
@@ -88,6 +100,7 @@ function fillRest(el: HTMLElement, n: number): void {
   el.removeAttribute("data-index");
   el.removeAttribute("aria-label");
   if (el.style.gridColumn !== "") el.style.gridColumn = "";
+  if (el.style.width !== "") el.style.width = "";
 }
 
 /**
@@ -102,7 +115,7 @@ export function fillVals(el: ValsEl, plan: RowValues, width: number, bpr: number
   const want = plan.cells.length + (plan.rest > 0 ? 1 : 0);
   let cls = "hv-vals";
   if (want === 0) cls += " hv-empty";
-  else cls += aligned ? " hv-vals-aligned" : " hv-vals-uniform";
+  else cls += ` hv-vals-${plan.layout}`;
   if (el.className !== cls) el.className = cls;
   while (el.childElementCount < want) el.append(document.createElement("span"));
   for (let i = 0; i < el.childElementCount; i++) {
@@ -123,7 +136,7 @@ export function fillVals(el: ValsEl, plan: RowValues, width: number, bpr: number
   if (el.style.gridTemplateColumns !== columns) el.style.gridTemplateColumns = columns;
   const cell = aligned ? "" : `${Math.round(plan.cellWidth)}px`;
   if (el.style.getPropertyValue("--hv-val-w") !== cell) el.style.setProperty("--hv-val-w", cell);
-  for (const [i, c] of plan.cells.entries()) fillCell(el.children[i] as HTMLElement, c, aligned);
+  for (const [i, c] of plan.cells.entries()) fillCell(el.children[i] as HTMLElement, c, plan.layout);
   if (plan.rest > 0) fillRest(el.children[plan.cells.length] as HTMLElement, plan.rest);
 }
 

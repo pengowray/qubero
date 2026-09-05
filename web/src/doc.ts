@@ -227,6 +227,11 @@ export type Cell = {
   /** What the listing would say about it on a shared row, or the symbol's name
    *  for a block of a decoder's trace. Never reformatted here. */
   readonly text: string;
+  /** What the cell itself shows, where that is shorter than what the tooltip
+   *  says: a deflate literal is the byte it decodes to, so a row of them reads
+   *  as the text coming out of the block, and a match is its two numbers. The
+   *  same as `text` for everything else. */
+  readonly label: string;
   readonly kind: string;
   /** False when the element's bits are not one run, which is what sends the
    *  table to its uniform layout. True for every type there is today. */

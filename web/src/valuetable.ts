@@ -47,6 +47,12 @@ export const VALUE_PAD = 5;
 export const VALUE_GAP = 2;
 /** Room kept on the last line for the `+3` that counts what did not fit. */
 export const VALUE_REST = 34;
+/** The three shapes a row's table takes. Aligned draws every value over the
+ *  bits it is stored in; uniform is equal cells wrapped over as many lines as
+ *  the row needs; flow is cells of their own natural width, for a run whose
+ *  elements are the symbols of a decoder and read as the text they decode
+ *  to. */
+export type Layout = "aligned" | "uniform" | "flow";
 /** Width to assume before the column has been measured once. */
 const COLUMN_GUESS = 320;
 /** Pitch of a hex cell to assume before one has been measured. */
@@ -78,7 +84,7 @@ export function typeDigits(kind: string, sizeBits: number): string {
  *  is known, and what it says where it is not. */
 function textWidth(c: Cell, measure: ChipMeasure): number {
   const digits = typeDigits(c.kind, c.size_bits);
-  return measure.value(digits === "" ? c.text : digits);
+  return measure.value(digits === "" ? c.label : digits);
 }
 
 /** Whether a value is a number, and so is read from its right-hand end. */
@@ -86,26 +92,38 @@ export function numeric(kind: string): boolean {
   return kind === "uint" || kind === "int" || kind === "float" || kind === "unset";
 }
 
-/** One cell as it is drawn: where it sits, what it says, and whether it is the
- *  tail of an element that began on the row above. */
+/** One cell as it is drawn: where it sits, what it says, and whether it is a
+ *  piece of an element whose text is on another row. */
 export type PlacedCell = {
   readonly index: number;
-  /** Empty on a continuation cell: the element's text is on the row it
-   *  started on. */
+  /** Empty on the piece of a straddling element that does not carry the text.
+   *  What is drawn, which for a symbol is shorter than what the tooltip
+   *  says. */
   readonly text: string;
+  /** What the element reads as in full, for the tooltip. */
+  readonly tip: string;
   readonly kind: string;
   readonly numeric: boolean;
-  readonly continued: boolean;
-  /** True when the row edge cuts the element short, so the cell it is drawn in
-   *  is narrower than the value needs. Its text is let out of the cell rather
-   *  than cut off: the room to the right of the table is nobody else's. */
+  /** Set on the empty piece of a straddling element: which way the piece
+   *  carrying the text lies. Null on a cell that says what it holds. */
+  readonly carried: "above" | "below" | null;
+  /** True when the piece carrying the text is narrower than the whole element,
+   *  so the cell is narrower than the value needs. Its text is let out of the
+   *  cell rather than cut off. */
   readonly cut: boolean;
+  /** Flow only: how wide the cell is drawn, in pixels. Zero in the other two
+   *  layouts, which have a width of their own. */
+  readonly width: number;
   /** The run the element belongs to: its name for the tooltip, its path for
    *  the pick. */
   readonly path: readonly number[];
   readonly run: string;
   readonly type: string;
   readonly symbol: boolean;
+  /** A symbol that is not one byte of the stream's output: a match, the end of
+   *  a block. Those are where the copying happens, and are tinted apart from
+   *  the literals around them. */
+  readonly copy: boolean;
   readonly sizeBits: number;
   /** The element's own bits, absolute, so the cursor can be found in them
    *  without reading anything back off the document. */
@@ -118,9 +136,21 @@ export type PlacedCell = {
   readonly to: number;
 };
 
+/**
+ * Whether a symbol is a copy rather than a byte the block spelled out.
+ *
+ * Read off the text, which is the core's and is one of a fixed handful of
+ * English phrases; `kind` is `symbol` for every step of a trace and says
+ * nothing about which. A literal is the only step that is one byte of output,
+ * so everything else is where the copying happens.
+ */
+export function symbolCopies(kind: string, text: string): boolean {
+  return kind === "symbol" && !text.startsWith("literal ");
+}
+
 /** What one row's table comes to. */
 export type RowValues = {
-  readonly layout: "aligned" | "uniform";
+  readonly layout: Layout;
   readonly cells: PlacedCell[];
   /** Uniform only: how wide every cell is drawn, in pixels. */
   readonly cellWidth: number;
@@ -212,7 +242,9 @@ export type RowValueOpts = {
   readonly runs: readonly RunCells[];
   readonly rowStart: number;
   readonly bpr: number;
-  readonly layout: "aligned" | "uniform";
+  readonly layout: Layout;
+  /** Flow only: how wide a cell's own text is. */
+  readonly measure?: ChipMeasure;
   /** From `uniformWidth`, so every row of a screenful draws the same width. */
   readonly cellWidth: number;
   readonly noteWidth: number;
@@ -224,44 +256,85 @@ export type RowValueOpts = {
 };
 
 /**
+ * Which row of the ones an element straddles carries its text, as an offset in
+ * rows from the row the element starts on.
+ *
+ * The wider piece: a 24-bit sample whose first byte is the last byte of a row
+ * has seven eighths of itself on the row below, and putting the number on the
+ * one-byte sliver leaves it hanging off the end of the table over nothing. The
+ * piece that is most of the value is the piece a reader looks at for it. Ties
+ * go to the piece the element starts on, so a value split evenly reads where
+ * it begins.
+ */
+function widestPiece(startBit: number, endBit: number, rowFrom: number, rowBits: number): number {
+  // Where the row containing the element's first bit begins. Rows are a fixed
+  // pitch apart, so this is worked out from the row in hand without knowing
+  // which row that is.
+  const firstRow = rowFrom + Math.floor((startBit - rowFrom) / rowBits) * rowBits;
+  let best = 0;
+  let bestWidth = 0;
+  for (let r = 0, at = firstRow; at < endBit; r++, at += rowBits) {
+    const width = Math.min(endBit, at + rowBits) - Math.max(startBit, at);
+    if (width > bestWidth) {
+      best = r;
+      bestWidth = width;
+    }
+  }
+  return best;
+}
+
+/**
  * Lay one row's values out.
  *
  * Aligned is one line whatever it holds: every cell is over its own bits, and
- * an element that straddles the row edge has its text on the row it starts on
- * and a continuation cell — same tint, no text — on the next.
+ * an element the row edge cuts has its text on whichever of its two pieces is
+ * wider, with the other drawn as an empty cell in the same tint.
  *
- * Uniform wraps into as many lines as the row needs, in the order of the
- * bytes, and an element belongs to the row its first bit falls on so that no
- * value is drawn twice.
+ * Uniform wraps equal cells into as many lines as the row needs, and flow
+ * wraps cells of their own width. Both are in the order of the bytes, and in
+ * both an element belongs to the row its first bit falls on so that no value
+ * is drawn twice.
  */
 export function planRowValues(o: RowValueOpts): RowValues {
+  const rowBits = o.bpr * 8;
   const rowFrom = o.rowStart * 8;
-  const rowTo = rowFrom + o.bpr * 8;
+  const rowTo = rowFrom + rowBits;
+  const aligned = o.layout === "aligned";
   const cells: PlacedCell[] = [];
   for (const run of o.runs) {
     for (const c of run.cells) {
       const end = c.offset_bits + c.size_bits;
       const started = c.offset_bits >= rowFrom && c.offset_bits < rowTo;
-      // Aligned draws a cell wherever the element's bits reach; uniform draws
-      // it once, on the row it starts on.
-      if (o.layout === "uniform" ? !started : end <= rowFrom || c.offset_bits >= rowTo) continue;
-      const continued = c.offset_bits < rowFrom;
+      // Aligned draws a cell wherever the element's bits reach; the other two
+      // draw it once, on the row it starts on.
+      if (!aligned ? !started : end <= rowFrom || c.offset_bits >= rowTo) continue;
+      // Which piece says what the element is, and so which of the others are
+      // empty and which way they look for it.
+      const straddles = aligned && (c.offset_bits < rowFrom || end > rowTo);
+      const carrier = straddles ? widestPiece(c.offset_bits, end, rowFrom, rowBits) : 0;
+      const mine = straddles ? pieceIndex(c.offset_bits, rowFrom, rowBits) : 0;
+      const carried = !straddles || mine === carrier ? null : mine > carrier ? "above" : "below";
       cells.push({
         index: c.index,
-        text: continued ? "" : c.text,
+        text: carried === null ? c.label : "",
+        tip: c.text,
         kind: c.kind,
         numeric: numeric(c.kind),
-        continued,
-        cut: o.layout === "aligned" && end > rowTo,
+        carried,
+        // The piece the text is on is narrower than the element, so the value
+        // may not fit the cell it is in.
+        cut: straddles,
+        width: o.layout === "flow" ? Math.ceil((o.measure?.value(c.label) ?? 0) + VALUE_PAD) : 0,
         path: run.path,
         run: run.name,
         type: run.type,
         symbol: run.symbol,
+        copy: symbolCopies(c.kind, c.text),
         sizeBits: c.size_bits,
         startBit: c.offset_bits,
         endBit: end,
-        from: o.layout === "aligned" ? Math.max(rowFrom, c.offset_bits) - rowFrom + 1 : 0,
-        to: o.layout === "aligned" ? Math.min(rowTo, end) - rowFrom + 1 : 0,
+        from: aligned ? Math.max(rowFrom, c.offset_bits) - rowFrom + 1 : 0,
+        to: aligned ? Math.min(rowTo, end) - rowFrom + 1 : 0,
       });
     }
   }
@@ -269,11 +342,13 @@ export function planRowValues(o: RowValueOpts): RowValues {
   // which is the only order two runs sharing a row can be put in.
   cells.sort((a, b) => a.startBit - b.startBit || a.index - b.index);
   if (cells.length === 0) return NO_VALUES;
-  if (o.layout === "aligned") {
-    return finish("aligned", cells, 0, 1, 0, o.valLine);
+  if (aligned) return finish("aligned", cells, 0, 1, 0, o.valLine);
+  const column = o.noteWidth || COLUMN_GUESS;
+  if (o.layout === "flow") {
+    const wrapped = wrapFlow(cells, column, o.maxLines);
+    return finish("flow", wrapped.kept, 0, wrapped.lines, wrapped.rest, o.valLine);
   }
   const width = Math.max(1, o.cellWidth);
-  const column = o.noteWidth || COLUMN_GUESS;
   const perLine = Math.max(1, Math.floor((column + VALUE_GAP) / (width + VALUE_GAP)));
   const want = Math.ceil(cells.length / perLine);
   if (want <= o.maxLines) return finish("uniform", cells, width, want, 0, o.valLine);
@@ -284,8 +359,43 @@ export function planRowValues(o: RowValueOpts): RowValues {
   return finish("uniform", kept, width, o.maxLines, cells.length - kept.length, o.valLine);
 }
 
+/** Which piece of a straddling element this row holds, counting from the row
+ *  the element starts on. */
+function pieceIndex(startBit: number, rowFrom: number, rowBits: number): number {
+  return -Math.floor((startBit - rowFrom) / rowBits);
+}
+
+/**
+ * Pack flow cells into lines, each cell as wide as its own text.
+ *
+ * The same greedy wrap the browser will do, worked out here because the row's
+ * height has to be known before the row is laid out. Every line takes at least
+ * one cell, so a label wider than the whole column takes a line of its own
+ * rather than never fitting.
+ */
+function wrapFlow(
+  cells: readonly PlacedCell[],
+  column: number,
+  maxLines: number,
+): { kept: PlacedCell[]; lines: number; rest: number } {
+  let lines = 1;
+  let used = 0;
+  for (const [i, c] of cells.entries()) {
+    const room = lines === maxLines ? column - VALUE_REST : column;
+    const next = used === 0 ? c.width : used + VALUE_GAP + c.width;
+    if (used > 0 && next > room) {
+      if (lines === maxLines) return { kept: cells.slice(0, i), lines, rest: cells.length - i };
+      lines++;
+      used = c.width;
+    } else {
+      used = next;
+    }
+  }
+  return { kept: [...cells], lines, rest: 0 };
+}
+
 function finish(
-  layout: "aligned" | "uniform",
+  layout: Layout,
   cells: PlacedCell[],
   cellWidth: number,
   lines: number,
@@ -294,6 +404,6 @@ function finish(
 ): RowValues {
   const key =
     `${layout[0] ?? ""}${lines}/${rest}/${Math.round(cellWidth)}~` +
-    cells.map((c) => (c.continued ? `^${c.index}` : `${c.index}=${c.text}`)).join(",");
+    cells.map((c) => (c.carried === null ? `${c.index}=${c.text}` : `${c.carried === "above" ? "^" : "v"}${c.index}`)).join(",");
   return { layout, cells, cellWidth, lines, rest, height: lines * valLine, key };
 }

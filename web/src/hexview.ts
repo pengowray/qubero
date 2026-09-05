@@ -1786,7 +1786,7 @@ export class HexView {
   private widestOf(key: string, cells: readonly Cell[]): string {
     let widest = this.runWidest.get(key) ?? "";
     for (const c of cells) {
-      if (c.text.length > widest.length) widest = c.text;
+      if (c.label.length > widest.length) widest = c.label;
     }
     this.runWidest.set(key, widest);
     return widest;
@@ -1799,6 +1799,12 @@ export class HexView {
    * text in it against the narrowest cell its bits are worth, so that the
    * tables do not change shape row by row. A row two runs reach takes the
    * uniform layout unless both of them fit the aligned one.
+   *
+   * A run of a decoder's symbols is neither: its cells read as the bytes the
+   * block produces, so they take the width of what they say and flow, and a
+   * row of them reads as a line of the file being unpacked. A row that a
+   * symbol run and something else both reach falls back to uniform, which is
+   * the layout both can be drawn in.
    */
   private planValues(runs: readonly RunCells[], start: number, bpr: number, maxLines: number): RowValues[] {
     const measure = this.valFonts ?? this.chipFonts ?? GUESS_TEXT;
@@ -1806,14 +1812,16 @@ export class HexView {
     const rows = this.visibleRows;
     const perRow: RunCells[][] = Array.from({ length: rows }, () => []);
     const aligned: boolean[] = Array.from({ length: rows }, () => true);
+    const flows: boolean[] = Array.from({ length: rows }, () => true);
     for (const run of runs) {
-      const fits = alignedFits([run], fit);
+      const flow = run.cells.some((c) => c.kind === "symbol");
+      const fits = !flow && alignedFits([run], fit);
       const byRow = new Map<number, Cell[]>();
       for (const c of run.cells) {
         const first = Math.floor((Math.floor(c.offset_bits / 8) - start) / bpr);
-        // Uniform draws an element once, on the row it starts on; aligned
-        // draws it on every row its bits reach, as a continuation past the
-        // first.
+        // Uniform and flow draw an element once, on the row it starts on;
+        // aligned draws it on every row its bits reach, with the rows that do
+        // not carry its text drawn empty.
         const last = fits ? Math.floor((Math.floor((c.offset_bits + c.size_bits - 1) / 8) - start) / bpr) : first;
         for (let r = Math.max(0, first); r <= Math.min(rows - 1, last); r++) {
           const at = byRow.get(r);
@@ -1824,6 +1832,7 @@ export class HexView {
       for (const [r, cells] of byRow) {
         (perRow[r] as RunCells[]).push({ ...run, cells });
         if (!fits) aligned[r] = false;
+        if (!flow) flows[r] = false;
       }
     }
     return perRow.map((rs, r) =>
@@ -1833,7 +1842,8 @@ export class HexView {
             runs: rs,
             rowStart: start + r * bpr,
             bpr,
-            layout: aligned[r] === true ? "aligned" : "uniform",
+            layout: flows[r] === true ? "flow" : aligned[r] === true ? "aligned" : "uniform",
+            measure,
             // The width is the row's own runs, not the screenful's: a run with
             // wider values scrolling off the bottom must not narrow the cells
             // of the run still on screen, since every row of it would rewrap.
