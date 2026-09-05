@@ -76,34 +76,59 @@ export function headingsByRow(
   return byRow;
 }
 
-/** Where a row's headings go, and where they cut it. */
-export type RowCut = {
-  /** The headings that start at each position in the row. */
-  readonly headsAt: Map<number, OutlineHeading[]>;
+/**
+ * How one row on screen is put together: where a heading cuts it, what stands
+ * over each of the pieces that makes, and how tall that is.
+ *
+ * The three lists run in step, one entry per piece. Everything that has to
+ * know the shape of a row reads it from here rather than working it out
+ * again: which lines the row is drawn in, how tall it will come out, and how
+ * far a scroll has to travel to take a piece off the top of the screen.
+ */
+export type RowPieces = {
+  /** The byte the row starts at. */
+  readonly rowStart: number;
   /** The pieces the row is drawn in, as the position each starts at. Always
    *  begins with 0, and is just `[0]` on a row nothing cuts. */
-  readonly segs: number[];
+  readonly segs: readonly number[];
+  /** The headings drawn over each piece. Empty for a piece nothing starts
+   *  at, which is every piece of most rows. */
+  readonly heads: readonly (readonly OutlineHeading[])[];
+  /** How tall each of those blocks of headings comes to. */
+  readonly headHeights: readonly number[];
 };
 
 /**
- * Where each of a row's headings goes, as a position in the row. A part that
- * starts part-way along cuts the row there, so the heading sits between the
- * bytes before it and the bytes after. Condensed readings keep every heading
- * above the row: they are the readings that trade room for rows.
+ * Work out that shape.
+ *
+ * A part that starts part-way along a row cuts it there, so the heading sits
+ * between the bytes before it and the bytes after. Condensed readings keep
+ * every heading above the row: they are the readings that trade room for
+ * rows.
  */
-export function cutRow(
+export function rowPieces(
   heads: readonly OutlineHeading[],
   rowStart: number,
   bpr: number,
   condensed: boolean,
-): RowCut {
-  const headsAt = new Map<number, OutlineHeading[]>();
+  sizes: HeadingSizes,
+  rowHeight: number,
+): RowPieces {
+  const at = new Map<number, OutlineHeading[]>();
   for (const h of heads) {
-    const at = condensed ? 0 : Math.min(bpr - 1, Math.max(0, Math.floor(h.offsetBits / 8) - rowStart));
-    (headsAt.get(at) ?? (headsAt.set(at, []), headsAt.get(at) as OutlineHeading[])).push(h);
+    const pos = condensed ? 0 : Math.min(bpr - 1, Math.max(0, Math.floor(h.offsetBits / 8) - rowStart));
+    const had = at.get(pos);
+    if (had === undefined) at.set(pos, [h]);
+    else had.push(h);
   }
-  const segs = [...new Set([0, ...headsAt.keys()])].sort((a, b) => a - b);
-  return { headsAt, segs };
+  const segs = [...new Set([0, ...at.keys()])].sort((a, b) => a - b);
+  const per = segs.map((pos) => at.get(pos) ?? []);
+  return {
+    rowStart,
+    segs,
+    heads: per,
+    headHeights: per.map((hs) => hs.reduce((n, h) => n + headingHeight(h, sizes, rowHeight), 0)),
+  };
 }
 
 /** An empty heading line. Like a chip, it keeps its click handler and the

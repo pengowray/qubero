@@ -23,7 +23,7 @@ import type { ChipMeasure } from "./chipfit.js";
 import { pinnedNoteKey, planRowChips, rowNoteKey, type ChipBlock } from "./chipplan.js";
 import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.js";
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.js";
-import { cutRow, fillHeadings, headingHeight } from "./hexheadings.js";
+import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.js";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.js";
 import { NO_VALUES } from "./valuetable.js";
 
@@ -268,15 +268,8 @@ export class HexRows {
    * Only the first line carries the address, since a row address is a multiple
    * of the row width and the address of a cut is not.
    */
-  private layOutRow(
-    row: HTMLElement,
-    parts: RowParts,
-    rowStart: number,
-    segs: readonly number[],
-    heads: ReadonlyMap<number, OutlineHeading[]>,
-    fileBits: number,
-    addrWidth: number,
-  ): void {
+  private layOutRow(row: HTMLElement, parts: RowParts, at: RowPieces, fileBits: number, addrWidth: number): void {
+    const { rowStart, segs } = at;
     const { bpr, binary, fields, below } = this.lineShape;
     while (parts.lines.length < segs.length) parts.lines.push(this.makeLine());
     // Every line the row has ever needed, in order, whether or not this
@@ -286,10 +279,10 @@ export class HexRows {
     const kids: HTMLElement[] = [];
     for (const [j, lp] of parts.lines.entries()) {
       const on = j < segs.length;
-      const at = on ? (segs[j] as number) : 0;
+      const pos = on ? (segs[j] as number) : 0;
       // Always in place, empty when no part starts here, so that a heading
       // arriving or leaving writes into a block that is already there.
-      fillHeadings(lp.head, on ? (heads.get(at) ?? []) : [], fileBits, rowStart + at, this.picks.heading);
+      fillHeadings(lp.head, on ? (at.heads[j] ?? []) : [], fileBits, rowStart + pos, this.picks.heading);
       kids.push(lp.head);
       if (lp.line.hidden === on) lp.line.hidden = !on;
       kids.push(lp.line);
@@ -467,19 +460,19 @@ export class HexRows {
     }
     parts.blank = false;
     const heads = f.headsByRow[r] ?? [];
-    const { headsAt, segs } = cutRow(heads, rowStart, bpr, f.condensed);
+    const at = rowPieces(heads, rowStart, bpr, f.condensed, f.sizes, f.rowHeight);
     // The share of the file changes with its length, so the key does too.
-    const layoutKey = `${segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
+    const layoutKey = `${at.segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
     if (layoutKey !== parts.layoutKey) {
-      this.layOutRow(row, parts, rowStart, segs, headsAt, len * 8, f.addrWidth);
+      this.layOutRow(row, parts, at, len * 8, f.addrWidth);
       parts.layoutKey = layoutKey;
       parts.noteKey = "";
       parts.valsKey = VALS_UNKNOWN;
       // Cells that changed line have to be told which byte they draw again.
       parts.start = -1;
     }
-    let height = f.rowHeight * segs.length;
-    for (const h of heads) height += headingHeight(h, f.sizes, f.rowHeight);
+    let height = f.rowHeight * at.segs.length;
+    for (const h of at.headHeights) height += h;
     const addr = (parts.lines[0] as LineParts).addr;
     setText(addr, rowStart.toString(16).padStart(f.addrWidth, "0"));
     // Which bytes a row stands for only changes when the view moves. A
@@ -488,7 +481,7 @@ export class HexRows {
     const moved = parts.start !== rowStart;
     parts.start = rowStart;
     this.drawCells(parts, rowStart, moved, f);
-    if (f.fields) height += this.drawNotes(r, parts, rowStart, segs, headsAt, f);
+    if (f.fields) height += this.drawNotes(r, parts, at, f);
     return height;
   }
 
@@ -553,11 +546,10 @@ export class HexRows {
   private drawNotes(
     r: number,
     parts: RowParts,
-    rowStart: number,
-    segs: readonly number[],
-    headsAt: ReadonlyMap<number, OutlineHeading[]>,
+    at: RowPieces,
     f: Frame,
   ): number {
+    const { rowStart, segs } = at;
     const firstNote = (parts.lines[0] as LineParts).note;
     if (!f.templated || f.trouble !== null) {
       const key = `!${r === 0 ? (f.trouble ?? NO_TEMPLATE) : ""}`;
@@ -601,7 +593,7 @@ export class HexRows {
       // that the strip pinned over the rows names only the fields that reach
       // a byte still on screen. Every other row sits square against nothing.
       topPx: r === 0 ? f.topPx : 0,
-      headHeights: segs.map((at) => (headsAt.get(at) ?? []).reduce((n, h) => n + headingHeight(h, f.sizes, f.rowHeight), 0)),
+      headHeights: at.headHeights,
       valsHeight: vals.height,
     });
     if (planned.pinned !== null) this.carried = planned.pinned;
