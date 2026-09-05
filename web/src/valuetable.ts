@@ -12,23 +12,11 @@
 // tests run this file under `node --test`, which strips the types but does not
 // rewrite a `.js` specifier back to the file it came from.
 import type { ChipMeasure } from "./chipfit.ts";
+import type { Cell } from "./doc.ts";
 
-/** One element of a run, as the core reads it. The shape `doc.runCells`
- *  answers in; `runcellsshim.ts` builds the same thing out of
- *  `templateChildren` until that lands. */
-export type Cell = {
-  /** The element's number in its run: the last step of its path. */
-  readonly index: number;
-  readonly offset_bits: number;
-  readonly size_bits: number;
-  /** What the listing would say on a shared row, or the symbol's name for a
-   *  traced block. Never reformatted here. */
-  readonly text: string;
-  readonly kind: string;
-  /** False when the element's bits are not one contiguous run, which is what
-   *  sends the whole run to the uniform layout. */
-  readonly contiguous: boolean;
-};
+// `Cell` is the core's own answer, from `doc.runCells`; nothing here reshapes
+// it. Re-exported so the view and the tests have one name for it.
+export type { Cell };
 
 /** A run and its elements on screen. The name and type are what a cell's
  *  tooltip says it is; `symbol` marks the steps of a traced block, which are
@@ -39,12 +27,22 @@ export type RunCells = {
   readonly name: string;
   readonly type: string;
   readonly symbol: boolean;
+  /** The widest text this run has ever shown, whether or not it is on screen
+   *  now. Which layout a run gets has to hold still while the reader scrolls:
+   *  a window whose samples happen to be four digits would otherwise be
+   *  aligned and the next window, holding a five-digit one, uniform, and every
+   *  row would change height between them. The floor only ever rises, so a run
+   *  gives the aligned layout up at most once. */
+  readonly widest: string;
   readonly cells: readonly Cell[];
 };
 
-/** Padding either side of a cell's text (`padding: 0 4px` in `.hv-val`), plus
- *  the hairline between two of them. Mirrors style.css. */
-export const VALUE_PAD = 9;
+/** Padding either side of a cell's text (`padding: 0 2px` in `.hv-val`), plus
+ *  the hairline between two of them. Mirrors style.css, and is kept narrow on
+ *  purpose: two bytes of a 16-byte row are 45 pixels, and `-32768` and its
+ *  padding have to fit inside them for a run of 16-bit samples to be drawn
+ *  over the bytes it is stored in. */
+export const VALUE_PAD = 5;
 /** The gap between two uniform cells (`gap: 2px` on `.hv-vals-uniform`). */
 export const VALUE_GAP = 2;
 /** Room kept on the last line for the `+3` that counts what did not fit. */
@@ -53,6 +51,35 @@ export const VALUE_REST = 34;
 const COLUMN_GUESS = 320;
 /** Pitch of a hex cell to assume before one has been measured. */
 const PITCH_GUESS = 22;
+
+/**
+ * How wide a cell of this kind and size has to be, whatever value it happens
+ * to hold: the longest text the type can produce, as a string of digits to
+ * measure.
+ *
+ * This is what keeps the layout still while the reader scrolls. Measuring the
+ * values that happen to be on screen means a window of four-digit samples is
+ * laid out one way and the next window, holding a five-digit one, another —
+ * and every row between them changes height. A `u16` is five digits wide
+ * whether it holds 7 or 65,535.
+ *
+ * Empty for the kinds whose text has no width the type can promise: a float, a
+ * decoder's symbol, a record's one-line reading. Those fall back to the widest
+ * text the run has shown.
+ */
+export function typeDigits(kind: string, sizeBits: number): string {
+  if (sizeBits <= 0 || sizeBits > 64) return "";
+  if (kind === "uint" || kind === "unset") return "8".repeat(Math.ceil(Math.log10(2 ** Math.min(sizeBits, 53))));
+  if (kind === "int") return `-${"8".repeat(Math.ceil(Math.log10(2 ** Math.min(sizeBits - 1, 53))))}`;
+  return "";
+}
+
+/** How wide one cell's text may be drawn: what its type can produce where that
+ *  is known, and what it says where it is not. */
+function textWidth(c: Cell, measure: ChipMeasure): number {
+  const digits = typeDigits(c.kind, c.size_bits);
+  return measure.value(digits === "" ? c.text : digits);
+}
 
 /** Whether a value is a number, and so is read from its right-hand end. */
 export function numeric(kind: string): boolean {
@@ -159,11 +186,12 @@ export function alignedFits(runs: readonly RunCells[], o: FitOpts): boolean {
   let widest = 0;
   let any = false;
   for (const run of runs) {
+    widest = Math.max(widest, o.measure.value(run.widest));
     for (const c of run.cells) {
       if (!c.contiguous) return false;
       any = true;
       narrowest = Math.min(narrowest, Math.min(c.size_bits, columns) * bit);
-      widest = Math.max(widest, o.measure.value(c.text));
+      widest = Math.max(widest, textWidth(c, o.measure));
     }
   }
   return any && narrowest >= widest + VALUE_PAD;
@@ -173,7 +201,8 @@ export function alignedFits(runs: readonly RunCells[], o: FitOpts): boolean {
 export function uniformWidth(runs: readonly RunCells[], measure: ChipMeasure): number {
   let widest = 0;
   for (const run of runs) {
-    for (const c of run.cells) widest = Math.max(widest, measure.value(c.text));
+    widest = Math.max(widest, measure.value(run.widest));
+    for (const c of run.cells) widest = Math.max(widest, textWidth(c, measure));
   }
   return Math.ceil(widest + VALUE_PAD);
 }
@@ -236,7 +265,9 @@ export function planRowValues(o: RowValueOpts): RowValues {
       });
     }
   }
-  cells.sort((a, b) => a.from - b.from || a.index - b.index);
+  // In the order of the bytes, which is the order the table is read in, and
+  // which is the only order two runs sharing a row can be put in.
+  cells.sort((a, b) => a.startBit - b.startBit || a.index - b.index);
   if (cells.length === 0) return NO_VALUES;
   if (o.layout === "aligned") {
     return finish("aligned", cells, 0, 1, 0, o.valLine);

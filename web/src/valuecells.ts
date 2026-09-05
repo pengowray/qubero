@@ -9,6 +9,7 @@
 // scrolling the view. Spare cells are hidden, never taken away.
 //
 // `.ts` on the imports for the reason `chipplan.ts` gives.
+import type { ChipMeasure } from "./chipfit.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { setText } from "./hexcell.ts";
 import { VALUES } from "./strings.ts";
@@ -124,6 +125,28 @@ export function fillVals(el: ValsEl, plan: RowValues, width: number, bpr: number
   if (el.style.getPropertyValue("--hv-val-w") !== cell) el.style.setProperty("--hv-val-w", cell);
   for (const [i, c] of plan.cells.entries()) fillCell(el.children[i] as HTMLElement, c, aligned);
   if (plan.rest > 0) fillRest(el.children[plan.cells.length] as HTMLElement, plan.rest);
+}
+
+/**
+ * How a value cell's own text is measured, read off a cell that has been
+ * drawn. The chips' font is a size larger, and measuring these against it says
+ * a run does not fit the aligned layout when it does.
+ *
+ * Null until there is a cell to read a font from; the caller keeps the chips'
+ * font until then and draws once more when this arrives.
+ */
+export function readValFont(root: HTMLElement): ChipMeasure | null {
+  const cell = root.querySelector(".hv-val");
+  if (!(cell instanceof HTMLElement)) return null;
+  const ctx = document.createElement("canvas").getContext("2d");
+  if (ctx === null) return null;
+  const s = getComputedStyle(cell);
+  const font = `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+  const width = (text: string): number => {
+    ctx.font = font;
+    return ctx.measureText(text).width;
+  };
+  return { name: width, value: width };
 }
 
 /**

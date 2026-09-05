@@ -28,15 +28,14 @@ import {
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, SPAN_LIMIT, valsOf, type ChipEl } from "./hexchips.js";
 import { cutRow, fillHeadings, headingsByRow } from "./hexheadings.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
-import { runCellsShim, runStride } from "./runcellsshim.js";
-import { fillVals, markVals, newVals } from "./valuecells.js";
+import { fillVals, markVals, newVals, readValFont } from "./valuecells.js";
+import type { Cell } from "./doc.js";
 import {
   alignedFits,
   alignedWidth,
   NO_VALUES,
   planRowValues,
   uniformWidth,
-  type Cell,
   type RowValues,
   type RunCells,
 } from "./valuetable.js";
@@ -322,6 +321,16 @@ export class HexView {
    *  not cost a screenful of elements. Keyed by the run's path; emptied
    *  whenever the document or the template changes. */
   private readonly cellCache = new Map<string, { from: number; to: number; cells: Cell[] }>();
+  /** The widest text each run has shown, kept past the cells themselves. Which
+   *  layout a run gets is decided from the widest value on screen, and a value
+   *  a digit longer scrolling into view would otherwise take every row of that
+   *  run from the aligned layout to the uniform one and back again. Kept as
+   *  the text rather than a width, so it survives a change of font. */
+  private readonly runWidest = new Map<string, string>();
+  /** How a value cell's text is measured, read from a drawn cell's own font.
+   *  Null until there has been one on screen to read; the chips' font stands
+   *  in until then, which is a size larger and so errs towards uniform. */
+  private valFonts: ChipMeasure | null = null;
   /**
    * Where the chips are drawn. Beside the bytes while there is room for them;
    * below the bytes, across the whole row, when a wide row has squeezed the
@@ -443,6 +452,7 @@ export class HexView {
       this.spanCache = null;
       this.spansAsked = null;
       this.cellCache.clear();
+      this.runWidest.clear();
       // An insert or a delete moves every later byte onto a different row, so
       // what those rows were measured at belongs to bytes that are no longer
       // there. The headings move too, and arrive again through `setSections`.
@@ -1706,47 +1716,50 @@ export class HexView {
    *
    * A screenful either side is read at a time, so scrolling a row at a time
    * does not ask again for what is already here; an answer that is not ready
-   * yet leaves the last table on screen, the way the spans do.
+   * yet leaves the last table on screen, the way the spans do. What is kept
+   * reaches past the window on purpose, and the rows it falls outside drop it.
    */
   private runCells(s: Span, fromBit: number, toBit: number): Cell[] | null {
-    const stride = runStride(s);
-    if (stride === 0) return null;
     const key = s.path.join(",");
-    const need = {
-      from: Math.max(0, Math.floor((fromBit - s.offset_bits) / stride)),
-      to: Math.min(s.count, Math.ceil((toBit - s.offset_bits) / stride)),
-    };
     const had = this.cellCache.get(key);
-    if (had !== undefined && had.from <= need.from && had.to >= need.to) {
-      return had.cells.slice(need.from - had.from, need.to - had.from);
-    }
-    const margin = need.to - need.from;
-    const from = Math.max(0, need.from - margin);
-    const to = Math.min(s.count, Math.max(need.to + margin, from + 1));
-    const capped = to - from > VALUE_LIMIT ? { from: need.from, to: Math.min(to, need.from + VALUE_LIMIT) } : { from, to };
-    const cells = runCellsShim(this.doc, s, s.offset_bits + capped.from * stride, s.offset_bits + capped.to * stride, VALUE_LIMIT);
+    if (had !== undefined && had.from <= fromBit && had.to >= toBit) return had.cells;
+    const margin = toBit - fromBit;
+    const end = s.offset_bits + s.size_bits;
+    const from = Math.max(s.offset_bits, fromBit - margin);
+    const to = Math.min(end, toBit + margin);
+    const r = this.doc.runCells(s.path, from, to, VALUE_LIMIT);
     // Still on its way: what was read last time stands until it arrives, so
     // the table does not blink off for every step of a scroll.
-    if (cells === null) return had?.cells ?? null;
+    if (r.status !== "ok") return had?.cells ?? null;
+    const cells = r.node;
+    // The limit may have stopped the answer short of what was asked for, and
+    // what is cached has to say what it really covers or the next draw would
+    // take the missing tail for an empty stretch of file.
+    const last = cells[cells.length - 1];
+    const reached = cells.length < VALUE_LIMIT || last === undefined ? to : last.offset_bits + last.size_bits;
     // One file can hold many runs, and every one scrolled past would otherwise
     // be kept for the life of the view.
     if (this.cellCache.size > 16) this.cellCache.clear();
-    this.cellCache.set(key, { from: capped.from, to: capped.from + cells.length, cells });
-    return cells.slice(Math.max(0, need.from - capped.from), Math.max(0, need.to - capped.from));
+    this.cellCache.set(key, { from, to: reached, cells });
+    return cells;
   }
 
   /**
-   * The runs whose values are drawn on this screenful.
+   * The runs whose values are drawn on this screenful: the ones the core
+   * folded, `body 72,000 values`, read through `runCells`.
    *
-   * Two sources, and only one of them costs anything. A run the core folded —
-   * `body 72,000 values` — is read through `runCells`. A run the view folded,
-   * where a handful of a list's elements sit on one row and became one chip,
-   * is already every element it stands for: those spans are the cells.
+   * Not the runs the view folds, where a handful of a list's elements sit
+   * together on a row and become one chip. Those are already on screen as
+   * spans and would cost nothing to draw — but whether they fold at all
+   * depends on what the top row carries in from above, so the same row would
+   * be one height at the top of the screen and another below it, which is the
+   * one thing a row's height may never depend on.
    */
-  private gatherRuns(spans: readonly Span[], byRow: readonly Chip[][], start: number, windowBytes: number): RunCells[] {
+  private gatherRuns(spans: readonly Span[], start: number, windowBytes: number): RunCells[] {
     const fromBit = start * 8;
     const toBit = (start + windowBytes) * 8;
-    const out: { path: readonly number[]; name: string; type: string; symbol: boolean; cells: Cell[] }[] = [];
+    const out: { path: readonly number[]; name: string; type: string; symbol: boolean; widest: string; cells: Cell[] }[] =
+      [];
     for (const s of spans) {
       if (s.count <= 0 || s.gap) continue;
       const end = s.offset_bits + s.size_bits;
@@ -1757,33 +1770,26 @@ export class HexView {
       // codes symbols, and a symbol's cell reads as one. The type a cell says
       // is the element's, not the run's: a cell of `body` holds an `i16 le`,
       // and the run is the `i16 le[]`.
-      out.push({ path: s.path, name: s.name, type: elementType(s.type), symbol: s.unit === "symbol", cells });
-    }
-    const folded = new Map<string, (typeof out)[number]>();
-    for (const chips of byRow) {
-      for (const c of chips) {
-        if (c.run.length === 0) continue;
-        const path = c.span.path.slice(0, -1);
-        const key = path.join(",");
-        let run = folded.get(key);
-        if (run === undefined) {
-          run = { path, name: listName(c.span), type: c.span.type, symbol: false, cells: [] };
-          folded.set(key, run);
-          out.push(run);
-        }
-        for (const e of c.run) {
-          run.cells.push({
-            index: e.path[e.path.length - 1] ?? 0,
-            offset_bits: e.offset_bits,
-            size_bits: e.size_bits,
-            text: e.value,
-            kind: e.kind,
-            contiguous: true,
-          });
-        }
-      }
+      out.push({
+        path: s.path,
+        name: s.name,
+        type: elementType(s.type),
+        symbol: s.unit === "symbol",
+        widest: this.widestOf(s.path.join(","), cells),
+        cells,
+      });
     }
     return out;
+  }
+
+  /** The widest text a run has shown, this screenful's cells included. */
+  private widestOf(key: string, cells: readonly Cell[]): string {
+    let widest = this.runWidest.get(key) ?? "";
+    for (const c of cells) {
+      if (c.text.length > widest.length) widest = c.text;
+    }
+    this.runWidest.set(key, widest);
+    return widest;
   }
 
   /**
@@ -1795,9 +1801,8 @@ export class HexView {
    * uniform layout unless both of them fit the aligned one.
    */
   private planValues(runs: readonly RunCells[], start: number, bpr: number, maxLines: number): RowValues[] {
-    const measure = this.chipFonts ?? GUESS_TEXT;
+    const measure = this.valFonts ?? this.chipFonts ?? GUESS_TEXT;
     const fit = { bpr, noteWidth: this.noteWidth, hexPitch: this.hexPitch, measure };
-    const cellWidth = uniformWidth(runs, measure);
     const rows = this.visibleRows;
     const perRow: RunCells[][] = Array.from({ length: rows }, () => []);
     const aligned: boolean[] = Array.from({ length: rows }, () => true);
@@ -1829,7 +1834,10 @@ export class HexView {
             rowStart: start + r * bpr,
             bpr,
             layout: aligned[r] === true ? "aligned" : "uniform",
-            cellWidth,
+            // The width is the row's own runs, not the screenful's: a run with
+            // wider values scrolling off the bottom must not narrow the cells
+            // of the run still on screen, since every row of it would rewrap.
+            cellWidth: uniformWidth(rs, measure),
             noteWidth: this.noteWidth,
             maxLines,
             valLine: this.sizes.valLine,
@@ -1855,7 +1863,7 @@ export class HexView {
     const { spans, more, trouble, byteSpan, byRow } =
       fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
     const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
-    const runs = fields && templated ? this.gatherRuns(spans, byRow, start, windowBytes) : [];
+    const runs = fields && templated ? this.gatherRuns(spans, start, windowBytes) : [];
     return {
       bpr,
       len,
@@ -2143,7 +2151,13 @@ export class HexView {
     const fields = f.fields;
     const below = f.below;
     const fonts = fields && this.chipFonts === null ? readChipFonts(this.rowsEl) : null;
+    const valFonts = fields && this.valFonts === null ? readValFont(this.rowsEl) : null;
     let widened = false;
+    if (valFonts !== null) {
+      // Set before the redraw, for the reason the chips' fonts are.
+      this.valFonts = valFonts;
+      widened = true;
+    }
     if (this.metrics === null || this.arrangement === "unknown") {
       const noteEl = fields ? (this.rowEls[0]?.querySelector(".hv-note") as HTMLElement | null) : null;
       // `clientWidth` counts the note's own left padding, which no chip can be

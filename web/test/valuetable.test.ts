@@ -9,6 +9,7 @@ import type { ChipMeasure } from "../src/chipfit.ts";
 import {
   alignedFits,
   planRowValues,
+  typeDigits,
   uniformWidth,
   VALUE_PAD,
   type Cell,
@@ -41,7 +42,7 @@ function run(o: {
       contiguous: o.contiguous ?? true,
     });
   }
-  return { path: [3], name: o.name ?? "body", type: o.type ?? "i24 le", symbol: false, cells };
+  return { path: [3], name: o.name ?? "body", type: o.type ?? "i24 le", symbol: false, widest: "", cells };
 }
 
 /** The plan for one row, with the sizes a 16-byte row of a wide column has. */
@@ -85,9 +86,22 @@ test("a narrow column takes the aligned table down with it", () => {
   assert.equal(alignedFits(cells, { bpr: 16, noteWidth: 90, hexPitch: 22, measure: CHAR }), false);
 });
 
-test("the widest cell width is the widest text plus its padding", () => {
-  const cells = [run({ stride: 16, from: 0, to: 4, text: (i) => "0".repeat(i + 1) })];
+test("a cell whose type says nothing about its width is as wide as its text", () => {
+  const cells = [run({ stride: 16, kind: "str", from: 0, to: 4, text: (i) => "0".repeat(i + 1) })];
   assert.equal(uniformWidth(cells, CHAR), 4 * 7 + VALUE_PAD);
+});
+
+test("a number is as wide as its type can be, not as wide as it happens to be", () => {
+  // A u16 is five digits whether it holds 7 or 65,535, so the layout holds
+  // still while the reader scrolls into the wider values.
+  const small = [run({ stride: 16, kind: "uint", from: 0, to: 4, text: () => "7" })];
+  const large = [run({ stride: 16, kind: "uint", from: 0, to: 4, text: () => "65535" })];
+  assert.equal(uniformWidth(small, CHAR), 5 * 7 + VALUE_PAD);
+  assert.equal(uniformWidth(large, CHAR), uniformWidth(small, CHAR));
+  // Signed spends a character on the sign and a digit on the smaller range.
+  assert.equal(typeDigits("int", 16), "-88888");
+  assert.equal(typeDigits("uint", 8), "888");
+  assert.equal(typeDigits("float", 32), "");
 });
 
 // ----- aligned -----

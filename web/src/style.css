@@ -805,7 +805,7 @@ input.invalid {
   box-sizing: border-box;
   min-width: 0;
   height: 16px;
-  padding: 0 4px;
+  padding: 0 2px;
   border-radius: 2px;
   /* Lighter than a chip: a hundred of these to a screen, and they are read as
      a table rather than picked out one at a time. The hairline is what tells
