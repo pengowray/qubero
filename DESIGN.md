@@ -604,12 +604,25 @@ screen, since a window of four-digit samples and the next window holding a
 five-digit one must not be laid out differently. Aligned is a grid of the row's
 bits, sized so a byte of it has the pitch of
 a hex cell, with each cell over the bits its value is stored in; an element the
-row edge cuts keeps its text on the row it starts on, lets it out of the sliver
-of a cell it was left, and has a tinted continuation cell on the next row.
-Uniform is equal cells as wide as the widest value the type holds, wrapped over as
+row edge cuts says its value on whichever of its two pieces is wider, ties to
+the piece it starts on, and the other piece is a tinted cell with no text that
+says in its tooltip which way the value lies. The wider piece is where the
+reader looks for a value, and a 24-bit sample whose first byte is the last byte
+of a row would otherwise hang its number off the end of the table over nothing.
+The piece with the text is still narrower than the value needs, so the text is
+let out of its cell rather than cut short. Uniform is equal cells as wide as the
+widest value the type holds, wrapped over as
 many lines as the row needs, and is what a run gets when its values do not fit
-the bits they are stored in — six-bit codes, Huffman symbols — or when the core
-says an element is not one contiguous run of bits. Numbers are read from the
+the bits they are stored in — six-bit codes — or when the core
+says an element is not one contiguous run of bits. Flow is the third, for a run
+of a decoder's symbols: each cell as wide as its own text, wrapped in the order
+of the bytes, so a row of a deflate block reads as the bytes the block produces
+with the matches inline as the wider cells they are. That is why a cell carries
+a `label` as well as a `text`: `literal 'Q'` on every cell of a screenful is ten
+lines of the same two words, where `Q` is one line of the file being unpacked,
+and the words are still there in the tooltip. A match and the end of a block
+take the marker colour, since where the copying happens is what there is to see
+in a block of symbols. Numbers are read from the
 right and everything else from the left. The cells are lighter than a chip and
 divided by a hairline, since a hundred of them are read as a table rather than
 picked out one at a time; clicking one selects that element in all three views,
