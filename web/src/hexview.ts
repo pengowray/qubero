@@ -10,6 +10,14 @@
 // view scrolls in pixels over `RowHeights`, a ledger of what each row is worth,
 // and a finger that moves twenty pixels moves the bytes twenty pixels whatever
 // it is passing over.
+//
+// What this file owns is the place in the file, the scrolling and pointer work
+// that moves it, the cursor and the selection, and the drawing of a row. What
+// it asks other files for: `valuefetch.ts` gets the fields and the values from
+// the core and holds the last answer while the next is on its way,
+// `chipplan.ts` and `chipfit.ts` say where the chips go, `valuelayout.ts` and
+// `valuetable.ts` say where the values go, and `hexchips.ts`, `valuecells.ts`
+// and `hexheadings.ts` write them into the document.
 
 import type { Doc, Span } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
@@ -25,11 +33,12 @@ import {
   setText,
   type Run,
 } from "./hexcell.js";
-import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, SPAN_LIMIT, valsOf, type ChipEl } from "./hexchips.js";
+import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.js";
 import { cutRow, fillHeadings, headingsByRow } from "./hexheadings.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.js";
 import type { Cell } from "./doc.js";
+import { ValueFetch } from "./valuefetch.js";
 import {
   alignedWidth,
   chooseLayout,
@@ -78,15 +87,6 @@ const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"
  *  sees them, so past some size the honest answer is no. */
 const COPY_LIMIT_BYTES = 256 * 1024;
 
-/** How many elements of one run the value table reads at a time. A screenful
- *  of 24-bit samples is a few hundred; the rest of the limit is the margin
- *  either side that lets a scroll of a row cost nothing. */
-const VALUE_LIMIT = 2000;
-
-/** What one element of a run is, from what the run is: `i16 le[]` holds an
- *  `i16 le`. The core writes the brackets; nothing else is taken off. */
-const elementType = (type: string): string => type.replace(/\[\]$/, "");
-
 /** How long a message stays up before it goes away on its own. */
 const NOTICE_MS = 5000;
 
@@ -108,7 +108,8 @@ const COPY_DONE = (bytes: number, asText: boolean): string =>
  *  which is the one thing a plain "keep" cannot say. */
 type Select = "keep" | "clear" | { readonly anchor: number };
 
-/** Where the spans on screen land. See `HexView.placeSpans`. */
+/** Where the spans on screen land. See `HexView.placeSpans`, which puts what
+ *  `valuefetch.ts` answered onto the rows. */
 type Placed = {
   spans: Span[];
   more: boolean;
@@ -297,38 +298,15 @@ export class HexView {
    */
   private linked: BitRange | null = null;
   private rightColumn: RightColumn = "text";
-  /** The last answered spans, and the stretch of file they were asked for.
-   *  Kept past the view moving: while the next answer is still being worked
-   *  out, the rows these still cover keep their chips. */
-  private spanCache:
-    | { key: string; from: number; to: number; spans: Span[]; more: boolean; error: string | null }
-    | null = null;
-  /** Whether this draw is the one that asks the core for spans, rather than
-   *  the one that gets the bytes on screen first. See `spansForView`. */
-  private spansNow = false;
-  /** The frame already booked to ask for spans, so that a burst of draws books
-   *  one. Cleared when it runs. */
-  private spansSoon: number | null = null;
-  /** The window already asked about once this way. A second draw on the same
-   *  window asks outright rather than booking another frame, so a reply that
-   *  needs several goes still gets them. */
-  private spansAsked: string | null = null;
+  /** What the field column asks the core for — which fields are on screen and
+   *  what a folded run's elements read as — and what it keeps on screen while
+   *  it waits for the next answer. */
+  private readonly fetch: ValueFetch;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
   /** Width of one byte of the hex column, measured from the last frame, so a
    *  byte of an aligned value table can be drawn at the same pitch. */
   private hexPitch = 0;
-  /** The elements of the runs on screen, kept between draws and read again
-   *  only when the view has left what was fetched. A scroll of one row must
-   *  not cost a screenful of elements. Keyed by the run's path; emptied
-   *  whenever the document or the template changes. */
-  private readonly cellCache = new Map<string, { from: number; to: number; cells: Cell[] }>();
-  /** The widest text each run has shown, kept past the cells themselves. Which
-   *  layout a run gets is decided from the widest value on screen, and a value
-   *  a digit longer scrolling into view would otherwise take every row of that
-   *  run from the aligned layout to the uniform one and back again. Kept as
-   *  the text rather than a width, so it survives a change of font. */
-  private readonly runWidest = new Map<string, string>();
   /** How a value cell's text is measured, read from a drawn cell's own font.
    *  Null until there has been one on screen to read; the chips' font stands
    *  in until then, which is a size larger and so errs towards uniform. */
@@ -400,6 +378,7 @@ export class HexView {
   private noticeTimer = 0;
 
   constructor(private readonly doc: Doc) {
+    this.fetch = new ValueFetch(doc, () => this.render());
     this.el = document.createElement("div");
     this.el.className = "hexview";
     this.el.tabIndex = 0;
@@ -451,10 +430,7 @@ export class HexView {
     this.track.addEventListener("pointerup", (e) => this.onTrackUp(e));
     this.track.addEventListener("pointercancel", (e) => this.onTrackUp(e));
     doc.onChange(() => {
-      this.spanCache = null;
-      this.spansAsked = null;
-      this.cellCache.clear();
-      this.runWidest.clear();
+      this.fetch.forgetAll();
       // An insert or a delete moves every later byte onto a different row, so
       // what those rows were measured at belongs to bytes that are no longer
       // there. The headings move too, and arrive again through `setSections`.
@@ -596,12 +572,11 @@ export class HexView {
 
   setRightColumn(c: RightColumn): void {
     this.rightColumn = c;
-    this.cellCache.clear();
+    this.fetch.forgetCells();
     // The text column is where the "ascii" pane lives; without it the cursor
     // has nowhere to be but the bytes.
     if (!this.showsText && this.pane === "ascii") this.pane = "hex";
-    this.spanCache = null;
-    this.spansAsked = null;
+    this.fetch.forgetSpans();
     // Rows are taller while the field column is shown, so the number of rows
     // that fit has to be worked out again.
     this.el.classList.toggle("has-notes", this.showsFields);
@@ -1639,159 +1614,9 @@ export class HexView {
    *  started above the view is named on the first row, so nothing on screen is
    *  left unexplained. */
   private placeSpans(start: number, windowBytes: number, bpr: number): Placed {
-    const { spans, more, error: trouble } = this.spansForView(start, windowBytes);
+    const { spans, more, error: trouble } = this.fetch.spansForView(start, windowBytes);
     const { byteSpan, byRow } = placeChips(spans, start, windowBytes, bpr, this.visibleRows);
     return { spans, more, trouble, byteSpan, byRow };
-  }
-
-  /** Spans for the rows on screen.
-   *
-   *  An answer that is not ready yet leaves the last one on screen for the
-   *  rows it still covers, and only the rows past it empty. Scrolling one
-   *  step through a program is what this is for: the file below the view is
-   *  megabytes of instructions, the reply for the new window takes several
-   *  goes, and blanking the column for every one of them makes the whole
-   *  column flicker off for as long as the reading takes. */
-  private spansForView(start: number, count: number): { spans: Span[]; more: boolean; error: string | null } {
-    const key = `${start}:${count}:${this.doc.template ?? ""}`;
-    if (this.spanCache?.key === key) return this.spanCache;
-    // The core's answer for a window nobody has asked about yet can take
-    // longer than a frame: inside a compressed stream it has bits to decode
-    // before it can say what is there. The bytes do not wait for it. A draw
-    // that lands on an unanswered window puts the hex up with the chips the
-    // last answer left, and books the next frame to ask. That frame asks about
-    // wherever the view is by then, so a second wheel step before the first
-    // answer lands replaces the question rather than queueing behind it.
-    if (!this.spansNow && this.spanCache !== null && this.spansAsked !== key) {
-      this.askForSpansSoon();
-      const kept = this.spanCache;
-      const overlaps = kept.from < start + count && start < kept.to;
-      return overlaps ? { spans: kept.spans, more: kept.more, error: null } : { spans: [], more: false, error: null };
-    }
-    this.spansNow = false;
-    this.spansAsked = key;
-    const max = Math.min(SPAN_LIMIT, count * 8);
-    const r = this.doc.spans(start * 8, (start + count) * 8, max);
-    // Pending: the bytes are on their way. Working: the structure is still
-    // being worked out. Both come back on their own, and until they do the
-    // last answer stands wherever it reaches. `placeChips` draws only the
-    // spans that fall on screen, so the rows past it are left empty.
-    if (r.status === "pending" || r.status === "working") {
-      const kept = this.spanCache;
-      if (kept === null || kept.to <= start || start + count <= kept.from) {
-        return { spans: [], more: false, error: null };
-      }
-      return { spans: kept.spans, more: kept.more, error: null };
-    }
-    // The template cannot read what is here, usually after an edit that
-    // changed a length, and an empty column would not say that.
-    if (r.status === "error") return { spans: [], more: false, error: r.message };
-    this.spanCache = {
-      key,
-      from: start,
-      to: start + count,
-      spans: r.node,
-      more: r.node.length >= max,
-      error: null,
-    };
-    return this.spanCache;
-  }
-
-  /** Book the next frame to ask the core for the spans of whatever is on
-   *  screen then, and draw again with them. One booking at a time. */
-  private askForSpansSoon(): void {
-    if (this.spansSoon !== null) return;
-    this.spansSoon = requestAnimationFrame(() => {
-      this.spansSoon = null;
-      this.spansNow = true;
-      try {
-        this.render();
-      } finally {
-        this.spansNow = false;
-      }
-    });
-  }
-
-  /**
-   * The elements of one folded run over a stretch of it, from the cache where
-   * the cache reaches and from the core where it does not.
-   *
-   * A screenful either side is read at a time, so scrolling a row at a time
-   * does not ask again for what is already here; an answer that is not ready
-   * yet leaves the last table on screen, the way the spans do. What is kept
-   * reaches past the window on purpose, and the rows it falls outside drop it.
-   */
-  private runCells(s: Span, fromBit: number, toBit: number): Cell[] | null {
-    const key = s.path.join(",");
-    const had = this.cellCache.get(key);
-    if (had !== undefined && had.from <= fromBit && had.to >= toBit) return had.cells;
-    const margin = toBit - fromBit;
-    const end = s.offset_bits + s.size_bits;
-    const from = Math.max(s.offset_bits, fromBit - margin);
-    const to = Math.min(end, toBit + margin);
-    const r = this.doc.runCells(s.path, from, to, VALUE_LIMIT);
-    // Still on its way: what was read last time stands until it arrives, so
-    // the table does not blink off for every step of a scroll.
-    if (r.status !== "ok") return had?.cells ?? null;
-    const cells = r.node;
-    // The limit may have stopped the answer short of what was asked for, and
-    // what is cached has to say what it really covers or the next draw would
-    // take the missing tail for an empty stretch of file.
-    const last = cells[cells.length - 1];
-    const reached = cells.length < VALUE_LIMIT || last === undefined ? to : last.offset_bits + last.size_bits;
-    // One file can hold many runs, and every one scrolled past would otherwise
-    // be kept for the life of the view.
-    if (this.cellCache.size > 16) this.cellCache.clear();
-    this.cellCache.set(key, { from, to: reached, cells });
-    return cells;
-  }
-
-  /**
-   * The runs whose values are drawn on this screenful: the ones the core
-   * folded, `body 72,000 values`, read through `runCells`.
-   *
-   * Not the runs the view folds, where a handful of a list's elements sit
-   * together on a row and become one chip. Those are already on screen as
-   * spans and would cost nothing to draw — but whether they fold at all
-   * depends on what the top row carries in from above, so the same row would
-   * be one height at the top of the screen and another below it, which is the
-   * one thing a row's height may never depend on.
-   */
-  private gatherRuns(spans: readonly Span[], start: number, windowBytes: number): RunCells[] {
-    const fromBit = start * 8;
-    const toBit = (start + windowBytes) * 8;
-    const out: { path: readonly number[]; name: string; type: string; symbol: boolean; widest: string; cells: Cell[] }[] =
-      [];
-    for (const s of spans) {
-      if (s.count <= 0 || s.gap) continue;
-      const end = s.offset_bits + s.size_bits;
-      if (end <= fromBit || s.offset_bits >= toBit) continue;
-      const cells = this.runCells(s, Math.max(fromBit, s.offset_bits), Math.min(toBit, end));
-      if (cells === null || cells.length === 0) continue;
-      // `unit` is the format's own word for what a run holds: a deflate block
-      // codes symbols, and a symbol's cell reads as one. The type a cell says
-      // is the element's, not the run's: a cell of `body` holds an `i16 le`,
-      // and the run is the `i16 le[]`.
-      out.push({
-        path: s.path,
-        name: s.name,
-        type: elementType(s.type),
-        symbol: s.unit === "symbol",
-        widest: this.widestOf(s.path.join(","), cells),
-        cells,
-      });
-    }
-    return out;
-  }
-
-  /** The widest text a run has shown, this screenful's cells included. */
-  private widestOf(key: string, cells: readonly Cell[]): string {
-    let widest = this.runWidest.get(key) ?? "";
-    for (const c of cells) {
-      if (c.label.length > widest.length) widest = c.label;
-    }
-    this.runWidest.set(key, widest);
-    return widest;
   }
 
   /**
@@ -1868,7 +1693,7 @@ export class HexView {
     const { spans, more, trouble, byteSpan, byRow } =
       fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
     const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
-    const runs = fields && templated ? this.gatherRuns(spans, start, windowBytes) : [];
+    const runs = fields && templated ? this.fetch.runsForView(spans, start, windowBytes) : [];
     return {
       bpr,
       len,

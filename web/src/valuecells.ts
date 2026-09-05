@@ -1,8 +1,8 @@
 // The cells the value table is made of, and how a row's block of them is
 // filled.
 //
-// What each one says is decided in `valuetable.ts`; this is only the writing
-// of it. Like the chips, every cell is written over rather than rebuilt: a
+// Which shape a row's values take is decided in `valuelayout.ts` and where
+// each one sits in `valuetable.ts`; this is only the writing of it. Like the chips, every cell is written over rather than rebuilt: a
 // redraw usually wants the cells that are already there, and on a touch screen
 // a finger may be resting on one, which the browser reads as the touch being
 // called off if the element leaves the document — which stops the drag that is
