@@ -38,6 +38,16 @@ const WINDOWS_READ = 3;
  *  screenfuls rather than once per scroll, which is what makes that bearable
  *  and what the ceiling is here to keep true. */
 const VALUE_CEILING = 30000;
+/**
+ * How long an ask for spans may take before the draw stops waiting for it.
+ *
+ * Under this, the answer is worth having in the draw that wants it: booking
+ * a frame to ask instead means every step of a scroll is drawn twice, once
+ * with the chips of the window before it. Over it, which is what a window
+ * inside a compressed stream costs while it decodes enough bits to say what
+ * is there, the bytes go up without waiting and the chips follow.
+ */
+const SPAN_BUDGET_MS = 4;
 
 /** How many elements of one run to read for a window this wide. Worked out
  *  rather than fixed, because how many cells a byte is worth is the run's
@@ -70,6 +80,11 @@ export class ValueFetch {
   /** Whether this draw is the one that asks the core for spans, rather than
    *  the one that gets the bytes on screen first. See `spansForView`. */
   private spansNow = false;
+  /** How long the last answered ask took. A cheap one is worth waiting for
+   *  inside the draw that wants it; a dear one is what the frame booked
+   *  below is for. Starts high so the first window of a file is drawn before
+   *  anything is known about what reading it costs. */
+  private spanCost = Infinity;
   /** The frame already booked to ask for spans, so that a burst of draws books
    *  one. Cleared when it runs. */
   private spansSoon: number | null = null;
@@ -126,7 +141,7 @@ export class ValueFetch {
     // last answer left, and books the next frame to ask. That frame asks about
     // wherever the view is by then, so a second wheel step before the first
     // answer lands replaces the question rather than queueing behind it.
-    if (!this.spansNow && this.spanCache !== null && this.spansAsked !== key) {
+    if (!this.spansNow && this.spanCost > SPAN_BUDGET_MS && this.spanCache !== null && this.spansAsked !== key) {
       this.askForSpansSoon();
       const kept = this.spanCache;
       const overlaps = kept.from < start + count && start < kept.to;
@@ -135,6 +150,7 @@ export class ValueFetch {
     this.spansNow = false;
     this.spansAsked = key;
     const max = Math.min(SPAN_LIMIT, count * 8);
+    const began = performance.now();
     const r = this.doc.spans(start * 8, (start + count) * 8, max);
     // Pending: the bytes are on their way. Working: the structure is still
     // being worked out. Both come back on their own, and until they do the
@@ -150,6 +166,10 @@ export class ValueFetch {
     // The template cannot read what is here, usually after an edit that
     // changed a length, and an empty column would not say that.
     if (r.status === "error") return { spans: [], more: false, error: r.message };
+    // What that cost, remembered so the next draw knows whether to wait for
+    // it. Eased down rather than replaced, so one slow window keeps the
+    // frame booked for a few draws instead of exactly one.
+    this.spanCost = Math.max(performance.now() - began, this.spanCost === Infinity ? 0 : this.spanCost * 0.6);
     this.spanCache = {
       key,
       from: start,

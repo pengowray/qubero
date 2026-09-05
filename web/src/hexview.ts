@@ -191,6 +191,9 @@ type Frame = {
   /** How wide an aligned table is drawn, so a byte of it has the pitch of a
    *  byte of the bytes. */
   readonly valsWidth: number;
+  /** How wide the chips' own text is drawn, with an answer kept per string
+   *  for the length of the draw. @see memoText */
+  readonly chipMeasure: ChipMeasure;
   /** What the top row carries in from above, put here by the row that finds
    *  it and read by the strip pinned over the rows. */
   pinned: ChipBlock | null;
@@ -297,6 +300,10 @@ export class HexView {
   private dragging: { startY: number; startPx: number; lastY: number; lastT: number; velocity: number } | null = null;
   /** The frame request of a throw still slowing down, if one is running. */
   private glide: number | null = null;
+  /** Wheel travel not yet drawn, and the frame booked to draw it. A wheel
+   *  reports several times a frame, and every report used to be a draw. */
+  private wheelPx = 0;
+  private wheelFrame: number | null = null;
   /**
    * A mouse drag that is selecting rather than scrolling. The pane is fixed at
    * the button press: a drag that wandered from the bytes into the text column
@@ -1126,21 +1133,60 @@ export class HexView {
     this.topPx = at.offsetPx;
   }
 
+  /**
+   * Move the view by a wheel's travel, at most once a frame.
+   *
+   * A mouse with a notched wheel reports once a notch, but a trackpad and a
+   * free-spinning wheel report several times a frame, and drawing for each of
+   * them spends the frame's budget several times over on screenfuls nobody
+   * sees. The first report of a frame is drawn at once, so a single notch is
+   * as immediate as it ever was; the rest are added up and drawn on the next
+   * frame, which is the soonest the screen could have shown them anyway.
+   */
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
     this.stopGlide();
-    const px =
+    this.wheelPx +=
       e.deltaMode === WheelEvent.DOM_DELTA_LINE
         ? e.deltaY * this.rowHeight
         : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
           ? e.deltaY * this.viewH
           : e.deltaY;
-    this.scrollToY(this.scrollY + px);
+    if (this.wheelFrame !== null) return;
+    this.spendWheel();
+    this.bookWheel();
+  }
+
+  /** Draw whatever the wheel has turned since the last draw, and book another
+   *  frame while it is still turning. */
+  private bookWheel(): void {
+    this.wheelFrame = requestAnimationFrame(() => {
+      this.wheelFrame = null;
+      if (this.wheelPx === 0) return;
+      this.spendWheel();
+      this.bookWheel();
+    });
+  }
+
+  private spendWheel(): void {
+    const px = this.wheelPx;
+    this.wheelPx = 0;
+    if (px !== 0) this.scrollToY(this.scrollY + px);
+  }
+
+  /** Forget wheel travel that has not been drawn. A finger or a keypress
+   *  places the view itself, and a notch left over from before would move it
+   *  again a frame later. */
+  private dropWheel(): void {
+    this.wheelPx = 0;
+    if (this.wheelFrame !== null) cancelAnimationFrame(this.wheelFrame);
+    this.wheelFrame = null;
   }
 
   private onPointerDown(e: PointerEvent): void {
     this.el.focus();
     this.stopGlide();
+    this.dropWheel();
     if (e.pointerType === "touch") {
       this.dragging = { startY: e.clientY, startPx: this.scrollY, lastY: e.clientY, lastT: e.timeStamp, velocity: 0 };
       this.rowsEl.setPointerCapture(e.pointerId);
@@ -1742,6 +1788,7 @@ export class HexView {
    * anything of its own.
    */
   private frame(): Frame {
+    const chipMeasure = memoText(this.chipFonts ?? GUESS_TEXT);
     const bpr = this.bytesPerRow;
     const len = this.doc.lengthBytes;
     const start = this.topRow * bpr;
@@ -1789,6 +1836,7 @@ export class HexView {
       headsByRow: headingsByRow(this.sections, start, windowBytes, bpr),
       values: this.planValues(runs, start, bpr, maxLines, valsWidth),
       valsWidth,
+      chipMeasure,
       pinned: null,
     };
   }
@@ -1975,7 +2023,7 @@ export class HexView {
       top: r === 0,
       noteWidth: this.noteWidth,
       maxLines: f.maxLines,
-      measure: this.chipFonts ?? GUESS_TEXT,
+      measure: f.chipMeasure,
       below: f.below,
       rowHeight: this.rowHeight,
       chipLine: this.sizes.chipLine,
