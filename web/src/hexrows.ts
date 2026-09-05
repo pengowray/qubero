@@ -115,6 +115,7 @@ export class HexRows {
   /** The elements each row is made of, kept between draws. See `fitParts`. */
   private parts: RowParts[] = [];
   private partsShape = "";
+  private headerShape = "";
   /** What `fitParts` last built the lines for, so a line added mid-draw for a
    *  row that had to be cut is built the same way. */
   private lineShape = { bpr: 16, binary: false, showText: true, fields: false, below: false };
@@ -338,6 +339,7 @@ export class HexRows {
     }
     while (this.rowEls.length > want) {
       this.rowEls.pop()?.remove();
+      this.parts.pop();
     }
   }
 
@@ -354,12 +356,15 @@ export class HexRows {
   private fitParts(bpr: number, binary: boolean, showText: boolean, fields: boolean, below: boolean): void {
     const shape = `${bpr}|${binary}|${showText}|${fields}|${below}`;
     if (shape === this.partsShape && this.parts.length === this.rowEls.length) return;
+    const changed = shape !== this.partsShape;
     this.partsShape = shape;
     this.lineShape = { bpr, binary, showText, fields, below };
-    this.parts = this.rowEls.map((row) => {
+    if (changed) this.parts = [];
+    for (let i = this.parts.length; i < this.rowEls.length; i++) {
+      const row = this.rowEls[i] as HTMLElement;
       const first = this.makeLine();
       row.replaceChildren(first.line);
-      return {
+      this.parts.push({
         lines: [first],
         hexCells: [...first.hex],
         textCells: [...first.text],
@@ -368,8 +373,8 @@ export class HexRows {
         layoutKey: "",
         noteKey: "",
         valsKey: "",
-      };
-    });
+      });
+    }
   }
 
   /** The eight bits of one byte, split into spans only where that is needed. */
@@ -407,6 +412,9 @@ export class HexRows {
   /** The row of column numbers over the bytes, and the word over the column
    *  beside them. */
   private drawHeader(f: Frame): void {
+    const shape = `${f.addrWidth}|${f.bpr}|${f.binary}|${f.showText}|${f.fields}|${f.below}`;
+    if (shape === this.headerShape) return;
+    this.headerShape = shape;
     const columns = document.createElement("span");
     columns.textContent =
       " ".repeat(f.addrWidth) +

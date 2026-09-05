@@ -139,6 +139,11 @@ export class ValueFetch {
   spansForView(start: number, count: number): SpanAnswer {
     const key = `${start}:${count}:${this.doc.template ?? ""}`;
     if (this.spanCache?.key === key) return this.spanCache;
+    // Spans describe whole fields, not just the requested bytes. A large PNG
+    // IDAT can cover thousands of screens: reuse that answer until a field
+    // boundary enters the window. Incomplete answers cannot promise coverage.
+    const cached = this.spanCache;
+    if (cached !== null && !cached.more && cached.from <= start && cached.to >= start + count) return cached;
     // The core's answer for a window nobody has asked about yet can take
     // longer than a frame: inside a compressed stream it has bits to decode
     // before it can say what is there. The bytes do not wait for it. A draw
@@ -175,10 +180,12 @@ export class ValueFetch {
     // it. Eased down rather than replaced, so one slow window keeps the
     // frame booked for a few draws instead of exactly one.
     this.spanCost = Math.max(performance.now() - began, this.spanCost === Infinity ? 0 : this.spanCost * 0.6);
+    const first = r.node[0];
+    const last = r.node.at(-1);
     this.spanCache = {
       key,
-      from: start,
-      to: start + count,
+      from: Math.min(start, Math.ceil((first?.offset_bits ?? start * 8) / 8)),
+      to: Math.max(start + count, last === undefined ? 0 : Math.floor((last.offset_bits + last.size_bits) / 8)),
       spans: r.node,
       more: r.node.length >= max,
       error: null,

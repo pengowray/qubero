@@ -1742,7 +1742,10 @@ export class HexView {
 
   render(): void {
     // A move draws once, when it has finished moving.
-    if (this.settling) return;
+    // Construction and background document updates also reach here. Measuring
+    // a detached or hidden grid gives it the wrong shape and builds cells that
+    // will immediately be rebuilt when the view is shown through relayout().
+    if (this.settling || this.el.hidden || !this.el.isConnected) return;
     this.fitRows();
     const f = this.frame();
     // What each row will be tall once the browser has laid it out, from what
