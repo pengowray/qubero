@@ -214,7 +214,9 @@ pub fn is_p8png(head: &[u8]) -> bool {
 /// Two of the three shapes name themselves. The third is Lua as it was typed,
 /// and a cart with less of it than sixteen bytes pads the rest with NULs, so
 /// what is asked of plain text is: a printable first byte, printable or
-/// whitespace up to the first NUL, and nothing but NULs after that.
+/// whitespace up to the first NUL, and nothing but NULs after that. Printable
+/// includes the P8SCII glyphs at 0x80 and up, since a cart's Lua carries them
+/// as it was typed.
 fn is_code(bytes: &[u8]) -> bool {
     if bytes.starts_with(b":c:\0") || bytes.starts_with(b"\0pxa") {
         return true;
@@ -230,7 +232,7 @@ fn is_code(bytes: &[u8]) -> bool {
         match b {
             0 if i > 0 => ended = true,
             b'\n' | b'\r' | b'\t' => {}
-            0x20..=0x7e => {}
+            0x20..=0x7e | 0x80..=0xff => {}
             _ => return false,
         }
     }
