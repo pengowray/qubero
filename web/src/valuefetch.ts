@@ -116,6 +116,7 @@ export class ValueFetch {
   forgetAll(): void {
     this.spanCache = null;
     this.spansAsked = null;
+    this.spanCost = Infinity;
     this.cellCache.clear();
     this.runWidest.clear();
   }
@@ -125,6 +126,10 @@ export class ValueFetch {
   forgetSpans(): void {
     this.spanCache = null;
     this.spansAsked = null;
+    // What the last template cost says nothing about what this one will: a
+    // template that reads a compressed stream is the one the booked frame is
+    // there for, and its first window has to be found out about, not assumed.
+    this.spanCost = Infinity;
   }
 
   /** Spans for the rows on screen.

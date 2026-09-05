@@ -25,7 +25,7 @@ async function loadChromium() {
 }
 
 function parseArgs(argv) {
-  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24 };
+  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24, css: "" };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = argv[i + 1];
@@ -36,6 +36,7 @@ function parseArgs(argv) {
     else if (k === "--height") { a.height = Number(v); i++; }
     else if (k === "--wait") { a.wait = Number(v); i++; }
     else if (k === "--gap") { a.gap = Number(v); i++; }
+    else if (k === "--css") { a.css = v; i++; }
   }
   return a;
 }
@@ -114,13 +115,25 @@ const main = async () => {
     if (s) { s.value = "16"; s.dispatchEvent(new Event("change", { bubbles: true })); }
   });
   await page.waitForTimeout(a.wait);
+  if (a.css !== "") await page.addStyleTag({ content: a.css });
   await page.evaluate(INSTRUMENT);
+
+  // What the browser itself spends, as against what the view's own code does:
+  // style and layout are the bill a draw runs up and the forced read at the
+  // end of it pays.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Performance.enable");
+  const metrics = async () => {
+    const { metrics: m } = await cdp.send("Performance.getMetrics");
+    return Object.fromEntries(m.map((x) => [x.name, x.value]));
+  };
 
   const box = await page.locator(".hv-rows").first().boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 
   const run = async (label, dir) => {
     await page.evaluate(() => window.__wc.reset());
+    const before = await metrics();
     const t0 = Date.now();
     for (let i = 0; i < a.notches; i++) {
       await page.mouse.wheel(0, dir * a.delta);
@@ -129,11 +142,18 @@ const main = async () => {
     await page.waitForTimeout(a.wait);
     const s = await page.evaluate(() => ({ ...window.__wc, reset: undefined, parts: JSON.parse(JSON.stringify(window.__wc.parts)) }));
     const wall = Date.now() - t0;
+    const after = await metrics();
+    const spent = (k) => ((after[k] ?? 0) - (before[k] ?? 0)) * 1000;
     console.log(
       `${label.padEnd(6)} notches ${a.notches}  wheel-driven draws ${String(s.top).padStart(3)}` +
         `  total draws ${String(s.draws).padStart(3)}  nested deepest ${s.deepest}` +
         `  draw ms ${s.drawMs.toFixed(1).padStart(7)}  longest ${s.longest.toFixed(1).padStart(6)}` +
         `  wall ${wall}ms`,
+    );
+    console.log(
+      `       browser: style ${spent("RecalcStyleDuration").toFixed(0)}ms/${(after.RecalcStyleCount ?? 0) - (before.RecalcStyleCount ?? 0)}` +
+        `  layout ${spent("LayoutDuration").toFixed(0)}ms/${(after.LayoutCount ?? 0) - (before.LayoutCount ?? 0)}` +
+        `  script ${spent("ScriptDuration").toFixed(0)}ms`,
     );
     const gaps = s.gaps.slice().sort((x, y) => x - y);
     const at = (q) => (gaps.length === 0 ? 0 : gaps[Math.min(gaps.length - 1, Math.floor(q * gaps.length))]);
@@ -151,6 +171,23 @@ const main = async () => {
   };
 
   console.log(a.url);
+
+  // Five wheel reports inside one frame. A view that draws for each of them
+  // draws five times; one that adds them up draws twice, once at once and
+  // once on the frame it booked. CDP's own `mouse.wheel` is paced slower than
+  // a frame, so only reports made from inside the page tell this apart.
+  const burst = await page.evaluate(() => {
+    const v = window.__qubero.view;
+    const before = window.__wc.draws;
+    for (let i = 0; i < 5; i++) {
+      v.el.dispatchEvent(new WheelEvent("wheel", { deltaY: 30, cancelable: true, bubbles: true }));
+    }
+    return new Promise((done) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => done(window.__wc.draws - before))),
+    );
+  });
+  console.log(`burst  five wheel reports in one frame -> ${burst} draws (2 is coalesced, 5 is not)`);
+
   await run("down", 1);
   await run("up", -1);
   await browser.close();
