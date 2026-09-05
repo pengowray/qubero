@@ -370,7 +370,7 @@ impl Evaluator {
     /// The nearest known element start at or before the bit `bit`, as an
     /// element index and its offset. Checkpoints rise in both index and offset,
     /// so the one to start from can be found by halving rather than scanning.
-    fn nearest_start_before(&self, parent: &[usize], bit: u64) -> (usize, u64) {
+    pub(super) fn nearest_start_before(&self, parent: &[usize], bit: u64) -> (usize, u64) {
         let state = self.list(parent);
         let mut best = (0, self.memo[parent].offset);
         let k = state.checkpoints.partition_point(|(_, at)| *at <= bit);
