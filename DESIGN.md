@@ -635,6 +635,14 @@ cost nothing to draw and are left alone anyway: whether they fold depends on
 what the top row carries in from above, so the same row would be one height at
 the top of the screen and another below it.
 
+Four files, in the order a value passes through them. `valuefetch.ts` asks the
+core for the fields and the elements on screen and holds the last answer while
+the next is on its way; `valuelayout.ts` says which of the three layouts a run
+gets and how wide the pieces of it are; `valuetable.ts` places one row's cells
+in that layout and says what the row comes to; `valuecells.ts` writes them into
+pooled elements. Only the last touches the document, and only the first talks to
+the core, so the two in the middle are tested without either.
+
 Every heading has space above it, so a part is divided from the one before
 rather than butted up against it, and level 0 gets more of it than level 1. The
 space is top padding inside the fixed heights the view reads back, and the
