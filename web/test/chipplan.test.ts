@@ -16,6 +16,7 @@ import {
   foldable,
   listName,
   pinnedNoteKey,
+  firstVisibleByte,
   placeChips,
   planRowChips,
   rowNoteKey,
@@ -223,6 +224,51 @@ test("a row's height never depends on whether it is the top row", () => {
   const top = plan([carried], { top: true, noteWidth: 400 });
   assert.equal(top.extraHeight, 0);
   assert.equal((top.blocks[0] as { entries: Chip[] }).entries.length, 0);
+});
+
+test("a carried field whose last byte has scrolled off the top is not pinned", () => {
+  // Row 0xb0, cut at byte 8 by the heading of the part that starts there. A
+  // field that ended at 0xb1 is in the piece before the cut, so a scroll far
+  // enough to take that piece away takes the field with it.
+  const carried: Chip = {
+    span: span({ name: "keyword", value: "Comment", offset_bits: 0xaa * 8, size_bits: 7 * 8 }),
+    carried: true,
+    run: [],
+  };
+  const cut = { top: true, segs: [0, 8], rowStart: 0xb0, headHeights: [0, 20] };
+  // Square against the edge: the whole row is there, and byte 0xb0 with it.
+  assert.equal(plan([carried], { ...cut, topPx: 0 }).pinned?.entries.length, 1);
+  // Part way up: the first piece is still showing, and so is 0xb0.
+  assert.equal(plan([carried], { ...cut, topPx: 20 }).pinned?.entries.length, 1);
+  // Past the bottom of the first piece: the bytes it held are gone.
+  assert.equal(plan([carried], { ...cut, topPx: 24 }).pinned?.entries.length, 0);
+});
+
+test("a carried field that reaches past the cut is pinned however far the row has scrolled", () => {
+  const carried: Chip = {
+    span: span({ name: "data", offset_bits: 0xa0 * 8, size_bits: 0x40 * 8 }),
+    carried: true,
+    run: [],
+  };
+  const cut = { top: true, segs: [0, 8], rowStart: 0xb0, headHeights: [0, 20] };
+  assert.equal(plan([carried], { ...cut, topPx: 60 }).pinned?.entries.length, 1);
+});
+
+test("a row that no heading cuts keeps its carried fields wherever the edge falls", () => {
+  const carried: Chip = { span: span({ name: "payload", offset_bits: 0, size_bits: 800 }), carried: true, run: [] };
+  assert.equal(plan([carried], { top: true, topPx: 0 }).pinned?.entries.length, 1);
+  assert.equal(plan([carried], { top: true, topPx: 20 }).pinned?.entries.length, 1);
+});
+
+test("the first byte still on screen is the one the pieces above the edge do not hold", () => {
+  // Two pieces of 24, with a 20-tall heading over the second.
+  const at = (topPx: number): number => firstVisibleByte(0xb0, [0, 8], [0, 20], [24, 24], topPx);
+  assert.equal(at(0), 0xb0);
+  assert.equal(at(23), 0xb0);
+  assert.equal(at(24), 0xb8);
+  // Inside the heading over the second piece, which is still on its way in.
+  assert.equal(at(40), 0xb8);
+  assert.equal(at(80), 0xb8);
 });
 
 test("beside the bytes the chips share the row's own line; below them every line adds", () => {

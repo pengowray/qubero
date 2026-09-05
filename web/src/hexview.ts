@@ -1870,7 +1870,7 @@ export class HexView {
     const moved = parts.start !== rowStart;
     parts.start = rowStart;
     this.drawCells(parts, rowStart, moved, f);
-    if (f.fields) height += this.drawNotes(r, parts, rowStart, segs, f);
+    if (f.fields) height += this.drawNotes(r, parts, rowStart, segs, headsAt, f);
     return height;
   }
 
@@ -1937,6 +1937,7 @@ export class HexView {
     parts: HexView["parts"][number],
     rowStart: number,
     segs: readonly number[],
+    headsAt: ReadonlyMap<number, OutlineHeading[]>,
     f: Frame,
   ): number {
     const firstNote = (parts.lines[0] as LineParts).note;
@@ -1966,6 +1967,7 @@ export class HexView {
     // What each block of chips will say, worked out before any of it is
     // written, and where each goes on a row a heading has cut. See
     // `chipplan.ts`, which holds the reasoning and the arithmetic.
+    const vals = f.values[r] ?? NO_VALUES;
     const planned = planRowChips({
       chips: f.byRow[r] ?? [],
       segs,
@@ -1977,11 +1979,16 @@ export class HexView {
       below: f.below,
       rowHeight: this.rowHeight,
       chipLine: this.sizes.chipLine,
+      // How far the top row is scrolled up, and what stands in the way, so
+      // that the strip pinned over the rows names only the fields that reach
+      // a byte still on screen. Every other row sits square against nothing.
+      topPx: r === 0 ? this.topPx : 0,
+      headHeights: segs.map((at) => (headsAt.get(at) ?? []).reduce((n, h) => n + this.headingHeight(h), 0)),
+      valsHeight: vals.height,
     });
     if (planned.pinned !== null) f.pinned = planned.pinned;
     const trailer = f.more && r === this.rowEls.length - 1;
     const key = rowNoteKey(planned.blocks, trailer);
-    const vals = f.values[r] ?? NO_VALUES;
     // The table goes in the first line's block: a heading may cut the row, but
     // the table spans the row's whole width and belongs to all of it.
     let block = valsOf(firstNote);

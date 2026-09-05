@@ -173,13 +173,53 @@ export type RowChipOpts = {
   readonly below: boolean;
   readonly rowHeight: number;
   readonly chipLine: number;
+  /** How far the top row is scrolled up past the top edge. Zero on every
+   *  other row, and on a top row sitting square against the edge. */
+  readonly topPx?: number;
+  /** How tall the headings above each piece of the row are. A heading is
+   *  drawn over the piece it cuts the row before, so it is part of what a
+   *  scroll has to travel to take that piece off the screen. */
+  readonly headHeights?: readonly number[];
+  /** How tall the table of a folded run's values is. It hangs under the
+   *  chips of the row's first piece, so it too holds that piece on screen. */
+  readonly valsHeight?: number;
 };
+
+/**
+ * The first byte of the row that is still on screen.
+ *
+ * A heading cuts a row into pieces drawn one under another, so scrolling the
+ * top row up past the edge takes its pieces away one at a time: the bytes
+ * before the cut go first, and the bytes after it are what is left at the top
+ * of the screen. `topPx` past the bottom of a piece means that piece is gone.
+ *
+ * `heights` are the pieces' own lines, `heads` what stands above each, both
+ * in the order they are drawn.
+ */
+export function firstVisibleByte(
+  rowStart: number,
+  segs: readonly number[],
+  heads: readonly number[],
+  heights: readonly number[],
+  topPx: number,
+): number {
+  let y = 0;
+  for (let j = 0; j < segs.length; j++) {
+    y += heads[j] ?? 0;
+    const bottom = y + (heights[j] ?? 0);
+    if (bottom > topPx) return rowStart + (segs[j] as number);
+    y = bottom;
+  }
+  return rowStart + (segs[segs.length - 1] ?? 0);
+}
+
+/** The byte one past the last a span covers. */
+const spanEnd = (s: Span): number => Math.ceil((s.offset_bits + s.size_bits) / 8);
 
 /** Lay out one row's chips: which block each goes in, how many of each block
  *  fit, and what the lot adds to the row's height. */
 export function planRowChips(o: RowChipOpts): RowChipPlan {
   const buckets = bucketChips(o.chips, o.segs, o.rowStart);
-  let pinned: ChipBlock | null = null;
   // A field carried down from above the view is named by the strip
   // pinned over the top of the rows, not by the top row itself: a chip
   // under the top row would sit between the bytes it covers and the ones
@@ -187,39 +227,72 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
   // same row is anywhere else, so every row below it jumped a chip line
   // as the top row changed. Only the top row can carry anything, so this
   // is the one place a row's height would depend on where it fell.
-  if (o.top) {
-    const carried = (buckets[0] as Chip[]).filter((c) => c.carried);
-    buckets[0] = (buckets[0] as Chip[]).filter((c) => !c.carried);
-    const texts = carried.map((c) => chipText(c));
-    const { shown } = chipLayout(
-      texts.map((t, i) => chipWidth(carriedName(t.name, carried[i]), continuedDetail(t.detail), o.measure)),
-      o.noteWidth,
-      o.maxLines,
-    );
-    pinned = { entries: carried, texts, shown };
-    // More carried fields than a capped block can hold: the rest are
-    // named below the bytes rather than dropped.
-    if (shown < carried.length) buckets[0] = [...carried.slice(shown), ...(buckets[0] as Chip[])];
-  }
-  const blocks: ChipBlock[] = [];
-  const chipHeights: number[] = [];
-  let extraHeight = 0;
-  for (let j = 0; j < o.segs.length; j++) {
-    const entries = buckets[j] as Chip[];
+  const carried = o.top ? (buckets[0] as Chip[]).filter((c) => c.carried) : [];
+  if (o.top) buckets[0] = (buckets[0] as Chip[]).filter((c) => !c.carried);
+
+  /** One block's chips, and how many lines of the column they take. */
+  const layOut = (entries: Chip[]): { block: ChipBlock; lines: number } => {
     const texts = entries.map((c) => chipText(c));
     const { shown, lines } = chipLayout(
       texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, o.measure)),
       o.noteWidth,
       o.maxLines,
     );
-    // Beside the bytes the chips share their line's height with the
-    // cells, so the line is the taller of the two. Below them the chips
-    // are their own block and their lines add to it.
-    extraHeight += o.below ? lines * o.chipLine : Math.max(0, lines * o.chipLine - o.rowHeight);
+    return { block: { entries, texts, shown }, lines };
+  };
+
+  const blocks: ChipBlock[] = [];
+  const chipHeights: number[] = [];
+  for (let j = 0; j < o.segs.length; j++) {
+    const { block, lines } = layOut(buckets[j] as Chip[]);
     chipHeights.push(lines * o.chipLine);
-    blocks.push({ entries, texts, shown });
+    blocks.push(block);
   }
+
+  let pinned: ChipBlock | null = null;
+  if (o.top) {
+    // Which of the carried fields reach a byte that is actually on screen.
+    // A row the reader has scrolled halfway up has lost the pieces above the
+    // edge, and a field whose last byte was in one of them is not continuing
+    // on to anything: saying so over bytes it does not cover reads as a field
+    // starting where the next one does.
+    const first = firstVisibleByte(
+      o.rowStart,
+      o.segs,
+      o.segs.map((_, j) => (o.headHeights ?? [])[j] ?? 0),
+      chipHeights.map((h, j) => lineHeight(o, h + (j === 0 ? (o.valsHeight ?? 0) : 0))),
+      o.topPx ?? 0,
+    );
+    const reaching = carried.filter((c) => spanEnd(c.span) > first);
+    const texts = reaching.map((c) => chipText(c));
+    const { shown } = chipLayout(
+      texts.map((t, i) => chipWidth(carriedName(t.name, reaching[i]), continuedDetail(t.detail), o.measure)),
+      o.noteWidth,
+      o.maxLines,
+    );
+    pinned = { entries: reaching, texts, shown };
+    // More carried fields than a capped block can hold: the rest are
+    // named below the bytes rather than dropped.
+    if (shown < reaching.length) {
+      const { block, lines } = layOut([...reaching.slice(shown), ...(buckets[0] as Chip[])]);
+      blocks[0] = block;
+      chipHeights[0] = lines * o.chipLine;
+    }
+  }
+
+  // Beside the bytes the chips share their line's height with the cells, so
+  // the line is the taller of the two. Below them the chips are their own
+  // block and their lines add to it. The table of values is the caller's to
+  // add: only it knows how tall the table came out.
+  const extraHeight = chipHeights.reduce((n, h) => n + (o.below ? h : Math.max(0, h - o.rowHeight)), 0);
   return { blocks, pinned, extraHeight, chipHeights };
+}
+
+/** How tall one piece of a row is drawn, from what its block holds: beside
+ *  the bytes the block shares the row's own line, below them it hangs under
+ *  it. */
+function lineHeight(o: RowChipOpts, blockHeight: number): number {
+  return o.below ? o.rowHeight + blockHeight : Math.max(o.rowHeight, blockHeight);
 }
 
 /** What a row's chips say, as one string, so they are written again only when
