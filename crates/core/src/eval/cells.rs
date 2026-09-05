@@ -33,13 +33,12 @@ pub struct Cell {
     /// two numbers. The same as `text` for everything else.
     pub label: String,
     /// "uint" | "int" | "float" | "bytes" | "str" | "enum" | "flags" |
-    /// "composite" | "symbol"
+    /// "composite" | "symbol" | "scale"
     pub kind: &'static str,
-    /// False when the element's bits are not one contiguous run. No type in
-    /// the template language stores a value in two places today, so this is
-    /// true everywhere; it is here because the layout the web picks depends on
-    /// it, and the day a packed quantisation format arrives the answer changes
-    /// in one place rather than in the view.
+    /// False when the element's bits are not one contiguous run: a `q5_0`
+    /// weight is four bits of `qs` and a fifth a dozen bytes away, so no run
+    /// of bits on the row is the weight, and the view lays those out uniformly
+    /// rather than against the bytes.
     pub contiguous: bool,
 }
 
@@ -59,6 +58,37 @@ fn kind_of(v: &Value) -> &'static str {
         Value::Flags { .. } => "flags",
         Value::Composite { .. } => "composite",
         Value::Magic { .. } | Value::Unread { .. } | Value::Unset(_) => "str",
+    }
+}
+
+/// A weight as the value panel writes one: four significant digits, which is
+/// more than a scale stored as a half float can justify, and the exponent form
+/// for the numbers at either end, so that a very small one does not read as
+/// zero and a very large one is not a wall of digits.
+///
+/// The same rule as `quantpanel.ts`'s `num`, down to how JavaScript writes an
+/// exponent, so that the panel and the table say the same thing about the same
+/// weight.
+fn num(x: f64) -> String {
+    if !x.is_finite() {
+        return x.to_string();
+    }
+    if x == 0.0 {
+        return "0".to_string();
+    }
+    let size = x.abs();
+    if size >= 1e5 || size < 1e-4 {
+        let s = format!("{x:.2e}");
+        return match s.split_once('e') {
+            Some((m, e)) if !e.starts_with('-') => format!("{m}e+{e}"),
+            _ => s,
+        };
+    }
+    // `Number(x.toPrecision(4))`: rounded to four digits, then written as
+    // shortly as the number it rounded to allows.
+    match format!("{x:.3e}").parse::<f64>() {
+        Ok(v) => v.to_string(),
+        Err(_) => x.to_string(),
     }
 }
 
@@ -223,7 +253,22 @@ impl Evaluator {
                 break;
             }
             if info.offset_bits + info.size_bits > from {
-                out.push(self.cell(doc, &p, i, &info)?);
+                let room = max - out.len();
+                match self.quant_cells(doc, &p, i, from, to, room) {
+                    // A block whose weights this crate can take apart is its
+                    // numbers, not one entry saying how many bytes it is.
+                    Ok(Some(cells)) => out.extend(cells),
+                    Ok(None) => out.push(self.cell(doc, &p, i, &info)?),
+                    Err(EvalError::Pending(m)) => {
+                        missing.extend(m);
+                        break;
+                    }
+                    Err(e) if e.interrupted() => return Err(e),
+                    // The bytes are there but will not read as a block: the
+                    // last one of a tensor cut short by the end of the file.
+                    // Saying where it is beats saying nothing about it.
+                    Err(_) => out.push(self.cell(doc, &p, i, &info)?),
+                }
             }
             i += 1;
         }
@@ -233,6 +278,70 @@ impl Evaluator {
             return Err(EvalError::Pending(missing));
         }
         Ok(out)
+    }
+
+    /// One packed block as the weights inside it, or `None` for an element
+    /// that is not one of those.
+    ///
+    /// A tensor's run is blocks, and a block is bytes: eighteen of them for a
+    /// `q4_0`, holding a scale and thirty-two numbers in an order the bytes do
+    /// not show. One cell per block would put `Q4_0` beside every eighteen
+    /// bytes of a gigabyte of weights and say nothing the reader wanted. So a
+    /// block is not one cell but the cells of what it holds: the scale where
+    /// the scale is, and every weight over the bits it is stored in.
+    ///
+    /// The order is the order of the bytes rather than the order of the
+    /// tensor's row, which are not the same order: weight 16 of a `q4_0` is
+    /// the top half of the byte weight 0 is the bottom half of, so it comes
+    /// first. That is what the reader is looking at.
+    fn quant_cells<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        run: &[usize],
+        i: u64,
+        from: u64,
+        to: u64,
+        max: usize,
+    ) -> R<Option<Vec<Cell>>> {
+        let mut p = run.to_vec();
+        p.push(i as usize);
+        let Some((_, block, at)) = self.quant_block(doc, &p)? else { return Ok(None) };
+        let mut cells = Vec::new();
+        // The scale as the listing writes it, read off the block's own field
+        // rather than printed from the unpacked number: `d` is a half float,
+        // and the whole of what a half float stands for is nineteen digits of
+        // decimal nobody asked for.
+        for name in std::iter::once("d").chain(block.second.map(|o| o.name)) {
+            let Some(cp) = self.child_named(doc, &p, name)? else { continue };
+            let info = self.node(doc, &cp)?;
+            let reading = super::listing::brief(&info.value);
+            cells.push(Cell {
+                index: i,
+                offset_bits: info.offset_bits,
+                size_bits: info.size_bits,
+                text: format!("{name} \u{b7} {reading}"),
+                label: reading,
+                kind: "scale",
+                contiguous: true,
+            });
+        }
+        for (j, w) in block.weights.iter().enumerate() {
+            cells.push(Cell {
+                index: i,
+                offset_bits: at + u64::from(w.bits.bit),
+                size_bits: u64::from(w.bits.width),
+                text: format!("weight {j} \u{b7} stored {} \u{b7} value {}", w.q, num(w.value)),
+                label: w.q.to_string(),
+                kind: "int",
+                contiguous: w.high.is_none(),
+            });
+        }
+        // A K type keeps its scale after its weights, so nothing may assume
+        // the scales come first.
+        cells.sort_by_key(|c| c.offset_bits);
+        cells.retain(|c| c.offset_bits < to && c.offset_bits + c.size_bits > from);
+        cells.truncate(max);
+        Ok(Some(cells))
     }
 
     /// One element, as its one line of text.
@@ -634,5 +743,271 @@ mod tests {
             assert_eq!(w[1].index, w[0].index + 1);
         }
         assert!(window.last().unwrap().offset_bits < mid.offset_bits + 200);
+    }
+
+    // ----- packed quantised blocks -----
+
+    /// A GGUF file of one tensor of `ty`, holding `weights` numbers, with
+    /// `payload` as its bytes. The same file `gguf`'s own tests build for
+    /// `a_quantised_tensor_reads_as_the_blocks_its_type_packs`, with the count
+    /// left open: a K type packs 256 weights to a block, so the sixty-four a
+    /// fixed count would give are no block at all.
+    fn gguf_tensor(ty: u32, weights: u64, payload: &[u8]) -> Document<MemSource> {
+        let name = b"blk.0.ffn_up.weight";
+        let mut b = b"GGUF".to_vec();
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&1u64.to_le_bytes()); // tensors
+        b.extend_from_slice(&0u64.to_le_bytes()); // metadata entries
+        b.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        b.extend_from_slice(name);
+        b.extend_from_slice(&1u32.to_le_bytes()); // one dimension
+        b.extend_from_slice(&weights.to_le_bytes());
+        b.extend_from_slice(&ty.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes()); // at the start of the data
+        b.resize(b.len().div_ceil(32) * 32, 0);
+        b.extend_from_slice(payload);
+        doc(b)
+    }
+
+    /// The half-precision bits of 1.0, so that a weight's value is the stored
+    /// integer and the arithmetic is checkable by eye.
+    const ONE: [u8; 2] = [0x00, 0x3C];
+
+    fn gguf() -> Evaluator {
+        Evaluator::new(crate::formats::builtin("gguf").expect("the gguf template"))
+    }
+
+    /// The tensor's run of blocks, which is what the value table is asked
+    /// about.
+    const BLOCKS: &[usize] = &[6, 0];
+
+    /// Two `q4_0` blocks: a scale and thirty-two nibbles apiece.
+    fn q4_0_pair() -> (Document<MemSource>, Evaluator) {
+        let mut payload = Vec::new();
+        for block in 0..2u8 {
+            payload.extend_from_slice(&ONE);
+            // Block 0: every byte 0x9A, so the low nibble is 10 and the high
+            // one 9, which are 2 and 1 once the bias of eight comes off.
+            // Block 1: 0x10, which is -8 and -7.
+            payload.extend(std::iter::repeat_n(if block == 0 { 0x9A } else { 0x10 }, 16));
+        }
+        (gguf_tensor(2, 64, &payload), gguf())
+    }
+
+    /// A tensor of packed weights reads as the weights, not as one entry per
+    /// block, and they come in the order of the bytes: the scale, then the
+    /// high half of the first `qs` byte, then its low half.
+    #[test]
+    fn a_quantised_run_is_the_weights_the_blocks_hold() {
+        let (d, mut e) = q4_0_pair();
+        let run = e.node(&d, BLOCKS).unwrap();
+        assert_eq!(run.child_count, 2, "two blocks");
+        let at = run.offset_bits;
+        let cells = e.run_cells(&d, BLOCKS, at, at + run.size_bits, 10_000).unwrap();
+        // A scale and thirty-two weights from each block.
+        assert_eq!(cells.len(), 2 * 33);
+        // The scale, as the listing writes the half float and not as the
+        // nineteen digits the number expands to.
+        assert_eq!(cells[0].kind, "scale");
+        assert_eq!((cells[0].offset_bits, cells[0].size_bits), (at, 16));
+        assert_eq!(cells[0].label, "1");
+        assert_eq!(cells[0].text, "d \u{b7} 1");
+        // Weight 16 is the top half of the byte weight 0 is the bottom half
+        // of, so the reader meets it first.
+        assert_eq!((cells[1].offset_bits, cells[1].size_bits), (at + 16, 4));
+        assert_eq!(cells[1].kind, "int");
+        assert_eq!(cells[1].label, "1");
+        assert_eq!(cells[1].text, "weight 16 \u{b7} stored 1 \u{b7} value 1");
+        assert_eq!(cells[2].offset_bits, at + 20);
+        assert_eq!(cells[2].text, "weight 0 \u{b7} stored 2 \u{b7} value 2");
+        assert_eq!(cells[3].text, "weight 17 \u{b7} stored 1 \u{b7} value 1");
+        // Every cell belongs to the block it is in, since that is all a click
+        // can select, and the whole run is in the order of the bytes.
+        assert!(cells[..33].iter().all(|c| c.index == 0));
+        assert!(cells[33..].iter().all(|c| c.index == 1));
+        for w in cells.windows(2) {
+            assert!(w[1].offset_bits >= w[0].offset_bits + w[0].size_bits, "{:?} then {:?}", w[0], w[1]);
+        }
+        // A nibble is four bits in a row, so the table can lay it against the
+        // byte it is half of.
+        assert!(cells.iter().all(|c| c.contiguous));
+        // The second block's numbers are its own.
+        assert_eq!(cells[34].text, "weight 16 \u{b7} stored -7 \u{b7} value -7");
+        assert_eq!(cells[35].text, "weight 0 \u{b7} stored -8 \u{b7} value -8");
+    }
+
+    /// A window over the second block is the second block's cells: nothing of
+    /// the block before it, and the first weight is the one the window starts
+    /// on rather than the first of the tensor.
+    #[test]
+    fn a_window_over_one_block_is_that_blocks_weights() {
+        let (d, mut e) = q4_0_pair();
+        let second = e.node(&d, &[6, 0, 1]).unwrap();
+        let cells = e.run_cells(&d, BLOCKS, second.offset_bits, second.offset_bits + second.size_bits, 10_000).unwrap();
+        assert_eq!(cells.len(), 33);
+        assert!(cells.iter().all(|c| c.index == 1));
+        assert_eq!(cells[0].offset_bits, second.offset_bits);
+        // Half a block: the cells over those bits and no others.
+        let half = second.offset_bits + 9 * 8;
+        let part = e.run_cells(&d, BLOCKS, half, half + 2 * 8, 10_000).unwrap();
+        assert_eq!(part.len(), 4, "two bytes of nibbles");
+        assert!(part.iter().all(|c| c.offset_bits >= half && c.offset_bits < half + 2 * 8));
+        assert_eq!(part[0].text, "weight 23 \u{b7} stored -7 \u{b7} value -7");
+    }
+
+    /// `max` counts cells, not blocks: a screenful of a tensor is thousands of
+    /// weights, and the answer stops where it is asked to.
+    #[test]
+    fn max_counts_the_weights_and_not_the_blocks() {
+        let (d, mut e) = q4_0_pair();
+        let run = e.node(&d, BLOCKS).unwrap();
+        let cells = e.run_cells(&d, BLOCKS, run.offset_bits, run.offset_bits + run.size_bits, 5).unwrap();
+        assert_eq!(cells.len(), 5);
+        assert_eq!(cells[0].kind, "scale");
+    }
+
+    /// A `q5_0` weight keeps its fifth bit in `qh`, bytes away from the four
+    /// in `qs`, so no run of bits on the row is the weight. The cell says so,
+    /// and the view lays those out uniformly rather than against the bytes.
+    #[test]
+    fn a_five_bit_weight_is_not_one_run_of_bits() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&ONE); // d
+        payload.extend_from_slice(&1u32.to_le_bytes()); // qh: weight 0's fifth bit
+        payload.extend(std::iter::repeat_n(0x21u8, 16)); // low 1, high 2
+        let d = gguf_tensor(6, 32, &payload);
+        let mut e = gguf();
+        let run = e.node(&d, BLOCKS).unwrap();
+        let cells = e.run_cells(&d, BLOCKS, run.offset_bits, run.offset_bits + run.size_bits, 10_000).unwrap();
+        assert_eq!(cells.len(), 33);
+        // The scale is where it is written and is one run; no weight is.
+        assert_eq!(cells[0].kind, "scale");
+        assert!(cells[0].contiguous);
+        assert!(cells[1..].iter().all(|c| !c.contiguous), "a five-bit weight claimed to be one run");
+        // The weights start after `qh`, at the first byte of `qs`.
+        assert_eq!(cells[1].offset_bits, run.offset_bits + 6 * 8);
+        // Weight 16 is the high nibble, 2, and nothing in `qh` is set for it.
+        assert_eq!(cells[1].text, "weight 16 \u{b7} stored -14 \u{b7} value -14");
+        // Weight 0 is the low nibble, 1, with the fifth bit set above it: 17,
+        // which is 1 once the bias of sixteen comes off.
+        assert_eq!(cells[2].text, "weight 0 \u{b7} stored 1 \u{b7} value 1");
+    }
+
+    /// Eight-bit weights are a byte each, so a `q8_0` block is thirty-two
+    /// cells of eight bits, one under every byte after the scale.
+    #[test]
+    fn a_q8_0_block_is_a_cell_a_byte() {
+        let mut payload = ONE.to_vec();
+        payload.extend((0..32u8).map(|i| i.wrapping_sub(4)));
+        let d = gguf_tensor(8, 32, &payload);
+        let mut e = gguf();
+        let run = e.node(&d, BLOCKS).unwrap();
+        let at = run.offset_bits;
+        let cells = e.run_cells(&d, BLOCKS, at, at + run.size_bits, 10_000).unwrap();
+        assert_eq!(cells.len(), 33);
+        let weights = &cells[1..];
+        assert_eq!(weights.len(), 32);
+        assert!(weights.iter().all(|c| c.size_bits == 8 && c.contiguous && c.kind == "int"));
+        for (j, c) in weights.iter().enumerate() {
+            assert_eq!(c.offset_bits, at + (2 + j as u64) * 8);
+        }
+        // Read signed rather than biased, which is what the eight-bit types do.
+        assert_eq!(weights[0].text, "weight 0 \u{b7} stored -4 \u{b7} value -4");
+        assert_eq!(weights[0].label, "-4");
+        assert_eq!(weights[31].text, "weight 31 \u{b7} stored 27 \u{b7} value 27");
+    }
+
+    /// A block whose weights come out of a table only ggml has stays one cell:
+    /// the editor can say how big it is and will not invent what is inside it.
+    #[test]
+    fn a_block_this_crate_cannot_unpack_is_still_one_cell() {
+        // IQ2_XXS: 256 weights in 66 bytes.
+        let d = gguf_tensor(16, 256, &[0x5A; 66]);
+        let mut e = gguf();
+        let run = e.node(&d, BLOCKS).unwrap();
+        let cells = e.run_cells(&d, BLOCKS, run.offset_bits, run.offset_bits + run.size_bits, 10_000).unwrap();
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].kind, "composite");
+        assert_eq!((cells[0].offset_bits, cells[0].size_bits), (run.offset_bits, 66 * 8));
+    }
+
+    /// A K type's scale is written after its weights, so the cells are in the
+    /// order of the bytes and not scale-first, and the six-bit group scales in
+    /// between get no cells of their own this round.
+    #[test]
+    fn a_k_types_scale_is_a_cell_where_the_scale_is() {
+        // Q2_K: scales[16], qs[64], d, dmin.
+        let d = gguf_tensor(10, 256, &[0x11; 84]);
+        let mut e = gguf();
+        let run = e.node(&d, BLOCKS).unwrap();
+        let at = run.offset_bits;
+        let cells = e.run_cells(&d, BLOCKS, at, at + run.size_bits, 10_000).unwrap();
+        assert_eq!(cells.len(), 256 + 2, "256 weights, a scale and a minimum");
+        // The sixteen bytes of group scales are nobody's cell; the weights
+        // start at `qs`.
+        assert_eq!(cells[0].offset_bits, at + 16 * 8);
+        assert_eq!(cells[0].size_bits, 2);
+        let scales: Vec<&Cell> = cells.iter().filter(|c| c.kind == "scale").collect();
+        assert_eq!(scales.len(), 2);
+        assert_eq!(scales[0].offset_bits, at + 80 * 8);
+        assert!(scales[0].text.starts_with("d \u{b7} "));
+        assert!(scales[1].text.starts_with("dmin \u{b7} "));
+        // And they are last, because that is where they are written.
+        assert_eq!(cells[cells.len() - 2].kind, "scale");
+        assert_eq!(cells[cells.len() - 1].kind, "scale");
+    }
+
+    /// A `q4_1` pairs its scale with a minimum, and the cell names which is
+    /// which so the two are not read as two scales.
+    #[test]
+    fn a_scale_cell_says_which_scale_it_is() {
+        let mut payload = ONE.to_vec();
+        payload.extend_from_slice(&ONE); // m
+        payload.extend(std::iter::repeat_n(0x30u8, 16));
+        let d = gguf_tensor(3, 32, &payload);
+        let mut e = gguf();
+        let run = e.node(&d, BLOCKS).unwrap();
+        let cells = e.run_cells(&d, BLOCKS, run.offset_bits, run.offset_bits + run.size_bits, 10_000).unwrap();
+        assert_eq!(cells[0].text, "d \u{b7} 1");
+        assert_eq!(cells[1].text, "m \u{b7} 1");
+        // Nothing is taken off a `q4_1` nibble, and the minimum is added.
+        assert_eq!(cells[2].text, "weight 16 \u{b7} stored 3 \u{b7} value 4");
+        assert_eq!(cells[3].text, "weight 0 \u{b7} stored 0 \u{b7} value 1");
+    }
+
+    /// Four significant digits, the way the value panel writes a weight, so
+    /// the panel and the table say the same thing about the same number.
+    #[test]
+    fn a_weights_value_is_four_significant_digits() {
+        assert_eq!(num(0.0), "0");
+        assert_eq!(num(-0.0), "0");
+        assert_eq!(num(2.0), "2");
+        assert_eq!(num(-0.012345678), "-0.01235");
+        assert_eq!(num(0.004110336303710938), "0.00411");
+        assert_eq!(num(123456.0), "1.23e+5");
+        assert_eq!(num(0.0000123), "1.23e-5");
+    }
+
+    /// A tensor big enough to scroll through, asked for one screenful of it.
+    /// The bound is that a window costs the window and not the tensor.
+    #[test]
+    fn a_screenful_of_a_quantised_tensor_is_quick() {
+        // Sixty-four `q4_k` blocks: 144 bytes and 256 weights each.
+        let d = gguf_tensor(12, 256 * 64, &vec![0x5Au8; 144 * 64]);
+        let mut e = gguf();
+        let run = e.node(&d, BLOCKS).unwrap();
+        assert_eq!(run.child_count, 64);
+        // A screenful of hex at sixteen bytes a row: thirty-two rows, which is
+        // three and a half blocks and something over nine hundred weights.
+        let from = run.offset_bits + 30 * 144 * 8;
+        let cold = std::time::Instant::now();
+        let cells = e.run_cells(&d, BLOCKS, from, from + 512 * 8, 4_000).unwrap();
+        let cold = cold.elapsed();
+        let warm = std::time::Instant::now();
+        e.run_cells(&d, BLOCKS, from, from + 512 * 8, 4_000).unwrap();
+        let warm = warm.elapsed();
+        eprintln!("run_cells over {} weights of a q4_k tensor: cold {cold:?}, warm {warm:?}", cells.len());
+        assert!(cells.len() > 900, "only {} cells over 512 bytes of q4_k", cells.len());
+        assert!(cold.as_millis() < 500, "a screenful took {cold:?}");
     }
 }
