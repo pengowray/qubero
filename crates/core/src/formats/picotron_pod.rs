@@ -57,8 +57,9 @@
 //! above, and 0x4 base64 on top. pxu is not a container round a POD. It sits
 //! *inside* the POD's text, where a `userdata()` value would otherwise be
 //! written: a reader scans the text for `pxu\0` and swaps each run it finds for
-//! the userdata that run decodes to. So it is opened from a POD's text and not
-//! from an entry, and [`crate::codec::pxu`] is what opens it.
+//! the userdata that run decodes to. So a run is reached from a POD's text and
+//! not from an entry. [`crate::codec::pxu`] decodes one, and no field here
+//! lays one out yet; that module says why.
 //!
 //! Read out of `picotron_fs.py` of thisismypassport/shrinko8, which reads and
 //! writes all of this, and checked against the two cartridges in the sample

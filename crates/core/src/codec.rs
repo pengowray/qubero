@@ -19,6 +19,7 @@ pub mod inflate;
 pub mod lz4;
 pub mod pico8;
 pub mod pixels;
+pub mod pxu;
 
 use std::ops::Range;
 
@@ -65,6 +66,10 @@ pub enum Codec {
     /// of zero bytes. The run handed here starts after the same eight header
     /// bytes.
     Pico8Old,
+    /// Picotron's `pxu` userdata encoding, which sits inside a POD's text
+    /// where a `userdata()` value would be. The run handed here starts at the
+    /// `pxu\0` and may be longer than the elements need.
+    PicotronPxu,
 }
 
 impl Codec {
@@ -80,6 +85,7 @@ impl Codec {
             Codec::LowBitsRgba11 => "low bits rgba 11",
             Codec::Pico8Pxa => "pico-8 pxa",
             Codec::Pico8Old => "pico-8 old code",
+            Codec::PicotronPxu => "picotron pxu",
         }
     }
 }
@@ -155,6 +161,15 @@ pub enum StepField {
     Filter,
     /// xz: the index and the stream footer.
     Footer,
+    /// pxu: the two bytes saying the element type, whether a height follows
+    /// the width, how wide the sizes are, and which compression was used.
+    PxuFlags,
+    /// pxu: how many elements a row is, and how many rows there are.
+    PxuWidth,
+    PxuHeight,
+    /// pxu: how many of a token's low bits are an index into the table of
+    /// elements written before.
+    PxuBits,
 }
 
 impl StepField {
@@ -177,6 +192,10 @@ impl StepField {
             StepField::BlockHeader => "block_header",
             StepField::Filter => "filter",
             StepField::Footer => "footer",
+            StepField::PxuFlags => "pxu_flags",
+            StepField::PxuWidth => "pxu_width",
+            StepField::PxuHeight => "pxu_height",
+            StepField::PxuBits => "pxu_bits",
         }
     }
 }
@@ -600,7 +619,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 16] = [
+const FIELDS: [StepField; 20] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -617,6 +636,10 @@ const FIELDS: [StepField; 16] = [
     StepField::BlockHeader,
     StepField::Filter,
     StepField::Footer,
+    StepField::PxuFlags,
+    StepField::PxuWidth,
+    StepField::PxuHeight,
+    StepField::PxuBits,
 ];
 
 /// Open a compressed run and say what the decoder did to it.
@@ -641,6 +664,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::LowBitsRgba11 => pixels::low_bits_rgba11(data)?,
         Codec::Pico8Pxa => pico8::pxa(data)?,
         Codec::Pico8Old => pico8::old(data)?,
+        Codec::PicotronPxu => pxu::pxu(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -656,7 +680,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     let out = match codec {
         // One decoder, not two: the bytes a reader sees have to be the bytes
         // the trace describes, so the traced path is the only path.
-        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb | Codec::LowBitsRgba11 | Codec::Pico8Pxa | Codec::Pico8Old => {
+        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb | Codec::LowBitsRgba11 | Codec::Pico8Pxa | Codec::Pico8Old | Codec::PicotronPxu => {
             decode_traced(codec, data)?.0
         }
         Codec::Zstd => zstd(data)?,
