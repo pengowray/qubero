@@ -1,15 +1,13 @@
-// The table of values beside a folded run: which layout a run's cells get,
-// where each cell sits on its row, and what a row of them adds to the row's
-// height.
+// Where each value sits on the row it falls on: the cells of one row, what a
+// row of them adds to the row's height, and what it says. Which layout a run
+// gets is next door, in valuelayout.test.ts.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import type { ChipMeasure } from "../src/chipfit.ts";
+import { CHAR, run } from "./runcells.ts";
 import {
-  alignedFits,
   planRowValues,
-  typeDigits,
   uniformWidth,
   VALUE_GAP,
   VALUE_PAD,
@@ -18,48 +16,6 @@ import {
   type Layout,
   type RunCells,
 } from "../src/valuetable.ts";
-
-/** Seven pixels a character, near enough to the mono a cell is drawn in, so a
- *  width in this file is a count of characters at that pitch. */
-const CHAR: ChipMeasure = { name: (s) => s.length * 7, value: (s) => s.length * 7 };
-
-/** A run of fixed-stride elements starting at byte 0. */
-function run(o: {
-  name?: string;
-  type?: string;
-  kind?: string;
-  stride: number;
-  from: number;
-  to: number;
-  text?: (i: number) => string;
-  /** What the cell shows, where that is not what its tooltip says. */
-  label?: (i: number) => string;
-  contiguous?: boolean;
-  symbol?: boolean;
-  at?: number;
-}): RunCells {
-  const cells: Cell[] = [];
-  const text = o.text ?? ((n: number) => String(n));
-  for (let i = o.from; i < o.to; i++) {
-    cells.push({
-      index: i,
-      offset_bits: (o.at ?? 0) + i * o.stride,
-      size_bits: o.stride,
-      text: text(i),
-      label: (o.label ?? text)(i),
-      kind: o.kind ?? "int",
-      contiguous: o.contiguous ?? true,
-    });
-  }
-  return {
-    path: [3],
-    name: o.name ?? "body",
-    type: o.type ?? "i24 le",
-    symbol: o.symbol ?? false,
-    widest: "",
-    cells,
-  };
-}
 
 /** The plan for one row, with the sizes a 16-byte row of a wide column has. */
 function row(
@@ -79,47 +35,6 @@ function row(
     valLine: 18,
   });
 }
-
-// ----- which layout -----
-
-test("a run whose values fit the bits they are stored in is aligned", () => {
-  // Three bytes a value, a wide column: `-394928` has a third of 16 bytes.
-  const cells = [run({ stride: 24, from: 0, to: 12, text: () => "-394928" })];
-  assert.equal(alignedFits(cells, { bpr: 16, noteWidth: 400, hexPitch: 22, measure: CHAR }), true);
-});
-
-test("six-bit codes go uniform: no value fits six bits of a row", () => {
-  const cells = [run({ stride: 6, from: 0, to: 40, type: "u6", text: (i) => String(i) })];
-  assert.equal(alignedFits(cells, { bpr: 16, noteWidth: 400, hexPitch: 22, measure: CHAR }), false);
-});
-
-test("a run the core says is not contiguous goes uniform however well it fits", () => {
-  const cells = [run({ stride: 32, from: 0, to: 4, text: () => "1", contiguous: false })];
-  assert.equal(alignedFits(cells, { bpr: 16, noteWidth: 400, hexPitch: 22, measure: CHAR }), false);
-});
-
-test("a narrow column takes the aligned table down with it", () => {
-  const cells = [run({ stride: 24, from: 0, to: 12, text: () => "-394928" })];
-  assert.equal(alignedFits(cells, { bpr: 16, noteWidth: 90, hexPitch: 22, measure: CHAR }), false);
-});
-
-test("a cell whose type says nothing about its width is as wide as its text", () => {
-  const cells = [run({ stride: 16, kind: "str", from: 0, to: 4, text: (i) => "0".repeat(i + 1) })];
-  assert.equal(uniformWidth(cells, CHAR), 4 * 7 + VALUE_PAD);
-});
-
-test("a number is as wide as its type can be, not as wide as it happens to be", () => {
-  // A u16 is five digits whether it holds 7 or 65,535, so the layout holds
-  // still while the reader scrolls into the wider values.
-  const small = [run({ stride: 16, kind: "uint", from: 0, to: 4, text: () => "7" })];
-  const large = [run({ stride: 16, kind: "uint", from: 0, to: 4, text: () => "65535" })];
-  assert.equal(uniformWidth(small, CHAR), 5 * 7 + VALUE_PAD);
-  assert.equal(uniformWidth(large, CHAR), uniformWidth(small, CHAR));
-  // Signed spends a character on the sign and a digit on the smaller range.
-  assert.equal(typeDigits("int", 16), "-88888");
-  assert.equal(typeDigits("uint", 8), "888");
-  assert.equal(typeDigits("float", 32), "");
-});
 
 // ----- aligned -----
 

@@ -1,91 +1,48 @@
-// The table of values the field column draws beside every row a folded run
-// covers: one cell per element whose bits fall on the row, in the order of the
-// bytes, so the reader can go from a byte to its value and back.
+// Where each value of a folded run sits on the row it falls on.
 //
 // A folded run is one chip — `body 72,000 values` — and the rows under that
-// chip used to say nothing at all. This is what they say instead. Nothing here
-// touches the document: the layout is settled as values, before a cell is
-// drawn, so a row's height is known before the browser lays it out and so this
-// file can be tested without one.
+// chip used to say nothing at all. This is what they say instead: one cell per
+// element whose bits fall on the row, in the order of the bytes, so the reader
+// can go from a byte to its value and back.
+//
+// This file places the cells. `valuelayout.ts` decides which of the three
+// shapes they are placed in and how wide the pieces of that shape are; the
+// view hands the answer in as `layout`. Nothing here touches the document: the
+// layout is settled as values, before a cell is drawn, so a row's height is
+// known before the browser lays it out and so this file can be tested without
+// one.
 //
 // `.ts` on the imports rather than the `.js` the rest of `src` writes: the
 // tests run this file under `node --test`, which strips the types but does not
 // rewrite a `.js` specifier back to the file it came from.
 import type { ChipMeasure } from "./chipfit.ts";
-import type { Cell } from "./doc.ts";
+import {
+  COLUMN_GUESS,
+  uniformFit,
+  VALUE_PAD,
+  wrapFlow,
+  type Cell,
+  type Layout,
+  type RunCells,
+} from "./valuelayout.ts";
 
-// `Cell` is the core's own answer, from `doc.runCells`; nothing here reshapes
-// it. Re-exported so the view and the tests have one name for it.
-export type { Cell };
-
-/** A run and its elements on screen. The name and type are what a cell's
- *  tooltip says it is; `symbol` marks the steps of a traced block, which are
- *  named rather than numbered. */
-export type RunCells = {
-  /** The run itself, so a cell picks the element at `[...path, index]`. */
-  readonly path: readonly number[];
-  readonly name: string;
-  readonly type: string;
-  readonly symbol: boolean;
-  /** The widest text this run has ever shown, whether or not it is on screen
-   *  now. Which layout a run gets has to hold still while the reader scrolls:
-   *  a window whose samples happen to be four digits would otherwise be
-   *  aligned and the next window, holding a five-digit one, uniform, and every
-   *  row would change height between them. The floor only ever rises, so a run
-   *  gives the aligned layout up at most once. */
-  readonly widest: string;
-  readonly cells: readonly Cell[];
-};
-
-/** Padding either side of a cell's text (`padding: 0 2px` in `.hv-val`), plus
- *  the hairline between two of them. Mirrors style.css, and is kept narrow on
- *  purpose: two bytes of a 16-byte row are 45 pixels, and `-32768` and its
- *  padding have to fit inside them for a run of 16-bit samples to be drawn
- *  over the bytes it is stored in. */
-export const VALUE_PAD = 5;
-/** The gap between two uniform cells (`gap: 2px` on `.hv-vals-uniform`). */
-export const VALUE_GAP = 2;
-/** Room kept on the last line for the `+3` that counts what did not fit. */
-export const VALUE_REST = 34;
-/** The three shapes a row's table takes. Aligned draws every value over the
- *  bits it is stored in; uniform is equal cells wrapped over as many lines as
- *  the row needs; flow is cells of their own natural width, for a run whose
- *  elements are the symbols of a decoder and read as the text they decode
- *  to. */
-export type Layout = "aligned" | "uniform" | "flow";
-/** Width to assume before the column has been measured once. */
-const COLUMN_GUESS = 320;
-/** Pitch of a hex cell to assume before one has been measured. */
-const PITCH_GUESS = 22;
-
-/**
- * How wide a cell of this kind and size has to be, whatever value it happens
- * to hold: the longest text the type can produce, as a string of digits to
- * measure.
- *
- * This is what keeps the layout still while the reader scrolls. Measuring the
- * values that happen to be on screen means a window of four-digit samples is
- * laid out one way and the next window, holding a five-digit one, another —
- * and every row between them changes height. A `u16` is five digits wide
- * whether it holds 7 or 65,535.
- *
- * Empty for the kinds whose text has no width the type can promise: a float, a
- * decoder's symbol, a record's one-line reading. Those fall back to the widest
- * text the run has shown.
- */
-export function typeDigits(kind: string, sizeBits: number): string {
-  if (sizeBits <= 0 || sizeBits > 64) return "";
-  if (kind === "uint" || kind === "unset") return "8".repeat(Math.ceil(Math.log10(2 ** Math.min(sizeBits, 53))));
-  if (kind === "int") return `-${"8".repeat(Math.ceil(Math.log10(2 ** Math.min(sizeBits - 1, 53))))}`;
-  return "";
-}
-
-/** How wide one cell's text may be drawn: what its type can produce where that
- *  is known, and what it says where it is not. */
-function textWidth(c: Cell, measure: ChipMeasure): number {
-  const digits = typeDigits(c.kind, c.size_bits);
-  return measure.value(digits === "" ? c.label : digits);
-}
+// One import site for the view and the tests: what a run's values come to is
+// this file's subject, and which shape they take is next door.
+export {
+  alignedFits,
+  alignedWidth,
+  chooseLayout,
+  rowLayout,
+  typeDigits,
+  uniformWidth,
+  VALUE_GAP,
+  VALUE_PAD,
+  VALUE_REST,
+  type Cell,
+  type FitOpts,
+  type Layout,
+  type RunCells,
+} from "./valuelayout.ts";
 
 /** Whether a value is a number, and so is read from its right-hand end. */
 export function numeric(kind: string): boolean {
@@ -175,67 +132,6 @@ export const NO_VALUES: RowValues = {
   height: 0,
   key: "",
 };
-
-export type FitOpts = {
-  readonly bpr: number;
-  /** Width of the annotation column, measured from the last frame. */
-  readonly noteWidth: number;
-  /** Width of one byte of the hex column, so a byte of the table can have the
-   *  pitch of a byte of the bytes. */
-  readonly hexPitch: number;
-  readonly measure: ChipMeasure;
-};
-
-/** How wide the aligned table is drawn: a byte of it has the pitch of a hex
- *  cell where the column is wide enough for that, and the whole table shrinks
- *  proportionally where it is not. */
-export function alignedWidth(o: FitOpts): number {
-  const pitch = o.hexPitch > 0 ? o.hexPitch : PITCH_GUESS;
-  return Math.min(o.noteWidth || COLUMN_GUESS, o.bpr * pitch);
-}
-
-/**
- * Which layout a run's cells get, decided once per run per screenful.
- *
- * Aligned puts every value over the bits it is stored in, which is the whole
- * point of the table — but only while the values fit the width their bits are
- * worth. A six-bit code holding `-13` has eight pixels to say it in, and a
- * cell that cannot say what it holds says nothing at all, so those runs go to
- * the uniform layout instead. So does any run the core marks as not stored in
- * one contiguous stretch of bits: there is no one place to draw those over.
- *
- * The narrowest cell is measured from the element's own size, not from the
- * piece of it left on a row it straddles: the element at the end of a row is
- * cut by the row edge, not by the layout, and letting that decide would send
- * every run with a straddling element to the uniform layout.
- */
-export function alignedFits(runs: readonly RunCells[], o: FitOpts): boolean {
-  const columns = o.bpr * 8;
-  const bit = alignedWidth(o) / columns;
-  let narrowest = Infinity;
-  let widest = 0;
-  let any = false;
-  for (const run of runs) {
-    widest = Math.max(widest, o.measure.value(run.widest));
-    for (const c of run.cells) {
-      if (!c.contiguous) return false;
-      any = true;
-      narrowest = Math.min(narrowest, Math.min(c.size_bits, columns) * bit);
-      widest = Math.max(widest, textWidth(c, o.measure));
-    }
-  }
-  return any && narrowest >= widest + VALUE_PAD;
-}
-
-/** How wide a uniform cell is: the widest text on screen and its padding. */
-export function uniformWidth(runs: readonly RunCells[], measure: ChipMeasure): number {
-  let widest = 0;
-  for (const run of runs) {
-    widest = Math.max(widest, measure.value(run.widest));
-    for (const c of run.cells) widest = Math.max(widest, textWidth(c, measure));
-  }
-  return Math.ceil(widest + VALUE_PAD);
-}
 
 export type RowValueOpts = {
   /** The runs on screen, with the cells that overlap this row among them. */
@@ -349,12 +245,11 @@ export function planRowValues(o: RowValueOpts): RowValues {
     return finish("flow", wrapped.kept, 0, wrapped.lines, wrapped.rest, o.valLine);
   }
   const width = Math.max(1, o.cellWidth);
-  const perLine = Math.max(1, Math.floor((column + VALUE_GAP) / (width + VALUE_GAP)));
+  const { perLine, lastLine } = uniformFit(column, width);
   const want = Math.ceil(cells.length / perLine);
   if (want <= o.maxLines) return finish("uniform", cells, width, want, 0, o.valLine);
   // Past the cap the last line keeps room for the count of what is left.
-  const room = Math.max(1, Math.floor((column + VALUE_GAP - VALUE_REST) / (width + VALUE_GAP)));
-  const shown = perLine * (o.maxLines - 1) + room;
+  const shown = perLine * (o.maxLines - 1) + lastLine;
   const kept = cells.slice(0, Math.min(cells.length - 1, shown));
   return finish("uniform", kept, width, o.maxLines, cells.length - kept.length, o.valLine);
 }
@@ -363,35 +258,6 @@ export function planRowValues(o: RowValueOpts): RowValues {
  *  the element starts on. */
 function pieceIndex(startBit: number, rowFrom: number, rowBits: number): number {
   return -Math.floor((startBit - rowFrom) / rowBits);
-}
-
-/**
- * Pack flow cells into lines, each cell as wide as its own text.
- *
- * The same greedy wrap the browser will do, worked out here because the row's
- * height has to be known before the row is laid out. Every line takes at least
- * one cell, so a label wider than the whole column takes a line of its own
- * rather than never fitting.
- */
-function wrapFlow(
-  cells: readonly PlacedCell[],
-  column: number,
-  maxLines: number,
-): { kept: PlacedCell[]; lines: number; rest: number } {
-  let lines = 1;
-  let used = 0;
-  for (const [i, c] of cells.entries()) {
-    const room = lines === maxLines ? column - VALUE_REST : column;
-    const next = used === 0 ? c.width : used + VALUE_GAP + c.width;
-    if (used > 0 && next > room) {
-      if (lines === maxLines) return { kept: cells.slice(0, i), lines, rest: cells.length - i };
-      lines++;
-      used = c.width;
-    } else {
-      used = next;
-    }
-  }
-  return { kept: [...cells], lines, rest: 0 };
 }
 
 function finish(
