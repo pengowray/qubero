@@ -168,6 +168,13 @@ fn dword(head: &[u8], at: usize) -> Option<u32> {
 }
 
 pub fn png() -> Template {
+    Template::new("png", image())
+}
+
+/// The image on its own, so a format that carries a whole PNG can place it. A
+/// PNG refers to nothing by name, so the type is the whole of it and there is
+/// no vocabulary to hand over with it.
+pub(crate) fn image() -> T {
     let (ihdr, text) = (ihdr(), text());
     let chunk = T::structure_named(
         "Chunk",
@@ -191,15 +198,12 @@ pub fn png() -> Template {
             ("crc", T::u32(Big)),
         ],
     );
-    Template::new(
-        "png",
-        T::structure(
-            "PNG",
-            vec![
-                ("signature", T::magic(b"\x89PNG\r\n\x1a\n")),
-                ("chunks", T::repeat(chunk, Until::FieldBytes { field: "type".into(), bytes: b"IEND".to_vec() })),
-            ],
-        ),
+    T::structure(
+        "PNG",
+        vec![
+            ("signature", T::magic(b"\x89PNG\r\n\x1a\n")),
+            ("chunks", T::repeat(chunk, Until::FieldBytes { field: "type".into(), bytes: b"IEND".to_vec() })),
+        ],
     )
 }
 
