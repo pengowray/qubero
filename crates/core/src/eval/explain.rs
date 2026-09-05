@@ -290,12 +290,32 @@ impl Evaluator {
             if &*packing == sqlite_overflow::PACKING {
                 return self.explain_sqlite_row(doc, at);
             }
-            let Some(kind) = ggml_quant::by_name(&packing) else { continue };
-            let bytes = self.read(doc, &r, r.offset, kind.block_bytes() as u64 * 8)?;
-            let Some(block) = ggml_quant::unpack(kind, &bytes) else { continue };
-            return Ok(quant_of(kind, block, r.offset, at_bits));
+            let Some((kind, block, at_block)) = self.quant_block(doc, at)? else { continue };
+            return Ok(quant_of(kind, block, at_block, at_bits));
         }
         Ok(Explain::Plain)
+    }
+
+    /// The block at `path` taken apart into its numbers, if it is one of the
+    /// ggml packings this crate knows: the layout, the weights, and where the
+    /// block starts in bits. `None` for everything else, which is every field
+    /// that is not a block and every block whose weights only ggml can unpack.
+    ///
+    /// The value panel asks this for the block under the cursor and the value
+    /// table asks it for every block over a screenful, and there is one answer
+    /// to what a block holds.
+    pub(super) fn quant_block<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+    ) -> R<Option<(Quant, ggml_quant::Block, u64)>> {
+        self.resolve(doc, path)?;
+        let r = self.memo.get(path).expect("resolved").clone();
+        let Ty::Struct(def) = &r.ty else { return Ok(None) };
+        let Some(packing) = def.packed.clone() else { return Ok(None) };
+        let Some(kind) = ggml_quant::by_name(&packing) else { return Ok(None) };
+        let bytes = self.read(doc, &r, r.offset, kind.block_bytes() as u64 * 8)?;
+        Ok(ggml_quant::unpack(kind, &bytes).map(|b| (kind, b, r.offset)))
     }
 
     /// A row that spilled, followed onto the pages it spilled onto and read as

@@ -210,10 +210,11 @@ struct CellDto {
     /// `text` for everything else.
     label: String,
     /// "uint" | "int" | "float" | "bytes" | "str" | "enum" | "flags" |
-    /// "composite" | "symbol"
+    /// "composite" | "symbol" | "scale"
     kind: &'static str,
     /// False when the element's bits are not one run, which sends the view to
-    /// its uniform layout. True for every type there is today.
+    /// its uniform layout: a `q5_0` weight is four bits of `qs` and a fifth
+    /// bytes away in `qh`.
     contiguous: bool,
 }
 

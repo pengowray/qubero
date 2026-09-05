@@ -232,9 +232,12 @@ export type Cell = {
    *  as the text coming out of the block, and a match is its two numbers. The
    *  same as `text` for everything else. */
   readonly label: string;
+  /** `"uint" | "int" | "float" | "bytes" | "str" | "enum" | "flags" |
+   *  "composite" | "symbol" | "scale"` */
   readonly kind: string;
   /** False when the element's bits are not one run, which is what sends the
-   *  table to its uniform layout. True for every type there is today. */
+   *  table to its uniform layout: a `q5_0` weight is four bits of `qs` and a
+   *  fifth bytes away in `qh`. */
   readonly contiguous: boolean;
 };
 
