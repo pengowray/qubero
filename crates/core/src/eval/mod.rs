@@ -16,6 +16,7 @@ use crate::source::{Missing, Source};
 use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
 use crate::text::{self, Settled};
 
+mod cells;
 mod explain;
 mod go;
 mod jsontree;
@@ -35,6 +36,7 @@ mod tests;
 
 pub use explain::{Explain, FlagBit};
 pub use space::{Space, SpaceId};
+pub use cells::Cell;
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
 
