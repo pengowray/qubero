@@ -975,6 +975,33 @@ mod tests {
         assert_eq!(cells[3].text, "weight 0 \u{b7} stored 0 \u{b7} value 1");
     }
 
+    /// A scale off a real model, rather than the 1.0 the other tests use so
+    /// that their arithmetic is checkable. The cell says what the listing says
+    /// about the same field, which for a half float is the few digits it takes
+    /// to tell it from its neighbours and not the nineteen the number expands
+    /// to. How short that is stays `brief`'s business, since the chip and the
+    /// cell have to agree.
+    #[test]
+    fn a_scale_cell_reads_as_the_listing_reads_the_field() {
+        let mut payload = vec![0x35, 0x1C]; // f16 0.00411
+        payload.extend(std::iter::repeat_n(0x9Au8, 16));
+        let d = gguf_tensor(2, 32, &payload);
+        let mut e = gguf();
+        let run = e.node(&d, BLOCKS).unwrap();
+        let cells = e.run_cells(&d, BLOCKS, run.offset_bits, run.offset_bits + run.size_bits, 10_000).unwrap();
+        let scale = e.node(&d, &[6, 0, 0, 0]).unwrap();
+        assert_eq!(cells[0].label, super::listing::brief(&scale.value));
+        assert_eq!(cells[0].label, "0.00411");
+        assert_eq!(cells[0].text, "d \u{b7} 0.00411");
+        // A weight's value is cut to four digits, which is as much as a scale
+        // stored in sixteen bits can justify. It is the scale times the stored
+        // integer worked out in full and then shortened, which the value panel
+        // does the same way, so the two agree with one another rather than
+        // with the shortest decimal the scale itself reads as.
+        assert_eq!(cells[1].text, "weight 16 \u{b7} stored 1 \u{b7} value 0.004108");
+        assert_eq!(cells[2].text, "weight 0 \u{b7} stored 2 \u{b7} value 0.008217");
+    }
+
     /// Four significant digits, the way the value panel writes a weight, so
     /// the panel and the table say the same thing about the same number.
     #[test]
