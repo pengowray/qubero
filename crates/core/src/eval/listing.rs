@@ -362,7 +362,14 @@ impl Evaluator {
             let span = if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
                 self.gap_before_the_next_placement(doc, &path, &info, at)?
             } else if inline {
-                self.one_row(doc, &path, &info)?
+                // A structure that reads on one row is still one of many when
+                // it is an element of a long run: a quantised tensor is
+                // thousands of packed blocks, and the run of them says more
+                // than a row per block, and gives the value table its cells.
+                match self.run_of(doc, &path, at)? {
+                    Some(run) => run,
+                    None => self.one_row(doc, &path, &info)?,
+                }
             } else if matches!(self.memo[&path].ty, Ty::Decoded { .. }) {
                 // The whole run, as one entry that says what it is and how
                 // many fields are inside. Before `composite`: its one child is
@@ -553,15 +560,23 @@ impl Evaluator {
         info: &NodeInfo,
         at: u64,
     ) -> R<Span> {
-        let span = self.span_of(doc, path, info)?;
-        let Some((run, count)) = self.collapsible(doc, path)? else { return Ok(span) };
+        match self.run_of(doc, path, at)? {
+            Some(run) => Ok(run),
+            None => self.span_of(doc, path, info),
+        }
+    }
+
+    /// The long run of values or records a field belongs to, as one entry, or
+    /// None when it belongs to none that is worth folding.
+    fn run_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize], at: u64) -> R<Option<Span>> {
+        let Some((run, count)) = self.collapsible(doc, path)? else { return Ok(None) };
         let run_info = self.node(doc, &run)?;
         // Pointer-heavy formats can reach a leaf through an overlapping
         // placement whose repeated ancestor has already ended. Collapsing that
         // ancestor would return a span behind `at` forever. Only substitute the
         // run when it covers the byte this request is actually advancing from.
         if run_info.offset_bits > at || at >= run_info.offset_bits + run_info.size_bits {
-            return Ok(span);
+            return Ok(None);
         }
         let mut span = self.span_of(doc, &run, &run_info)?;
         span.count = count;
@@ -599,7 +614,7 @@ impl Evaluator {
                 rest: true,
             });
         }
-        Ok(span)
+        Ok(Some(span))
     }
 
     pub(super) fn span_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
