@@ -129,7 +129,12 @@ fn field_ty(prefix: &str, schema: Option<&Struct>) -> T {
     // A header byte of 0x01 through 0x0F is a delta of zero with a real type
     // in it, which is the one shape that writes its id out. A byte of zero is
     // the stop byte, and everything else carries its delta in the top nibble.
-    let explicit: Vec<(i128, T)> = (1..=15).map(|k| (k, id_ty(schema, T::zigzag()))).collect();
+    let mut explicit: Vec<(i128, T)> = (1..=15).map(|k| (k, id_ty(schema, T::zigzag()))).collect();
+    // The stop byte is a delta of zero too, and it has no id at all. Left to
+    // the running sum it would take the id of the field before it and be
+    // labelled with that field's name, which is a row saying a field is here
+    // when what is here is the end of them.
+    explicit.push((0, T::enumeration("ThriftStop", T::computed(E::lit(0)), &[(0, "stop")])));
     let running = id_ty(schema, T::computed(E::prev("id").add(E::field("hdr").shr(E::lit(4)))));
     T::structure_named(
         "ThriftField",
@@ -149,7 +154,7 @@ fn field_ty(prefix: &str, schema: Option<&Struct>) -> T {
 fn id_ty(schema: Option<&Struct>, inner: T) -> T {
     let Some(s) = schema else { return inner };
     let cases: Vec<(i128, &str)> = s.fields.iter().map(|f| (f.id, f.name)).collect();
-    T::enumeration(&format!("{} field", s.name), inner, &cases)
+    T::enumeration(&format!("{}Field", s.name), inner, &cases)
 }
 
 /// The value of a field, or of one element of a list, set or map.
@@ -204,7 +209,7 @@ fn by_id(schema: Option<&Struct>, generic: T, refine: &dyn Fn(&Field) -> Option<
 /// True and false, by name. The value is in the type nibble for a field and in
 /// a byte for an element, and either way it is 1 or 2 rather than 1 or 0.
 fn boolean(inner: T) -> T {
-    T::enumeration("bool", inner, &[(1, "true"), (2, "false")])
+    T::enumeration("Bool", inner, &[(1, "true"), (2, "false")])
 }
 
 /// Binary: a length and then that many bytes. `text` is what the schema says

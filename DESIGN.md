@@ -252,6 +252,11 @@ Later additions to the IR, each paying for itself in a format:
   round, so it could not stand in. Writing one keeps the field's size by
   padding at the front with 0x80, a group of zero bits that says "more
   follows": redundant, legal, and what stops a delta time moving the track.
+* `Zigzag` is LEB128 groups holding a number whose sign is in the bottom bit
+  and whose magnitude is above it, so -1 is 1 and 1 is 2. Thrift's compact
+  protocol writes every integer wider than a byte this way, and protobuf calls
+  it `sint32`. Neither LEB128 spelling can stand in: the three read 0x03 as 3,
+  3 and -2. See "A structure whose fields are numbered rather than placed".
 
 A wasm function body reads as a list of instructions: the opcode is an `Enum`
 over the byte and its immediate is a `Switch` on that byte. The 0xFD (SIMD) and
@@ -1686,6 +1691,53 @@ Ctrl+F5 is "Copy all text on the DOS screen", which is the text screenshot, and
 `COPY CLIP$ FILE.TXT` inside the guest writes what the clipboard holds back
 through the guest's own code page, which is how the same screen is captured
 both ways. The steps are in the sample folder's own README.
+
+### A structure whose fields are numbered rather than placed
+Every format above writes its fields in an order the template knows. Thrift's
+compact protocol does not: a struct is a run of fields ending at a zero byte,
+each opening with one byte that says how far its id is from the id of the field
+before it and what kind of value follows. Which fields are there, and in what
+order, is the writer's business. That is why a Parquet file written this year
+still reads in a program from 2016, and it is what `crates/core/src/formats/
+thrift.rs` describes.
+
+The shape comes off the wire and the names come off a schema, and keeping those
+two apart is the whole design. The type nibble decides what to read: a
+zigzagged varint, eight bytes of double, a length and its bytes, a nested
+struct, a list with its own count and element type. The schema only says which
+id is called what, which ids hold a struct and which one, and which integers
+have named values. A field the schema has never heard of is read exactly as
+correctly as one it has and shown by its number, which is the forward
+compatibility the format was built for, kept rather than thrown away.
+
+Two things carry it and neither is new. `Expr::Prev` is the running id: field
+`n`'s id is field `n - 1`'s id plus this delta, which is what running status
+needed for MIDI. A nested struct is a list of its own, so the counter resets
+when one opens and picks up again when it closes, matching Thrift's per-struct
+stack without anything saying so. And `Enum` over the id is what names the
+field, with `named_by` putting that name on the row: `[3] num_rows` rather than
+`[3]`.
+
+One type is new, because it cannot be worked around. `Ty::Zigzag` is LEB128
+groups holding a number whose sign is in the bottom bit. The same bytes read as
+an unsigned LEB128 come out doubled, and as a sign-extended one come out
+doubled with half of them negative: 0x03 is 3, 3 and -2 under the three
+readings. Nothing but the type says which a file meant.
+
+Parquet is the format that asked for it. The footer is a `FileMetaData` and
+reads as one: the schema, every row group, every column chunk, the statistics
+and the encodings. The stop byte reads as `stop` rather than inheriting the
+name of the field before it, since a row saying a field is here where the
+fields end is worse than a row saying nothing. What is not done is placing the
+pages: the offsets that place them are in the footer, and reaching a numbered
+field from outside is `Expr::Tagged`, which is already built. A sequential walk
+of the region instead would be wrong, because a column index, an offset index
+and a bloom filter may sit in it and none of those is a page.
+
+A file whose footer is encrypted says `PARE` at both ends, and the magic at the
+front picks the shape. Everything in it is ciphertext but one structure: the
+`FileCryptoMetaData` before the footer names the algorithm and the key, and it
+reads.
 
 ### The file as the text it is
 The hex grid answers "what is at this address" and the listing answers "how is

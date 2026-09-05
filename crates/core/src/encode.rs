@@ -766,6 +766,27 @@ mod tests {
         assert!(leb_signed(-123456, 2).is_none());
     }
 
+    /// The three varint readings that share these bytes disagree, so the one
+    /// written has to be the one the field says. -1 is a byte here and ten of
+    /// them as a sign-extended LEB128, which is the point of zigzagging.
+    #[test]
+    fn a_zigzag_moves_the_sign_to_the_bottom_bit() {
+        assert_eq!(zigzag(0), 0);
+        assert_eq!(zigzag(-1), 1);
+        assert_eq!(zigzag(1), 2);
+        assert_eq!(zigzag(-2), 3);
+        assert_eq!(zigzag(i64::MIN as i128), u64::MAX as u128);
+        // And packed as LEB128 groups, which is what a Thrift i32 or i64 is.
+        assert_eq!(leb_unsigned(zigzag(-1), 1).unwrap(), vec![0x01]);
+        assert_eq!(leb_unsigned(zigzag(-64), 1).unwrap(), vec![0x7f]);
+        assert_eq!(leb_unsigned(zigzag(64), 2).unwrap(), vec![0x80, 0x01]);
+        assert_eq!(leb_unsigned(zigzag(-65), 2).unwrap(), vec![0x81, 0x01]);
+        // A wider field pads at the front with empty groups, so writing a
+        // number into a footer does not move everything after it.
+        assert_eq!(leb_unsigned(zigzag(-1), 3).unwrap(), vec![0x81, 0x80, 0x00]);
+        assert!(leb_unsigned(zigzag(123456), 2).is_none());
+    }
+
     #[test]
     fn ebml_vints_keep_their_current_width() {
         assert_eq!(encode(&Ty::ebml_size(), "8", 8, &StrState::default()).unwrap(), vec![0x88]);
