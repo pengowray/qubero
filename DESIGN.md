@@ -595,13 +595,18 @@ A folded run is one chip on the row it starts on, and the rows under that chip
 would otherwise say nothing at all: the reader can see the bytes of 72,000
 samples and not one of the numbers they are. So beside every row a run covers,
 the column also draws a value table, one cell per element whose bits fall on
-that row, in the order of the bytes. It takes one of two layouts, chosen per run
-per screenful from measured text the way `chipfit.ts` chooses how many chips
-fit. Aligned is a grid of the row's bits, sized so a byte of it has the pitch of
+that row, in the order of the bytes. `Evaluator::run_cells` answers what the
+elements are, one call per run per screenful, the way `spans` answers what the
+fields are. The table takes one of two layouts, chosen per run from measured
+text the way `chipfit.ts` chooses how many chips fit — measured from what the
+element's type can hold rather than from the values that happen to be on
+screen, since a window of four-digit samples and the next window holding a
+five-digit one must not be laid out differently. Aligned is a grid of the row's
+bits, sized so a byte of it has the pitch of
 a hex cell, with each cell over the bits its value is stored in; an element the
 row edge cuts keeps its text on the row it starts on, lets it out of the sliver
 of a cell it was left, and has a tinted continuation cell on the next row.
-Uniform is equal cells the width of the widest value on screen, wrapped over as
+Uniform is equal cells as wide as the widest value the type holds, wrapped over as
 many lines as the row needs, and is what a run gets when its values do not fit
 the bits they are stored in — six-bit codes, Huffman symbols — or when the core
 says an element is not one contiguous run of bits. Numbers are read from the
@@ -611,6 +616,11 @@ picked out one at a time; clicking one selects that element in all three views,
 and the cell the cursor is in takes the same accent its byte does. Both layouts
 report their height before the row is laid out, like the chips, and both are
 written into pooled elements that a scroll never takes out from under a finger.
+Only the runs the core folded get a table. The runs the view folds, where a
+handful of a list's elements sit together on a row and become one chip, would
+cost nothing to draw and are left alone anyway: whether they fold depends on
+what the top row carries in from above, so the same row would be one height at
+the top of the screen and another below it.
 
 Every heading has space above it, so a part is divided from the one before
 rather than butted up against it, and level 0 gets more of it than level 1. The
