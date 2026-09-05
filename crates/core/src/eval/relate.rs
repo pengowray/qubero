@@ -61,7 +61,7 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let mut out = Vec::new();
         if let Some(from) = self.name_from(path) {
-            self.relation(doc, path, &from, Role::Name, &mut out);
+            self.relation(doc, path, &from, Role::Name, None, &mut out);
         }
         let declared = self.declared_ty(path)?;
         let mut ty = declared;
@@ -71,12 +71,18 @@ impl Evaluator {
                     Some(t) => ty = t.clone(),
                     None => break,
                 },
+                // Measured in the room the container had left, which is not
+                // the room this node has: resolving a `Sized` narrows the
+                // limit to the window the size itself set. Asking here would
+                // answer with the window, and write out a length short by
+                // whatever the expression takes off the end.
                 Ty::Sized { size, inner } => {
-                    self.relation(doc, path, &size, Role::Length, &mut out);
+                    let room = self.before_window(path);
+                    self.relation(doc, path, &size, Role::Length, room, &mut out);
                     ty = *inner;
                 }
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
-                    self.relation(doc, path, &on, Role::Type, &mut out);
+                    self.relation(doc, path, &on, Role::Type, None, &mut out);
                     break;
                 }
                 _ => break,
@@ -84,20 +90,38 @@ impl Evaluator {
         }
         let base = self.memo[path].ty.without_sentinel().clone();
         match &base {
-            Ty::Bytes(e) => self.relation(doc, path, &e.clone(), Role::Length, &mut out),
+            Ty::Bytes(e) => self.relation(doc, path, &e.clone(), Role::Length, None, &mut out),
             // How wide the number is, which is the one thing about it the
             // template did not fix. Told apart from a byte length because it
             // is bits and because a reader asking "why is this eleven bits"
             // wants the field that said eleven.
-            Ty::UIntExpr { bits, .. } => self.relation(doc, path, &(**bits).clone(), Role::Width, &mut out),
+            Ty::UIntExpr { bits, .. } => self.relation(doc, path, &(**bits).clone(), Role::Width, None, &mut out),
             Ty::Str { len: StrLen::Fixed(e) | StrLen::Padded { size: e, .. }, .. } => {
-                self.relation(doc, path, &e.clone(), Role::Length, &mut out)
+                self.relation(doc, path, &e.clone(), Role::Length, None, &mut out)
             }
-            Ty::Array { count, .. } => self.relation(doc, path, &count.clone(), Role::Count, &mut out),
-            Ty::Computed(e) | Ty::ComputedText(e) => self.relation(doc, path, &e.clone(), Role::Value, &mut out),
+            Ty::Array { count, .. } => self.relation(doc, path, &count.clone(), Role::Count, None, &mut out),
+            Ty::Computed(e) | Ty::ComputedText(e) => self.relation(doc, path, &e.clone(), Role::Value, None, &mut out),
             _ => {}
         }
         Ok(out)
+    }
+
+    /// The frame a `Sized` node's own size expression was worked out in:
+    /// where the field starts, and how far its container let it go.
+    ///
+    /// Resolving a `Sized` narrows the node's limit to the window the size
+    /// expression set, so by the time there is a node to ask, the memo no
+    /// longer holds the room the expression saw. `Remaining` read from the
+    /// narrowed frame answers with the window, and a length written out as
+    /// `max(403 - 8, 0) = 395` for a field of 403 bytes is a number nothing
+    /// in the file agrees with.
+    ///
+    /// Nothing for a `Sized` at the root, which has no container to ask; the
+    /// caller then falls back to the node's own frame, as every other
+    /// relationship does.
+    fn before_window(&self, path: &[usize]) -> Option<(u64, u64)> {
+        let (_, parent) = path.split_last()?;
+        Some((self.memo.get(path)?.offset, self.memo.get(parent)?.limit))
     }
 
     /// One expression written both ways, if it can be. Dropped rather than
@@ -111,15 +135,17 @@ impl Evaluator {
         at: &[usize],
         e: &Expr,
         role: Role,
+        here: Option<(u64, u64)>,
         out: &mut Vec<Relation>,
     ) {
         let Some(written) = write_expr(e) else { return };
         let mut named = false;
-        let Ok(Some(substituted)) = self.substitute(doc, at, e, 0, &mut named) else { return };
+        let here = here.or_else(|| self.memo.get(at).map(|r| (r.offset, r.limit)));
+        let Ok(Some(substituted)) = self.substitute(doc, at, e, 0, here, &mut named) else { return };
         if !named || substituted == written {
             return;
         }
-        let Ok(result) = self.eval_expr(doc, at, e) else { return };
+        let Ok(result) = self.eval_expr_at(doc, at, e, here) else { return };
         let result = result.to_string();
         // A substitution that already is the answer says the same thing twice.
         if substituted == result {
@@ -136,12 +162,13 @@ impl Evaluator {
         at: &[usize],
         e: &Expr,
         outer: u32,
+        here: Option<(u64, u64)>,
         named: &mut bool,
     ) -> R<Option<String>> {
-        let here = prec(e);
-        let wrap = |s: String| if here > 0 && here < outer { format!("({s})") } else { s };
+        let here_prec = prec(e);
+        let wrap = |s: String| if here_prec > 0 && here_prec < outer { format!("({s})") } else { s };
         let two = |a: &Expr, b: &Expr, op: &str, ev: &mut Self, named: &mut bool| -> R<Option<String>> {
-            let (Some(l), Some(r)) = (ev.substitute(doc, at, a, here, named)?, ev.substitute(doc, at, b, here + 1, named)?)
+            let (Some(l), Some(r)) = (ev.substitute(doc, at, a, here_prec, here, named)?, ev.substitute(doc, at, b, here_prec + 1, here, named)?)
             else {
                 return Ok(None);
             };
@@ -161,18 +188,18 @@ impl Evaluator {
             Expr::Min(a, b) | Expr::Max(a, b) => {
                 let name = if matches!(e, Expr::Min(..)) { "min" } else { "max" };
                 let (Some(l), Some(r)) =
-                    (self.substitute(doc, at, a, 0, named)?, self.substitute(doc, at, b, 0, named)?)
+                    (self.substitute(doc, at, a, 0, here, named)?, self.substitute(doc, at, b, 0, here, named)?)
                 else {
                     return Ok(None);
                 };
                 Some(format!("{name}({l}, {r})"))
             }
             Expr::PadTo { n, align } => {
-                let Some(inner) = self.substitute(doc, at, n, 0, named)? else { return Ok(None) };
+                let Some(inner) = self.substitute(doc, at, n, 0, here, named)? else { return Ok(None) };
                 Some(format!("align({inner}, {align})"))
             }
             Expr::Bit(a, i) => {
-                let Some(inner) = self.substitute(doc, at, a, 0, named)? else { return Ok(None) };
+                let Some(inner) = self.substitute(doc, at, a, 0, here, named)? else { return Ok(None) };
                 Some(format!("bit({inner}, {i})"))
             }
             // A search over a list, where the value alone would hide the half
@@ -181,14 +208,13 @@ impl Evaluator {
             // back, and leaves the reader to guess which element answered.
             Expr::Tagged(t) => {
                 let tag = match &t.tag {
-                    Tag::Computed(e) => self.substitute(doc, at, &e.clone(), 0, named)?,
+                    Tag::Computed(e) => self.substitute(doc, at, &e.clone(), 0, here, named)?,
                     // A label that is text: substituting the expression that
                     // works it out means the text it came to, since that is
                     // what the search was actually given. Leaving it as
                     // written would make the two forms the same and the whole
                     // relationship would be dropped as saying nothing.
                     Tag::ComputedText(e) => {
-                        let here = self.memo.get(at).map(|r| (r.offset, r.limit));
                         *named = true;
                         Some(format!("{:?}", self.text_at(doc, at, &e.clone(), here)?))
                     }
@@ -207,7 +233,7 @@ impl Evaluator {
                     return Ok(None);
                 }
                 *named = true;
-                Some(self.eval_expr(doc, at, e)?.to_string())
+                Some(self.eval_expr_at(doc, at, e, here)?.to_string())
             }
         };
         Ok(s)

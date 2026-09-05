@@ -604,6 +604,22 @@ mod tests {
         assert_eq!(e.node(&d, &[2, 0, 2, 3, 1]).unwrap().value, Value::Str("me".into()));
     }
 
+    /// The footer's length is `remaining - 8`, worked out in the room the
+    /// file had left. Once the field is placed, its own limit is the window
+    /// that length set, so a reader shown the arithmetic has to be shown the
+    /// room the arithmetic saw: `max(17 - 8, 0) = 9` for a nine-byte footer,
+    /// not `max(9 - 8, 0) = 1`.
+    #[test]
+    fn the_footers_length_is_written_out_in_the_room_it_measured() {
+        let d = Document::new(MemSource(footed(&[0x15, 0x02, 0x26, 0x10, 0x38, 0x02, b'm', b'e', 0x00])));
+        let mut e = Evaluator::new(parquet());
+        assert_eq!(e.node(&d, &[2]).unwrap().size_bits, 9 * 8);
+        let rel = e.relations(&d, &[2]).unwrap();
+        assert_eq!(rel[0].written, "max(remaining - 8, 0)");
+        assert_eq!(rel[0].substituted, "max(17 - 8, 0)");
+        assert_eq!(rel[0].result, "9");
+    }
+
     #[test]
     fn an_encrypted_file_still_says_how_it_was_encrypted() {
         // A FileCryptoMetaData: field 1 is an AES_GCM_V1 whose field 2 is an
