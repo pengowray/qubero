@@ -143,7 +143,10 @@ export function asciiGlyph(b: number): string {
   return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
 }
 
-const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+/** Every byte as two hex digits, so a cell's text is a lookup rather than a
+ *  `toString` and a pad. Also the column numbers over the grid, which are the
+ *  same two digits. */
+export const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 
 /** What a cell shows and every mark on it, from the byte it stands for and
  *  what the view is doing. Nothing here touches the document. */

@@ -173,9 +173,11 @@ const main = async () => {
   console.log(a.url);
 
   // Five wheel reports inside one frame. A view that draws for each of them
-  // draws five times; one that adds them up draws twice, once at once and
-  // once on the frame it booked. CDP's own `mouse.wheel` is paced slower than
-  // a frame, so only reports made from inside the page tell this apart.
+  // draws five times; one that adds them up draws twice, once at once and once
+  // on the frame it booked, or three times when the window it landed on had to
+  // book a frame to ask what fields are on it. CDP's own `mouse.wheel` is paced
+  // slower than a frame, so only reports made from inside the page tell these
+  // apart.
   const burst = await page.evaluate(() => {
     const v = window.__qubero.view;
     const before = window.__wc.draws;
@@ -186,7 +188,7 @@ const main = async () => {
       requestAnimationFrame(() => requestAnimationFrame(() => done(window.__wc.draws - before))),
     );
   });
-  console.log(`burst  five wheel reports in one frame -> ${burst} draws (2 is coalesced, 5 is not)`);
+  console.log(`burst  five wheel reports in one frame -> ${burst} draws (2 or 3 is coalesced, 5 is not)`);
 
   await run("down", 1);
   await run("up", -1);
