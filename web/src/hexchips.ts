@@ -99,7 +99,9 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
     if (c.run.length > first.length) first.push("…");
     title = `${s.trail.join(" ")} · ${s.type} · ${detail}: ${first.join(", ")}`;
   } else if (s.gap) {
-    title = `No field covers these ${detail}. Inside: ${path}`;
+    // A run that stopped short leaves what it could not read as a gap, and
+    // says why: the value the core puts on such a gap is the reason.
+    title = s.value === "" ? `No field covers these ${detail}. Inside: ${path}` : `Could not be read: ${s.value}. Inside: ${path}`;
   } else if (c.carried) {
     // The arrow says "this began further up", which a screen reader cannot
     // see and a first-time reader should not have to work out.

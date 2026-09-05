@@ -107,6 +107,7 @@ impl Memo {
             repeat_len: 0,
             repeat_end: None,
             repeat_done: false,
+            repeat_trouble: None,
             walk_at: None,
             expected_count: None,
             checkpoints: Vec::new(),
@@ -164,6 +165,7 @@ impl Memo {
                 l.repeat_len = 0;
                 l.repeat_end = None;
                 l.repeat_done = false;
+                l.repeat_trouble = None;
             }
             // Where a pointer list's children start was read from a field that
             // may be anywhere, and where a sequential walk had got to counts

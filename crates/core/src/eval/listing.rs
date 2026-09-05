@@ -457,6 +457,13 @@ impl Evaluator {
         span.offset_bits = begins;
         span.size_bits = ends - begins;
         span.count = 0;
+        // A run that stopped short says why: the stretch after its last
+        // element is not bytes nobody described but bytes the template could
+        // not read, and the gap carries the reason.
+        span.value = match self.list(path).repeat_trouble.clone() {
+            Some(why) if begins >= self.list(path).repeat_end.unwrap_or(0) => Value::Str(why),
+            _ => Value::Str(String::new()),
+        };
         Ok(span)
     }
 

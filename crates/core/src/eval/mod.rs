@@ -289,6 +289,11 @@ struct ListState {
     repeat_len: usize,
     repeat_end: Option<u64>,
     repeat_done: bool,
+    /// Why the walk stopped short of the end of its room, when it did: the
+    /// element after the last one could not be read. The elements before it
+    /// stand, and what is left is a gap that says this. A run that ends where
+    /// its room ends, or on its terminating condition, has none.
+    repeat_trouble: Option<String>,
     /// How far a walk over this list has got: an element index and where it
     /// starts. Walking on from here is what keeps reading a list in order
     /// one step per element rather than one walk per element.

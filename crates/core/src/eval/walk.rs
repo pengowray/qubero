@@ -146,14 +146,94 @@ impl Evaluator {
             }
             let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(ends);
-            self.resolve(doc, &p)?;
-            let size = self.size_of(doc, &p)?;
+            let sized = self.resolve(doc, &p).and_then(|()| self.size_of(doc, &p));
+            let size = match sized {
+                Ok(size) => size,
+                // An element that cannot be read ends the run before it,
+                // rather than taking the run down with it. A RIFF whose size
+                // slot undercounts by forty bytes has a trailing chunk that
+                // runs past the RIFF's end; the two chunks before it are
+                // still the file, and a reader wants them, with what is left
+                // said to be a stretch that could not be read and why. The
+                // first element failing is another matter: a run with nothing
+                // in it is the failure, not a short run.
+                Err(EvalError::Failed(why)) if ends > 0 => {
+                    self.memo.forget_node(&p);
+                    match self.stretch_to(doc, path, &p)? {
+                        Some(size) => size,
+                        None => {
+                            let m = self.list_mut(path);
+                            m.repeat_done = true;
+                            m.repeat_trouble = Some(why);
+                            return Ok(ends as u64);
+                        }
+                    }
+                }
+                Err(e) => return Err(e),
+            };
             let end = self.memo[p.as_slice()].cursor + size;
             if size == 0 {
                 return fail("repeated element has zero size");
             }
             self.note_element(doc, path, &p, end, until, before)?;
             p.pop();
+        }
+    }
+
+    /// A run whose declared room ends part-way through an element that would
+    /// fit the room outside it: the size was wrong, not the element. A bat
+    /// recorder writes its GUANO chunk after the samples and leaves the RIFF
+    /// size counting only the samples, and every player reads the chunk
+    /// anyway. So the room is stretched to the end of that one element, no
+    /// further, and the element is read; a size that was right about where
+    /// the run ends, with something else after it, is left as it was, since
+    /// the element would fail again with the room outside too.
+    ///
+    /// Some(size of the element) when the room was stretched and the element
+    /// read; None when there was no room to stretch into or it did not help,
+    /// with everything as it was.
+    fn stretch_to<S: Source>(&mut self, doc: &Document<S>, path: &[usize], elem: &[usize]) -> R<Option<u64>> {
+        let Some(k) = path.len().checked_sub(1) else { return Ok(None) };
+        let outer = self.memo[&path[..k]].limit;
+        let (mine, declared) = {
+            let r = &self.memo[path];
+            (r.limit, r.declared_size)
+        };
+        if declared.is_none() || outer <= mine {
+            return Ok(None);
+        }
+        let Some(m) = self.memo.get_mut(path) else { return Ok(None) };
+        m.limit = outer;
+        let sized = self.resolve(doc, elem).and_then(|()| self.size_of(doc, elem));
+        match sized {
+            Ok(size) => {
+                let end = self.memo[elem].cursor + size;
+                // Whatever was sized from the old room is sized again from
+                // the new one: this run, and everything it is inside.
+                for j in 0..=path.len() {
+                    if let Some(a) = self.memo.get_mut(&path[..j]) {
+                        a.size = None;
+                    }
+                }
+                if let Some(m) = self.memo.get_mut(path) {
+                    m.limit = end;
+                    m.declared_size = Some(end - m.offset);
+                }
+                Ok(Some(size))
+            }
+            Err(EvalError::Failed(_)) => {
+                self.memo.forget_node(elem);
+                if let Some(m) = self.memo.get_mut(path) {
+                    m.limit = mine;
+                }
+                Ok(None)
+            }
+            Err(e) => {
+                if let Some(m) = self.memo.get_mut(path) {
+                    m.limit = mine;
+                }
+                Err(e)
+            }
         }
     }
 

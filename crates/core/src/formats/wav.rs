@@ -1007,6 +1007,47 @@ mod tests {
         assert_eq!(ev.node(&d, &[3, 1, 0]).unwrap().value, Value::Str("data".into()));
     }
 
+    /// A bat recorder wrote a GUANO chunk after the data and did not count it
+    /// in the RIFF size, so the chunk runs past the RIFF's end. Every player
+    /// reads the chunk anyway, so the RIFF is stretched to the end of it and
+    /// no further.
+    #[test]
+    fn a_trailing_chunk_past_the_riff_size_is_still_read() {
+        // The RIFF size counts the trailing chunk's header and not its body,
+        // so the RIFF ends part-way through the chunk.
+        let inside = wave(&[], None).len() as u32 - 8 + 8;
+        let mut bytes = wave(&[], Some(inside));
+        bytes.extend(chunk_bytes(b"guan", b"GUANO|Version: 1.0\n"));
+        // And two bytes of nothing after it, which are nobody's.
+        bytes.extend_from_slice(&[0, 0]);
+        let len = bytes.len() as u64;
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 2, 0]).unwrap().value, Value::Str("guan".into()));
+        // The RIFF now runs to the end of that chunk, and its size slot still
+        // says what it said.
+        assert_eq!(ev.node(&d, &[]).unwrap().size_bits, (len - 2) * 8);
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(u128::from(inside)));
+    }
+
+    /// The same undercount with junk after the RIFF rather than a chunk: the
+    /// junk does not read as a chunk however much room it is given, so the
+    /// chunks before it stand and what is left is a gap that says why.
+    #[test]
+    fn junk_the_riff_size_cuts_through_is_a_gap_that_says_why() {
+        let inside = wave(&[], None).len() as u32 - 8 + 2;
+        let bytes = wave(&[0, 0, 0, 0], Some(inside));
+        let riff_end = 8 + u64::from(inside);
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[]).unwrap().size_bits, riff_end * 8);
+        let spans = ev.spans(&d, riff_end * 8 - 16, riff_end * 8, 8).unwrap();
+        let gap = spans.iter().find(|s| s.gap).expect("a gap after the last chunk");
+        assert!(matches!(&gap.value, Value::Str(why) if why.contains("past the end")), "{:?}", gap.value);
+    }
+
     /// A file written as it was recorded never gets its size filled in, and
     /// one that was cut off mid-recording keeps whatever the writer guessed.
     /// Either way the chunks get the rest of the file rather than nothing at
