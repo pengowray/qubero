@@ -24,6 +24,10 @@ depends on the codec:
 | LZ4 block | per sequence | token, literals, offset, match length |
 | zstd | per block | frame header, block headers; inside a block only as bytes this round |
 | xz / lzma | per block | stream and block headers; inside a block only as bytes |
+| PNG unfilter | per row | each row's filter byte, named, and the row it applies to as one run |
+| low bits argb, low bits rgba 11 | per pixel | one step a pixel: the four channels in, the byte they carry out |
+| PICO-8 pxa | per symbol | each literal by the table position that named it, each `match(len, dist)`, a run stored as it is a byte at a time, and the bits the last byte was padded out with |
+| PICO-8 old code | per symbol | each literal, whether it came from the character table or from an escape, each `match(len, dist)`, the two zero bytes that end the stream, and the room after them |
 
 The steps are **fields in the compressed space**. The deflate template gains real
 structure: blocks, their headers, the code-length alphabet, the literal/length

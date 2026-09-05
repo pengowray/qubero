@@ -775,6 +775,10 @@ pub enum Encoding {
     /// The format does not say. Read as UTF-8 if the bytes are valid UTF-8,
     /// otherwise Latin-1, and say which was used.
     Unknown,
+    /// P8SCII, the character set a PICO-8 cart's text is written in. ASCII in
+    /// the middle, and above 0x7f the glyphs a cart draws with and the two
+    /// Japanese syllabaries. See [`crate::text::CodePage::P8scii`].
+    P8scii,
 }
 
 impl Encoding {
@@ -789,6 +793,7 @@ impl Encoding {
             Encoding::Utf16(Endian::Big) => "utf16be".into(),
             Encoding::Bom { .. } => "text bom".into(),
             Encoding::Unknown => "text?".into(),
+            Encoding::P8scii => "p8scii".into(),
         }
     }
 }

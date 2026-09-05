@@ -221,6 +221,43 @@ const CP866_HIGH: [char; 128] = [
     '\u{0401}', '\u{0451}', '\u{0404}', '\u{0454}', '\u{0407}', '\u{0457}', '\u{040e}', '\u{045e}',
     '\u{00b0}', '\u{2219}', '\u{00b7}', '\u{221a}', '\u{2116}', '\u{00a4}', '\u{25a0}', '\u{00a0}',
 ];
+
+/// P8SCII, the character set PICO-8 draws with. ASCII in the middle, glyphs
+/// for the buttons and the shapes a cart draws with in 0x80 to 0x99, and then
+/// hiragana and katakana to the end.
+///
+/// PICO-8 shows six of these as emoji with a variation selector after them,
+/// and a page here is one character a byte, so the selector is dropped: the
+/// down arrow is U+2B07 rather than U+2B07 U+FE0F. What is lost is whether a
+/// font draws it in colour.
+///
+/// Below 0x80 the page is ASCII, which is what a code page here means, so the
+/// glyphs PICO-8 also puts at 0x01 to 0x1f are not read as glyphs. Those bytes
+/// are control codes to `print()` as well, and a cart's Lua uses them as
+/// escapes far more often than as pictures.
+///
+/// Lexaloffle publishes the control codes but not the byte-to-character table.
+/// This one is shrinko8's `k_charset`, which is what the tools that convert a
+/// cart to and from Unicode text agree on.
+const P8SCII_HIGH: [char; 128] = [
+    '\u{2588}', '\u{2592}', '\u{1f431}', '\u{2b07}', '\u{2591}', '\u{273d}', '\u{25cf}', '\u{2665}',
+    '\u{2609}', '\u{c6c3}', '\u{2302}', '\u{2b05}', '\u{1f610}', '\u{266a}', '\u{1f17e}', '\u{25c6}',
+    '\u{2026}', '\u{27a1}', '\u{2605}', '\u{29d7}', '\u{2b06}', '\u{02c7}', '\u{2227}', '\u{274e}',
+    '\u{25a4}', '\u{25a5}', '\u{3042}', '\u{3044}', '\u{3046}', '\u{3048}', '\u{304a}', '\u{304b}',
+    '\u{304d}', '\u{304f}', '\u{3051}', '\u{3053}', '\u{3055}', '\u{3057}', '\u{3059}', '\u{305b}',
+    '\u{305d}', '\u{305f}', '\u{3061}', '\u{3064}', '\u{3066}', '\u{3068}', '\u{306a}', '\u{306b}',
+    '\u{306c}', '\u{306d}', '\u{306e}', '\u{306f}', '\u{3072}', '\u{3075}', '\u{3078}', '\u{307b}',
+    '\u{307e}', '\u{307f}', '\u{3080}', '\u{3081}', '\u{3082}', '\u{3084}', '\u{3086}', '\u{3088}',
+    '\u{3089}', '\u{308a}', '\u{308b}', '\u{308c}', '\u{308d}', '\u{308f}', '\u{3092}', '\u{3093}',
+    '\u{3063}', '\u{3083}', '\u{3085}', '\u{3087}', '\u{30a2}', '\u{30a4}', '\u{30a6}', '\u{30a8}',
+    '\u{30aa}', '\u{30ab}', '\u{30ad}', '\u{30af}', '\u{30b1}', '\u{30b3}', '\u{30b5}', '\u{30b7}',
+    '\u{30b9}', '\u{30bb}', '\u{30bd}', '\u{30bf}', '\u{30c1}', '\u{30c4}', '\u{30c6}', '\u{30c8}',
+    '\u{30ca}', '\u{30cb}', '\u{30cc}', '\u{30cd}', '\u{30ce}', '\u{30cf}', '\u{30d2}', '\u{30d5}',
+    '\u{30d8}', '\u{30db}', '\u{30de}', '\u{30df}', '\u{30e0}', '\u{30e1}', '\u{30e2}', '\u{30e4}',
+    '\u{30e6}', '\u{30e8}', '\u{30e9}', '\u{30ea}', '\u{30eb}', '\u{30ec}', '\u{30ed}', '\u{30ef}',
+    '\u{30f2}', '\u{30f3}', '\u{30c3}', '\u{30e3}', '\u{30e5}', '\u{30e7}', '\u{25dc}', '\u{25dd}',
+];
+
 /// A single-byte code page: ASCII below 0x80, a table of 128 characters above
 /// it. Which one a file is in is never in the bytes, so it is a choice the
 /// reader makes, and the two slots the panel offers are one from each family.
@@ -237,6 +274,10 @@ pub enum CodePage {
     Cp437,
     Cp850,
     Cp866,
+    /// The character set PICO-8 draws with. Not a page a file is guessed
+    /// against: it is named by the templates that read a cart, since that is
+    /// the only place these bytes mean this.
+    P8scii,
 }
 
 impl CodePage {
@@ -269,6 +310,7 @@ impl CodePage {
             CodePage::Cp437 => "CP437",
             CodePage::Cp850 => "CP850",
             CodePage::Cp866 => "CP866",
+            CodePage::P8scii => "P8SCII",
         }
     }
 
@@ -292,6 +334,7 @@ impl CodePage {
             CodePage::Cp437 => &CP437_HIGH,
             CodePage::Cp850 => &CP850_HIGH,
             CodePage::Cp866 => &CP866_HIGH,
+            CodePage::P8scii => &P8SCII_HIGH,
         }
     }
 
@@ -365,6 +408,7 @@ pub fn settle(enc: &Encoding, head: &[u8]) -> (Settled, usize, Option<String>) {
         Encoding::Ascii => (Settled::Ascii, 0, None),
         Encoding::Latin1 => (Settled::Latin1, 0, None),
         Encoding::Cp437 => (Settled::Cp437, 0, None),
+        Encoding::P8scii => (Settled::SingleByte(CodePage::P8scii), 0, None),
         Encoding::Utf16(e) => (Settled::Utf16(*e), 0, None),
         Encoding::Bom { fallback } => match head {
             [0xef, 0xbb, 0xbf, ..] => (Settled::Utf8, 3, Some("Read as UTF-8, from a byte-order mark".into())),

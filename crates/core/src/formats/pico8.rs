@@ -38,10 +38,13 @@
 //!   is mostly made of, and anything higher is a back-reference into the last
 //!   4K of output.
 //! - Anything else, in which case the region is the Lua source as it stands,
-//!   ASCII, ending at the first zero byte.
+//!   ending at the first zero byte.
 //!
 //! The first two are opened, so the code reads as its text either way, with
-//! every literal and every back-reference named. Neither scheme is written
+//! every literal and every back-reference named. All three read as P8SCII
+//! rather than as ASCII or UTF-8: a cart writes the button glyphs and the
+//! syllabaries straight into its source, and every byte above 0x7f is one of
+//! them. See [`crate::text::CodePage::P8scii`]. Neither scheme is written
 //! down anywhere Lexaloffle publishes; see [`crate::codec::pico8`] for what
 //! the decoders were written against.
 
@@ -83,6 +86,17 @@ fn cart() -> T {
     )
 }
 
+/// What a cart's code comes to: the same one-field space
+/// [`super::decoded_text`] opens, read as P8SCII rather than as UTF-8.
+fn code_text() -> T {
+    T::structure_named(
+        "DecodedText",
+        "",
+        "text",
+        vec![("text", T::text(StrLen::Fixed(E::Remaining), Encoding::P8scii))],
+    )
+}
+
 /// The Lua region, as whichever of the three shapes its first four bytes say.
 fn code() -> T {
     // The header of each compressed form: the magic, the length of the text it
@@ -94,13 +108,16 @@ fn code() -> T {
             ("text_len", T::u16(Big)),
             ("packed_len", T::u16(Big)),
             // `packed_len` counts the eight header bytes above as well, so
-            // the stream itself is that much shorter.
+            // the stream itself is that much shorter. Clamped at zero because
+            // a cart damaged into saying less than eight would otherwise ask
+            // for a run of a negative length, and a field that reads as empty
+            // says what is there better than one that refuses to be read.
             (
                 "packed",
                 T::decoded(
-                    E::field("packed_len").sub(E::lit(8)),
+                    E::field("packed_len").sub(E::lit(8)).at_least(E::lit(0)),
                     Codec::Pico8Pxa,
-                    super::decoded_text(),
+                    code_text(),
                 ),
             ),
             ("unused", T::bytes(E::Remaining)),
@@ -114,14 +131,14 @@ fn code() -> T {
             ("reserved", T::bytes(E::lit(2))),
             // Nothing says how long this one is: it ends at a pair of zero
             // bytes, and the rest of the region is room it did not need.
-            ("packed", T::decoded(E::Remaining, Codec::Pico8Old, super::decoded_text())),
+            ("packed", T::decoded(E::Remaining, Codec::Pico8Old, code_text())),
         ],
     );
     let plain = T::structure_named(
         "PlainCode",
         "",
         "text",
-        vec![("text", T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Ascii))],
+        vec![("text", T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::P8scii))],
     );
     // The first four bytes as one big-endian number, which is what tells the
     // three apart without reading any of them twice.
@@ -361,18 +378,31 @@ mod tests {
         assert_eq!(code.type_name, "PlainCode");
         assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 0]).unwrap().value, Value::Str("print(\"hi\")".into()));
 
-        // A `packed_len` smaller than the eight header bytes it counts, which
-        // no encoder writes and a damaged cart may hold. The field says it
-        // cannot be read rather than wrapping round to an enormous run, and
-        // everything after it in the cart still reads.
+    }
+
+    /// A `packed_len` smaller than the eight header bytes it counts, which no
+    /// encoder writes and a damaged cart may hold. The clamp reads it as no
+    /// stream at all rather than as a run of a negative length, so the field
+    /// is empty, its text is empty, and everything after it in the cart still
+    /// reads.
+    #[test]
+    fn a_packed_len_shorter_than_its_own_header_reads_as_no_stream() {
         let mut c = a_cart();
         c[0x4306..0x4308].copy_from_slice(&3u16.to_be_bytes());
         let d = Document::new(MemSource(cart_png(&c)));
         let mut ev = Evaluator::new(p8png());
-        assert!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3]).is_err());
+        let packed = ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3]).unwrap();
+        assert_eq!(packed.size_bits, 0);
+        assert_eq!(packed.type_name, "pico-8 pxa");
+        assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3, 0, 0]).unwrap().value, Value::Str(String::new()));
         assert_eq!(ev.node(&d, &[1, 1, 2, 0, 0, 0, 7]).unwrap().value, Value::UInt(41));
+    }
 
-        // And the scheme before pxa.
+    /// The scheme before pxa, from the PNG through to its Lua. The decoder's
+    /// own tests cover the stream; this covers the template picking the older
+    /// shape out of the first four bytes and reading it in place.
+    #[test]
+    fn the_old_scheme_reads_through_to_its_lua() {
         let mut c = a_cart();
         c[0x4300..0x4400].fill(0);
         c[0x4300..0x4308].copy_from_slice(b":c:\0\x00\x0b\0\0");
@@ -385,6 +415,21 @@ mod tests {
         assert_eq!(
             ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 3, 0, 0]).unwrap().value,
             Value::Str("print(\"hi\")".into())
+        );
+    }
+
+    /// A cart's text is P8SCII, so a byte above 0x7f is the glyph PICO-8 draws
+    /// there rather than a broken UTF-8 sequence. 0x8e is the O button, which
+    /// is in the sample collection's older cart twice.
+    #[test]
+    fn code_reads_as_p8scii_rather_than_utf8() {
+        let mut c = a_cart();
+        c[0x4300..0x430d].copy_from_slice(b"if(btn(\x8e))\0\0\0");
+        let d = Document::new(MemSource(cart_png(&c)));
+        let mut ev = Evaluator::new(p8png());
+        assert_eq!(
+            ev.node(&d, &[1, 1, 2, 0, 0, 0, 6, 0]).unwrap().value,
+            Value::Str("if(btn(\u{1f17e}))".into())
         );
     }
 

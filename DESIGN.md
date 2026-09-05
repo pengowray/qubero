@@ -1062,10 +1062,11 @@ So a template may say what a run is compressed with, and the reading opens it.
 `Ty::Decoded { codec, inner }` is applied to a run of bytes and changes nothing
 about the run: the field is at the offset it is at, it is as long as the file
 makes it, and its bytes are the compressed bytes. What it gains is one child,
-`inner`, read over the bytes the run comes to. Five codecs so far: zlib, raw
-deflate, zstd, one LZ4 block, and xz. It has no length of its own, because a
-compressed stream never says how long it is, so it is written inside a `Sized`
-that does.
+`inner`, read over the bytes the run comes to. Ten codecs so far: zlib, raw
+deflate, zstd, one LZ4 block, xz, undoing a PNG's per-row filters, the two ways
+a picture hides bytes in the low bits of its pixels, and the two ways a PICO-8
+cart packs its Lua. A compressed stream never says how long it is, so one with
+no length of its own is written inside a `Sized` that does.
 
 **Spaces.** The file is space 0 and every offset in the IR is a bit of it.
 Each `Decoded` node opens another, numbered as it is opened, and a field read
