@@ -7,6 +7,14 @@ import assert from "node:assert/strict";
 
 import { RowHeights } from "../src/rowheights.ts";
 
+test("sparse measured rows beyond the signed 32-bit range retain their addresses", () => {
+  const h = new RowHeights();
+  h.setRows(6_000_000_000);
+  h.measure(4_000_000_000, 100);
+  assert.equal(h.heightBefore(4_000_000_001), 4_000_000_001 * 20 + 80);
+  assert.deepEqual(h.rowAtY(4_000_000_000 * 20 + 75), { row: 4_000_000_000, offsetPx: 75 });
+});
+
 /** A ledger of `rows` rows, base 20. */
 function ledger(rows: number): RowHeights {
   const h = new RowHeights();

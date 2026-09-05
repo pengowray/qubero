@@ -18,10 +18,9 @@
 //    have one, so they are a sparse map, capped, and their prefix sums are
 //    rebuilt lazily when something has changed them.
 //
-// Nothing here touches the DOM. The listing's `tops[]` and the text view's
-// `lineY`/`lineAtY` answer the same three questions this does — where a row
-// starts, how tall everything is, which row is at a pixel — and could be moved
-// onto this ledger later. They are not wired to it now.
+// Nothing here touches the DOM. The hex view uses this for annotations and
+// the text view for wrapped lines. Row addresses use doubles because a large
+// text file can exceed the signed 32-bit line-number range.
 
 /** A row's extra height above the base, known before it is drawn. */
 export type StructuralExtra = { readonly row: number; readonly extra: number };
@@ -36,7 +35,7 @@ export class RowHeights {
   private base = 20;
   private rows = 0;
   /** Rows with a structural extra, ascending. */
-  private structRows: Int32Array = new Int32Array(0);
+  private structRows: Float64Array = new Float64Array(0);
   private structExtra: Float64Array = new Float64Array(0);
   /** `structSum[i]` is the total structural extra of `structRows[0..i)`. */
   private structSum: Float64Array = new Float64Array(1);
@@ -47,7 +46,7 @@ export class RowHeights {
   private measured = new Map<number, number>();
   /** The measured rows in ascending order with their prefix sums, rebuilt when
    *  `measuredDirty`. */
-  private mRows: Int32Array = new Int32Array(0);
+  private mRows: Float64Array = new Float64Array(0);
   private mSum: Float64Array = new Float64Array(1);
   private measuredDirty = false;
 
@@ -74,7 +73,7 @@ export class RowHeights {
   setStructural(entries: readonly StructuralExtra[]): void {
     const kept = entries.filter((e) => e.extra > 0 && e.row >= 0);
     kept.sort((a, b) => a.row - b.row);
-    const rows = new Int32Array(kept.length);
+    const rows = new Float64Array(kept.length);
     const extra = new Float64Array(kept.length);
     let n = 0;
     for (const e of kept) {
@@ -196,7 +195,7 @@ export class RowHeights {
     let lo = 0;
     let hi = this.rows;
     while (lo < hi) {
-      const mid = (lo + hi) >> 1;
+      const mid = Math.floor((lo + hi) / 2);
       if (this.heightBefore(mid + 1) <= y) lo = mid + 1;
       else hi = mid;
     }
@@ -207,7 +206,7 @@ export class RowHeights {
   private rebuild(): void {
     if (!this.measuredDirty) return;
     this.measuredDirty = false;
-    const rows = Int32Array.from(this.measured.keys()).sort();
+    const rows = Float64Array.from(this.measured.keys()).sort();
     const sum = new Float64Array(rows.length + 1);
     for (let i = 0; i < rows.length; i++) {
       sum[i + 1] = (sum[i] as number) + (this.measured.get(rows[i] as number) as number);
@@ -218,11 +217,11 @@ export class RowHeights {
 }
 
 /** The first index of `arr` whose value is at least `v`. */
-function lowerBound(arr: Int32Array, v: number): number {
+function lowerBound(arr: Float64Array, v: number): number {
   let lo = 0;
   let hi = arr.length;
   while (lo < hi) {
-    const mid = (lo + hi) >> 1;
+    const mid = Math.floor((lo + hi) / 2);
     if ((arr[mid] as number) < v) lo = mid + 1;
     else hi = mid;
   }

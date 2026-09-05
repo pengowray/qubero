@@ -35,6 +35,7 @@ import {
 } from "./encodings.js";
 import type { Doc, TextLine, TextReading } from "./doc.js";
 import { el } from "./dom.js";
+import { RowHeights } from "./rowheights.js";
 import { LineIndex } from "./lineindex.js";
 import type { Endings } from "./lineindex.js";
 import { moveRows, needsPaint, paintWindow } from "./paintwindow.js";
@@ -49,9 +50,8 @@ const ROW = 20;
  *  Firefox's limit is the lowest, about 17.9 million, and a canvas past it
  *  draws nothing at all rather than less. */
 const MAX_CANVAS = 16_000_000;
-/** Characters drawn on one line before the rest is left off. The core cuts a
- *  line at 4 KiB; this is what fits across a screen with room to spare. */
-const MAX_CHARS = 2000;
+/** Wrapped text includes the entire bounded chunk returned by the core. */
+const MAX_CHARS = 4096;
 /** How much of a selection one copy carries. A selection can be the whole
  *  file, and the clipboard is not where a gigabyte belongs. */
 const COPY_LIMIT = 1 << 20;
@@ -61,15 +61,17 @@ const BATCH = 300;
 /** Decoded lines kept. Enough that scrolling around inside a large log never
  *  asks twice, and bounded so that a day of scrolling does not grow forever. */
 const CACHE_LINES = 50_000;
-/** How much file one background pass over the index covers. The core caps its
- *  own scan at the same size, so this is one call. */
-const INDEX_STEP = 4 * 1024 * 1024;
+/** Bound decoded text as well as line count. Long lines otherwise retain
+ * hundreds of megabytes, plus their lazily built character/byte maps. */
+const CACHE_CHARS = 2 * 1024 * 1024;
+/** Small scans yield between reads so background work cannot monopolise UI. */
+const INDEX_STEP = 256 * 1024;
 /** Files no larger than this are indexed to their end. A multi-gigabyte image
  *  should not be read cover to cover merely because its text tab was opened. */
-const FULL_INDEX_LIMIT = 256 * 1024 * 1024;
+const FULL_INDEX_LIMIT = 16 * 1024 * 1024;
 /** Enough of a giant file to establish a useful line-length estimate. Jumps
  *  elsewhere leave local index segments, so nearby movement stays exact. */
-const GIANT_INDEX_HEAD = 64 * 1024 * 1024;
+const GIANT_INDEX_HEAD = 1024 * 1024;
 /** The longest a line is before the core cuts it, which must match `MAX_LINE`
  *  in `crates/core/src/textview.rs`. */
 const MAX_LINE = 4096;
@@ -90,6 +92,75 @@ export class TextView {
 
   /** Byte offset of the first drawn line. */
   private top = 0;
+  private wrap: "off" | "line" | "word" = "off";
+  private readonly heights = new RowHeights();
+  private layoutWidth = 0;
+  private clipChars = MAX_CHARS;
+  /** Native scrollTop changes before the scroll event/RAF is delivered.
+   * Keep the last mapping we wrote so layout cannot overwrite that input. */
+  private wrappedScrollTop = 0;
+  private wrappedScrollSpan = 1;
+  private wrappedPixelSpan = 1;
+  private scrollRevision = 0;
+  private requestedByte: number | null = null;
+
+  private get displayLines(): number {
+    return Math.max(this.index.totalLines, this.topLine + this.lines.length);
+  }
+
+  private captureWrappedScroll(): void {
+    if (this.wrap === "off" || Math.abs(this.scroll.scrollTop - this.wrappedScrollTop) < 0.5) return;
+    const y = this.scroll.scrollTop / this.wrappedPixelSpan * this.wrappedScrollSpan;
+    const pos = this.heights.rowAtY(y);
+    this.viewLine = pos.row;
+    this.viewOffset = pos.offsetPx;
+    this.wrappedScrollTop = this.scroll.scrollTop;
+    this.scrollRevision++;
+    if (this.drawing) this.pending = true;
+  }
+
+  async setWrap(mode: "off" | "line" | "word"): Promise<void> {
+    this.captureWrappedScroll();
+    this.wrap = mode;
+    this.wrappedScrollTop = this.scroll.scrollTop;
+    this.el.dataset.wrap = mode;
+    this.heights.clearMeasured();
+    this.rowCache.clear();
+    this.viewOffset = 0;
+    await this.draw();
+    if (mode === "off") {
+      this.scroll.scrollTop = this.lineY(this.viewLine);
+      this.placeBlock();
+    } else this.syncWrappedPosition();
+  }
+
+  private wrappedSpan(): number {
+    this.heights.setRows(this.displayLines);
+    return Math.max(1, this.heights.totalHeight() - this.scroll.clientHeight);
+  }
+
+  private syncWrappedPosition(): void {
+    if (this.wrap === "off") return;
+    this.captureWrappedScroll();
+    this.canvasWas = this.canvasHeight();
+    this.canvas.style.height = `${this.canvasWas}px`;
+    const y = Math.min(this.wrappedSpan(), this.heights.heightBefore(this.viewLine) + this.viewOffset);
+    this.scroll.scrollTop = y / this.wrappedSpan() * this.span();
+    this.wrappedScrollTop = this.scroll.scrollTop;
+    this.wrappedScrollSpan = this.wrappedSpan();
+    this.wrappedPixelSpan = this.span();
+    this.placeBlock();
+  }
+
+  private scrollWrapped(pixels: number): void {
+    this.captureWrappedScroll();
+    const y = Math.max(0, Math.min(this.wrappedSpan(), this.heights.heightBefore(this.viewLine) + this.viewOffset + pixels));
+    const pos = this.heights.rowAtY(y);
+    this.viewLine = pos.row;
+    this.viewOffset = pos.offsetPx;
+    this.syncWrappedPosition();
+    if (this.needsPaint(this.viewLine)) void this.draw();
+  }
   /** Line number of the first drawn line, and of the first line inside the
    *  viewport. They differ by the overscan, except at the front of the file. */
   private topLine = 0;
@@ -120,6 +191,7 @@ export class TextView {
   /** Lines already decoded, by the byte each starts at. A Map is its own
    *  least-recently-used list: re-reading a line moves it to the back. */
   private cache = new Map<number, TextLine>();
+  private cacheChars = 0;
   /** How many times the core has been asked for lines, which is the number the
    *  whole of this is about. Read by the tests and by hand in the console. */
   fetches = 0;
@@ -199,6 +271,8 @@ export class TextView {
   private forget(): void {
     this.index = new LineIndex(this.doc.lengthBytes, this.reading.mark);
     this.cache.clear();
+    this.cacheChars = 0;
+    this.heights.clearMeasured();
     this.usualEnding = "";
     this.anchorLine = 0;
     this.anchorAt = 0;
@@ -244,7 +318,7 @@ export class TextView {
    *  step would leave the reading of a hundred megabytes paced by the
    *  scheduler rather than by the disk. */
   private async indexPass(): Promise<void> {
-    const until = performance.now() + 50;
+    const until = performance.now() + 8;
     do {
       await this.indexStep();
     } while (this.indexFrom() !== null && performance.now() < until);
@@ -256,8 +330,16 @@ export class TextView {
     if (from === null) return;
     const got = await this.doc.textIndex(this.chosen, from, from + INDEX_STEP);
     if (got.starts.length === 0) return;
+    this.captureWrappedScroll();
     this.index.add(got.starts, got.next, { lf: got.lf, cr: got.cr, crlf: got.crlf });
     this.settleEnding();
+    // top/topLine are being resolved across awaits. They do not describe
+    // the painted rows until the draw commits; correcting them now can turn
+    // an old window into the anchor for a newer scrollbar jump.
+    if (this.drawing) {
+      this.pending = true;
+      return;
+    }
     // The line on screen was a line number the index had to guess at, and the
     // index has now counted its way to it. Take the correction on the line
     // number and the scrollbar together: the canvas is as tall as the file has
@@ -265,6 +347,7 @@ export class TextView {
     // them, so both ends of the mapping moved. Nothing moves on screen.
     const known = this.index.lineAt(this.top);
     if (known !== null && known !== this.topLine) {
+      this.heights.clearMeasured();
       this.viewLine += known - this.topLine;
       this.topLine = known;
       this.anchorLine = known;
@@ -310,7 +393,8 @@ export class TextView {
    *  estimated to have, scaled down where that is taller than a browser will
    *  honour. */
   private canvasHeight(): number {
-    const want = this.index.totalLines * ROW;
+    this.heights.setRows(this.displayLines);
+    const want = this.wrap === "off" ? this.displayLines * ROW : this.heights.totalHeight();
     return Math.max(this.scroll.clientHeight + 1, Math.min(MAX_CANVAS, want));
   }
 
@@ -325,16 +409,18 @@ export class TextView {
    *  been scaled down: a screenful is worth more than a screen of canvas then,
    *  and the last screenful would otherwise sit past the scrollbar's floor. */
   private lastTop(): number {
-    return Math.max(1, this.index.totalLines - this.visible());
+    return Math.max(1, this.displayLines - this.visible());
   }
 
   /** Where a line sits on the scrollbar. */
   private lineY(n: number, height = this.canvasHeight()): number {
+    if (this.wrap !== "off") return Math.min(1, this.heights.heightBefore(n) / this.wrappedSpan()) * this.span(height);
     return Math.round(Math.min(1, n / this.lastTop()) * this.span(height));
   }
 
   /** The line the scrollbar is pointing at. */
   private lineAtY(y: number): number {
+    if (this.wrap !== "off") return this.heights.rowAtY(y / this.span() * this.wrappedSpan()).row;
     return Math.max(0, Math.round((y / this.span()) * this.lastTop()));
   }
 
@@ -350,6 +436,7 @@ export class TextView {
     // wheel in flight sits a fraction of a row past the line, and putting the
     // scrollbar back on the line every index pass threw that fraction away,
     // several times a second, under the reader's hand.
+    if (this.wrap !== "off") { this.syncWrappedPosition(); return; }
     const height = this.canvasHeight();
     const was = this.canvasWas;
     this.canvasWas = height;
@@ -378,7 +465,9 @@ export class TextView {
    *  itself. On a capped canvas it also accounts for compressed scrollbar
    *  pixels: one scrollbar pixel can cross several full-height rows there. */
   private placeBlock(): void {
-    const y = this.lineY(this.viewLine) - (this.viewLine - this.topLine) * ROW - this.viewOffset;
+    const y = this.wrap === "off"
+      ? this.lineY(this.viewLine) - (this.viewLine - this.topLine) * ROW - this.viewOffset
+      : this.scroll.scrollTop - this.viewOffset - (this.heights.heightBefore(this.viewLine) - this.heights.heightBefore(this.topLine));
     this.view.style.transform = `translateY(${y}px)`;
   }
 
@@ -400,6 +489,13 @@ export class TextView {
     if (this.lines.length === 0) return true;
     const last = this.lines[this.lines.length - 1];
     const atEnd = last !== undefined && last.at + last.len >= this.doc.lengthBytes;
+    if (this.wrap !== "off") {
+      const y = this.heights.heightBefore(line) + this.viewOffset;
+      const above = y - this.heights.heightBefore(this.topLine);
+      const below = this.heights.heightBefore(this.topLine + this.lines.length) - y - this.scroll.clientHeight;
+      return above < 0 || (!atEnd && below < this.scroll.clientHeight)
+        || (this.topLine > 0 && above < this.scroll.clientHeight);
+    }
     return needsPaint(
       line,
       this.visible(),
@@ -412,12 +508,19 @@ export class TextView {
   }
 
   private onScroll(): void {
+    this.captureWrappedScroll();
     // The compositor scrolls through rows already in the DOM. JavaScript only
     // recentres that painted window when half its runway has been consumed;
     // ordinary half-page and page movements therefore need no draw at all.
     if (this.scrollFrame !== 0) return;
     this.scrollFrame = requestAnimationFrame(() => {
       this.scrollFrame = 0;
+      if (this.wrap !== "off") {
+        this.captureWrappedScroll();
+        this.placeBlock();
+        if (this.needsPaint(this.viewLine)) void this.draw();
+        return;
+      }
       const want = this.lineAtY(this.scroll.scrollTop);
       if (want === this.viewLine) return;
       this.viewLine = want;
@@ -438,6 +541,13 @@ export class TextView {
    * a deliberate jump to anywhere in the file.
    */
   private onWheel(e: WheelEvent): void {
+    if (e.ctrlKey || e.metaKey) return;
+    if (this.wrap !== "off") {
+      if (this.heights.totalHeight() <= MAX_CANVAS || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      this.scrollWrapped(e.deltaY * (e.deltaMode === 1 ? ROW : e.deltaMode === 2 ? this.scroll.clientHeight : 1));
+      return;
+    }
     if (!this.compressed() || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
     e.preventDefault();
     const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? ROW : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.scroll.clientHeight : 1;
@@ -453,10 +563,12 @@ export class TextView {
   /** Go to a line, scrollbar and all. `render` also refreshes row decoration,
    *  used when arriving there changed the caret rather than only the scroll. */
   private async goto(n: number, render = false): Promise<void> {
+    this.captureWrappedScroll();
     this.viewLine = Math.max(0, Math.min(n, Math.max(0, this.index.totalLines - 1)));
     this.viewOffset = 0;
     const repaint = this.needsPaint(this.viewLine);
-    this.scroll.scrollTop = Math.max(0, Math.min(this.lineY(this.viewLine), this.canvasHeight() - this.scroll.clientHeight));
+    if (this.wrap !== "off") this.syncWrappedPosition();
+    else this.scroll.scrollTop = Math.max(0, Math.min(this.lineY(this.viewLine), this.canvasHeight() - this.scroll.clientHeight));
     this.placeBlock();
     if (repaint || render) await this.draw();
   }
@@ -530,11 +642,14 @@ export class TextView {
   }
 
   private keep(line: TextLine): void {
+    this.cacheChars -= this.cache.get(line.at)?.text.length ?? 0;
     this.cache.delete(line.at);
     this.cache.set(line.at, line);
-    while (this.cache.size > CACHE_LINES) {
+    this.cacheChars += line.text.length;
+    while (this.cache.size > CACHE_LINES || this.cacheChars > CACHE_CHARS) {
       const oldest = this.cache.keys().next();
       if (oldest.done === true) break;
+      this.cacheChars -= this.cache.get(oldest.value)?.text.length ?? 0;
       this.cache.delete(oldest.value);
     }
   }
@@ -568,6 +683,9 @@ export class TextView {
     try {
       do {
         this.pending = false;
+        this.captureWrappedScroll();
+        const revision = this.scrollRevision;
+        const requested = this.requestedByte;
         if (force || !this.readingSettled || this.reading.encoding === "") {
           const was = this.reading.mark;
           this.reading = await this.doc.textReading(this.chosen);
@@ -576,15 +694,26 @@ export class TextView {
         }
         this.index.setLength(this.doc.lengthBytes);
         this.startIndexing();
-        const window = paintWindow(this.viewLine, this.visible());
+        const window = this.wrap === "off" ? paintWindow(this.viewLine, this.visible()) : {
+          first: this.heights.rowAtY(Math.max(0, this.heights.heightBefore(this.viewLine) - this.scroll.clientHeight * 2)).row,
+          count: this.visible() * 5,
+          runway: this.visible() * 2,
+        };
         const want = window.count;
         this.paintRunway = window.runway;
-        this.top = await this.topByte(window.first);
-        let got = await this.linesFrom(this.top, want);
+        if (requested !== null) {
+          // Explicit byte navigation is exact, even where scrollbar positions
+          // are estimates. Resolve a bounded window around the requested byte.
+          const back = await this.doc.textBack(this.chosen, requested, Math.floor(want / 2));
+          this.top = back.back;
+          this.topLine = this.index.lineAt(this.top) ?? this.index.guessLineAt(this.top);
+          this.anchoredAt(this.topLine, this.top);
+        } else this.top = await this.topByte(window.first);
+        let got = await this.linesFrom(this.top, want + (requested === null ? 0 : 2));
         // A screen that came up short ran out of file. Back up so that the
         // last screenful of a file is a full screen rather than one line at
         // the bottom of an empty one.
-        if (got.length < want && this.top > 0) {
+        if (requested === null && got.length < want && this.top > 0) {
           const oldTop = this.top;
           const b = await this.doc.textBack(this.chosen, this.top, want - got.length);
           if (b.back < this.top) {
@@ -595,15 +724,54 @@ export class TextView {
             // An estimated jump may have named lines beyond the real end.
             // Clamp it to the last full viewport without pulling a valid last
             // screen upward merely because its lower runway met the file end.
-            this.viewLine = Math.min(this.viewLine, this.topLine + Math.max(0, got.length - this.visible()));
+            if (this.wrap === "off") this.viewLine = Math.min(this.viewLine, this.topLine + Math.max(0, got.length - this.visible()));
           }
         }
+        this.captureWrappedScroll();
+        if (revision !== this.scrollRevision || requested !== this.requestedByte) {
+          this.pending = true;
+          continue;
+        }
+        const last = got[got.length - 1];
+        const eof = last === undefined ? this.doc.lengthBytes === 0 : last.at + last.len === this.doc.lengthBytes;
+        if (eof && (last === undefined || this.textEnd(last) < this.doc.lengthBytes)) {
+          got.push({ at: this.doc.lengthBytes, len: 0, ending: "no ending", text: "", escapes: [], lossy: false });
+        }
+        const toEnd = requested === this.doc.lengthBytes && requested !== null;
+        if (toEnd) {
+          // Detached tail segments have exact bytes but estimated row numbers.
+          // Attach their last row to the end of the estimated scrollbar.
+          this.topLine = this.index.lineAt(this.top) ?? Math.max(0, this.index.totalLines - got.length);
+          this.anchoredAt(this.topLine, this.top);
+        }
         this.lines = got;
+        if (requested !== null) {
+          const i = got.findIndex(l => requested >= l.at && requested <= this.textEnd(l));
+          if (i >= 0) this.viewLine = Math.max(this.topLine, this.topLine + i - Math.floor(this.visible() / 3));
+          this.viewOffset = 0;
+          this.requestedByte = null;
+        }
         if (this.usualEnding === "") this.settleEnding();
-        this.canvasWas = this.canvasHeight();
-        this.canvas.style.height = `${this.canvasWas}px`;
+        if (this.wrap === "off") {
+          this.canvasWas = this.canvasHeight();
+          this.canvas.style.height = `${this.canvasWas}px`;
+          if (requested !== null) this.scroll.scrollTop = this.lineY(this.viewLine);
+        }
         this.placeBlock();
         this.render();
+        if (toEnd) {
+          if (this.wrap === "off") {
+            this.viewLine = Math.max(0, this.topLine + got.length - this.visible());
+            this.scroll.scrollTop = this.lineY(this.viewLine);
+            this.placeBlock();
+          } else {
+            const y = Math.max(0, this.heights.heightBefore(this.topLine + got.length) - this.scroll.clientHeight);
+            const pos = this.heights.rowAtY(y);
+            this.viewLine = pos.row;
+            this.viewOffset = pos.offsetPx;
+            this.syncWrappedPosition();
+          }
+        }
         this.onReading(this.reading, this.index.endings);
         this.prefetch();
       } while (this.pending);
@@ -614,19 +782,33 @@ export class TextView {
 
   /** Show the line holding this byte, and mark the character it falls in. */
   async setByte(at: number): Promise<void> {
+    at = Math.max(0, Math.min(at, this.doc.lengthBytes));
     this.cursor = at;
     // Drawn is not the same as on screen: a caret in the overscan has to be
     // scrolled to like any other.
-    const i = this.lines.findIndex((l) => at >= l.at && at < l.at + l.len);
-    const onScreen = i >= this.viewLine - this.topLine && i < this.viewLine - this.topLine + this.visible();
+    const i = this.lines.findIndex((l) => at >= l.at && (at < l.at + l.len || at === this.doc.lengthBytes && at === this.textEnd(l)));
+    const onScreen = this.wrap === "off"
+      ? i >= this.viewLine - this.topLine && i < this.viewLine - this.topLine + this.visible()
+      : i >= 0 && this.heights.heightBefore(this.topLine + i + 1) > this.heights.heightBefore(this.viewLine) + this.viewOffset
+        && this.heights.heightBefore(this.topLine + i) < this.heights.heightBefore(this.viewLine) + this.viewOffset + this.scroll.clientHeight;
     if (!onScreen) {
-      const b = await this.doc.textBack(this.chosen, at, 0);
-      return this.goto(
-        Math.max(0, (this.index.lineAt(b.start) ?? this.index.guessLineAt(b.start)) - Math.floor(this.visible() / 3)),
-        true,
-      );
+      this.requestedByte = at;
+      await this.draw();
+      this.revealCaret();
+      return;
     }
     await this.draw();
+    this.revealCaret();
+  }
+
+  private revealCaret(): void {
+    if (this.wrap === "off") return;
+    const caret = this.rows.querySelector<HTMLElement>(".is-cursor") ?? this.rows.querySelector<HTMLElement>(".tv-caret");
+    if (caret === null) return;
+    const rect = caret.getBoundingClientRect();
+    const viewport = this.scroll.getBoundingClientRect();
+    if (rect.top < viewport.top) this.scrollWrapped(rect.top - viewport.top);
+    else if (rect.bottom > viewport.bottom) this.scrollWrapped(rect.bottom - viewport.bottom);
   }
 
   /** Show the selection the rest of the app is holding. */
@@ -661,6 +843,14 @@ export class TextView {
       void f();
     };
     if (e.ctrlKey || e.metaKey) {
+      if (e.key === "Home" || e.key === "End") {
+        e.preventDefault();
+        this.extending = e.shiftKey;
+        if (e.shiftKey) this.anchor ??= this.cursor;
+        else this.anchor = null;
+        void this.moveFileEdge(e.key === "End" ? this.doc.lengthBytes : 0);
+        return;
+      }
       if (e.key === "c" || e.key === "C") {
         e.preventDefault();
         void this.copySelection();
@@ -705,6 +895,20 @@ export class TextView {
     if ([...e.key].length === 1) move(() => this.insert(e.key));
   }
 
+  private async moveFileEdge(at: number): Promise<void> {
+    // Always resolve the edge, including when the final logical line is
+    // already drawn but its wrapped tail is below the viewport.
+    this.requestedByte = at;
+    this.cursor = at;
+    await this.draw();
+    if (this.extending) this.extendTo(at);
+    else {
+      this.selection = null;
+      this.onPick(at);
+    }
+    this.render();
+  }
+
   /** Move the caret a character left or right, following it onto the line
    *  above or below when it runs off the end of this one. */
   private async moveChar(dir: 1 | -1): Promise<void> {
@@ -727,6 +931,20 @@ export class TextView {
 
   /** Move the caret a line up or down, keeping the character it was on. */
   private async moveLine(dir: 1 | -1): Promise<void> {
+    if (this.wrap !== "off") {
+      const caret = this.rows.querySelector<HTMLElement>(".is-cursor") ?? this.rows.querySelector<HTMLElement>(".tv-caret");
+      if (caret !== null) {
+        const rect = caret.getBoundingClientRect();
+        const port = this.scroll.getBoundingClientRect();
+        let y = rect.top + 1 + dir * ROW;
+        if (y < port.top || y >= port.bottom) {
+          this.scrollWrapped(dir * ROW);
+          y -= dir * ROW;
+        }
+        const at = this.byteUnder(new MouseEvent("mousemove", { clientX: rect.left + 1, clientY: y }));
+        if (at !== null && at !== this.cursor) return this.place(at);
+      }
+    }
     const here = this.caretLine();
     if (here === null) return;
     const column = this.charsOf(here.line).filter((c) => c.at < this.cursor).length;
@@ -769,6 +987,7 @@ export class TextView {
       this.onPick(clamped);
     }
     await this.draw();
+    this.revealCaret();
   }
 
   /** Type text in at the caret, over whatever is selected. */
@@ -858,10 +1077,14 @@ export class TextView {
   private async after(caret: number, at: number, delta: number | null): Promise<void> {
     this.cursor = Math.max(0, Math.min(caret, this.doc.lengthBytes));
     const from = this.index.place(at)?.at ?? at;
-    for (const key of [...this.cache.keys()]) if (key >= from) this.cache.delete(key);
+    for (const key of [...this.cache.keys()]) if (key >= from) {
+      this.cacheChars -= this.cache.get(key)?.text.length ?? 0;
+      this.cache.delete(key);
+    }
     if (delta === null) this.index.dropFrom(at);
     else this.index.shiftFrom(at, delta);
     this.index.setLength(this.doc.lengthBytes);
+    this.heights.clearMeasured();
     this.startIndexing();
     await this.draw(true);
     this.onPick(this.cursor);
@@ -870,20 +1093,16 @@ export class TextView {
 
   private async scrollLines(n: number): Promise<void> {
     if (n === 0) return;
+    if (this.wrap !== "off") { this.scrollWrapped(n * ROW); return; }
     await this.goto(this.viewLine + n);
   }
 
   /** The byte a pointer is over, or null when it is not over a character. */
   private byteUnder(e: MouseEvent): number | null {
-    const target = e.target;
+    // Resolve at use time: a queued drag event can refer to a span replaced
+    // by the previous frame's selection decoration.
+    const target = document.elementFromPoint(e.clientX, e.clientY) ?? e.target;
     if (!(target instanceof Element)) return null;
-    const run = target.closest<HTMLElement>(".tv-text[data-cell]");
-    const row = target.closest<HTMLElement>(".tv-row[data-line-at]");
-    if (run === null || row === null) return null;
-    const lineAt = Number(row.dataset.lineAt);
-    const first = Number(run.dataset.cell);
-    const line = this.lines.find((candidate) => candidate.at === lineAt);
-    if (!Number.isFinite(first) || line === undefined) return null;
 
     // Runs keep the DOM small; ask the browser which insertion point inside
     // the run the pointer is nearest to, then turn that character back into
@@ -899,6 +1118,14 @@ export class TextView {
     const range = position === undefined ? doc.caretRangeFromPoint?.(e.clientX, e.clientY) : undefined;
     const node = position?.offsetNode ?? range?.startContainer;
     const offset = position?.offset ?? range?.startOffset;
+    const element = node instanceof Element ? node : node?.parentElement;
+    const run = element?.closest<HTMLElement>(".tv-text[data-cell]") ?? target.closest<HTMLElement>(".tv-text[data-cell]");
+    const row = run?.closest<HTMLElement>(".tv-row[data-line-at]");
+    if (run === null || row === undefined || row === null || !this.rows.contains(row)) return null;
+    const lineAt = Number(row.dataset.lineAt);
+    const first = Number(run.dataset.cell);
+    const line = this.lines.find(candidate => candidate.at === lineAt);
+    if (!Number.isFinite(first) || line === undefined) return null;
     if (node === undefined || offset === undefined || !run.contains(node)) return null;
     const into =
       node === run
@@ -984,20 +1211,43 @@ export class TextView {
    *  drag rebuilds only the rows the selection moved through. */
   private rowCache = new Map<string, HTMLElement>();
   private gutterCache = new Map<string, HTMLElement>();
+  private lineIds = new WeakMap<TextLine, number>();
+  private nextLineId = 0;
 
   /** Everything a row's appearance depends on. */
   private rowKey(line: TextLine): string {
+    let id = this.lineIds.get(line);
+    if (id === undefined) {
+      id = ++this.nextLineId;
+      this.lineIds.set(line, id);
+    }
     const end = line.at + line.len;
     const sel = this.selection;
     const a = sel === null ? 0 : Math.max(sel.start, line.at);
     const b = sel === null ? 0 : Math.min(sel.end, end);
     const selPart = b > a ? `${a}:${b}` : "";
     const cur = this.cursor >= line.at && this.cursor <= end ? this.cursor : -1;
-    const S = " ";
-    return line.at + S + line.len + S + line.ending + S + String(line.lossy) + S + line.text + S + line.escapes.join(",") + S + cur + S + selPart + S + this.usualEnding + S + this.reading.encoding;
+    const S = "\u0000";
+    return id + S + cur + S + selPart + S + this.usualEnding + S + this.reading.encoding;
   }
 
   private render(): void {
+    this.captureWrappedScroll();
+    // Measure once before mutations; resizing invalidates both the clipping
+    // budget and all wrap heights, but never the decoded text or byte index.
+    const width = this.scroll.clientWidth;
+    if (width <= 0) return;
+    if (width !== this.layoutWidth) {
+      this.layoutWidth = width;
+      this.heights.clearMeasured();
+      this.rowCache.clear();
+      const probe = document.createElement("canvas").getContext("2d");
+      if (probe !== null) {
+        const style = getComputedStyle(this.rows);
+        probe.font = `${style.fontSize} ${getComputedStyle(this.gutter).fontFamily}`;
+        this.clipChars = Math.max(16, Math.ceil(width / Math.max(1, probe.measureText("0").width)) + 8);
+      }
+    }
     const keptRows = new Map<string, HTMLElement>();
     const keptGutter = new Map<string, HTMLElement>();
     const gutter: HTMLElement[] = [];
@@ -1009,7 +1259,7 @@ export class TextView {
       // offset always: the offset is what this view is for, and the number is
       // what a reader of a log came looking for.
       const n = this.index.lineAt(line.at);
-      const gkey = `${line.at} ${n ?? ""}`;
+      const gkey = `${line.at}\u0000${n ?? ""}`;
       const g =
         this.gutterCache.get(gkey) ??
         el(
@@ -1029,13 +1279,26 @@ export class TextView {
     this.gutterCache = keptGutter;
     replace(this.gutter, gutter);
     replace(this.rows, rows);
+    if (this.wrap !== "off") {
+      // Read all heights together before writing the gutter: one layout pass.
+      const real = rows.map(row => row.offsetHeight);
+      real.forEach((h, i) => {
+        this.heights.measure(this.topLine + i, h);
+        const g = gutter[i];
+        if (g !== undefined) g.style.height = `${h}px`;
+      });
+      this.heights.trim(this.viewLine);
+      this.syncWrappedPosition();
+    } else {
+      for (const g of gutter) g.style.height = "";
+    }
   }
 
   /** Where each character of a line sits and how many bytes it takes. The
    *  write path asks this as much as the drawing does: what backspace removes
    *  is the width of the character before the caret, not one byte. */
   private charsOf(line: TextLine): { char: string; at: number; width: number }[] {
-    const key = `${this.reading.encoding} ${this.reading.unit}`;
+    const key = `${this.reading.encoding}\u0000${this.reading.unit}`;
     if (key !== this.charCacheKey) {
       this.charCache = new WeakMap();
       this.charCacheKey = key;
@@ -1067,7 +1330,15 @@ export class TextView {
     const cells = this.charsOf(line);
     const escapes = escapeMask(cells.length, line.escapes);
     const sel = this.selection;
-    const shown = Math.min(cells.length, MAX_CHARS);
+    const caretIndex = this.wrap === "off" ? cells.findIndex(c => this.cursor >= c.at && this.cursor < c.at + c.width) : -1;
+    const column = this.cursor === this.textEnd(line) ? cells.length : caretIndex;
+    // Keep a far-away byte reachable in No wrap without constructing the
+    // offscreen prefix. The ellipsis makes the shifted excerpt explicit.
+    const first = this.wrap === "off" && column >= this.clipChars - 16 ? Math.max(0, column - Math.floor(this.clipChars / 2)) : 0;
+    const shown = Math.min(cells.length, first + (this.wrap === "off" ? this.clipChars : MAX_CHARS));
+    if (first > 0) {
+      row.append(el("span", { className: "tv-more", textContent: "…", title: "Earlier text is outside this excerpt. Enable wrapping to show the complete line." }));
+    }
     // Adjacent characters with the same appearance share one span. A plain
     // long line is one node rather than two thousand; `byteUnder` uses the
     // browser's caret hit test to recover an exact character inside the run.
@@ -1081,11 +1352,11 @@ export class TextView {
       row.append(span);
       runText = "";
     };
-    for (let i = 0; i < shown; i++) {
+    for (let i = first; i < shown; i++) {
       const cell = cells[i];
       if (cell === undefined) continue;
       const { char: c, at, width } = cell;
-      if (this.cursor === at) {
+      if (this.cursor === at && this.wrap === "off") {
         flush();
         row.append(el("span", { className: "tv-caret" }));
       }

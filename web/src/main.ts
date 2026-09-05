@@ -7,6 +7,7 @@ import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingReport } from "./listingreport.js";
 import { ListPane } from "./listpane.js";
 import { TextView } from "./textview.js";
+import { Crystal } from "./crystal.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { Tabs, type Page, type Tab } from "./tabs.js";
 import { markFromRange, markFromStep } from "./unpackedlink.js";
@@ -156,12 +157,26 @@ const signatureOption = (name: string): string =>
  * Open a file from disk, in place of everything already open. Unsaved edits
  * live only in this page, so replacing a document that has them asks first.
  */
+let welcomeCrystal: Crystal | null = null;
+let welcomeStatus: HTMLElement | null = null;
+
 function openFile(f: File, note?: string): void {
   const edited = modifiedTab();
   if (edited !== null && !confirm(discardMsg(edited.doc.name, f.name))) return;
-  void Doc.open(f).then((doc) => {
+  welcomeCrystal?.setBusy(true);
+  if (welcomeStatus !== null) welcomeStatus.textContent = `Opening ${f.name}…`;
+  // Let the opening screen paint its loading state before starting WASM work.
+  void new Promise<void>(resolve => requestAnimationFrame(() => setTimeout(resolve, 0))).then(() => Doc.open(f)).then((doc) => {
+    welcomeCrystal?.dispose();
+    welcomeCrystal = null;
+    welcomeStatus = null;
     mount(doc);
     if (note !== undefined) say(note);
+  }).catch((error: unknown) => {
+    welcomeCrystal?.setBusy(false);
+    const message = error instanceof Error ? error.message : "Could not open this file.";
+    if (welcomeStatus !== null) welcomeStatus.textContent = message;
+    else say(message, true);
   });
 }
 
@@ -647,6 +662,15 @@ function build(tab: Tab): Page {
   // What the file was read as, beside the chooser, so a guess is never passed
   // off as a fact.
   const reading = el("span", { className: "tb-reading" });
+  const wrapping = el("select", { className: "tb-enc" });
+  wrapping.setAttribute("aria-label", "Text wrapping");
+  wrapping.title = "Visual wrapping preserves file bytes and line endings. Offsets identify original lines; scrollbar positions in unindexed regions are estimates.";
+  for (const [value, label] of [["off", "No wrap"], ["line", "Wrap anywhere"], ["word", "Word wrap"]] as const) {
+    wrapping.append(el("option", { value, textContent: label }));
+  }
+  wrapping.addEventListener("change", () => {
+    void text.setWrap(wrapping.value as "off" | "line" | "word");
+  });
   // Which line ending the file uses, which is a fact about the whole file and
   // not about the screen, so it belongs beside the encoding rather than in the
   // margin of every line.
@@ -668,7 +692,7 @@ function build(tab: Tab): Page {
   /** Controls that only mean anything over the hex rows. */
   const hexOnly = [width, mode, column];
   /** Controls that only mean anything over the text. */
-  const textOnly = [encoding, reading, endings];
+  const textOnly = [encoding, wrapping, reading, endings];
   /** True while the listing is showing, which is also while the hex grid's
    *  editing state is not the user's to act on. */
   let listingShowing = false;
@@ -744,6 +768,7 @@ function build(tab: Tab): Page {
     kind.label,
     kind.info,
     encoding,
+    wrapping,
     reading,
     endings,
     saveMsg,
@@ -977,6 +1002,10 @@ function pickOmeZarr(): void {
 }
 
 function welcome(): void {
+  welcomeCrystal?.dispose();
+  welcomeCrystal = new Crystal();
+  welcomeStatus = el("p", { className: "welcome-status" });
+  welcomeStatus.setAttribute("role", "status");
   const openBtn = el("button", { type: "button", textContent: "Open a file", className: "primary" });
   openBtn.addEventListener("click", pick);
   const openOmeZarrBtn = el("button", { type: "button", textContent: "Open OME-Zarr", className: "secondary", hidden: true });
@@ -984,11 +1013,14 @@ function welcome(): void {
   const drop = el(
     "div",
     { className: "welcome" },
-    el("h1", { textContent: "Qubero" }),
-    el("p", { textContent: "A hex editor for files of any size. Nothing leaves your device." }),
+    el("div", { className: "welcome-brand" }, welcomeCrystal.el, el("h1", { textContent: "Qubero" })),
+    el("p", { className: "welcome-tagline", textContent: "A closer look at your data." }),
+    el("p", { className: "welcome-description", textContent: "A scientific hex editor for files of any size." }),
     openBtn,
     openOmeZarrBtn,
     el("p", { className: "hint", textContent: DROP_HINT }),
+    el("p", { className: "welcome-privacy", textContent: "Your files stay on your device." }),
+    welcomeStatus,
   );
   app.replaceChildren(drop);
 }
