@@ -134,7 +134,9 @@ export function fillVals(el: ValsEl, plan: RowValues, width: number, bpr: number
   if (el.style.maxWidth !== w) el.style.maxWidth = w;
   const columns = aligned ? `repeat(${bpr * 8}, minmax(0, 1fr))` : "";
   if (el.style.gridTemplateColumns !== columns) el.style.gridTemplateColumns = columns;
-  const cell = aligned ? "" : `${Math.round(plan.cellWidth)}px`;
+  // Uniform's one width for every cell. Aligned takes its widths from the
+  // grid and flow from each cell's own text, so neither wants this.
+  const cell = plan.layout === "uniform" ? `${Math.round(plan.cellWidth)}px` : "";
   if (el.style.getPropertyValue("--hv-val-w") !== cell) el.style.setProperty("--hv-val-w", cell);
   for (const [i, c] of plan.cells.entries()) fillCell(el.children[i] as HTMLElement, c, plan.layout);
   if (plan.rest > 0) fillRest(el.children[plan.cells.length] as HTMLElement, plan.rest);
