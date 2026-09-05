@@ -15,7 +15,7 @@ import type { Doc, Span } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
 import { NO_TEMPLATE } from "./strings.js";
 import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
-import { listName, pinnedNoteKey, placeChips, planRowChips, rowNoteKey, type Chip, type ChipBlock } from "./chipplan.js";
+import { pinnedNoteKey, placeChips, planRowChips, rowNoteKey, type Chip, type ChipBlock } from "./chipplan.js";
 import {
   asciiGlyph,
   cellDraw,
