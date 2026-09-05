@@ -908,6 +908,16 @@ impl Evaluator {
         listing::plain(elem).then_some("value")
     }
 
+    /// Whether a failure is the reader giving up rather than the bytes not
+    /// reading: nested past what the stack can hold, however the nesting is
+    /// spelled. A run that meets one of these does not carry on past it as it
+    /// does past an element that cannot be read (see `walk.rs`), since the
+    /// elements after it are as deep as the one that stopped it, and a file
+    /// nested past the limit is refused rather than read around.
+    pub(super) fn is_refusal(why: &str) -> bool {
+        why.contains("nested more than") || why.contains("nested too deep")
+    }
+
     fn resolve<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<()> {
         if self.memo.contains_key(path) {
             return Ok(());

@@ -156,8 +156,9 @@ impl Evaluator {
                 // still the file, and a reader wants them, with what is left
                 // said to be a stretch that could not be read and why. The
                 // first element failing is another matter: a run with nothing
-                // in it is the failure, not a short run.
-                Err(EvalError::Failed(why)) if ends > 0 => {
+                // in it is the failure, not a short run. Nor is the reader
+                // giving up on depth a short run: see `is_refusal`.
+                Err(EvalError::Failed(why)) if ends > 0 && !Self::is_refusal(&why) => {
                     self.memo.forget_node(&p);
                     match self.stretch_to(doc, path, &p)? {
                         Some(size) => size,
