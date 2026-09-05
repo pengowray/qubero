@@ -5,7 +5,7 @@
 // (`runsForView`). Both are answered over the wire from the core, both can
 // come back later than the frame that asked, and both have the same rule:
 // **the last answer stands until the next one is ready**. Scrolling one step
-// through a program is what that is for — the reply for the new window takes
+// through a program is what that is for. The reply for the new window takes
 // several goes, and blanking the column for every one of them makes the whole
 // column flicker off for as long as the reading takes.
 //

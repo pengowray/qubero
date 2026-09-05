@@ -298,7 +298,7 @@ export class HexView {
    */
   private linked: BitRange | null = null;
   private rightColumn: RightColumn = "text";
-  /** What the field column asks the core for — which fields are on screen and
+  /** What the field column asks the core for, which fields are on screen and
    *  what a folded run's elements read as — and what it keeps on screen while
    *  it waits for the next answer. */
   private readonly fetch: ValueFetch;

@@ -5,7 +5,7 @@
 // questions it has to be told the answer to first: which of the three layouts
 // a run gets, and what a cell of that layout may be. Both are arithmetic over
 // measured text, so both are here rather than in the view, and both are
-// settled per screenful rather than per row — a table that changed shape from
+// settled per screenful rather than per row: a table that changed shape from
 // one row to the next would be unreadable, and a row whose height depended on
 // what happened to be beside it would break the scroll.
 //
