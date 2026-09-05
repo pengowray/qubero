@@ -21,21 +21,23 @@ export type ValsEl = HTMLElement;
 
 /** How a cell says which element it is: the run's path and the index, so one
  *  handler on the block serves every cell for as long as the block lives. */
-function pickPath(el: HTMLElement): number[] | null {
+function pickPath(el: HTMLElement): { path: number[]; bit: number } | null {
   const path = el.dataset["path"];
   const index = el.dataset["index"];
-  if (path === undefined || index === undefined) return null;
+  const bit = el.dataset["bit"];
+  if (path === undefined || index === undefined || bit === undefined) return null;
   const steps = path === "" ? [] : path.split(",").map(Number);
   const i = Number(index);
-  if (!Number.isFinite(i) || steps.some((s) => !Number.isFinite(s))) return null;
-  return [...steps, i];
+  const at = Number(bit);
+  if (!Number.isFinite(i) || !Number.isFinite(at) || steps.some((s) => !Number.isFinite(s))) return null;
+  return { path: [...steps, i], bit: at };
 }
 
 /** An empty block of value cells, ready to be filled. One click handler for
  *  the block rather than one per cell: a screenful of 24-bit samples is a
  *  thousand cells, and a thousand listeners is a thousand things to take off
  *  again. */
-export function newVals(onPick: (path: readonly number[]) => void): ValsEl {
+export function newVals(onPick: (path: readonly number[], bit: number) => void): ValsEl {
   const el = document.createElement("div");
   el.className = "hv-vals";
   el.addEventListener("click", (e) => {
@@ -43,10 +45,10 @@ export function newVals(onPick: (path: readonly number[]) => void): ValsEl {
     if (!(target instanceof HTMLElement)) return;
     const cell = target.closest<HTMLElement>(".hv-val");
     if (cell === null || cell.parentElement !== el) return;
-    const path = pickPath(cell);
-    if (path === null) return;
+    const picked = pickPath(cell);
+    if (picked === null) return;
     e.stopPropagation();
-    onPick(path);
+    onPick(picked.path, picked.bit);
   });
   return el;
 }
@@ -65,6 +67,12 @@ function fillCell(el: HTMLElement, c: PlacedCell, layout: RowValues["layout"]): 
   if (el.dataset["path"] !== path) el.dataset["path"] = path;
   const index = String(c.index);
   if (el.dataset["index"] !== index) el.dataset["index"] = index;
+  // Where the element itself begins, so a click can put the cursor there as
+  // well as select the path. For most runs that is the first bit of the thing
+  // the path names anyway; for a packed block, where thirty-two weights share
+  // one index, it is the only thing that says which of them was pressed.
+  const bit = String(c.startBit);
+  if (el.dataset["bit"] !== bit) el.dataset["bit"] = bit;
   const title =
     c.carried === "above"
       ? VALUES.continued(c.run, c.index)
@@ -83,9 +91,11 @@ function fillCell(el: HTMLElement, c: PlacedCell, layout: RowValues["layout"]): 
   if (el.style.gridColumn !== column) el.style.gridColumn = column;
   // Flow cells are each as wide as their own text, and the width is set here
   // rather than left to the browser so that the wrap the plan counted lines
-  // from is the wrap the browser does. Cleared on the other two layouts: the
-  // element may have been a flow cell a draw ago.
-  const width = layout === "flow" ? `${c.width}px` : "";
+  // from is the wrap the browser does. A uniform scale is the same case: it
+  // keeps its own width while the cells around it share `--hv-val-w`. Cleared
+  // otherwise: the element may have been a flow cell a draw ago.
+  const own = layout === "flow" || (layout === "uniform" && c.kind === "scale");
+  const width = own ? `${c.width}px` : "";
   if (el.style.width !== width) el.style.width = width;
 }
 
@@ -98,6 +108,7 @@ function fillRest(el: HTMLElement, n: number): void {
   if (el.title !== tip) el.title = tip;
   el.removeAttribute("data-path");
   el.removeAttribute("data-index");
+  el.removeAttribute("data-bit");
   el.removeAttribute("aria-label");
   if (el.style.gridColumn !== "") el.style.gridColumn = "";
   if (el.style.width !== "") el.style.width = "";

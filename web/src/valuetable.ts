@@ -16,15 +16,7 @@
 // tests run this file under `node --test`, which strips the types but does not
 // rewrite a `.js` specifier back to the file it came from.
 import type { ChipMeasure } from "./chipfit.ts";
-import {
-  COLUMN_GUESS,
-  uniformFit,
-  VALUE_PAD,
-  wrapFlow,
-  type Cell,
-  type Layout,
-  type RunCells,
-} from "./valuelayout.ts";
+import { COLUMN_GUESS, isScale, VALUE_PAD, wrapFlow, type Cell, type Layout, type RunCells } from "./valuelayout.ts";
 
 // One import site for the view and the tests: what a run's values come to is
 // this file's subject, and which shape they take is next door.
@@ -32,6 +24,7 @@ export {
   alignedFits,
   alignedWidth,
   chooseLayout,
+  isScale,
   rowLayout,
   typeDigits,
   uniformWidth,
@@ -44,9 +37,10 @@ export {
   type RunCells,
 } from "./valuelayout.ts";
 
-/** Whether a value is a number, and so is read from its right-hand end. */
+/** Whether a value is a number, and so is read from its right-hand end. A
+ *  block's scale is a float like any other and is read the same way. */
 export function numeric(kind: string): boolean {
-  return kind === "uint" || kind === "int" || kind === "float" || kind === "unset";
+  return kind === "uint" || kind === "int" || kind === "float" || kind === "unset" || kind === "scale";
 }
 
 /** One cell as it is drawn: where it sits, what it says, and whether it is a
@@ -68,8 +62,11 @@ export type PlacedCell = {
    *  so the cell is narrower than the value needs. Its text is let out of the
    *  cell rather than cut off. */
   readonly cut: boolean;
-  /** Flow only: how wide the cell is drawn, in pixels. Zero in the other two
-   *  layouts, which have a width of their own. */
+  /** How wide the cell is drawn, in pixels: its own text in the flow layout,
+   *  the one measured width in the uniform one, and its own text there too for
+   *  a scale, which is a float among nibbles and would otherwise widen every
+   *  cell in the table to fit it. Zero in the aligned layout, whose widths come
+   *  from the grid. */
   readonly width: number;
   /** The run the element belongs to: its name for the tooltip, its path for
    *  the pick. */
@@ -152,6 +149,25 @@ export type RowValueOpts = {
 };
 
 /**
+ * How wide one cell is drawn.
+ *
+ * Flow gives every cell its own text's width. Uniform gives them all the one
+ * measured width, except a scale, which takes its own: a block's `0.004108`
+ * among thirty-two nibbles reading `-8` would otherwise set the width of the
+ * whole table and cost a row of Q4_0 five lines where it needs two. There is
+ * one scale to a block, so the ragged edge it leaves is cheap, and it is the
+ * block boundary the reader is looking for anyway. Aligned takes its widths
+ * from the grid and wants none of this.
+ */
+function cellWidth(c: Cell, o: RowValueOpts): number {
+  if (o.layout === "aligned") return 0;
+  const own = Math.ceil((o.measure?.value(c.label) ?? 0) + VALUE_PAD);
+  if (o.layout === "flow") return own;
+  const uniform = Math.max(1, Math.round(o.cellWidth));
+  return isScale(c.kind) ? Math.max(own, uniform) : uniform;
+}
+
+/**
  * Which row of the ones an element straddles carries its text, as an offset in
  * rows from the row the element starts on.
  *
@@ -220,7 +236,7 @@ export function planRowValues(o: RowValueOpts): RowValues {
         // The piece the text is on is narrower than the element, so the value
         // may not fit the cell it is in.
         cut: straddles,
-        width: o.layout === "flow" ? Math.ceil((o.measure?.value(c.label) ?? 0) + VALUE_PAD) : 0,
+        width: cellWidth(c, o),
         path: run.path,
         run: run.name,
         type: run.type,
@@ -244,14 +260,16 @@ export function planRowValues(o: RowValueOpts): RowValues {
     const wrapped = wrapFlow(cells, column, o.maxLines);
     return finish("flow", wrapped.kept, 0, wrapped.lines, wrapped.rest, o.valLine);
   }
+  // Wrapped by each cell's own width rather than by a count per line, since a
+  // scale is wider than the weights around it. With every cell the same width
+  // this is the count per line, so nothing else changes. Twice: once to find
+  // out whether the table fits at all, and only if it does not again with the
+  // cap, which keeps room on the last line for the `+N` that counts the rest.
   const width = Math.max(1, o.cellWidth);
-  const { perLine, lastLine } = uniformFit(column, width);
-  const want = Math.ceil(cells.length / perLine);
-  if (want <= o.maxLines) return finish("uniform", cells, width, want, 0, o.valLine);
-  // Past the cap the last line keeps room for the count of what is left.
-  const shown = perLine * (o.maxLines - 1) + lastLine;
-  const kept = cells.slice(0, Math.min(cells.length - 1, shown));
-  return finish("uniform", kept, width, o.maxLines, cells.length - kept.length, o.valLine);
+  const loose = wrapFlow(cells, column, Infinity);
+  if (loose.lines <= o.maxLines) return finish("uniform", loose.kept, width, loose.lines, 0, o.valLine);
+  const capped = wrapFlow(cells, column, o.maxLines);
+  return finish("uniform", capped.kept, width, capped.lines, capped.rest, o.valLine);
 }
 
 /** Which piece of a straddling element this row holds, counting from the row

@@ -5,8 +5,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { CHAR, run } from "./runcells.ts";
+import { CHAR, quantRun, run } from "./runcells.ts";
 import {
+  numeric,
   planRowValues,
   uniformWidth,
   VALUE_GAP,
@@ -163,6 +164,50 @@ test("condensed stops at three lines and counts the rest", () => {
   assert.equal(plan.rest > 0, true);
   assert.equal(plan.cells.length, 10);
   assert.equal(plan.rest, 12);
+});
+
+test("a block's scale keeps its own width among the weights it scales", () => {
+  // Two six-byte blocks on a sixteen-byte row: a scale and eight nibbles each,
+  // in the order of the bytes.
+  const cells = [quantRun({ blocks: 2, weights: 8, bits: 4 })];
+  const plan = row(cells, 0, { layout: "uniform" });
+  assert.equal(plan.cells.length, 18);
+  // The weights share the one measured width, which is `-8` and its padding.
+  assert.equal(plan.cellWidth, 2 * 7 + VALUE_PAD);
+  const weights = plan.cells.filter((c) => c.kind !== "scale");
+  assert.equal(new Set(weights.map((c) => c.width)).size, 1);
+  assert.equal(weights[0]?.width, 2 * 7 + VALUE_PAD);
+  // The scale is a float and takes what it says: there is one to a block, so
+  // the room it asks for is not asked for thirty-two times over.
+  const scales = plan.cells.filter((c) => c.kind === "scale");
+  assert.equal(scales.length, 2);
+  assert.equal(scales[0]?.width, "0.004108".length * 7 + VALUE_PAD);
+  // A scale is a number and is read from its right-hand end like one.
+  assert.equal(scales[0]?.numeric, true);
+  assert.equal(numeric("scale"), true);
+  // In the order of the bytes: each block's scale before its weights.
+  assert.equal(plan.cells[0]?.kind, "scale");
+  assert.equal(plan.cells[9]?.kind, "scale");
+  const bits = plan.cells.map((c) => c.startBit);
+  assert.deepEqual(bits, [...bits].sort((a, b) => a - b));
+});
+
+test("a row of nibbles fits the lines the widths really need", () => {
+  // Sixteen bytes of `q4_0` at two weights a byte, plus the scales between
+  // them. The count comes from the widths, not from a cell count per line, so
+  // the wider scales are paid for where they fall.
+  const cells = [quantRun({ blocks: 2, weights: 8, bits: 4 })];
+  const wide = row(cells, 0, { layout: "uniform", noteWidth: 1000 });
+  assert.equal(wide.lines, 1);
+  assert.equal(wide.rest, 0);
+  const narrow = row(cells, 0, { layout: "uniform", noteWidth: 200 });
+  assert.equal(narrow.lines > 1, true);
+  assert.equal(narrow.rest, 0);
+  // Capped, what is left is counted rather than dropped.
+  const capped = row(cells, 0, { layout: "uniform", noteWidth: 200, maxLines: 1 });
+  assert.equal(capped.lines, 1);
+  assert.equal(capped.cells.length + capped.rest, 18);
+  assert.equal(capped.rest > 0, true);
 });
 
 // ----- flow -----

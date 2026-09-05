@@ -18,10 +18,31 @@ import type { Cell, Doc, Span } from "./doc.js";
 import { SPAN_LIMIT } from "./hexchips.js";
 import type { RunCells } from "./valuetable.js";
 
-/** How many elements of one run the value table reads at a time. A screenful
- *  of 24-bit samples is a few hundred; the rest of the limit is the margin
- *  either side that lets a scroll of a row cost nothing. */
-const VALUE_LIMIT = 2000;
+/** The most cells one byte on screen can be worth. A `q2_k` block packs four
+ *  weights into every byte, which is the densest type the core takes apart;
+ *  `q4` and `q5` are two. A screenful of anything else is far below this. */
+const CELLS_PER_BYTE = 4;
+/** The scales are on top of the weights: `q2_k` keeps sixteen of them plus two
+ *  more per 84-byte block, so a byte is worth a fifth of a scale. Rounded up
+ *  to a quarter, since being short by a few would cut the tail off a screen. */
+const SCALES_PER_BYTE = 0.25;
+/** How far past the window `runCells` reads, in windows: one either side, so a
+ *  scroll of a row costs nothing. Mirrors the margin in `runCells`. */
+const WINDOWS_READ = 3;
+/** A ceiling on one ask however dense the run is. A run past this is read a
+ *  window at a time instead, which costs a call per scroll rather than one per
+ *  screenful, and is what the cache's `reached` is for. Thirty thousand cells
+ *  is a wide window of `q2_k` and still a reply the wasm boundary can carry
+ *  inside a frame. */
+const VALUE_CEILING = 30000;
+
+/** How many elements of one run to read for a window this wide. Worked out
+ *  rather than fixed, because how many cells a byte is worth is the run's
+ *  business: one for a run of samples, four for a `q2_k` tensor. */
+function valueLimit(windowBytes: number): number {
+  const dense = windowBytes * WINDOWS_READ * (CELLS_PER_BYTE + SCALES_PER_BYTE);
+  return Math.min(VALUE_CEILING, Math.max(2000, Math.ceil(dense)));
+}
 
 /** What one element of a run is, from what the run is: `i16 le[]` holds an
  *  `i16 le`. The core writes the brackets; nothing else is taken off. */
@@ -161,7 +182,7 @@ export class ValueFetch {
    * yet leaves the last table on screen, the way the spans do. What is kept
    * reaches past the window on purpose, and the rows it falls outside drop it.
    */
-  private runCells(s: Span, fromBit: number, toBit: number): Cell[] | null {
+  private runCells(s: Span, fromBit: number, toBit: number, limit: number): Cell[] | null {
     const key = s.path.join(",");
     const had = this.cellCache.get(key);
     if (had !== undefined && had.from <= fromBit && had.to >= toBit) return had.cells;
@@ -169,7 +190,7 @@ export class ValueFetch {
     const end = s.offset_bits + s.size_bits;
     const from = Math.max(s.offset_bits, fromBit - margin);
     const to = Math.min(end, toBit + margin);
-    const r = this.doc.runCells(s.path, from, to, VALUE_LIMIT);
+    const r = this.doc.runCells(s.path, from, to, limit);
     // Still on its way: what was read last time stands until it arrives, so
     // the table does not blink off for every step of a scroll.
     if (r.status !== "ok") return had?.cells ?? null;
@@ -178,7 +199,7 @@ export class ValueFetch {
     // what is cached has to say what it really covers or the next draw would
     // take the missing tail for an empty stretch of file.
     const last = cells[cells.length - 1];
-    const reached = cells.length < VALUE_LIMIT || last === undefined ? to : last.offset_bits + last.size_bits;
+    const reached = cells.length < limit || last === undefined ? to : last.offset_bits + last.size_bits;
     // One file can hold many runs, and every one scrolled past would otherwise
     // be kept for the life of the view.
     if (this.cellCache.size > 16) this.cellCache.clear();
@@ -201,11 +222,12 @@ export class ValueFetch {
     const fromBit = start * 8;
     const toBit = (start + windowBytes) * 8;
     const out: RunCells[] = [];
+    const limit = valueLimit(windowBytes);
     for (const s of spans) {
       if (s.count <= 0 || s.gap) continue;
       const end = s.offset_bits + s.size_bits;
       if (end <= fromBit || s.offset_bits >= toBit) continue;
-      const cells = this.runCells(s, Math.max(fromBit, s.offset_bits), Math.min(toBit, end));
+      const cells = this.runCells(s, Math.max(fromBit, s.offset_bits), Math.min(toBit, end), limit);
       if (cells === null || cells.length === 0) continue;
       // `unit` is the format's own word for what a run holds: a deflate block
       // codes symbols, and a symbol's cell reads as one. The type a cell says
@@ -223,11 +245,16 @@ export class ValueFetch {
     return out;
   }
 
-  /** The widest text a run has shown, this screenful's cells included. */
+  /** The widest text a run has shown, this screenful's cells included.
+   *
+   *  Scales do not count. A block's `0.004108` is the widest thing in a
+   *  quantised tensor by a factor of four, and letting it set the floor would
+   *  give every one of the thirty-two nibbles beside it that much room. The
+   *  scale takes its own width in the table instead. */
   private widestOf(key: string, cells: readonly Cell[]): string {
     let widest = this.runWidest.get(key) ?? "";
     for (const c of cells) {
-      if (c.label.length > widest.length) widest = c.label;
+      if (c.kind !== "scale" && c.label.length > widest.length) widest = c.label;
     }
     this.runWidest.set(key, widest);
     return widest;

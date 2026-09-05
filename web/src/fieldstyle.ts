@@ -19,6 +19,11 @@ export function fieldClass(kind: string): string {
     case "str":
       return "field-text";
     case "magic":
+    // The scale a packed block keeps for the weights after it. It is a number,
+    // but what a reader wants from it in a table of thirty-two nibbles is
+    // where one block stops and the next starts, which is what the marker
+    // colour says everywhere else.
+    case "scale":
       return "field-marker";
     case "enum":
       return "field-category";
