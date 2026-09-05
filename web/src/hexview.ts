@@ -549,10 +549,14 @@ export class HexView {
    *  cursor is. For every other run the cell's first bit is the first bit of
    *  what the path names anyway, so this is where the reader clicked either
    *  way. Held as one function for the life of the view, since every block of
-   *  cells keeps it. */
+   *  cells keeps it.
+   *
+   *  The pick first and the cursor after it, in that order: picking a field
+   *  sends the cursor to the front of what the path names, which for a packed
+   *  block is the block's scale rather than the weight that was clicked. */
   private readonly pickValue = (path: readonly number[], bit: number): void => {
-    this.setBitCursor(bit, { pane: "hex" });
     this.onPickField(path);
+    this.setBitCursor(bit, { pane: "hex" });
   };
 
   /** Go to the first byte of the part a heading names. Held as one function
