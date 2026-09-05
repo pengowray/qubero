@@ -115,6 +115,7 @@ mod pe;
 pub mod pe_tables;
 mod pi1;
 mod picotron;
+mod picotron_pod;
 mod psd;
 mod pnm;
 mod qoi;
