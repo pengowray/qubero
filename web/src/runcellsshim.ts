@@ -21,12 +21,13 @@ import type { Cell } from "./valuetable.js";
 export function runStride(span: Span): number {
   if (span.count <= 0 || span.size_bits <= 0) return 0;
   const first = span.parts[0];
-  const stride = first !== undefined && !first.rest && first.size_bits > 0 ? first.size_bits : span.size_bits / span.count;
-  if (!Number.isFinite(stride) || stride <= 0) return 0;
-  // Fixed stride only: a run whose size is not its count times its stride has
-  // elements of more than one length, and the arithmetic below would put every
-  // value under the wrong bytes.
-  return Math.round(span.size_bits / stride) === span.count ? stride : 0;
+  if (first === undefined || first.rest || first.size_bits <= 0) return 0;
+  // Fixed stride only, and the first element's own extent is the only honest
+  // evidence of one: dividing the run's size by its count answers a stride for
+  // every run there is, including the deflate block whose symbols are each a
+  // different number of bits, and every value would then be drawn under bytes
+  // it has nothing to do with. Those runs wait for `doc.runCells`.
+  return Math.round(span.size_bits / first.size_bits) === span.count ? first.size_bits : 0;
 }
 
 /**
