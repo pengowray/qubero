@@ -663,6 +663,15 @@ can say which of thirty-two was pressed. How many cells one screenful is worth
 is worked out rather than fixed, since `q2_k` packs four weights into a byte
 where a run of samples is one value to two.
 
+None of that is on screen yet, because `spans` does not hand the view the run
+to draw it for. A packed block is a composite, so the branch that answers a
+composite with `gap_inside` catches it before `field_or_its_run` can ask
+`collapsible` whether the tensor folds, and a screenful of a quantised tensor
+comes back as one entry per block, each with `count: 0`. `run_cells` on the
+tensor answers correctly; nothing asks it. The paragraph above describes what
+the column does once `spans` folds a quantised tensor the way it folds a run
+of samples.
+
 Four files, in the order a value passes through them. `valuefetch.ts` asks the
 core for the fields and the elements on screen and holds the last answer while
 the next is on its way; `valuelayout.ts` says which of the three layouts a run

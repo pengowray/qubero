@@ -31,9 +31,12 @@ const SCALES_PER_BYTE = 0.25;
 const WINDOWS_READ = 3;
 /** A ceiling on one ask however dense the run is. A run past this is read a
  *  window at a time instead, which costs a call per scroll rather than one per
- *  screenful, and is what the cache's `reached` is for. Thirty thousand cells
- *  is a wide window of `q2_k` and still a reply the wasm boundary can carry
- *  inside a frame. */
+ *  screenful, and is what the cache's `reached` is for. Thirty thousand is a
+ *  wide window of `q2_k`, and the ask is not free: measured over a `q4_0`
+ *  tensor a call fetching three thousand cells took about eight milliseconds,
+ *  so a full one is several frames' worth. It is paid once per three
+ *  screenfuls rather than once per scroll, which is what makes that bearable
+ *  and what the ceiling is here to keep true. */
 const VALUE_CEILING = 30000;
 
 /** How many elements of one run to read for a window this wide. Worked out
