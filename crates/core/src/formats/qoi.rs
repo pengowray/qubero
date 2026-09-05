@@ -29,21 +29,25 @@ const TAG: &[(i128, &str)] = &[(0, "index"), (1, "diff"), (2, "luma"), (3, "run"
 const COLOURSPACE: &[(i128, &str)] = &[(0, "srgb with linear alpha"), (1, "all linear")];
 
 pub fn qoi() -> Template {
-    Template::new(
-        "qoi",
-        T::structure(
-            "QOI",
-            vec![
-                ("magic", T::magic(b"qoif")),
-                ("width", T::u32(Big)),
-                ("height", T::u32(Big)),
-                ("channels", T::enumeration("Channels", T::u8(), &[(3, "rgb"), (4, "rgba")])),
-                ("colourspace", T::enumeration("Colourspace", T::u8(), COLOURSPACE)),
-                // Everything but the last eight bytes, which are the marker.
-                ("chunks", T::sized(E::Remaining.sub(E::lit(8)), T::repeat(chunk(), Until::End))),
-                ("end_marker", T::magic(&[0, 0, 0, 0, 0, 0, 0, 1])),
-            ],
-        ),
+    Template::new("qoi", image())
+}
+
+/// The image on its own, so a format that carries one can place it. A QOI
+/// refers to nothing by name, so the type is the whole of it and there is no
+/// vocabulary to hand over with it.
+pub(crate) fn image() -> T {
+    T::structure(
+        "QOI",
+        vec![
+            ("magic", T::magic(b"qoif")),
+            ("width", T::u32(Big)),
+            ("height", T::u32(Big)),
+            ("channels", T::enumeration("Channels", T::u8(), &[(3, "rgb"), (4, "rgba")])),
+            ("colourspace", T::enumeration("Colourspace", T::u8(), COLOURSPACE)),
+            // Everything but the last eight bytes, which are the marker.
+            ("chunks", T::sized(E::Remaining.sub(E::lit(8)), T::repeat(chunk(), Until::End))),
+            ("end_marker", T::magic(&[0, 0, 0, 0, 0, 0, 0, 1])),
+        ],
     )
 }
 
