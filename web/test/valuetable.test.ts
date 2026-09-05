@@ -21,7 +21,7 @@ import {
 function row(
   runs: readonly RunCells[],
   rowStart: number,
-  o: { bpr?: number; layout?: Layout; noteWidth?: number; maxLines?: number; cellWidth?: number } = {},
+  o: { bpr?: number; layout?: Layout; noteWidth?: number; maxLines?: number; cellWidth?: number; bitWidth?: number } = {},
 ) {
   return planRowValues({
     runs,
@@ -29,6 +29,7 @@ function row(
     bpr: o.bpr ?? 16,
     layout: o.layout ?? "aligned",
     measure: CHAR,
+    bitWidth: o.bitWidth ?? 0,
     cellWidth: o.cellWidth ?? uniformWidth(runs, CHAR),
     noteWidth: o.noteWidth ?? 400,
     maxLines: o.maxLines ?? Infinity,
@@ -75,6 +76,10 @@ test("24-bit samples at 16 bytes a row: the sixth of each row is split", () => {
   // is let out of its cell.
   assert.equal(second.cells[0]?.cut, true);
   assert.equal(second.cells[1]?.cut, false);
+  // Told how wide a bit is drawn, the piece is cut only when the text does
+  // not fit it: `v5` and its padding are 19px; two bytes are 32 at 2px a bit and 16 at 1.
+  assert.equal(row(cells, 16, { bitWidth: 2 }).cells[0]?.cut, false);
+  assert.equal(row(cells, 16, { bitWidth: 1 }).cells[0]?.cut, true);
 });
 
 test("a value cut by the row edge is said on its wider piece", () => {

@@ -101,32 +101,80 @@ export type FitOpts = {
   readonly measure: ChipMeasure;
 };
 
-/** How wide the aligned table is drawn: a byte of it has the pitch of a hex
- *  cell where the column is wide enough for that, and the whole table shrinks
- *  proportionally where it is not. */
-export function alignedWidth(o: FitOpts): number {
-  const pitch = o.hexPitch > 0 ? o.hexPitch : PITCH_GUESS;
-  return Math.min(o.noteWidth || COLUMN_GUESS, o.bpr * pitch);
+/**
+ * The bits of the widest piece an element is left in once the row edges have
+ * cut it: the whole element when no edge does, else the larger of its pieces.
+ * That piece is the cell its text is drawn in (see `valuetable.ts`), so it is
+ * the width the text has to fit. Rows begin at multiples of their own width.
+ */
+export function widestPieceBits(c: Cell, rowBits: number): number {
+  const start = c.offset_bits;
+  const end = start + c.size_bits;
+  let best = 0;
+  for (let at = Math.floor(start / rowBits) * rowBits; at < end; at += rowBits) {
+    best = Math.max(best, Math.min(end, at + rowBits) - Math.max(start, at));
+  }
+  return best;
 }
 
 /**
- * Which layout a run's cells get, decided once per run per screenful.
+ * How many pixels a bit of the aligned grid has to be for every value in
+ * these runs to fit the piece it is drawn in: a bit of a hex cell, so that a
+ * byte of the table sits under a byte of the bytes, or wider where a value
+ * needs more than that. A run of 32-bit samples that starts two bytes into a
+ * row is cut in half by every row edge, and nine digits do not fit two bytes
+ * at the hex pitch; they do fit two bytes at half again as much, and a table
+ * a little wider than the bytes still reads as the bytes' own table. Infinity
+ * for a run that cannot be aligned at all: one with no cells, or one the core
+ * says is not stored in one contiguous stretch of bits.
+ */
+export function alignedBit(runs: readonly RunCells[], o: FitOpts): number {
+  const columns = o.bpr * 8;
+  let need = (o.hexPitch > 0 ? o.hexPitch : PITCH_GUESS) / 8;
+  let any = false;
+  for (const run of runs) {
+    const floor = o.measure.value(run.widest);
+    for (const c of run.cells) {
+      if (!c.contiguous) return Infinity;
+      any = true;
+      const text = Math.max(floor, textWidth(c, o.measure)) + VALUE_PAD;
+      need = Math.max(need, text / widestPieceBits(c, columns));
+    }
+  }
+  return any ? need : Infinity;
+}
+
+/** How wide the aligned table is drawn on this screenful: a byte of it has the
+ *  pitch of a hex cell, or as much more as the widest value of the runs that
+ *  are aligned needs, and never more than the column. One width for the
+ *  screenful, since every row's table shares the column's byte positions. */
+export function alignedWidth(runs: readonly RunCells[], o: FitOpts): number {
+  const columns = o.bpr * 8;
+  const column = o.noteWidth || COLUMN_GUESS;
+  const aligned = runs.filter((r) => alignedFits([r], o));
+  const bit = aligned.length > 0 ? alignedBit(aligned, o) : (o.hexPitch > 0 ? o.hexPitch : PITCH_GUESS) / 8;
+  return Math.min(column, columns * bit);
+}
+
+/**
+ * Whether a run's cells can be drawn over the bits they are stored in.
  *
  * Aligned puts every value over the bits it is stored in, which is the whole
- * point of the table — but only while the values fit the width their bits are
+ * point of the table, but only while the values fit the width their bits are
  * worth. A six-bit code holding `-13` has eight pixels to say it in, and a
  * cell that cannot say what it holds says nothing at all, so those runs go to
  * the uniform layout instead. So does any run the core marks as not stored in
  * one contiguous stretch of bits: there is no one place to draw those over.
  *
- * The narrowest cell is measured from the element's own size, not from the
- * piece of it left on a row it straddles: the element at the end of a row is
- * cut by the row edge, not by the layout, and letting that decide would send
- * every run with a straddling element to the uniform layout.
+ * The element is measured whole, not as the piece of it left on a row it
+ * straddles: the element at the end of a row is cut by the row edge, not by
+ * the layout. `alignedWidth` widens the grid for those pieces where the
+ * column has the room; where it has not, the piece lets its text out over the
+ * end of the table (`.hv-val-cut`), which is still the value beside its bytes.
  */
 export function alignedFits(runs: readonly RunCells[], o: FitOpts): boolean {
   const columns = o.bpr * 8;
-  const bit = alignedWidth(o) / columns;
+  const bit = Math.min(o.noteWidth || COLUMN_GUESS, columns * ((o.hexPitch > 0 ? o.hexPitch : PITCH_GUESS) / 8)) / columns;
   let narrowest = Infinity;
   let widest = 0;
   let any = false;

@@ -172,6 +172,13 @@ type Frame = {
   pinned: ChipBlock | null;
 };
 
+/** What a row's table key is set to when what the block holds is no longer
+ *  known: a row past the end of the file, or one whose lines were laid out
+ *  again. Not the empty string, which is the key of a row with no table, so
+ *  that a table left in the block by the row before is written over rather
+ *  than taken for the empty block the new row wants. */
+const VALS_UNKNOWN = "\u0000";
+
 /** One line of cells: an address, the bytes, their text and their fields. A row
  *  is one of these unless a part starts part-way along it. */
 type LineParts = {
@@ -1628,8 +1635,9 @@ export class HexView {
    * each, so a fourth layout is one more case in `chooseLayout` and one more
    * branch in the placement, and nothing here.
    */
-  private planValues(runs: readonly RunCells[], start: number, bpr: number, maxLines: number): RowValues[] {
+  private planValues(runs: readonly RunCells[], start: number, bpr: number, maxLines: number, valsWidth: number): RowValues[] {
     const measure = this.valFonts ?? this.chipFonts ?? GUESS_TEXT;
+    const bitWidth = valsWidth / (bpr * 8);
     const fit = { bpr, noteWidth: this.noteWidth, hexPitch: this.hexPitch, measure };
     const rows = this.visibleRows;
     const perRow: RunCells[][] = Array.from({ length: rows }, () => []);
@@ -1664,6 +1672,7 @@ export class HexView {
             bpr,
             layout: rowLayout(layouts[r] ?? []),
             measure,
+            bitWidth,
             // The width is the row's own runs, not the screenful's: a run with
             // wider values scrolling off the bottom must not narrow the cells
             // of the run still on screen, since every row of it would rewrap.
@@ -1694,6 +1703,14 @@ export class HexView {
       fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
     const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
     const runs = fields && templated ? this.fetch.runsForView(spans, start, windowBytes) : [];
+    // One width for every table on the screenful: a byte of it at the pitch
+    // of a hex cell, or wider where a value cut by the row edge needs more.
+    const valsWidth = alignedWidth(runs, {
+      bpr,
+      noteWidth: this.noteWidth,
+      hexPitch: this.hexPitch,
+      measure: this.valFonts ?? this.chipFonts ?? GUESS_TEXT,
+    });
     return {
       bpr,
       len,
@@ -1720,8 +1737,8 @@ export class HexView {
       byteSpan,
       byRow,
       headsByRow: headingsByRow(this.sections, start, windowBytes, bpr),
-      values: this.planValues(runs, start, bpr, maxLines),
-      valsWidth: alignedWidth({ bpr, noteWidth: this.noteWidth, hexPitch: this.hexPitch, measure: GUESS_TEXT }),
+      values: this.planValues(runs, start, bpr, maxLines, valsWidth),
+      valsWidth,
       pinned: null,
     };
   }
@@ -1776,7 +1793,7 @@ export class HexView {
         parts.blank = true;
         parts.layoutKey = "";
         parts.noteKey = "";
-        parts.valsKey = "";
+        parts.valsKey = VALS_UNKNOWN;
       }
       return 0;
     }
@@ -1789,7 +1806,7 @@ export class HexView {
       this.layOutRow(row, parts, rowStart, segs, headsAt, len * 8, f.addrWidth);
       parts.layoutKey = layoutKey;
       parts.noteKey = "";
-      parts.valsKey = "";
+      parts.valsKey = VALS_UNKNOWN;
       // Cells that changed line have to be told which byte they draw again.
       parts.start = -1;
     }
@@ -1877,7 +1894,7 @@ export class HexView {
       const key = `!${r === 0 ? (f.trouble ?? NO_TEMPLATE) : ""}`;
       if (key !== parts.noteKey) {
         parts.noteKey = key;
-        parts.valsKey = "";
+        parts.valsKey = VALS_UNKNOWN;
         for (let j = 1; j < segs.length; j++) {
           const note = (parts.lines[j] as LineParts).note;
           for (const c of chipsOf(note)) c.remove();

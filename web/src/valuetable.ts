@@ -139,8 +139,13 @@ export type RowValueOpts = {
   readonly rowStart: number;
   readonly bpr: number;
   readonly layout: Layout;
-  /** Flow only: how wide a cell's own text is. */
+  /** Flow only: how wide a cell's own text is. Aligned reads it too, to know
+   *  whether a cut value fits the piece it is drawn on. */
   readonly measure?: ChipMeasure;
+  /** Aligned only: how many pixels one bit of the grid is drawn as, from
+   *  `alignedWidth`. Zero when unknown, which takes every cut value to be too
+   *  wide for its piece. */
+  readonly bitWidth?: number;
   /** From `uniformWidth`, so every row of a screenful draws the same width. */
   readonly cellWidth: number;
   readonly noteWidth: number;
@@ -218,8 +223,14 @@ export function planRowValues(o: RowValueOpts): RowValues {
         numeric: numeric(c.kind),
         carried,
         // The piece the text is on is narrower than the element, so the value
-        // may not fit the cell it is in.
-        cut: straddles,
+        // may not fit the cell it is in; it is let out only when it does not,
+        // since a value that fits its piece is read like any other cell.
+        cut:
+          straddles &&
+          carried === null &&
+          (o.measure === undefined ||
+            (o.bitWidth ?? 0) <= 0 ||
+            o.measure.value(c.label) + VALUE_PAD > (Math.min(rowTo, end) - Math.max(rowFrom, c.offset_bits)) * (o.bitWidth ?? 0)),
         width: o.layout === "flow" ? Math.ceil((o.measure?.value(c.label) ?? 0) + VALUE_PAD) : 0,
         path: run.path,
         run: run.name,

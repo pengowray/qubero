@@ -7,12 +7,14 @@ import assert from "node:assert/strict";
 import { CHAR, run } from "./runcells.ts";
 import {
   alignedFits,
+  alignedWidth,
   chooseLayout,
   rowLayout,
   typeDigits,
   uniformFit,
   uniformWidth,
   VALUE_PAD,
+  widestPieceBits,
   type Cell,
 } from "../src/valuelayout.ts";
 
@@ -127,5 +129,20 @@ test("the piece of a value left on a row does not decide the layout", () => {
   const cells: Cell[] = [
     { index: 0, offset_bits: 14 * 8, size_bits: 24, text: "-394928", label: "-394928", kind: "int", contiguous: true },
   ];
-  assert.equal(alignedFits([{ ...run({ stride: 24, from: 0, to: 0 }), cells }], WIDE), true);
+  const runs = [{ ...run({ stride: 24, from: 0, to: 0 }), cells }];
+  assert.equal(alignedFits(runs, WIDE), true);
+  // The larger piece is the two bytes on the second row, and the eight
+  // characters an i24 can need do not fit two bytes at the hex pitch, so the
+  // grid is drawn wider than the bytes: 61px over 16 bits, for 128 bits.
+  assert.equal(alignedWidth(runs, { ...WIDE, noteWidth: 600 }), (61 / 16) * 128);
+  // A column too narrow for that widened grid stops at the column, and the
+  // piece lets its text out over the end of the table instead.
+  assert.equal(alignedWidth(runs, WIDE), 400);
+  assert.equal(alignedFits(runs, WIDE), true);
+});
+
+test("a run nothing cuts is drawn at the hex pitch", () => {
+  const runs = [run({ stride: 16, kind: "str", from: 0, to: 8, text: () => "-1" })];
+  assert.equal(alignedWidth(runs, WIDE), 16 * 22);
+  assert.equal(widestPieceBits({ index: 0, offset_bits: 120, size_bits: 32, text: "", label: "", kind: "int", contiguous: true }, 128), 24);
 });
