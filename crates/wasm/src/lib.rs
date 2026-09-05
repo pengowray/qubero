@@ -195,6 +195,24 @@ struct NodeDto {
     space_root: bool,
 }
 
+/// One element of a folded run, as the value table draws it.
+#[derive(Serialize)]
+struct CellDto {
+    /// Where the element sits in its run: the last step of its path.
+    index: f64,
+    offset_bits: f64,
+    size_bits: f64,
+    /// What the listing would say about it on a shared row, or the symbol's
+    /// name for a block of a trace. Nothing here is reformatted by the view.
+    text: String,
+    /// "uint" | "int" | "float" | "bytes" | "str" | "enum" | "flags" |
+    /// "composite" | "symbol"
+    kind: &'static str,
+    /// False when the element's bits are not one run, which sends the view to
+    /// its uniform layout. True for every type there is today.
+    contiguous: bool,
+}
+
 /// What the byte-class scan has found so far. `classes` is one digit per
 /// bucket in file order, the digit being `overview::Class`.
 #[derive(Serialize)]
@@ -1065,6 +1083,17 @@ fn dto(n: NodeInfo) -> NodeDto {
 }
 
 /// Chunks the evaluator answered without, as the host counts them.
+fn cell_dto(c: qubero_core::eval::Cell) -> CellDto {
+    CellDto {
+        index: c.index as f64,
+        offset_bits: c.offset_bits as f64,
+        size_bits: c.size_bits as f64,
+        text: c.text,
+        kind: c.kind,
+        contiguous: c.contiguous,
+    }
+}
+
 fn wanted(e: &Evaluator) -> Vec<f64> {
     e.wanted().into_iter().map(|m| m.chunk as f64).collect()
 }
@@ -1710,6 +1739,27 @@ impl Editor {
                 let r = e
                     .children(&sh.doc, &p, from as u64, to as u64)
                     .map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
+                reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
+            }
+        }
+    }
+
+    /// The elements of the folded run at `path` whose bits overlap
+    /// `from_bit..to_bit`, at most `max` of them, for the value table beside
+    /// the bytes: {status:"ok",node:[cell,..]}. Same envelope as
+    /// `template_children`. `path` is what a span with a count carries, or a
+    /// block of a decoded stream's trace.
+    pub fn run_cells(&mut self, space: u32, path: &[u32], from_bit: f64, to_bit: f64, max: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut sh.eval {
+            None => reply::<Vec<CellDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                let r = e
+                    .run_cells(&sh.doc, &p, from_bit as u64, to_bit as u64, max as usize)
+                    .map(|v| v.into_iter().map(cell_dto).collect::<Vec<CellDto>>());
                 reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
             }
         }

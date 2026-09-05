@@ -216,6 +216,23 @@ export type Span = {
   readonly bits: BitRoles | null;
 };
 
+/** One element of a folded run, for the value table beside the bytes. A span
+ *  with a count stands for a whole run; these are the elements of it that a
+ *  stretch of rows actually covers. */
+export type Cell = {
+  /** Where the element sits in its run: the last step of its path. */
+  readonly index: number;
+  readonly offset_bits: number;
+  readonly size_bits: number;
+  /** What the listing would say about it on a shared row, or the symbol's name
+   *  for a block of a decoder's trace. Never reformatted here. */
+  readonly text: string;
+  readonly kind: string;
+  /** False when the element's bits are not one run, which is what sends the
+   *  table to its uniform layout. True for every type there is today. */
+  readonly contiguous: boolean;
+};
+
 /** What a decoder does with one run of bits: `more` and `stop` are the
  *  continuation bit either way round, `width` is EBML spending leading zeros
  *  on how wide the number is, and `payload` is the number itself. */
@@ -1199,6 +1216,19 @@ export class Doc {
 
   templateChildren(path: readonly number[], from: number, to: number): TemplateReply<TemplateNode[]> {
     return this.handleReply(this.editor.template_children(this.space, Uint32Array.from(path), from, to));
+  }
+
+  /**
+   * The elements of the folded run at `path` whose bits fall between two
+   * offsets, at most `max` of them. One call covers a screenful, the way
+   * `spans` does: the run itself is one span saying how many elements it has,
+   * and this is what those elements read as over the rows on screen.
+   *
+   * `path` is a span's own `path` when its `count` is above zero, or a block
+   * of a decoded stream's trace.
+   */
+  runCells(path: readonly number[], fromBit: number, toBit: number, max: number): TemplateReply<Cell[]> {
+    return this.handleReply<Cell[]>(this.editor.run_cells(this.space, Uint32Array.from(path), fromBit, toBit, max));
   }
 
   /** The whole text of a text field, decoded in the field's own encoding. */
