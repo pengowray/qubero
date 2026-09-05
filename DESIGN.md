@@ -1940,6 +1940,30 @@ mismatched field does not offer to write the bytes the format wanted.
 `encode::editable` refuses to write a magic field at all, and one narrow
 exception to that is a decision to take on purpose. This half is read-side.
 
+### A run that stops short says why, and a room that was counted wrong is stretched
+A run read until the end of its room (`Repeat`, `Until::End`) used to fail
+whole when any element of it could not be read: a bat recording whose RIFF
+size left out the GUANO chunk the recorder wrote after the samples showed as
+one unmapped file with the chunk's complaint over it, and none of the header,
+the format or the samples were on screen. Two rules in `eval/walk.rs` replace
+that.
+
+The run ends before the element that cannot be read. The elements before it
+stand, and what is left of the room is a gap that carries the reason
+(`ListState::repeat_trouble`, put on the gap's span by `gap_inside`, so the
+hex chip's tooltip reads `Could not be read: size 160 runs past the end of its
+container`). The first element failing is still the run failing: a run with
+nothing in it is not a short run.
+
+Before giving up, the walk tries the room outside. A run whose declared room
+ends part-way through an element that would fit the room around it has a size
+that was wrong, not an element that was: the room is stretched to the end of
+that one element and no further, the element is read, and the sizes above it
+are worked out again. A size that was right about where the run ends, with
+something else after it, is left as it was, because the element fails again
+with the wider room and the gap says so. Bytes after the room that no element
+starts inside were never touched by either rule; they are still nobody's.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
