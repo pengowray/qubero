@@ -18,6 +18,30 @@ export function headingName(h: OutlineHeading, fileBits: number): string {
   return REPORT.unnamedPart(where);
 }
 
+/** What the stylesheet says a heading line is tall, by the heading's level:
+ *  one pair for a heading with space above it and one for the heading that
+ *  has nothing above it to be spaced away from. */
+export type HeadingSizes = {
+  readonly heading: readonly [number, number];
+  readonly headingFirst: readonly [number, number];
+};
+
+/**
+ * How tall a heading line is.
+ *
+ * Every heading has space above it, so that a part of the file is divided
+ * from the one before rather than butted up against it: every heading but the
+ * one for the part that starts at the front of the file, which has nothing
+ * above it. Keyed on where the part is in the file, never on where the row
+ * happens to fall on screen, since a row's height must not depend on whether
+ * it is the top one. `fallback` is a row's own height, for a level the
+ * stylesheet says nothing about.
+ */
+export function headingHeight(h: OutlineHeading, sizes: HeadingSizes, fallback: number): number {
+  const pair = h.offsetBits === 0 ? sizes.headingFirst : sizes.heading;
+  return pair[h.level] ?? pair[1] ?? fallback;
+}
+
 /** What pressing a heading does, for a reader who cannot guess. */
 export const HEADING_TIP = (name: string): string => `Move the cursor to the first byte of ${name}`;
 

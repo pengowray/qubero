@@ -34,7 +34,7 @@ import {
   type Run,
 } from "./hexcell.js";
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.js";
-import { cutRow, fillHeadings, headingsByRow } from "./hexheadings.js";
+import { cutRow, fillHeadings, headingHeight, headingsByRow, type HeadingSizes } from "./hexheadings.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.js";
 import type { Cell } from "./doc.js";
@@ -159,6 +159,13 @@ const NO_SPANS = (windowBytes: number): Placed => ({
  * draw agree about what they are drawing however many of them there are, and
  * so that none of them asks the document for the same answer twice.
  */
+/** What the stylesheet says the rows are built out of: the heading lines, a
+ *  line of chips, and a line of a table of values. */
+export type Sizes = HeadingSizes & {
+  readonly chipLine: number;
+  readonly valLine: number;
+};
+
 type Frame = {
   readonly bpr: number;
   readonly len: number;
@@ -191,6 +198,30 @@ type Frame = {
   /** How wide an aligned table is drawn, so a byte of it has the pitch of a
    *  byte of the bytes. */
   readonly valsWidth: number;
+  /** Where the cursor is and what it looks like, taken once at the start of
+   *  the draw. Every mark on the bytes is settled here rather than read off
+   *  the view row by row, so that what one row shows cannot disagree with
+   *  what the next one does. */
+  readonly cursor: number;
+  readonly bit: number;
+  readonly pane: Pane;
+  readonly nibble: 0 | 1;
+  readonly insertMode: boolean;
+  readonly highlight: readonly BitRange[];
+  readonly linked: BitRange | null;
+  /** The cursor as a bit offset, which is what marks a cell of a value
+   *  table. */
+  readonly cursorBit: number;
+  /** How far the top row is scrolled up past the top edge. */
+  readonly topPx: number;
+  /** A row's own height, and how wide the column beside it is. */
+  readonly rowHeight: number;
+  readonly noteWidth: number;
+  /** What the stylesheet says the rest of a row is built out of. */
+  readonly sizes: Sizes;
+  /** True for the readings that trade room for rows: the chips stop at three
+   *  lines and every heading stays above the row. */
+  readonly condensed: boolean;
   /** How wide the chips' own text is drawn, with an answer kept per string
    *  for the length of the draw. @see memoText */
   readonly chipMeasure: ChipMeasure;
@@ -383,11 +414,11 @@ export class HexView {
   /** What the stylesheet says a heading line, a smaller one, and one line of
    *  chips are tall, so a row's height can be worked out before it is drawn.
    *  Read with `fit`, since only a change of style moves them. */
-  private sizes = {
-    heading: [36, 26] as readonly [number, number],
+  private sizes: Sizes = {
+    heading: [36, 26],
     /** The heading for the part that starts at the front of the file, which
      *  has nothing above it to be spaced away from. */
-    headingFirst: [26, 20] as readonly [number, number],
+    headingFirst: [26, 20],
     chipLine: 22,
     valLine: 18,
   };
@@ -520,7 +551,7 @@ export class HexView {
         extra = 0;
         cuts = new Set<number>();
       }
-      extra += this.headingHeight(h);
+      extra += headingHeight(h, this.sizes, this.rowHeight);
       if (!condensed) {
         const at = Math.min(bpr - 1, Math.max(0, byte - r * bpr));
         // Position zero is the row's own start, not a cut in it.
@@ -532,21 +563,6 @@ export class HexView {
     }
     if (extra > 0) out.push({ row, extra });
     this.ledger.setStructural(out);
-  }
-
-  /**
-   * How tall a heading line is.
-   *
-   * Every heading has space above it, so that a part of the file is divided
-   * from the one before rather than butted up against it — every heading but
-   * the one for the part that starts at the front of the file, which has
-   * nothing above it. Keyed on where the part is in the file, never on where
-   * the row happens to fall on screen: a row's height must not depend on
-   * whether it is the top one.
-   */
-  private headingHeight(h: OutlineHeading): number {
-    const sizes = h.offsetBits === 0 ? this.sizes.headingFirst : this.sizes.heading;
-    return sizes[h.level] ?? sizes[1] ?? this.rowHeight;
   }
 
   /** Pick the field a chip stands for. Held as one function for the life of
@@ -1673,12 +1689,12 @@ export class HexView {
   // ----- rendering -----
 
   /** The eight bits of one byte, split into spans only where that is needed. */
-  private fillBits(cell: HTMLElement, byte: number | null, off: number, hl: readonly Run[], sel: Run | null): void {
+  private fillBits(f: Frame, cell: HTMLElement, byte: number | null, off: number, hl: readonly Run[], sel: Run | null): void {
     const text = byte === null ? "········" : byte.toString(2).padStart(8, "0");
     if (byte === null) cell.classList.add("hv-pending");
-    const onCursor = off === this.cursor;
+    const onCursor = off === f.cursor;
     const whole = covers(hl, 0, 8);
-    const selClass = this.pane === "hex" ? "hv-sel" : "hv-sel-weak";
+    const selClass = f.pane === "hex" ? "hv-sel" : "hv-sel-weak";
     const selWhole = sel !== null && sel.from <= 0 && sel.to >= 8;
     // A whole selected byte is marked on the cell rather than on its bits, so
     // the space between two bytes is inside the selection and not a hole in it.
@@ -1696,9 +1712,9 @@ export class HexView {
       s.setAttribute("data-pane", "hex");
       if (hl.some((r) => k >= r.from && k < r.to)) s.classList.add("hv-hl");
       if (sel !== null && !selWhole && k >= sel.from && k < sel.to) s.classList.add(selClass);
-      if (onCursor && k === this.bit) {
-        s.classList.add("hv-cur", this.pane === "hex" ? "hv-focus" : "hv-dim");
-        if (this.insertMode) s.classList.add("hv-ins");
+      if (onCursor && k === f.bit) {
+        s.classList.add("hv-cur", f.pane === "hex" ? "hv-focus" : "hv-dim");
+        if (f.insertMode) s.classList.add("hv-ins");
       }
       cell.append(s);
     }
@@ -1837,6 +1853,19 @@ export class HexView {
       values: this.planValues(runs, start, bpr, maxLines, valsWidth),
       valsWidth,
       chipMeasure,
+      cursor: this.cursor,
+      bit: this.bit,
+      pane: this.pane,
+      nibble: this.nibble,
+      insertMode: this.insertMode,
+      highlight: this.highlight,
+      linked: this.linked,
+      cursorBit: this.cursorState.bitOffset,
+      topPx: this.topPx,
+      rowHeight: this.rowHeight,
+      noteWidth: this.noteWidth,
+      sizes: this.sizes,
+      condensed: this.isCondensed,
       pinned: null,
     };
   }
@@ -1897,7 +1926,7 @@ export class HexView {
     }
     parts.blank = false;
     const heads = f.headsByRow[r] ?? [];
-    const { headsAt, segs } = cutRow(heads, rowStart, bpr, this.isCondensed);
+    const { headsAt, segs } = cutRow(heads, rowStart, bpr, f.condensed);
     // The share of the file changes with its length, so the key does too.
     const layoutKey = `${segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
     if (layoutKey !== parts.layoutKey) {
@@ -1908,8 +1937,8 @@ export class HexView {
       // Cells that changed line have to be told which byte they draw again.
       parts.start = -1;
     }
-    let height = this.rowHeight * segs.length;
-    for (const h of heads) height += this.headingHeight(h);
+    let height = f.rowHeight * segs.length;
+    for (const h of heads) height += headingHeight(h, f.sizes, f.rowHeight);
     const addr = (parts.lines[0] as LineParts).addr;
     setText(addr, rowStart.toString(16).padStart(f.addrWidth, "0"));
     // Which bytes a row stands for only changes when the view moves. A
@@ -1947,7 +1976,7 @@ export class HexView {
       // A user-selected range temporarily replaces the active-field mark.
       // Keeping both over the same bytes made adjacent or overlapping state
       // impossible to parse; clearing the selection reveals the field again.
-      const hl = selection === null ? highlightBits(this.highlight, off) : [];
+      const hl = selection === null ? highlightBits(f.highlight, off) : [];
       const sb = selection === null ? null : selectionBits(selection, off);
       const si = fields && off >= start && off < start + windowBytes ? byteSpan[off - start] ?? -1 : -1;
       const s = si >= 0 ? spans[si] : undefined;
@@ -1960,11 +1989,11 @@ export class HexView {
         span: s === undefined || s.gap ? null : { kind: s.kind, startsHere: off === Math.floor(s.offset_bits / 8) },
         hl,
         sel: sb,
-        link: this.linked,
-        cursor: this.cursor,
-        pane: this.pane,
-        nibble: this.nibble,
-        insertMode: this.insertMode,
+        link: f.linked,
+        cursor: f.cursor,
+        pane: f.pane,
+        nibble: f.nibble,
+        insertMode: f.insertMode,
       });
       if (h.style.backgroundImage !== draw.bits) h.style.backgroundImage = draw.bits;
       setText(a, draw.asciiText);
@@ -1972,7 +2001,7 @@ export class HexView {
       // The bits inside a cell carry their own marks, so in binary the cell
       // has only what `fillBits` puts on it.
       if (h.className !== draw.hex) h.className = draw.hex;
-      if (binary && off < len) this.fillBits(h, complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
+      if (binary && off < len) this.fillBits(f, h, complete ? bytes[off - start] ?? 0 : null, off, hl, sb);
       if (a.className !== draw.ascii) a.className = draw.ascii;
     }
   }
@@ -2021,17 +2050,17 @@ export class HexView {
       segs,
       rowStart,
       top: r === 0,
-      noteWidth: this.noteWidth,
+      noteWidth: f.noteWidth,
       maxLines: f.maxLines,
       measure: f.chipMeasure,
       below: f.below,
-      rowHeight: this.rowHeight,
-      chipLine: this.sizes.chipLine,
+      rowHeight: f.rowHeight,
+      chipLine: f.sizes.chipLine,
       // How far the top row is scrolled up, and what stands in the way, so
       // that the strip pinned over the rows names only the fields that reach
       // a byte still on screen. Every other row sits square against nothing.
-      topPx: r === 0 ? this.topPx : 0,
-      headHeights: segs.map((at) => (headsAt.get(at) ?? []).reduce((n, h) => n + this.headingHeight(h), 0)),
+      topPx: r === 0 ? f.topPx : 0,
+      headHeights: segs.map((at) => (headsAt.get(at) ?? []).reduce((n, h) => n + headingHeight(h, f.sizes, f.rowHeight), 0)),
       valsHeight: vals.height,
     });
     if (planned.pinned !== null) f.pinned = planned.pinned;
@@ -2060,7 +2089,7 @@ export class HexView {
       // Which cell the cursor is in is not part of what the row says, so it is
       // marked on its own: a cursor key moves the mark two cells rather than
       // rewriting every value on screen.
-      markVals(block, vals, this.cursorState.bitOffset);
+      markVals(block, vals, f.cursorBit);
     }
     if (key !== parts.noteKey) {
       parts.noteKey = key;
@@ -2075,7 +2104,7 @@ export class HexView {
     let extra = 0;
     for (const [j, h] of planned.chipHeights.entries()) {
       const total = h + (j === 0 ? vals.height : 0);
-      extra += f.below ? total : Math.max(0, total - this.rowHeight);
+      extra += f.below ? total : Math.max(0, total - f.rowHeight);
     }
     return extra;
   }
