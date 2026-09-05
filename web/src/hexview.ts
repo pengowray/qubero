@@ -60,6 +60,30 @@ export type Pane = "hex" | "ascii";
 export type RightColumn = "text" | "fields" | "fields-condensed" | "both" | "both-condensed";
 /** Every reading of the column setting, in the order they are offered. */
 export const RIGHT_COLUMNS: readonly RightColumn[] = ["text", "fields", "fields-condensed", "both", "both-condensed"];
+/**
+ * The same measure with an answer per string kept for as long as it is held.
+ *
+ * Canvas `measureText` is the expensive call in the value table's arithmetic,
+ * and a screenful of a quantised tensor asks it about a couple of thousand
+ * cells that between them say a few dozen different things. One table per
+ * draw, thrown away with it, so a change of font or of zoom is picked up on
+ * the next frame without anything having to say so.
+ */
+function memoText(measure: ChipMeasure): ChipMeasure {
+  const names = new Map<string, number>();
+  const values = new Map<string, number>();
+  const memo =
+    (of: (t: string) => number, seen: Map<string, number>) =>
+    (text: string): number => {
+      const had = seen.get(text);
+      if (had !== undefined) return had;
+      const w = of(text);
+      seen.set(text, w);
+      return w;
+    };
+  return { name: memo(measure.name, names), value: memo(measure.value, values) };
+}
+
 /** Whether a saved or typed value is one of them. */
 export function isRightColumn(v: string | null): v is RightColumn {
   return v !== null && (RIGHT_COLUMNS as readonly string[]).includes(v);
@@ -522,6 +546,24 @@ export class HexView {
    *  the view, since every chip keeps it. */
   private readonly pickField = (path: readonly number[]): void => {
     this.onPickField(path);
+  };
+
+  /** Pick the element a value cell stands for, and stand on its first bit.
+   *
+   *  The cursor as well as the selection, because a path does not always name
+   *  one value: thirty-two weights of a packed block share the block's index,
+   *  and which of them the inspector opens the block on is read from where the
+   *  cursor is. For every other run the cell's first bit is the first bit of
+   *  what the path names anyway, so this is where the reader clicked either
+   *  way. Held as one function for the life of the view, since every block of
+   *  cells keeps it.
+   *
+   *  The pick first and the cursor after it, in that order: picking a field
+   *  sends the cursor to the front of what the path names, which for a packed
+   *  block is the block's scale rather than the weight that was clicked. */
+  private readonly pickValue = (path: readonly number[], bit: number): void => {
+    this.onPickField(path);
+    this.setBitCursor(bit, { pane: "hex" });
   };
 
   /** Go to the first byte of the part a heading names. Held as one function
@@ -1629,6 +1671,8 @@ export class HexView {
   /**
    * The table each row on screen draws, and how wide an aligned one is.
    *
+   * @see memoText for why the measure is wrapped.
+   *
    * Which layout a run gets is decided once per screenful by `chooseLayout`,
    * so that the tables do not change shape row by row, and a row two runs
    * reach takes whatever the two of them agree on. Both answers are one word
@@ -1636,8 +1680,14 @@ export class HexView {
    * branch in the placement, and nothing here.
    */
   private planValues(runs: readonly RunCells[], start: number, bpr: number, maxLines: number, valsWidth: number): RowValues[] {
-    const measure = this.valFonts ?? this.chipFonts ?? GUESS_TEXT;
     const bitWidth = valsWidth / (bpr * 8);
+    // Measured through a table kept for the draw. A screenful of a quantised
+    // tensor is a couple of thousand cells and the width of each is asked for
+    // more than once — by the layout, by the row it is on — but the run of a
+    // packed block says `-8` to `7` and the whole screenful is a few dozen
+    // distinct strings. Canvas `measureText` is the one expensive call in this
+    // path, so it is made once per string rather than once per cell.
+    const measure = memoText(this.valFonts ?? this.chipFonts ?? GUESS_TEXT);
     const fit = { bpr, noteWidth: this.noteWidth, hexPitch: this.hexPitch, measure };
     const rows = this.visibleRows;
     const perRow: RunCells[][] = Array.from({ length: rows }, () => []);
@@ -1937,7 +1987,7 @@ export class HexView {
     let block = valsOf(firstNote);
     if (vals.lines > 0 || block !== null) {
       if (block === null) {
-        block = newVals(this.pickField);
+        block = newVals(this.pickValue);
         firstNote.append(block);
       }
       if (vals.key !== parts.valsKey) {

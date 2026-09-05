@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { CHAR, run } from "./runcells.ts";
+import { CHAR, quantRun, run } from "./runcells.ts";
 import {
   alignedFits,
   alignedWidth,
@@ -47,6 +47,24 @@ test("a narrow column takes the aligned table down with it", () => {
 test("a cell whose type says nothing about its width is as wide as its text", () => {
   const cells = [run({ stride: 16, kind: "str", from: 0, to: 4, text: (i) => "0".repeat(i + 1) })];
   assert.equal(uniformWidth(cells, CHAR), 4 * 7 + VALUE_PAD);
+});
+
+test("a block's scale does not set the width of the weights beside it", () => {
+  // A `q4_0` block is one `0.004108` and thirty-two nibbles reading `-8` to
+  // `7`. Measured against the scale every nibble would take eight characters
+  // where it needs two, and a sixteen-byte row would run to five lines.
+  const cells = [quantRun({ blocks: 2, weights: 32, bits: 4 })];
+  assert.equal(uniformWidth(cells, CHAR), 2 * 7 + VALUE_PAD);
+  // Nothing a float can promise, so the scale falls back to its own text.
+  assert.equal(typeDigits("scale", 16), "");
+});
+
+test("packed weights do not fit the bits they are stored in", () => {
+  // Four bits at sixteen bytes a row is eleven pixels, and `-8` is nineteen.
+  assert.equal(chooseLayout(quantRun({ blocks: 4, weights: 32, bits: 4 }), WIDE), "uniform");
+  // A five-bit type keeps a weight's top bit elsewhere, and there is no one
+  // place to draw a value whose bits are in two.
+  assert.equal(chooseLayout(quantRun({ blocks: 4, weights: 32, bits: 4, contiguous: false }), WIDE), "uniform");
 });
 
 test("a number is as wide as its type can be, not as wide as it happens to be", () => {

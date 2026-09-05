@@ -625,8 +625,10 @@ take the marker colour, since where the copying happens is what there is to see
 in a block of symbols. Numbers are read from the
 right and everything else from the left. The cells are lighter than a chip and
 divided by a hairline, since a hundred of them are read as a table rather than
-picked out one at a time; clicking one selects that element in all three views,
-and the cell the cursor is in takes the same accent its byte does. Both layouts
+picked out one at a time; clicking one selects that element in all three views
+and puts the cursor on its first bit, and the cell the cursor is in takes the
+same accent its byte does. The cursor as well as the selection, because a path
+does not always name one value: see the packed blocks below. Both layouts
 report their height before the row is laid out, like the chips, and both are
 written into pooled elements that a scroll never takes out from under a finger.
 Only the runs the core folded get a table. The runs the view folds, where a
@@ -634,6 +636,41 @@ handful of a list's elements sit together on a row and become one chip, would
 cost nothing to draw and are left alone anyway: whether they fold depends on
 what the top row carries in from above, so the same row would be one height at
 the top of the screen and another below it.
+
+A quantised tensor is the hardest case the table has, and the one it was worth
+building for: a GGUF `Q4_0` tensor is a run of eighteen-byte blocks, and one
+cell a block would put the word `Q4_0` beside every eighteen bytes of a
+gigabyte and say nothing anyone wanted. So `quant_cells` sends the inside of
+the block instead — the scale where the scale is, then one cell per weight over
+the bits of its nibble — and the table draws what a block really holds. The
+order is the order of the bytes and not the order of the tensor's row, which
+are different orders: weight 16 of a `q4_0` is the top half of the byte weight 0
+is the bottom half of, so it comes first, and the reader is looking at bytes.
+Weights never fit the bits they are stored in, four bits being eleven pixels
+and `-8` nineteen, so a tensor is always the uniform layout; a five-bit type
+keeps a weight's top bit sixteen bytes away and says so with `contiguous`,
+which lands in the same place. The scale is the one exception to equal cells:
+it is a float, `0.004108`, four times the width of the nibbles around it, and
+measuring the table against it would give every weight four times the room it
+needs and turn a sixteen-byte row into five lines. So a scale takes its own
+width and the weights share theirs. It is also tinted as a marker rather than a
+number, which is what the reader wants from it: not the value so much as where
+one block stops and the next starts. Every weight of a block shares the block's
+index, so the path a cell picks names the block and not the weight — which is
+why clicking a cell moves the cursor as well: the inspector's block panel marks
+the weight whose bits the cursor is in, and the cursor is the only thing that
+can say which of thirty-two was pressed. How many cells one screenful is worth
+is worked out rather than fixed, since `q2_k` packs four weights into a byte
+where a run of samples is one value to two.
+
+None of that is on screen yet, because `spans` does not hand the view the run
+to draw it for. A packed block is a composite, so the branch that answers a
+composite with `gap_inside` catches it before `field_or_its_run` can ask
+`collapsible` whether the tensor folds, and a screenful of a quantised tensor
+comes back as one entry per block, each with `count: 0`. `run_cells` on the
+tensor answers correctly; nothing asks it. The paragraph above describes what
+the column does once `spans` folds a quantised tensor the way it folds a run
+of samples.
 
 Four files, in the order a value passes through them. `valuefetch.ts` asks the
 core for the fields and the elements on screen and holds the last answer while

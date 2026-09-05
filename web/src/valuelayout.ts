@@ -81,7 +81,19 @@ export function typeDigits(kind: string, sizeBits: number): string {
   if (sizeBits <= 0 || sizeBits > 64) return "";
   if (kind === "uint" || kind === "unset") return "8".repeat(Math.ceil(Math.log10(2 ** Math.min(sizeBits, 53))));
   if (kind === "int") return `-${"8".repeat(Math.ceil(Math.log10(2 ** Math.min(sizeBits - 1, 53))))}`;
+  // `scale` is a block's `d` or `dmin`, a half float written as the listing
+  // writes it. A float has no width its type promises, so like the other
+  // floats it falls back to the widest text the run has shown.
   return "";
+}
+
+/** A block's own scale rather than one of the numbers it scales: `d` and
+ *  `dmin` in front of a run of packed weights. Kept apart from the weights
+ *  because it is one cell to their thirty-two and is a float where they are
+ *  small integers, so letting it set the width of every cell in the table
+ *  would make a row of nibbles four times wider than it needs to be. */
+export function isScale(kind: string): boolean {
+  return kind === "scale";
 }
 
 /** How wide one cell's text may be drawn: what its type can produce where that
@@ -190,12 +202,23 @@ export function alignedFits(runs: readonly RunCells[], o: FitOpts): boolean {
   return any && narrowest >= widest + VALUE_PAD;
 }
 
-/** How wide a uniform cell is: the widest text on screen and its padding. */
+/**
+ * How wide a uniform cell is: the widest text on screen and its padding.
+ *
+ * Scales are left out. A quantised block is one `0.004108` and thirty-two
+ * nibbles reading `-8` to `7`, and measuring the cells against the scale would
+ * give every nibble four times the room it needs and turn a sixteen-byte row
+ * into eight lines. The scale takes its own width instead, which it can afford
+ * to because there are so few of them; see `planRowValues`.
+ */
 export function uniformWidth(runs: readonly RunCells[], measure: ChipMeasure): number {
   let widest = 0;
   for (const run of runs) {
     widest = Math.max(widest, measure.value(run.widest));
-    for (const c of run.cells) widest = Math.max(widest, textWidth(c, measure));
+    for (const c of run.cells) {
+      if (isScale(c.kind)) continue;
+      widest = Math.max(widest, textWidth(c, measure));
+    }
   }
   return Math.ceil(widest + VALUE_PAD);
 }

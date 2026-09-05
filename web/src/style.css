@@ -810,8 +810,11 @@ input.invalid {
   text-align: center;
 }
 /* A match, or the end of a block: the places a copy happens rather than a byte
-   being spelled out, which is what there is to see in a block of symbols. */
-.hv-vals-flow > .field-marker {
+   being spelled out, which is what there is to see in a block of symbols. The
+   scale of a packed block is the same case in a table of weights: it is where
+   one block stops and the next starts, and a reader scanning a screenful of
+   nibbles is looking for exactly that. */
+.hv-val.field-marker {
   background: color-mix(in srgb, var(--field-color) 26%, transparent);
   box-shadow: inset -1px 0 0 color-mix(in srgb, var(--field-color) 45%, transparent);
 }
