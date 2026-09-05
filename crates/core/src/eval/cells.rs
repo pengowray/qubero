@@ -541,6 +541,30 @@ mod tests {
         assert_eq!(cells[0].text, "10 11");
     }
 
+    /// Bytes that have not arrived come back as `Pending` with the chunks to
+    /// fetch, the way `children` does, rather than as an empty table that
+    /// would read as a run of no elements.
+    #[test]
+    fn a_window_over_bytes_that_have_not_arrived_asks_for_them() {
+        use crate::source::ChunkStore;
+        let t = Template::new(
+            "t",
+            T::structure("Root", vec![("n", T::u8()), ("xs", T::array(T::u16(Big), E::field("n")))]),
+        );
+        let mut d = Document::new(ChunkStore::new(65, 8, 16));
+        let mut e = Evaluator::new(t);
+        // The count is in the first chunk, so the run is there to be asked
+        // about; the elements the window wants are in one that is not.
+        d.source_mut().insert(0, vec![32, 0, 1, 0, 2, 0, 3, 0].into_boxed_slice());
+        let run = e.node(&d, &[1]).unwrap();
+        assert_eq!(run.child_count, 32);
+        let from = run.offset_bits + 20 * 16;
+        match e.run_cells(&d, &[1], from, from + 4 * 16, 100) {
+            Err(EvalError::Pending(missing)) => assert!(!missing.is_empty()),
+            other => panic!("a window over missing bytes answered {other:?}"),
+        }
+    }
+
     /// The symbols of a deflate block, read off the trace rather than placed:
     /// each is the bits the decoder read for it, named as the listing names it.
     fn zlib_of(content: &[u8]) -> (Document<MemSource>, Evaluator) {
