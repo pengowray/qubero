@@ -222,6 +222,35 @@ fn byte(v: u8) -> String {
     }
 }
 
+/// What a symbol says in a cell of the value table, as against what it says in
+/// the listing and in its tooltip.
+///
+/// A row of a deflate block is a row of what the block produces, so a literal
+/// reads as the byte itself and a row of them reads as the text coming out of
+/// the stream. `literal 'Q'` repeated across a screen is ten lines of the same
+/// two words; `Q` is one line of the file being unpacked. A match keeps both
+/// its numbers, because that is all a match is, and drops the word: the tint
+/// says it is a copy.
+pub(super) fn symbol_label(step: &Step) -> String {
+    match step.kind {
+        StepKind::Literal(v) => byte_label(v),
+        StepKind::Match { len, dist } => format!("{len} back {dist}"),
+        _ => symbol_ty(step).0,
+    }
+}
+
+/// A literal's byte as the value table shows it: the character, so the cells
+/// read as the text they decode to. A space would be an empty cell, so it
+/// keeps the quotes that show there is a byte there at all, and anything not
+/// printable reads as its number.
+fn byte_label(v: u8) -> String {
+    match v {
+        0x21..=0x7e => (v as char).to_string(),
+        0x20 => "' '".to_string(),
+        _ => format!("{v:#04x}"),
+    }
+}
+
 fn sized(bits: u64, inner: T) -> T {
     T::SizedBits { bits: E::lit(bits as i128), inner: Box::new(inner) }
 }
@@ -409,6 +438,23 @@ mod tests {
         let (name, ty) = symbol_ty(&step);
         assert_eq!(name, "literal 'q'");
         assert!(matches!(ty, T::SizedBits { .. }));
+    }
+
+    /// What a symbol shows in a cell of the value table: the byte itself, so
+    /// a row of them reads as the text the block produces. A space and a
+    /// control byte would both be blank cells, so both keep a form that shows
+    /// there is a byte there.
+    #[test]
+    fn a_symbol_in_a_cell_reads_as_what_it_decodes_to() {
+        let lit = |v: u8| symbol_label(&Step { in_bits: 0..9, out_bytes: 0..1, kind: StepKind::Literal(v) });
+        assert_eq!(lit(b'Q'), "Q");
+        assert_eq!(lit(b' '), "' '");
+        assert_eq!(lit(b'\n'), "0x0a");
+        assert_eq!(lit(0xff), "0xff");
+        let step = Step { in_bits: 0..17, out_bytes: 5..17, kind: StepKind::Match { len: 6, dist: 18 } };
+        assert_eq!(symbol_label(&step), "6 back 18");
+        let end = Step { in_bits: 0..7, out_bytes: 0..0, kind: StepKind::EndOfBlock };
+        assert_eq!(symbol_label(&end), "end of block");
     }
 
     #[test]

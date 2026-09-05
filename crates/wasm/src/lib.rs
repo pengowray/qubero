@@ -205,6 +205,10 @@ struct CellDto {
     /// What the listing would say about it on a shared row, or the symbol's
     /// name for a block of a trace. Nothing here is reformatted by the view.
     text: String,
+    /// What the cell shows, where that is shorter than what its tooltip says:
+    /// a deflate literal is the byte, a match its two numbers. The same as
+    /// `text` for everything else.
+    label: String,
     /// "uint" | "int" | "float" | "bytes" | "str" | "enum" | "flags" |
     /// "composite" | "symbol"
     kind: &'static str,
@@ -1089,6 +1093,7 @@ fn cell_dto(c: qubero_core::eval::Cell) -> CellDto {
         offset_bits: c.offset_bits as f64,
         size_bits: c.size_bits as f64,
         text: c.text,
+        label: c.label,
         kind: c.kind,
         contiguous: c.contiguous,
     }

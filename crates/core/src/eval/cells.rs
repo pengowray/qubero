@@ -26,6 +26,12 @@ pub struct Cell {
     /// name for a traced block (`literal 'a'`, `match 3 back 12`, `end of
     /// block`), so the two views agree.
     pub text: String,
+    /// What the cell itself shows, which is shorter than `text` wherever the
+    /// two words in front of a value are worth saying once in a tooltip and
+    /// not on every cell of a screenful: a deflate literal is the byte, so a
+    /// row of cells reads as the text the block produces, and a match is its
+    /// two numbers. The same as `text` for everything else.
+    pub label: String,
     /// "uint" | "int" | "float" | "bytes" | "str" | "enum" | "flags" |
     /// "composite" | "symbol"
     pub kind: &'static str,
@@ -130,6 +136,7 @@ impl Evaluator {
                 offset_bits: at,
                 size_bits: size,
                 text: super::traced::symbol_ty(&step).0,
+                label: super::traced::symbol_label(&step),
                 kind: "symbol",
                 contiguous: true,
             });
@@ -259,6 +266,9 @@ impl Evaluator {
             index: i,
             offset_bits: info.offset_bits,
             size_bits: info.size_bits,
+            // Only a symbol has anything shorter to say in a cell than it says
+            // in a tooltip; a number reads the same in both.
+            label: text.clone(),
             text,
             kind: kind_of(&info.value),
             contiguous: true,
@@ -339,6 +349,8 @@ mod tests {
         assert!(cells.iter().all(|c| c.contiguous));
         // The text is the same reading the listing gives the field.
         assert_eq!(cells[0].text, (36_000i32 % 3001 - 1500).to_string());
+        // A number has nothing shorter to say in a cell than in a tooltip.
+        assert!(cells.iter().all(|c| c.label == c.text));
     }
 
     /// The window is clamped to the run at both ends: a screen that starts
@@ -585,6 +597,13 @@ mod tests {
         assert_eq!(cells[0].text, "literal 'a'");
         assert_eq!(cells.last().unwrap().text, "end of block");
         assert!(cells.iter().any(|c| c.text.starts_with("match ")), "no match among the symbols");
+        // What the cell shows is shorter than what the tooltip says: a literal
+        // is the byte itself, so a row of them reads as the text the block
+        // produces, and a match keeps its numbers without the word.
+        assert_eq!(cells[0].label, "a");
+        assert_eq!(cells.last().unwrap().label, "end of block");
+        let m = cells.iter().find(|c| c.text.starts_with("match ")).expect("a match");
+        assert_eq!(m.label, m.text.strip_prefix("match ").unwrap());
         // The symbols follow one another with nothing in between, and the
         // first starts after the block's header rather than at the block.
         assert!(cells[0].offset_bits > block.offset_bits);
