@@ -2044,16 +2044,22 @@ export class HexView {
    * `widened` says the rows were drawn against a column width that has since
    * changed, so the caller draws them again.
    */
-  private measure(f: Frame): { widened: boolean; trackH: number } {
+  private measure(f: Frame): { widened: boolean; refont: boolean; trackH: number } {
     const fields = f.fields;
     const below = f.below;
     const fonts = fields && this.chipFonts === null ? readChipFonts(this.rowsEl) : null;
     const valFonts = fields && this.valFonts === null ? readValFont(this.rowsEl) : null;
     let widened = false;
+    let refont = false;
     if (valFonts !== null) {
-      // Set before the redraw, for the reason the chips' fonts are.
+      // Set before the redraw, for the reason the chips' fonts are. A redraw
+      // and no more: the font arrives with the first value cell on screen,
+      // and only rows holding a table are laid out from it. Every row on
+      // screen is measured again by that redraw, so nothing else has to be
+      // forgotten. Forgetting it all moved the view: the row above the top
+      // edge went back to its estimate, and the rows jumped by the difference.
       this.valFonts = valFonts;
-      widened = true;
+      refont = true;
     }
     if (this.metrics === null || this.arrangement === "unknown") {
       const noteEl = fields ? (this.rowEls[0]?.querySelector(".hv-note") as HTMLElement | null) : null;
@@ -2117,7 +2123,7 @@ export class HexView {
       this.chipFonts = fonts;
       widened = true;
     }
-    return { widened, trackH: this.metrics.trackH };
+    return { widened, refont, trackH: this.metrics.trackH };
   }
 
   /**
@@ -2194,11 +2200,11 @@ export class HexView {
       if (h !== null) heights.push(h);
     }
     this.drawPinned(f);
-    const { widened, trackH } = this.measure(f);
-    if (widened) {
+    const { widened, refont, trackH } = this.measure(f);
+    if (widened || refont) {
       // Those rows were drawn against a column width that has just changed, so
       // how tall they came out says nothing about how tall they will be.
-      this.ledger.clearMeasured();
+      if (widened) this.ledger.clearMeasured();
       this.render();
       return;
     }
