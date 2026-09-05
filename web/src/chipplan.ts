@@ -191,24 +191,27 @@ export type RowChipOpts = {
  * A heading cuts a row into pieces drawn one under another, so scrolling the
  * top row up past the edge takes its pieces away one at a time: the bytes
  * before the cut go first, and the bytes after it are what is left at the top
- * of the screen. `topPx` past the bottom of a piece means that piece is gone.
+ * of the screen.
  *
- * `heights` are the pieces' own lines, `heads` what stands above each, both
- * in the order they are drawn.
+ * The bytes are the top `rowHeight` of their piece, whether the chips are
+ * beside them or under them, and it is the bytes this answers about: a piece
+ * whose chips are still showing under the edge has none of its bytes left.
+ * `pieces` is how tall each piece comes to in all, `heads` what stands above
+ * each, both in the order they are drawn.
  */
 export function firstVisibleByte(
   rowStart: number,
   segs: readonly number[],
   heads: readonly number[],
-  heights: readonly number[],
+  pieces: readonly number[],
+  rowHeight: number,
   topPx: number,
 ): number {
   let y = 0;
   for (let j = 0; j < segs.length; j++) {
     y += heads[j] ?? 0;
-    const bottom = y + (heights[j] ?? 0);
-    if (bottom > topPx) return rowStart + (segs[j] as number);
-    y = bottom;
+    if (y + rowHeight > topPx) return rowStart + (segs[j] as number);
+    y += pieces[j] ?? rowHeight;
   }
   return rowStart + (segs[segs.length - 1] ?? 0);
 }
@@ -260,7 +263,8 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
       o.rowStart,
       o.segs,
       o.segs.map((_, j) => (o.headHeights ?? [])[j] ?? 0),
-      chipHeights.map((h, j) => lineHeight(o, h + (j === 0 ? (o.valsHeight ?? 0) : 0))),
+      chipHeights.map((h, j) => pieceHeight(o, h + (j === 0 ? (o.valsHeight ?? 0) : 0))),
+      o.rowHeight,
       o.topPx ?? 0,
     );
     const reaching = carried.filter((c) => spanEnd(c.span) > first);
@@ -291,7 +295,7 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
 /** How tall one piece of a row is drawn, from what its block holds: beside
  *  the bytes the block shares the row's own line, below them it hangs under
  *  it. */
-function lineHeight(o: RowChipOpts, blockHeight: number): number {
+function pieceHeight(o: RowChipOpts, blockHeight: number): number {
   return o.below ? o.rowHeight + blockHeight : Math.max(o.rowHeight, blockHeight);
 }
 
