@@ -8,7 +8,11 @@
 //    into so a heading can sit between its bytes, are both worked out from the
 //    parts of the file. A file can have a hundred thousand of them, so they
 //    are held as a sorted array with prefix sums built in one pass and queried
-//    by bisection.
+//    by bisection. The heights themselves come from the view, which reads them
+//    off the stylesheet: every heading carries the space above it inside its
+//    own height, except the one for the part that starts at offset 0, which is
+//    the smaller height it always was. So this ledger is told a different
+//    number for that row, rather than knowing anything about headings.
 //  - Measured extras are only known once the browser has laid a row out: how
 //    many lines a row's chips wrapped to. Only rows that have been on screen
 //    have one, so they are a sparse map, capped, and their prefix sums are

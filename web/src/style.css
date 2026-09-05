@@ -827,6 +827,15 @@ input.invalid {
 .hv-val-num {
   text-align: right;
 }
+/* An element the row edge cuts short: its cell is a sliver of the bits it
+   really covers, so its value is let out of the cell to the right, where the
+   table has stopped and nothing else is drawn. Left, because text that
+   overflows a right-aligned box goes the other way, over the value before it. */
+.hv-val-cut {
+  overflow: visible;
+  text-overflow: clip;
+  text-align: left;
+}
 /* The tail of a value that began on the row above: the same tint over the bits
    it ends in, with its text where it started. */
 .hv-val-continued {

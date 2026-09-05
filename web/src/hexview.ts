@@ -82,6 +82,10 @@ const COPY_LIMIT_BYTES = 256 * 1024;
  *  either side that lets a scroll of a row cost nothing. */
 const VALUE_LIMIT = 2000;
 
+/** What one element of a run is, from what the run is: `i16 le[]` holds an
+ *  `i16 le`. The core writes the brackets; nothing else is taken off. */
+const elementType = (type: string): string => type.replace(/\[\]$/, "");
+
 /** How long a message stays up before it goes away on its own. */
 const NOTICE_MS = 5000;
 
@@ -1750,8 +1754,10 @@ export class HexView {
       const cells = this.runCells(s, Math.max(fromBit, s.offset_bits), Math.min(toBit, end));
       if (cells === null || cells.length === 0) continue;
       // `unit` is the format's own word for what a run holds: a deflate block
-      // codes symbols, and a symbol's cell reads as one.
-      out.push({ path: s.path, name: s.name, type: s.type, symbol: s.unit === "symbol", cells });
+      // codes symbols, and a symbol's cell reads as one. The type a cell says
+      // is the element's, not the run's: a cell of `body` holds an `i16 le`,
+      // and the run is the `i16 le[]`.
+      out.push({ path: s.path, name: s.name, type: elementType(s.type), symbol: s.unit === "symbol", cells });
     }
     const folded = new Map<string, (typeof out)[number]>();
     for (const chips of byRow) {
@@ -2089,6 +2095,7 @@ export class HexView {
         // A block below or above the bytes takes no room when it is empty, and
         // a table is something in it whether or not a chip is.
         if (vals.lines > 0) firstNote.classList.remove("hv-empty");
+        else if (chipsOf(firstNote).every((c) => c.hidden)) firstNote.classList.add("hv-empty");
       }
       // Which cell the cursor is in is not part of what the row says, so it is
       // marked on its own: a cursor key moves the mark two cells rather than

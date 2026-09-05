@@ -69,6 +69,10 @@ export type PlacedCell = {
   readonly kind: string;
   readonly numeric: boolean;
   readonly continued: boolean;
+  /** True when the row edge cuts the element short, so the cell it is drawn in
+   *  is narrower than the value needs. Its text is let out of the cell rather
+   *  than cut off: the room to the right of the table is nobody else's. */
+  readonly cut: boolean;
   /** The run the element belongs to: its name for the tooltip, its path for
    *  the pick. */
   readonly path: readonly number[];
@@ -219,6 +223,7 @@ export function planRowValues(o: RowValueOpts): RowValues {
         kind: c.kind,
         numeric: numeric(c.kind),
         continued,
+        cut: o.layout === "aligned" && end > rowTo,
         path: run.path,
         run: run.name,
         type: run.type,

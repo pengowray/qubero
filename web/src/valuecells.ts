@@ -55,6 +55,7 @@ function fillCell(el: HTMLElement, c: PlacedCell, aligned: boolean): void {
   let cls = `hv-val ${fieldClass(c.kind)}`;
   if (c.continued) cls += " hv-val-continued";
   if (c.numeric) cls += " hv-val-num";
+  if (c.cut) cls += " hv-val-cut";
   if (el.className !== cls) el.className = cls;
   setText(el, c.text);
   const path = c.path.join(",");
@@ -111,8 +112,12 @@ export function fillVals(el: ValsEl, plan: RowValues, width: number, bpr: number
   // The grid is as many columns as the row has bits, so a cell can span
   // exactly the bits its element is stored in; the width is what makes a byte
   // of it the pitch of a byte of the bytes.
+  // `max-width` rather than `width`: the block is a line of its own inside the
+  // note, which it is by taking the note's whole width, and a flex item's
+  // basis wins over its width. What is capped here is how far the grid
+  // stretches, which is what gives a byte of it the pitch of a hex cell.
   const w = aligned ? `${Math.round(width)}px` : "";
-  if (el.style.width !== w) el.style.width = w;
+  if (el.style.maxWidth !== w) el.style.maxWidth = w;
   const columns = aligned ? `repeat(${bpr * 8}, minmax(0, 1fr))` : "";
   if (el.style.gridTemplateColumns !== columns) el.style.gridTemplateColumns = columns;
   const cell = aligned ? "" : `${Math.round(plan.cellWidth)}px`;

@@ -591,6 +591,35 @@ byte. They are not rows: they take no cursor and do not shift the row-to-offset
 mapping. A run of `[i]` elements of one list on a row folds to one chip,
 `name  N values`, so an array of u16 is one chip and not a jumble.
 
+A folded run is one chip on the row it starts on, and the rows under that chip
+would otherwise say nothing at all: the reader can see the bytes of 72,000
+samples and not one of the numbers they are. So beside every row a run covers,
+the column also draws a value table, one cell per element whose bits fall on
+that row, in the order of the bytes. It takes one of two layouts, chosen per run
+per screenful from measured text the way `chipfit.ts` chooses how many chips
+fit. Aligned is a grid of the row's bits, sized so a byte of it has the pitch of
+a hex cell, with each cell over the bits its value is stored in; an element the
+row edge cuts keeps its text on the row it starts on, lets it out of the sliver
+of a cell it was left, and has a tinted continuation cell on the next row.
+Uniform is equal cells the width of the widest value on screen, wrapped over as
+many lines as the row needs, and is what a run gets when its values do not fit
+the bits they are stored in — six-bit codes, Huffman symbols — or when the core
+says an element is not one contiguous run of bits. Numbers are read from the
+right and everything else from the left. The cells are lighter than a chip and
+divided by a hairline, since a hundred of them are read as a table rather than
+picked out one at a time; clicking one selects that element in all three views,
+and the cell the cursor is in takes the same accent its byte does. Both layouts
+report their height before the row is laid out, like the chips, and both are
+written into pooled elements that a scroll never takes out from under a finger.
+
+Every heading has space above it, so a part is divided from the one before
+rather than butted up against it, and level 0 gets more of it than level 1. The
+space is top padding inside the fixed heights the view reads back, and the
+heading for the part that starts at offset 0 keeps the old smaller height, since
+there is nothing above it to be divided from. That is keyed on where the part is
+in the file and never on where the row falls on screen: a row's height must be
+the same wherever it is drawn.
+
 The right panel folds to a narrow vertical tab that still names it. The bottom
 Structure panel is gone; its tree is the rail's Contents and its Logical mode is
 the rail's Logical tab.
