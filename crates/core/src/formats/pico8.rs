@@ -470,10 +470,11 @@ mod tests {
         assert!(!is_p8png(&empty));
         assert_eq!(sniff(&empty, empty.len() as u64), Some("png"));
 
-        // Noise at 0x4300 is not code either.
+        // Control bytes at 0x4300 are not code either. Bytes at 0x80 and up
+        // would be, since those are P8SCII glyphs.
         let mut noise = a_cart();
         for (i, b) in noise[CODE_AT..CODE_AT + 16].iter_mut().enumerate() {
-            *b = 0x80 | i as u8;
+            *b = 0x01 + i as u8;
         }
         assert!(!is_p8png(&cart_png(&noise)));
 
