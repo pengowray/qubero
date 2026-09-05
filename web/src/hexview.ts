@@ -31,11 +31,13 @@ import { RowHeights, type StructuralExtra } from "./rowheights.js";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.js";
 import type { Cell } from "./doc.js";
 import {
-  alignedFits,
   alignedWidth,
+  chooseLayout,
   NO_VALUES,
   planRowValues,
+  rowLayout,
   uniformWidth,
+  type Layout,
   type RowValues,
   type RunCells,
 } from "./valuetable.js";
@@ -1795,34 +1797,28 @@ export class HexView {
   /**
    * The table each row on screen draws, and how wide an aligned one is.
    *
-   * Which layout a run gets is decided once per screenful, from the widest
-   * text in it against the narrowest cell its bits are worth, so that the
-   * tables do not change shape row by row. A row two runs reach takes the
-   * uniform layout unless both of them fit the aligned one.
-   *
-   * A run of a decoder's symbols is neither: its cells read as the bytes the
-   * block produces, so they take the width of what they say and flow, and a
-   * row of them reads as a line of the file being unpacked. A row that a
-   * symbol run and something else both reach falls back to uniform, which is
-   * the layout both can be drawn in.
+   * Which layout a run gets is decided once per screenful by `chooseLayout`,
+   * so that the tables do not change shape row by row, and a row two runs
+   * reach takes whatever the two of them agree on. Both answers are one word
+   * each, so a fourth layout is one more case in `chooseLayout` and one more
+   * branch in the placement, and nothing here.
    */
   private planValues(runs: readonly RunCells[], start: number, bpr: number, maxLines: number): RowValues[] {
     const measure = this.valFonts ?? this.chipFonts ?? GUESS_TEXT;
     const fit = { bpr, noteWidth: this.noteWidth, hexPitch: this.hexPitch, measure };
     const rows = this.visibleRows;
     const perRow: RunCells[][] = Array.from({ length: rows }, () => []);
-    const aligned: boolean[] = Array.from({ length: rows }, () => true);
-    const flows: boolean[] = Array.from({ length: rows }, () => true);
+    const layouts: Layout[][] = Array.from({ length: rows }, () => []);
     for (const run of runs) {
-      const flow = run.cells.some((c) => c.kind === "symbol");
-      const fits = !flow && alignedFits([run], fit);
+      const layout = chooseLayout(run, fit);
       const byRow = new Map<number, Cell[]>();
       for (const c of run.cells) {
         const first = Math.floor((Math.floor(c.offset_bits / 8) - start) / bpr);
         // Uniform and flow draw an element once, on the row it starts on;
         // aligned draws it on every row its bits reach, with the rows that do
         // not carry its text drawn empty.
-        const last = fits ? Math.floor((Math.floor((c.offset_bits + c.size_bits - 1) / 8) - start) / bpr) : first;
+        const last =
+          layout === "aligned" ? Math.floor((Math.floor((c.offset_bits + c.size_bits - 1) / 8) - start) / bpr) : first;
         for (let r = Math.max(0, first); r <= Math.min(rows - 1, last); r++) {
           const at = byRow.get(r);
           if (at === undefined) byRow.set(r, [c]);
@@ -1831,8 +1827,7 @@ export class HexView {
       }
       for (const [r, cells] of byRow) {
         (perRow[r] as RunCells[]).push({ ...run, cells });
-        if (!fits) aligned[r] = false;
-        if (!flow) flows[r] = false;
+        (layouts[r] as Layout[]).push(layout);
       }
     }
     return perRow.map((rs, r) =>
@@ -1842,7 +1837,7 @@ export class HexView {
             runs: rs,
             rowStart: start + r * bpr,
             bpr,
-            layout: flows[r] === true ? "flow" : aligned[r] === true ? "aligned" : "uniform",
+            layout: rowLayout(layouts[r] ?? []),
             measure,
             // The width is the row's own runs, not the screenful's: a run with
             // wider values scrolling off the bottom must not narrow the cells
