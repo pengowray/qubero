@@ -41,7 +41,7 @@ function run(o: {
       contiguous: o.contiguous ?? true,
     });
   }
-  return { name: o.name ?? "body", type: o.type ?? "i24 le", symbol: false, cells };
+  return { path: [3], name: o.name ?? "body", type: o.type ?? "i24 le", symbol: false, cells };
 }
 
 /** The plan for one row, with the sizes a 16-byte row of a wide column has. */

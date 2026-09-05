@@ -337,9 +337,16 @@ input.invalid {
      it is laid out: a heading line, the smaller line for a part inside one,
      and the pitch of one line of chips (a 20px chip and the 2px between
      lines). The heading rules and `.hv-note` below are built from these. */
-  --hv-heading: 26px;
-  --hv-subheading: 20px;
+  --hv-heading: 36px;
+  --hv-subheading: 26px;
+  /* The heading for the part that starts at the front of the file: no space
+     above it, because there is nothing above it. */
+  --hv-heading-first: 26px;
+  --hv-subheading-first: 20px;
   --hv-chip-line: 22px;
+  /* The pitch of one line of the value table: a 16px cell and the 2px between
+     lines, so n lines add n times this to the row. */
+  --hv-val-line: 18px;
 }
 .hexview:focus-visible {
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -559,8 +566,11 @@ input.invalid {
 /* Condensed: three lines and no more, with what did not fit counted by a `+N`
    chip the view puts there. The cap has to match `CHIP_LINES` in chipfit.ts,
    which is what decides where the count begins. */
+/* The table of values is not one of the three lines the cap counts: the row
+   reports its height, and cutting it off here would hide what the row said it
+   would show. `--hv-vals-h` is set on the note by the view. */
 .hexview.is-condensed .hv-note {
-  max-height: calc(3 * var(--hv-chip-line));
+  max-height: calc(3 * var(--hv-chip-line) + var(--hv-vals-h, 0px));
   overflow: hidden;
   /* From the top, so a line the count did not foresee is cut off cleanly at
      the bottom rather than showing half of itself above and below. */
@@ -622,14 +632,18 @@ input.invalid {
 .hv-headings:empty {
   display: none;
 }
+/* The space above a heading is inside its fixed height, as top padding, since
+   the view reads the height back to work out how tall a row will be before it
+   is laid out. `box-sizing` is what keeps the padding inside it. */
 .hv-heading {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
   height: var(--hv-heading);
   min-height: 0;
-  padding: 0 8px 0 0;
+  padding: 10px 8px 0 0;
   border: 0;
   border-top: 1px solid var(--line);
   background: var(--panel);
@@ -648,6 +662,7 @@ input.invalid {
 }
 .hv-heading-1 {
   height: var(--hv-subheading);
+  padding-top: 6px;
   padding-left: 18px;
   border-top-color: color-mix(in srgb, var(--line) 70%, transparent);
   background: none;
@@ -655,6 +670,17 @@ input.invalid {
 }
 .hv-heading-1:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+/* The part that starts at the front of the file: no space above it, since
+   there is nothing above it to be divided from. Marked by `fillHeadings` from
+   the part's own offset, so a row's height stays the same wherever the row
+   falls on screen. */
+.hv-heading-first {
+  height: var(--hv-heading-first);
+  padding-top: 0;
+}
+.hv-heading-1.hv-heading-first {
+  height: var(--hv-subheading-first);
 }
 /* Straight under the column header's own rule, a second rule is a double
    line. */
@@ -741,6 +767,91 @@ input.invalid {
   border-left-style: dashed;
   color: color-mix(in srgb, var(--fg) 80%, var(--bg));
   cursor: default;
+}
+/* ---- the values of a folded run ---- */
+/* A run of samples is one chip, `body 72,000 values`, and the rows it covers
+   would otherwise say nothing at all. This is what they say instead: one cell
+   per element whose bits fall on the row, in the order of the bytes. It is a
+   line of its own at the end of the block, so `flex-basis: 100%` puts it under
+   the chips whatever they wrapped to. */
+.hv-vals {
+  flex-basis: 100%;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+.hv-vals.hv-empty {
+  display: none;
+}
+/* Aligned: a grid of the row's own bits, so a cell sits over the bits its
+   value is stored in and a byte of the table has the pitch of a byte of the
+   bytes. The width is set from that pitch, and the columns share it out. */
+.hv-vals-aligned {
+  display: grid;
+  grid-auto-rows: 16px;
+  gap: 0;
+  max-width: 100%;
+}
+/* Uniform: equal cells, as wide as the widest value on screen, wrapped into as
+   many lines as the row needs. */
+.hv-vals-uniform > .hv-val {
+  width: var(--hv-val-w, auto);
+}
+.hv-val {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 2px;
+  /* Lighter than a chip: a hundred of these to a screen, and they are read as
+     a table rather than picked out one at a time. The hairline is what tells
+     one cell from the next when they touch. */
+  background: color-mix(in srgb, var(--field-color) 7%, transparent);
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--field-color) 22%, transparent);
+  color: color-mix(in srgb, var(--fg) 85%, var(--bg));
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.hv-val:hover {
+  background: color-mix(in srgb, var(--field-color) 18%, transparent);
+}
+/* A number is read from its right-hand end, so that is the end that stays when
+   the cell is too narrow for all of it. */
+.hv-val-num {
+  text-align: right;
+}
+/* The tail of a value that began on the row above: the same tint over the bits
+   it ends in, with its text where it started. */
+.hv-val-continued {
+  background: color-mix(in srgb, var(--field-color) 4%, transparent);
+  border-left: 1px dashed color-mix(in srgb, var(--field-color) 30%, transparent);
+}
+/* The cell the cursor is in, marked as the hex cell it names is marked. */
+.hv-val-at {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+/* What the condensed cap could not hold. */
+.hv-val-rest {
+  --field-color: var(--muted);
+  color: var(--muted);
+  cursor: default;
+}
+@media (prefers-color-scheme: dark) {
+  .hv-val {
+    background: color-mix(in srgb, var(--field-color) 12%, transparent);
+    box-shadow: inset -1px 0 0 color-mix(in srgb, var(--field-color) 28%, transparent);
+  }
+  .hv-val-continued {
+    background: color-mix(in srgb, var(--field-color) 6%, transparent);
+  }
 }
 .hv-head-note {
   border-left-color: transparent;

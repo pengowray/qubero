@@ -34,6 +34,8 @@ export type Cell = {
  *  tooltip says it is; `symbol` marks the steps of a traced block, which are
  *  named rather than numbered. */
 export type RunCells = {
+  /** The run itself, so a cell picks the element at `[...path, index]`. */
+  readonly path: readonly number[];
   readonly name: string;
   readonly type: string;
   readonly symbol: boolean;
@@ -67,11 +69,17 @@ export type PlacedCell = {
   readonly kind: string;
   readonly numeric: boolean;
   readonly continued: boolean;
-  /** The run the element belongs to, for the tooltip. */
+  /** The run the element belongs to: its name for the tooltip, its path for
+   *  the pick. */
+  readonly path: readonly number[];
   readonly run: string;
   readonly type: string;
   readonly symbol: boolean;
   readonly sizeBits: number;
+  /** The element's own bits, absolute, so the cursor can be found in them
+   *  without reading anything back off the document. */
+  readonly startBit: number;
+  readonly endBit: number;
   /** Grid columns in the aligned layout: bit columns of the row, 1-based, so
    *  a row of `bpr` bytes runs from 1 to `bpr * 8 + 1`. Both are 0 in the
    *  uniform layout, which has no grid. */
@@ -211,10 +219,13 @@ export function planRowValues(o: RowValueOpts): RowValues {
         kind: c.kind,
         numeric: numeric(c.kind),
         continued,
+        path: run.path,
         run: run.name,
         type: run.type,
         symbol: run.symbol,
         sizeBits: c.size_bits,
+        startBit: c.offset_bits,
+        endBit: end,
         from: o.layout === "aligned" ? Math.max(rowFrom, c.offset_bits) - rowFrom + 1 : 0,
         to: o.layout === "aligned" ? Math.min(rowTo, end) - rowFrom + 1 : 0,
       });

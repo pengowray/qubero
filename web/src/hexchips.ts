@@ -18,6 +18,17 @@ import { setText } from "./hexcell.ts";
 /** How many entries one screenful of the annotation column may hold. */
 export const SPAN_LIMIT = 600;
 
+/** The table of values at the end of a block, if the row has one. */
+export function valsOf(el: HTMLElement): HTMLElement | null {
+  const last = el.lastElementChild;
+  return last instanceof HTMLElement && last.classList.contains("hv-vals") ? last : null;
+}
+
+/** The chips of a block, which is everything in it but that table. */
+export function chipsOf(el: HTMLElement): ChipEl[] {
+  return [...el.children].filter((c): c is ChipEl => c.classList.contains("hv-chip"));
+}
+
 /** A chip element, with the path of the field it stands for kept on it, so one
  *  click handler serves the button for as long as the button lives. */
 export type ChipEl = HTMLButtonElement & { _path?: readonly number[] | undefined };
@@ -121,19 +132,24 @@ export function fillNote(
   const n = b === null ? 0 : b.shown;
   const rest = b !== null && b.shown < b.entries.length;
   const want = n + (rest ? 1 : 0) + (tail ? 1 : 0);
-  while (el.childElementCount < want) el.append(newChip(onPick));
+  // The table of a folded run's values is the last thing in the block and is
+  // not a chip: it is written by `valuecells.ts` and only counted here, so
+  // that a chip added or hidden does not land on top of it.
+  const vals = valsOf(el);
+  const chips = el.childElementCount - (vals === null ? 0 : 1);
+  for (let i = chips; i < want; i++) el.insertBefore(newChip(onPick), vals);
   // Spare chips are hidden rather than taken away. A row that scrolls into
   // one with fewer fields would otherwise drop the element a finger is
   // resting on, and a touch whose element leaves the document is one the
   // browser calls off, which stops the drag that is scrolling the view.
-  for (let i = 0; i < el.childElementCount; i++) {
+  for (let i = 0; i < Math.max(chips, want); i++) {
     const c = el.children[i] as HTMLElement;
     if (c.hidden !== i >= want) c.hidden = i >= want;
   }
-  // A block of chips with none showing takes no room, the same as one with
-  // no children. Only above and below the bytes: the column beside them
-  // holds its width whether or not this row has a field.
-  el.classList.toggle("hv-empty", want === 0);
+  // A block with nothing showing takes no room, the same as one with no
+  // children. Only above and below the bytes: the column beside them holds
+  // its width whether or not this row has a field.
+  el.classList.toggle("hv-empty", want === 0 && (vals === null || vals.classList.contains("hv-empty")));
   for (let i = 0; i < n && b !== null; i++) {
     fillChip(el.children[i] as ChipEl, b.entries[i] as Chip, b.texts[i] as ChipText, continued);
   }

@@ -498,6 +498,22 @@ export const JPEG = {
   waiting: "Loading the table's bytes…",
 } as const;
 
+/** The table of values beside a folded run in the hex view. A cell says its
+ *  value and nothing else; everything about which element it is lives in the
+ *  tooltip, since a table of a hundred cells has no room to repeat itself. */
+export const VALUES = {
+  cell: (run: string, index: number, type: string, text: string): string => `${run}[${index}] · ${type} · ${text}`,
+  /** A step of a traced block: named rather than numbered, and worth its
+   *  width in bits, which is the whole point of a coded symbol. */
+  symbol: (index: number, text: string, bits: number): string => `symbol ${index} · ${text} · ${bits} bits`,
+  /** A value the row above began: the same tint over the bits it ends in,
+   *  with its text where it started. */
+  continued: (run: string, index: number): string => `${run}[${index}] · continued from the row above`,
+  continuedLabel: "continued from the row above",
+  rest: (n: number): string => `+${n}`,
+  restTip: (n: number): string => `${n} more values on this row`,
+} as const;
+
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the
  *  same panel writes `0x131+4b` for an address four bits into a byte, and one
  *  `b` there is bits and the other is bytes. */

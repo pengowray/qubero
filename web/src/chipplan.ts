@@ -153,6 +153,10 @@ export type RowChipPlan = {
   /** What the chips add to the row's height, over and above its lines of
    *  cells and the headings on it. */
   readonly extraHeight: number;
+  /** How tall each block's chips are on their own, in pixels. The row's own
+   *  height is not taken off here: a block that also holds a table of values
+   *  is taller than its chips, and only the caller knows by how much. */
+  readonly chipHeights: number[];
 };
 
 export type RowChipOpts = {
@@ -198,6 +202,7 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
     if (shown < carried.length) buckets[0] = [...carried.slice(shown), ...(buckets[0] as Chip[])];
   }
   const blocks: ChipBlock[] = [];
+  const chipHeights: number[] = [];
   let extraHeight = 0;
   for (let j = 0; j < o.segs.length; j++) {
     const entries = buckets[j] as Chip[];
@@ -211,9 +216,10 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
     // cells, so the line is the taller of the two. Below them the chips
     // are their own block and their lines add to it.
     extraHeight += o.below ? lines * o.chipLine : Math.max(0, lines * o.chipLine - o.rowHeight);
+    chipHeights.push(lines * o.chipLine);
     blocks.push({ entries, texts, shown });
   }
-  return { blocks, pinned, extraHeight };
+  return { blocks, pinned, extraHeight, chipHeights };
 }
 
 /** What a row's chips say, as one string, so they are written again only when

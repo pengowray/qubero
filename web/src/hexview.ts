@@ -15,7 +15,7 @@ import type { Doc, Span } from "./doc.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
 import { NO_TEMPLATE } from "./strings.js";
 import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
-import { pinnedNoteKey, placeChips, planRowChips, rowNoteKey, type Chip, type ChipBlock } from "./chipplan.js";
+import { listName, pinnedNoteKey, placeChips, planRowChips, rowNoteKey, type Chip, type ChipBlock } from "./chipplan.js";
 import {
   asciiGlyph,
   cellDraw,
@@ -25,9 +25,21 @@ import {
   setText,
   type Run,
 } from "./hexcell.js";
-import { fillNote, fillPlain, newChip, readChipFonts, SPAN_LIMIT, type ChipEl } from "./hexchips.js";
+import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, SPAN_LIMIT, valsOf, type ChipEl } from "./hexchips.js";
 import { cutRow, fillHeadings, headingsByRow } from "./hexheadings.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
+import { runCellsShim, runStride } from "./runcellsshim.js";
+import { fillVals, markVals, newVals } from "./valuecells.js";
+import {
+  alignedFits,
+  alignedWidth,
+  NO_VALUES,
+  planRowValues,
+  uniformWidth,
+  type Cell,
+  type RowValues,
+  type RunCells,
+} from "./valuetable.js";
 
 export type Pane = "hex" | "ascii";
 /**
@@ -64,6 +76,11 @@ const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"
  *  the bytes have to be fetched and turned into a string before the clipboard
  *  sees them, so past some size the honest answer is no. */
 const COPY_LIMIT_BYTES = 256 * 1024;
+
+/** How many elements of one run the value table reads at a time. A screenful
+ *  of 24-bit samples is a few hundred; the rest of the limit is the margin
+ *  either side that lets a scroll of a row cost nothing. */
+const VALUE_LIMIT = 2000;
 
 /** How long a message stays up before it goes away on its own. */
 const NOTICE_MS = 5000;
@@ -138,6 +155,12 @@ type Frame = {
   readonly byteSpan: Int32Array;
   readonly byRow: Chip[][];
   readonly headsByRow: OutlineHeading[][];
+  /** The table of values each row draws under its chips, one per row on
+   *  screen. `NO_VALUES` for a row no folded run covers. */
+  readonly values: readonly RowValues[];
+  /** How wide an aligned table is drawn, so a byte of it has the pitch of a
+   *  byte of the bytes. */
+  readonly valsWidth: number;
   /** What the top row carries in from above, put here by the row that finds
    *  it and read by the strip pinned over the rows. */
   pinned: ChipBlock | null;
@@ -201,6 +224,9 @@ export class HexView {
     /** What the row's chips last said, so they are built again only when they
      *  would say something else. Cleared whenever the lines they live in are. */
     noteKey: string;
+    /** The same for the row's table of values, kept apart from the chips so
+     *  that a value changing does not rewrite the chips beside it. */
+    valsKey: string;
   }[] = [];
   private partsShape = "";
   /** What `fitParts` last built the lines for, so a line added mid-draw for a
@@ -284,6 +310,14 @@ export class HexView {
   private spansAsked: string | null = null;
   /** Width of the annotation column, measured from the last frame. */
   private noteWidth = 0;
+  /** Width of one byte of the hex column, measured from the last frame, so a
+   *  byte of an aligned value table can be drawn at the same pitch. */
+  private hexPitch = 0;
+  /** The elements of the runs on screen, kept between draws and read again
+   *  only when the view has left what was fetched. A scroll of one row must
+   *  not cost a screenful of elements. Keyed by the run's path; emptied
+   *  whenever the document or the template changes. */
+  private readonly cellCache = new Map<string, { from: number; to: number; cells: Cell[] }>();
   /**
    * Where the chips are drawn. Beside the bytes while there is room for them;
    * below the bytes, across the whole row, when a wide row has squeezed the
@@ -318,7 +352,14 @@ export class HexView {
   /** What the stylesheet says a heading line, a smaller one, and one line of
    *  chips are tall, so a row's height can be worked out before it is drawn.
    *  Read with `fit`, since only a change of style moves them. */
-  private sizes = { heading: [26, 20] as readonly [number, number], chipLine: 22 };
+  private sizes = {
+    heading: [36, 26] as readonly [number, number],
+    /** The heading for the part that starts at the front of the file, which
+     *  has nothing above it to be spaced away from. */
+    headingFirst: [26, 20] as readonly [number, number],
+    chipLine: 22,
+    valLine: 18,
+  };
   /** True while a move is still settling, so `render` puts the work off to the
    *  end of it. Moving the cursor draws the rows, then tells the rest of the
    *  app, which comes straight back with the field to highlight and draws them
@@ -397,6 +438,7 @@ export class HexView {
     doc.onChange(() => {
       this.spanCache = null;
       this.spansAsked = null;
+      this.cellCache.clear();
       // An insert or a delete moves every later byte onto a different row, so
       // what those rows were measured at belongs to bytes that are no longer
       // there. The headings move too, and arrive again through `setSections`.
@@ -448,7 +490,7 @@ export class HexView {
         extra = 0;
         cuts = new Set<number>();
       }
-      extra += this.sizes.heading[h.level] ?? this.sizes.heading[1] ?? this.rowHeight;
+      extra += this.headingHeight(h);
       if (!condensed) {
         const at = Math.min(bpr - 1, Math.max(0, byte - r * bpr));
         // Position zero is the row's own start, not a cut in it.
@@ -460,6 +502,21 @@ export class HexView {
     }
     if (extra > 0) out.push({ row, extra });
     this.ledger.setStructural(out);
+  }
+
+  /**
+   * How tall a heading line is.
+   *
+   * Every heading has space above it, so that a part of the file is divided
+   * from the one before rather than butted up against it — every heading but
+   * the one for the part that starts at the front of the file, which has
+   * nothing above it. Keyed on where the part is in the file, never on where
+   * the row happens to fall on screen: a row's height must not depend on
+   * whether it is the top one.
+   */
+  private headingHeight(h: OutlineHeading): number {
+    const sizes = h.offsetBits === 0 ? this.sizes.headingFirst : this.sizes.heading;
+    return sizes[h.level] ?? sizes[1] ?? this.rowHeight;
   }
 
   /** Pick the field a chip stands for. Held as one function for the life of
@@ -523,6 +580,7 @@ export class HexView {
 
   setRightColumn(c: RightColumn): void {
     this.rightColumn = c;
+    this.cellCache.clear();
     // The text column is where the "ascii" pane lives; without it the cursor
     // has nowhere to be but the bytes.
     if (!this.showsText && this.pane === "ascii") this.pane = "hex";
@@ -578,7 +636,12 @@ export class HexView {
       const v = parseFloat(style.getPropertyValue(name));
       return v > 0 ? v : fallback;
     };
-    this.sizes = { heading: [px("--hv-heading", 26), px("--hv-subheading", 20)], chipLine: px("--hv-chip-line", 22) };
+    this.sizes = {
+      heading: [px("--hv-heading", 36), px("--hv-subheading", 26)],
+      headingFirst: [px("--hv-heading-first", 26), px("--hv-subheading-first", 20)],
+      chipLine: px("--hv-chip-line", 22),
+      valLine: px("--hv-val-line", 18),
+    };
     this.viewH = this.rowsEl.clientHeight;
     // One more than fills the space: the top row is usually cut off by the
     // scroll position, and without the spare there would be a strip of nothing
@@ -623,6 +686,7 @@ export class HexView {
         blank: false,
         layoutKey: "",
         noteKey: "",
+        valsKey: "",
       };
     });
   }
@@ -1633,6 +1697,141 @@ export class HexView {
   }
 
   /**
+   * The elements of one folded run over a stretch of it, from the cache where
+   * the cache reaches and from the core where it does not.
+   *
+   * A screenful either side is read at a time, so scrolling a row at a time
+   * does not ask again for what is already here; an answer that is not ready
+   * yet leaves the last table on screen, the way the spans do.
+   */
+  private runCells(s: Span, fromBit: number, toBit: number): Cell[] | null {
+    const stride = runStride(s);
+    if (stride === 0) return null;
+    const key = s.path.join(",");
+    const need = {
+      from: Math.max(0, Math.floor((fromBit - s.offset_bits) / stride)),
+      to: Math.min(s.count, Math.ceil((toBit - s.offset_bits) / stride)),
+    };
+    const had = this.cellCache.get(key);
+    if (had !== undefined && had.from <= need.from && had.to >= need.to) {
+      return had.cells.slice(need.from - had.from, need.to - had.from);
+    }
+    const margin = need.to - need.from;
+    const from = Math.max(0, need.from - margin);
+    const to = Math.min(s.count, Math.max(need.to + margin, from + 1));
+    const capped = to - from > VALUE_LIMIT ? { from: need.from, to: Math.min(to, need.from + VALUE_LIMIT) } : { from, to };
+    const cells = runCellsShim(this.doc, s, s.offset_bits + capped.from * stride, s.offset_bits + capped.to * stride, VALUE_LIMIT);
+    // Still on its way: what was read last time stands until it arrives, so
+    // the table does not blink off for every step of a scroll.
+    if (cells === null) return had?.cells ?? null;
+    // One file can hold many runs, and every one scrolled past would otherwise
+    // be kept for the life of the view.
+    if (this.cellCache.size > 16) this.cellCache.clear();
+    this.cellCache.set(key, { from: capped.from, to: capped.from + cells.length, cells });
+    return cells.slice(Math.max(0, need.from - capped.from), Math.max(0, need.to - capped.from));
+  }
+
+  /**
+   * The runs whose values are drawn on this screenful.
+   *
+   * Two sources, and only one of them costs anything. A run the core folded —
+   * `body 72,000 values` — is read through `runCells`. A run the view folded,
+   * where a handful of a list's elements sit on one row and became one chip,
+   * is already every element it stands for: those spans are the cells.
+   */
+  private gatherRuns(spans: readonly Span[], byRow: readonly Chip[][], start: number, windowBytes: number): RunCells[] {
+    const fromBit = start * 8;
+    const toBit = (start + windowBytes) * 8;
+    const out: { path: readonly number[]; name: string; type: string; symbol: boolean; cells: Cell[] }[] = [];
+    for (const s of spans) {
+      if (s.count <= 0 || s.gap) continue;
+      const end = s.offset_bits + s.size_bits;
+      if (end <= fromBit || s.offset_bits >= toBit) continue;
+      const cells = this.runCells(s, Math.max(fromBit, s.offset_bits), Math.min(toBit, end));
+      if (cells === null || cells.length === 0) continue;
+      // `unit` is the format's own word for what a run holds: a deflate block
+      // codes symbols, and a symbol's cell reads as one.
+      out.push({ path: s.path, name: s.name, type: s.type, symbol: s.unit === "symbol", cells });
+    }
+    const folded = new Map<string, (typeof out)[number]>();
+    for (const chips of byRow) {
+      for (const c of chips) {
+        if (c.run.length === 0) continue;
+        const path = c.span.path.slice(0, -1);
+        const key = path.join(",");
+        let run = folded.get(key);
+        if (run === undefined) {
+          run = { path, name: listName(c.span), type: c.span.type, symbol: false, cells: [] };
+          folded.set(key, run);
+          out.push(run);
+        }
+        for (const e of c.run) {
+          run.cells.push({
+            index: e.path[e.path.length - 1] ?? 0,
+            offset_bits: e.offset_bits,
+            size_bits: e.size_bits,
+            text: e.value,
+            kind: e.kind,
+            contiguous: true,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The table each row on screen draws, and how wide an aligned one is.
+   *
+   * Which layout a run gets is decided once per screenful, from the widest
+   * text in it against the narrowest cell its bits are worth, so that the
+   * tables do not change shape row by row. A row two runs reach takes the
+   * uniform layout unless both of them fit the aligned one.
+   */
+  private planValues(runs: readonly RunCells[], start: number, bpr: number, maxLines: number): RowValues[] {
+    const measure = this.chipFonts ?? GUESS_TEXT;
+    const fit = { bpr, noteWidth: this.noteWidth, hexPitch: this.hexPitch, measure };
+    const cellWidth = uniformWidth(runs, measure);
+    const rows = this.visibleRows;
+    const perRow: RunCells[][] = Array.from({ length: rows }, () => []);
+    const aligned: boolean[] = Array.from({ length: rows }, () => true);
+    for (const run of runs) {
+      const fits = alignedFits([run], fit);
+      const byRow = new Map<number, Cell[]>();
+      for (const c of run.cells) {
+        const first = Math.floor((Math.floor(c.offset_bits / 8) - start) / bpr);
+        // Uniform draws an element once, on the row it starts on; aligned
+        // draws it on every row its bits reach, as a continuation past the
+        // first.
+        const last = fits ? Math.floor((Math.floor((c.offset_bits + c.size_bits - 1) / 8) - start) / bpr) : first;
+        for (let r = Math.max(0, first); r <= Math.min(rows - 1, last); r++) {
+          const at = byRow.get(r);
+          if (at === undefined) byRow.set(r, [c]);
+          else at.push(c);
+        }
+      }
+      for (const [r, cells] of byRow) {
+        (perRow[r] as RunCells[]).push({ ...run, cells });
+        if (!fits) aligned[r] = false;
+      }
+    }
+    return perRow.map((rs, r) =>
+      rs.length === 0
+        ? NO_VALUES
+        : planRowValues({
+            runs: rs,
+            rowStart: start + r * bpr,
+            bpr,
+            layout: aligned[r] === true ? "aligned" : "uniform",
+            cellWidth,
+            noteWidth: this.noteWidth,
+            maxLines,
+            valLine: this.sizes.valLine,
+          }),
+    );
+  }
+
+  /**
    * Everything one draw needs, gathered once: the shape the view is in, the
    * bytes and the spans for the rows on screen, and where the headings fall.
    *
@@ -1649,6 +1848,8 @@ export class HexView {
     const templated = this.doc.template !== null;
     const { spans, more, trouble, byteSpan, byRow } =
       fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
+    const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
+    const runs = fields && templated ? this.gatherRuns(spans, byRow, start, windowBytes) : [];
     return {
       bpr,
       len,
@@ -1667,7 +1868,7 @@ export class HexView {
       templated,
       // Full rows grow to hold every chip; condensed ones stop at three lines
       // and count the rest.
-      maxLines: this.isCondensed ? CHIP_LINES : Infinity,
+      maxLines,
       selection: this.selectionRange,
       spans,
       more,
@@ -1675,6 +1876,8 @@ export class HexView {
       byteSpan,
       byRow,
       headsByRow: headingsByRow(this.sections, start, windowBytes, bpr),
+      values: this.planValues(runs, start, bpr, maxLines),
+      valsWidth: alignedWidth({ bpr, noteWidth: this.noteWidth, hexPitch: this.hexPitch, measure: GUESS_TEXT }),
       pinned: null,
     };
   }
@@ -1729,6 +1932,7 @@ export class HexView {
         parts.blank = true;
         parts.layoutKey = "";
         parts.noteKey = "";
+        parts.valsKey = "";
       }
       return 0;
     }
@@ -1741,11 +1945,12 @@ export class HexView {
       this.layOutRow(row, parts, rowStart, segs, headsAt, len * 8, f.addrWidth);
       parts.layoutKey = layoutKey;
       parts.noteKey = "";
+      parts.valsKey = "";
       // Cells that changed line have to be told which byte they draw again.
       parts.start = -1;
     }
     let height = this.rowHeight * segs.length;
-    for (const h of heads) height += this.sizes.heading[h.level];
+    for (const h of heads) height += this.headingHeight(h);
     const addr = (parts.lines[0] as LineParts).addr;
     setText(addr, rowStart.toString(16).padStart(f.addrWidth, "0"));
     // Which bytes a row stands for only changes when the view moves. A
@@ -1828,12 +2033,21 @@ export class HexView {
       const key = `!${r === 0 ? (f.trouble ?? NO_TEMPLATE) : ""}`;
       if (key !== parts.noteKey) {
         parts.noteKey = key;
-        for (let j = 1; j < segs.length; j++) (parts.lines[j] as LineParts).note.replaceChildren();
+        parts.valsKey = "";
+        for (let j = 1; j < segs.length; j++) {
+          const note = (parts.lines[j] as LineParts).note;
+          for (const c of chipsOf(note)) c.remove();
+        }
         const say = r === 0 ? (f.trouble ?? NO_TEMPLATE) : null;
-        while (firstNote.childElementCount > (say === null ? 0 : 1)) firstNote.lastElementChild?.remove();
+        // The table of values goes with the fields it belongs to, and is left
+        // in place rather than taken away: a finger may be on it.
+        const vals = valsOf(firstNote);
+        if (vals !== null) fillVals(vals, NO_VALUES, 0, f.bpr);
+        const chips = chipsOf(firstNote);
+        for (const c of chips.slice(say === null ? 0 : 1)) c.remove();
         if (say !== null) {
-          if (firstNote.childElementCount === 0) firstNote.append(newChip(this.pickField));
-          fillPlain(firstNote.firstElementChild as ChipEl, "hv-chip-wide", say, f.trouble ?? "");
+          const chip = chips[0] ?? (firstNote.insertBefore(newChip(this.pickField), vals) as ChipEl);
+          fillPlain(chip, "hv-chip-wide", say, f.trouble ?? "");
         }
       }
       return 0;
@@ -1856,13 +2070,47 @@ export class HexView {
     if (planned.pinned !== null) f.pinned = planned.pinned;
     const trailer = f.more && r === this.rowEls.length - 1;
     const key = rowNoteKey(planned.blocks, trailer);
+    const vals = f.values[r] ?? NO_VALUES;
+    // The table goes in the first line's block: a heading may cut the row, but
+    // the table spans the row's whole width and belongs to all of it.
+    let block = valsOf(firstNote);
+    if (vals.lines > 0 || block !== null) {
+      if (block === null) {
+        block = newVals(this.pickField);
+        firstNote.append(block);
+      }
+      if (vals.key !== parts.valsKey) {
+        parts.valsKey = vals.key;
+        fillVals(block, vals, f.valsWidth, f.bpr);
+        // The condensed cap counts chip lines; the table is not one of them,
+        // and without this the block is cut off at three lines of chips.
+        const room = `${vals.height}px`;
+        if (firstNote.style.getPropertyValue("--hv-vals-h") !== room) firstNote.style.setProperty("--hv-vals-h", room);
+        // A block below or above the bytes takes no room when it is empty, and
+        // a table is something in it whether or not a chip is.
+        if (vals.lines > 0) firstNote.classList.remove("hv-empty");
+      }
+      // Which cell the cursor is in is not part of what the row says, so it is
+      // marked on its own: a cursor key moves the mark two cells rather than
+      // rewriting every value on screen.
+      markVals(block, vals, this.cursorState.bitOffset);
+    }
     if (key !== parts.noteKey) {
       parts.noteKey = key;
       for (const [j, b] of planned.blocks.entries()) {
         fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1, this.pickField);
       }
     }
-    return planned.extraHeight;
+    // The chips and the table share a block, and beside the bytes the first
+    // line of it is the row's own height. Which is why the chips' own
+    // `extraHeight` is not what is returned: the table is a further line under
+    // them, and the two together are what the row has to hold.
+    let extra = 0;
+    for (const [j, h] of planned.chipHeights.entries()) {
+      const total = h + (j === 0 ? vals.height : 0);
+      extra += f.below ? total : Math.max(0, total - this.rowHeight);
+    }
+    return extra;
   }
 
   /** The strip over the top edge, filled in place: it is inside `.hv-rows`,
@@ -1912,6 +2160,15 @@ export class HexView {
       // width above.
       const noteLeft =
         noteEl === null ? 0 : noteEl.getBoundingClientRect().left - this.rowsEl.getBoundingClientRect().left;
+      // How wide a byte of the bytes is drawn, so a byte of an aligned value
+      // table can be drawn at the same pitch. Read in the same forced layout
+      // as everything else here.
+      const cell = this.rowEls[0]?.querySelector(f.binary ? ".hv-bits > span" : ".hv-hex > span");
+      const pitch = cell instanceof HTMLElement ? cell.getBoundingClientRect().width : 0;
+      if (pitch > 0 && Math.abs(pitch - this.hexPitch) > 0.5) {
+        this.hexPitch = pitch;
+        widened = true;
+      }
       this.metrics = { noteWidth: w, noteLeft, trackH: this.track.clientHeight };
       // One redraw when the measured width first disagrees with the guess, so
       // the count of what did not fit is right rather than nearly right.

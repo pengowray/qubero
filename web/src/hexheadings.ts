@@ -136,7 +136,11 @@ export function fillHeadings(
   for (const [i, h] of heads.entries()) {
     const b = block.children[i] as HeadEl;
     b._head = h;
-    const cls = `hv-heading hv-heading-${h.level}`;
+    // Every heading has space above it but the one for the part that starts at
+    // the front of the file, which has nothing above it to be divided from.
+    // The class says which, so a row's height never depends on where the row
+    // falls on screen.
+    const cls = `hv-heading hv-heading-${h.level}${h.offsetBits === 0 ? " hv-heading-first" : ""}`;
     if (b.className !== cls) b.className = cls;
     const swatch = b.firstElementChild as HTMLElement;
     swatch.hidden = h.level !== 0;
