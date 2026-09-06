@@ -248,6 +248,11 @@ pub struct NodeInfo {
     /// a `body`, and a view that gives `body` a heading of its own has spent a
     /// level of structure on the word "body". See `StructDef::contents`.
     pub contents: bool,
+    /// True when the template said this structure is one row rather than one
+    /// row per field. A view that draws headings has no other way to know that
+    /// a structure is a value with parts rather than a part of the file.
+    /// See `StructDef::inline`.
+    pub inline: bool,
 }
 
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
@@ -667,6 +672,7 @@ impl Evaluator {
             framed: matches!(&r.ty, Ty::Json(shape, _) if shape.composite()) && child_count > 0,
             machinery,
             contents,
+            inline: matches!(r.ty.base(), Ty::Struct(s) if s.inline),
         })
     }
 

@@ -174,6 +174,10 @@ struct NodeDto {
     /// True when this field is only its parent's contents, and so has no name
     /// of its own worth a level of structure.
     contents: bool,
+    /// True when the template says this structure is one row rather than one
+    /// row per field: a value with parts, not a part of the file. A view that
+    /// gives it a heading of its own has spent a heading on a colour.
+    inline: bool,
     /// True when the node's own bytes include punctuation its children do not
     /// account for: the braces of a JSON object, the brackets of an array.
     /// What the children leave over is the node's own syntax, not bytes
@@ -1079,6 +1083,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         consumed_by: n.consumed_by.map(|i| i as f64),
         machinery: n.machinery,
         contents: n.contents,
+        inline: n.inline,
         framed: n.framed,
         space: n.space as f64,
         refused: n.refused,

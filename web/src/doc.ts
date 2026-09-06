@@ -144,6 +144,9 @@ export type TemplateNode = {
   readonly composite: boolean;
   /** True when `writeNode` accepts typed text for this field. */
   readonly editable: boolean;
+  /** True when the template says this structure is one row rather than one row
+   * per field: a value with parts, not a part of the file. */
+  readonly inline: boolean;
   /** Bytes the value occupies: short of the field's size when text is padded
    * or terminated, since neither belongs to the value. */
   readonly value_bytes: number;

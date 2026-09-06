@@ -13,6 +13,7 @@
 // how big the file is.
 
 import type { TemplateNode, TemplateReply } from "./doc.js";
+import { densityOf, type Density } from "./headingdensity.ts";
 
 /** Children of one list drawn before the reader asks for more. */
 export const PAGE = 200;
@@ -208,6 +209,12 @@ export type FlatOptions = {
    *  the same reason `isRecord` is. A node with a card is always opened: a
    *  card the reader has to find is a card nobody sees. */
   readonly formatCard?: (node: TemplateNode) => string | null;
+  /** How much structure a run of siblings is worth drawing, for a view that
+   *  wants to override what the shapes say. Format-specific, and settled by
+   *  the caller for the same reason `isRecord` is: changing how a format is
+   *  drawn should not mean changing what its template says the bytes are.
+   *  Absent, or returning null, leaves it to `headingdensity`. */
+  readonly density?: (parent: TemplateNode, kids: readonly TemplateNode[]) => Density | null;
   readonly page?: number;
   readonly sectionListMax?: number;
   /** What the file opens with, before its first part: the picture an image
@@ -245,10 +252,13 @@ function inFileOrder(nodes: readonly TemplateNode[]): TemplateNode[] {
 }
 
 /** True when a list's elements are parts of the file in their own right,
- *  rather than a run of values inside one part. */
-function elementsAreSections(node: TemplateNode, kids: readonly TemplateNode[], max: number, fileBits: number): boolean {
+ *  rather than a run of values inside one part. `how` is what the shapes (or
+ *  the view) make of the elements: a run drawn as rows is not divisions of the
+ *  file however much of it they cover. */
+function elementsAreSections(node: TemplateNode, kids: readonly TemplateNode[], max: number, fileBits: number, how: Density): boolean {
   if (!node.composite || kids.length === 0 || kids.length > max) return false;
   if (!kids.every((k) => k.composite)) return false;
+  if (how === "rows") return false;
   return fileBits > 0 && node.size_bits >= fileBits * SECTION_SHARE;
 }
 
@@ -567,7 +577,8 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
       // not one part holding a list: three SQLite pages read as three. Only a
       // list drawn whole can be, since a part of the file that is only some of
       // a list is not a part of the file.
-      if (part.inner !== null && part.inner.from === 0 && part.inner.nodes.length === first.child_count && elementsAreSections(first, part.inner.nodes, w.sectionListMax, w.fileBits)) {
+      const how = part.inner === null ? "headings" : (w.opts.density?.(first, part.inner.nodes) ?? densityOf(part.inner.nodes));
+      if (part.inner !== null && part.inner.from === 0 && part.inner.nodes.length === first.child_count && elementsAreSections(first, part.inner.nodes, w.sectionListMax, w.fileBits, how)) {
         w.section -= 1;
         sections(w, kidPath, first, part.inner.nodes, part.inner.from, first.name);
       } else {
@@ -827,7 +838,11 @@ function drawn(w: Walk, path: readonly number[], node: TemplateNode, slice: Slic
   // byte between them. Measuring the members against the object's edges would
   // draw an unmapped row over each brace, so the edges are nobody's here.
   const bounds = elsewhere || node.framed ? null : { start, end };
-  rows(w, path, slice.nodes, slice.from, [], depth, bounds, node.child_count);
+  // Whether the composites in this run are parts of the file or values with
+  // parts. Asked once for the run, so a list is drawn one way the whole way
+  // down rather than a band here and a row there.
+  const how = w.opts.density?.(node, slice.nodes) ?? densityOf(slice.nodes);
+  rows(w, path, slice.nodes, slice.from, [], depth, bounds, node.child_count, slice.nodes, slice.from, how);
   if (after > 0 && !elsewhere) {
     edge(w, "later", path, depth, after, slice.from, to, { start: end, end: outer.end });
   }
@@ -854,6 +869,7 @@ function rows(
   total: number,
   siblings: readonly TemplateNode[] = kids,
   sibBase: number = base,
+  how: Density = "headings",
 ): void {
   const order = inFileOrder(kids);
   let cursor = bounds?.start ?? order[0]?.offset_bits ?? 0;
@@ -867,7 +883,7 @@ function rows(
     // A field that is only its parent's contents has no name worth a level of
     // structure: its children stand in its place, at its depth.
     if (!kid.contents || !kid.composite || kid.child_count === 0) {
-      child(w, kid, depth, total, consumerOf(kid, siblings, sibBase));
+      child(w, kid, depth, total, consumerOf(kid, siblings, sibBase), how);
       continue;
     }
     const inner = w.kids(kid.path, kid.child_count);
@@ -931,12 +947,13 @@ function isWholeBytes(offsetBits: number, sizeBits: number): boolean {
   return offsetBits % 8 === 0 && sizeBits % 8 === 0;
 }
 
-function child(w: Walk, node: TemplateNode, depth: number, total: number, reads: { readonly name: string; readonly path: readonly number[] } | null = null): void {
+function child(w: Walk, node: TemplateNode, depth: number, total: number, reads: { readonly name: string; readonly path: readonly number[] } | null = null, how: Density = "headings"): void {
   const key = pathKey(node.path);
   // A structure that places another field is not a division of the file, so it
   // stays a row: an array of cell pointers belongs beside the fields it was
-  // written among, not as a heading over the page's contents.
-  if (node.composite && node.child_count > 0 && depth === 1 && reads === null) {
+  // written among, not as a heading over the page's contents. Nor is one in a
+  // run the shapes call rows: see `headingdensity`.
+  if (node.composite && node.child_count > 0 && depth === 1 && reads === null && how === "headings") {
     // A short table opens itself, since the table is what it is for.
     const open =
       w.isOpen(key, arrivesOpen(node, total)) ||

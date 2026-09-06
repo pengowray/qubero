@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 
 import type { TemplateNode, TemplateReply } from "../src/doc.ts";
 import { emptyState, flatten, pathKey, refold, sectionBreaks } from "../src/flatten.ts";
-import type { Item, ListingState, TreeSource } from "../src/flatten.ts";
+import type { FlatOptions, Item, ListingState, TreeSource } from "../src/flatten.ts";
 
 type Spec = {
   name: string;
@@ -30,6 +30,8 @@ type Spec = {
   type?: string;
   /** What kind of leaf, where the rules turn on it: `bytes` for an opaque run. */
   kind?: TemplateNode["kind"];
+  /** The template's word that this structure is one row, not a part of the file. */
+  inline?: boolean;
 };
 
 type Fixture = { node: TemplateNode; kids: Fixture[] };
@@ -56,6 +58,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     ok: true,
     child_count: spec.count ?? kids.length,
     composite,
+    inline: spec.inline ?? false,
     editable: false,
     space: 0,
     refused: null,
@@ -96,9 +99,9 @@ function source(root: Fixture, absent: ReadonlySet<string> = new Set()): TreeSou
   };
 }
 
-function run(spec: Spec, state: ListingState = emptyState, absent?: ReadonlySet<string>) {
+function run(spec: Spec, state: ListingState = emptyState, absent?: ReadonlySet<string>, opts?: FlatOptions) {
   const root = build(spec, [], 0);
-  return flatten(source(root, absent), state);
+  return flatten(source(root, absent), state, opts);
 }
 
 function shape(items: readonly Item[]): string[] {
@@ -415,9 +418,11 @@ test("the elements of a long list arrive closed, and one of a short one open", (
   assert.equal(short.filter((i) => i.kind === "row" && i.node.name === "a").length, 4);
   const long = run(many(65)).items;
   assert.equal(long.filter((i) => i.kind === "row" && i.node.name === "a").length, 0);
-  // Each element is still there to be seen, as a heading of its own.
-  assert.equal(long.filter((i) => i.kind === "heading" && i.level === 1).length, 65);
-  assert.equal(long.filter((i) => i.kind === "heading" && i.level === 1 && i.open).length, 0);
+  // Each element is still there to be seen. As a row rather than a heading:
+  // four bytes is a value with parts, not a part of the file. See
+  // `headingdensity`.
+  assert.equal(long.filter((i) => i.kind === "row" && /^\[\d+\]$/.test(i.node.name)).length, 65);
+  assert.equal(long.filter((i) => i.kind === "row" && /^\[\d+\]$/.test(i.node.name) && i.open).length, 0);
   // Asked for, one of them opens.
   const one = run(many(65), { ...emptyState, open: new Set(["0.7"]) }).items;
   assert.equal(one.filter((i) => i.kind === "row" && i.node.name === "a").length, 1);
@@ -567,6 +572,83 @@ test("a short list of small things is one part, not one part each", () => {
     headings.map((h) => (h.kind === "heading" ? (h.node?.name ?? "(run)") : "")),
     ["(run)", "metadata", "weights"],
   );
+});
+
+test("a run of small structures is rows, not a heading each", () => {
+  // A pickle frame: two hundred opcodes of a byte or two, with a couple of
+  // longer strings among them. A band naming one byte says less than the row
+  // it displaces, and the strings must not buy bands for the opcodes.
+  const op = (n: number, bytes: number): Spec => ({
+    name: `[${n}]`,
+    bytes,
+    kids: [{ name: "code", bytes: 1 }, { name: "operand", bytes: bytes - 1 }],
+  });
+  const ops = Array.from({ length: 40 }, (_, n) => op(n, n % 10 === 0 ? 24 : 2));
+  const frame: Spec = { name: "file", bytes: 300, kids: [{ name: "frame", bytes: 300, kids: ops }] };
+  const items = run(frame).items;
+  assert.equal(items.filter((i) => i.kind === "heading" && i.level === 1).length, 0);
+  assert.equal(items.filter((i) => i.kind === "row" && /^\[\d+\]$/.test(i.node.name)).length, 40);
+});
+
+test("a run of structures worth a heading still gets one each", () => {
+  // Three pages of a database, which are what the file is made of.
+  const page = (n: number): Spec => ({
+    name: `[${n}]`,
+    bytes: 4096,
+    kids: [{ name: "type", bytes: 1 }, { name: "cells", bytes: 4095 }],
+  });
+  const db: Spec = {
+    name: "file",
+    bytes: 12_291,
+    kids: [{ name: "header", bytes: 3 }, { name: "pages", bytes: 12_288, kids: [page(0), page(1), page(2)] }],
+  };
+  // Three parts of the file, which is what `elementsAreSections` promotes a
+  // short list of big structures to.
+  // Three parts of the file, which is what a short list of big structures is
+  // promoted to: each page is a section of its own rather than a row.
+  const items = run(db).items;
+  assert.equal(items.filter((i) => i.kind === "heading" && /^\[\d+\]$/.test(i.node?.name ?? "")).length, 3);
+});
+
+test("a structure that points elsewhere is measured by what it points at", () => {
+  // An ELF's program headers: a field of no bytes where it is declared, whose
+  // segments are a hundred and twenty-eight bytes somewhere else. Counting
+  // the nought would call the run small and take its headings away.
+  const file: Spec = {
+    name: "file",
+    bytes: 1024,
+    kids: [
+      { name: "magic", bytes: 4 },
+      { name: "program_headers", bytes: 0, at: 4, kids: [{ name: "segments", bytes: 128, at: 128, kids: [{ name: "[0]", bytes: 128, at: 128 }] }] },
+      { name: "section_headers", bytes: 0, at: 4, kids: [{ name: "sections", bytes: 320, at: 256, kids: [{ name: "[0]", bytes: 320, at: 256 }] }] },
+    ],
+  };
+  const headings = run(file).items.filter((i) => i.kind === "heading");
+  assert.ok(headings.some((h) => h.kind === "heading" && h.node?.name === "program_headers"), JSON.stringify(shape(run(file).items)));
+});
+
+test("a template that says a structure is one row is believed", () => {
+  // Big enough for a band by the shapes; the template says otherwise, and the
+  // template knows what it declared.
+  const entry = (n: number): Spec => ({
+    name: `[${n}]`,
+    bytes: 64,
+    inline: true,
+    kids: [{ name: "a", bytes: 32 }, { name: "b", bytes: 32 }],
+  });
+  const file: Spec = { name: "file", bytes: 192, kids: [{ name: "list", bytes: 192, kids: [entry(0), entry(1), entry(2)] }] };
+  assert.equal(run(file).items.filter((i) => i.kind === "heading" && i.level === 1).length, 0);
+});
+
+test("a view may overrule what the shapes say, either way", () => {
+  const op = (n: number): Spec => ({ name: `[${n}]`, bytes: 2, kids: [{ name: "code", bytes: 1 }, { name: "operand", bytes: 1 }] });
+  const file: Spec = { name: "file", bytes: 20, kids: [{ name: "ops", bytes: 20, kids: Array.from({ length: 10 }, (_, n) => op(n)) }] };
+  // The shapes say rows; a view that knows better asks for headings.
+  const forced = run(file, emptyState, new Set(), { density: () => "headings" }).items;
+  assert.equal(forced.filter((i) => i.kind === "heading" && /^\[\d+\]$/.test(i.node?.name ?? "")).length, 10);
+  // Answering null leaves the shapes to it.
+  const left = run(file, emptyState, new Set(), { density: () => null }).items;
+  assert.equal(left.filter((i) => i.kind === "heading" && /^\[\d+\]$/.test(i.node?.name ?? "")).length, 0);
 });
 
 test("bytes that have not been read yet are marked, not guessed", () => {
