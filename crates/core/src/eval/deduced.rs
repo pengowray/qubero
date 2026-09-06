@@ -113,10 +113,11 @@ impl Evaluator {
     }
 }
 
-/// What a deduced number reads as when nothing was deduced. Negative, so a
-/// `Switch` over a table of cases falls to its default rather than landing on
-/// case zero.
-const NOTHING: i128 = -1;
+/// What a deduced number reads as when nothing was deduced. Zero, because the
+/// case at zero is the nothing case, which `pickle::shapes` puts there on
+/// purpose. A `Switch` over the table then reaches the honest answer at a
+/// known position rather than scanning a thousand dtypes to miss all of them.
+const NOTHING: i128 = 0;
 
 /// The largest file run as a program. Past this the opcodes are still listed
 /// and placed; only the annotation stops, which is the part that costs memory

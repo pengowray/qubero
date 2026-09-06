@@ -1428,8 +1428,13 @@ impl Evaluator {
                     // about to read needs to know where that byte is.
                     let v = self.eval_expr_at(doc, path, &on, Some((offset, limit)))?;
                     // Only the case this file takes is cloned; the others
-                    // stay shared.
-                    ty = match cases.iter().find(|(k, _)| *k == v) {
+                    // stay shared. A table keyed by position (a pickle's
+                    // thousand dtypes) is reached at the position rather than
+                    // scanned for; anything else falls back to the scan, and
+                    // the key is checked either way so a table with holes in
+                    // it cannot answer with the wrong case.
+                    let at_index = usize::try_from(v).ok().and_then(|i| cases.get(i)).filter(|(k, _)| *k == v);
+                    ty = match at_index.or_else(|| cases.iter().find(|(k, _)| *k == v)) {
                         Some((_, t)) => t.clone(),
                         None => (*default).clone(),
                     };

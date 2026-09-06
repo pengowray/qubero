@@ -23,7 +23,8 @@
 //!
 //! The index into this list is what crosses from the machine to the template,
 //! as an [`Expr::Deduced`](crate::template::Expr::Deduced), so nothing is
-//! reordered here without both sides moving together. Only append.
+//! reordered here without both sides moving together. Index zero is the
+//! nothing case; after that, only append.
 
 use std::sync::OnceLock;
 
@@ -39,16 +40,22 @@ pub(super) enum Packed {
     DateTime,
 }
 
+/// The case a payload takes when the run of the file said nothing about it,
+/// which is most payloads in most files: bytes, which is what they were.
+///
+/// It is index zero rather than the switch's default so that the answer is
+/// reached at its position in the table instead of scanned for through a
+/// thousand dtypes. Every other case is shifted past it.
+pub(super) const PAST_NOTHING: usize = 1;
+
 /// Every type a payload may be read as, in index order.
 ///
 /// Built once. The dtype half is a thousand cases and the switch holding them
 /// is shared rather than copied, so the cost is one table for the process
 /// however many pickles are open.
 pub(super) fn cases() -> Vec<T> {
-    let mut out: Vec<T> = npy::dtypes()
-        .into_iter()
-        .map(|(_, elem, _)| T::array(elem, E::deduced(Deduce::PayloadCount)))
-        .collect();
+    let mut out = vec![T::bytes(E::Remaining)];
+    out.extend(npy::dtypes().into_iter().map(|(_, elem, _)| T::array(elem, E::deduced(Deduce::PayloadCount))));
     out.push(date());
     out.push(time());
     out.push(datetime());
@@ -59,13 +66,13 @@ pub(super) fn cases() -> Vec<T> {
 pub(super) fn dtype(descr: &str) -> Option<(usize, u64)> {
     static TABLE: OnceLock<Vec<(String, u64)>> = OnceLock::new();
     let table = TABLE.get_or_init(|| npy::dtypes().into_iter().map(|(k, _, w)| (k, w as u64)).collect());
-    table.iter().position(|(k, _)| k == descr).map(|i| (i, table[i].1))
+    table.iter().position(|(k, _)| k == descr).map(|i| (i + PAST_NOTHING, table[i].1))
 }
 
 /// Where a packed record sits in the list, and how many bytes one is.
 pub(super) fn packed(kind: Packed) -> (usize, u64) {
     static DTYPES: OnceLock<usize> = OnceLock::new();
-    let after = *DTYPES.get_or_init(|| npy::dtypes().len());
+    let after = PAST_NOTHING + *DTYPES.get_or_init(|| npy::dtypes().len());
     match kind {
         Packed::Date => (after, 4),
         Packed::Time => (after + 1, 6),
@@ -127,11 +134,19 @@ mod tests {
         let cases = cases();
         for kind in [Packed::Date, Packed::Time, Packed::DateTime] {
             let (i, _) = packed(kind);
-            assert!(i < cases.len(), "{kind:?} is index {i} of {}", cases.len());
+            assert!((PAST_NOTHING..cases.len()).contains(&i), "{kind:?} is index {i} of {}", cases.len());
         }
         let (i, width) = dtype("<f4").expect("f4 is a dtype");
-        assert!(i < cases.len());
+        assert!((PAST_NOTHING..cases.len()).contains(&i));
         assert_eq!(width, 4);
+    }
+
+    /// Index zero is the nothing case, and a case lost from the front of the
+    /// list would read every array as the dtype one place to its left: the
+    /// same width, the wrong numbers, and nothing on screen to say so.
+    #[test]
+    fn the_first_case_is_the_one_that_says_nothing() {
+        assert!(matches!(cases()[0], T::Bytes(_)), "index zero is bytes, so a payload nothing was deduced about reads as bytes");
     }
 
     /// The packed records are the widths CPython writes, and being wrong about
