@@ -142,7 +142,7 @@ fn op() -> T {
 }
 
 fn code() -> T {
-    T::enumeration("PickleOp", T::u8(), OPCODE)
+    T::enumeration("Opcode", T::u8(), OPCODE)
 }
 
 /// What follows the opcode byte, which the opcode byte decides.
@@ -174,27 +174,27 @@ fn operand() -> T {
     // depends on the opcode: text for the `UNICODE` family, a byte string for
     // the `BYTES` family, and for the two `STRING` ones a Python 2 `str`,
     // which is bytes that were usually text.
-    add(&[0x8c], sized_text(T::u8(), Encoding::Utf8));
-    add(&[0x58], sized_text(T::u32(Little), Encoding::Utf8));
-    add(&[0x8d], sized_text(T::u64(Little), Encoding::Utf8));
-    add(&[0x55], sized_text(T::u8(), Encoding::Unknown));
-    add(&[0x54], sized_text(T::i32(Little), Encoding::Unknown));
-    add(&[0x43], sized_bytes(T::u8()));
-    add(&[0x42], sized_bytes(T::u32(Little)));
-    add(&[0x8e, 0x96], sized_bytes(T::u64(Little)));
+    add(&[0x8c], counted_text(T::u8(), Encoding::Utf8));
+    add(&[0x58], counted_text(T::u32(Little), Encoding::Utf8));
+    add(&[0x8d], counted_text(T::u64(Little), Encoding::Utf8));
+    add(&[0x55], counted_text(T::u8(), Encoding::Unknown));
+    add(&[0x54], counted_text(T::i32(Little), Encoding::Unknown));
+    add(&[0x43], counted_bytes(T::u8()));
+    add(&[0x42], counted_bytes(T::u32(Little)));
+    add(&[0x8e, 0x96], counted_bytes(T::u64(Little)));
 
     // An integer of any size at all: a length, and that many bytes of
     // two's-complement magnitude, little end first. A length of zero is the
     // number zero, which is the one integer with no bytes.
-    add(&[0x8a], sized_bytes(T::u8()));
-    add(&[0x8b], sized_bytes(T::i32(Little)));
+    add(&[0x8a], counted_bytes(T::u8()));
+    add(&[0x8b], counted_bytes(T::i32(Little)));
 
     // Written as text, one value to a line. The newline belongs to the field,
     // so the opcode after it starts where the field ends.
     add(&[0x49, 0x67, 0x70], T::decimal(line()));
     add(&[0x46, 0x53, 0x56, 0x50], T::text(line(), Encoding::Unknown));
-    add(&[0x4c], long_text());
-    add(&[0x63, 0x69], name_pair());
+    add(&[0x4c], decimal_long());
+    add(&[0x63, 0x69], qualified_name());
 
     // The frame, which is the only opcode holding other opcodes.
     add(&[0x95], frame());
@@ -210,9 +210,9 @@ fn line() -> StrLen {
 }
 
 /// A length, and that many bytes read as text.
-fn sized_text(length: T, enc: Encoding) -> T {
+fn counted_text(length: T, enc: Encoding) -> T {
     T::structure_named(
-        "Sized",
+        "CountedText",
         "",
         "text",
         vec![("length", length), ("text", T::text(StrLen::Fixed(E::field("length")), enc))],
@@ -221,9 +221,9 @@ fn sized_text(length: T, enc: Encoding) -> T {
 
 /// A length, and that many bytes. What the bytes mean is the opcode's
 /// business: a byte string, a `bytearray`, or the magnitude of an integer.
-fn sized_bytes(length: T) -> T {
+fn counted_bytes(length: T) -> T {
     T::structure_named(
-        "Sized",
+        "CountedBytes",
         "",
         "value",
         vec![("length", length), ("value", T::bytes(E::field("length")))],
@@ -233,9 +233,9 @@ fn sized_bytes(length: T) -> T {
 /// `LONG` writes its digits, then an `L`, then the newline: the `L` is the
 /// suffix Python 2 put on a long integer, and it is part of the format rather
 /// than part of the number.
-fn long_text() -> T {
+fn decimal_long() -> T {
     T::structure_named(
-        "LongText",
+        "DecimalLong",
         "",
         "value",
         vec![
@@ -248,9 +248,9 @@ fn long_text() -> T {
 /// A module and a name, a line each. `GLOBAL` writes the two so that the
 /// unpickler can import the first and look the second up in it, and `INST`
 /// writes the same pair for a class it is about to call.
-fn name_pair() -> T {
+fn qualified_name() -> T {
     T::structure_named(
-        "Name",
+        "QualifiedName",
         "",
         "name",
         vec![
