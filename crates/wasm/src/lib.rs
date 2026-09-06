@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{Step as MapStep, StepKind};
-use qubero_core::eval::{Explain, Origin, SpaceId};
+use qubero_core::eval::{Explain, Graph, Origin, SpaceId, NO_PARENT};
 use qubero_core::hexdump;
 use qubero_core::textview;
 use qubero_core::source::Source;
@@ -508,6 +508,47 @@ struct RelationDto {
     result: String,
 }
 
+/// One field of a subtree, as much of it as an arrow needs. No value: what a
+/// field says is what makes reading it expensive, and nothing a graph draws
+/// shows it.
+#[derive(Serialize)]
+struct GraphNodeDto {
+    path: Vec<f64>,
+    name: String,
+    /// The resolved type said coarsely, for a view that groups or colours by
+    /// it: "u16", "u32", "f32", "bytes", "str", "struct", "array", "repeat"
+    /// and the rest. See `qubero_core::eval::kind_of`.
+    kind: String,
+    offset_bits: f64,
+    size_bits: f64,
+    /// Index into the node list, or -1 for the node the graph was asked for.
+    parent: f64,
+    child_count: f64,
+    /// True when this node has children the walk stopped short of.
+    truncated: bool,
+}
+
+/// One field deciding something about another, as an arrow between two nodes.
+#[derive(Serialize)]
+struct GraphEdgeDto {
+    /// Index into the node list: the field that decided.
+    from: f64,
+    /// Index into the node list: the field it decided about.
+    to: f64,
+    /// "length" | "count" | "type" | "position" | "value" | "name" | "width" | "points"
+    role: &'static str,
+}
+
+/// The subtree under one node, and what its fields decide about each other.
+#[derive(Serialize)]
+struct GraphDto {
+    nodes: Vec<GraphNodeDto>,
+    edges: Vec<GraphEdgeDto>,
+    /// How many nodes under the one asked about were left out, as far as is
+    /// known.
+    omitted: f64,
+}
+
 #[derive(Serialize)]
 struct CaseDto {
     value: f64,
@@ -529,6 +570,34 @@ fn origin_dto(o: Origin) -> OriginDto {
         path: o.path.into_iter().map(|x| x as f64).collect(),
         value: o.value,
         target_bits: o.target_bits.map(|b| b as f64),
+    }
+}
+
+/// The graph as the host reads it. The one thing translated rather than copied
+/// is the root's parent: the core says `usize::MAX`, which as a JSON number is
+/// sixteen digits of nonsense, and -1 is what every other absent index here is.
+fn graph_dto(g: Graph) -> GraphDto {
+    GraphDto {
+        nodes: g
+            .nodes
+            .into_iter()
+            .map(|n| GraphNodeDto {
+                path: n.path.into_iter().map(|x| x as f64).collect(),
+                name: n.name,
+                kind: n.kind,
+                offset_bits: n.offset_bits as f64,
+                size_bits: n.size_bits as f64,
+                parent: if n.parent == NO_PARENT { -1.0 } else { n.parent as f64 },
+                child_count: n.child_count as f64,
+                truncated: n.truncated,
+            })
+            .collect(),
+        edges: g
+            .edges
+            .into_iter()
+            .map(|e| GraphEdgeDto { from: e.from as f64, to: e.to as f64, role: e.role })
+            .collect(),
+        omitted: g.omitted as f64,
     }
 }
 
@@ -1659,6 +1728,26 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.origins(&sh.doc, &p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
+            }
+        }
+    }
+
+    /// The same question asked of every field under `path` at once: the nodes
+    /// of the subtree and every connection between two of them, ready to be
+    /// laid out. JSON, in the same reply shape as the rest.
+    ///
+    /// `limit` caps the nodes. The walk is breadth-first, so what a cap keeps
+    /// is the top of the format rather than one deep spine of it, and the
+    /// answer says how many nodes it left out.
+    pub fn graph(&mut self, space: u32, path: &[u32], limit: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut sh.eval {
+            None => reply::<GraphDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.graph(&sh.doc, &p, limit as usize).map(graph_dto))
             }
         }
     }

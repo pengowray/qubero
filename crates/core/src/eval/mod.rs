@@ -20,6 +20,7 @@ mod cells;
 mod deduced;
 mod explain;
 mod go;
+mod graph;
 mod jsontree;
 mod listing;
 mod memo;
@@ -36,6 +37,7 @@ mod walk;
 mod tests;
 
 pub use explain::{Explain, FlagBit};
+pub use graph::{kind_of, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
 pub use cells::Cell;
 pub use listing::{magic_reading, Span, SpanPart};
