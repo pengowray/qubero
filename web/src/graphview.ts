@@ -81,6 +81,14 @@ const HULL_MIN = 3;
  *  type says anything. See `drawHulls`. */
 const HULL_PULL_MIN = 0.25;
 
+/** How much of the picture one type's boundary may cover before it stops being
+ *  a group and starts being the picture. See `measureHulls`. */
+const HULL_SPREAD_MAX = 0.4;
+
+/** How far in the view will zoom to fill the board with a small graph. Life
+ *  size: a node drawn at the size it was measured at. */
+const MAX_ZOOM = 1;
+
 /** Ideal edge length per force, in layout units. The dependency edges are the
  *  shortest because they are the only ones that are a fact about this file
  *  rather than about the type system: a length and the field it sizes belong
@@ -270,6 +278,22 @@ export class GraphView {
     // the browser has not sized yet gives the boundaries a canvas of nothing
     // to be drawn on.
     requestAnimationFrame(() => {
+      // Fitted to the fields, not to the hubs. A hub sits wherever the pull of
+      // its type put it, which is often well outside the fields it gathered,
+      // and fitting to one would leave the graph in a corner with empty space
+      // beside it.
+      const real = cy.nodes().filter((n) => n.data("hub") !== 1);
+      if (real.length > 0) {
+        cy.fit(real, 40);
+        // Fitting a graph of fifteen fields to a screen blows each node up to
+        // the size of a coin, which says the file is enormous. Past life size
+        // the picture is recentred instead of magnified.
+        if (cy.zoom() > MAX_ZOOM) {
+          const at = { x: cy.width() / 2, y: cy.height() / 2 };
+          cy.zoom({ level: MAX_ZOOM, renderedPosition: at });
+          cy.center(real);
+        }
+      }
       this.measureHulls();
       this.drawHulls();
     });
@@ -322,7 +346,7 @@ export class GraphView {
     g.nodes.forEach((n, i) => {
       const id = idOf(n.path);
       if ((byKind.get(n.kind) ?? 0) >= HULL_MIN) {
-        out.push({ data: { id: `k${i}`, source: id, target: hubOf(n.kind), force: "kind" }, classes: "gv-soft" });
+        out.push({ data: { id: `k${i}`, source: id, target: hubOf(n.kind), force: "kind" }, classes: "gv-hidden" });
       }
       // Its neighbour in the file, and its parent. One edge each, so both
       // forces cost one edge per field however big the file is.
@@ -354,10 +378,17 @@ export class GraphView {
       if (list === undefined) byKind.set(kind, [[p.x, p.y]]);
       else list.push([p.x, p.y]);
     }
+    // How big the whole picture is, so a boundary can be judged against it. A
+    // type that ended up spread over most of the graph did not gather, and a
+    // boundary round it is a shape that crosses everything else and says the
+    // opposite of what a boundary means.
+    const all = [...byKind.values()].flat();
+    const whole = area(convexHull(all));
     for (const [kind, points] of byKind) {
       if (points.length < HULL_MIN) continue;
       const hull = convexHull(points);
       if (hull.length < 3) continue;
+      if (whole > 0 && area(hull) / whole > HULL_SPREAD_MAX) continue;
       this.hulls.push({ kind, points: expand(hull, 26), label: GRAPH.hull(kind, points.length) });
     }
   }
@@ -490,6 +521,20 @@ function convexHull(points: readonly [number, number][]): [number, number][] {
   return [...half(pts), ...half([...pts].reverse())];
 }
 
+/** The area a closed polygon encloses, by the shoelace formula. Used only to
+ *  compare one boundary against another, so the sign does not matter. */
+function area(points: readonly [number, number][]): number {
+  if (points.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    if (a === undefined || b === undefined) continue;
+    sum += a[0] * b[1] - b[0] * a[1];
+  }
+  return Math.abs(sum) / 2;
+}
+
 /** Push a hull outwards so the boundary is round the nodes rather than through
  *  their centres. */
 function expand(hull: readonly [number, number][], by: number): [number, number][] {
@@ -590,6 +635,10 @@ function stylesheet(p: Palette): cytoscape.StylesheetJson {
       },
     },
     { selector: "edge.gv-soft", style: { width: 0.5, "line-color": p.line, "curve-style": "haystack", opacity: 0.5 } },
+    // The same-type edges run to a hub nobody can see. Drawn, they are lines
+    // with one end in empty space, which reads as a stray rather than as the
+    // pull it is. The boundary round the type is what shows that.
+    { selector: "edge.gv-hidden", style: { opacity: 0, events: "no" } },
     { selector: "node.is-here", style: { "border-width": 2, "border-color": p.accent, "z-index": 10 } },
     // Everything that is neither the field at the cursor nor joined to it
     // steps back, so "what is this connected to" is answered by looking
