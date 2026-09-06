@@ -7,51 +7,55 @@
 //! never touch it, over a stack that exists only while the program runs.
 //!
 //! So [`Deduce`] is the small set of questions a template may ask about a
-//! field that only running the container answers, and this is where they are
-//! answered. The run happens once per document and is kept beside the memo,
-//! the way a parsed JSON header is: a file of a hundred thousand opcodes is
-//! walked once however many rows a reader opens.
+//! field that only running the container answers, and this is where the
+//! asking is arranged. Not the answering: a template that has such fields
+//! says what runs it, as a [`Deducer`](crate::template::Deducer), and nothing
+//! here knows which format that is. What this owes the format is that the run
+//! happens once per document and is kept beside the memo, the way a parsed
+//! JSON header is: a file of a hundred thousand opcodes is walked once
+//! however many rows a reader opens.
 //!
 //! Every answer has a nothing case, and the nothing case is always the honest
-//! one. A file that is not a pickle, a pickle whose stack does not balance,
-//! bytes no recogniser knows: all of them read as bytes, which is what they
-//! were before any of this and what they are.
+//! one. A format with nothing to run it, a run that stopped where a stack
+//! stopped balancing, bytes no recogniser knows: all of them read as bytes,
+//! which is what they were before any of this and what they are.
 
 use std::sync::Arc;
 
 use super::*;
-use crate::formats::pickle::{self, machine};
-use crate::template::Deduce;
+use crate::template::{Deduce, Deduced};
 
 impl Evaluator {
     /// What running the file said about it, running it if nothing has yet.
     ///
-    /// Only for a document being read as a pickle: the run is over opcodes,
-    /// and asking it of anything else would be reading a JPEG as a program.
-    fn ran<S: Source>(&mut self, doc: &Document<S>) -> R<Arc<machine::Reading>> {
+    /// Only for a template that said what runs it. A run is over a format
+    /// written as a program, and asking it of anything else would be reading
+    /// a JPEG as one.
+    fn ran<S: Source>(&mut self, doc: &Document<S>) -> R<Arc<dyn Deduced>> {
         if let Some(r) = self.memo.deduced() {
             return Ok(r.clone());
         }
-        if self.template.name != "pickle" {
-            return fail("this file is not being read as a pickle");
-        }
-        // The whole file, because a pickle is the whole file and the answer
-        // for a byte near the end depends on every opcode before it. Too large
-        // to hold is a file that reads as opcodes and nothing more, which is
-        // an answer rather than a failure and is worth remembering.
+        let Some(deducer) = self.template.deducer.clone() else {
+            return fail("this file is not being read as a format that runs");
+        };
+        // The whole file, because a format that has to be run is the whole
+        // file and the answer for a byte near the end depends on everything
+        // before it. Too large to hold is a file that reads as its own fields
+        // and nothing more, which is an answer rather than a failure and is
+        // worth remembering.
         let len = doc.len_bits() / 8;
         if len > most_bytes() {
-            let empty = Arc::new(machine::Reading::default());
+            let empty: Arc<dyn Deduced> = Arc::new(Nothing);
             self.memo.remember_deduced(empty.clone());
             return Ok(empty);
         }
         // Through the evaluator's own read, which is what says a chunk has
         // not arrived yet. Reading the document directly would hand the
-        // machine a run of zeros where the file has not been fetched, and the
+        // deducer a run of zeros where the file has not been fetched, and the
         // answer worked out from those would then be remembered as if it were
         // the file's. `Pending` goes back up and the caller asks again.
         let bytes = self.read_in(doc, 0, 0, len * 8)?;
-        let run = Arc::new(machine::run(&pickle::opcodes(&bytes)));
+        let run = deducer.run(&bytes);
         self.memo.remember_deduced(run.clone());
         Ok(run)
     }
@@ -79,15 +83,7 @@ impl Evaluator {
     ) -> R<i128> {
         let Some(offset) = self.deduced_at(at, here) else { return Ok(NOTHING) };
         let run = self.ran(doc)?;
-        let payload = run.arrays.get(&offset);
-        Ok(match (what, payload) {
-            (Deduce::PayloadShape, Some(p)) => p.shape as i128,
-            (Deduce::PayloadCount, Some(p)) => p.count as i128,
-            // A field asking for a number and getting a word is a template
-            // fault rather than a file's, and reads as nothing rather than as
-            // a guess.
-            (Deduce::Builds, _) | (_, None) => NOTHING,
-        })
+        Ok(run.int(what, offset).unwrap_or(NOTHING))
     }
 
     /// A word the run of the file answers, for the rows that would otherwise
@@ -104,19 +100,31 @@ impl Evaluator {
         }
         let Some(offset) = self.deduced_at(at, here) else { return Ok(String::new()) };
         let run = self.ran(doc)?;
-        // The word is filed over the bytes the opcode covers, and the field
-        // asking is the last of that opcode's fields and no bytes wide, so it
-        // sits at the byte after the opcode rather than inside it. The byte
-        // before that is the opcode's own last, whether the opcode was one
-        // byte or five.
-        Ok(run.builds_at(offset.saturating_sub(1)).unwrap_or_default().to_string())
+        Ok(run.text(what, offset).unwrap_or_default())
     }
 }
 
-/// What a deduced number reads as when nothing was deduced. Zero, because the
-/// case at zero is the nothing case, which `pickle::shapes` puts there on
-/// purpose. A `Switch` over the table then reaches the honest answer at a
-/// known position rather than scanning a thousand dtypes to miss all of them.
+/// A run that said nothing, for a file too large to be run at all.
+///
+/// Every question has a nothing case and this answers all of them with it, so
+/// a file past [`most_bytes`] reads exactly as one whose run recognised none
+/// of its bytes: as the bytes it holds.
+struct Nothing;
+
+impl Deduced for Nothing {
+    fn int(&self, _what: Deduce, _at: u64) -> Option<i128> {
+        None
+    }
+    fn text(&self, _what: Deduce, _at: u64) -> Option<String> {
+        None
+    }
+}
+
+/// What a deduced number reads as when nothing was deduced. Zero rather than
+/// -1, so that a format can put its own nothing case first in the table it
+/// switches on: a `Switch` then reaches the honest answer at a known position
+/// rather than scanning a thousand cases to miss all of them. `pickle::shapes`
+/// is written that way.
 const NOTHING: i128 = 0;
 
 /// The largest file run as a program. Past this the opcodes are still listed

@@ -127,7 +127,7 @@ const OPCODE: &[(i128, &str)] = &[
 ];
 
 pub fn pickle() -> Template {
-    Template::new("pickle", ops()).with_type("Op", op())
+    Template::new("pickle", ops()).with_type("Op", op()).deduced_by(machine::Program)
 }
 
 /// A run of opcodes, ending at the `.` that stops the machine.

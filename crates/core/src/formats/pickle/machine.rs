@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::known::{self, Payload};
+use crate::template::{Deduce, Deduced, Deducer};
 
 /// How many values may be on the stack, and how many the memo may hold. A
 /// pickle is written by a program that could be writing anything, so both are
@@ -156,6 +157,45 @@ impl Reading {
         let i = self.builds.partition_point(|(start, _, _)| *start <= at).checked_sub(1)?;
         let (_, end, word) = &self.builds[i];
         (at < *end).then_some(word.as_str())
+    }
+}
+
+/// Running the file is what a pickle answers with, so the reading of a run is
+/// what answers the template's questions about a field.
+impl Deduced for Reading {
+    fn int(&self, what: Deduce, at: u64) -> Option<i128> {
+        let payload = self.arrays.get(&at)?;
+        match what {
+            Deduce::PayloadShape => Some(payload.shape as i128),
+            Deduce::PayloadCount => Some(payload.count as i128),
+            // A field asking for a number and getting a word is a template
+            // fault rather than a file's, and reads as nothing rather than as
+            // a guess.
+            Deduce::Builds => None,
+        }
+    }
+
+    fn text(&self, what: Deduce, at: u64) -> Option<String> {
+        if what != Deduce::Builds {
+            return None;
+        }
+        // The word is filed over the bytes the opcode covers, and the field
+        // asking is the last of that opcode's fields and no bytes wide, so it
+        // sits at the byte after the opcode rather than inside it. The byte
+        // before that is the opcode's own last, whether the opcode was one
+        // byte or five.
+        Some(self.builds_at(at.saturating_sub(1))?.to_string())
+    }
+}
+
+/// What the pickle template hands the evaluator so a field can ask what the
+/// file builds. The file is the program, and this is the offer to run it.
+#[derive(Debug)]
+pub struct Program;
+
+impl Deducer for Program {
+    fn run(&self, bytes: &[u8]) -> Arc<dyn Deduced> {
+        Arc::new(run(&super::opcodes(bytes)))
     }
 }
 
