@@ -44,10 +44,10 @@
 //! byte is an opcode like any other, and a file of them looks like a file of
 //! anything. See [`is_pickle`].
 
-pub mod arrays;
+pub mod known;
 pub mod machine;
+pub mod shapes;
 
-use crate::formats::npy;
 use crate::template::{Deduce, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// Every opcode, by the byte that spells it, with the name Python gives it.
@@ -269,12 +269,8 @@ fn counted_payload(length: T) -> T {
 /// same way. Bytes the machine says nothing about stay bytes, which is the
 /// default and is what most byte strings in most pickles are.
 fn payload() -> T {
-    let cases = npy::dtypes()
-        .into_iter()
-        .enumerate()
-        .map(|(i, (_, elem, _))| (i as i128, T::array(elem, E::deduced(Deduce::ArrayElements))))
-        .collect();
-    T::switch(E::deduced(Deduce::ArrayDtype), cases, T::bytes(E::Remaining))
+    let cases = shapes::cases().into_iter().enumerate().map(|(i, ty)| (i as i128, ty)).collect();
+    T::switch(E::deduced(Deduce::PayloadShape), cases, T::bytes(E::Remaining))
 }
 
 /// A memo index, and what is in the memo there. The index alone says nothing:

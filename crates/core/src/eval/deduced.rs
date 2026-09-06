@@ -79,10 +79,10 @@ impl Evaluator {
     ) -> R<i128> {
         let Some(offset) = self.deduced_at(at, here) else { return Ok(NOTHING) };
         let run = self.ran(doc)?;
-        let array = run.arrays.get(&offset);
-        Ok(match (what, array) {
-            (Deduce::ArrayDtype, Some(a)) => a.dtype as i128,
-            (Deduce::ArrayElements, Some(a)) => a.elements as i128,
+        let payload = run.arrays.get(&offset);
+        Ok(match (what, payload) {
+            (Deduce::PayloadShape, Some(p)) => p.shape as i128,
+            (Deduce::PayloadCount, Some(p)) => p.count as i128,
             // A field asking for a number and getting a word is a template
             // fault rather than a file's, and reads as nothing rather than as
             // a guess.

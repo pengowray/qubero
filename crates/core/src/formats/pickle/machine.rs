@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::arrays;
+use super::known::{self, Payload};
 
 /// How many values may be on the stack, and how many the memo may hold. A
 /// pickle is written by a program that could be writing anything, so both are
@@ -121,14 +121,6 @@ impl Value {
     }
 }
 
-/// What one payload turned out to be: an array of `elements` values of the
-/// dtype at `dtype` in [`crate::formats::npy::dtypes`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Array {
-    pub dtype: usize,
-    pub elements: u64,
-}
-
 /// What running the pickle said about it, keyed by where in the file the
 /// answer applies.
 ///
@@ -138,8 +130,8 @@ pub struct Array {
 /// handful of rows holding one.
 #[derive(Debug, Default)]
 pub struct Reading {
-    /// The byte offset of a byte string's first byte, and the array it holds.
-    pub arrays: HashMap<u64, Array>,
+    /// The byte offset of a byte string's first byte, and what it holds.
+    pub arrays: HashMap<u64, Payload>,
     /// What an opcode does, in words, over the bytes the opcode covers.
     ///
     /// A range rather than the opcode's own offset, because the field asking
@@ -282,6 +274,11 @@ impl Run {
             0x63 | 0x69 => {
                 let (module, name) = pair(&op.operand);
                 let named = Value::Global { module, name };
+                if let Some(full) = named.global() {
+                    if let Some(word) = known::what(&full) {
+                        self.say(op, word.to_string());
+                    }
+                }
                 match op.code {
                     // INST names a class and calls it in one opcode, on the
                     // arguments back to the mark. The mark is taken first: the
@@ -304,8 +301,11 @@ impl Run {
                     return Some(());
                 };
                 // The two strings are already rows above this one, but they
-                // are rows apart and neither says it is half of a name.
-                self.say(op, format!("names {module}.{name}"));
+                // are rows apart and neither says it is half of a name. Where
+                // the name is one anybody knows, saying what it is beats
+                // saying it again.
+                let full = format!("{module}.{name}");
+                self.say(op, known::what(&full).map_or(format!("names {full}"), str::to_string));
                 self.push(Value::Global { module: module.into(), name: name.into() });
             }
 
@@ -429,7 +429,10 @@ impl Run {
     /// What a call is, in words, and whether its arguments describe an array.
     fn note(&mut self, op: &Op, callable: &Value, args: &[Value]) {
         if let Some(name) = callable.global() {
-            self.say(op, format!("calls {name}"));
+            // What it is where anybody knows, and what it is called where
+            // nobody does. Never both: the module and the name are already
+            // two rows above this one.
+            self.say(op, known::what(&name).map_or_else(|| format!("calls {name}"), str::to_string));
         }
         self.record(callable, args);
     }
@@ -462,7 +465,8 @@ impl Run {
         }
         if let Value::Call { callable, .. } = object {
             if let Some(name) = callable.global() {
-                self.say(op, format!("fills in {name}"));
+                let what = known::what(&name).unwrap_or(&name).to_string();
+                self.say(op, format!("fills in {what}"));
             }
             let items = state.tuple().unwrap_or(std::slice::from_ref(state));
             self.record(callable, items);
@@ -473,8 +477,8 @@ impl Run {
     /// where the answer's bytes are.
     fn record(&mut self, callable: &Value, args: &[Value]) {
         let Some(name) = callable.global() else { return };
-        let Some((at, len, array, what)) = arrays::recognise(&name, args) else { return };
-        self.out.arrays.insert(at, array);
+        let Some((at, len, payload, what)) = known::recognise(&name, args) else { return };
+        self.out.arrays.insert(at, payload);
         // Filed against the bytes rather than against the opcode that
         // recognised them: the data is somewhere earlier in the file, and it
         // is the row a reader will be looking at.

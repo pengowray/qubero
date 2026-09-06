@@ -44,9 +44,9 @@ pub enum Deduce {
     /// Which of `formats::npy::dtypes()` the bytes under this field hold, as
     /// an index into that table, or -1 where the pickle does not describe them
     /// as an array at all.
-    ArrayDtype,
+    PayloadShape,
     /// How many values of that dtype the bytes hold.
-    ArrayElements,
+    PayloadCount,
     /// What the opcode this field belongs to does, in words: the callable a
     /// `REDUCE` calls, the object a memo reference points at, the class a
     /// `STACK_GLOBAL` names. Empty where there is nothing to say.

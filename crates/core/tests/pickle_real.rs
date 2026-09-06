@@ -161,6 +161,129 @@ fn an_array_is_read_as_the_numbers_it_holds() {
     assert!(checked >= 8, "only {checked} array samples found");
 }
 
+/// A packed record is read as the fields packed into it.
+///
+/// `datetime.datetime` writes its whole value as ten bytes and hands them to
+/// the class. Nothing beside them says the year is big-endian, the
+/// microseconds take three bytes, or that the top bit of the month is the
+/// `fold` flag that tells the two two-o'clocks apart on the night a clock goes
+/// back. The sample holds both folds, so the bit is read and not assumed.
+#[test]
+fn a_packed_date_is_read_as_the_fields_in_it() {
+    let Some(dir) = folder() else { return };
+    let path = dir.join("proto4-datetime.pickle");
+    let Ok(bytes) = std::fs::read(&path) else { return };
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
+
+    let mut found = Vec::new();
+    fields(&doc, &mut ev, &[], &mut found, 0);
+    let named = |ty: &str, field: &str| -> Vec<i128> {
+        found.iter().filter(|(t, f, _)| t == ty && f == field).map(|(_, _, v)| *v).collect()
+    };
+    assert_eq!(named("DateTime", "year"), vec![2026; 3], "three datetimes, all this year");
+    assert_eq!(named("Date", "month"), vec![9]);
+    assert_eq!(named("Date", "day"), vec![6]);
+    assert_eq!(named("Time", "microsecond"), vec![250_000]);
+    // One of the three datetimes is the second two o'clock, and the bit that
+    // says so is inside the month byte.
+    let folds = named("DateTime", "fold");
+    assert_eq!(folds.iter().filter(|f| **f == 1).count(), 1, "folds were {folds:?}");
+    assert!(named("DateTime", "month").contains(&4), "the folded one is in April: {:?}", named("DateTime", "month"));
+}
+
+/// Every field of every packed record, as its record's type, its own name and
+/// its value.
+fn fields(
+    doc: &Document<MemSource>,
+    ev: &mut Evaluator,
+    at: &[usize],
+    out: &mut Vec<(String, String, i128)>,
+    depth: usize,
+) {
+    if depth > 10 {
+        return;
+    }
+    let Ok(node) = ev.node(doc, at) else { return };
+    if matches!(node.type_name.as_str(), "Date" | "Time" | "DateTime") {
+        for i in 0..node.child_count as usize {
+            let mut child = at.to_vec();
+            child.push(i);
+            if let Ok(f) = ev.node(doc, &child) {
+                if let Some(v) = f.value.as_int() {
+                    out.push((node.type_name.clone(), f.name.clone(), v));
+                }
+            }
+        }
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = at.to_vec();
+        next.push(i);
+        fields(doc, ev, &next, out, depth + 1);
+    }
+}
+
+/// Each library's samples say what they are.
+///
+/// A pickle names a callable and nothing else, so a reader that does not know
+/// the name shows a module path and leaves the rest to the reader's memory.
+/// These are the names worth knowing, and the check is that the phrase reaches
+/// the row rather than that any particular row has it: the module paths move
+/// between versions and the phrases are matched on the part that does not.
+#[test]
+fn the_libraries_worth_knowing_are_named() {
+    let Some(dir) = folder() else { return };
+    let want: &[(&str, &str)] = &[
+        ("proto4-numpy-array.pickle", "a numpy array"),
+        ("proto5-pandas-dataframe.pickle", "a pandas DataFrame"),
+        ("proto5-pandas-series.pickle", "a pandas Series"),
+        ("proto5-pandas-index-types.pickle", "a category column"),
+        ("proto2-torch-state-dict.pickle", "a torch tensor"),
+        ("proto4-scipy-csr-matrix.pickle", "a CSR sparse matrix"),
+        ("proto4-scipy-csc-matrix.pickle", "a CSC sparse matrix"),
+        ("proto4-scipy-coo-matrix.pickle", "a COO sparse matrix"),
+        ("proto4-sklearn-random-forest.pickle", "a scikit-learn estimator"),
+        ("proto4-sklearn-pipeline.pickle", "a scikit-learn estimator"),
+        ("proto4-datetime.pickle", "a length of time"),
+        ("proto4-collections.pickle", "a tally"),
+        ("proto4-builtins.pickle", "a slice"),
+    ];
+    let mut checked = 0;
+    for (file, phrase) in want {
+        let Ok(bytes) = std::fs::read(dir.join(file)) else { continue };
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
+        let mut said = Vec::new();
+        words(&doc, &mut ev, &[], &mut said, 0);
+        assert!(said.iter().any(|w| w.contains(phrase)), "{file}: nothing said {phrase:?}; it said {said:?}");
+        checked += 1;
+    }
+    assert!(checked >= 10, "only {checked} of the library samples were there");
+}
+
+/// Everything the run of the file had to say, one string per row that said
+/// anything.
+fn words(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], out: &mut Vec<String>, depth: usize) {
+    if depth > 10 {
+        return;
+    }
+    let Ok(node) = ev.node(doc, at) else { return };
+    if node.type_name == "computed text" {
+        if let Value::Str(text) = &node.value {
+            if !text.is_empty() {
+                out.push(text.clone());
+            }
+        }
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = at.to_vec();
+        next.push(i);
+        words(doc, ev, &next, out, depth + 1);
+    }
+}
+
 /// A file that has not all arrived yet is not run as a program.
 ///
 /// The machine reads the whole file, and in the browser a file arrives a chunk
