@@ -483,6 +483,21 @@ function build(tab: Tab): Page {
     overview.reveal(path);
     structure.reveal(path);
   };
+  // Pointing at a row in the "Depends on" list marks that field over the bytes.
+  // The sidebar names the field and the grid says where it is; between them
+  // that is the whole answer, and neither has to be clicked for it.
+  inspector.onHoverField = (path) => {
+    if (path === null || !inFile(path)) {
+      view.markHover(null);
+      return;
+    }
+    const n = doc.templateNode(path);
+    if (n.status !== "ok") {
+      view.markHover(null);
+      return;
+    }
+    view.markHover({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
+  };
   inspector.onOpenTab = openEmbedded;
   /**
    * Open a compressed run as a document of its own, or bring its tab to the
@@ -761,8 +776,10 @@ function build(tab: Tab): Page {
   // How many of the fields it would have drawn were nowhere on screen. Said
   // rather than left out: an arrow that is not there because the field is a
   // thousand rows away looks exactly like no dependency at all.
-  view.links.onOffScreen = (n) => {
-    linksNote.textContent = n === 0 ? "" : LINKS.offScreen(n);
+  view.links.onOffScreen = (ends) => {
+    linksNote.textContent = LINKS.offScreen(
+      ends.map((e) => ({ name: e.end.label, at: formatOffset(e.end.startBit), above: e.above })),
+    );
   };
 
   // Hex and Listing are two readings of the same file, so they share the

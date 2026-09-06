@@ -68,13 +68,17 @@ export class HexLinks {
   /** Bytes the grid is showing, so a field far off screen is known to be off
    *  screen without probing for a box that cannot exist. */
   private window = { start: 0, end: 0 };
-  /** How many of the fields on the plan were nowhere on screen, for the line
-   *  the status bar shows. */
-  private missed = 0;
+  /** The field the pointer is on in the sidebar. See `setHover`. */
+  private hover: { readonly startBit: number; readonly endBit: number } | null = null;
+  /** Which fields on the plan were nowhere on screen, for the line the status
+   *  bar shows. Kept so the line is written again only when it would say
+   *  something else. */
+  private missed = "";
 
-  /** Told when the count of off-screen ends changes, so the status bar can
-   *  say so without the view polling it. */
-  onOffScreen: (n: number) => void = () => {};
+  /** Told when the off-screen ends change, so the status bar can say which
+   *  fields they are without the view polling for them. A field is above the
+   *  screen when it starts before the first byte drawn. */
+  onOffScreen: (ends: readonly { end: LinkEnd; above: boolean }[]) => void = () => {};
 
   constructor(private readonly boxOf: ByteBox) {
     this.el = svg("svg", { class: "hv-links" });
@@ -88,9 +92,9 @@ export class HexLinks {
     if (this.on === on) return;
     this.on = on;
     if (!on) {
-      this.el.replaceChildren();
-      this.missed = 0;
-      this.onOffScreen(0);
+      this.clearShapes();
+      this.missed = "";
+      this.onOffScreen([]);
     }
   }
 
@@ -101,6 +105,25 @@ export class HexLinks {
   /** The field the cursor moved to, and what it depends on. */
   setPlan(plan: LinkPlan): void {
     this.plan = plan;
+  }
+
+  /**
+   * The field the pointer is resting on in the sidebar, marked over the bytes.
+   *
+   * Drawn here rather than as a mark on the cells because a mark on the cells
+   * is a class per byte computed on every frame, and the hex view already
+   * carries three of those. A box drawn over the top costs one rectangle and
+   * nothing at all while nothing is hovered. Answered whether or not the
+   * arrows are switched on: pointing at a row in the sidebar is a question
+   * about where that field is, and it deserves an answer either way.
+   */
+  setHover(range: { readonly startBit: number; readonly endBit: number } | null): boolean {
+    const same =
+      (range === null && this.hover === null) ||
+      (range !== null && this.hover !== null && range.startBit === this.hover.startBit && range.endBit === this.hover.endBit);
+    if (same) return false;
+    this.hover = range;
+    return true;
   }
 
   /** Which bytes the grid is showing, from the view's own viewport event. */
@@ -117,12 +140,22 @@ export class HexLinks {
    * layout for the whole overlay, after the view has already taken its own.
    */
   draw(width: number, height: number): void {
-    if (!this.on) return;
+    if (!this.on && this.hover === null) {
+      if (this.el.firstElementChild?.nextElementSibling !== undefined) this.clearShapes();
+      return;
+    }
     this.el.setAttribute("viewBox", `0 0 ${Math.round(width)} ${Math.round(height)}`);
     this.el.setAttribute("width", String(Math.round(width)));
     this.el.setAttribute("height", String(Math.round(height)));
-    const target = this.plan.target === null ? [] : this.boxes(this.plan.target.startBit, this.plan.target.endBit);
     const parts: SVGElement[] = [];
+    if (this.hover !== null) {
+      for (const b of this.boxes(this.hover.startBit, this.hover.endBit)) parts.push(this.outline(b, "hv-link-hover"));
+    }
+    if (!this.on) {
+      this.el.replaceChildren(arrowDefs(), ...parts);
+      return;
+    }
+    const target = this.plan.target === null ? [] : this.boxes(this.plan.target.startBit, this.plan.target.endBit);
     if (this.plan.parent !== null) {
       const p = this.boxes(this.plan.parent.startBit, this.plan.parent.endBit);
       for (const b of p) parts.push(this.outline(b, "hv-link-parent"));
@@ -131,20 +164,24 @@ export class HexLinks {
     // Where the arrows land: the left edge of the field, which is the side the
     // gutter is on and so the side an arrow can reach without crossing bytes.
     const head = target[0] ?? null;
-    let missed = 0;
+    const missed: { end: LinkEnd; above: boolean }[] = [];
     for (const end of this.plan.from) {
       const boxes = this.boxes(end.startBit, end.endBit);
       const source = boxes[0] ?? null;
       if (source === null || head === null) {
-        missed++;
+        missed.push({ end, above: Math.floor(end.startBit / 8) < this.window.start });
         continue;
       }
       for (const b of boxes) parts.push(this.outline(b, "hv-link-source"));
       parts.push(...this.arrow(source, head, end.role, height));
     }
-    this.el.replaceChildren(...parts);
-    if (missed !== this.missed) {
-      this.missed = missed;
+    this.el.replaceChildren(arrowDefs(), ...parts);
+    // Written again only when the answer changed. Every scroll redraws the
+    // overlay, and a status line rewritten on every frame is a status line the
+    // reader cannot finish reading.
+    const key = missed.map((m) => `${m.end.startBit}${m.above ? "^" : "v"}`).join(",");
+    if (key !== this.missed) {
+      this.missed = key;
       this.onOffScreen(missed);
     }
   }
@@ -176,6 +213,12 @@ export class HexLinks {
     }
     if (run !== null) out.push(run);
     return out;
+  }
+
+  /** Everything but the arrowhead, which every arrow shares and which costs
+   *  nothing to leave in place. */
+  private clearShapes(): void {
+    this.el.replaceChildren(arrowDefs());
   }
 
   private outline(b: Box, cls: string): SVGElement {

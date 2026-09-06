@@ -687,11 +687,66 @@ export const COUNTED = (n: number): string => (n === 1 ? "1 match." : `${n.toLoc
 export const REPLACED = (n: number): string => (n === 1 ? "Replaced 1 match." : `Replaced ${n.toLocaleString()} matches.`);
 export const BAD_REPLACEMENT = "Replacement is hex too: pairs of digits, like 00 ff";
 
-/** The arrows over the hex grid, and the graph view. Both show the same thing
- *  the "Depends on" list shows, so the words for it are here rather than in
- *  either view, and neither can drift from the other. */
+/** The arrows over the hex grid, and the graph view. Both show what the
+ *  "Depends on" list shows, so the words for it are here rather than in either
+ *  view, and neither can drift from the other. */
 export const LINKS = {
-  button: "TODO:links-button",
-  title: "TODO:links-title",
-  offScreen: (n: number): string => `TODO:links-offscreen ${n}`,
+  button: "Dependencies",
+  title: "Draw arrows from the fields the field at the cursor depends on, and outline the structure it is in",
+  /**
+   * A dependency the overlay could not draw because the field it leaves from
+   * is not on screen.
+   *
+   * The field is named rather than counted: an arrow that is missing because
+   * its far end is a thousand rows away looks exactly like no dependency at
+   * all, and the name is what lets the reader go and find it. Past three the
+   * line would not fit, so the rest are counted.
+   */
+  offScreen: (fields: readonly { name: string; at: string; above: boolean }[]): string => {
+    const first = fields[0];
+    if (first === undefined) return "";
+    if (fields.length === 1) {
+      return `Depends on ${first.name} at ${first.at}, off screen ${first.above ? "above" : "below"}.`;
+    }
+    const named = fields.slice(0, 3).map((f) => `${f.name} at ${f.at}`);
+    const rest = fields.length - named.length;
+    const list = rest > 0 ? `${named.join(", ")}, and ${rest.toLocaleString()} more` : named.join(", ");
+    return `Depends on ${fields.length.toLocaleString()} fields off screen: ${list}.`;
+  },
+};
+
+/** The graph view. */
+export const GRAPH = {
+  button: "Graph",
+  /** Kept on screen rather than shown once. A note about a slow layout that
+   *  has already gone by the time the layout is slow is no warning at all. */
+  experimental: "Experimental. Laying out a large file may be slow, or may not finish.",
+  /**
+   * More fields under the cursor than the view will lay out: what is shown,
+   * out of what there is, and the one thing the reader can do about it.
+   *
+   * `root` is null when the graph covers the whole file, where "a smaller part
+   * of the file" would be saying "the file" twice.
+   */
+  omitted: (shown: number, total: number, root: string | null): string => {
+    const where = root === null ? "this file" : root;
+    const smaller = root === null ? "it" : "the file";
+    return (
+      `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} fields in ${where}. ` +
+      `Put the cursor inside a smaller part of ${smaller} to lay out that part instead.`
+    );
+  },
+  /** Over the sliders. Each label finishes the sentence this starts: pull
+   *  together the fields that are of the same type, and so on. */
+  forcesHeading: "Pull together",
+  force: {
+    depends: "Dependencies",
+    kind: "Same type",
+    near: "Near in the file",
+    sibling: "Same parent",
+  },
+  /** The boundary drawn round the fields of one type. The count is the fact
+   *  the eye cannot get from the shape once a group holds more than a handful,
+   *  and it is what lets two groups be compared at a glance. */
+  hull: (kind: string, n: number): string => `${kind} Â· ${countText(n, "field")}`,
 };

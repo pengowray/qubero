@@ -1730,6 +1730,18 @@ export class HexView {
    * wrapped line of chips or a table of values makes any row taller than the
    * one above it, so there is no pitch to multiply by.
    */
+  /**
+   * Mark the field the reader is pointing at in the sidebar, or clear it.
+   *
+   * Redraws the overlay alone. The rows have not changed, so laying them out
+   * again to move one box would be the whole view's cost for none of its work.
+   */
+  markHover(range: BitRange | null): void {
+    if (!this.links.setHover(range)) return;
+    if (this.el.hidden || !this.el.isConnected) return;
+    this.links.draw(this.rowsEl.clientWidth, this.viewH);
+  }
+
   byteBox(byte: number): { x: number; y: number; w: number; h: number } | null {
     const bpr = this.bytesPerRow;
     const row = Math.floor(byte / bpr);
@@ -1768,10 +1780,8 @@ export class HexView {
     // After the rows have settled, so every box the arrows are measured
     // against is the box the browser drew. Costs nothing while the overlay is
     // switched off, which is what it is unless the reader asked for it.
-    if (this.links.enabled) {
-      this.links.setWindow(f.start * 8, endBit);
-      this.links.draw(this.rowsEl.clientWidth, this.viewH);
-    }
+    this.links.setWindow(f.start * 8, endBit);
+    this.links.draw(this.rowsEl.clientWidth, this.viewH);
   }
 
   render(): void {

@@ -3805,3 +3805,14 @@ table.rec tr.is-on td {
 .gv-slider input {
   width: 100%;
 }
+
+/* The field the pointer is resting on in the sidebar. Filled rather than
+   outlined: it answers "where is that one", and a wash is what the eye finds
+   without being told where to look. Translucent because the overlay is drawn
+   over the bytes, and the bytes are what the reader was sent here to see. */
+.hv-link-hover {
+  fill: var(--accent);
+  fill-opacity: 0.18;
+  stroke: var(--accent);
+  stroke-width: 1;
+}
