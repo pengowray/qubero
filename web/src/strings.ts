@@ -812,5 +812,5 @@ export const GRAPH = {
   /** The boundary drawn round the fields of one type. The count is the fact
    *  the eye cannot get from the shape once a group holds more than a handful,
    *  and it is what lets two groups be compared at a glance. */
-  hull: (kind: string, n: number): string => `${kind} Â· ${countText(n, "field")}`,
+  hull: (kind: string, n: number): string => `${kind} \u00b7 ${countText(n, "field")}`,
 };

@@ -265,8 +265,14 @@ export class GraphView {
         },
       } as cytoscape.LayoutOptions)
       .run();
-    this.measureHulls();
-    this.drawHulls();
+    // A frame later, because the first graph of a session is laid out in the
+    // same turn as the element it lives in was put on the page, and a board
+    // the browser has not sized yet gives the boundaries a canvas of nothing
+    // to be drawn on.
+    requestAnimationFrame(() => {
+      this.measureHulls();
+      this.drawHulls();
+    });
   }
 
   /**
@@ -401,11 +407,22 @@ export class GraphView {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      // The label goes on the topmost point of the boundary, outside it, where
-      // it names the group without landing on one of its fields.
+      // Above the boundary's highest point and clear of it, where it names the
+      // group without landing on a field. Overlapping labels are the one
+      // failure this view cannot afford: a boundary the reader cannot read the
+      // name of is a shape, and a shape says nothing.
       const top = hull.points.reduce((a, b) => (b[1] < a[1] ? b : a));
+      const tx = top[0] * zoom + pan.x;
+      const ty = top[1] * zoom + pan.y - 6;
       ctx.fillStyle = p.hullLabel;
-      ctx.fillText(hull.label, top[0] * zoom + pan.x, top[1] * zoom + pan.y - 4);
+      // A short bar of the ground colour under the words, so a label that ends
+      // up over an edge is still readable. The node labels are drawn by
+      // cytoscape on the canvas above this one, so they win where the two
+      // meet, which is the right way round: a field's own name matters more
+      // than the name of the crowd it is in.
+      ctx.textAlign = "center";
+      ctx.fillText(hull.label, tx, ty);
+      ctx.textAlign = "start";
       ctx.fillStyle = p.hullFill;
     }
   }
