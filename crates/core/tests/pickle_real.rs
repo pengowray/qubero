@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats;
-use qubero_core::source::MemSource;
+use qubero_core::source::{ChunkStore, MemSource};
 
 #[test]
 fn every_pickle_is_opcodes_all_the_way_to_the_full_stop() {
@@ -159,6 +159,68 @@ fn an_array_is_read_as_the_numbers_it_holds() {
         eprintln!("{name}: {typed:?}");
     }
     assert!(checked >= 8, "only {checked} array samples found");
+}
+
+/// A file that has not all arrived yet is not run as a program.
+///
+/// The machine reads the whole file, and in the browser a file arrives a chunk
+/// at a time. Running it over the chunks that have turned up, with zeros where
+/// the rest will be, would give an answer about a file nobody has: a shape
+/// read out of zeros, a length that happens to agree, an array of nothing. And
+/// the answer is remembered, so it would still be wrong once the bytes landed.
+///
+/// So the run goes through the same read every field goes through, and says
+/// "not yet" the same way. This feeds a real sample in one chunk at a time and
+/// checks that the array reads as an array only once the last of it is there.
+#[test]
+fn a_file_still_arriving_is_not_run_as_a_program() {
+    let Some(dir) = folder() else { return };
+    let path = dir.join("proto4-numpy-array.pickle");
+    let Ok(bytes) = std::fs::read(&path) else { return };
+
+    const CHUNK: u64 = 64;
+    let mut doc = Document::new(ChunkStore::new(bytes.len() as u64, CHUNK, 64));
+    let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
+    let chunks = bytes.len().div_ceil(CHUNK as usize);
+
+    for n in 0..chunks {
+        let from = n * CHUNK as usize;
+        let to = (from + CHUNK as usize).min(bytes.len());
+        doc.source_mut().insert(n as u64, bytes[from..to].to_vec().into_boxed_slice());
+        let mut typed = Vec::new();
+        chunked_payloads(&doc, &mut ev, &[], &mut typed, 0);
+        // Nothing may be claimed until the file is whole, and everything must
+        // be claimed once it is.
+        match n + 1 == chunks {
+            false => assert!(typed.is_empty(), "read {typed:?} from {} of {chunks} chunks", n + 1),
+            true => assert_eq!(typed, vec![("f32 le".to_string(), 24)], "the whole file"),
+        }
+    }
+}
+
+/// The same walk as [`payloads`], over a source that may still be fetching.
+/// A node that is not there yet is not a node that read as bytes, so the walk
+/// simply stops there.
+fn chunked_payloads(
+    doc: &Document<ChunkStore>,
+    ev: &mut Evaluator,
+    at: &[usize],
+    out: &mut Vec<(String, u64)>,
+    depth: usize,
+) {
+    if depth > 10 {
+        return;
+    }
+    let Ok(node) = ev.node(doc, at) else { return };
+    if node.name == "value" && node.composite && node.type_name != "bytes[]" && node.type_name.ends_with("[]") {
+        out.push((node.type_name.trim_end_matches("[]").to_string(), node.child_count));
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = at.to_vec();
+        next.push(i);
+        chunked_payloads(doc, ev, &next, out, depth + 1);
+    }
 }
 
 /// Every payload that was read as an array rather than as bytes, as the

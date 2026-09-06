@@ -21,6 +21,12 @@
 //! the `.npy` reader uses. That is deliberate: a `.npy` file and a pickled
 //! array hold the same bytes described the same way, and two tables would
 //! drift.
+//!
+//! None of this reaches a pickle written at protocol 2 or below, and nothing
+//! is wrong when it does not. Those protocols have no bytes object, so numpy
+//! writes an array as Latin-1 text handed to `_codecs.encode`: the file holds
+//! the text's UTF-8, not the array's bytes, and there is nothing in place to
+//! type. Protocol 3 brought `BINBYTES` and every array since is verbatim.
 
 use std::sync::OnceLock;
 
@@ -64,10 +70,12 @@ fn array(data: &Value, dtype: &Value, shape: &Value) -> Option<(u64, u64, Array,
     if elements.checked_mul(width)? != *len {
         return None;
     }
+    // numpy's own spelling of a shape, which is what the reader will have
+    // typed to make the array and what every traceback about it will say.
     let shown = match dims.len() {
-        0 => "a scalar".to_string(),
-        1 => format!("{}", dims[0]),
-        _ => dims.iter().map(u64::to_string).collect::<Vec<_>>().join(" x "),
+        0 => "()".to_string(),
+        1 => format!("({},)", dims[0]),
+        _ => format!("({})", dims.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")),
     };
     Some((*at, *len, Array { dtype: index, elements }, format!("{dtype} array, {shown}")))
 }
@@ -124,7 +132,7 @@ mod tests {
         let (at, _, array, word) = recognise("numpy._core.multiarray._reconstruct", &args).expect("an array");
         assert_eq!(at, 0x9b);
         assert_eq!(array.elements, 24);
-        assert!(word.contains("4 x 6"), "said {word:?}");
+        assert!(word.contains("(4, 6)"), "said {word:?}");
     }
 
     /// numpy 1 wrote `numpy.core`, numpy 2 writes `numpy._core`, and a file

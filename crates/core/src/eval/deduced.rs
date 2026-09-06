@@ -36,17 +36,21 @@ impl Evaluator {
             return fail("this file is not being read as a pickle");
         }
         // The whole file, because a pickle is the whole file and the answer
-        // for a byte near the end depends on every opcode before it. The size
-        // is what the source has; a pickle too large to hold is a pickle that
-        // reads as opcodes and nothing more.
+        // for a byte near the end depends on every opcode before it. Too large
+        // to hold is a file that reads as opcodes and nothing more, which is
+        // an answer rather than a failure and is worth remembering.
         let len = doc.len_bits() / 8;
-        if len > MOST_BYTES {
+        if len > most_bytes() {
             let empty = Arc::new(machine::Reading::default());
             self.memo.remember_deduced(empty.clone());
             return Ok(empty);
         }
-        let mut bytes = vec![0u8; len as usize];
-        doc.read_bytes(0, &mut bytes);
+        // Through the evaluator's own read, which is what says a chunk has
+        // not arrived yet. Reading the document directly would hand the
+        // machine a run of zeros where the file has not been fetched, and the
+        // answer worked out from those would then be remembered as if it were
+        // the file's. `Pending` goes back up and the caller asks again.
+        let bytes = self.read_in(doc, 0, 0, len * 8)?;
         let run = Arc::new(machine::run(&pickle::opcodes(&bytes)));
         self.memo.remember_deduced(run.clone());
         Ok(run)
@@ -117,4 +121,12 @@ const NOTHING: i128 = -1;
 /// The largest file run as a program. Past this the opcodes are still listed
 /// and placed; only the annotation stops, which is the part that costs memory
 /// proportional to what is in the file rather than to what is on screen.
-const MOST_BYTES: u64 = 256 << 20;
+///
+/// Lower in the browser, where the whole address space is four gigabytes and
+/// a copy of the file is a copy the tab can fail to make.
+fn most_bytes() -> u64 {
+    match cfg!(target_pointer_width = "32") {
+        true => 64 << 20,
+        false => 256 << 20,
+    }
+}

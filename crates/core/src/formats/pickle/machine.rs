@@ -132,9 +132,9 @@ pub struct Array {
 /// What running the pickle said about it, keyed by where in the file the
 /// answer applies.
 ///
-/// Two maps rather than one structure per opcode, because they are asked
-/// separately and most opcodes are in neither: a listing asks what a row
-/// builds for every row it draws, and asks what a payload is only for the
+/// Kept apart rather than as one structure per opcode, because the two are
+/// asked separately and most opcodes are in neither: a listing asks what a row
+/// builds for every row it draws, and asks what a payload holds only for the
 /// handful of rows holding one.
 #[derive(Debug, Default)]
 pub struct Reading {
@@ -150,6 +150,11 @@ pub struct Reading {
     /// Whether the run finished. A reading that gave up part way is still
     /// worth keeping: the opcodes before the trouble were read correctly.
     pub whole: bool,
+    /// What was left on the stack. A pickle that ran properly leaves the one
+    /// object it built, so anything else says the model of some opcode's
+    /// stack effect is wrong. Nothing reads it but the tests, which is the
+    /// point: it is the check `pickletools.dis` does and a listing cannot.
+    pub left: usize,
 }
 
 impl Reading {
@@ -162,8 +167,8 @@ impl Reading {
     }
 }
 
-/// One opcode of the file, as the caller found it: where its own byte is,
-/// where its operand starts, and what the operand holds.
+/// One opcode of the file, as the caller found it: where it is, where its
+/// value is, and what that value holds.
 ///
 /// Handed in rather than parsed again here, so there is one place that knows
 /// how wide an operand is and the machine cannot drift from the listing.
@@ -276,13 +281,19 @@ impl Run {
             // Naming a callable, the two ways.
             0x63 | 0x69 => {
                 let (module, name) = pair(&op.operand);
-                self.push(Value::Global { module, name });
-                if op.code == 0x69 {
-                    // INST calls the class it names straight away, on the
-                    // arguments back to the mark.
-                    let args: Arc<[Value]> = Arc::from(self.to_mark()?);
-                    let callable = Arc::new(self.stack.pop()?);
-                    self.push(Value::Call { callable, args });
+                let named = Value::Global { module, name };
+                match op.code {
+                    // INST names a class and calls it in one opcode, on the
+                    // arguments back to the mark. The mark is taken first: the
+                    // class is the opcode's own operand and was never on the
+                    // stack, so pushing it before closing the mark would put
+                    // it among its own arguments.
+                    0x69 => {
+                        let args: Arc<[Value]> = Arc::from(self.to_mark()?);
+                        self.note(op, &named, &args);
+                        self.push(Value::Call { callable: Arc::new(named), args });
+                    }
+                    _ => self.push(named),
                 }
             }
             0x93 => {
@@ -324,9 +335,16 @@ impl Run {
                 self.note(op, &callable, &args);
                 self.push(Value::Call { callable, args });
             }
+            // OBJ takes the class from *inside* the mark: the mark is opened,
+            // the class pushed, then the arguments. So it is the first of what
+            // the mark gives back, not the item under the mark.
             0x6f => {
-                let args: Arc<[Value]> = Arc::from(self.to_mark()?);
-                let callable = Arc::new(self.stack.pop()?);
+                let mut items = self.to_mark()?;
+                if items.is_empty() {
+                    return None;
+                }
+                let callable = Arc::new(items.remove(0));
+                let args: Arc<[Value]> = Arc::from(items);
                 self.note(op, &callable, &args);
                 self.push(Value::Call { callable, args });
             }
@@ -367,9 +385,16 @@ impl Run {
                 self.push(v.unwrap_or(Value::Opaque));
             }
 
+            // A persistent id: the pickle names an object instead of writing
+            // it. `PERSID` has the name in its own operand; `BINPERSID` takes
+            // it off the stack, so it replaces a value rather than adding one.
+            0x51 => {
+                self.stack.pop()?;
+                self.push(Value::Opaque);
+            }
             // Everything left is a value this does not model, or an
             // instruction that changes nothing it tracks.
-            0x50 | 0x51 | 0x82 | 0x83 | 0x84 | 0x97 => self.push(Value::Opaque),
+            0x50 | 0x82 | 0x83 | 0x84 | 0x97 => self.push(Value::Opaque),
             0x98 => {}
             0x80 | 0x95 | 0x2e => {}
             _ => return None,
@@ -392,6 +417,7 @@ impl Run {
     fn settle(&mut self) {
         self.out.builds.sort_by_key(|(start, end, _)| (*start, *end));
         self.out.builds.dedup_by_key(|(start, _, _)| *start);
+        self.out.left = self.stack.len();
     }
 
     /// Everything above the innermost open mark, with the mark closed.
@@ -517,8 +543,7 @@ fn pair(bytes: &[u8]) -> (Arc<str>, Arc<str>) {
 /// What a memo reference points at, said briefly enough for a row.
 fn describe(v: &Value) -> Option<String> {
     Some(match v {
-        Value::Text(s) if s.chars().count() <= 48 => format!("the string {s:?}"),
-        Value::Text(_) => "a string".to_string(),
+        Value::Text(s) if !s.is_empty() && s.chars().count() <= 48 => format!("the string {s:?}"),
         Value::Int(n) => format!("the number {n}"),
         Value::Global { module, name } => format!("{module}.{name}"),
         Value::Call { callable, .. } => match callable.global() {
@@ -528,6 +553,9 @@ fn describe(v: &Value) -> Option<String> {
         Value::Tuple(items) => format!("a tuple of {}", items.len()),
         Value::Collection => "a list, set or dict".to_string(),
         Value::Bytes { len, .. } => format!("{len} bytes"),
+        // A string too long to have been kept, which is a payload rather than
+        // a name: its length is what there is to say about it.
+        Value::Text(_) => "a string".to_string(),
         Value::Dtype(descr) => format!("the dtype {descr}"),
         _ => return None,
     })
@@ -546,6 +574,34 @@ mod tests {
         // MARK, 1, 2, TUPLE, STOP
         let r = run(&ops(b"(K\x01K\x02t."));
         assert!(r.whole);
+        assert_eq!(r.left, 1);
+    }
+
+    /// A pickle that ran properly leaves one object on the stack, and every
+    /// opcode's stack effect has to be modelled right for that to come out.
+    /// The opcodes with the awkward ones are all in the hand-written sample:
+    /// `OBJ` takes its class from inside the mark, `INST` names its own and
+    /// takes the mark first, and `BINPERSID` replaces a value rather than
+    /// adding one.
+    #[test]
+    fn the_stack_balances_on_the_awkward_opcodes() {
+        let handmade = b"(S'quoted'\nU\x05shortT\x04\x00\x00\x00four20\
+                         (c__main__\nOldStyle\nK\x01o\
+                         (i__main__\nOther\n(K\x021t.";
+        let r = run(&ops(handmade));
+        assert!(r.whole, "the run gave up");
+        assert_eq!(r.left, 1, "a pickle leaves the one object it built");
+    }
+
+    /// A persistent id names an object rather than writing it, and takes the
+    /// name off the stack. Leaking a slot per id would put every later opcode
+    /// in a `torch.save` archive one out.
+    #[test]
+    fn a_persistent_id_replaces_the_name_it_used() {
+        // 'a' BINPERSID 'b' BINPERSID TUPLE2 STOP
+        let r = run(&ops(b"\x8c\x01aQ\x8c\x01bQ\x86."));
+        assert!(r.whole);
+        assert_eq!(r.left, 1);
     }
 
     #[test]
