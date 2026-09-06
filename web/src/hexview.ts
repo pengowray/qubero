@@ -25,6 +25,7 @@ import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
 import { placeChips, type Chip, type ChipBlock } from "./chipplan.js";
 import { asciiGlyph, HEX } from "./hexcell.js";
 import { HexRows } from "./hexrows.js";
+import { HexLinks } from "./hexlinks.js";
 import { headingHeight, headingsByRow, type HeadingSizes } from "./hexheadings.js";
 import { RowHeights, type StructuralExtra } from "./rowheights.js";
 import type { Cell } from "./doc.js";
@@ -374,6 +375,9 @@ export class HexView {
    *  a copy that did not happen has to say so where the user is looking. */
   private readonly notice: HTMLElement;
   private noticeTimer = 0;
+  /** The arrows drawn from the fields a field depends on to the field itself.
+   *  Off by default, and inert while it is off. */
+  readonly links: HexLinks;
 
   constructor(private readonly doc: Doc) {
     this.fetch = new ValueFetch(doc, () => this.render());
@@ -386,7 +390,10 @@ export class HexView {
     this.grid = new HexRows({ field: this.pickField, value: this.pickValue, heading: this.pressHeading });
     this.rowsEl = document.createElement("div");
     this.rowsEl.className = "hv-rows";
-    this.rowsEl.append(this.grid.inner, this.grid.pinned);
+    this.links = new HexLinks((byte) => this.byteBox(byte));
+    // Last, so the arrows are over the bytes rather than under them. It draws
+    // nothing until it is switched on, and never takes part in layout.
+    this.rowsEl.append(this.grid.inner, this.grid.pinned, this.links.el);
     const body = document.createElement("div");
     body.className = "hv-body";
     body.append(this.grid.header, this.rowsEl);
@@ -1715,6 +1722,25 @@ export class HexView {
 
   /** Put the rows at the scroll position, size the scrollbar thumb, and say
    *  what stretch of the file is on screen. */
+  /**
+   * Where one byte's hex cell is drawn, in the coordinates of the box the rows
+   * are clipped to. Null when that byte is not on screen.
+   *
+   * Read off the cell rather than worked out from a row height: a heading, a
+   * wrapped line of chips or a table of values makes any row taller than the
+   * one above it, so there is no pitch to multiply by.
+   */
+  byteBox(byte: number): { x: number; y: number; w: number; h: number } | null {
+    const bpr = this.bytesPerRow;
+    const row = Math.floor(byte / bpr);
+    const cell = this.grid.cellFor(row - this.topRow, byte - row * bpr);
+    if (cell === undefined) return null;
+    const host = this.rowsEl.getBoundingClientRect();
+    const r = cell.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return { x: r.left - host.left, y: r.top - host.top, w: r.width, h: r.height };
+  }
+
   private finish(real: readonly number[], trackH: number, f: Frame): void {
     this.grid.setOffset(this.topPx);
 
@@ -1737,7 +1763,15 @@ export class HexView {
     const top = limit === 0 ? 0 : Math.round((Math.min(this.scrollY, limit) / limit) * (trackH - thumbH));
     this.thumb.style.height = `${thumbH}px`;
     this.thumb.style.transform = `translateY(${top}px)`;
-    this.onViewport({ startBit: f.start * 8, endBit: Math.min(f.len, f.start + onScreen * f.bpr) * 8 });
+    const endBit = Math.min(f.len, f.start + onScreen * f.bpr) * 8;
+    this.onViewport({ startBit: f.start * 8, endBit });
+    // After the rows have settled, so every box the arrows are measured
+    // against is the box the browser drew. Costs nothing while the overlay is
+    // switched off, which is what it is unless the reader asked for it.
+    if (this.links.enabled) {
+      this.links.setWindow(f.start * 8, endBit);
+      this.links.draw(this.rowsEl.clientWidth, this.viewH);
+    }
   }
 
   render(): void {
