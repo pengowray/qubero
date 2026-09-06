@@ -9,7 +9,7 @@ import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, countText, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOrigin } from "./strings.js";
+import { bitSizeText, childWord, countText, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOrigin } from "./strings.js";
 import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
@@ -1251,7 +1251,7 @@ export class Inspector {
       if (fields.length === 0 && sums.length === 0) continue;
       const group = document.createElement("div");
       group.className = "insp-role";
-      group.append(roleHead(ROLE_GROUP[role]), ...fields.map(originRow), ...sums.map(relationRow));
+      group.append(roleHead(ROLE_GROUP[role] ?? role), ...fields.map(originRow), ...sums.map(relationRow));
       groups.push(group);
     }
     return groups;
@@ -1741,27 +1741,6 @@ function grouped(value: string): string {
  */
 const ROLE_ORDER = ["position", "length", "width", "count", "type", "value", "name"] as const;
 type OriginRole = (typeof ROLE_ORDER)[number];
-
-/**
- * What each group of rows decided. One noun each: the "Depends on" heading
- * above them has already supplied the subject and the verb, so a heading
- * repeated up to seven times down one narrow panel says the one word that is
- * not already on screen.
- *
- * `Bit width` is the exception. Beside `Length` a bare `Width` reads as a
- * synonym of it, and the unit is the entire difference between the two
- * questions: a run of grid values is as long as the count says, and each value
- * in it is as wide as the packing said.
- */
-const ROLE_GROUP: Record<OriginRole, string> = {
-  position: "Position",
-  length: "Length",
-  width: "Bit width",
-  count: "Count",
-  type: "Type",
-  value: "Value",
-  name: "Name",
-};
 
 /** The control that folds the steps above the nearest one away, counted in
  *  levels rather than rows: a row is a field or a formula and counting both

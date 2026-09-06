@@ -101,6 +101,11 @@ export class GraphView {
   private weights: Weights = { ...DEFAULT_WEIGHTS };
   private hulls: Hull[] = [];
   private input: GraphInput | null = null;
+  /** Whether the next layout is this graph's first, which is the only one that
+   *  should start from random positions. See `relayout`. */
+  private first = true;
+  /** The colours, resolved once per graph. See `readPalette`. */
+  private palette: Palette | null = null;
   /** Paths by cytoscape node id, so a tap can be answered with a field. */
   private paths = new Map<string, readonly number[]>();
 
@@ -170,15 +175,15 @@ export class GraphView {
       ? GRAPH.omitted(graph.nodes.length, graph.nodes.length + graph.omitted, rootName)
       : GRAPH.experimental;
     this.note.classList.toggle("is-warn", cut);
+    this.palette = readPalette(this.el);
     this.cy?.destroy();
     this.cy = cytoscape({
       container: this.board,
       elements: this.elements(graph),
-      style: STYLE,
+      style: stylesheet(this.palette),
       // The reader is looking for shape, and a hundred labels drawn at once
       // while the layout is still moving is the slowest part of the frame.
       textureOnViewport: true,
-      pixelRatio: 1,
       wheelSensitivity: 0.2,
     });
     this.cy.on("tap", "node[path]", (e) => {
@@ -186,8 +191,12 @@ export class GraphView {
       const p = this.paths.get(id);
       if (p !== undefined) this.onPick(p);
     });
-    this.cy.on("render", () => this.drawHulls());
-    this.relayout();
+    this.cy.on("viewport render", () => this.drawHulls());
+    this.first = true;
+    // One frame late, so the note above has been painted before the layout
+    // takes the thread. A warning about a slow layout that arrives after the
+    // slow layout has finished is not a warning.
+    requestAnimationFrame(() => this.relayout());
   }
 
   /** Which field the rest of the app is on, marked here too. Nothing moves:
@@ -196,14 +205,16 @@ export class GraphView {
     const cy = this.cy;
     if (cy === null) return;
     cy.batch(() => {
-      cy.elements().removeClass("is-here is-near");
+      cy.elements().removeClass("is-here is-dim");
       if (path === null) return;
       const node = cy.getElementById(idOf(path));
       if (node.empty()) return;
+      // Everything but this field and what it touches steps back. Marking the
+      // one node would be lost in two thousand; dimming the rest is the same
+      // fact said in a way that survives the crowd.
+      const keep = node.closedNeighborhood();
+      cy.elements().difference(keep).addClass("is-dim");
       node.addClass("is-here");
-      // Its neighbours too: the question the view answers is what this field
-      // is connected to, and dimming everything else is how it gets asked.
-      node.neighborhood().addClass("is-near");
     });
   }
 
@@ -212,17 +223,23 @@ export class GraphView {
     const cy = this.cy;
     if (cy === null) return;
     const w = this.weights;
+    // Only the first layout of a graph starts from nowhere. A slider moved
+    // afterwards is a question about what changes, and starting from random
+    // positions again would throw away the picture being compared against.
+    const randomize = this.first;
+    this.first = false;
     cy
       .layout({
         name: "fcose",
         quality: "default",
         animate: false,
-        randomize: true,
+        randomize,
         nodeRepulsion: () => 6000,
         // A force turned down does not vanish; it gets long and slack, which
-        // is what "pulls less" means to a spring layout. A force at zero is
-        // dropped in `elements` instead, since a spring of infinite length is
-        // still a spring the solver has to think about.
+        // is what "pulls less" means to a spring layout. At zero the spring is
+        // left in but made long enough to be beyond anything else on screen,
+        // which is as close to absent as a solver that must see every edge
+        // can get.
         idealEdgeLength: (e: cytoscape.EdgeSingular) => {
           const cls = String(e.data("force")) as keyof Weights;
           const base = IDEAL[cls] ?? 80;
@@ -349,14 +366,17 @@ export class GraphView {
     // over the whole graph and a hull round them is a shape that crosses
     // everything, saying the opposite of what it means.
     if (this.weights.kind < HULL_PULL_MIN) return;
+    const p = this.palette;
+    if (p === null) return;
     const zoom = cy.zoom();
     const pan = cy.pan();
-    const style = getComputedStyle(this.el);
-    ctx.strokeStyle = style.getPropertyValue("--gv-hull").trim() || "#8888";
-    ctx.fillStyle = style.getPropertyValue("--gv-hull-fill").trim() || "#8881";
+    // Read once when the graph was built, not here: this runs on every frame
+    // of a pan, and `getComputedStyle` is a forced style recalculation.
+    ctx.strokeStyle = p.hull;
+    ctx.fillStyle = p.hullFill;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
-    ctx.font = `11px ${style.getPropertyValue("--sans").trim() || "sans-serif"}`;
+    ctx.font = `11px ${p.sans}`;
     for (const hull of this.hulls) {
       ctx.beginPath();
       hull.points.forEach(([x, y], i) => {
@@ -371,9 +391,9 @@ export class GraphView {
       // The label goes on the topmost point of the boundary, outside it, where
       // it names the group without landing on one of its fields.
       const top = hull.points.reduce((a, b) => (b[1] < a[1] ? b : a));
-      ctx.fillStyle = style.getPropertyValue("--gv-hull-label").trim() || "#888";
+      ctx.fillStyle = p.hullLabel;
       ctx.fillText(hull.label, top[0] * zoom + pan.x, top[1] * zoom + pan.y - 4);
-      ctx.fillStyle = style.getPropertyValue("--gv-hull-fill").trim() || "#8881";
+      ctx.fillStyle = p.hullFill;
     }
   }
 
@@ -453,37 +473,98 @@ function expand(hull: readonly [number, number][], by: number): [number, number]
   });
 }
 
-/** How the graph is drawn. Colours come from the same CSS variables every
- *  other view reads, so a field is the colour here that it is in the listing. */
-const STYLE: cytoscape.StylesheetJson = [
-  {
-    selector: "node",
-    style: {
-      "background-color": "var(--field-color)",
-      width: "mapData(weight, 0, 24, 10, 46)",
-      height: "mapData(weight, 0, 24, 10, 46)",
-      label: "data(label)",
-      "font-size": "9px",
-      color: "var(--fg)",
-      "text-valign": "center",
-      "text-halign": "right",
-      "text-margin-x": 3,
-      "min-zoomed-font-size": 8,
+/**
+ * The colours the graph is drawn in, read off the page.
+ *
+ * Cytoscape draws to a canvas and parses its own style language, in which
+ * `var(--accent)` means nothing: a stylesheet written in CSS variables comes
+ * out silently grey. So the five field colours and the interface ones are
+ * looked up once, by putting an element of each class in the view and asking
+ * the browser what it made of it. Doing that at `show` is also what gets dark
+ * mode right without this file having to know there is such a thing.
+ */
+type Palette = {
+  readonly field: Readonly<Record<string, string>>;
+  readonly accent: string;
+  readonly fg: string;
+  readonly line: string;
+  readonly hull: string;
+  readonly hullFill: string;
+  readonly hullLabel: string;
+  readonly sans: string;
+};
+
+/** The classes `fieldClass` can hand back, which are the ones worth asking
+ *  about. */
+const FIELD_CLASSES = ["field-number", "field-text", "field-marker", "field-category", "field-structure", "field-binary"] as const;
+
+function readPalette(host: HTMLElement): Palette {
+  const probe = document.createElement("span");
+  probe.style.display = "none";
+  host.append(probe);
+  const field: Record<string, string> = {};
+  for (const cls of FIELD_CLASSES) {
+    probe.className = cls;
+    field[cls] = getComputedStyle(probe).getPropertyValue("--field-color").trim() || "#888888";
+  }
+  probe.remove();
+  const own = getComputedStyle(host);
+  const at = (name: string, fallback: string): string => own.getPropertyValue(name).trim() || fallback;
+  return {
+    field,
+    accent: at("--accent", "#2457c5"),
+    fg: at("--fg", "#1b1b1f"),
+    line: at("--line", "#dcdfe4"),
+    hull: at("--gv-hull", "#8a90993d"),
+    hullFill: at("--gv-hull-fill", "#8a909914"),
+    hullLabel: at("--gv-hull-label", "#6b6f76"),
+    sans: at("--sans", "sans-serif"),
+  };
+}
+
+/** How the graph is drawn, in colours already resolved to what this page
+ *  shows. A field is the colour here that it is in the listing and in the hex
+ *  view, because both read the same variables. */
+function stylesheet(p: Palette): cytoscape.StylesheetJson {
+  const perClass = FIELD_CLASSES.map((cls) => ({
+    selector: `node.${cls}`,
+    style: { "background-color": p.field[cls] ?? "#888888" },
+  }));
+  return [
+    {
+      selector: "node",
+      style: {
+        "background-color": "#888888",
+        width: "mapData(weight, 0, 24, 10, 46)",
+        height: "mapData(weight, 0, 24, 10, 46)",
+        label: "data(label)",
+        "font-size": "9px",
+        color: p.fg,
+        "text-valign": "center",
+        "text-halign": "right",
+        "text-margin-x": 3,
+        "min-zoomed-font-size": 8,
+      },
     },
-  },
-  { selector: "node.gv-hub", style: { width: 1, height: 1, opacity: 0, label: "" } },
-  {
-    selector: "edge.gv-dep",
-    style: {
-      width: 1.2,
-      "line-color": "var(--accent)",
-      "target-arrow-color": "var(--accent)",
-      "target-arrow-shape": "triangle",
-      "arrow-scale": 0.6,
-      "curve-style": "straight",
+    ...perClass,
+    { selector: "node.gv-hub", style: { width: 1, height: 1, opacity: 0, label: "" } },
+    {
+      selector: "edge.gv-dep",
+      style: {
+        width: 1.2,
+        "line-color": p.accent,
+        "target-arrow-color": p.accent,
+        "target-arrow-shape": "triangle",
+        "arrow-scale": 0.6,
+        "curve-style": "straight",
+      },
     },
-  },
-  { selector: "edge.gv-soft", style: { width: 0.5, "line-color": "var(--line)", "curve-style": "haystack", opacity: 0.5 } },
-  { selector: "node.is-here", style: { "border-width": 2, "border-color": "var(--accent)", "z-index": 10 } },
-  { selector: ".is-near", style: { "z-index": 5 } },
-];
+    { selector: "edge.gv-soft", style: { width: 0.5, "line-color": p.line, "curve-style": "haystack", opacity: 0.5 } },
+    { selector: "node.is-here", style: { "border-width": 2, "border-color": p.accent, "z-index": 10 } },
+    // Everything that is neither the field at the cursor nor joined to it
+    // steps back, so "what is this connected to" is answered by looking
+    // instead of by tracing.
+    { selector: "node.is-dim", style: { opacity: 0.25 } },
+    { selector: "edge.is-dim", style: { opacity: 0.12 } },
+  ];
+}

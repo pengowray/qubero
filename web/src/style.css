@@ -3764,19 +3764,23 @@ table.rec tr.is-on td {
 }
 /* The graph itself. `position: relative` so the boundaries round each kind can
    be a canvas laid over it; cytoscape puts its own canvases in here too. */
+/* `isolation` so the stacking of the two canvases inside is settled here and
+   not by whatever the page around them does. */
 .gv-board {
   position: relative;
+  isolation: isolate;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 /* Behind the graph, and never clicked: the boundaries are something to look at,
-   not something to hit. */
+   not something to hit. First in the box and at the same level as cytoscape's
+   own canvases, so document order puts the nodes over them. */
 .gv-hulls {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
+  z-index: 0;
 }
 .gv-controls {
   width: 190px;

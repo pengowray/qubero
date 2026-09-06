@@ -15,6 +15,8 @@
 
 /** Where a byte is drawn, in the overlay's own coordinates. Null when that
  *  byte is not on screen. */
+import { roleLabel } from "./strings.js";
+
 export type ByteBox = (byte: number) => { x: number; y: number; w: number; h: number } | null;
 
 /** One field the selected field depends on, as the overlay needs it. */
@@ -305,7 +307,7 @@ export class HexLinks {
       y: String(r(Math.max(9, Math.min(height - 2, ly)))),
       "text-anchor": sameLine ? "middle" : "start",
     });
-    label.textContent = role;
+    label.textContent = roleLabel(role);
     return [path, label];
   }
 }

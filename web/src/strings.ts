@@ -687,6 +687,33 @@ export const COUNTED = (n: number): string => (n === 1 ? "1 match." : `${n.toLoc
 export const REPLACED = (n: number): string => (n === 1 ? "Replaced 1 match." : `Replaced ${n.toLocaleString()} matches.`);
 export const BAD_REPLACEMENT = "Replacement is hex too: pairs of digits, like 00 ff";
 
+/**
+ * What each group of rows decided. One noun each: the "Depends on" heading
+ * above them has already supplied the subject and the verb, so a heading
+ * repeated up to seven times down one narrow panel says the one word that is
+ * not already on screen.
+ *
+ * `Bit width` is the exception. Beside `Length` a bare `Width` reads as a
+ * synonym of it, and the unit is the entire difference between the two
+ * questions: a run of grid values is as long as the count says, and each value
+ * in it is as wide as the packing said.
+ */
+export const ROLE_GROUP: Readonly<Record<string, string>> = {
+  position: "Position",
+  length: "Length",
+  width: "Bit width",
+  count: "Count",
+  type: "Type",
+  value: "Value",
+  name: "Name",
+};
+
+/** The same words on an arrow over the hex grid. The core writes the role as
+ *  one lower-case word; the arrow says what the panel beside it says. */
+export function roleLabel(role: string): string {
+  return ROLE_GROUP[role] ?? role;
+}
+
 /** The arrows over the hex grid, and the graph view. Both show what the
  *  "Depends on" list shows, so the words for it are here rather than in either
  *  view, and neither can drift from the other. */
