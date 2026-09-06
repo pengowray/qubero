@@ -520,6 +520,46 @@ fn a_field_can_read_its_contents_somewhere_else_and_still_cost_nothing() {
     assert_eq!(ev2.locate(&d, 6 * 8).unwrap(), vec![1, 0, 1]);
 }
 
+/// A list whose elements point somewhere is walked to the end of it, however
+/// long it is.
+///
+/// The index of placed stretches gives up on a list once its elements stop
+/// adding anything, which is what saves it from walking a column of a hundred
+/// thousand strings that all name the same heap. Whether an element added
+/// anything is a question about the whole of it, though, and hardly ever about
+/// the element itself: a Parquet column chunk points at its pages from four
+/// levels inside it, and a file of sixty-six of them had the last two left out
+/// of the index and reading as a gap.
+#[test]
+fn a_long_list_of_pointers_is_walked_to_the_end() {
+    const N: usize = 70;
+    const DATA: usize = 200;
+    let t = Template::new(
+        "t",
+        T::array(
+            T::structure("Record", vec![
+                ("at", T::u16(Big)),
+                ("data", T::at(E::field("at"), T::bytes(E::lit(4)))),
+            ]),
+            E::lit(N as i128),
+        ),
+    );
+    let mut bytes = vec![0u8; DATA + N * 4];
+    for i in 0..N {
+        let at = (DATA + i * 4) as u16;
+        bytes[i * 2..i * 2 + 2].copy_from_slice(&at.to_be_bytes());
+    }
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+
+    // The last element's stretch is past everything the root covers, so only
+    // the index can place it.
+    let last = ((DATA + (N - 1) * 4) * 8) as u64;
+    assert_eq!(ev.locate(&d, last).unwrap(), vec![N - 1, 1, 0], "the last element's bytes read as a gap");
+    let first = (DATA * 8) as u64;
+    assert_eq!(ev.locate(&d, first).unwrap(), vec![0, 1, 0]);
+}
+
 #[test]
 fn a_scanned_field_steps_over_its_separators_and_stops_at_the_next() {
     use crate::template::{Encoding, StrLen};

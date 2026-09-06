@@ -68,6 +68,12 @@ pub(super) struct Frame {
     fields: Option<Vec<usize>>,
     /// How many of its elements in a row have added nothing to the index.
     stale: usize,
+    /// How much was in the index when the element being walked now was handed
+    /// out, where one has been. Whether it added anything cannot be known
+    /// until the walk comes back out of it, because what a list element places
+    /// is hardly ever placed by the element itself: a column chunk points at
+    /// its pages from four levels inside it.
+    pending: Option<usize>,
 }
 
 /// How many nodes one go of the walk may open. Enough that a file of a few
@@ -166,10 +172,16 @@ impl Evaluator {
                 self.placed.done = true;
                 break;
             }
+            let found = self.placed.stretches.len();
             let Some(top) = self.placed.frontier.last_mut() else {
                 self.placed.done = true;
                 break;
             };
+            // The walk is back out of the element handed out last, so now it
+            // can be said whether that element was worth walking.
+            if let Some(before) = top.pending.take() {
+                top.stale = if found > before { 0 } else { top.stale + 1 };
+            }
             if top.next >= top.count || top.stale >= SAME_ANSWER {
                 self.placed.frontier.pop();
                 continue;
@@ -198,6 +210,7 @@ impl Evaluator {
                     // the next go opens it rather than stepping over it.
                     if let Some(f) = self.placed.frontier.iter_mut().rev().find(|f| f.path.len() == depth) {
                         f.next -= 1;
+                        f.pending = None;
                     }
                     self.placed.stretches.sort_by_key(|p| (p.start, p.end));
                     return Err(e);
@@ -207,9 +220,8 @@ impl Evaluator {
                 Err(_) => {}
             }
             if listy {
-                let grew = self.placed.stretches.len() > before;
                 if let Some(f) = self.placed.frontier.iter_mut().rev().find(|f| f.path.len() == depth) {
-                    f.stale = if grew { 0 } else { f.stale + 1 };
+                    f.pending = Some(before);
                 }
             }
         }
@@ -292,7 +304,7 @@ impl Evaluator {
                 return Ok(None);
             }
         }
-        Ok(Some(Frame { path, count, next: 0, fields, stale: 0 }))
+        Ok(Some(Frame { path, count, next: 0, fields, stale: 0, pending: None }))
     }
 
     /// Whether anything inside this type places its contents elsewhere. False
