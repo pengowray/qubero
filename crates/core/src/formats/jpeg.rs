@@ -153,8 +153,21 @@ fn segment(exif: &T) -> T {
     cases.extend(FRAME.iter().map(|m| (*m, sized(frame()))));
     cases.push((0xffc4, sized(T::repeat(huffman_table(), Until::End))));
     cases.push((0xffdb, sized(T::repeat(quant_table(), Until::End))));
-    cases.push((0xffdd, sized(T::inline_structure("Dri", vec![("restart_interval", T::u16(Big))]))));
-    cases.push((0xffdc, sized(T::inline_structure("Dnl", vec![("lines", T::u16(Big))]))));
+    // The interval is counted in minimum coded units, and a bare number beside
+    // a marker already called `restart interval` says only what the marker
+    // said.
+    cases.push((
+        0xffdd,
+        sized(
+            T::inline_structure("Dri", vec![("restart_interval", T::u16(Big))])
+                .reads_as(&[("restart_interval", "{} MCUs", "")]),
+        ),
+    ));
+    cases.push((
+        0xffdc,
+        sized(T::inline_structure("Dnl", vec![("lines", T::u16(Big))]).reads_as(&[("lines", "{} lines", "")])),
+    ));
+    cases.push((0xffee, sized(app14())));
     cases.push((0xffe0, sized(app0())));
     cases.push((0xffe1, sized(app1(exif))));
     cases.push((0xfffe, sized(T::text(StrLen::Fixed(E::Remaining), Encoding::Latin1))));
@@ -201,6 +214,16 @@ fn frame() -> T {
             ("components", T::array(frame_component(), E::field("component_count"))),
         ],
     )
+    // The one segment a reader opens a JPEG to find. Width first, against the
+    // order the file writes them in: nobody says an image is 1200 by 1920.
+    // Eight bits is what baseline means and is left unsaid; twelve is worth a
+    // word wherever it appears.
+    .reads_as(&[
+        ("width", "width {}", ""),
+        ("height", "height {}", ""),
+        ("components", "", ""),
+        ("precision", "precision {}", "8"),
+    ])
 }
 
 /// One channel of the image. The two sampling factors are how many blocks of
@@ -220,6 +243,7 @@ fn frame_component() -> T {
         ],
     )
     .counted_as("component")
+    .reads_as(&[("h_sampling", "h {}", ""), ("v_sampling", "v {}", ""), ("quant_table", "quant table {}", "")])
 }
 
 /// One Huffman table. The sixteen counts are how many codes there are of each
@@ -240,6 +264,10 @@ fn huffman_table() -> T {
         ],
     )
     .counted_as("table")
+    // The sixteen counts are the table's shape and are what `symbols` is as
+    // long as; what a reader wants from a row of them is which table it is and
+    // how big it came out.
+    .reads_as(&[("class", "", ""), ("symbols", "", "")])
 }
 
 /// One quantisation table: sixty-four numbers, in the zigzag order the
@@ -267,6 +295,10 @@ fn quant_table() -> T {
         ],
     )
     .counted_as("table")
+    // Sixty-four values every time, so their count says nothing; the table is
+    // its number, which is its name, and the precision only when it is the
+    // one that is worth remarking on.
+    .reads_as(&[("precision", "", "8-bit")])
 }
 
 /// `APP0`, which is JFIF in every file that has one, and which is what makes a
@@ -279,6 +311,9 @@ fn app0() -> T {
             ("data", T::matches(E::field("identifier"), vec![("JFIF", jfif())], T::bytes(E::Remaining))),
         ],
     )
+    // `JFIF` is what an APP0 says in every file that has one, so it is left
+    // unsaid; the one that says something else is worth naming.
+    .reads_as(&[("identifier", "", "JFIF"), ("data", "", "")])
 }
 
 fn jfif() -> T {
@@ -305,6 +340,46 @@ fn jfif() -> T {
             ("thumbnail", T::bytes(E::Remaining)),
         ],
     )
+    // The version is 1.01 in every file anyone has, and two fields cannot say
+    // that between them. The densities keep their words: `1 · 1 · none,
+    // aspect ratio only` is three readings that need each other, and quieting
+    // a density of 1 would turn a 2:1 aspect ratio into `x 2`.
+    .reads_as(&[
+        ("x_density", "x {}", ""),
+        ("y_density", "y {}", ""),
+        ("density_units", "", ""),
+        ("thumbnail", "thumbnail {}", "0 bytes"),
+    ])
+}
+
+/// `APP14`, which Adobe writes and which decoders read for one thing: what the
+/// three or four channels of the frame actually are. Without it a
+/// three-channel JPEG is assumed to be YCbCr and a four-channel one is
+/// guessed at, which is how a CMYK JPEG comes out inverted.
+///
+/// The identifier is five bytes with nothing after them, not a C string.
+fn app14() -> T {
+    T::inline_structure(
+        "App14",
+        vec![
+            ("identifier", T::text(StrLen::Fixed(E::lit(5)), Encoding::Latin1)),
+            ("version", T::u16(Big)),
+            ("flags0", T::u16(Big)),
+            ("flags1", T::u16(Big)),
+            // Transform 0 says the channels are not transformed, which leaves
+            // them RGB or CMYK by how many of them there are. That is the
+            // frame's business, not this segment's, so it is not said here.
+            (
+                "transform",
+                T::enumeration(
+                    "AdobeTransform",
+                    T::u8(),
+                    &[(0, "no transform"), (1, "ycbcr"), (2, "ycck")],
+                ),
+            ),
+        ],
+    )
+    .reads_as(&[("identifier", "", "Adobe"), ("transform", "", "")])
 }
 
 /// `APP1`, which is where a camera writes what it knew when it took the
@@ -365,7 +440,19 @@ fn scan() -> T {
                             ("approximation_high", T::UInt { bits: 4, endian: Big }),
                             ("approximation_low", T::UInt { bits: 4, endian: Big }),
                         ],
-                    ),
+                    )
+                    // The four the spec calls Ss, Se, Ah and Al, which keep
+                    // their own case because `ss 1 · se 5` does not read as
+                    // the symbols. Each is quiet at the value a baseline scan
+                    // writes, so a baseline scan says only which channels it
+                    // carries and a progressive one says which band.
+                    .reads_as(&[
+                        ("components", "", ""),
+                        ("spectral_start", "Ss {}", "0"),
+                        ("spectral_end", "Se {}", "63"),
+                        ("approximation_high", "Ah {}", "0"),
+                        ("approximation_low", "Al {}", "0"),
+                    ]),
                 ),
             ),
             // The compressed bits, ending at the next marker that is neither a
@@ -373,6 +460,9 @@ fn scan() -> T {
             ("entropy", T::bytes(E::to_marker(0xff, ESCAPES))),
         ],
     )
+    // Declared rather than left to the walk, so the two halves are divided the
+    // way every other reading divides its parts.
+    .reads_as(&[("header", "", ""), ("entropy", "", "")])
 }
 
 /// One channel of a scan, and which of the four Huffman tables of each kind it
@@ -389,6 +479,7 @@ fn scan_component() -> T {
         ],
     )
     .counted_as("component")
+    .reads_as(&[("dc_table", "dc table {}", ""), ("ac_table", "ac table {}", "")])
 }
 
 #[cfg(test)]

@@ -1383,9 +1383,11 @@ pub struct LinePart {
     /// The field this part reads. A field the shapes left out of a particular
     /// record is skipped rather than refused.
     pub field: Arc<str>,
-    /// The word that introduces the reading, where the number alone would not
-    /// say what it is: `seq 4903`, against `0xb3` on its own. Empty for a
-    /// value that says what it is.
+    /// How the reading is worded, where the value alone would not say what it
+    /// is. A word on its own goes in front: `seq` gives `seq 4903`. A pattern
+    /// holding `{}` puts the reading where the braces are, which is what a
+    /// unit needs: `{} MCUs` gives `240 MCUs`. Empty for a value that says
+    /// what it is.
     pub word: Arc<str>,
     /// The one reading this field has that says nothing, left off the line
     /// when the field says it. Nearly every space packet is `unsegmented`,

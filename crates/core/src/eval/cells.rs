@@ -400,10 +400,12 @@ impl Evaluator {
     /// A record as the line the format says it reads as. See
     /// [`crate::template::LinePart`], which is where the choosing is done.
     ///
-    /// A field of raw bytes reads as how many of them there are. The bytes
-    /// themselves are already in the column this cell sits beside, and a
-    /// preview of the first few of them in a cell this narrow says less than
-    /// the length does.
+    /// A part that is itself a structure reads as *its* line, so a JPEG
+    /// segment can name its body and get what the body says rather than how
+    /// many bytes it is. A part that is a list counts its elements. A part
+    /// that is raw bytes reads as how many there are: the bytes themselves are
+    /// already in the column this sits beside, and a preview of the first few
+    /// of them says less at this width than the length does.
     pub(super) fn record_line<S: Source>(&mut self, doc: &Document<S>, path: &[usize], line: &[LinePart]) -> R<String> {
         let mut parts: Vec<String> = Vec::new();
         for part in line {
@@ -411,17 +413,30 @@ impl Evaluator {
             // template can describe several shapes of the same structure.
             let Some(cp) = self.child_named(doc, path, &part.field)? else { continue };
             let info = self.node(doc, &cp)?;
-            let reading = match &info.value {
-                Value::Bytes { .. } | Value::Unread { .. } | Value::Composite { .. } => {
-                    let n = info.size_bits / 8;
-                    if n == 1 { "1 byte".to_string() } else { format!("{n} bytes") }
+            let reading = if info.composite {
+                // Through whatever the field is wrapped in: a JPEG segment's
+                // body is a switch inside a sized structure, and the reading
+                // wanted is the one at the bottom of that.
+                let mut said = Vec::new();
+                self.one_line(doc, &cp, &mut said)?;
+                said.join(" ")
+            } else {
+                match &info.value {
+                    Value::Bytes { .. } | Value::Unread { .. } => super::listing::byte_text(info.size_bits / 8),
+                    v => super::listing::brief(v),
                 }
-                v => super::listing::brief(v),
             };
             if reading.is_empty() || reading == *part.quiet {
                 continue;
             }
-            parts.push(if part.word.is_empty() { reading } else { format!("{} {reading}", part.word) });
+            // `word` is a pattern rather than a prefix: a restart interval is
+            // `240 MCUs` and a sequence count is `seq 4903`, and a format that
+            // can only put its word in front cannot say the first one.
+            parts.push(match part.word.split_once("{}") {
+                None if part.word.is_empty() => reading,
+                None => format!("{} {reading}", part.word),
+                Some((before, after)) => format!("{before}{reading}{after}"),
+            });
         }
         Ok(parts.join(" \u{b7} "))
     }
@@ -441,21 +456,26 @@ impl Evaluator {
         };
         let text = if info.composite {
             let inline = matches!(self.memo[&p].ty.base(), Ty::Struct(s) if s.inline);
-            if !line.is_empty() {
+            // The index is what the path already says; the name a record
+            // carries is what the reader cannot see from where the cell is. A
+            // record with no name but its index keeps the index, since an
+            // empty cell says less than `[81]` does.
+            let index = format!("[{i}]");
+            let named = info.name.strip_prefix(&index).unwrap_or(&info.name).trim();
+            let name = if named.is_empty() { info.name.clone() } else { named.to_string() };
+            let said = if !line.is_empty() {
                 self.record_line(doc, &p, &line)?
             } else if inline {
                 let mut parts = Vec::new();
                 self.one_line(doc, &p, &mut parts)?;
                 parts.join(" ")
             } else {
-                // The index is what the path already says; the name a record
-                // carries is what the reader cannot see from where the cell
-                // is. A record with no name but its index keeps the index,
-                // since an empty cell says less than `[81]` does.
-                let index = format!("[{i}]");
-                let named = info.name.strip_prefix(&index).unwrap_or(&info.name).trim();
-                if named.is_empty() { info.name.clone() } else { named.to_string() }
-            }
+                String::new()
+            };
+            // A line that came out empty is a record whose every part was the
+            // reading that says nothing: a JPEG quantisation table at the
+            // ordinary precision. Its name is still worth the cell.
+            if said.is_empty() { name } else { said }
         } else {
             super::listing::brief(&info.value)
         };

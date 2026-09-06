@@ -91,9 +91,30 @@ pub(super) fn brief(v: &Value) -> String {
     }
 }
 
+/// How many bytes something is, where its bytes are what there is to say
+/// about it. Counted in bytes rather than rounded to KiB: this stands beside
+/// the bytes themselves.
+pub(super) fn byte_text(n: u64) -> String {
+    if n == 1 { "1 byte".to_string() } else { format!("{} bytes", grouped(n)) }
+}
+
+/// A number with its thousands marked off, which is what makes `626,038`
+/// readable at a glance and `626038` a thing to be counted.
+pub(super) fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// How many of something, named by what they are: `64 values`, `3 components`.
 pub(super) fn count_text(n: u64, unit: &str) -> String {
-    if n == 1 { format!("1 {unit}") } else { format!("{n} {}", plural(unit)) }
+    if n == 1 { format!("1 {unit}") } else { format!("{} {}", grouped(n), plural(unit)) }
 }
 
 /// More than one of them. The nouns here are the words formats use for what
@@ -732,7 +753,14 @@ impl Evaluator {
             // A field of no bits is an absence, not an empty value: the switch
             // for an opcode with no immediate selects one.
             if info.size_bits > 0 {
-                let text = brief(&info.value);
+                // Raw bytes read as how many there are. A JPEG scan is two
+                // hundred kilobytes of entropy-coded data, and the first
+                // sixteen of them written out in hex say nothing that the
+                // sixteen in the column to the left do not.
+                let text = match &info.value {
+                    Value::Bytes { .. } | Value::Unread { .. } => byte_text(info.size_bits / 8),
+                    v => brief(v),
+                };
                 if !text.is_empty() {
                     out.push(text);
                 }
@@ -748,6 +776,18 @@ impl Evaluator {
             let unit = self.unit_of(path, &ty).unwrap_or("value").to_string();
             out.push(count_text(info.child_count, &unit));
             return Ok(());
+        }
+        // A structure that has said what it reads as says it here too, so a
+        // field naming another structure gets that structure's reading rather
+        // than a walk through its leaves.
+        if let Some(def) = self.struct_of(&ty) {
+            if !def.line.is_empty() {
+                let said = self.record_line(doc, path, &def.line.clone())?;
+                if !said.is_empty() {
+                    out.push(said);
+                }
+                return Ok(());
+            }
         }
         // A field that exists to say how long or how many another field is has
         // nothing to say on a line beside the field it measures: every JPEG
