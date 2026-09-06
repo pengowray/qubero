@@ -96,7 +96,8 @@ pub(super) struct Sink {
 }
 
 impl Sink {
-    /// Collecting for a reader who wants what each field says.
+    /// An empty collection, saying whether the reader wants what each field
+    /// says as well as which field it was.
     fn told(values: bool) -> Sink {
         Sink { out: Vec::new(), values }
     }
