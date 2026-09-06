@@ -136,10 +136,68 @@ fn both_paths_read_a_dump_the_same_way() {
     assert!(fast >= 5, "only {fast} dumps took the fast path; something stopped verifying");
 }
 
+/// Nothing in the rest of the collection is a dump, and the reader has to say
+/// so about all of it.
+///
+/// This is the side of the answer that costs something to get wrong. A file
+/// wrongly taken for a dump sends a reader off to open bytes that were never
+/// in it, and the shapes that invite the mistake are everywhere: a
+/// disassembly's address and instruction bytes, a magic file's offsets, a
+/// PDF's cross-reference table, a run of commit hashes. Before the reader was
+/// made harder to convince, fourteen files here read as dumps of something.
+#[test]
+fn nothing_else_in_the_collection_is_a_dump() {
+    let Some(dir) = folder().and_then(|d| d.parent().map(Path::to_path_buf)) else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let mut wrong = Vec::new();
+    let mut looked = 0;
+    for path in everything_else(&dir) {
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        if bytes.is_empty() || bytes.len() > hexdump::LIMIT {
+            continue;
+        }
+        looked += 1;
+        if let Some(dump) = hexdump::read(&bytes, 0) {
+            let l = &dump.layout;
+            wrong.push(format!(
+                "{}: read as {} bytes a line in groups of {}, covering {}",
+                path.display(),
+                l.bytes_per_line,
+                l.group,
+                dump.byte_count()
+            ));
+        }
+    }
+    assert!(looked > 100, "only {looked} files looked at; the collection is meant to hold more");
+    assert!(wrong.is_empty(), "{} files read as dumps that are not:\n{}", wrong.len(), wrong.join("\n"));
+}
+
 fn folder() -> Option<PathBuf> {
     let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
     let beside = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples");
     named.into_iter().chain(std::iter::once(beside)).map(|p| p.join("hexdump")).find(|p| p.is_dir())
+}
+
+/// Every file in the collection except the dumps themselves and the working
+/// parts of the repository holding it.
+fn everything_else(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let skip = p.file_name().is_some_and(|n| n == "hexdump" || n == ".git");
+        if skip {
+            continue;
+        }
+        if p.is_dir() {
+            stack.extend(std::fs::read_dir(&p).into_iter().flatten().flatten().map(|e| e.path()));
+        } else {
+            out.push(p);
+        }
+    }
+    out.sort();
+    out
 }
 
 fn dumps(dir: &Path) -> Vec<PathBuf> {

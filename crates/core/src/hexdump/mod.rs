@@ -35,6 +35,18 @@
 //!   away and a reader wants: it is how a dump of a stretch in the middle of a
 //!   file knows it is one.
 //!
+//! * **It is hard to convince.** Text that looks like a table of hex is not
+//!   rare: a disassembly has an address, a colon and the instruction's bytes;
+//!   a magic file has offsets and values; a PDF's cross-reference table has
+//!   ten hex digits at the front of every line; a reflog has forty. Read any
+//!   of those as a dump and the reader is sent off to open bytes that were
+//!   never in anything. So the reading has to earn it, against the tests every
+//!   real dump passes with room to spare: a line whose groups divide it, an
+//!   address column padded the way every tool pads one, a dump that is most of
+//!   the text rather than a few lines in the middle of it, and a character
+//!   column that confirms the digits rather than contradicting them. What
+//!   fails is left as the text it also is, which is the cheaper mistake.
+//!
 //! There are two ways through, and which one a dump gets is the dump's own
 //! doing. Almost everything anyone opens is a machine's output, unedited: the
 //! same layout on every line, every line the same length, every address one
@@ -334,14 +346,173 @@ fn read_as(bytes: &[u8], base: u64, settled: Settled, mark: usize, slow: bool) -
     // these are the only lines that are ever decoded twice.
     let head = &bytes[..bytes.len().min(HEAD_BYTES)];
     let layout = layout::infer(&sample_of(&lines::split(settled, mark, head, base)))?;
+    if doubt_about_layout(&layout).is_some() {
+        return None;
+    }
 
     if !slow {
         if let Some(regular) = strict::verify(bytes, base, mark, &layout) {
-            return Some(assemble(bytes, base, layout, regular));
+            // A reading the checks below turn down is not one to try again the
+            // other way: the slow path would read the same lines by the same
+            // layout and reach the same verdict.
+            return convincing(assemble(bytes, base, layout, regular));
         }
     }
     let text = lines::split(settled, mark, bytes, base);
-    irregular(bytes, base, &text, layout)
+    convincing(irregular(bytes, base, &text, layout)?)
+}
+
+/// Why a reading was not accepted as a dump.
+///
+/// Kept as reasons rather than a yes or no because the reasons are the whole
+/// of the argument, and a test that says which one refused a file is a test
+/// that will still mean something when the numbers move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Doubt {
+    /// The line is not a shape a dumping tool writes: too few bytes on it,
+    /// groups that do not divide it, or a group wider than any tool uses.
+    Line,
+    /// A column of addresses none of the tools would have written, because
+    /// they all pad theirs to a fixed width and this one does not.
+    Ragged,
+    /// Too little of it to be worth calling a dump of anything.
+    Slight,
+    /// Most of the text is not part of it. A heading, a prompt and a length
+    /// are lines a dump comes with; a thousand of them are a file that has a
+    /// few dump-shaped lines in it.
+    Interrupted,
+    /// The two columns describe different bytes almost everywhere, which does
+    /// not mean a corrupted dump. It means what was taken for a character
+    /// column is not one: the mnemonics of a disassembly, or the rest of a
+    /// line that happens to start with hex.
+    Uncorroborated,
+}
+
+/// The least a dump is allowed to be: fewer lines or fewer bytes than this and
+/// there is nothing to be gained by opening it as one. Two lines because that
+/// is the fewest a layout can be worked out from at all, one address being
+/// nothing to subtract from another.
+const LEAST_ROWS: usize = 2;
+const LEAST_BYTES: u64 = 16;
+
+/// Lines with something on them that are not part of the dump, allowed before
+/// the dump stops being what the file is. The tools write a handful: a header,
+/// a column heading, a length, a prompt above the command. The fraction is for
+/// a long transcript, which has more of them for having more of everything.
+const STRAY_LINES: usize = 16;
+const STRAY_SHARE: usize = 8;
+
+/// How much of the character column may contradict the digits before it is
+/// taken to be something other than a character column.
+const CONFLICT_SHARE: usize = 4;
+
+/// How much of a dump with no address column its character column has to
+/// confirm, where it has one at all.
+const CORROBORATED_SHARE: usize = 4;
+
+/// What is wrong with the shape of the line, before a byte of it is read.
+///
+/// Every dumping tool writes a fixed number of bytes on a line, in groups that
+/// divide it evenly, under an address padded to a fixed width. That is a
+/// narrow enough shape that most of what is not a dump can be turned away
+/// here, for the cost of looking at four numbers.
+fn doubt_about_layout(layout: &Layout) -> Option<Doubt> {
+    let per_line = layout.bytes_per_line;
+    let group = layout.group;
+    // A group wider than eight is a tool nobody has, unless the line is one
+    // group: `xxd -p` and `certutil -encodehex` write the whole line as a run
+    // of digits with nothing between them.
+    let grouped = group > 0 && per_line % group == 0 && (group <= 8 || group == per_line);
+    if per_line < 4 || !grouped {
+        return Some(Doubt::Line);
+    }
+    // Addresses that are not all the same width are a listing's line numbers
+    // rather than a dump's addresses: no tool writes `0:` and then `10:`.
+    if layout.address.as_ref().is_some_and(|a| a.digits.is_none()) {
+        return Some(Doubt::Ragged);
+    }
+    None
+}
+
+/// What is wrong with the dump once it has been read, or nothing.
+fn doubt_about_dump(dump: &Dump<'_>) -> Option<Doubt> {
+    let rows = match &dump.index {
+        Index::Rows(rows) => rows.len(),
+        Index::Runs(runs) => runs.iter().map(|r| r.lines as usize).sum(),
+    };
+    if rows < LEAST_ROWS || dump.byte_count() < LEAST_BYTES {
+        return Some(Doubt::Slight);
+    }
+    let allowed = STRAY_LINES + rows / STRAY_SHARE;
+    if stray_lines(dump, allowed + 1) > allowed {
+        return Some(Doubt::Interrupted);
+    }
+    if dump.layout.text.is_some() {
+        let (confirmed, conflicting, checked) = corroboration(dump);
+        if conflicting * CONFLICT_SHARE > confirmed + conflicting {
+            return Some(Doubt::Uncorroborated);
+        }
+        // A dump with no address column is the weakest evidence there is:
+        // nothing in it checks out against anything else, and the only reason
+        // to believe it is that the digits are digits. The tools that write
+        // one write nothing but digits, so anything after them has to be a
+        // character column that earns its place. Otherwise it is the rest of
+        // a record whose first field happens to be hex, which is what a PDF
+        // cross-reference table is.
+        if dump.layout.address.is_none() && confirmed * CORROBORATED_SHARE < checked {
+            return Some(Doubt::Uncorroborated);
+        }
+    }
+    None
+}
+
+/// The dump, where it is one, and nothing where the reading was not convincing.
+fn convincing(dump: Dump<'_>) -> Option<Dump<'_>> {
+    doubt_about_dump(&dump).map_or(Some(dump), |_| None)
+}
+
+/// How many lines that were not part of the dump had anything on them.
+///
+/// Counting stops at `limit`, so a file that is mostly not a dump costs no
+/// more to turn away than one that barely is.
+fn stray_lines(dump: &Dump<'_>, limit: usize) -> usize {
+    let mut n = 0;
+    for at in &dump.skipped {
+        let from = (at - dump.base) as usize;
+        if from >= dump.text.len() {
+            continue;
+        }
+        let end = dump.text[from..].iter().position(|b| *b == b'\n').map_or(dump.text.len(), |i| from + i);
+        if dump.text[from..end].iter().any(|b| !b.is_ascii_whitespace()) {
+            n += 1;
+            if n >= limit {
+                break;
+            }
+        }
+    }
+    n
+}
+
+/// How many bytes the character column confirmed, how many it contradicted,
+/// and how many it was shown, over the same bounded sample of rows both paths
+/// settle the layout from.
+fn corroboration(dump: &Dump<'_>) -> (usize, usize, usize) {
+    let Some((from, _)) = dump.span() else { return (0, 0, 0) };
+    let reach = (SETTLE_ROWS * dump.layout.bytes_per_line.max(1)) as u64;
+    let mut confirmed = 0;
+    let mut conflicting = 0;
+    let mut checked = 0;
+    for r in dump.rows(from, from.saturating_add(reach)) {
+        for a in &r.agreement {
+            checked += 1;
+            match a {
+                Agreement::Confirmed => confirmed += 1,
+                Agreement::Conflict { .. } => conflicting += 1,
+                Agreement::Unverifiable => {}
+            }
+        }
+    }
+    (confirmed, conflicting, checked)
 }
 
 /// Finish a dump the fast path found: settle what the layout could not say
@@ -750,3 +921,105 @@ fn command(line: &str) -> Option<&str> {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shapes that are not dumps are the ones that look most like them:
+    /// something address-shaped down the left and something hex-shaped after
+    /// it. All four of these were being read as dumps of a file that never
+    /// existed, and a reader sent to open the bytes would have got nonsense.
+    #[test]
+    fn a_disassembly_is_not_a_dump_of_anything() {
+        // An address, a colon, the instruction's bytes, and then a mnemonic
+        // where a character column would be. The mnemonic is what gives it
+        // away: it contradicts the digits on every byte.
+        let text = "\
+       0: 00c8         \tlsls\tr0, r1, #0x3
+       2: 08c8         \tlsrs\tr0, r1, #0x3
+       4: 10c8         \tasrs\tr0, r1, #0x3
+       6: 1888         \tadds\tr0, r1, r2
+       8: 1a88         \tsubs\tr0, r1, r2
+       a: 1cc8         \tadds\tr0, r1, #0x3
+";
+        assert!(read(text.as_bytes(), 0).is_none());
+    }
+
+    /// `file`'s magic descriptions: an offset, a type, a value. A handful of
+    /// lines out of hundreds happen to read as an address and a byte.
+    #[test]
+    fn a_magic_file_is_not_a_dump() {
+        let text = "\
+# Amiga
+0\tbeshort\t\t0x0e80\t\tAmiga loadseg
+4\tstring\t\tADF\t\tAmiga disk
+0\tstring\t\tDOS\\0\t\tAmiga DOS disk
+8\tbelong\t\t0x000003f3\tAmiga executable
+0\tstring\t\tRGB8\t\tIFF raster
+";
+        assert!(read(text.as_bytes(), 0).is_none());
+    }
+
+    /// A PDF's cross-reference table: ten digits, five more, and a letter.
+    /// Every one of those first tokens is ten hex digits, so every line reads
+    /// as five bytes with no address above them.
+    #[test]
+    fn a_pdf_cross_reference_table_is_not_a_dump() {
+        let text = "\
+xref
+0 6
+0000000000 65535 f
+0000000009 00000 n
+0000000074 00000 n
+0000000120 00000 n
+0000000179 00000 n
+0000000364 00000 n
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+466
+%%EOF
+";
+        assert!(read(text.as_bytes(), 0).is_none());
+    }
+
+    /// A reflog: two commit hashes, then a name and a message. Forty hex
+    /// digits is a line of twenty bytes to anything counting digits.
+    #[test]
+    fn a_list_of_commit_hashes_is_not_a_dump() {
+        let text = "\
+0000000000000000000000000000000000000000 912947be2f0a4c1d8e3b5a7c9d0f1e2a3b4c5d6e Pengo <p@example.com> 1756000000 +1000\tcommit (initial): first
+912947be2f0a4c1d8e3b5a7c9d0f1e2a3b4c5d6e 38664c3a1b2c3d4e5f60718293a4b5c6d7e8f900 Pengo <p@example.com> 1756000060 +1000\tcommit: second
+38664c3a1b2c3d4e5f60718293a4b5c6d7e8f900 b50824e1f2a3b4c5d6e7f8091a2b3c4d5e6f7081 Pengo <p@example.com> 1756000120 +1000\tcommit: third
+";
+        assert!(read(text.as_bytes(), 0).is_none());
+    }
+
+    /// The gate has to let the short things through: two lines is the fewest
+    /// a layout can be settled from, and a dump pasted into a bug report is
+    /// often exactly that.
+    #[test]
+    fn two_lines_are_still_a_dump() {
+        let text = "\
+00000000: 0001 0203 0405 0607 0809 0a0b 0c0d 0e0f  ................
+00000010: 1011 1213 1415 1617 1819 1a1b 1c1d 1e1f  ................
+";
+        let dump = read(text.as_bytes(), 0).expect("two lines of xxd");
+        assert_eq!(dump.byte_count(), 32);
+    }
+
+    /// A dump with a corrupted digit is still a dump. The character column
+    /// contradicting the digits here and there is the thing this module exists
+    /// to notice, so it must not also be the thing that hides the dump.
+    #[test]
+    fn a_wrong_digit_does_not_hide_the_dump() {
+        let text = "\
+00000000: 4142 4344 4546 4748 494a 4b4c 4d4e 4f50  ABCDEFGHIJKLMNOP
+00000010: 5152 5354 5556 5758 595a 3031 3233 3435  QRSTUVWXYZ012345
+00000020: 4143 4344 4546 4748 494a 4b4c 4d4e 4f50  ABCDEFGHIJKLMNOP
+";
+        let dump = read(text.as_bytes(), 0).expect("a dump with one digit wrong");
+        assert_eq!(dump.conflicts().len(), 1, "the second byte of the last line, and only it");
+    }
+}
