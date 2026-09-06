@@ -259,6 +259,10 @@ const PROBES: &[Probe] = &[
     // whose parse covers the whole file. Nothing marks the front of one, so
     // what recognises it is reading all of it.
     Probe::Is("bencode", bencode::is_bencode),
+    // A pickle, which is a program rather than a document: protocol 2 and up
+    // open with two bytes and protocol 0 and 1 open with an opcode that could
+    // be any byte, so what recognises one is running it to its full stop.
+    Probe::Is("pickle", pickle::is_pickle),
     // A Picotron cartridge. Three lower-case letters would recognise half the
     // text files there are, so what settles it is the length written after
     // them: it counts the compressed bytes, and so is the file less its

@@ -115,6 +115,7 @@ pub mod pdf_xref;
 mod pe;
 pub mod pe_tables;
 mod pi1;
+mod pickle;
 mod picotron;
 mod picotron_pod;
 mod psd;
@@ -221,6 +222,7 @@ pub use parquet::parquet;
 pub use pcx::pcx;
 pub use pdf::pdf;
 pub use pi1::pi1;
+pub use pickle::pickle;
 pub use picotron::{p64png, p64rom};
 pub use psd::psd;
 pub use bdb::bdb;
@@ -380,6 +382,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("lnk", |_| lnk()),
     ("cbor", |_| cbor()),
     ("bencode", |_| bencode()),
+    ("pickle", |_| pickle()),
     ("cpio", |_| cpio()),
     ("ar", |_| ar()),
     ("rpm", |_| rpm()),
