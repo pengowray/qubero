@@ -1131,46 +1131,53 @@ button.welcome-crystal {
 }
 .insp-origin {
   display: flex;
-  padding-left: 2px;
   gap: 6px;
   align-items: baseline;
   font-family: var(--mono);
   font-size: 12px;
-  padding: 1px 0;
+  /* Room at the sides for the mark a pointed-at row takes, so the highlight
+     does not sit flush against the name inside it. */
+  padding: 1px 4px;
+  border-radius: 3px;
 }
-/* The step of the path these entries are about, when it is not the field at
-   the cursor itself. */
-.insp-origin-group {
-  display: block;
-  font-family: var(--mono);
-  font-size: 12px;
-  margin: 4px 0 1px;
+/* One thing about the field that another field settled: what was settled, and
+   under it the fields that settled it and the expression they were read by. */
+.insp-role {
+  margin: 2px 0 5px;
 }
-.insp-origin-role {
+/* Names what the rows below it settled. Quieter than the section heading it
+   sits under, because it divides a list rather than opening one, and it is
+   read once on the way past rather than at every row. */
+.insp-role-head {
   font-family: var(--sans);
+  font-size: 11px;
   color: var(--muted);
-  min-width: 4.5rem;
+  padding-left: 4px;
+}
+/* Indented under the heading, so a group reads as one block at a glance even
+   where the panel is only wide enough for a name and a number. */
+.insp-role > .insp-origin {
+  padding-left: 14px;
 }
 .insp-origin-val {
   color: var(--muted);
 }
-/* The expression itself, under the fields it names. Two lines with the role
-   label beside the first, so the substituted form sits directly under the
-   written one and reads as the same expression twice. */
+/* An origin the file gives no field for: it holds the place a name would, with
+   nowhere to follow it to. */
+.insp-origin-name {
+  color: var(--fg);
+}
+/* The expression itself, under the fields it names: two lines, the substituted
+   form directly under the written one, so it reads as the same expression
+   twice. */
 .insp-relation {
-  display: grid;
-  grid-template-columns: 4.5rem 1fr;
-  gap: 0 6px;
-  padding: 3px 0 3px 2px;
+  padding: 3px 0 3px 14px;
   font-family: var(--mono);
   font-size: 12px;
 }
-.insp-relation .insp-origin-role {
-  min-width: 0;
-}
 .insp-rel-written,
 .insp-rel-sums {
-  grid-column: 2;
+  display: block;
   overflow-wrap: anywhere;
 }
 .insp-rel-written {
@@ -1196,6 +1203,39 @@ button.welcome-crystal {
 }
 .insp-link.addr {
   color: var(--addr);
+}
+/* The step of the path a group of rows is about, when it is not the field at
+   the cursor itself, and the control that unfolds the steps above it. Both head
+   a list rather than sit in a row, so they take the whole width and the same
+   padding a row takes. Written with both classes to outrank the flat padding
+   every link has. */
+.insp-link.insp-origin-group,
+.insp-link.insp-origin-more {
+  display: block;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 12px;
+  margin: 6px 0 1px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+/* How many steps are still folded away. A number, so it does not compete with
+   the words beside it. */
+/* The triangle on the disclosure. It carries the open/shut state on its own,
+   since the words beside it say the same thing either way. */
+.insp-origin-mark {
+  color: var(--muted);
+  margin-right: 5px;
+}
+/* The row the pointer is resting on. The views mark the field it names at the
+   same moment, so both ends of one connection are lit at once. */
+.insp-origin.is-hover,
+.insp-origin-group.is-hover {
+  background: var(--accent-soft);
+}
+/* A whole row leads to the field it names, not only the name in it. */
+.insp-origin[data-path] {
+  cursor: pointer;
 }
 .seg {
   display: inline-flex;
@@ -3691,4 +3731,77 @@ table.rec tr.is-on td {
 }
 .tv-scroll {
   user-select: none;
+}
+
+/* ---- the graph view ---- */
+/* Experimental, and a main view like Hex and Listing: it takes the whole area
+   they take, with its own note above it and its sliders down one side. */
+.graphview {
+  --gv-hull: #8a90993d;
+  --gv-hull-fill: #8a909914;
+  --gv-hull-label: var(--muted);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto 1fr;
+}
+@media (prefers-color-scheme: dark) {
+  .graphview {
+    --gv-hull: #9aa0a840;
+    --gv-hull-fill: #9aa0a814;
+  }
+}
+.gv-note {
+  grid-column: 1 / -1;
+  padding: 4px 8px;
+  font: 12px var(--sans);
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.gv-note.is-warn {
+  color: var(--warn);
+}
+/* The graph itself. `position: relative` so the boundaries round each kind can
+   be a canvas laid over it; cytoscape puts its own canvases in here too. */
+.gv-board {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Behind the graph, and never clicked: the boundaries are something to look at,
+   not something to hit. */
+.gv-hulls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.gv-controls {
+  width: 190px;
+  padding: 8px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  font: 12px var(--sans);
+  overflow-y: auto;
+}
+.gv-controls-head {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+.gv-slider {
+  display: block;
+  margin-bottom: 8px;
+}
+.gv-slider-name {
+  display: block;
+  margin-bottom: 2px;
+}
+.gv-slider input {
+  width: 100%;
 }
