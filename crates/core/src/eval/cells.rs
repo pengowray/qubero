@@ -14,6 +14,7 @@
 //! window, since the run is scrolled through and the window is a screenful.
 
 use super::*;
+use crate::template::LinePart;
 
 /// One element of a run, as the value table draws it.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +36,13 @@ pub struct Cell {
     /// "uint" | "int" | "float" | "bytes" | "str" | "enum" | "flags" |
     /// "composite" | "symbol" | "scale"
     pub kind: &'static str,
+    /// True when this record reads exactly as the record before it in the run,
+    /// so the table draws its cell without the text. A capture that is nine
+    /// tenths idle packets is nine tenths one sentence written again, and the
+    /// few records that say something else are what the reader is scrolling
+    /// for. The text stays on the cell for its tooltip, and for the width the
+    /// table is laid out to.
+    pub repeat: bool,
     /// False when the element's bits are not one contiguous run: a `q5_0`
     /// weight is four bits of `qs` and a fifth a dozen bytes away, so no run
     /// of bits on the row is the weight, and the view lays those out uniformly
@@ -168,6 +176,7 @@ impl Evaluator {
                 text: super::traced::symbol_ty(&step).0,
                 label: super::traced::symbol_label(&step),
                 kind: "symbol",
+                repeat: false,
                 contiguous: true,
             });
         }
@@ -277,7 +286,49 @@ impl Evaluator {
             missing.dedup();
             return Err(EvalError::Pending(missing));
         }
+        self.mark_repeats(doc, path, &mut out)?;
         Ok(out)
+    }
+
+    /// Mark the records that read exactly as the record before them.
+    ///
+    /// Records only. A run of numbers is a table whose cells are the data, and
+    /// a decoder's literals are the text the block unpacks to; blanking the
+    /// repeats in either would take away the very thing the table is for. A
+    /// record's cell is a sentence about the record, and the same sentence
+    /// written down a screenful is what the reader has to look past.
+    ///
+    /// The comparison is against the element before it in the file, not the
+    /// first one on screen, so that a stretch of identical records reads the
+    /// same wherever the window happens to begin. That costs one element more
+    /// than the window holds. Where that one will not read -- its bytes have
+    /// not arrived, or it is the element the run stopped on -- the cell keeps
+    /// its text, which is the harmless way to be wrong about it.
+    fn mark_repeats<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut [Cell]) -> R<()> {
+        let mut prev: Option<String> = None;
+        let first = out.first().filter(|c| c.kind == "composite" && c.index > 0).map(|c| c.index);
+        if let Some(i) = first {
+            let mut p = path.to_vec();
+            p.push(i as usize - 1);
+            let before = self.node(doc, &p);
+            p.pop();
+            if let Ok(info) = before {
+                if info.composite {
+                    if let Ok(cell) = self.cell(doc, path, i - 1, &info) {
+                        prev = Some(cell.text);
+                    }
+                }
+            }
+        }
+        for c in out.iter_mut() {
+            if c.kind != "composite" {
+                prev = None;
+                continue;
+            }
+            c.repeat = prev.as_deref() == Some(c.text.as_str());
+            prev = Some(c.text.clone());
+        }
+        Ok(())
     }
 
     /// One packed block as the weights inside it, or `None` for an element
@@ -322,6 +373,7 @@ impl Evaluator {
                 text: format!("{name} \u{b7} {reading}"),
                 label: reading,
                 kind: "scale",
+                repeat: false,
                 contiguous: true,
             });
         }
@@ -333,6 +385,7 @@ impl Evaluator {
                 text: format!("weight {j} \u{b7} stored {} \u{b7} value {}", w.q, num(w.value)),
                 label: w.q.to_string(),
                 kind: "int",
+                repeat: false,
                 contiguous: w.high.is_none(),
             });
         }
@@ -344,6 +397,35 @@ impl Evaluator {
         Ok(Some(cells))
     }
 
+    /// A record as the line the format says it reads as. See
+    /// [`crate::template::LinePart`], which is where the choosing is done.
+    ///
+    /// A field of raw bytes reads as how many of them there are. The bytes
+    /// themselves are already in the column this cell sits beside, and a
+    /// preview of the first few of them in a cell this narrow says less than
+    /// the length does.
+    fn record_line<S: Source>(&mut self, doc: &Document<S>, path: &[usize], line: &[LinePart]) -> R<String> {
+        let mut parts: Vec<String> = Vec::new();
+        for part in line {
+            // A field the shapes left out of this record is not an error: one
+            // template can describe several shapes of the same structure.
+            let Some(cp) = self.child_named(doc, path, &part.field)? else { continue };
+            let info = self.node(doc, &cp)?;
+            let reading = match &info.value {
+                Value::Bytes { .. } | Value::Unread { .. } | Value::Composite { .. } => {
+                    let n = info.size_bits / 8;
+                    if n == 1 { "1 byte".to_string() } else { format!("{n} bytes") }
+                }
+                v => super::listing::brief(v),
+            };
+            if reading.is_empty() || reading == *part.quiet {
+                continue;
+            }
+            parts.push(if part.word.is_empty() { reading } else { format!("{} {reading}", part.word) });
+        }
+        Ok(parts.join(" \u{b7} "))
+    }
+
     /// One element, as its one line of text.
     ///
     /// A leaf reads as its value does on a shared row. A record reads as its
@@ -353,9 +435,15 @@ impl Evaluator {
     fn cell<S: Source>(&mut self, doc: &Document<S>, run: &[usize], i: u64, info: &NodeInfo) -> R<Cell> {
         let mut p = run.to_vec();
         p.push(i as usize);
+        let line = match self.memo[&p].ty.base() {
+            Ty::Struct(s) if !s.line.is_empty() => s.line.clone(),
+            _ => Vec::new(),
+        };
         let text = if info.composite {
             let inline = matches!(self.memo[&p].ty.base(), Ty::Struct(s) if s.inline);
-            if inline {
+            if !line.is_empty() {
+                self.record_line(doc, &p, &line)?
+            } else if inline {
                 let mut parts = Vec::new();
                 self.one_line(doc, &p, &mut parts)?;
                 parts.join(" ")
@@ -380,6 +468,7 @@ impl Evaluator {
             label: text.clone(),
             text,
             kind: kind_of(&info.value),
+            repeat: false,
             contiguous: true,
         })
     }
@@ -438,6 +527,75 @@ mod tests {
     fn long_wav() -> (Document<MemSource>, Evaluator) {
         let samples: Vec<i16> = (0..72_000i32).map(|i| (i % 3001 - 1500) as i16).collect();
         (wav_of(&samples), wav_eval())
+    }
+
+    /// A stream of space packets, the case a table of records is for: one
+    /// packet carrying something, then filler, then another that carries
+    /// something.
+    fn packets() -> (Document<MemSource>, Evaluator) {
+        fn packet(apid: u16, seq: u16, data: &[u8]) -> Vec<u8> {
+            let mut v = apid.to_be_bytes().to_vec();
+            v.extend_from_slice(&(0xc000 | seq).to_be_bytes());
+            v.extend_from_slice(&((data.len() - 1) as u16).to_be_bytes());
+            v.extend_from_slice(data);
+            v
+        }
+        let mut bytes = packet(0xb3, 4903, &[7; 231]);
+        for _ in 0..3 {
+            bytes.extend_from_slice(&packet(0x7ff, 0, &[0; 8]));
+        }
+        bytes.extend_from_slice(&packet(0x12, 7, &[1; 8]));
+        (doc(bytes), Evaluator::new(crate::formats::builtin("spp").expect("the spp template")))
+    }
+
+    /// A record reads as the line its format declares: what tells one from the
+    /// next, and not the name they share.
+    #[test]
+    fn a_record_reads_as_the_line_its_format_declares() {
+        let (d, mut e) = packets();
+        let cells = e.run_cells(&d, &[0], 0, u64::MAX, 100).unwrap();
+        let said: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                "0xb3 \u{b7} seq 4903 \u{b7} 231 bytes",
+                "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
+                "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
+                "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
+                "0x12 \u{b7} seq 7 \u{b7} 8 bytes",
+            ]
+        );
+    }
+
+    /// The filler is marked as repeating rather than said again, and what it
+    /// repeats is the packet before it in the file: a window that opens partway
+    /// through a stretch of filler says the same about it as one that opened
+    /// before the stretch began.
+    #[test]
+    fn a_record_that_reads_as_the_one_before_it_is_marked_a_repeat() {
+        let (d, mut e) = packets();
+        let cells = e.run_cells(&d, &[0], 0, u64::MAX, 100).unwrap();
+        assert_eq!(cells.iter().map(|c| c.repeat).collect::<Vec<_>>(), [false, false, true, true, false]);
+        // The third idle packet, with the two before it off the top of the
+        // window. It is still a repeat, and its text is still what it says.
+        let third = 237 + 14 * 2;
+        let cells = e.run_cells(&d, &[0], third * 8, u64::MAX, 100).unwrap();
+        assert_eq!(cells[0].index, 3);
+        assert!(cells[0].repeat, "the window's first packet lost its repeat: {:?}", cells[0]);
+        assert_eq!(cells[0].text, "idle packet \u{b7} seq 0 \u{b7} 8 bytes");
+        // The first record of a run has nothing before it to repeat.
+        let cells = e.run_cells(&d, &[0], 0, 8, 100).unwrap();
+        assert!(!cells[0].repeat);
+    }
+
+    /// A run of numbers is a table whose cells are the data, so nothing in it
+    /// is ever dropped for reading as the number before it.
+    #[test]
+    fn a_run_of_numbers_repeats_its_numbers() {
+        let (d, mut e) = (wav_of(&[7, 7, 7, 7]), wav_eval());
+        let run = e.node(&d, SAMPLES).unwrap();
+        let cells = e.run_cells(&d, SAMPLES, run.offset_bits, run.offset_bits + run.size_bits, 100).unwrap();
+        assert!(cells.iter().all(|c| !c.repeat && c.label == "7"), "{cells:?}");
     }
 
     /// A window in the middle of a long run answers with the elements over it

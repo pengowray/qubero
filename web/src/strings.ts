@@ -542,7 +542,14 @@ export const VALUES = {
   continues: (run: string, index: number): string => `${run}[${index}] · continues on the row below`,
   continuesLabel: "continues on the row below",
   rest: (n: number): string => `+${n}`,
-  restTip: (n: number): string => `${n} more values on this row`,
+  restTip: (n: number, unit: string | null): string => `${countText(n, unit ?? "value")} more on this row`,
+  /** A record that reads exactly as the one above it. The ditto is the table
+   *  convention for it, and one muted glyph leaves the records that do say
+   *  something else as the only text on the screen. An empty cell was not
+   *  free to take: the table already draws one for a piece of a value whose
+   *  text is on another row. */
+  ditto: "\u2033",
+  dittoLabel: (unit: string | null): string => `same as the ${unit ?? "value"} above`,
 } as const;
 
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the

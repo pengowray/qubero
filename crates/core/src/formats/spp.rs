@@ -79,6 +79,18 @@ fn packet() -> T {
         ],
     )
     .counted_as("packet")
+    // What one packet reads as where a table of them has one line each: what
+    // it is for, whether it is a piece of something larger, and how much it
+    // carries. The version is zero in every packet there is, the type is
+    // telemetry in every capture off a spacecraft, and both are a hover away
+    // in the field tree.
+    .reads_as(&[
+        ("apid", "", ""),
+        ("sequence_flags", "", "unsegmented"),
+        ("packet_type", "", "telemetry"),
+        ("sequence_count", "seq", ""),
+        ("data", "", ""),
+    ])
 }
 
 /// Whether this file is a stream of space packets.

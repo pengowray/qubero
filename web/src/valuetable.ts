@@ -17,6 +17,7 @@
 // rewrite a `.js` specifier back to the file it came from.
 import type { ChipMeasure } from "./chipfit.ts";
 import { COLUMN_GUESS, isScale, VALUE_PAD, wrapFlow, type Cell, type Layout, type RunCells } from "./valuelayout.ts";
+import { VALUES } from "./strings.ts";
 
 // One import site for the view and the tests: what a run's values come to is
 // this file's subject, and which shape they take is next door.
@@ -68,12 +69,19 @@ export type PlacedCell = {
    *  cell in the table to fit it. Zero in the aligned layout, whose widths come
    *  from the grid. */
   readonly width: number;
+  /** True when the record reads exactly as the one before it, so the cell is
+   *  drawn as a ditto. The tooltip still says the whole reading: what the cell
+   *  drops is the repetition, not the fact. */
+  readonly repeat: boolean;
   /** The run the element belongs to: its name for the tooltip, its path for
    *  the pick. */
   readonly path: readonly number[];
   readonly run: string;
   readonly type: string;
   readonly symbol: boolean;
+  /** The format's own word for one element of the run, for the words a screen
+   *  reader is given in place of the ditto. */
+  readonly unit: string | null;
   /** A symbol that is not one byte of the stream's output: a match, the end of
    *  a block. Those are where the copying happens, and are tinted apart from
    *  the literals around them. */
@@ -233,7 +241,11 @@ export function planRowValues(o: RowValueOpts): RowValues {
       const carried = !straddles || mine === carrier ? null : mine > carrier ? "above" : "below";
       cells.push({
         index: c.index,
-        text: carried === null ? c.label : "",
+        // A record that reads as the one before it is a ditto: the cell keeps
+        // its place in the table, and the records that do say something else
+        // are the only text left on the screen.
+        text: carried === null ? (c.repeat ? VALUES.ditto : c.label) : "",
+        repeat: c.repeat && carried === null,
         tip: c.text,
         kind: c.kind,
         numeric: numeric(c.kind),
@@ -244,6 +256,7 @@ export function planRowValues(o: RowValueOpts): RowValues {
         cut:
           straddles &&
           carried === null &&
+          !c.repeat &&
           (o.measure === undefined ||
             (o.bitWidth ?? 0) <= 0 ||
             o.measure.value(c.label) + VALUE_PAD > (Math.min(rowTo, end) - Math.max(rowFrom, c.offset_bits)) * (o.bitWidth ?? 0)),
@@ -252,6 +265,7 @@ export function planRowValues(o: RowValueOpts): RowValues {
         run: run.name,
         type: run.type,
         symbol: run.symbol,
+        unit: run.unit,
         copy: symbolCopies(c.kind, c.text),
         sizeBits: c.size_bits,
         startBit: c.offset_bits,

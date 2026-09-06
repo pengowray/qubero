@@ -43,6 +43,7 @@ export function quantRun(o: {
       label: scale,
       kind: "scale",
       contiguous: true,
+      repeat: false,
     });
     for (let w = 0; w < o.weights; w++) {
       const q = (w % 16) - 8;
@@ -54,10 +55,11 @@ export function quantRun(o: {
         label: String(q),
         kind: "int",
         contiguous: o.contiguous ?? true,
+        repeat: false,
       });
     }
   }
-  return { path: [6, 0, 3], name: "blocks", type: "Q4_0", symbol: false, widest: "", cells };
+  return { path: [6, 0, 3], name: "blocks", type: "Q4_0", symbol: false, unit: null, widest: "", cells };
 }
 
 /** A run of fixed-stride elements starting at byte 0. */
@@ -86,6 +88,7 @@ export function run(o: {
       label: (o.label ?? text)(i),
       kind: o.kind ?? "int",
       contiguous: o.contiguous ?? true,
+      repeat: false,
     });
   }
   return {
@@ -93,6 +96,7 @@ export function run(o: {
     name: o.name ?? "body",
     type: o.type ?? "i24 le",
     symbol: o.symbol ?? false,
+    unit: null,
     widest: "",
     cells,
   };

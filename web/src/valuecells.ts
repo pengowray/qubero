@@ -61,6 +61,7 @@ function fillCell(el: HTMLElement, c: PlacedCell, layout: RowValues["layout"]): 
   if (c.carried === "below") cls += " hv-val-before";
   if (c.numeric) cls += " hv-val-num";
   if (c.cut && c.carried === null) cls += " hv-val-cut";
+  if (c.repeat) cls += " hv-val-ditto";
   if (el.className !== cls) el.className = cls;
   setText(el, c.text);
   const path = c.path.join(",");
@@ -86,6 +87,8 @@ function fillCell(el: HTMLElement, c: PlacedCell, layout: RowValues["layout"]): 
   // screen reader has only the words.
   if (c.carried === "above") el.setAttribute("aria-label", VALUES.continuedLabel);
   else if (c.carried === "below") el.setAttribute("aria-label", VALUES.continuesLabel);
+  // The ditto is a mark, and a mark read out as a double prime says nothing.
+  else if (c.repeat) el.setAttribute("aria-label", VALUES.dittoLabel(c.unit));
   else el.removeAttribute("aria-label");
   const column = aligned ? `${c.from} / ${c.to}` : "";
   if (el.style.gridColumn !== column) el.style.gridColumn = column;
@@ -100,11 +103,11 @@ function fillCell(el: HTMLElement, c: PlacedCell, layout: RowValues["layout"]): 
 }
 
 /** The `+N` that counts what the condensed cap left over. */
-function fillRest(el: HTMLElement, n: number): void {
+function fillRest(el: HTMLElement, n: number, unit: string | null): void {
   const cls = "hv-val hv-val-rest";
   if (el.className !== cls) el.className = cls;
   setText(el, VALUES.rest(n));
-  const tip = VALUES.restTip(n);
+  const tip = VALUES.restTip(n, unit);
   if (el.title !== tip) el.title = tip;
   el.removeAttribute("data-path");
   el.removeAttribute("data-index");
@@ -150,7 +153,7 @@ export function fillVals(el: ValsEl, plan: RowValues, width: number, bpr: number
   const cell = plan.layout === "uniform" ? `${Math.round(plan.cellWidth)}px` : "";
   if (el.style.getPropertyValue("--hv-val-w") !== cell) el.style.setProperty("--hv-val-w", cell);
   for (const [i, c] of plan.cells.entries()) fillCell(el.children[i] as HTMLElement, c, plan.layout);
-  if (plan.rest > 0) fillRest(el.children[plan.cells.length] as HTMLElement, plan.rest);
+  if (plan.rest > 0) fillRest(el.children[plan.cells.length] as HTMLElement, plan.rest, plan.cells[0]?.unit ?? null);
 }
 
 /**

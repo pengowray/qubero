@@ -20,12 +20,12 @@ import type { OutlineHeading } from "./outline.js";
 import type { Frame } from "./hexview.js";
 import { NO_TEMPLATE } from "./strings.js";
 import type { ChipMeasure } from "./chipfit.js";
-import { pinnedNoteKey, planRowChips, rowNoteKey, type ChipBlock } from "./chipplan.js";
+import { pinnedNoteKey, planRowChips, rowNoteKey, type ChipBlock, type Reading } from "./chipplan.js";
 import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.js";
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.js";
 import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.js";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.js";
-import { NO_VALUES } from "./valuetable.js";
+import { NO_VALUES, type RowValues } from "./valuetable.js";
 
 /** What pressing something in a row does. Held as one object for the life of
  *  the view: every chip and every heading keeps the function it was built
@@ -548,6 +548,18 @@ export class HexRows {
     }
   }
 
+  /** The record the top row starts in, for the strip pinned over the rows.
+   *
+   *  Records only. A run of records draws a ditto wherever one reads as the
+   *  one before it, so the top of a screenful taken from the middle of such a
+   *  run says nothing at all without this; a run of numbers has its numbers on
+   *  every row and needs no help. */
+  private topReading(vals: RowValues): Reading | null {
+    const cell = vals.cells.find((c) => c.kind === "composite");
+    if (cell === undefined) return null;
+    return { path: cell.path.join(","), index: cell.index, text: cell.tip };
+  }
+
   /** Put a row's chips in the blocks beside or below its bytes, and say what
    *  they add to its height. What the top row carries goes on the frame, for
    *  the strip pinned over the rows. */
@@ -603,6 +615,7 @@ export class HexRows {
       topPx: r === 0 ? f.topPx : 0,
       headHeights: at.headHeights,
       valsHeight: vals.height,
+      reading: r === 0 ? this.topReading(vals) : null,
     });
     if (planned.pinned !== null) this.carried = planned.pinned;
     const trailer = f.more && r === this.rowEls.length - 1;

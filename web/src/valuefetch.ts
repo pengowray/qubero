@@ -273,6 +273,7 @@ export class ValueFetch {
         name: s.name,
         type: elementType(s.type),
         symbol: s.unit === "symbol",
+        unit: s.unit,
         widest: this.widestOf(s.path.join(","), cells),
         cells,
       });

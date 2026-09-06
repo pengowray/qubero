@@ -145,7 +145,7 @@ test("the piece of a value left on a row does not decide the layout", () => {
   // Three bytes a value at byte 14: one byte of the first is on the first row.
   // Measured on that sliver every run with a straddle would go uniform.
   const cells: Cell[] = [
-    { index: 0, offset_bits: 14 * 8, size_bits: 24, text: "-394928", label: "-394928", kind: "int", contiguous: true },
+    { index: 0, offset_bits: 14 * 8, size_bits: 24, text: "-394928", label: "-394928", kind: "int", contiguous: true, repeat: false },
   ];
   const runs = [{ ...run({ stride: 24, from: 0, to: 0 }), cells }];
   assert.equal(alignedFits(runs, WIDE), true);
@@ -162,5 +162,5 @@ test("the piece of a value left on a row does not decide the layout", () => {
 test("a run nothing cuts is drawn at the hex pitch", () => {
   const runs = [run({ stride: 16, kind: "str", from: 0, to: 8, text: () => "-1" })];
   assert.equal(alignedWidth(runs, WIDE), 16 * 22);
-  assert.equal(widestPieceBits({ index: 0, offset_bits: 120, size_bits: 32, text: "", label: "", kind: "int", contiguous: true }, 128), 24);
+  assert.equal(widestPieceBits({ index: 0, offset_bits: 120, size_bits: 32, text: "", label: "", kind: "int", contiguous: true, repeat: false }, 128), 24);
 });

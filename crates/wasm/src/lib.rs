@@ -220,6 +220,10 @@ struct CellDto {
     /// its uniform layout: a `q5_0` weight is four bits of `qs` and a fifth
     /// bytes away in `qh`.
     contiguous: bool,
+    /// True when this record reads exactly as the record before it, so the
+    /// cell is drawn without its text. `text` is still what it says, for the
+    /// tooltip and for the width the table is laid out to.
+    repeat: bool,
 }
 
 /// What the byte-class scan has found so far. `classes` is one digit per
@@ -1171,6 +1175,7 @@ fn cell_dto(c: qubero_core::eval::Cell) -> CellDto {
         label: c.label,
         kind: c.kind,
         contiguous: c.contiguous,
+        repeat: c.repeat,
     }
 }
 

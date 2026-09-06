@@ -65,6 +65,26 @@ export function continuedDetail(detail: string): string {
   return detail === "" ? "continued" : `${detail} · continued`;
 }
 
+/** The record the top of the screen is in the middle of: which element of the
+ *  run it is, and what it reads as. */
+export type Reading = { readonly path: string; readonly index: number; readonly text: string };
+
+/**
+ * What the strip pinned over the rows says about a run the reader has scrolled
+ * into the middle of.
+ *
+ * A run of records draws a ditto for every record that reads as the one before
+ * it, so a screenful taken from the middle of sixteen thousand idle packets is
+ * a column of dittos with nothing above it saying what they are dittos of. The
+ * strip is what says it, and it says which record as well as what the record
+ * reads as: every cell's tooltip names its element `packets[8411]`, so the
+ * strip naming it the same way costs nothing to learn.
+ */
+export function pinnedText(t: ChipText, c: Chip, reading: Reading | null): ChipText {
+  if (reading === null || reading.path !== c.span.path.join(",") || reading.text === "") return t;
+  return { name: `${t.name}[${reading.index}]`, detail: `${reading.text} · ${t.detail}` };
+}
+
 /** What a chip says. A run of list elements is named for the list and says
  *  how many; a structure that reads on one line is the whole chip, since
  *  `[47]` is the element's number in a repeat and says nothing, and the
@@ -183,6 +203,11 @@ export type RowChipOpts = {
   /** How tall the table of a folded run's values is. It hangs under the
    *  chips of the row's first piece, so it too holds that piece on screen. */
   readonly valsHeight?: number;
+  /** The record at the top of the screen, for the strip pinned over the rows.
+   *  Null on every row but the top one, and for a run whose elements are not
+   *  records: a number on the strip would be one of the thousands already on
+   *  the screen and would say nothing the table has not said. */
+  readonly reading?: Reading | null;
 };
 
 /**
@@ -268,7 +293,7 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
       o.topPx ?? 0,
     );
     const reaching = carried.filter((c) => spanEnd(c.span) > first);
-    const texts = reaching.map((c) => chipText(c));
+    const texts = reaching.map((c) => pinnedText(chipText(c), c, o.reading ?? null));
     const { shown } = chipLayout(
       texts.map((t, i) => chipWidth(carriedName(t.name, reaching[i]), continuedDetail(t.detail), o.measure)),
       o.noteWidth,

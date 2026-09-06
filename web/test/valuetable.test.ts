@@ -232,10 +232,11 @@ function symbols(): RunCells[] {
       label: match ? "6 back 18" : String.fromCharCode(97 + (i % 26)),
       kind: "symbol",
       contiguous: true,
+      repeat: false,
     });
     at += match ? 17 : 9;
   }
-  return [{ path: [6, 1, 0], name: "symbols", type: "symbol", symbol: true, widest: "", cells }];
+  return [{ path: [6, 1, 0], name: "symbols", type: "symbol", symbol: true, unit: "symbol", widest: "", cells }];
 }
 
 test("symbols flow, each cell as wide as the byte it decodes to", () => {
@@ -293,6 +294,7 @@ test("a label wider than the column takes a line rather than none", () => {
       name: "symbols",
       type: "symbol",
       symbol: true,
+      unit: null,
       widest: "",
       cells: [
         { index: 0, offset_bits: 0, size_bits: 9, text: "literal 'a'", label: "a", kind: "symbol", contiguous: true },
@@ -304,6 +306,7 @@ test("a label wider than the column takes a line rather than none", () => {
           label: "300 back 32000",
           kind: "symbol",
           contiguous: true,
+          repeat: false,
         },
       ] as Cell[],
     },

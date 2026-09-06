@@ -588,6 +588,11 @@ impl Evaluator {
         }
         let mut span = self.span_of(doc, &run, &run_info)?;
         span.count = count;
+        // What the format calls one of these, so a run of records counts in its
+        // own word rather than in `value`, which is what a run of numbers is
+        // made of and a run of packets is not.
+        let ty = self.memo[&run].ty.clone();
+        span.unit = self.unit_of(&run, &ty).map(str::to_string);
         let mut covered = 0u64;
         for i in 0..count.min(SAMPLE) {
             let mut elem = run.clone();

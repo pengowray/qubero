@@ -1369,6 +1369,32 @@ impl Unset {
     }
 }
 
+/// One part of the line a record reads as where a whole record has to fit on
+/// one: which field it reads, and how much has to be said about it.
+///
+/// A cell in a table of records is a sentence about the record, twenty-odd
+/// characters wide, with a screenful of its neighbours under it. So the line
+/// holds what varies from one record to the next and leaves the rest to the
+/// field tree: a space packet reads as `0xb3 · seq 4903 · 231 bytes`, and
+/// that it is version 0, telemetry, and carries a secondary header is true of
+/// nearly every packet in the capture and is one hover away.
+#[derive(Debug, Clone)]
+pub struct LinePart {
+    /// The field this part reads. A field the shapes left out of a particular
+    /// record is skipped rather than refused.
+    pub field: Arc<str>,
+    /// The word that introduces the reading, where the number alone would not
+    /// say what it is: `seq 4903`, against `0xb3` on its own. Empty for a
+    /// value that says what it is.
+    pub word: Arc<str>,
+    /// The one reading this field has that says nothing, left off the line
+    /// when the field says it. Nearly every space packet is `unsegmented`,
+    /// and a column of that word says only that the format has the field;
+    /// the few that say `continuation segment` are the ones worth reading.
+    /// Empty where every reading is worth having.
+    pub quiet: Arc<str>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
@@ -1411,6 +1437,9 @@ pub struct StructDef {
     /// settles the stride of every row and is also the first thing a reader
     /// wants to know, and folding it behind the pixels would hide it.
     pub payload: Vec<Arc<str>>,
+    /// What one of these reads as where a whole record has to fit on one line.
+    /// Empty for a structure with no line of its own, which reads as its name.
+    pub line: Vec<LinePart>,
 }
 
 impl Ty {
@@ -1546,6 +1575,7 @@ impl Ty {
             packed: None,
             machinery: Vec::new(),
             payload: Vec::new(),
+            line: Vec::new(),
         }))
     }
     /// A structure that one of its own fields names, and one field that is
@@ -1609,6 +1639,25 @@ impl Ty {
     pub fn payload(self, names: &[&str]) -> Ty {
         match self {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { payload: names.iter().map(|n| Arc::from(*n)).collect(), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// What one of these reads as where a whole record has to fit on one line,
+    /// as `(field, word, quiet)` triples. See [`LinePart`].
+    pub fn reads_as(self, parts: &[(&str, &str, &str)]) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef {
+                line: parts
+                    .iter()
+                    .map(|(field, word, quiet)| LinePart {
+                        field: Arc::from(*field),
+                        word: Arc::from(*word),
+                        quiet: Arc::from(*quiet),
+                    })
+                    .collect(),
+                ..(*s).clone()
+            })),
             other => other,
         }
     }

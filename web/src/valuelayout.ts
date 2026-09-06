@@ -31,6 +31,9 @@ export type RunCells = {
   readonly name: string;
   readonly type: string;
   readonly symbol: boolean;
+  /** The format's own word for one element, where it has one: a run of space
+   *  packets holds packets, not values. Null where it has none. */
+  readonly unit: string | null;
   /** The widest text this run has ever shown, whether or not it is on screen
    *  now. Which layout a run gets has to hold still while the reader scrolls:
    *  a window whose samples happen to be four digits would otherwise be

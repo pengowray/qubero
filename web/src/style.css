@@ -916,6 +916,13 @@ button.welcome-crystal {
   border-left: 0;
   border-right: 1px dashed color-mix(in srgb, var(--field-color) 30%, transparent);
 }
+/* A record that reads exactly as the one above it. The cell keeps its place in
+   the table, so the boundaries between records stay drawn against the bytes;
+   what it gives up is saying the same sentence again. Muted, so the records
+   that do say something else are what the eye lands on. */
+.hv-val-ditto {
+  color: var(--muted);
+}
 /* The cell the cursor is in, marked as the hex cell it names is marked. */
 .hv-val-at {
   background: color-mix(in srgb, var(--accent) 38%, transparent);

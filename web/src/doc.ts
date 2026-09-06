@@ -245,6 +245,13 @@ export type Cell = {
    *  table to its uniform layout: a `q5_0` weight is four bits of `qs` and a
    *  fifth bytes away in `qh`. */
   readonly contiguous: boolean;
+  /** True when this record reads exactly as the record before it in the run,
+   *  so the cell is drawn without its text: a capture that is nine tenths idle
+   *  packets is nine tenths one sentence written again, and the records that
+   *  say something else are what the reader is scrolling for. `text` is still
+   *  what it says, for the tooltip and for the width the table is laid out
+   *  to. */
+  readonly repeat: boolean;
 };
 
 /** What a decoder does with one run of bits: `more` and `stop` are the
