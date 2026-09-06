@@ -25,6 +25,15 @@ export type LinkEnd = {
   readonly label: string;
   readonly startBit: number;
   readonly endBit: number;
+  /**
+   * The first bit of what this field decided about.
+   *
+   * Not always the field at the cursor. A run of packed weights is as long as
+   * a number three levels up said the record was, and the arrow that says so
+   * has to land on the record: pointing it at the weights would claim the
+   * number sized them, which is one deduction further than the core made.
+   */
+  readonly decidesBit: number;
 };
 
 /** Everything the overlay draws for one selected field. */
@@ -156,24 +165,32 @@ export class HexLinks {
       return;
     }
     const target = this.plan.target === null ? [] : this.boxes(this.plan.target.startBit, this.plan.target.endBit);
+    // The structure as one box round the lot of it. A record of six hundred
+    // bytes covers twenty rows, and twenty separate outlines read as twenty
+    // things rather than as the edge of one.
     if (this.plan.parent !== null) {
-      const p = this.boxes(this.plan.parent.startBit, this.plan.parent.endBit);
-      for (const b of p) parts.push(this.outline(b, "hv-link-parent"));
+      const bounds = bound(this.boxes(this.plan.parent.startBit, this.plan.parent.endBit));
+      if (bounds !== null) parts.push(this.outline(bounds, "hv-link-parent"));
     }
-    for (const b of target) parts.push(this.outline(b, "hv-link-target"));
-    // Where the arrows land: the left edge of the field, which is the side the
-    // gutter is on and so the side an arrow can reach without crossing bytes.
+    // Only where the arrows land. The field at the cursor is already marked
+    // cell by cell by the view itself; outlining every row of it again says
+    // nothing the reader cannot already see, and buries the arrowheads.
     const head = target[0] ?? null;
+    if (head !== null) parts.push(this.outline(head, "hv-link-target"));
     const missed: { end: LinkEnd; above: boolean }[] = [];
     for (const end of this.plan.from) {
       const boxes = this.boxes(end.startBit, end.endBit);
       const source = boxes[0] ?? null;
-      if (source === null || head === null) {
+      // Where the arrow lands: the first byte of whatever this field decided
+      // about, which is the field at the cursor for its own dependencies and
+      // the enclosing record for an ancestor's.
+      const lands = this.boxes(end.decidesBit, end.decidesBit + 8)[0] ?? head;
+      if (source === null || lands === null) {
         missed.push({ end, above: Math.floor(end.startBit / 8) < this.window.start });
         continue;
       }
       for (const b of boxes) parts.push(this.outline(b, "hv-link-source"));
-      parts.push(...this.arrow(source, head, end.role, height));
+      parts.push(...this.arrow(source, lands, end.role, height));
     }
     this.el.replaceChildren(arrowDefs(), ...parts);
     // Written again only when the answer changed. Every scroll redraws the
@@ -233,33 +250,79 @@ export class HexLinks {
   }
 
   /**
-   * One arrow, bowed out to the left of the bytes.
+   * One arrow from the field that decided to the field it decided about.
    *
-   * Straight lines between two boxes in the same column of a grid lie on top
-   * of the bytes between them and on top of each other. Bowing every arrow the
-   * same way into the space left of the first column keeps them off the bytes
-   * and keeps two arrows to the same field apart, since they leave from
-   * different rows.
+   * Two cases, because a grid of bytes puts the two ends either on one line or
+   * on two, and one curve cannot serve both. On one line the arrow arches over
+   * the bytes between them, which is where there is room and where it cannot
+   * be read as a run of marked cells. On two it swings out into the address
+   * column to the left, which is the only vertical whitespace the view has;
+   * the further apart the ends, the wider the swing, so a length reaching
+   * across the screen looks like it does.
    */
   private arrow(from: Box, to: Box, role: string, height: number): SVGElement[] {
-    const x1 = from.x;
+    const sameLine = Math.abs(from.y - to.y) < from.h / 2;
     const y1 = from.y + from.h / 2;
-    const x2 = to.x;
     const y2 = to.y + to.h / 2;
-    // How far left the curve swings: enough to clear the bytes, more when the
-    // two ends are far apart, so a long arrow is a visibly long way round.
-    const bow = Math.min(64, 12 + Math.abs(y2 - y1) * 0.25);
-    const cx = Math.max(2, Math.min(x1, x2) - bow);
-    const d = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`;
+    let d: string;
+    let lx: number;
+    let ly: number;
+    if (sameLine) {
+      // Over the middle of each field rather than between their facing edges.
+      // A length is very often the field immediately in front of what it
+      // sizes, and an arrow drawn edge to edge between neighbours has nowhere
+      // to go: it comes out as a dot on the boundary. Over the middles it
+      // always spans something, and it spans the two fields it is about.
+      const x1 = from.x + from.w / 2;
+      const x2 = to.x + to.w / 2;
+      const lift = Math.min(16, from.h * 0.7);
+      const top = from.y - lift;
+      const mid = (x1 + x2) / 2;
+      d = `M ${r(x1)} ${r(from.y)} Q ${r(mid)} ${r(top - lift)}, ${r(x2)} ${r(to.y)}`;
+      lx = mid;
+      ly = top - lift + 3;
+    } else {
+      const x1 = from.x;
+      const x2 = to.x;
+      const bow = Math.min(70, 20 + Math.abs(y2 - y1) * 0.3);
+      const cx = Math.max(2, Math.min(x1, x2) - bow);
+      d = `M ${r(x1)} ${r(y1)} C ${r(cx)} ${r(y1)}, ${r(cx)} ${r(y2)}, ${r(x2)} ${r(y2)}`;
+      lx = cx + 3;
+      ly = (y1 + y2) / 2;
+    }
     const path = svg("path", { class: "hv-link-arrow", d, "marker-end": "url(#hv-arrowhead)" });
     const label = svg("text", {
       class: "hv-link-role",
-      x: String(Math.round(cx + 4)),
-      y: String(Math.round(Math.max(8, Math.min(height - 2, (y1 + y2) / 2)))),
+      x: String(r(lx)),
+      y: String(r(Math.max(9, Math.min(height - 2, ly)))),
+      "text-anchor": sameLine ? "middle" : "start",
     });
     label.textContent = role;
     return [path, label];
   }
+}
+
+/** One box round a run that covers more than one line. */
+function bound(boxes: readonly Box[]): Box | null {
+  const first = boxes[0];
+  if (first === undefined) return null;
+  let x = first.x;
+  let y = first.y;
+  let right = first.x + first.w;
+  let bottom = first.y + first.h;
+  for (const b of boxes) {
+    x = Math.min(x, b.x);
+    y = Math.min(y, b.y);
+    right = Math.max(right, b.x + b.w);
+    bottom = Math.max(bottom, b.y + b.h);
+  }
+  return { x, y, w: right - x, h: bottom - y };
+}
+
+/** Halves and quarter-pixels come out of `getBoundingClientRect`, and a path
+ *  drawn on one is a blurred path. */
+function r(n: number): number {
+  return Math.round(n);
 }
 
 /** The one arrowhead every arrow shares. Put in the SVG once, since a marker

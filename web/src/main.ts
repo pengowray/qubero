@@ -359,12 +359,22 @@ function build(tab: Tab): Page {
         };
       }
     }
+    // Every step of the path is asked, not only the field itself, for the same
+    // reason the sidebar asks: 128 bytes of packed weights are 128 bytes
+    // because of a record three levels up, and that record is the answer. The
+    // walk stops at the nearest step above the field that has anything to say,
+    // which is what the sidebar shows without being unfolded. Past that the
+    // grid would carry arrows the panel beside it has folded away.
     const from: LinkEnd[] = [];
     const seen = new Set<string>();
-    const reply = doc.origins(path);
-    if (reply.status === "ok") {
+    for (let i = path.length; i >= 0 && from.length === 0; i--) {
+      const at = path.slice(0, i);
+      const step = doc.templateNode(at);
+      if (step.status !== "ok") continue;
+      const reply = doc.origins(at);
+      if (reply.status !== "ok") continue;
       for (const o of reply.node) {
-        // A `points` row is the other direction and has no field at its far
+        // A `points` row is the other direction and names no field at its far
         // end: the arrow would leave from the field it is already drawn on.
         if (o.role === "points" || o.path.length === 0) continue;
         const key = `${o.role}/${o.path.join("/")}`;
@@ -378,6 +388,7 @@ function build(tab: Tab): Page {
           label: o.label,
           startBit: n.node.offset_bits,
           endBit: n.node.offset_bits + n.node.size_bits,
+          decidesBit: step.node.offset_bits,
         });
       }
     }
