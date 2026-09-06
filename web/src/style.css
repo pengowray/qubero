@@ -3782,6 +3782,13 @@ table.rec tr.is-on td {
   pointer-events: none;
   z-index: 0;
 }
+/* Cytoscape's own box. It positions its canvases inside this, so it needs a
+   size of its own rather than inheriting the board's by accident. */
+.gv-cy {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
 .gv-controls {
   width: 190px;
   padding: 8px;

@@ -65,7 +65,13 @@ export const FORCES: readonly (keyof Weights)[] = ["depends", "kind", "near", "s
 /** How many nodes the view will lay out. Past this fCoSe takes longer than a
  *  reader will wait and the picture is a hairball either way, so the walk
  *  stops and the view says how many fields it did not draw. */
-export const NODE_CAP = 2000;
+export const NODE_CAP = 1200;
+
+/** Past this many nodes fCoSe is asked for a rougher answer. Its "default"
+ *  quality on a thousand nodes takes the thread for several seconds, and a
+ *  picture nobody can pan while it settles is worse than a looser one they
+ *  can. Under it the good layout is quick enough not to be noticed. */
+const DRAFT_ABOVE = 300;
 
 /** Fields of one kind below this many are not worth a boundary of their own:
  *  two uint32s that happened to drift together are not a cluster. */
@@ -94,6 +100,8 @@ type Hull = { kind: string; points: [number, number][]; label: string };
 export class GraphView {
   readonly el: HTMLElement;
   private readonly board: HTMLElement;
+  /** What cytoscape draws into, which it is free to empty. */
+  private readonly canvas: HTMLElement;
   private readonly hullCanvas: HTMLCanvasElement;
   private readonly note: HTMLElement;
   private readonly controls: HTMLElement;
@@ -122,7 +130,12 @@ export class GraphView {
     this.board.className = "gv-board";
     this.hullCanvas = document.createElement("canvas");
     this.hullCanvas.className = "gv-hulls";
-    this.board.append(this.hullCanvas);
+    // Cytoscape empties the element it is given, so it gets one of its own.
+    // The boundaries go beside it rather than inside it, or the first graph
+    // drawn takes the canvas they are painted on with it.
+    this.canvas = document.createElement("div");
+    this.canvas.className = "gv-cy";
+    this.board.append(this.hullCanvas, this.canvas);
     this.controls = document.createElement("div");
     this.controls.className = "gv-controls";
     this.buildControls();
@@ -178,7 +191,7 @@ export class GraphView {
     this.palette = readPalette(this.el);
     this.cy?.destroy();
     this.cy = cytoscape({
-      container: this.board,
+      container: this.canvas,
       elements: this.elements(graph),
       style: stylesheet(this.palette),
       // The reader is looking for shape, and a hundred labels drawn at once
@@ -231,7 +244,7 @@ export class GraphView {
     cy
       .layout({
         name: "fcose",
-        quality: "default",
+        quality: cy.nodes().length > DRAFT_ABOVE ? "draft" : "default",
         animate: false,
         randomize,
         nodeRepulsion: () => 6000,
@@ -564,7 +577,7 @@ function stylesheet(p: Palette): cytoscape.StylesheetJson {
     // Everything that is neither the field at the cursor nor joined to it
     // steps back, so "what is this connected to" is answered by looking
     // instead of by tracing.
-    { selector: "node.is-dim", style: { opacity: 0.25 } },
-    { selector: "edge.is-dim", style: { opacity: 0.12 } },
+    { selector: "node.is-dim", style: { opacity: 0.45 } },
+    { selector: "edge.is-dim", style: { opacity: 0.25 } },
   ];
 }

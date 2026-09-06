@@ -3,7 +3,6 @@ import * as nav from "./navhistory.js";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.js";
 import type { LinkEnd, LinkPlan } from "./hexlinks.js";
 import type { GraphView } from "./graphview.js";
-import type { OutlineHeading } from "./outline.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
@@ -434,7 +433,7 @@ function build(tab: Tab): Page {
     // is what the note in the view promises when it says to put the cursor in
     // a smaller part of the file.
     if (graph !== null && !graph.el.hidden) {
-      if (sameRoot(graphRoot, partAt(bitOffset))) graph.setPath(at.node);
+      if (sameRoot(graphRoot, graphRootFor(bitOffset))) graph.setPath(at.node);
       else void showGraph();
     }
     overview.reveal(at.node);
@@ -890,7 +889,6 @@ function build(tab: Tab): Page {
   let graphRoot: readonly number[] | null = null;
   /** How many fields the graph will lay out, from the module once it is here. */
   let graphCap = 2000;
-  let headings: readonly OutlineHeading[] = [];
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
@@ -901,26 +899,43 @@ function build(tab: Tab): Page {
    *  editing state is not the user's to act on. */
   let listingShowing = false;
   /**
-   * Which part of the file a bit is in, as the graph's root.
+   * What to draw the graph of, for a cursor sitting on one field.
    *
-   * The listing has already worked out what the parts of the file are and
-   * every other view draws the same ones, so the graph is rooted at whichever
-   * of them the cursor is inside. Rooting at the file is right for a file of a
-   * few hundred fields and hopeless for one of a million, and the parts are
-   * the division the reader already has a name for.
+   * Not the whole file: a WAV holds one sample per field and there are
+   * twenty-four thousand of them, and a graph of the first twelve hundred of
+   * those says nothing about anything. Not the field itself either, which has
+   * no connections of its own to show.
+   *
+   * So: down the path from the root towards the field, and stop at the first
+   * ancestor whose subtree fits under the cap. That is the largest piece of
+   * the file that can be drawn whole, which is the most context the reader can
+   * be given without the picture being a lie about what is in it. The file
+   * root wins outright on a small file, which is the right answer there.
+   *
+   * Null means the whole file, which is also what a file with no template
+   * comes back as.
    */
-  const partAt = (bit: number): readonly number[] | null => {
-    let found: OutlineHeading | null = null;
-    for (const h of headings) {
-      if (h.level !== 0 || bit < h.offsetBits || bit >= h.offsetBits + h.sizeBits) continue;
-      found = h;
+  const graphRootFor = (bit: number): readonly number[] | null => {
+    const at = doc.locate(bit);
+    const path = at.status === "ok" ? at.node : [];
+    for (let i = 0; i < path.length; i++) {
+      const here = path.slice(0, i);
+      const reply = doc.graph(here, graphCap);
+      // Not readable yet, or nothing to say: neither is a reason to go deeper.
+      if (reply.status !== "ok") break;
+      if (reply.node.omitted === 0) return i === 0 ? null : here;
     }
-    return found === null ? null : found.path;
+    // Every ancestor overflows, so the field's own parent is as small as this
+    // gets. What it leaves out the view says out loud.
+    return path.length > 1 ? path.slice(0, -1) : null;
   };
 
-  /** Whether two roots are the same part of the file. */
-  const sameRoot = (a: readonly number[] | null, b: readonly number[] | null): boolean =>
-    a !== null && b !== null && a.length === b.length && a.every((x, i) => x === b[i]);
+  /** Whether two roots are the same part of the file. Null is the whole file,
+   *  which is a root like any other and is the same as itself. */
+  const sameRoot = (a: readonly number[] | null, b: readonly number[] | null): boolean => {
+    if (a === null || b === null) return a === b;
+    return a.length === b.length && a.every((x, i) => x === b[i]);
+  };
 
   /**
    * Build the graph for wherever the cursor is, fetching the layout engine the
@@ -942,12 +957,13 @@ function build(tab: Tab): Page {
       graph.el.hidden = false;
       workspaceLeft.append(graph.el);
     }
-    const root = partAt(view.cursorState.bitOffset);
+    const root = graphRootFor(view.cursorState.bitOffset);
     const reply = doc.graph(root ?? [], graphCap);
     if (reply.status !== "ok") return;
     graphRoot = root;
     const named = root === null ? null : doc.templateNode(root);
-    graph.show(reply.node, named !== null && named.status === "ok" ? named.node.name : null);
+    const rootName = named !== null && named.status === "ok" ? named.node.name : null;
+    graph.show(reply.node, rootName);
     graph.relayoutForShow();
     graph.setPath(linkPath);
   };
@@ -1148,9 +1164,8 @@ function build(tab: Tab): Page {
   // The listing works out what the parts of the file are; the rail lists them
   // and the hex view draws their headings. The rail says whether they changed,
   // so a walk that named the same parts again redraws nothing.
-  structure.onOutline = (list) => {
-    headings = list;
-    if (overview.setOutline(list)) view.setSections(list);
+  structure.onOutline = (headings) => {
+    if (overview.setOutline(headings)) view.setSections(headings);
   };
   // Only the view on screen says where the reader is. A hidden listing still
   // walks the file and would otherwise drag the rail's mark to wherever it
