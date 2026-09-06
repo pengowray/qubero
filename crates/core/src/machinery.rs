@@ -39,11 +39,29 @@ use crate::template::{Expr, StrLen, StructDef, Ty};
 /// that structure's business: descending into one would mark a field here
 /// whose name a type further in happens to reuse.
 pub fn consumers(def: &StructDef) -> Vec<Option<usize>> {
+    refs(def, true)
+}
+
+/// The same, for the fields that settle how long, how many or where another
+/// field is, leaving out the ones that settle only *which* of several shapes
+/// it takes.
+///
+/// The two are machinery in different degrees. A length in front of a run of
+/// bytes is arithmetic: a reading that leads with it opens with the extent the
+/// row is already drawn at. A field that picks a shape is usually the word the
+/// whole record is about, and dropping it leaves nothing to read: a wasm
+/// opcode picks the type of its immediate, and `i32.const 42` without it is
+/// `42`.
+pub fn measurers(def: &StructDef) -> Vec<Option<usize>> {
+    refs(def, false)
+}
+
+fn refs(def: &StructDef, selectors: bool) -> Vec<Option<usize>> {
     let mut out = vec![None; def.fields.len()];
     let mut names: Vec<Arc<str>> = Vec::new();
     for (i, f) in def.fields.iter().enumerate() {
         names.clear();
-        ty_refs(&f.ty, &mut names);
+        ty_refs(&f.ty, &mut names, selectors);
         if names.is_empty() {
             continue;
         }
@@ -74,53 +92,61 @@ pub fn hint(def: &StructDef, i: usize) -> Option<bool> {
 }
 
 /// Every sibling name this type reads, for length, count, type or position.
-fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>) {
+///
+/// `selectors` says whether the name a switch picks its shape by counts. It
+/// does for [`consumers`], which is about which field settled another's shape
+/// at all, and does not for [`measurers`], which is about arithmetic.
+fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>, selectors: bool) {
     match ty {
         Ty::Bytes(e) => expr_refs(e, out),
         Ty::Str { len, .. } | Ty::TextInt { len, .. } => strlen_refs(len, out),
         Ty::Array { elem, count } => {
             expr_refs(count, out);
-            ty_refs(elem, out);
+            ty_refs(elem, out, selectors);
         }
         // `Until::FieldBytes` names a field of the element, not a sibling of
         // the list, so there is nothing here to collect.
-        Ty::Repeat { elem, .. } => ty_refs(elem, out),
+        Ty::Repeat { elem, .. } => ty_refs(elem, out, selectors),
         Ty::PointerList { offsets, adjust, elem, .. } => {
             out.push(offsets.clone());
             expr_refs(adjust, out);
-            ty_refs(elem, out);
+            ty_refs(elem, out, selectors);
         }
         // The field that says where the chain starts is machinery for it, the
         // way a pointer list's table of offsets is. The `next` field is inside
         // an element and so is not a sibling of anything here.
         Ty::Chain { first, elem, .. } => {
             expr_refs(first, out);
-            ty_refs(elem, out);
+            ty_refs(elem, out, selectors);
         }
         Ty::At { at, inner, .. } => {
             expr_refs(at, out);
-            ty_refs(inner, out);
+            ty_refs(inner, out, selectors);
         }
         Ty::Sized { size, inner } => {
             expr_refs(size, out);
-            ty_refs(inner, out);
+            ty_refs(inner, out, selectors);
         }
-        Ty::Origin { inner } => ty_refs(inner, out),
+        Ty::Origin { inner } => ty_refs(inner, out, selectors),
         Ty::Switch { on, cases, default } => {
-            expr_refs(on, out);
-            for (_, t) in cases.iter() {
-                ty_refs(t, out);
+            if selectors {
+                expr_refs(on, out);
             }
-            ty_refs(default, out);
+            for (_, t) in cases.iter() {
+                ty_refs(t, out, selectors);
+            }
+            ty_refs(default, out, selectors);
         }
         Ty::Match { on, cases, default } => {
-            expr_refs(on, out);
-            for (_, t) in cases.iter() {
-                ty_refs(t, out);
+            if selectors {
+                expr_refs(on, out);
             }
-            ty_refs(default, out);
+            for (_, t) in cases.iter() {
+                ty_refs(t, out, selectors);
+            }
+            ty_refs(default, out, selectors);
         }
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => ty_refs(inner, out),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => ty_refs(inner, out, selectors),
         // How wide the number is settles it the way a length settles a run of
         // bytes, so the field that said so is machinery for it: a GRIB's
         // `bits_per_value` belongs to the grid it packs.

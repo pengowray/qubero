@@ -91,6 +91,25 @@ pub(super) fn brief(v: &Value) -> String {
     }
 }
 
+/// How many of something, named by what they are: `64 values`, `3 components`.
+pub(super) fn count_text(n: u64, unit: &str) -> String {
+    if n == 1 { format!("1 {unit}") } else { format!("{n} {}", plural(unit)) }
+}
+
+/// More than one of them. The nouns here are the words formats use for what
+/// they hold, so this covers the endings those run to and no more.
+fn plural(noun: &str) -> String {
+    let last = noun.chars().last().unwrap_or(' ');
+    let before = noun.chars().rev().nth(1).unwrap_or(' ');
+    if last == 'y' && !matches!(before, 'a' | 'e' | 'i' | 'o' | 'u') {
+        return format!("{}ies", &noun[..noun.len() - 1]);
+    }
+    if noun.ends_with('s') || noun.ends_with('x') || noun.ends_with('z') || noun.ends_with("ch") || noun.ends_with("sh") {
+        return format!("{noun}es");
+    }
+    format!("{noun}s")
+}
+
 /// How a signature reads in one line.
 ///
 /// The bytes as C would write a string, so a reader sees the name in them and
@@ -551,9 +570,22 @@ impl Evaluator {
     /// A structure marked to read on one row, as the one row it reads as.
     fn one_row<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
-        let mut parts = Vec::new();
-        self.one_line(doc, path, &mut parts)?;
-        span.line = Some(parts.join(" "));
+        // What the format says one of these reads as, where it has said. The
+        // same declaration the value table's cells are written from, so the
+        // chip beside the bytes and the cell over them say the same thing
+        // about the same record.
+        let line = match self.struct_of(&self.memo[path].ty.clone()) {
+            Some(def) if !def.line.is_empty() => Some(def.line.clone()),
+            _ => None,
+        };
+        span.line = Some(match line {
+            Some(line) => self.record_line(doc, path, &line)?,
+            None => {
+                let mut parts = Vec::new();
+                self.one_line(doc, path, &mut parts)?;
+                parts.join(" ")
+            }
+        });
         Ok(span)
     }
 
@@ -707,12 +739,53 @@ impl Evaluator {
             }
             return Ok(());
         }
+        // A list on a line says how many it holds. A quantisation table is
+        // sixty-four numbers, and sixty-four numbers written across a chip is
+        // not a reading of the table: it is the table with the reader left to
+        // do the work. The field tree opens it for anyone who wants them.
+        let ty = self.memo[path].ty.clone();
+        if matches!(ty.base(), Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. }) {
+            let unit = self.unit_of(path, &ty).unwrap_or("value").to_string();
+            out.push(count_text(info.child_count, &unit));
+            return Ok(());
+        }
+        // A field that exists to say how long or how many another field is has
+        // nothing to say on a line beside the field it measures: every JPEG
+        // segment's reading opened with its own length, which is the extent
+        // the row is already drawn at. A field that picks a shape is left
+        // alone, since that is usually the word the record is about, and a
+        // format that wants a measurement back on the line says so with
+        // `payload`.
+        let quiet: Vec<bool> = match self.struct_of(&ty) {
+            Some(def) => {
+                let m = crate::machinery::measurers(&def);
+                (0..def.fields.len()).map(|i| m[i].is_some() && crate::machinery::hint(&def, i) != Some(false)).collect()
+            }
+            None => Vec::new(),
+        };
         for i in 0..info.child_count as usize {
+            if quiet.get(i) == Some(&true) {
+                continue;
+            }
             let mut child = path.to_vec();
             child.push(i);
             self.one_line(doc, &child, out)?;
         }
         Ok(())
+    }
+
+    /// The structure a type is, following the names in the template's own
+    /// table. None for anything that is not one.
+    fn struct_of(&self, ty: &Ty) -> Option<std::sync::Arc<crate::template::StructDef>> {
+        let mut ty = ty.base();
+        for _ in 0..8 {
+            match ty {
+                Ty::Struct(s) => return Some(s.clone()),
+                Ty::Named(n) => ty = self.template.types.get(&**n)?.base(),
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// The nearest repeated run `path` sits in, if it is long enough to be

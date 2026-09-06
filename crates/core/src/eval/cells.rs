@@ -404,7 +404,7 @@ impl Evaluator {
     /// themselves are already in the column this cell sits beside, and a
     /// preview of the first few of them in a cell this narrow says less than
     /// the length does.
-    fn record_line<S: Source>(&mut self, doc: &Document<S>, path: &[usize], line: &[LinePart]) -> R<String> {
+    pub(super) fn record_line<S: Source>(&mut self, doc: &Document<S>, path: &[usize], line: &[LinePart]) -> R<String> {
         let mut parts: Vec<String> = Vec::new();
         for part in line {
             // A field the shapes left out of this record is not an error: one
