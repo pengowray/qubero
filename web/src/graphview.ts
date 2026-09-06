@@ -255,7 +255,11 @@ export class GraphView {
         quality: cy.nodes().length > DRAFT_ABOVE ? "draft" : "default",
         animate: false,
         randomize,
-        nodeRepulsion: () => 6000,
+        // More room between nodes the more of them there are. At a dozen fields
+        // the default spreads them nicely; at a thousand it packs them into a
+        // ball, because every node is pushing every other node from further
+        // away and the springs win.
+        nodeRepulsion: () => 6000 + Math.min(40000, cy.nodes().length * 40),
         // A force turned down does not vanish; it gets long and slack, which
         // is what "pulls less" means to a spring layout. At zero the spring is
         // left in but made long enough to be beyond anything else on screen,
