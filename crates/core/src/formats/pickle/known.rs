@@ -64,6 +64,27 @@ pub(super) fn recognise(callable: &str, args: &[Value]) -> Option<(u64, u64, Pay
     }
 }
 
+/// What a rebuilder was handed to rebuild.
+///
+/// Some callables make nothing of their own. `copyreg._reconstructor` and
+/// pandas' Cython helper are given a class and put one of those back together,
+/// so a row saying what the *callable* is says the same thing for every class
+/// in the file: every pandas array, whatever it holds, reads as the helper
+/// that rebuilt it. The class is the first argument, and it is the answer.
+///
+/// Nothing when the class is one no recogniser knows, so the caller falls back
+/// to naming the rebuilder, which is at least true.
+pub(super) fn rebuilt(callable: &str, args: &[Value]) -> Option<&'static str> {
+    let (module, name) = callable.rsplit_once('.')?;
+    let hands_it_a_class = matches!(
+        (root(module), name),
+        ("copyreg", "_reconstructor" | "__newobj__")
+            | ("pandas", "__pyx_unpickle_NDArrayBacked")
+            | ("numpy", "_reconstruct")
+    );
+    hands_it_a_class.then(|| what(&args.first()?.global()?)).flatten()
+}
+
 /// What this callable is, in words, or nothing where it is not one anybody
 /// would recognise.
 ///
@@ -74,7 +95,12 @@ pub(super) fn recognise(callable: &str, args: &[Value]) -> Option<(u64, u64, Pay
 pub(super) fn what(callable: &str) -> Option<&'static str> {
     let (module, name) = callable.rsplit_once('.')?;
     Some(match (root(module), name) {
-        // numpy.
+        // numpy. An array's data reads as numbers only from protocol 3 up.
+        // Before that a pickle had no bytes object, so numpy writes the array
+        // as a `str` through `_codecs.encode(..., 'latin1')`, and a byte over
+        // 0x7f is two bytes in the file. There is no run of array data in such
+        // a file to point a type at, which is a fact about the file rather
+        // than a gap here.
         ("numpy", "_reconstruct" | "ndarray") => "a numpy array",
         ("numpy", "_frombuffer") => "a numpy array over a buffer",
         ("numpy", "scalar") => "a numpy scalar",
@@ -148,7 +174,8 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
         ("builtins", "getattr") => "an attribute fetched by name",
         ("copyreg", "_reconstructor") => "an instance via its base class (protocol 0/1)",
         ("copyreg", "__newobj__") => "an instance via __new__ without __init__",
-        ("_codecs", "encode") => "a bytes object stored as a str (protocols 0-2)",
+        // `root` takes the leading underscore off, so this is `_codecs`.
+        ("codecs", "encode") => "a bytes object stored as a str (protocols 0-2)",
         _ => return None,
     })
 }
@@ -290,6 +317,7 @@ mod tests {
         assert_eq!(what("collections.OrderedDict"), Some("an ordered dict"));
         assert!(what("torch._utils._rebuild_tensor_v2").is_some_and(|w| w.contains("tensor")));
         assert!(what("sklearn.ensemble._forest.RandomForestClassifier").is_some());
+        assert!(what("_codecs.encode").is_some(), "the private module keeps its underscore in the file");
         assert_eq!(what("mymodule.MyClass"), None, "nothing is invented for a class nobody knows");
         let _ = Arc::<[Value]>::from(&[][..]);
     }

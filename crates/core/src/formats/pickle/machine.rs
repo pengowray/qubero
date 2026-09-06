@@ -270,15 +270,12 @@ impl Run {
                 }
             }
 
-            // Naming a callable, the two ways.
+            // Naming a callable, the two ways. Neither row says what the
+            // class is for: naming is not making, the operand spells the name
+            // out on this very row, and the row that calls it says the rest.
             0x63 | 0x69 => {
                 let (module, name) = pair(&op.operand);
                 let named = Value::Global { module, name };
-                if let Some(full) = named.global() {
-                    if let Some(word) = known::what(&full) {
-                        self.say(op, word.to_string());
-                    }
-                }
                 match op.code {
                     // INST names a class and calls it in one opcode, on the
                     // arguments back to the mark. The mark is taken first: the
@@ -301,11 +298,12 @@ impl Run {
                     return Some(());
                 };
                 // The two strings are already rows above this one, but they
-                // are rows apart and neither says it is half of a name. Where
-                // the name is one anybody knows, saying what it is beats
-                // saying it again.
-                let full = format!("{module}.{name}");
-                self.say(op, known::what(&full).map_or(format!("names {full}"), str::to_string));
+                // are rows apart and neither says it is half of a name. So the
+                // row joins them, and leaves what the class is to the row that
+                // calls it: `numpy.ndarray` and the factory that makes one are
+                // both "a numpy array", and a reader told that three times
+                // before anything is built has been told it none.
+                self.say(op, format!("names {module}.{name}"));
                 self.push(Value::Global { module: module.into(), name: name.into() });
             }
 
@@ -390,6 +388,7 @@ impl Run {
             // it off the stack, so it replaces a value rather than adding one.
             0x51 => {
                 self.stack.pop()?;
+                self.say(op, "an object from outside the pickle".to_string());
                 self.push(Value::Opaque);
             }
             // Everything left is a value this does not model, or an
@@ -432,7 +431,7 @@ impl Run {
             // What it is where anybody knows, and what it is called where
             // nobody does. Never both: the module and the name are already
             // two rows above this one.
-            self.say(op, known::what(&name).map_or_else(|| format!("calls {name}"), str::to_string));
+            self.say(op, phrase(&name, args).unwrap_or_else(|| format!("calls {name}")));
         }
         self.record(callable, args);
     }
@@ -463,10 +462,9 @@ impl Run {
             self.say(op, format!("the dtype {descr}"));
             return;
         }
-        if let Value::Call { callable, .. } = object {
+        if let Value::Call { callable, args } = object {
             if let Some(name) = callable.global() {
-                let what = known::what(&name).unwrap_or(&name).to_string();
-                self.say(op, format!("fills in {what}"));
+                self.say(op, format!("fills in {}", phrase(&name, args).unwrap_or(name)));
             }
             let items = state.tuple().unwrap_or(std::slice::from_ref(state));
             self.record(callable, items);
@@ -544,6 +542,12 @@ fn pair(bytes: &[u8]) -> (Arc<str>, Arc<str>) {
     (module.into(), name.into())
 }
 
+/// What a call makes, in words: what the class it was handed is where it was
+/// handed one, else what the callable itself is.
+fn phrase(callable: &str, args: &[Value]) -> Option<String> {
+    known::rebuilt(callable, args).or_else(|| known::what(callable)).map(str::to_string)
+}
+
 /// What a memo reference points at, said briefly enough for a row.
 fn describe(v: &Value) -> Option<String> {
     Some(match v {
@@ -553,8 +557,8 @@ fn describe(v: &Value) -> Option<String> {
         // The row that built this said what it was, so the row reusing it
         // says the same thing rather than the module path underneath: one
         // value should not have two vocabularies.
-        Value::Call { callable, .. } => match callable.global() {
-            Some(name) => known::what(&name).map_or_else(|| format!("what {name} returned"), str::to_string),
+        Value::Call { callable, args } => match callable.global() {
+            Some(name) => phrase(&name, args).unwrap_or_else(|| format!("what {name} returned")),
             None => "an object".to_string(),
         },
         Value::Tuple(items) => format!("a tuple of {}", items.len()),

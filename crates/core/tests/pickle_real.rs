@@ -203,6 +203,77 @@ fn a_packed_date_is_read_as_the_fields_in_it() {
     assert!(named("DateTime", "month").contains(&4), "the folded one is in April: {:?}", named("DateTime", "month"));
 }
 
+/// A naming row names, and leaves what the thing is to the row that makes it.
+///
+/// A pickle names a class, then calls it, then fills it in, and for a while
+/// every one of those rows said "a numpy array": the same four words three
+/// times before anything existed. Worse, the factory and the class it is
+/// handed are two different names that both read as "a numpy array", so two
+/// rows running said it about two different things. Naming is not making.
+#[test]
+fn a_naming_row_says_the_name_and_nothing_else() {
+    let Some(dir) = folder() else { return };
+    let mut checked = 0;
+    for path in pickles(&dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
+        let mut rows = Vec::new();
+        annotated(&doc, &mut ev, &[], &mut rows, 0);
+        for (op, text) in &rows {
+            if op == "STACK_GLOBAL" {
+                assert!(text.starts_with("names "), "{name}: STACK_GLOBAL says {text:?}");
+            }
+            // GLOBAL spells the name out in its own operand, so a word from
+            // this would be the row telling the reader what the row says.
+            assert_ne!(op, "GLOBAL", "{name}: GLOBAL says {text:?}, which its operand already does");
+        }
+        checked += 1;
+    }
+    assert!(checked >= 10, "only {checked} pickles found");
+
+    // And the phrase lands once. Two `STACK_GLOBAL`s and a `REDUCE` build one
+    // array between them; only the `REDUCE` made anything.
+    let Ok(bytes) = std::fs::read(dir.join("proto4-numpy-array.pickle")) else { return };
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
+    let mut rows = Vec::new();
+    annotated(&doc, &mut ev, &[], &mut rows, 0);
+    let said: Vec<&(String, String)> = rows.iter().filter(|(_, t)| t == "a numpy array").collect();
+    assert_eq!(said.len(), 1, "one row makes the array, and these said so: {said:?}");
+    assert_eq!(said[0].0, "REDUCE");
+}
+
+/// Every opcode that has something to say, as its name and what it said.
+fn annotated(
+    doc: &Document<MemSource>,
+    ev: &mut Evaluator,
+    at: &[usize],
+    out: &mut Vec<(String, String)>,
+    depth: usize,
+) {
+    if depth > 10 {
+        return;
+    }
+    let Ok(node) = ev.node(doc, at) else { return };
+    if node.type_name == "Op" {
+        if let Ok(word) = ev.node(doc, &[at, &[1]].concat()) {
+            if word.type_name == "computed text" {
+                if let Value::Str(text) = &word.value {
+                    if !text.is_empty() {
+                        out.push((opcode(&node.name).to_string(), text.clone()));
+                    }
+                }
+            }
+        }
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = at.to_vec();
+        next.push(i);
+        annotated(doc, ev, &next, out, depth + 1);
+    }
+}
+
 /// Every field of every packed record, as its record's type, its own name and
 /// its value.
 fn fields(
@@ -276,13 +347,26 @@ fn the_libraries_worth_knowing_are_named() {
 /// Everything the run of the file had to say, one string per row that said
 /// anything.
 fn words(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], out: &mut Vec<String>, depth: usize) {
+    said(doc, ev, at, out, depth, None);
+}
+
+/// The same, restricted to one field: `operand` is what an opcode did, `holds`
+/// is what a memo slot has in it, and the two answer different questions.
+fn said(
+    doc: &Document<MemSource>,
+    ev: &mut Evaluator,
+    at: &[usize],
+    out: &mut Vec<String>,
+    depth: usize,
+    only: Option<&str>,
+) {
     if depth > 10 {
         return;
     }
     let Ok(node) = ev.node(doc, at) else { return };
     if node.type_name == "computed text" {
         if let Value::Str(text) = &node.value {
-            if !text.is_empty() {
+            if !text.is_empty() && only.is_none_or(|f| node.name == f) {
                 out.push(text.clone());
             }
         }
@@ -291,7 +375,7 @@ fn words(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], out: &mut 
     for i in 0..node.child_count as usize {
         let mut next = at.to_vec();
         next.push(i);
-        words(doc, ev, &next, out, depth + 1);
+        said(doc, ev, &next, out, depth + 1, only);
     }
 }
 

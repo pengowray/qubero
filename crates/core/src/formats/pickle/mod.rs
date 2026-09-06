@@ -199,10 +199,17 @@ fn operand() -> T {
     // in the file, so the operand slot they were never going to use says it.
     // No bytes, so nothing about the layout changes.
     add(&[0x52, 0x62, 0x93, 0x81, 0x92, 0x6f, 0x51], T::ComputedText(E::deduced(Deduce::Builds)));
-    // The memo, whose one-byte index says nothing on its own.
-    add(&[0x68, 0x71], memo_ref(T::u8()));
-    add(&[0x6a, 0x72], memo_ref(T::u32(Little)));
-    add(&[0x67, 0x70], memo_ref(T::decimal(line())));
+    // Reading the memo, whose index says nothing on its own: `BINGET 5` is a
+    // row a reader has to go looking to understand.
+    add(&[0x68], memo_ref(T::u8()));
+    add(&[0x6a], memo_ref(T::u32(Little)));
+    add(&[0x67], memo_ref(T::decimal(line())));
+    // Writing it, where the index is the whole of what the row does. What is
+    // being kept is the row above, so a second telling would only be that row
+    // again with a slot number in front of it.
+    add(&[0x71], T::u8());
+    add(&[0x72], T::u32(Little));
+    add(&[0x70], T::decimal(line()));
 
     // Written as text, one value to a line. The newline belongs to the field,
     // so the opcode after it starts where the field ends.
@@ -273,9 +280,9 @@ fn payload() -> T {
     T::switch(E::deduced(Deduce::PayloadShape), cases, T::bytes(E::Remaining))
 }
 
-/// A memo index, and what is in the memo there. The index alone says nothing:
-/// `BINGET 5` is a row a reader has to go looking to understand, and the memo
-/// is nowhere in the file to look in.
+/// A memo index, and what is in the memo there. Only for the opcodes that read
+/// the memo: the memo is nowhere in the file to look in, so a row pointing at
+/// slot five has to be told what slot five was.
 fn memo_ref(index: T) -> T {
     T::structure_named(
         "MemoRef",
