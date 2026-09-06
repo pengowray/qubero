@@ -429,6 +429,56 @@ export type Relation = {
   readonly result: string;
 };
 
+/** One field of a subtree, as much of it as an arrow needs. No value: what a
+ *  field says is the expensive half of reading it, and nothing a graph draws
+ *  shows it. */
+export type GraphNode = {
+  readonly path: number[];
+  readonly name: string;
+  /** The resolved type said coarsely, to group or colour by: `u8`, `u16`,
+   *  `i32`, `uint`, `varint`, `f16`, `bf16`, `f32`, `f64`, `f80`, `f8`,
+   *  `fixed`, `digits`, `magic`, `bytes`, `str`, `enum`, `flags`, `computed`,
+   *  `insn`, `json`, `struct`, `array`, `repeat`, `pointers`, `chain`, `at`,
+   *  `stream`, `trace`, `switch`, `named`. The core decides these; nothing
+   *  here should read a type name and work out its own. */
+  readonly kind: string;
+  readonly offset_bits: number;
+  readonly size_bits: number;
+  /** Index into the node list, or -1 for the node the graph was asked for. */
+  readonly parent: number;
+  readonly child_count: number;
+  /** True when this node has children the walk stopped short of. */
+  readonly truncated: boolean;
+};
+
+/** One field deciding something about another. The arrow runs the way a reader
+ *  follows it: from the field that decided to the field it decided about. */
+export type GraphEdge = {
+  /** Index into the node list: the field that decided. */
+  readonly from: number;
+  /** Index into the node list: the field it decided about. */
+  readonly to: number;
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "points";
+};
+
+/**
+ * A subtree of fields and what they decide about each other. `origins` answers
+ * for one field at a time, which is what a panel showing one row needs; this
+ * answers for all of them at once, which is what a picture of the format needs.
+ *
+ * Every edge joins two nodes of this list. One whose far end fell outside the
+ * subtree or past the cap is dropped rather than left hanging.
+ */
+export type FieldGraph = {
+  readonly nodes: GraphNode[];
+  readonly edges: GraphEdge[];
+  /** How many nodes under the one asked about were left out, as far as is
+   *  known. A run whose count would take a walk of the whole file to settle
+   *  contributes what the walk reached, so this is a floor rather than a
+   *  total. */
+  readonly omitted: number;
+};
+
 /** What a type permits, beyond what this file's bytes happen to say. */
 /** One row of a cross-reference stream, already decoded. `offset` is a real
  *  place in the file for an in-use row and -1 for every other kind. */
@@ -1348,6 +1398,18 @@ export class Doc {
    */
   origins(path: readonly number[]): TemplateReply<Origin[]> {
     return this.handleReply<Origin[]>(this.editor.origins(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * The same question asked of every field under `path` at once: the fields of
+   * the subtree and the connections between them, ready to be laid out.
+   *
+   * `limit` caps the fields. The walk is breadth-first, so what a cap keeps is
+   * the top of the format rather than one deep spine of it, and the answer says
+   * how many fields it left out.
+   */
+  graph(path: readonly number[], limit: number): TemplateReply<FieldGraph> {
+    return this.handleReply<FieldGraph>(this.editor.graph(this.space, Uint32Array.from(path), limit));
   }
 
   /**

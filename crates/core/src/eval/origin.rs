@@ -74,50 +74,117 @@ pub struct Origin {
     pub target_bits: Option<u64>,
 }
 
+/// Where the answers are being collected, and whether the collector wants each
+/// named field's value read back.
+///
+/// One reader wants both halves: a row saying `len = 40` is the whole of what
+/// an inspector panel is for. The other wants only which field it was, because
+/// it is asking the same question of every field in a subtree at once, and
+/// reading a value means placing that field and fetching its bytes. Asking a
+/// hundred thousand of those to say what they hold, so that none of it is
+/// shown, is the difference between a graph that draws and one that does not.
+/// See [`Evaluator::graph`].
+///
+/// So this is what the collection is handed instead of a bare `Vec`: the
+/// expression walking below is one piece of code, and the decision about
+/// values is made once, here.
+pub(super) struct Sink {
+    out: Vec<Origin>,
+    /// Read what each named field says, and work out what an aggregate over a
+    /// list comes to.
+    values: bool,
+}
+
+impl Sink {
+    /// Collecting for a reader who wants what each field says.
+    fn told(values: bool) -> Sink {
+        Sink { out: Vec::new(), values }
+    }
+
+    fn push(&mut self, o: Origin) {
+        self.out.push(o);
+    }
+}
+
 impl Evaluator {
     /// Which fields settled the shape of the one at `path`, and where this one
     /// points if it is an offset. Empty for a field the template placed and
     /// sized outright, which is most of them.
     pub fn origins<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Vec<Origin>> {
+        let mut sink = Sink::told(true);
+        self.collect_origins(doc, path, &mut sink)?;
+        Ok(sink.out)
+    }
+
+    /// The same connections, without reading what any of the named fields say.
+    ///
+    /// What comes back is the `(role, path)` pairs `origins` would give, with
+    /// every `value` left empty. `Points` is left out as well: that answer is
+    /// a bit of the file rather than a field, and the one caller wanting a
+    /// field on the far end of a pointer asks [`Evaluator::points_at`] itself.
+    pub(super) fn origins_no_values<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Vec<Origin>> {
+        let mut sink = Sink::told(false);
+        self.collect_origins(doc, path, &mut sink)?;
+        Ok(sink.out)
+    }
+
+    /// Every connection into the field at `path`, in the order a reader would
+    /// meet them: what placed it, what named it, what stream it came out of,
+    /// what its declaration made of it, and what it points at.
+    fn collect_origins<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
         self.resolve(doc, path)?;
-        let mut out = Vec::new();
-        self.placed_by(doc, path, &mut out)?;
+        self.placed_by(doc, path, out)?;
         // Where the name on the row came from, when the file rather than the
         // template says what the field is called.
         if let Some(from) = self.name_from(path) {
-            self.from_expr(doc, path, &from, Role::Name, &mut out)?;
+            self.from_expr(doc, path, &from, Role::Name, out)?;
         }
-        self.decoded_from(doc, path, &mut out)?;
-        self.decoded_with(doc, path, &mut out)?;
+        self.decoded_from(doc, path, out)?;
+        self.decoded_with(doc, path, out)?;
         // The declared type, before the switch picked a case and before `Sized`
         // was unwrapped: that is where the deciding expressions are.
         let declared = self.declared_ty(path)?;
-        self.wrapper_origins(doc, path, declared, &mut out)?;
+        self.wrapper_origins(doc, path, declared, out)?;
         let base = self.memo[path].ty.without_sentinel().clone();
-        self.base_origins(doc, path, &base, &mut out)?;
-        if let Some((label, bits)) = self.points_at(doc, path)? {
-            out.push(Origin {
-                role: Role::Points,
-                label,
-                path: Vec::new(),
-                value: String::new(),
-                target_bits: Some(bits),
-            });
+        self.base_origins(doc, path, &base, out)?;
+        // A bit of the file rather than a field, so only the reader who can
+        // show a bit is told about it.
+        if out.values {
+            if let Some((label, bits, _)) = self.points_at(doc, path)? {
+                out.push(Origin {
+                    role: Role::Points,
+                    label,
+                    path: Vec::new(),
+                    value: String::new(),
+                    target_bits: Some(bits),
+                });
+            }
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Where this field points, for a field an earlier list of pointers reads
     /// its offsets from. The answer is where that list put the matching child,
     /// which is the same arithmetic the list already did.
-    fn points_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<(String, u64)>> {
+    ///
+    /// Three things come back, because two readers want different halves of
+    /// the same fact. An inspector wants the bit, since what it can do with the
+    /// answer is put the cursor there. A graph wants the node, since what it
+    /// can do is draw an arrow to it, and working the node out again from the
+    /// bit would be a second, worse answer: the bit is counted in whatever
+    /// space the list was read in, and a stream's offsets are not the file's.
+    pub(super) fn points_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+    ) -> R<Option<(String, u64, Vec<usize>)>> {
         let Some((list, idx, name)) = self.pointer_use(doc, path) else { return Ok(None) };
         let mut child = list;
         child.push(idx);
         if self.resolve(doc, &child).is_err() {
             return Ok(None);
         }
-        Ok(Some((name, self.memo[&child].offset)))
+        Ok(Some((name, self.memo[&child].offset, child)))
     }
 
     /// The pointer list that reads this field as one of its offsets: where the
@@ -152,7 +219,7 @@ impl Evaluator {
     }
 
     /// The offset that placed a child of a pointer list.
-    fn placed_by<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<Origin>) -> R<()> {
+    fn placed_by<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
         let Some((&idx, list)) = path.split_last() else { return Ok(()) };
         let Some(r) = self.memo.get(list) else { return Ok(()) };
         let Ty::PointerList { offsets, field, .. } = &r.ty else { return Ok(()) };
@@ -166,7 +233,7 @@ impl Evaluator {
             }
             label = format!("{label}.{}", field.join("."));
         }
-        let o = self.origin(doc, Role::Position, label, p);
+        let o = self.origin(doc, out.values, Role::Position, label, p);
         out.push(o);
         Ok(())
     }
@@ -177,7 +244,7 @@ impl Evaluator {
     /// cannot show: the field is at `+0x1c`, and `+0x1c` of *what* is the
     /// question. The answer is the compressed run, which is a field of the
     /// file with a place of its own to go and look at.
-    fn decoded_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<Origin>) -> R<()> {
+    fn decoded_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
         if self.memo.get(path).is_none_or(|r| r.space == 0) {
             return Ok(());
         }
@@ -192,11 +259,11 @@ impl Evaluator {
             None => None,
         });
         let Some((stream, codec, label)) = found else { return Ok(()) };
-        let mut o = self.origin(doc, Role::Value, label, stream);
+        let mut o = self.origin(doc, out.values, Role::Value, label, stream);
         // What the run says, as a field, is a preview of compressed bytes and
         // tells the reader nothing. What is worth saying is which codec opened
         // it.
-        o.value = codec.as_str().to_string();
+        o.value = if out.values { codec.as_str().to_string() } else { String::new() };
         out.push(o);
         Ok(())
     }
@@ -208,7 +275,7 @@ impl Evaluator {
     /// declared thirty rows above. That table is a field with a place of its
     /// own, so the answer is a row saying which block, that the reader can go
     /// to.
-    fn decoded_with<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<Origin>) -> R<()> {
+    fn decoded_with<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
         // The nearest block above this node, which is the one whose header and
         // tables settled what its symbols mean.
         let found = (0..path.len()).rev().find_map(|k| match self.memo.get(&path[..k]).map(|r| &r.ty) {
@@ -220,7 +287,7 @@ impl Evaluator {
             return Ok(());
         }
         let label = self.memo.get(&block).map(|r| r.name.text()).unwrap_or_default();
-        let mut o = self.origin(doc, Role::Type, label, block);
+        let mut o = self.origin(doc, out.values, Role::Type, label, block);
         // What the block reads as is a count of its children, which says
         // nothing. What settled the symbol is how the block coded them.
         o.value = String::new();
@@ -264,7 +331,7 @@ impl Evaluator {
         doc: &Document<S>,
         path: &[usize],
         mut ty: Ty,
-        out: &mut Vec<Origin>,
+        out: &mut Sink,
     ) -> R<()> {
         for _ in 0..64 {
             match ty {
@@ -289,7 +356,7 @@ impl Evaluator {
 
     /// The type the field is actually read as: how long it runs, or how many
     /// children it has.
-    fn base_origins<S: Source>(&mut self, doc: &Document<S>, path: &[usize], ty: &Ty, out: &mut Vec<Origin>) -> R<()> {
+    fn base_origins<S: Source>(&mut self, doc: &Document<S>, path: &[usize], ty: &Ty, out: &mut Sink) -> R<()> {
         match ty {
             Ty::Bytes(e) => self.from_expr(doc, path, &e.clone(), Role::Length, out),
             Ty::Str { len: StrLen::Fixed(e) | StrLen::Padded { size: e, .. }, .. } => {
@@ -311,29 +378,41 @@ impl Evaluator {
         at: &[usize],
         e: &Expr,
         role: Role,
-        out: &mut Vec<Origin>,
+        out: &mut Sink,
     ) -> R<()> {
         match e {
             Expr::Ref(name) => {
                 if let Some(p) = self.find_field(at, name) {
-                    let o = self.origin(doc, role, name.to_string(), p);
+                    let o = self.origin(doc, out.values, role, name.to_string(), p);
                     out.push(o);
                 }
             }
             Expr::SizeOf(name) | Expr::BitsOf(name) => {
                 if let Some(p) = self.find_field(at, name) {
-                    let mut o = self.origin(doc, role, format!("size of {name}"), p);
+                    let mut o = self.origin(doc, out.values, role, format!("size of {name}"), p);
                     // How long the field is, not what it says. The row names a
                     // size and used to answer with the value, which is a
                     // different number and reads as this one being wrong.
-                    o.value = self.eval_expr(doc, at, e)?.to_string();
+                    //
+                    // Measuring the field is what answering costs, and a
+                    // collector that shows no values is not going to spend it:
+                    // sizing a run of a million elements to fill in a number
+                    // nobody reads is exactly what `values` is here to stop.
+                    if out.values {
+                        o.value = self.eval_expr(doc, at, e)?.to_string();
+                    }
                     out.push(o);
                 }
             }
             Expr::ProductOf(name) | Expr::SumOf(name) | Expr::MaxOf(name) => {
                 if let Some(p) = self.find_field(at, name) {
-                    let mut o = self.origin(doc, role, name.to_string(), p);
-                    o.value = self.eval_expr(doc, at, e)?.to_string();
+                    let mut o = self.origin(doc, out.values, role, name.to_string(), p);
+                    // An aggregate reads every element of the list it names, so
+                    // the same rule applies: the connection is the answer, and
+                    // what it comes to is only worth the walk when it is shown.
+                    if out.values {
+                        o.value = self.eval_expr(doc, at, e)?.to_string();
+                    }
                     out.push(o);
                 }
             }
@@ -356,7 +435,7 @@ impl Evaluator {
                     }
                     label = format!("{label}.{name}");
                 }
-                let o = self.origin(doc, role, label, p);
+                let o = self.origin(doc, out.values, role, label, p);
                 out.push(o);
             }
             Expr::Elem { array, index, field } | Expr::Product { array, index, field } => {
@@ -378,8 +457,8 @@ impl Evaluator {
                     }
                     label = format!("{label}.{name}");
                 }
-                let mut o = self.origin(doc, role, label, p);
-                if product {
+                let mut o = self.origin(doc, out.values, role, label, p);
+                if product && out.values {
                     o.value = self.eval_expr(doc, at, e)?.to_string();
                 }
                 out.push(o);
@@ -400,7 +479,7 @@ impl Evaluator {
                 let t = t.clone();
                 let here = self.memo.get(at).map(|r| (r.offset, r.limit));
                 if let Some((p, label)) = self.tagged_path(doc, at, &t, here)? {
-                    let o = self.origin(doc, role, label, p);
+                    let o = self.origin(doc, out.values, role, label, p);
                     out.push(o);
                 }
             }
@@ -429,10 +508,21 @@ impl Evaluator {
     /// One answer, with the named field's value if it can be read. A value that
     /// cannot be read yet is left out rather than waited for: where the number
     /// came from is worth saying without it.
-    fn origin<S: Source>(&mut self, doc: &Document<S>, role: Role, label: String, path: Vec<usize>) -> Origin {
-        let value = match self.node(doc, &path) {
-            Ok(info) => brief(&info.value),
-            Err(_) => String::new(),
+    ///
+    /// `values` is what the collector asked for. Reading the field means
+    /// placing it, sizing it and fetching its bytes, so a collector that shows
+    /// nothing says so here and the answer is the connection alone.
+    fn origin<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        values: bool,
+        role: Role,
+        label: String,
+        path: Vec<usize>,
+    ) -> Origin {
+        let value = match values.then(|| self.node(doc, &path)) {
+            Some(Ok(info)) => brief(&info.value),
+            _ => String::new(),
         };
         Origin { role, label, path, value, target_bits: None }
     }
