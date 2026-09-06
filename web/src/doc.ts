@@ -37,8 +37,11 @@ function isOmeZarrMetadata(name: string, bytes: Uint8Array): boolean {
  * is the only evidence there is. A `.c16` capture is raw samples from the first
  * byte: no header, no magic number, nothing but the extension to go on. A
  * `.ppma` does open with `P3` and is usually recognised by that; the mapping is
- * here for one written without the newline the check expects. */
-const BY_EXTENSION: Record<string, string> = { c16: "c16", ppma: "pnm" };
+ * here for one written without the newline the check expects. A `.mat` from
+ * before MATLAB 5 has no header either, and while the sniffer does recognise
+ * one by the five integers it opens with, a file those integers do not fit
+ * still opens as what it is called. */
+const BY_EXTENSION: Record<string, string> = { c16: "c16", ppma: "pnm", mat: "mat" };
 
 function templateByExtension(name: string): string | null {
   const ext = name.toLowerCase().split(".").pop() ?? "";

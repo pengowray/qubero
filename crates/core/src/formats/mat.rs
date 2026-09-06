@@ -149,6 +149,7 @@ const MX_STRUCT: i128 = 2;
 const MX_OBJECT: i128 = 3;
 const MX_CHAR: i128 = 4;
 const MX_SPARSE: i128 = 5;
+const MX_FUNCTION: i128 = 16;
 const MX_OPAQUE: i128 = 17;
 const MX_OBJECT_NEW: i128 = 18;
 
@@ -347,19 +348,19 @@ fn matrix(e: Endian) -> T {
     T::structure(
         "Array",
         vec![
-            ("flags", array_flags(e)),
+            ("array_flags", array_flags(e)),
             // Every class but one says how big it is here. An opaque array
             // does not: what follows its flags is the name of the variable,
             // which is the field below.
             (
                 "dimensions",
-                T::switch(E::within(&["flags", "class"]), vec![(MX_OPAQUE, T::bytes(E::lit(0)))], dimensions(e)),
+                T::switch(E::within(&["array_flags", "class"]), vec![(MX_OPAQUE, T::bytes(E::lit(0)))], dimensions(e)),
             ),
             ("name", T::Named(text_element_name(e).into())),
             (
                 "contents",
                 T::switch(
-                    E::within(&["flags", "class"]),
+                    E::within(&["array_flags", "class"]),
                     vec![
                         (MX_CELL, cells(e)),
                         (MX_STRUCT, fields(e, false)),
@@ -367,6 +368,7 @@ fn matrix(e: Endian) -> T {
                         (MX_OBJECT_NEW, fields(e, true)),
                         (MX_CHAR, characters(e)),
                         (MX_SPARSE, sparse(e)),
+                        (MX_FUNCTION, function(e)),
                         (MX_OPAQUE, opaque(e)),
                     ],
                     numbers(e),
@@ -377,33 +379,28 @@ fn matrix(e: Endian) -> T {
 }
 
 /// The first subelement, which is always the long form and always two words:
-/// one packing the class and the flags, and the count of stored values a
+/// one holding the class and the flags, and the count of stored values a
 /// sparse array keeps.
+///
+/// The word is a class in its low byte and three flags in the byte above it,
+/// so which of those two bytes comes first is which way round the file is.
+/// Read as two bytes rather than as one word and a pair of shifts, so that
+/// each row covers the byte it is talking about.
 fn array_flags(e: Endian) -> T {
-    T::structure(
-        "ArrayFlags",
-        vec![
-            ("type", T::enumeration("DataType", T::u32(e), DATA_TYPES)),
-            ("bytes", T::u32(e)),
-            // One word holding two things: the class in its low byte, and
-            // three flags nine bits up. Both are read off it rather than
-            // read again, so the word itself is the only thing with bytes.
-            ("packed", T::u32(e)),
-            ("class", T::enumeration("Class", T::computed(E::field("packed").and(E::lit(0xff))), CLASSES)),
-            (
-                "flags",
-                T::flags(
-                    "ArrayFlag",
-                    T::computed(E::field("packed").shr(E::lit(9)).and(E::lit(7))),
-                    &[(0, "logical"), (1, "global"), (2, "complex")],
-                ),
-            ),
-            // Nonzero only for a sparse array, where it is how many values
-            // were made room for.
-            ("nzmax", T::u32(e)),
-        ],
-    )
-    .machinery(&["type", "bytes", "packed"])
+    let class = || T::enumeration("Class", T::u8(), CLASSES);
+    let flags = || T::flags("ArrayFlag", T::u8(), &[(1, "logical"), (2, "global"), (3, "complex")]);
+    let mut fields = vec![
+        ("type", T::enumeration("DataType", T::u32(e), DATA_TYPES)),
+        ("bytes", T::u32(e)),
+    ];
+    match e {
+        Little => fields.extend([("class", class()), ("flags", flags()), ("reserved", T::u16(e))]),
+        Big => fields.extend([("reserved", T::u16(e)), ("flags", flags()), ("class", class())]),
+    }
+    // Nonzero only for a sparse array, where it is how many values were made
+    // room for.
+    fields.push(("nzmax", T::u32(e)));
+    T::structure("ArrayFlags", fields).machinery(&["type", "bytes", "reserved"])
 }
 
 /// The second subelement: one 32-bit number per dimension. Always the long
@@ -426,7 +423,7 @@ fn dimensions(e: Endian) -> T {
 /// may carry. Complex is bit 11 of the flags word.
 fn imaginary(e: Endian) -> T {
     T::switch(
-        E::within(&["flags", "packed"]).shr(E::lit(11)).and(E::lit(1)),
+        E::within(&["array_flags", "flags"]).shr(E::lit(3)).and(E::lit(1)),
         vec![(1, T::Named(element_name(e).into()))],
         T::bytes(E::lit(0)),
     )
@@ -478,6 +475,12 @@ fn sparse(e: Endian) -> T {
             ("imaginary", imaginary(e)),
         ],
     )
+}
+
+/// A function handle, which holds one array: the structure MATLAB keeps the
+/// function's name, its workspace and where it was defined in.
+fn function(e: Endian) -> T {
+    T::structure("Function", vec![("definition", T::Named(element_name(e).into()))])
 }
 
 /// An object of a class MATLAB keeps in the subsystem data, which is what a

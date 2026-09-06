@@ -93,6 +93,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   cdf: "NASA CDF",
   hdf4: "HDF4",
   parquet: "Parquet",
+  mat: "MATLAB MAT",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */
