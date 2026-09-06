@@ -152,12 +152,18 @@ export class HexLinks {
    * height, because a heading, a wrapped line of chips or a value table can
    * make any row taller than the one above it. Reading the boxes is one forced
    * layout for the whole overlay, after the view has already taken its own.
+   *
+   * How big the overlay is comes as a function rather than as two numbers: the
+   * overlay is switched off in most sessions, and reading a width off the
+   * page makes the browser lay it out again. A scroll paid for that layout on
+   * every frame to size an overlay that then drew nothing.
    */
-  draw(width: number, height: number): void {
+  draw(box: () => { width: number; height: number }): void {
     if (!this.on && this.hover === null) {
       if (this.el.firstElementChild?.nextElementSibling !== undefined) this.clearShapes();
       return;
     }
+    const { width, height } = box();
     this.el.setAttribute("viewBox", `0 0 ${Math.round(width)} ${Math.round(height)}`);
     this.el.setAttribute("width", String(Math.round(width)));
     this.el.setAttribute("height", String(Math.round(height)));

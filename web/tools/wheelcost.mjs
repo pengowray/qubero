@@ -25,7 +25,7 @@ async function loadChromium() {
 }
 
 function parseArgs(argv) {
-  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24, css: "", links: false };
+  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24, css: "", links: false, spin: 0, every: 8 };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = argv[i + 1];
@@ -36,6 +36,11 @@ function parseArgs(argv) {
     else if (k === "--height") { a.height = Number(v); i++; }
     else if (k === "--wait") { a.wait = Number(v); i++; }
     else if (k === "--gap") { a.gap = Number(v); i++; }
+    // A sustained spin: how long to keep reporting for, and how often. This is
+    // the case the reader complains about and the one `page.mouse.wheel`
+    // cannot make, since CDP paces it slower than a frame.
+    else if (k === "--spin") { a.spin = Number(v); i++; }
+    else if (k === "--every") { a.every = Number(v); i++; }
     else if (k === "--css") { a.css = v; i++; }
     // With the dependency arrows switched on and a field picked, so the cost
     // of the overlay is measured on the same footing as everything else.
@@ -72,20 +77,31 @@ const INSTRUMENT = () => {
   // Where a draw's time goes, by the step that spent it. A step called from
   // another is counted in its own right as well as in the whole.
   state.parts = {};
-  for (const name of ["frame", "placeSpans", "planValues", "drawHeader", "fitParts", "drawRow", "drawCells", "drawNotes", "drawPinned", "measure", "settleHeights", "finish", "fitRows"]) {
-    const fn = proto[name];
-    if (typeof fn !== "function") continue;
-    state.parts[name] = { n: 0, ms: 0 };
-    proto[name] = function timed(...args) {
-      const t = performance.now();
-      try {
-        return fn.apply(this, args);
-      } finally {
-        const p = state.parts[name];
-        p.n++;
-        p.ms += performance.now() - t;
-      }
-    };
+  // The drawing moved out of the view and into `HexRows`, so both prototypes
+  // are timed: a step missing from this list is time that shows up in the
+  // whole draw and nowhere else.
+  const time = (owner, names, prefix = "") => {
+    for (const name of names) {
+      const fn = owner[name];
+      if (typeof fn !== "function") continue;
+      const key = prefix + name;
+      state.parts[key] = { n: 0, ms: 0 };
+      owner[name] = function timed(...args) {
+        const t = performance.now();
+        try {
+          return fn.apply(this, args);
+        } finally {
+          const p = state.parts[key];
+          p.n++;
+          p.ms += performance.now() - t;
+        }
+      };
+    }
+  };
+  time(proto, ["frame", "placeSpans", "planValues", "measure", "settleHeights", "finish", "fitRows", "markHover", "relayout"]);
+  const rows = v.grid ?? v.rows;
+  if (rows !== undefined) {
+    time(Object.getPrototypeOf(rows), ["write", "heights", "drawHeader", "drawRow", "drawCells", "drawNotes", "drawPinned", "layOutRow", "fitParts", "ensure", "noteMetrics", "hexPitch"], "rows.");
   }
   // How evenly the browser got to paint: a frame it could not finish inside
   // its budget is a step the reader sees as a stall.
@@ -103,6 +119,69 @@ const INSTRUMENT = () => {
     for (const p of Object.values(state.parts)) { p.n = 0; p.ms = 0; }
     state.gaps.length = 0;
   };
+};
+
+/**
+ * A sustained spin, reported from inside the page.
+ *
+ * The reader's complaint is about keeping the wheel turning, which is a report
+ * every frame or two for seconds on end. CDP's own `page.mouse.wheel` is paced
+ * slower than that, so a run of those measures a view that is idle between
+ * notches and says nothing about one that never catches up. This dispatches
+ * the reports itself and asks the only question that matters while it does:
+ * how many frames the browser missed.
+ */
+const spin = async (page, a, metrics) => {
+  await page.evaluate(() => window.__wc.reset());
+  const before = await metrics();
+  const out = await page.evaluate(
+    ([ms, every]) =>
+      new Promise((done) => {
+        const v = window.__qubero.view;
+        const stop = performance.now() + ms;
+        let sent = 0;
+        const tick = () => {
+          if (performance.now() >= stop) {
+            // Two frames of quiet, so the last draw lands inside the run.
+            requestAnimationFrame(() => requestAnimationFrame(() => done({ sent })));
+            return;
+          }
+          v.el.dispatchEvent(new WheelEvent("wheel", { deltaY: 40, cancelable: true, bubbles: true }));
+          sent++;
+          setTimeout(tick, every);
+        };
+        tick();
+      }),
+    [a.spin, a.every],
+  );
+  const s = await page.evaluate(() => ({ ...window.__wc, reset: undefined, parts: JSON.parse(JSON.stringify(window.__wc.parts)) }));
+  const after = await metrics();
+  const spent = (k) => ((after[k] ?? 0) - (before[k] ?? 0)) * 1000;
+  const gaps = s.gaps.slice().sort((x, y) => x - y);
+  const at = (q) => (gaps.length === 0 ? 0 : gaps[Math.min(gaps.length - 1, Math.floor(q * gaps.length))]);
+  // A frame the browser could not finish inside its budget is a step the
+  // reader sees. 20ms is a 60Hz frame with a little slack; anything past 32ms
+  // is a frame dropped outright.
+  const late = gaps.filter((g) => g > 20).length;
+  console.log(
+    `spin   ${a.spin}ms, a report every ${a.every}ms  reports ${out.sent}  draws ${s.top}` +
+      `  draw ms ${s.drawMs.toFixed(1)}  longest ${s.longest.toFixed(1)}`,
+  );
+  console.log(
+    `       frames ${gaps.length}  median ${at(0.5).toFixed(1)}  p90 ${at(0.9).toFixed(1)}  worst ${(gaps[gaps.length - 1] ?? 0).toFixed(1)}` +
+      `  late (>20ms) ${late}  dropped (>32ms) ${gaps.filter((g) => g > 32).length}`,
+  );
+  console.log(
+    `       browser: style ${spent("RecalcStyleDuration").toFixed(0)}ms/${(after.RecalcStyleCount ?? 0) - (before.RecalcStyleCount ?? 0)}` +
+      `  layout ${spent("LayoutDuration").toFixed(0)}ms/${(after.LayoutCount ?? 0) - (before.LayoutCount ?? 0)}` +
+      `  script ${spent("ScriptDuration").toFixed(0)}ms`,
+  );
+  const parts = Object.entries(s.parts)
+    .filter(([, p]) => p.ms >= 1)
+    .sort((x, y) => y[1].ms - x[1].ms)
+    .map(([k, p]) => `${k} ${p.ms.toFixed(0)}ms/${p.n}`)
+    .join("  ");
+  if (parts !== "") console.log(`       ${parts}`);
 };
 
 const main = async () => {
@@ -206,6 +285,7 @@ const main = async () => {
 
   await run("down", 1);
   await run("up", -1);
+  if (a.spin > 0) await spin(page, a, metrics);
   await browser.close();
 };
 

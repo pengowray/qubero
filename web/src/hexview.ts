@@ -1773,6 +1773,14 @@ export class HexView {
    * wrapped line of chips or a table of values makes any row taller than the
    * one above it, so there is no pitch to multiply by.
    */
+  /** How big the dependency overlay is drawn. Read only when there is
+   *  something to draw in it: `clientWidth` makes the browser lay the page out
+   *  again, and every draw was paying for that to size an overlay that is
+   *  switched off unless the reader asked for it. */
+  private overlayBox(): { width: number; height: number } {
+    return { width: this.rowsEl.clientWidth, height: this.viewH };
+  }
+
   /**
    * Mark the field the reader is pointing at in the sidebar, or clear it.
    *
@@ -1782,7 +1790,7 @@ export class HexView {
   markHover(range: BitRange | null): void {
     if (!this.links.setHover(range)) return;
     if (this.el.hidden || !this.el.isConnected) return;
-    this.links.draw(this.rowsEl.clientWidth, this.viewH);
+    this.links.draw(() => this.overlayBox());
   }
 
   byteBox(byte: number): { x: number; y: number; w: number; h: number } | null {
@@ -1824,7 +1832,7 @@ export class HexView {
     // against is the box the browser drew. Costs nothing while the overlay is
     // switched off, which is what it is unless the reader asked for it.
     this.links.setWindow(f.start * 8, endBit, f.bpr);
-    this.links.draw(this.rowsEl.clientWidth, this.viewH);
+    this.links.draw(() => this.overlayBox());
   }
 
   render(): void {
