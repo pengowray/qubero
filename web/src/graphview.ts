@@ -140,13 +140,8 @@ export class GraphView {
   /** Parents whose plain fields the reader has asked to see, by their index in
    *  the graph. Cleared with the graph, since the indexes are its own. */
   private opened = new Set<number>();
-  /** How many fields the last build folded away, for the note. */
-  private foldCount = 0;
   /** What the graph is rooted at, kept so a rebuild can say it again. */
   private rootName: string | null = null;
-  /** The note without the folding sentence, which is added once the elements
-   *  have been built and it is known how many were folded. */
-  private noteText = "";
 
   /** The reader tapped a field. The rest of the app puts the cursor there. */
   onPick: (path: readonly number[]) => void = () => {};
@@ -225,8 +220,9 @@ export class GraphView {
     // What was left out replaces the experimental line rather than joining it:
     // a reader looking at a tenth of a file needs to know that before they
     // need to know the view is new.
-    this.noteText = cut ? GRAPH.omitted(graph.nodes.length, graph.nodes.length + graph.omitted, rootName) : GRAPH.experimental;
-    this.note.textContent = this.noteText;
+    this.note.textContent = cut
+      ? GRAPH.omitted(graph.nodes.length, graph.nodes.length + graph.omitted, rootName)
+      : GRAPH.experimental;
     this.note.classList.toggle("is-warn", cut);
     this.palette = readPalette(this.el);
     this.cy?.destroy();
@@ -251,13 +247,26 @@ export class GraphView {
       this.opened.add(Number(e.target.data("fold")));
       this.rebuild();
     });
+    // That the box opens is said by the cursor rather than by a sentence at
+    // the top of the view. Cytoscape draws to a canvas and has no element per
+    // node to put a cursor on, so the container's is changed instead.
+    this.cy.on("mouseover", "node[fold], node[path]", () => {
+      this.canvas.style.cursor = "pointer";
+    });
+    this.cy.on("mouseout", "node[fold], node[path]", () => {
+      this.canvas.style.cursor = "";
+    });
     this.cy.on("viewport render", () => this.drawHulls());
-    if (this.foldCount > 0) this.note.textContent = `${this.noteText} ${GRAPH.foldedNote(this.foldCount)}`;
     this.first = true;
-    // One frame late, so the note above has been painted before the layout
-    // takes the thread. A warning about a slow layout that arrives after the
-    // slow layout has finished is not a warning.
-    requestAnimationFrame(() => this.relayout());
+    // A turn late, so the note above has been painted before the layout takes
+    // the thread: a warning about a slow layout that arrives after the slow
+    // layout has finished is not a warning.
+    //
+    // A timer rather than an animation frame. The browser stops serving frames
+    // to a page nobody is looking at, and a reader who opens the graph and
+    // switches away would come back to a graph that had never been laid out.
+    // Timers are throttled in a hidden page but they do arrive.
+    setTimeout(() => this.relayout(), 0);
   }
 
   /**
@@ -331,30 +340,43 @@ export class GraphView {
         },
       } as cytoscape.LayoutOptions)
       .run();
-    // A frame later, because the first graph of a session is laid out in the
-    // same turn as the element it lives in was put on the page, and a board
-    // the browser has not sized yet gives the boundaries a canvas of nothing
-    // to be drawn on.
-    requestAnimationFrame(() => {
-      // Fitted to the fields, not to the hubs. A hub sits wherever the pull of
-      // its type put it, which is often well outside the fields it gathered,
-      // and fitting to one would leave the graph in a corner with empty space
-      // beside it.
-      const real = cy.nodes().filter((n) => n.data("hub") !== 1);
-      if (real.length > 0) {
-        cy.fit(real, 40);
-        // Fitting a graph of fifteen fields to a screen blows each node up to
-        // the size of a coin, which says the file is enormous. Past life size
-        // the picture is recentred instead of magnified.
-        if (cy.zoom() > MAX_ZOOM) {
-          const at = { x: cy.width() / 2, y: cy.height() / 2 };
-          cy.zoom({ level: MAX_ZOOM, renderedPosition: at });
-          cy.center(real);
-        }
+    this.settle(cy);
+  }
+
+  /**
+   * Put the finished layout on screen: fitted, and with the boundaries drawn
+   * round it.
+   *
+   * Waits for the board to have a size. The first graph of a session is laid
+   * out in the same turn as the element it lives in was put on the page, and a
+   * `fit` against a viewport of nothing is a no-op that leaves the graph at
+   * the origin, which is a quarter of it on screen and the rest off the top
+   * and the left. Retrying is the only way to tell that case from a graph that
+   * is genuinely empty.
+   */
+  private settle(cy: Cy, tries = 0): void {
+    if (this.cy !== cy) return;
+    if ((cy.width() === 0 || cy.height() === 0) && tries < 30) {
+      setTimeout(() => this.settle(cy, tries + 1), 16);
+      return;
+    }
+    // Fitted to the fields, not to the hubs. A hub sits wherever the pull of
+    // its type put it, which is often well outside the fields it gathered, and
+    // fitting to one would leave the graph in a corner with empty space beside
+    // it.
+    const real = cy.nodes().filter((n) => n.data("hub") !== 1);
+    if (real.length > 0) {
+      cy.fit(real, 40);
+      // Fitting a graph of fifteen fields to a screen blows each node up to
+      // the size of a coin, which says the file is enormous. Past life size
+      // the picture is recentred instead of magnified.
+      if (cy.zoom() > MAX_ZOOM) {
+        cy.zoom({ level: MAX_ZOOM, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+        cy.center(real);
       }
-      this.measureHulls();
-      this.drawHulls();
-    });
+    }
+    this.measureHulls();
+    this.drawHulls();
   }
 
   /**
@@ -409,7 +431,6 @@ export class GraphView {
     const out: cytoscape.ElementDefinition[] = [];
     const byKind = new Map<string, number>();
     const fold = this.folded(g);
-    this.foldCount = fold.size;
     // How many of each parent's fields were folded away, for the node that
     // stands in for them.
     const folded = new Map<number, number>();

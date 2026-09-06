@@ -1263,7 +1263,11 @@ function build(tab: Tab): Page {
     relayout();
     refresh();
   };
-  if (import.meta.env.DEV) Object.assign(window, { __qubero: { doc, view, inspector, overview, structure, listPane, text, setView, tabs } });
+  if (import.meta.env.DEV) {
+    Object.assign(window, {
+      __qubero: { doc, view, inspector, overview, structure, listPane, text, setView, tabs, graph: () => graph },
+    });
+  }
   return { el: page, shown };
 }
 

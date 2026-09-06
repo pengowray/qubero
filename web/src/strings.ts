@@ -786,18 +786,24 @@ export const GRAPH = {
    *  has already gone by the time the layout is slow is no warning at all. */
   experimental: "Experimental. Laying out a large file may be slow, or may not finish.",
   /**
-   * More fields under the cursor than the view will lay out: what is shown,
-   * out of what there is, and the one thing the reader can do about it.
+   * More fields under the cursor than the view will lay out.
    *
-   * `root` is null when the graph covers the whole file, where "a smaller part
-   * of the file" would be saying "the file" twice.
+   * The verdict first, because it is what a skim has to catch, then the
+   * numbers as the evidence for it, then the one thing to do and where to do
+   * it. Contents is named because it is the panel that is on screen in every
+   * view and reaches inside a part; "put the cursor somewhere" tells a reader
+   * looking at a graph nothing about how.
+   *
+   * Never "the first N": the walk is breadth-first, so the fields shown are
+   * the top of the structure and not a prefix of the file.
+   *
+   * `root` is null when the graph covers the whole file.
    */
   omitted: (shown: number, total: number, root: string | null): string => {
     const where = root === null ? "this file" : root;
-    const smaller = root === null ? "it" : "the file";
     return (
-      `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} fields in ${where}. ` +
-      `Put the cursor inside a smaller part of ${smaller} to lay out that part instead.`
+      `Too many fields in ${where} to draw: ${shown.toLocaleString()} of ${total.toLocaleString()} shown. ` +
+      `Click a smaller part under Contents to graph just that part.`
     );
   },
   /** Over the sliders. Each label finishes the sentence this starts: pull
@@ -818,10 +824,6 @@ export const GRAPH = {
    * connections, with the rest noted beside them.
    */
   folded: (n: number): string => countText(n, "plain field"),
-  /** The same, said once at the top, where a reader who has not noticed the
-   *  boxes can find out why the graph is smaller than the file. */
-  foldedNote: (n: number): string =>
-    `${countText(n, "field")} with no connections are counted, not drawn. Click a count to open it.`,
   /** The boundary drawn round the fields of one type. The count is the fact
    *  the eye cannot get from the shape once a group holds more than a handful,
    *  and it is what lets two groups be compared at a glance. */
