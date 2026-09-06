@@ -212,6 +212,15 @@ export function childWord(n: { readonly unit?: string; readonly type: string }):
   return n.unit ?? (n.type.endsWith("[]") || n.type.startsWith("offsets ") ? "item" : "field");
 }
 
+/** The row width that is one record of what is on screen, which reads a
+ *  stream of records as the table it is: the same field of every record in the
+ *  same column. `every` is false where the records are only mostly that
+ *  length, which the reader wants to know before trusting the columns. */
+export function strideOption(bytes: number, every: boolean, unit: string | null): string {
+  const word = unit ?? "record";
+  return `${bytes} per row (${every ? `one ${word}` : `most ${plural(word)}`})`;
+}
+
 /** More than one of them. Nouns here are the words formats use for what they
  *  hold, so this covers the endings those run to and no more. */
 function plural(noun: string): string {

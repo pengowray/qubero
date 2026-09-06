@@ -16,7 +16,7 @@ import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence } from "./filetype.js";
-import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
+import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
 
@@ -739,6 +739,28 @@ function build(tab: Tab): Page {
   width.value = narrow ? "8" : "16";
   view.setBytesPerRow(narrow ? 8 : 16);
   width.addEventListener("change", () => view.setBytesPerRow(Number(width.value)));
+  // A stream of records read sixteen bytes to a row is read across the grain:
+  // every record starts in a different column. This offers the row that is one
+  // record long, where the screen is holding records of one length. It is
+  // worked out as the menu opens rather than kept up to date behind it: an
+  // entry that changed while the reader was deciding would be worse than one
+  // that is not there.
+  const stride = el("option", { value: "" });
+  stride.hidden = true;
+  width.append(stride);
+  const offerStride = (): void => {
+    // Not while it is the row width in use: the entry the reader chose has to
+    // go on saying what they chose.
+    if (!stride.hidden && width.value === stride.value) return;
+    const found = view.recordStride();
+    const fixed = found !== null && [8, 16, 32].includes(found.bytes);
+    stride.hidden = found === null || fixed;
+    if (found === null || fixed) return;
+    stride.value = String(found.bytes);
+    stride.textContent = strideOption(found.bytes, found.every, found.unit);
+  };
+  width.addEventListener("pointerdown", offerStride);
+  width.addEventListener("keydown", offerStride);
 
   const mode = el("select", { className: "tb-mode" });
   mode.setAttribute("aria-label", "Show bytes as");

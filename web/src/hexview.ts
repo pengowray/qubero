@@ -282,6 +282,45 @@ export class HexView {
   private selAnchor: number | null = null;
   private selFocus = 0;
   /**
+   * How long one record of what is on the screen is, where the screen is a run
+   * of records and they are mostly one length.
+   *
+   * A stream of records read sixteen bytes to a row is a stream read across
+   * the grain: every record starts at a different column and nothing lines up
+   * with anything. Read at the length of a record, the same field of every
+   * record is in the same column and the stream is a table. `every` says
+   * whether they are all that length or only most, which is the difference
+   * between a row that is a record and a row that usually is.
+   *
+   * Answered from what is on the screen rather than from the whole file: the
+   * question is asked about what the reader is looking at, and reading a
+   * quarter of a million records to answer it is not worth a row width.
+   */
+  recordStride(): { bytes: number; every: boolean; unit: string | null } | null {
+    const sizes = new Map<number, number>();
+    let records = 0;
+    let unit: string | null = null;
+    for (const run of this.onScreen) {
+      for (const c of run.cells) {
+        if (c.kind !== "composite" || c.size_bits % 8 !== 0) continue;
+        const bytes = c.size_bits / 8;
+        records += 1;
+        unit ??= run.unit;
+        sizes.set(bytes, (sizes.get(bytes) ?? 0) + 1);
+      }
+    }
+    // Too few to have a rhythm, and a row of three bytes is not a row.
+    if (records < 4) return null;
+    let bytes = 0;
+    let most = 0;
+    for (const [n, count] of sizes) {
+      if (count > most || (count === most && n > bytes)) [bytes, most] = [n, count];
+    }
+    if (bytes < 4 || bytes > 64 || most * 2 < records) return null;
+    return { bytes, every: most === records, unit };
+  }
+
+  /**
    * The bit runs to highlight: usually one, the field the cursor is in, but a
    * value the format does not keep in one piece takes more than one. A five-bit
    * ggml weight is four bits of `qs` and one bit of `qh` sixteen bytes away,
@@ -310,6 +349,9 @@ export class HexView {
    *  Null until there has been one on screen to read; the chips' font stands
    *  in until then, which is a size larger and so errs towards uniform. */
   private valFonts: ChipMeasure | null = null;
+  /** The folded runs the last draw put on the screen, for the question the
+   *  row-width control asks about them. */
+  private onScreen: readonly RunCells[] = [];
   /**
    * Where the chips are drawn. Beside the bytes while there is room for them;
    * below the bytes, across the whole row, when a wide row has squeezed the
@@ -1557,6 +1599,7 @@ export class HexView {
       fields && templated ? this.placeSpans(start, windowBytes, bpr) : NO_SPANS(windowBytes);
     const maxLines = this.isCondensed ? CHIP_LINES : Infinity;
     const runs = fields && templated ? this.fetch.runsForView(spans, start, windowBytes) : [];
+    this.onScreen = runs;
     // One width for every table on the screenful: a byte of it at the pitch
     // of a hex cell, or wider where a value cut by the row edge needs more.
     const valsWidth = alignedWidth(runs, {
