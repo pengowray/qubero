@@ -405,6 +405,9 @@ pub fn infer(sample: &[String]) -> Option<Layout> {
     let half = bytes_per_line / 2;
     let half_gap = rows.iter().filter(|(_, c)| c.bytes >= bytes_per_line).any(|(t, c)| {
         let before = taken_tokens(&t[c.skipped..], half);
+        if before == 0 {
+            return false;
+        }
         match (t.get(c.skipped + before - 1), t.get(c.skipped + before)) {
             (Some(a), Some(b)) => b.at > a.at + a.s.chars().count() + 1,
             _ => false,
