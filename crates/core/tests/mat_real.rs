@@ -185,6 +185,23 @@ fn a_structure_names_its_fields_before_it_writes_them() {
     assert_eq!(fields.child_count, 2);
 }
 
+/// A short tag packs the byte count and the type into one word, the count in
+/// its top half. Which of the two comes first is the byte order, so a
+/// big-endian file is the only thing that catches a reading with them the
+/// wrong way round: the field name length below is always written this way.
+#[test]
+fn a_short_tag_swaps_its_halves_with_the_byte_order() {
+    let (d, mut ev) = open!("teststruct_6.1_SOL2.mat");
+    let length = &[1, 0, 2, 3, 0];
+    // The row takes its name from the field and its type together.
+    assert_eq!(at(&d, &mut ev, length).0, "field_name_length int32");
+    // The count is first and the type second, which is only true this way
+    // round: read the other way it says four bytes of uint16.
+    assert_eq!(number(&d, &mut ev, &[length.as_slice(), &[0]].concat()), 4);
+    assert_eq!(number(&d, &mut ev, &[length.as_slice(), &[1]].concat()), 5, "int32");
+    assert_eq!(ev.node(&d, &[length.as_slice(), &[2]].concat()).unwrap().type_name, "i32 be[]");
+}
+
 /// A sparse array keeps its values in the compressed-column layout: a row for
 /// each value, and where each column's values begin.
 #[test]

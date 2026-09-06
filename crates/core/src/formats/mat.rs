@@ -284,22 +284,24 @@ fn long_element(e: Endian, as_text: bool) -> T {
     .machinery(&["padding"])
 }
 
-/// The short form: byte count and type packed into one word, and four bytes
-/// of data after it. Four bytes is the whole of the form, so what is not
-/// data is padding.
+/// The short form: the byte count and the type packed into one word, and four
+/// bytes of data after it. Which half of that word comes first is which way
+/// round the file is, since the count is the top half of it: a little-endian
+/// writer puts the type first and a big-endian one the count.
+///
+/// Four bytes is the whole of the form, so whatever the count does not reach
+/// is padding, and an element of this shape is eight bytes either way.
 fn short_element(e: Endian, as_text: bool) -> T {
-    T::structure_named(
-        "Element",
-        "type",
-        "data",
-        vec![
-            ("type", T::enumeration("DataType", T::uint_expr(E::lit(16), e), DATA_TYPES)),
-            ("bytes", T::u16(e)),
-            ("data", body(e, E::field("bytes").at_most(E::lit(4)), as_text)),
-            ("padding", T::bytes(E::lit(4).sub(E::field("bytes").at_most(E::lit(4))))),
-        ],
-    )
-    .machinery(&["padding"])
+    let kind = || T::enumeration("DataType", T::u16(e), DATA_TYPES);
+    let count = || T::u16(e);
+    let mut fields = match e {
+        Little => vec![("type", kind()), ("bytes", count())],
+        Big => vec![("bytes", count()), ("type", kind())],
+    };
+    let size = E::field("bytes").at_most(E::lit(4));
+    fields.push(("data", body(e, size.clone(), as_text)));
+    fields.push(("padding", T::bytes(E::lit(4).sub(size))));
+    T::structure_named("Element", "type", "data", fields).machinery(&["padding"])
 }
 
 /// What an element's bytes read as, by the type in its tag. `size` is the
