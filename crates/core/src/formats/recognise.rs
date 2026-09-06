@@ -189,6 +189,13 @@ const PROBES: &[Probe] = &[
     // signature would go and the only fixed bytes it has 126 in: two letters
     // that read the same either way round and say which way round the rest is.
     Probe::Is("mat", |h, _| mat::is_mat5(h)),
+    // An HDF5 file behind a user block, whose signature is at 512, 1024 or a
+    // later power of two rather than at the front. After the MATLAB test, not
+    // before it: a level 7.3 file is one of these and is a MATLAB file, which
+    // is the more precise answer and the one that reads the header in the
+    // block. Before the table of signatures only because a file that opens
+    // with the signature is in the table already.
+    Probe::Is("hdf5", |h, _| is_user_blocked_hdf5(h)),
     Probe::Is("whisper", |h, _| is_whisper(h)),
     Probe::Is("safetensors", |h, _| is_safetensors(h)),
     // A Claude Code colour theme, which is JSON and has to be told from the
@@ -389,6 +396,18 @@ fn is_p64rom(head: &[u8], len: u64) -> bool {
     }
     let payload = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as u64;
     payload == len.saturating_sub(picotron::HEADER_LEN)
+}
+
+/// An HDF5 file with a user block in front of it. The block is a power of two
+/// of at least 512, and the signature sits at the end of it; nothing else is
+/// written there, so finding the signature on one of those boundaries is the
+/// whole test. A MATLAB 7.3 file is one of these, and says so in the header
+/// it puts in the block, but a plain `.h5` may have one too and says nothing.
+fn is_user_blocked_hdf5(head: &[u8]) -> bool {
+    // 512 up to the widest block that fits in what a sniff is given.
+    std::iter::successors(Some(512usize), |n| n.checked_mul(2))
+        .take_while(|at| at + hdf5::SIGNATURE.len() <= head.len())
+        .any(|at| &head[at..at + hdf5::SIGNATURE.len()] == hdf5::SIGNATURE)
 }
 
 fn is_deb(head: &[u8]) -> bool {

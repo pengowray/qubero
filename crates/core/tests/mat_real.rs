@@ -228,14 +228,27 @@ fn an_opaque_array_names_the_class_it_stands_for() {
 }
 
 /// Level 7.3 is the same header with an HDF5 file behind it, in the user block
-/// HDF5 allows. The header is read; the HDF5 is named and left alone.
+/// HDF5 allows, and it is read as the HDF5 file it is.
+///
+/// Every address in it counts from the superblock rather than from the front
+/// of the file, which is what the origin the HDF5 is placed in says. Read the
+/// other way the root group's header would land 512 bytes early, on bytes that
+/// are not a header at all.
 #[test]
 fn a_level_7_3_file_is_hdf5_behind_the_same_header() {
     let (d, mut ev) = open!("testhdf5_7.4_GLNX86.mat");
     assert_eq!(number(&d, &mut ev, &[0, 2]), 0x0200, "level 7.3");
-    let signature = ev.node(&d, &[1, 1]).unwrap();
+    let signature = ev.node(&d, &[1, 1, 0]).unwrap();
     assert_eq!(signature.offset_bits / 8, 512);
     assert!(matches!(&signature.value, Value::Magic { ok: true, .. }), "{:?}", signature.value);
+    // The root group's object header, which the superblock puts at 928: 512
+    // bytes of user block further in than a reading from the front would.
+    let root_group = &[1, 1, 2, 14, 5, 0];
+    assert_eq!(ev.node(&d, root_group).unwrap().offset_bits / 8, 512 + 928);
+    // And the one variable in the file, whose name is a byte offset into the
+    // local heap the root group's symbol table names.
+    let name = [root_group.as_slice(), &[6, 0, 4, 2, 0, 7, 0, 6, 0, 3, 0, 4, 0, 5, 0]].concat();
+    assert_eq!(text(&d, &mut ev, &name), "testdouble");
 }
 
 /// A file whose element runs past the end of it is refused rather than read

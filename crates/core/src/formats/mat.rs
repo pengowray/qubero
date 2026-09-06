@@ -42,11 +42,12 @@
 //! the length of the file.
 //!
 //! Level 7.3 is an HDF5 file with the same 128-byte header in front of it,
-//! sitting in the 512-byte user block that HDF5 allows. The header is read
-//! here and says so; the HDF5 inside it is not, because every address in an
-//! HDF5 superblock counts from the base address the superblock names, and the
-//! HDF5 template reads addresses from the front of the file. Reading one would
-//! mean teaching that template a base to count from.
+//! sitting in the 512-byte user block that HDF5 allows, and it is read as the
+//! HDF5 file it is. Every address in an HDF5 superblock counts from the base
+//! address the superblock names, which is 512 here and nought in a file that
+//! is only HDF5; the one layout serves both because the HDF5 is placed in an
+//! origin of its own and its addresses are counted from there. See
+//! [`Anchor::Origin`](crate::template::Anchor::Origin).
 //!
 //! What else is not read here:
 //!
@@ -154,7 +155,10 @@ const MX_OPAQUE: i128 = 17;
 const MX_OBJECT_NEW: i128 = 18;
 
 pub fn mat() -> Template {
-    let mut t = Template::new("mat", root());
+    // A level 7.3 file is an HDF5 one behind the header, and an HDF5 file is
+    // nothing but names: every object in it is reached by address, through a
+    // type that refers to itself. So the vocabulary travels with the type.
+    let mut t = Template::new("mat", root()).with_part(&super::hdf5::hdf5_part());
     for e in [Little, Big] {
         t = t.with_type(element_name(e), element(e, false));
         t = t.with_type(text_element_name(e), element(e, true));
@@ -234,14 +238,19 @@ fn header(e: Endian) -> T {
 }
 
 /// A level 7.3 file's contents: the rest of the user block, and then the HDF5
-/// file that starts at 512. See the note at the top for why it stops there.
+/// file that starts where it ends.
+///
+/// Read as the HDF5 file it is, in an origin of its own. Every address in an
+/// HDF5 superblock counts from the base address the superblock names, which is
+/// 512 here and nought in a file that is only HDF5; the one layout serves both
+/// because the addresses are counted from the origin rather than from the
+/// front of whatever holds it.
 fn hdf5_body() -> T {
     T::structure(
-        "HDF5",
+        "MAT-file",
         vec![
             ("user_block", T::bytes(E::lit(USER_BLOCK as i128 - HEADER_LEN).at_most(E::Remaining))),
-            ("signature", T::magic(b"\x89HDF\r\n\x1a\n")),
-            ("file", T::bytes(E::Remaining)),
+            ("hdf5", T::origin(super::hdf5::hdf5_part().root)),
         ],
     )
 }

@@ -82,10 +82,14 @@ fn check(path: &Path) {
 
     // The extension is not the format: an archive unpacked on a Mac leaves a
     // resource fork beside every file, under the same name and with none of
-    // the bytes. A file that does not open with the signature is passed over
-    // rather than failed, since nothing here claimed it was one.
-    let signature = ev.node(&doc, &[0]).expect("the signature is read");
-    if !matches!(signature.value, Value::Magic { ok: true, .. }) {
+    // the bytes. The signature is the first field of a file that opens with
+    // one and the second of a file that keeps a user block in front of it, so
+    // both are asked. A file with neither is passed over rather than failed,
+    // since nothing here claimed it was one.
+    let signed = |ev: &mut Evaluator, at: &[usize]| {
+        matches!(ev.node(&doc, at).map(|n| n.value), Ok(Value::Magic { ok: true, .. }))
+    };
+    if !signed(&mut ev, &[0]) && !signed(&mut ev, &[1, 0]) {
         eprintln!("--- {}: no HDF5 signature, passed over", path.display());
         return;
     }
@@ -98,6 +102,44 @@ fn check(path: &Path) {
     // A file with nothing in it would pass everything above, so the root group
     // has to have led somewhere.
     assert!(!names.is_empty(), "{}: no named object was reached", path.display());
+}
+
+/// The same file with and without a user block reads the same objects.
+///
+/// Every address in an HDF5 file counts from the base address its superblock
+/// names, and the two files in the collection differ only in what that address
+/// is: nought in one and 512 in the other. Reading them as different files
+/// would mean the base was not being counted from, which is the one thing this
+/// pair is there to say.
+#[test]
+fn a_user_block_changes_where_the_file_begins_and_nothing_else() {
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let named = |name: &str| -> Vec<String> {
+        let path = dir.join("hdf5").join(name);
+        let file = File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let len = file.metadata().unwrap().len();
+        let doc = Document::new(FileSource { file: RefCell::new(file), len });
+        let mut ev = Evaluator::new(hdf5());
+        let (mut seen, mut names) = (0usize, Vec::new());
+        walk(&mut ev, &doc, &[], &mut seen, &mut names, &path);
+        names
+    };
+    let plain = named("groups-and-datasets.h5");
+    assert!(plain.contains(&"measurements".to_string()), "{plain:?}");
+    assert_eq!(plain, named("userblock-512.h5"));
+}
+
+/// The sample collection, wherever it is. None when there is none.
+fn sample_dir() -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
+        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
+    }
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
+    roots.into_iter().find(|r| r.join("hdf5").is_dir())
 }
 
 /// Every node under `path`, in order, failing on the first that cannot be

@@ -49,11 +49,14 @@
 //! root group entry onwards rather than refused, which the size fields
 //! themselves make plain.
 //!
-//! The base address is not added to the addresses read: it is zero in every
-//! file that does not sit inside another one.
-//!
-//! A signature may also sit at 512, 1024 or any later power of two, with a
-//! user block in front of it. Only a file that starts with one is claimed.
+//! Every address counts from the base address the superblock names, which is
+//! where this copy of the file begins: nought for a file that is only HDF5,
+//! and the size of the user block for one written into the middle of
+//! something else. A signature may sit at 512, 1024 or any later power of two
+//! with a user block in front of it, and a MATLAB 7.3 file is exactly that,
+//! 128 bytes of MAT header inside a 512-byte block. Both are read, by counting
+//! from an [`Anchor::Origin`](crate::template::Anchor::Origin) rather than
+//! from the front of the file.
 //!
 //! A group with more links than fit as messages keeps them in a fractal heap:
 //! a header, a table of blocks whose rows double in size, and the links
@@ -116,7 +119,7 @@
 use crate::template::{
     Encoding,
     Endian::{Big, Little},
-    Expr as E, StrLen, Template, Ty as T, Until,
+    Expr as E, Part, StrLen, Template, Ty as T, Until,
 };
 
 /// The address a file writes for "there is nothing here": all ones, in
@@ -124,7 +127,17 @@ use crate::template::{
 const UNDEFINED: i128 = u64::MAX as i128;
 
 pub fn hdf5() -> Template {
-    Template::new("hdf5", root())
+    let part = hdf5_part();
+    Template::new("hdf5", part.root.clone()).with_part(&part)
+}
+
+/// The whole of an HDF5 file and the names it refers to, for a format that
+/// carries one inside it. Wrap the root in [`T::origin`] where it does not
+/// start at the front of the file and every address in it lands in the right
+/// place; on its own it needs no wrapper, since an origin anchor with no
+/// origin around it counts from nought.
+pub fn hdf5_part() -> Part {
+    Part::new(with_user_block())
         .with_type("ObjectHeader", object_header())
         .with_type("Message", message())
         .with_type("MessageV2", message_v2())
@@ -140,11 +153,41 @@ pub fn hdf5() -> Template {
         .with_type("BTree2Node", btree2_node())
 }
 
+/// The eight bytes every HDF5 superblock opens with.
+pub const SIGNATURE: &[u8] = b"\x89HDF\r\n\x1a\n";
+
+/// The same, as one big-endian word, so that where it is can be asked before
+/// anything is placed.
+const SIGNATURE_WORD: i128 = 0x8948_4446_0d0a_1a0a;
+
+/// A file that opens with the signature, and one that keeps a user block in
+/// front of it. The second is the same layout begun further in, and every
+/// address inside it counts from there rather than from the front of the
+/// file: that is what the origin says.
+///
+/// A file with no block is left exactly as it was. An origin around it would
+/// change nothing, since an origin anchor with none around it counts from
+/// nought, and not wrapping it keeps the tree the shape every reading of an
+/// ordinary file has had.
+fn with_user_block() -> T {
+    T::switch(
+        E::peek(64, Big),
+        vec![(SIGNATURE_WORD, root())],
+        T::structure(
+            "HDF5",
+            vec![
+                ("user_block", T::bytes(E::to_bytes(SIGNATURE))),
+                ("file", T::origin(root())),
+            ],
+        ),
+    )
+}
+
 fn root() -> T {
     T::structure(
         "HDF5",
         vec![
-            ("signature", T::magic(b"\x89HDF\r\n\x1a\n")),
+            ("signature", T::magic(SIGNATURE)),
             ("superblock_version", T::u8()),
             (
                 "superblock",
@@ -224,11 +267,18 @@ fn length() -> T {
 }
 
 /// What `field` points at, or nothing when it holds the undefined address.
+///
+/// Counted from where this copy of the file begins rather than from the front
+/// of whatever holds it. On its own the two are the same place; behind a user
+/// block they are not, and a MATLAB 7.3 file is this format written 512 bytes
+/// in. Not from the nearest window either: a message body is sized, and an
+/// address written inside one still counts from the superblock. See
+/// [`Anchor::Origin`](crate::template::Anchor::Origin).
 fn at_address(field: &str, inner: T) -> T {
     T::switch(
         E::field(field),
         vec![(UNDEFINED, T::bytes(E::lit(0)))],
-        T::at(E::field(field), inner),
+        T::at_origin(E::field(field), inner),
     )
 }
 
@@ -257,7 +307,7 @@ fn link_cache(named: bool) -> T {
     if named {
         fields.push((
             "link_value",
-            T::at(
+            T::at_origin(
                 E::field("data_segment_address").add(E::field("link_value_offset")),
                 T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Utf8),
             ),
@@ -313,7 +363,7 @@ fn symbol_table_entry(named: bool) -> T {
         // tree is placed inside the heap.
         fields.push((
             "name",
-            T::at(
+            T::at_origin(
                 E::field("data_segment_address").add(E::field("link_name_offset")),
                 T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Utf8),
             ),
@@ -1736,7 +1786,7 @@ fn group_entry() -> T {
             ("name_offset", length()),
             (
                 "key_name",
-                T::at(
+                T::at_origin(
                     E::field("data_segment_address").add(E::field("name_offset")),
                     T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Utf8),
                 ),
