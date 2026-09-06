@@ -924,9 +924,30 @@ export type ReadResult = {
   readonly complete: boolean;
 };
 
+/**
+ * The editor's own code could not be fetched.
+ *
+ * Told apart from every other reason a file will not open because there is
+ * something to be done about this one: the page may have outlived the files it
+ * names, and asking for it again would find the new ones. See `staleassets`.
+ */
+export class EditorMissing extends Error {
+  constructor(cause: unknown) {
+    super("the editor could not be loaded", { cause });
+    this.name = "EditorMissing";
+  }
+}
+
 let wasmReady: Promise<unknown> | null = null;
 function ensureWasm(): Promise<unknown> {
-  wasmReady ??= init();
+  // A failure is forgotten rather than remembered, the same way `loadMagic`
+  // forgets one: a rejected promise kept here would be handed to every file
+  // opened afterwards, so one bad moment would last as long as the tab and
+  // trying again could never work. The same reasoning, and the same two lines.
+  wasmReady ??= init().catch((e: unknown) => {
+    wasmReady = null;
+    throw new EditorMissing(e);
+  });
   return wasmReady;
 }
 

@@ -665,6 +665,19 @@ export const DUMP = {
     `hex and text columns disagree on ${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"}`,
 } as const;
 
+/** The page is an older build than the site now serves, and is about to reload
+ *  itself once. Names the page as the thing out of date: the file and the
+ *  reader did nothing wrong, and the browser's cache is nobody's business
+ *  here. */
+export const PAGE_OUT_OF_DATE = "This page is out of date. Reloading\u2026";
+
+/** The one reload is spent and loading still failed, so a stale page is ruled
+ *  out. Says only what is known and the two things that can help; no support
+ *  address or status page is named because neither exists. Ctrl and not Cmd
+ *  for the same reason every other shortcut here says Ctrl: the buttons do. */
+export const EDITOR_WONT_LOAD =
+  "Couldn't load the editor, even after reloading. Try a hard refresh (Ctrl+Shift+R). If that doesn't help, this browser may not support WebAssembly.";
+
 export const NO_MATCH = "No match.";
 export const WRAPPED_ON = "Wrapped to the start of the file.";
 export const WRAPPED_BACK = "Wrapped to the end of the file.";

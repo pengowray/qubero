@@ -1,4 +1,4 @@
-import { Doc, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.js";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.js";
 import * as nav from "./navhistory.js";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.js";
 import { Inspector } from "./inspector.js";
@@ -14,7 +14,8 @@ import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence } from "./filetype.js";
-import { DUMP, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
+import { DUMP, EDITOR_WONT_LOAD, PAGE_OUT_OF_DATE, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
+import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
 
 const appEl = document.getElementById("app");
@@ -172,12 +173,40 @@ function openFile(f: File, note?: string): void {
     welcomeStatus = null;
     mount(doc);
     if (note !== undefined) say(note);
-  }).catch((error: unknown) => {
-    welcomeCrystal?.setBusy(false);
-    const message = error instanceof Error ? error.message : "Could not open this file.";
-    if (welcomeStatus !== null) welcomeStatus.textContent = message;
-    else say(message, true);
-  });
+  }).catch(openFailed);
+}
+
+/**
+ * Say why a file did not open, and answer the one reason there is an answer
+ * to.
+ *
+ * The editor's own code being missing means, after a deployment, that this
+ * page is naming files that were replaced: asking for the page again finds the
+ * new ones. A tab that has already asked gets the message instead, since a
+ * page that reloads forever takes the tab away from the reader before they can
+ * read what went wrong.
+ *
+ * Every way of opening a file goes through here, and that is the point: a
+ * dropped file, a `?url=`, and a synthetic one all fail the same way when the
+ * editor will not load, and one of them silently doing nothing is how this was
+ * found.
+ */
+function openFailed(error: unknown): void {
+  if (error instanceof EditorMissing && reloadForStaleAssets()) {
+    if (welcomeStatus !== null) welcomeStatus.textContent = PAGE_OUT_OF_DATE;
+    else say(PAGE_OUT_OF_DATE, true);
+    return;
+  }
+  welcomeCrystal?.setBusy(false);
+  const message =
+    error instanceof EditorMissing
+      ? EDITOR_WONT_LOAD
+      : error instanceof Error
+        ? error.message
+        : "Could not open this file.";
+  if (welcomeStatus !== null) welcomeStatus.textContent = message;
+  else say(message, true);
+  console.error("open", error);
 }
 
 /** Open bytes lifted out of the showing document as a tab of their own. */
@@ -1094,15 +1123,22 @@ document.addEventListener("drop", (e) => {
 window.addEventListener("dragend", () => showDropzone(false));
 window.addEventListener("blur", () => showDropzone(false));
 
+// A chunk that will not load is this page naming a file the site no longer
+// serves, and the answer is to ask for the page again. Only while there is
+// nothing open: the rule database is fetched once a file is being read, and
+// reloading then would take that file away to fix a sentence about it.
+watchForStaleAssets(() => tabs.all.length === 0);
+
 const params = new URLSearchParams(location.search);
 const sampleUrl = params.get("url");
 if (sampleUrl !== null) {
   void fetch(sampleUrl)
     .then((r) => r.blob())
     .then((b) => Doc.open(new File([b], sampleUrl.split("/").pop() ?? "sample")))
-    .then(mount);
+    .then(mount)
+    .catch(openFailed);
 }
 const synthetic = sampleUrl !== null ? null : params.get("synthetic");
 const syntheticSize = synthetic === null ? null : parseSize(synthetic);
-if (syntheticSize !== null) void Doc.open(syntheticFile(syntheticSize)).then(mount);
+if (syntheticSize !== null) void Doc.open(syntheticFile(syntheticSize)).then(mount).catch(openFailed);
 else welcome();
