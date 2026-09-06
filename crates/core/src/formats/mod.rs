@@ -94,6 +94,7 @@ mod lha;
 mod lnk;
 mod lz4;
 mod lzip;
+mod mat;
 mod mca;
 mod midi;
 mod mkv;
@@ -206,6 +207,7 @@ pub use lha::lha;
 pub use lnk::lnk;
 pub use lz4::lz4;
 pub use lzip::lzip;
+pub use mat::mat;
 pub use mca::mca;
 pub use midi::midi;
 pub use mkv::mkv;
@@ -304,6 +306,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("wasm", |_| wasm()),
     ("mp4", |_| mp4()),
     ("mseed", |_| mseed()),
+    ("mat", |_| mat()),
     ("sac", |_| sac()),
     ("mkv", |_| mkv()),
     ("dtb", |_| dtb()),

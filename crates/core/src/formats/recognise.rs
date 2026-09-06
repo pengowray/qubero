@@ -185,6 +185,10 @@ const PROBES: &[Probe] = &[
     Probe::Is("stuffit", |h, _| is_stuffit(h)),
     Probe::Is("compactpro", is_compactpro),
     Probe::Is("bardstale", is_bards_tale),
+    // A MATLAB save file, which puts a sentence about itself where a
+    // signature would go and the only fixed bytes it has 126 in: two letters
+    // that read the same either way round and say which way round the rest is.
+    Probe::Is("mat", |h, _| mat::is_mat5(h)),
     Probe::Is("whisper", |h, _| is_whisper(h)),
     Probe::Is("safetensors", |h, _| is_safetensors(h)),
     // A Claude Code colour theme, which is JSON and has to be told from the
@@ -282,6 +286,10 @@ const PROBES: &[Probe] = &[
             false => Some("wav"),
         }
     }),
+    // A MATLAB save file from before there was a header: five integers that
+    // have to agree with each other and with the length of the file. Late,
+    // because nothing at all marks the front of one.
+    Probe::Is("mat", mat::is_mat4),
     // Last of all, because it is the weakest evidence there is: a zlib
     // stream has no signature, only two bytes that agree with each other.
     Probe::Is("zlib", |h, _| zlib::is_zlib(h)),
