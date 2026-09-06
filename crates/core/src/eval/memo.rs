@@ -20,6 +20,7 @@ use rustc_hash::FxHashMap;
 
 use super::{ListState, Resolved};
 use crate::json;
+use crate::template::Deduced;
 
 #[derive(Default)]
 pub(super) struct Memo {
@@ -29,10 +30,12 @@ pub(super) struct Memo {
     nodes: FxHashMap<Vec<usize>, Resolved>,
     lists: FxHashMap<Vec<usize>, ListState>,
     json: FxHashMap<Vec<usize>, Arc<json::Val>>,
-    /// What running the whole file as a pickle said about it. One per
-    /// document rather than one per path: a pickle is the file, and the run
-    /// is over the opcodes rather than over any node.
-    deduced: Option<Arc<crate::formats::pickle::machine::Reading>>,
+    /// What running the whole file said about it. One per document rather
+    /// than one per path: a format that has to be run is run whole, and the
+    /// run is over the file rather than over any node. What the reading is
+    /// belongs to the format that produced it; here it is a thing kept and
+    /// handed back.
+    deduced: Option<Arc<dyn Deduced>>,
 }
 
 impl Memo {
@@ -142,11 +145,11 @@ impl Memo {
     }
 
     /// What running the file said about it, if it has been run.
-    pub(super) fn deduced(&self) -> Option<&Arc<crate::formats::pickle::machine::Reading>> {
+    pub(super) fn deduced(&self) -> Option<&Arc<dyn Deduced>> {
         self.deduced.as_ref()
     }
 
-    pub(super) fn remember_deduced(&mut self, r: Arc<crate::formats::pickle::machine::Reading>) {
+    pub(super) fn remember_deduced(&mut self, r: Arc<dyn Deduced>) {
         self.deduced = Some(r);
     }
 

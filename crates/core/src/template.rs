@@ -53,6 +53,42 @@ pub enum Deduce {
     Builds,
 }
 
+/// The format's own answer to the questions in [`Deduce`].
+///
+/// Two traits rather than one, because a run is two things: something a format
+/// knows how to do, which lives on the template and is the same for every file,
+/// and what one file's run came to, which is worked out once and kept. The
+/// evaluator holds the first and hands out the second without ever knowing
+/// which format either belongs to.
+///
+/// `Debug` because a [`Template`] is, `Send + Sync` because a reading is held
+/// in an `Arc` beside the memo and a reading nothing can share is a reading
+/// every thread runs again.
+pub trait Deducer: std::fmt::Debug + Send + Sync {
+    /// Run the whole file, and hand back what the run said.
+    ///
+    /// Once per document: this is handed every byte, and a caller that asked
+    /// twice would run the whole file twice.
+    fn run(&self, bytes: &[u8]) -> Arc<dyn Deduced>;
+}
+
+/// What one file's run came to, asked about one field at a time.
+///
+/// `at` is where the asking field's bytes start, as a byte offset in the file.
+/// An offset rather than a path, because that is what a run and a listing
+/// agree on: a run knows what it built by where it was, and a node knows where
+/// it is. What the field's own offset means relative to the thing it is asking
+/// about is the format's business and is worked out here.
+///
+/// `None` is the nothing case, which every question has and which the
+/// evaluator turns into the reading a field gets when the file did not say.
+pub trait Deduced: Send + Sync {
+    /// A number this run answers about the field at `at`.
+    fn int(&self, what: Deduce, at: u64) -> Option<i128>;
+    /// A word this run answers about the field at `at`.
+    fn text(&self, what: Deduce, at: u64) -> Option<String>;
+}
+
 /// An integer-valued expression. `Ref` names a field that appears earlier in the
 /// same struct, or in an enclosing struct before the current field.
 #[derive(Debug, Clone)]
@@ -1863,11 +1899,22 @@ pub struct Template {
     /// Types a `Ty::Named` can refer to, including the root's own type when a
     /// format nests inside itself.
     pub types: HashMap<String, Ty>,
+    /// Who answers an [`Expr::Deduced`], for the formats that have anything
+    /// to answer it with. `None` for nearly all of them: a format that writes
+    /// what a field is beside the field never has to ask.
+    pub deducer: Option<Arc<dyn Deducer>>,
 }
 
 impl Template {
     pub fn new(name: &str, root: Ty) -> Template {
-        Template { name: name.to_string(), root, types: HashMap::new() }
+        Template { name: name.to_string(), root, types: HashMap::new(), deducer: None }
+    }
+    /// Say what runs this format, for a template holding an
+    /// [`Expr::Deduced`]. A template that has one of those and no deducer has
+    /// asked a question nothing can answer, and the field asking it fails.
+    pub fn deduced_by(mut self, by: impl Deducer + 'static) -> Template {
+        self.deducer = Some(Arc::new(by));
+        self
     }
     pub fn with_type(mut self, name: &str, ty: Ty) -> Template {
         self.types.insert(name.to_string(), ty);

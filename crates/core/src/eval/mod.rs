@@ -1613,6 +1613,10 @@ impl Evaluator {
         // The stream's fields may name types the file's template declared, and
         // a reading that does not know them cannot place them.
         t.types = self.template.types.clone();
+        // Same for what runs the format: these are the file's own fields read
+        // in a space of their own, so a field of them asking what the file
+        // builds is asking the same question it would have asked outside.
+        t.deducer = self.template.deducer.clone();
         (t, false)
     }
 
