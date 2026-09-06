@@ -25,7 +25,7 @@ async function loadChromium() {
 }
 
 function parseArgs(argv) {
-  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24, css: "" };
+  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24, css: "", links: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = argv[i + 1];
@@ -37,6 +37,9 @@ function parseArgs(argv) {
     else if (k === "--wait") { a.wait = Number(v); i++; }
     else if (k === "--gap") { a.gap = Number(v); i++; }
     else if (k === "--css") { a.css = v; i++; }
+    // With the dependency arrows switched on and a field picked, so the cost
+    // of the overlay is measured on the same footing as everything else.
+    else if (k === "--links") { a.links = true; }
   }
   return a;
 }
@@ -115,6 +118,17 @@ const main = async () => {
     if (s) { s.value = "16"; s.dispatchEvent(new Event("change", { bubbles: true })); }
   });
   await page.waitForTimeout(a.wait);
+  if (a.links) {
+    await page.evaluate(() => {
+      const t = document.querySelector(".tb-links");
+      if (t && t.getAttribute("aria-pressed") !== "true") t.click();
+      // Any field with a dependency will do; the first chip in the grid is
+      // whatever the file starts with.
+      const b = [...document.querySelectorAll(".hexview .hv-chip, .hexview button")].find((x) => x.dataset?.path !== undefined);
+      b?.click();
+    });
+    await page.waitForTimeout(a.wait);
+  }
   if (a.css !== "") await page.addStyleTag({ content: a.css });
   await page.evaluate(INSTRUMENT);
 

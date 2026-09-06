@@ -1780,7 +1780,7 @@ export class HexView {
     // After the rows have settled, so every box the arrows are measured
     // against is the box the browser drew. Costs nothing while the overlay is
     // switched off, which is what it is unless the reader asked for it.
-    this.links.setWindow(f.start * 8, endBit);
+    this.links.setWindow(f.start * 8, endBit, f.bpr);
     this.links.draw(this.rowsEl.clientWidth, this.viewH);
   }
 

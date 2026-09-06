@@ -51,11 +51,12 @@ type Box = { x: number; y: number; w: number; h: number };
 
 const NS = "http://www.w3.org/2000/svg";
 
-/** How many bytes of one field the overlay will probe for boxes. A field of a
- *  hundred megabytes covers every row on screen, and the rows on screen are
- *  what bound the work: past a screenful of boxes the outline is the whole
- *  view and one more box adds nothing. */
-const PROBE_LIMIT = 4096;
+/** How many lines of one field the overlay will probe for boxes. A field of a
+ *  hundred megabytes covers every line on screen, and the lines on screen are
+ *  what bound the work: past a screenful the outline is the whole view and one
+ *  more box adds nothing. Generous, so that a very short row count and a very
+ *  tall window both fit under it. */
+const PROBE_LINES = 512;
 
 function svg<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string, string>): SVGElementTagNameMap[K] {
   const e = document.createElementNS(NS, name);
@@ -76,7 +77,7 @@ export class HexLinks {
   private on = false;
   /** Bytes the grid is showing, so a field far off screen is known to be off
    *  screen without probing for a box that cannot exist. */
-  private window = { start: 0, end: 0 };
+  private window = { start: 0, end: 0, bpr: 16 };
   /** The field the pointer is on in the sidebar. See `setHover`. */
   private hover: { readonly startBit: number; readonly endBit: number } | null = null;
   /** Which fields on the plan were nowhere on screen, for the line the status
@@ -135,9 +136,11 @@ export class HexLinks {
     return true;
   }
 
-  /** Which bytes the grid is showing, from the view's own viewport event. */
-  setWindow(startBit: number, endBit: number): void {
-    this.window = { start: Math.floor(startBit / 8), end: Math.ceil(endBit / 8) };
+  /** Which bytes the grid is showing and how many it puts on a line, from the
+   *  view's own viewport event. The line width is what lets a run be measured
+   *  a line at a time rather than a byte at a time. */
+  setWindow(startBit: number, endBit: number, bytesPerLine: number): void {
+    this.window = { start: Math.floor(startBit / 8), end: Math.ceil(endBit / 8), bpr: Math.max(1, bytesPerLine) };
   }
 
   /**
@@ -203,32 +206,37 @@ export class HexLinks {
     }
   }
 
-  /** One rounded box per line the run covers. A run of a hundred rows that is
-   *  mostly off screen yields the boxes for the lines that are on it. */
+  /**
+   * One rounded box per line of the grid the run covers.
+   *
+   * Two probes a line, not one a byte. A six-hundred-byte record on a
+   * sixteen-byte grid is thirty-eight lines and seventy-six reads; probing
+   * every byte of it was six hundred reads, per record, per draw, and a draw
+   * happens on every wheel notch. Nothing is gained by the finer walk: what
+   * comes out either way is one box per line.
+   *
+   * A line whose first or last byte has no cell is skipped rather than
+   * guessed. That happens at the ends of the file and while a row is being
+   * rebuilt, and a box drawn from half a measurement is a box in the wrong
+   * place.
+   */
   private boxes(startBit: number, endBit: number): Box[] {
     const first = Math.max(Math.floor(startBit / 8), this.window.start);
     const last = Math.min(Math.ceil(endBit / 8), this.window.end);
     if (last <= first) return [];
+    const bpr = this.window.bpr;
     const out: Box[] = [];
-    let run: Box | null = null;
-    const stop = Math.min(last, first + PROBE_LIMIT);
-    for (let byte = first; byte < stop; byte++) {
-      const b = this.boxOf(byte);
-      if (b === null) {
-        if (run !== null) out.push(run);
-        run = null;
-        continue;
-      }
-      // A new line, or a jump backwards: either way this byte starts a box.
-      if (run === null || Math.abs(b.y - run.y) > 1) {
-        if (run !== null) out.push(run);
-        run = { ...b };
-        continue;
-      }
-      run.w = b.x + b.w - run.x;
-      run.h = Math.max(run.h, b.h);
+    let line = 0;
+    for (let at = first; at < last && line < PROBE_LINES; line++) {
+      // The last byte of this line, or the last byte of the run if the run
+      // stops inside it.
+      const lineEnd = Math.min(last, (Math.floor(at / bpr) + 1) * bpr);
+      const head = this.boxOf(at);
+      const tail = this.boxOf(lineEnd - 1);
+      at = lineEnd;
+      if (head === null || tail === null) continue;
+      out.push({ x: head.x, y: head.y, w: tail.x + tail.w - head.x, h: Math.max(head.h, tail.h) });
     }
-    if (run !== null) out.push(run);
     return out;
   }
 

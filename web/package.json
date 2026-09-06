@@ -13,8 +13,13 @@
     "magdir": "node ../tools/magdir.mjs"
   },
   "devDependencies": {
+    "@types/cytoscape": "^3.21.9",
     "@types/node": "^26.4.0",
     "typescript": "^5.9",
     "vite": "^7"
+  },
+  "dependencies": {
+    "cytoscape": "^3.34.2",
+    "cytoscape-fcose": "^2.2.0"
   }
 }
