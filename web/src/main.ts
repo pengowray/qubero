@@ -889,6 +889,8 @@ function build(tab: Tab): Page {
   let graphRoot: readonly number[] | null = null;
   /** How many fields the graph will lay out, from the module once it is here. */
   let graphCap = 2000;
+  /** True while the graph is waiting on bytes it asked for. See `showGraph`. */
+  let graphWaiting = false;
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
@@ -959,7 +961,14 @@ function build(tab: Tab): Page {
     }
     const root = graphRootFor(view.cursorState.bitOffset);
     const reply = doc.graph(root ?? [], graphCap);
-    if (reply.status !== "ok") return;
+    // Bytes on their way, or a walk that ran out of time. Either is answered
+    // by asking again once the document says something changed, which is how
+    // every other panel here waits.
+    if (reply.status !== "ok") {
+      graphWaiting = true;
+      return;
+    }
+    graphWaiting = false;
     graphRoot = root;
     const named = root === null ? null : doc.templateNode(root);
     const rootName = named !== null && named.status === "ok" ? named.node.name : null;
@@ -1133,6 +1142,10 @@ function build(tab: Tab): Page {
       followedBit = null;
       followCursor(followWhenLoaded);
     }
+    // The graph asked for a part of the file whose bytes had not arrived. They
+    // have now, or some of them have, so it asks again rather than sitting
+    // blank.
+    if (graphWaiting && graph !== null && !graph.el.hidden) void showGraph();
   });
 
   // A match moves the cursor and marks its bytes in whichever view is showing.

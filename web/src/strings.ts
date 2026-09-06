@@ -809,6 +809,19 @@ export const GRAPH = {
     near: "Near in the file",
     sibling: "Same parent",
   },
+  /**
+   * A structure's plain fields, counted instead of drawn.
+   *
+   * A field that no arrow touches is the same shape as every other field that
+   * no arrow touches, so a dozen of them drawn round their parent is a
+   * starburst that says one thing twelve times. Counted, the picture is the
+   * connections, with the rest noted beside them.
+   */
+  folded: (n: number): string => countText(n, "plain field"),
+  /** The same, said once at the top, where a reader who has not noticed the
+   *  boxes can find out why the graph is smaller than the file. */
+  foldedNote: (n: number): string =>
+    `${countText(n, "field")} with no connections are counted, not drawn. Click a count to open it.`,
   /** The boundary drawn round the fields of one type. The count is the fact
    *  the eye cannot get from the shape once a group holds more than a handful,
    *  and it is what lets two groups be compared at a glance. */

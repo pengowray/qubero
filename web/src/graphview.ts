@@ -97,6 +97,11 @@ const HULL_SPREAD_MAX = 0.4;
  *  size: a node drawn at the size it was measured at. */
 const MAX_ZOOM = 1;
 
+/** How many plain fields a structure needs before they are counted rather than
+ *  drawn. Below this, folding trades names the reader can use for a number
+ *  they cannot, and saves no room worth having. */
+const FOLD_MIN = 3;
+
 /** Ideal edge length per force, in layout units. The dependency edges are the
  *  shortest because they are the only ones that are a fact about this file
  *  rather than about the type system: a length and the field it sizes belong
@@ -132,6 +137,16 @@ export class GraphView {
   private palette: Palette | null = null;
   /** Paths by cytoscape node id, so a tap can be answered with a field. */
   private paths = new Map<string, readonly number[]>();
+  /** Parents whose plain fields the reader has asked to see, by their index in
+   *  the graph. Cleared with the graph, since the indexes are its own. */
+  private opened = new Set<number>();
+  /** How many fields the last build folded away, for the note. */
+  private foldCount = 0;
+  /** What the graph is rooted at, kept so a rebuild can say it again. */
+  private rootName: string | null = null;
+  /** The note without the folding sentence, which is added once the elements
+   *  have been built and it is known how many were folded. */
+  private noteText = "";
 
   /** The reader tapped a field. The rest of the app puts the cursor there. */
   onPick: (path: readonly number[]) => void = () => {};
@@ -201,16 +216,17 @@ export class GraphView {
    * moving a slider re-runs the layout on the same elements, so the reader is
    * watching one picture settle differently rather than a new one appear.
    */
-  show(graph: GraphInput, rootName: string | null): void {
+  show(graph: GraphInput, rootName: string | null, keepOpen = false): void {
     this.input = graph;
     this.paths.clear();
+    if (!keepOpen) this.opened.clear();
+    this.rootName = rootName;
     const cut = graph.omitted > 0;
     // What was left out replaces the experimental line rather than joining it:
     // a reader looking at a tenth of a file needs to know that before they
     // need to know the view is new.
-    this.note.textContent = cut
-      ? GRAPH.omitted(graph.nodes.length, graph.nodes.length + graph.omitted, rootName)
-      : GRAPH.experimental;
+    this.noteText = cut ? GRAPH.omitted(graph.nodes.length, graph.nodes.length + graph.omitted, rootName) : GRAPH.experimental;
+    this.note.textContent = this.noteText;
     this.note.classList.toggle("is-warn", cut);
     this.palette = readPalette(this.el);
     this.cy?.destroy();
@@ -228,12 +244,34 @@ export class GraphView {
       const p = this.paths.get(id);
       if (p !== undefined) this.onPick(p);
     });
+    // Tapping the count draws that structure's plain fields after all. The
+    // graph is built again rather than grown, since which fields are folded
+    // decides the layout as much as which are drawn.
+    this.cy.on("tap", "node[fold]", (e) => {
+      this.opened.add(Number(e.target.data("fold")));
+      this.rebuild();
+    });
     this.cy.on("viewport render", () => this.drawHulls());
+    if (this.foldCount > 0) this.note.textContent = `${this.noteText} ${GRAPH.foldedNote(this.foldCount)}`;
     this.first = true;
     // One frame late, so the note above has been painted before the layout
     // takes the thread. A warning about a slow layout that arrives after the
     // slow layout has finished is not a warning.
     requestAnimationFrame(() => this.relayout());
+  }
+
+  /**
+   * Draw the same graph again with a structure's plain fields opened.
+   *
+   * A rebuild rather than an addition: which fields are folded decides where
+   * everything else goes as much as which are drawn, so adding six nodes to a
+   * settled layout would leave them stacked on top of whatever was already
+   * where they belong.
+   */
+  private rebuild(): void {
+    const g = this.input;
+    if (g === null) return;
+    this.show(g, this.rootName, true);
   }
 
   /** Which field the rest of the app is on, marked here too. Nothing moves:
@@ -320,6 +358,45 @@ export class GraphView {
   }
 
   /**
+   * Which fields are drawn one by one, and which are gathered into a count.
+   *
+   * A record of eight fields where two decide something and six decide nothing
+   * is drawn, as a graph, as a two-armed thing with a six-spoke starburst
+   * hanging off it. The starburst is the same shape whatever the six fields
+   * are, so it says nothing six times, and on a file of a thousand records it
+   * is the whole picture. What a reader wants from those six is that they are
+   * there and how many, which is a list, not a graph.
+   *
+   * So a leaf with no arrow at either end is folded into its parent's count,
+   * and every field that any arrow touches is drawn. What is left is the shape
+   * of the connections with the plain fields counted beside them. Tapping the
+   * count opens that parent's fields for the reader who wants them.
+   */
+  private folded(g: GraphInput): Set<number> {
+    const wired = new Set<number>();
+    for (const e of g.edges) {
+      wired.add(e.from);
+      wired.add(e.to);
+    }
+    // How many plain leaves each parent has, so a parent with only one or two
+    // keeps them: folding two fields into a node saying "2 fields" trades two
+    // names for no space.
+    const plain = new Map<number, number[]>();
+    g.nodes.forEach((n, i) => {
+      if (n.child_count > 0 || wired.has(i) || n.parent < 0) return;
+      const list = plain.get(n.parent);
+      if (list === undefined) plain.set(n.parent, [i]);
+      else list.push(i);
+    });
+    const out = new Set<number>();
+    for (const [parent, list] of plain) {
+      if (list.length < FOLD_MIN || this.opened.has(parent)) continue;
+      for (const i of list) out.add(i);
+    }
+    return out;
+  }
+
+  /**
    * The elements cytoscape lays out: one node per field, and an edge per force
    * that has anything to say about a pair.
    *
@@ -331,7 +408,17 @@ export class GraphView {
   private elements(g: GraphInput): cytoscape.ElementDefinition[] {
     const out: cytoscape.ElementDefinition[] = [];
     const byKind = new Map<string, number>();
+    const fold = this.folded(g);
+    this.foldCount = fold.size;
+    // How many of each parent's fields were folded away, for the node that
+    // stands in for them.
+    const folded = new Map<number, number>();
+    for (const i of fold) {
+      const n = g.nodes[i];
+      if (n !== undefined) folded.set(n.parent, (folded.get(n.parent) ?? 0) + 1);
+    }
     g.nodes.forEach((n, i) => {
+      if (fold.has(i)) return;
       const id = idOf(n.path);
       this.paths.set(id, n.path);
       byKind.set(n.kind, (byKind.get(n.kind) ?? 0) + 1);
@@ -349,6 +436,15 @@ export class GraphView {
         classes: fieldClass(family(n.kind)),
       });
     });
+    // One node per parent standing for the fields folded into it, drawn as a
+    // box rather than a circle so it is not read as a field of its own.
+    for (const [parent, count] of folded) {
+      const up = g.nodes[parent];
+      if (up === undefined) continue;
+      const id = `fold:${parent}`;
+      out.push({ data: { id, label: GRAPH.folded(count), fold: parent, weight: 6 }, classes: "gv-fold" });
+      out.push({ data: { id: `fe${parent}`, source: idOf(up.path), target: id, force: "sibling" }, classes: "gv-soft" });
+    }
     // One hub per kind that has enough fields to be worth grouping.
     for (const [kind, count] of byKind) {
       if (count < HULL_MIN) continue;
@@ -364,6 +460,7 @@ export class GraphView {
       });
     }
     g.nodes.forEach((n, i) => {
+      if (fold.has(i)) return;
       const id = idOf(n.path);
       if ((byKind.get(n.kind) ?? 0) >= HULL_MIN) {
         out.push({ data: { id: `k${i}`, source: id, target: hubOf(n.kind), force: "kind" }, classes: "gv-hidden" });
@@ -371,7 +468,7 @@ export class GraphView {
       // Its neighbour in the file, and its parent. One edge each, so both
       // forces cost one edge per field however big the file is.
       const prev = g.nodes[i - 1];
-      if (prev !== undefined && prev.parent === n.parent) {
+      if (prev !== undefined && prev.parent === n.parent && !fold.has(i - 1)) {
         out.push({ data: { id: `n${i}`, source: idOf(prev.path), target: id, force: "near" }, classes: "gv-soft" });
       }
       const up = g.nodes[n.parent];
@@ -643,6 +740,27 @@ function stylesheet(p: Palette): cytoscape.StylesheetJson {
     },
     ...perClass,
     { selector: "node.gv-hub", style: { width: 1, height: 1, opacity: 0, label: "" } },
+    // The fields that were counted rather than drawn. A box, not a circle: it
+    // is not a field, and a reader should not have to read the label to know
+    // that. The label sits inside it, since there is no name to sit beside.
+    {
+      selector: "node.gv-fold",
+      style: {
+        shape: "round-rectangle",
+        "background-color": p.line,
+        "background-opacity": 0.55,
+        "border-width": 1,
+        "border-color": p.line,
+        width: "label",
+        height: 16,
+        padding: "4px",
+        label: "data(label)",
+        color: p.fg,
+        "font-size": "9px",
+        "text-valign": "center",
+        "text-halign": "center",
+      },
+    },
     {
       selector: "edge.gv-dep",
       style: {

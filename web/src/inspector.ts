@@ -7,7 +7,7 @@
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
-import type { Doc, Origin, Relation, TemplateNode } from "./doc.js";
+import type { Doc, FieldGraph, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { bitSizeText, childWord, countText, ROLE_GROUP, USED_BY, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
 import { withPictures } from "./textview.js";
@@ -1218,12 +1218,16 @@ export class Inspector {
    * The other direction: which fields read this one.
    *
    * The core answers "what decided this field" one field at a time and has no
-   * call for the reverse, so the reverse is read off the graph of the enclosing
-   * structure and turned round. That is the whole of where an answer can be:
-   * an expression names a field by looking outwards through the structures it
-   * is inside, so nothing outside this field's parent can name it without
-   * naming the parent too, and the parent's own dependents are a question about
-   * the parent.
+   * call for the reverse, so the reverse is read off the graph of a subtree
+   * holding this field and turned round.
+   *
+   * Which subtree is the whole question. Only the file gives a complete
+   * answer: an expression can reach a field by a path from anywhere
+   * (`header.record[2].format`), so a field inside one structure can be read
+   * by a field in another. The file is tried first for that reason, with the
+   * enclosing structure as the fallback where the file is too big to walk. In
+   * the fallback the list is what that structure knows, which is most of the
+   * answer and not all of it.
    *
    * Rows stay flat, with the role word on each. Grouped under a heading the
    * word would flip its referent: `Length` above means what decided this
@@ -1231,16 +1235,17 @@ export class Inspector {
    */
   private usedBy(path: readonly number[]): Node[] {
     if (path.length === 0) return [];
-    const reply = this.doc.graph(path.slice(0, -1), USED_BY_LIMIT);
-    if (reply.status !== "ok") return [];
-    const key = path.join("/");
-    const self = reply.node.nodes.findIndex((n) => n.path.join("/") === key);
-    if (self < 0) return [];
+    const found = this.reverseGraph(path);
+    if (found === null) return [];
+    const { graph, self } = found;
     const rows: Node[] = [];
     const seen = new Set<string>();
-    for (const e of reply.node.edges) {
-      if (e.from !== self || e.to === self) continue;
-      const to = reply.node.nodes[e.to];
+    for (const e of graph.edges) {
+      // A `points` edge is the pointer this field holds, and the section above
+      // has already shown where it points. Under this heading the same fact
+      // would read the other way round, as the far end using this field.
+      if (e.from !== self || e.to === self || e.role === "points") continue;
+      const to = graph.nodes[e.to];
       if (to === undefined) continue;
       const at = `${e.role} ${to.path.join("/")}`;
       if (seen.has(at)) continue;
@@ -1248,6 +1253,32 @@ export class Inspector {
       rows.push(usedRow(e.role, to.name, to.path));
     }
     return rows;
+  }
+
+  /**
+   * A graph holding the field at `path` that was walked to the end, and where
+   * the field is in it. Null when neither the file nor the enclosing structure
+   * could be walked whole.
+   *
+   * A walk that hit the cap is thrown away rather than used. What it holds is
+   * whichever fields it reached first, and a list of dependents that is
+   * silently a sample of them is worse than no list, because nothing on screen
+   * says which it is.
+   */
+  private reverseGraph(path: readonly number[]): { graph: FieldGraph; self: number } | null {
+    const key = path.join("/");
+    for (const root of [[] as readonly number[], path.slice(0, -1)]) {
+      // A structure of more fields than the cap cannot come back whole, so it
+      // is not asked at all: the walk would be paid for and thrown away, on
+      // every move of the cursor.
+      const node = this.doc.templateNode(root);
+      if (node.status === "ok" && node.node.child_count > USED_BY_LIMIT) continue;
+      const reply = this.doc.graph(root, USED_BY_LIMIT);
+      if (reply.status !== "ok" || reply.node.omitted > 0) continue;
+      const self = reply.node.nodes.findIndex((n) => n.path.join("/") === key);
+      if (self >= 0) return { graph: reply.node, self };
+    }
+    return null;
   }
 
   /**
