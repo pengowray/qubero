@@ -81,6 +81,7 @@ impl Evaluator {
                     self.relation(doc, path, &size, Role::Length, room, &mut out);
                     ty = *inner;
                 }
+                Ty::Origin { inner } => ty = *inner,
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.relation(doc, path, &on, Role::Type, None, &mut out);
                     break;

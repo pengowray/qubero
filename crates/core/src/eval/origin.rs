@@ -276,6 +276,7 @@ impl Evaluator {
                     self.from_expr(doc, path, &size, Role::Length, out)?;
                     ty = *inner;
                 }
+                Ty::Origin { inner } => ty = *inner,
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.from_expr(doc, path, &on, Role::Type, out)?;
                     return Ok(());

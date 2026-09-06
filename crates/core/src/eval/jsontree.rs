@@ -84,6 +84,7 @@ impl Evaluator {
             cursor: outer,
             limit: next,
             declared_size: None,
+            origin: false,
             size: Some(next - outer),
             payload: Some((offset, end - offset)),
             computed: None,

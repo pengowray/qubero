@@ -2792,3 +2792,45 @@ mod json_edits {
         assert_eq!(after.len(), bytes.len());
     }
 }
+
+/// An address counted from where this copy of a format begins, with a window
+/// between it and that origin. `Anchor::Window` would answer with the window,
+/// which is the whole reason the origin marker exists: an HDF5 message body is
+/// sized, and an address written inside one counts from the front of the HDF5
+/// file rather than from the front of the message.
+#[test]
+fn an_origin_is_counted_from_past_the_windows_between() {
+    // Inside the copy: a sized box holding a pointer, and the thing it points
+    // at eight bytes into the copy.
+    let target = T::structure("Target", vec![("value", T::u16(Big))]);
+    let boxed = T::sized(E::lit(4), T::structure("Box", vec![("at", T::u16(Big)), ("target", T::at_origin(E::field("at"), target))]));
+    let copy = T::origin(T::structure("Copy", vec![("head", T::u16(Big)), ("boxed", boxed)]));
+    let t = Template::new("t", T::structure("File", vec![("lead", T::array(T::u8(), E::lit(3))), ("copy", copy)]));
+
+    // Three bytes of lead, then the copy: a header, a box saying 8, padding,
+    // and at offset 8 of the copy the two bytes pointed at.
+    let d = doc(&[0xee, 0xee, 0xee, 0, 1, 0, 8, 0, 0, 0, 0, 0xbe, 0xef]);
+    let mut ev = Evaluator::new(t);
+
+    // The target sits at 3 + 8 = 11, not at the start of the sized box.
+    let node = ev.node(&d, &[1, 1, 1, 0, 0]).expect("target");
+    assert_eq!(node.offset_bits / 8, 11);
+    assert_eq!(node.value, Value::UInt(0xbeef));
+}
+
+/// With no origin around it, the same address counts from the front of the
+/// file. That is what makes one layout serve a format read on its own and the
+/// same format written into the middle of another file.
+#[test]
+fn an_origin_anchor_with_no_origin_counts_from_the_file() {
+    let target = T::structure("Target", vec![("value", T::u16(Big))]);
+    let t = Template::new(
+        "t",
+        T::structure("File", vec![("at", T::u16(Big)), ("target", T::at_origin(E::field("at"), target))]),
+    );
+    let d = doc(&[0, 4, 0, 0, 0xbe, 0xef]);
+    let mut ev = Evaluator::new(t);
+    let node = ev.node(&d, &[1, 0, 0]).expect("target");
+    assert_eq!(node.offset_bits / 8, 4);
+    assert_eq!(node.value, Value::UInt(0xbeef));
+}

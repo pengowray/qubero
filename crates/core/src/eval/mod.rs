@@ -363,6 +363,9 @@ struct Resolved {
     limit: u64,
     /// Size fixed by an enclosing `Sized`, if any.
     declared_size: Option<u64>,
+    /// True when a [`Ty::Origin`] was unwrapped to reach this type, so the
+    /// offsets under it count from here. See [`Anchor::Origin`].
+    origin: bool,
     size: Option<u64>,
     /// A computed field's value, once worked out. Element `n` of a list asks
     /// element `n - 1` for its value, so without this a track of ten thousand
@@ -1049,6 +1052,7 @@ impl Evaluator {
                         cursor: pr.offset,
                         limit: pr.offset,
                         declared_size: Some(0),
+                        origin: false,
                         size: Some(0),
                         computed: None,
                         space: pr.space,
@@ -1083,8 +1087,14 @@ impl Evaluator {
             let to = self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8;
             let into = if anchor == Anchor::File { 0 } else { pr.space };
             self.no_ring(parent, to, into, &what)?;
+            // Both of these name a place outside whatever window they were
+            // written in, so neither is held to that window's end: a file
+            // address reaches the whole file, and one counted from an origin
+            // reaches the whole of that copy of the format.
             if anchor == Anchor::File {
                 escapes = Some(doc.len_bits());
+            } else if anchor == Anchor::Origin {
+                escapes = Some(self.origin_of(parent).map_or(doc.len_bits(), |(_, limit)| limit));
             }
             to
         } else if idx == 0 {
@@ -1209,12 +1219,29 @@ impl Evaluator {
                     .map(|r| r.offset)
                     .unwrap_or(0)
             }
+            // Where this copy of the format begins, which is the only thing a
+            // marker put there for the purpose can mean. Unlike `Window` it
+            // steps over the windows in between: an HDF5 message body is sized
+            // and an address inside one still counts from the front of the
+            // file the message is in.
+            Anchor::Origin => self.origin_of(path).map_or(0, |(offset, _)| offset),
             // Its own start, aligned. `align` is bytes; offsets are bits.
             Anchor::SelfAligned(align) => {
                 let a = u64::from(align) * 8;
                 if a == 0 { own } else { own.div_ceil(a) * a }
             }
         }
+    }
+
+    /// Where this copy of the format begins and how far it runs, for the
+    /// nearest [`Ty::Origin`] around `path`. Nothing when there is none, which
+    /// is the ordinary case of a format read on its own.
+    fn origin_of(&self, path: &[usize]) -> Option<(u64, u64)> {
+        let space = self.memo.get(path).map_or(0, |r| r.space);
+        (0..path.len())
+            .rev()
+            .find_map(|k| self.memo.get(&path[..k]).filter(|r| r.origin && r.space == space))
+            .map(|r| (r.offset, r.limit))
     }
 
     /// Where child `idx` of a pointer list starts. The offsets are bytes from
@@ -1389,6 +1416,7 @@ impl Evaluator {
         space: u32,
     ) -> R<Resolved> {
         let mut declared_size = None;
+        let mut origin = false;
         let mut hops = 0;
         loop {
             match ty {
@@ -1426,6 +1454,13 @@ impl Evaluator {
                     }
                     limit = offset + bits;
                     declared_size = Some(bits);
+                    ty = *inner;
+                }
+                // A marker and nothing else: it takes no bytes and bounds
+                // nothing, and what it says is where the addresses below it
+                // count from.
+                Ty::Origin { inner } => {
+                    origin = true;
                     ty = *inner;
                 }
                 Ty::Switch { on, cases, default } => {
@@ -1473,6 +1508,7 @@ impl Evaluator {
                         cursor: offset,
                         limit,
                         declared_size,
+                        origin,
                         size: None,
                         computed: None,
                         space,

@@ -105,6 +105,7 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>) {
             expr_refs(size, out);
             ty_refs(inner, out);
         }
+        Ty::Origin { inner } => ty_refs(inner, out),
         Ty::Switch { on, cases, default } => {
             expr_refs(on, out);
             for (_, t) in cases.iter() {

@@ -954,6 +954,17 @@ pub enum Anchor {
     Window,
     /// The start of the file.
     File,
+    /// The start of the nearest [`Ty::Origin`] around the field, and the start
+    /// of the file when there is none.
+    ///
+    /// What a format whose offsets count from the front of its own copy needs
+    /// when that copy has windows inside it. `Window` asks the same question
+    /// and answers it with the nearest `Sized`, which is right for a page of a
+    /// database and wrong for an HDF5 file: a message body is sized, and an
+    /// address written inside one still counts from the front of the file, not
+    /// from the front of the message. Two meanings had been folded into one
+    /// marker, and this is the other one.
+    Origin,
     /// The list's own start, rounded up to a multiple of this many bytes.
     /// GGUF's tensor data starts at the end of the tensor table aligned to
     /// `general.alignment`, which is almost always 32; a file that sets it to
@@ -1239,6 +1250,16 @@ pub enum Ty {
     At { anchor: Anchor, at: Expr, inner: Box<Ty> },
     /// Occupies exactly `size` bytes; `inner` is parsed within that window.
     Sized { size: Expr, inner: Box<Ty> },
+    /// Where the offsets under it count from, and nothing else: it takes no
+    /// bytes, bounds nothing and reads as whatever is inside it. An
+    /// [`Anchor::Origin`] anywhere below counts from here.
+    ///
+    /// A format written into the middle of another file is the whole reason
+    /// for it. An HDF5 file may sit behind a user block — that is what a
+    /// MATLAB 7.3 file is, 512 bytes of MAT header and then the superblock —
+    /// and every address in it counts from where the superblock begins. On its
+    /// own the file starts at nought and this changes nothing.
+    Origin { inner: Box<Ty> },
     /// The same, in bits.
     ///
     /// For a field whose width the format states in bits and which no integer
@@ -1687,6 +1708,15 @@ impl Ty {
     pub fn at_in_window(at: Expr, inner: Ty) -> Ty {
         Ty::At { anchor: Anchor::Window, at, inner: Box::new(inner) }
     }
+    /// Say that the offsets inside `inner` count from where it begins. See
+    /// [`Ty::Origin`].
+    pub fn origin(inner: Ty) -> Ty {
+        Ty::Origin { inner: Box::new(inner) }
+    }
+    /// What `at` points at, counted from the nearest [`Ty::Origin`] around it.
+    pub fn at_origin(at: Expr, inner: Ty) -> Ty {
+        Ty::At { anchor: Anchor::Origin, at, inner: Box::new(inner) }
+    }
     pub fn sized(size: Expr, inner: Ty) -> Ty {
         Ty::Sized { size, inner: Box::new(inner) }
     }
@@ -1870,7 +1900,7 @@ impl Ty {
             // children, and these come one from each child.
             Ty::Chain { elem, .. } => format!("chain \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
-            Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => inner.display_name(),
+            Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Match { .. } => "switch".into(),
             Ty::Json(shape, schema) => match schema.as_ref().and_then(|s| s.type_name.clone()) {
