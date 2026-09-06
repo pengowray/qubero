@@ -283,28 +283,37 @@ fn frame() -> T {
 /// the walk below reads opcode after opcode the way the machine would, and a
 /// file is a pickle when the walk reaches `STOP` having used every byte.
 ///
-/// Two allowances, and no more. A `PROTO` opener may be trusted over a window
-/// that is only the front of a longer file, since the walk cannot reach the
-/// end of what it has not been given. And the run may end at `STOP` with
-/// nothing after it; a pickle is written to be read by something that stops
-/// there, so bytes after it are somebody else's file.
+/// Three allowances, and no more. A `PROTO` opener may be trusted over a
+/// window that is only the front of a longer file, since the walk cannot reach
+/// the end of what it has not been given. The run must use every byte: a
+/// pickle is written to be read by something that stops at the full stop, so
+/// bytes after it are somebody else's file. And with no opener, at least one
+/// opcode has to have taken an operand.
+///
+/// That last one is not fussiness. Thirty-four opcodes are a single letter and
+/// nothing else, `.` among them, so a short lower-case word ending in a full
+/// stop walks perfectly: `data.` is DICT, APPEND, TUPLE, APPEND, STOP, and so
+/// is every other word spelled out of those letters. Every protocol 0 or 1
+/// pickle of anything at all has an operand in it -- the empty list is
+/// `(lp0\n.`, which puts itself in the memo -- so the rule costs nothing and
+/// turns away a whole class of text file.
 pub(super) fn is_pickle(head: &[u8], len: u64) -> bool {
-    let framed = matches!(head, [0x80, 2..=5, ..]);
+    let opener = matches!(head, [0x80, 2..=5, ..]);
     match walk(head) {
-        Walk::Stopped(n) => n as u64 == len,
+        Walk::Stopped { end, operands } => end as u64 == len && (opener || operands > 0),
         // Cut off by the window rather than by the file. Only where the file
         // really is longer than the window, and only behind an opener: a run
         // of ordinary bytes that happens to read as opcodes for eight
         // kilobytes is not evidence of anything.
-        Walk::Cut => framed && len > head.len() as u64,
+        Walk::Cut => opener && len > head.len() as u64,
         Walk::No => false,
     }
 }
 
 /// How far a walk over the opcodes got.
 enum Walk {
-    /// Reached `STOP` at this offset, one past the full stop.
-    Stopped(usize),
+    /// Reached `STOP`, one past the full stop, having read this many operands.
+    Stopped { end: usize, operands: usize },
     /// Ran out of bytes in the middle of an opcode or its operand.
     Cut,
     /// A byte that is not an opcode, or an operand that cannot be read.
@@ -318,6 +327,7 @@ enum Walk {
 /// is wrong shows up as the opcode after it not being one.
 fn walk(bytes: &[u8]) -> Walk {
     let mut at = 0usize;
+    let mut operands = 0usize;
     // A file of nothing is not a pickle, and neither is one that never stops.
     // The cap is the opcode count rather than the byte count, since the
     // shortest opcode is one byte and this is only asked of a window.
@@ -328,12 +338,16 @@ fn walk(bytes: &[u8]) -> Walk {
         }
         at += 1;
         if code == b'.' {
-            return Walk::Stopped(at);
+            return Walk::Stopped { end: at, operands };
         }
-        at = match operand_size(bytes, at, code) {
+        let next = match operand_size(bytes, at, code) {
             Some(next) => next,
             None => return if at >= bytes.len() { Walk::Cut } else { Walk::No },
         };
+        if next > at {
+            operands += 1;
+        }
+        at = next;
         if at > bytes.len() {
             return Walk::Cut;
         }
@@ -435,12 +449,20 @@ mod tests {
 
     /// Text that is not a pickle at all, which is the case that matters:
     /// protocol 0 is printable and a text file is printable.
+    ///
+    /// The words are the sharp end of it. Thirty-four opcodes are one letter
+    /// and nothing else, so `data.` walks as five opcodes using every byte,
+    /// and only having no operand in it says it is a word rather than a
+    /// program.
     #[test]
     fn ordinary_text_is_not_a_pickle() {
         for text in [
             &b"hello, world\n"[..],
             b"# a magic file\n0\tstring\tGIF\tGIF image\n",
             b"{\n  \"name\": \"qubero\"\n}\n",
+            b"data.",
+            b"steal.",
+            b"Nadal.",
             b"",
         ] {
             assert!(!is_pickle(text, text.len() as u64), "{:?} read as a pickle", &text[..text.len().min(20)]);
