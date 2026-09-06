@@ -51,7 +51,7 @@ pub(super) fn recognise(callable: &str, args: &[Value]) -> Option<(u64, u64, Pay
             let dtype = dtype_of(args.first()?)?;
             let Value::Bytes { at, len } = args.get(1)? else { return None };
             let (shape, width) = shapes::dtype(&dtype)?;
-            (*len == width).then(|| (*at, *len, Payload { shape, count: 1 }, format!("one {dtype}")))
+            (*len == width).then(|| (*at, *len, Payload { shape, count: 1 }, format!("a single {dtype}")))
         }
         // The standard library's packed records. Each is the whole value of
         // the object in a byte string handed straight to the class, and each
@@ -77,7 +77,7 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
         // numpy.
         ("numpy", "_reconstruct" | "ndarray") => "a numpy array",
         ("numpy", "_frombuffer") => "a numpy array over a buffer",
-        ("numpy", "scalar") => "a numpy number",
+        ("numpy", "scalar") => "a numpy scalar",
         ("numpy", "dtype") => "a numpy dtype",
 
         // pandas. A frame keeps its columns in a block manager and each block
@@ -85,47 +85,49 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
         // numbers.
         ("pandas", "DataFrame") => "a pandas DataFrame",
         ("pandas", "Series") => "a pandas Series",
-        ("pandas", "BlockManager") => "the blocks a frame's columns are kept in",
-        ("pandas", "SingleBlockManager") => "the one block a series is kept in",
-        ("pandas", "_unpickle_block") => "one column block",
-        ("pandas", "_new_Index") => "an index",
-        ("pandas", "Index" | "RangeIndex" | "DatetimeIndex" | "MultiIndex" | "CategoricalIndex") => "an index",
-        ("pandas", "Categorical") => "a category column: codes, and the values they stand for",
-        ("pandas", "CategoricalDtype") => "the categories a code column stands for",
+        ("pandas", "BlockManager") => "a DataFrame's column blocks",
+        ("pandas", "SingleBlockManager") => "a Series' single block",
+        ("pandas", "_unpickle_block") => "a block of columns sharing a dtype",
+        ("pandas", "_new_Index") => "a pandas Index",
+        ("pandas", "Index" | "RangeIndex" | "DatetimeIndex" | "MultiIndex" | "CategoricalIndex") => "a pandas Index",
+        ("pandas", "Categorical") => "a pandas Categorical: codes and categories",
+        ("pandas", "CategoricalDtype") => "a pandas dtype listing the categories",
         ("pandas", "StringDtype" | "DatetimeTZDtype" | "PeriodDtype" | "IntervalDtype") => "a pandas dtype",
         // pandas keeps its own array types -- strings, dates with a zone,
         // categories -- in a class wrapping a numpy one, and rebuilds every
         // one of them through the same Cython helper.
-        ("pandas", "__pyx_unpickle_NDArrayBacked") => "a pandas array over a numpy one",
+        ("pandas", "__pyx_unpickle_NDArrayBacked") => "a pandas array wrapping a numpy array",
         ("pandas", "DatetimeArray" | "StringArray" | "IntegerArray" | "PeriodArray" | "TimedeltaArray") => {
             "a pandas array"
         }
-        ("pandas", "Timestamp") => "a pandas timestamp",
-        ("pandas", "Timedelta") => "a pandas length of time",
+        ("pandas", "Timestamp") => "a pandas Timestamp",
+        ("pandas", "Timedelta") => "a pandas Timedelta",
 
-        // PyTorch. A tensor's numbers are not in the pickle: `torch.save`
-        // writes a zip, keeps the pickle in `data.pkl` and every storage in a
-        // file of its own, named by a persistent id. So what is here is the
-        // shape, the stride and which storage to go and get.
+        // PyTorch. A tensor is a shape and a stride over a storage, and the
+        // storage is somewhere else: `torch.save` writes a zip, keeps the
+        // pickle in `data.pkl` and every storage in a file of its own named by
+        // a persistent id. A plain `pickle.dumps` of a tensor has nowhere to
+        // put one, so it embeds a whole legacy `torch.save` file as a byte
+        // string and reopens it through `_load_from_bytes`.
         ("torch", "_rebuild_tensor" | "_rebuild_tensor_v2" | "_rebuild_tensor_v3") => {
-            "a torch tensor: its shape and stride, with the numbers in the archive beside it"
+            "a torch tensor: shape and stride over a storage"
         }
-        ("torch", "_rebuild_parameter") => "a torch parameter, which is a tensor that learns",
+        ("torch", "_rebuild_parameter") => "a torch parameter (a trainable tensor)",
         ("torch", "_rebuild_sparse_tensor") => "a sparse torch tensor",
-        ("torch", "_load_from_bytes") => "a torch storage read out of a byte string",
+        ("torch", "_load_from_bytes") => "a torch storage (an embedded torch.save file)",
         ("torch", "OrderedDict") => "a state dict",
 
         // scipy's sparse matrices, which are three arrays and a shape: the
         // values, where each one sits along a row, and where each row starts.
-        ("scipy", "csr_matrix" | "csr_array" | "_csr") => "a CSR sparse matrix, stored a row at a time",
-        ("scipy", "csc_matrix" | "csc_array") => "a CSC sparse matrix, stored a column at a time",
-        ("scipy", "coo_matrix" | "coo_array") => "a COO sparse matrix: one row and column per value",
+        ("scipy", "csr_matrix" | "csr_array" | "_csr") => "a CSR sparse matrix",
+        ("scipy", "csc_matrix" | "csc_array") => "a CSC sparse matrix",
+        ("scipy", "coo_matrix" | "coo_array") => "a COO sparse matrix",
         ("scipy", "dia_matrix" | "bsr_matrix" | "lil_matrix" | "dok_matrix") => "a sparse matrix",
 
         // scikit-learn. An estimator is a class and a dict of what it learned,
         // and what it learned is numpy arrays, so those type themselves.
         ("sklearn", "Tree") => "a decision tree's nodes and values",
-        ("sklearn", _) => "part of a scikit-learn model",
+        ("sklearn", _) => "a scikit-learn object",
 
         // The standard library.
         ("datetime", "date") => "a date",
@@ -133,19 +135,20 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
         ("datetime", "datetime") => "a date and time",
         ("datetime", "timedelta") => "a length of time",
         ("datetime", "timezone") => "a fixed offset from UTC",
-        ("collections", "OrderedDict") => "a dict that remembers the order it was filled in",
-        ("collections", "defaultdict") => "a dict with a value for keys nobody put there",
-        ("collections", "Counter") => "a tally of how many of each",
+        ("collections", "OrderedDict") => "an ordered dict",
+        ("collections", "defaultdict") => "a dict with a default for missing keys",
+        ("collections", "Counter") => "a dict of counts",
         ("collections", "deque") => "a double-ended queue",
         ("builtins", "slice") => "a slice: start, stop and step",
         ("builtins", "complex") => "a complex number",
         ("builtins", "range") => "a range: start, stop and step",
-        ("builtins", "set" | "frozenset") => "a set",
+        ("builtins", "set") => "a set",
+        ("builtins", "frozenset") => "a frozenset",
         ("builtins", "bytearray") => "a bytearray",
         ("builtins", "getattr") => "an attribute fetched by name",
-        ("copyreg", "_reconstructor") => "an object rebuilt the old way, by calling its base class",
-        ("copyreg", "__newobj__") => "an object rebuilt by calling its own class",
-        ("_codecs", "encode") => "bytes written as text, which is how a pickle before protocol 3 held them",
+        ("copyreg", "_reconstructor") => "an instance via its base class (protocol 0/1)",
+        ("copyreg", "__newobj__") => "an instance via __new__ without __init__",
+        ("_codecs", "encode") => "a bytes object stored as a str (protocols 0-2)",
         _ => return None,
     })
 }
@@ -284,7 +287,7 @@ mod tests {
         for name in ["scipy.sparse.csr.csr_matrix", "scipy.sparse._csr.csr_matrix"] {
             assert!(what(name).is_some_and(|w| w.contains("CSR")), "{name}");
         }
-        assert_eq!(what("collections.OrderedDict"), Some("a dict that remembers the order it was filled in"));
+        assert_eq!(what("collections.OrderedDict"), Some("an ordered dict"));
         assert!(what("torch._utils._rebuild_tensor_v2").is_some_and(|w| w.contains("tensor")));
         assert!(what("sklearn.ensemble._forest.RandomForestClassifier").is_some());
         assert_eq!(what("mymodule.MyClass"), None, "nothing is invented for a class nobody knows");

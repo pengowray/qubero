@@ -550,16 +550,19 @@ fn describe(v: &Value) -> Option<String> {
         Value::Text(s) if s.chars().count() <= 48 => format!("the string {s:?}"),
         Value::Int(n) => format!("the number {n}"),
         Value::Global { module, name } => format!("{module}.{name}"),
+        // The row that built this said what it was, so the row reusing it
+        // says the same thing rather than the module path underneath: one
+        // value should not have two vocabularies.
         Value::Call { callable, .. } => match callable.global() {
-            Some(name) => format!("what {name} returned"),
+            Some(name) => known::what(&name).map_or_else(|| format!("what {name} returned"), str::to_string),
             None => "an object".to_string(),
         },
         Value::Tuple(items) => format!("a tuple of {}", items.len()),
         Value::Collection => "a list, set or dict".to_string(),
-        Value::Bytes { len, .. } => format!("{len} bytes"),
-        // Longer than a row has room for, so the row says what it is and
+        Value::Bytes { len, .. } => format!("a bytes object ({len} bytes)"),
+        // Longer than a row has room for, so the row says how long it is and
         // leaves the reading of it to the bytes underneath.
-        Value::Text(_) => "a string".to_string(),
+        Value::Text(s) => format!("a string of {} chars", s.chars().count()),
         Value::Dtype(descr) => format!("the dtype {descr}"),
         _ => return None,
     })
