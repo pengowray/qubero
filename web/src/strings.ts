@@ -686,3 +686,12 @@ export const COUNT_STOPPED = (n: number): string => `Stopped at ${n.toLocaleStri
 export const COUNTED = (n: number): string => (n === 1 ? "1 match." : `${n.toLocaleString()} matches.`);
 export const REPLACED = (n: number): string => (n === 1 ? "Replaced 1 match." : `Replaced ${n.toLocaleString()} matches.`);
 export const BAD_REPLACEMENT = "Replacement is hex too: pairs of digits, like 00 ff";
+
+/** The arrows over the hex grid, and the graph view. Both show the same thing
+ *  the "Depends on" list shows, so the words for it are here rather than in
+ *  either view, and neither can drift from the other. */
+export const LINKS = {
+  button: "TODO:links-button",
+  title: "TODO:links-title",
+  offScreen: (n: number): string => `TODO:links-offscreen ${n}`,
+};

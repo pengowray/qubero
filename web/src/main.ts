@@ -1,6 +1,7 @@
 import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.js";
 import * as nav from "./navhistory.js";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.js";
+import type { LinkEnd, LinkPlan } from "./hexlinks.js";
 import { Inspector } from "./inspector.js";
 import { saveDoc } from "./save.js";
 import { parseSize, syntheticFile } from "./synthetic.js";
@@ -14,7 +15,7 @@ import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence } from "./filetype.js";
-import { DUMP, EDITOR_WONT_LOAD, PAGE_OUT_OF_DATE, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
+import { DUMP, EDITOR_WONT_LOAD, LINKS, PAGE_OUT_OF_DATE, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
 
@@ -315,6 +316,75 @@ function build(tab: Tab): Page {
   let followWhenLoaded: number | null = null;
   let followedBit: number | null = null;
 
+  /** Which field the arrows are drawn for. The cursor's field, or a field
+   *  picked by name in the listing, which is the same thing every other panel
+   *  is showing. */
+  let linkPath: readonly number[] | null = null;
+
+  /**
+   * Work out what the overlay should draw for the field the panels are on.
+   *
+   * The core is asked the same question the sidebar asks: which fields settled
+   * this one's shape. Nothing new is inferred here, so an arrow can never say
+   * something the "Depends on" list does not.
+   *
+   * Only fields whose offsets are bits of the file are drawn. A field read out
+   * of a compressed stream is at an offset of that stream, and pointing at the
+   * byte of the file with the same number would point at some other field.
+   */
+  const refreshLinks = (): void => {
+    if (!view.links.enabled) return;
+    const path = linkPath;
+    if (path === null || !inFile(path)) {
+      view.links.setPlan({ target: null, parent: null, from: [] });
+      view.render();
+      return;
+    }
+    const self = doc.templateNode(path);
+    const target =
+      self.status === "ok"
+        ? { startBit: self.node.offset_bits, endBit: self.node.offset_bits + self.node.size_bits }
+        : null;
+    // The structure the field is part of, outlined so that a length four rows
+    // up reads as a length of this record rather than of the file. The root is
+    // not a structure the reader can see the edges of, so it is left out.
+    let parent: LinkPlan["parent"] = null;
+    if (path.length > 0) {
+      const up = doc.templateNode(path.slice(0, -1));
+      if (up.status === "ok" && up.node.size_bits > 0) {
+        parent = {
+          startBit: up.node.offset_bits,
+          endBit: up.node.offset_bits + up.node.size_bits,
+          name: up.node.name,
+        };
+      }
+    }
+    const from: LinkEnd[] = [];
+    const seen = new Set<string>();
+    const reply = doc.origins(path);
+    if (reply.status === "ok") {
+      for (const o of reply.node) {
+        // A `points` row is the other direction and has no field at its far
+        // end: the arrow would leave from the field it is already drawn on.
+        if (o.role === "points" || o.path.length === 0) continue;
+        const key = `${o.role}/${o.path.join("/")}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!inFile(o.path)) continue;
+        const n = doc.templateNode(o.path);
+        if (n.status !== "ok") continue;
+        from.push({
+          role: o.role,
+          label: o.label,
+          startBit: n.node.offset_bits,
+          endBit: n.node.offset_bits + n.node.size_bits,
+        });
+      }
+    }
+    view.links.setPlan({ target, parent, from });
+    view.render();
+  };
+
   const followCursor = (bitOffset: number): void => {
     if (doc.template === null) return;
     // Only an actual move picks a field, so Escape can clear the highlight
@@ -332,6 +402,8 @@ function build(tab: Tab): Page {
     if (n.status === "ok") {
       view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
     }
+    linkPath = at.node;
+    refreshLinks();
     overview.reveal(at.node);
     structure.setBit(bitOffset);
     listPane.setBit(bitOffset);
@@ -345,6 +417,8 @@ function build(tab: Tab): Page {
     view.setBitCursor(n.node.offset_bits, { pane: "hex" });
     picking = false;
     inspector.setPath(path);
+    linkPath = path;
+    refreshLinks();
   };
 
   /** Whether a field's offsets are bits of the file, so the hex view and the
@@ -366,6 +440,8 @@ function build(tab: Tab): Page {
       view.setBitCursor(startBit, { pane: "hex" });
       picking = false;
       overview.reveal(path);
+      linkPath = path;
+      refreshLinks();
     }
     inspector.setPath(path);
   };
@@ -659,6 +735,36 @@ function build(tab: Tab): Page {
     view.setRightColumn(c);
   });
 
+  // The arrows from a field's dependencies to the field, over the bytes. Only
+  // over the hex grid: the listing already draws the structure as a tree and
+  // the text view has no fields to point at.
+  // How many arrows could not be drawn because the field they leave from is
+  // off screen. Lives in the status bar rather than over the grid: it is a
+  // fact about the view, and the grid is already carrying the arrows.
+  const linksNote = el("span", { className: "tb-linksnote" });
+  const linksBtn = el("button", { type: "button", textContent: LINKS.button, className: "tb-links" });
+  linksBtn.title = LINKS.title;
+  linksBtn.setAttribute("aria-pressed", "false");
+  const setLinks = (on: boolean): void => {
+    view.links.setEnabled(on);
+    linksBtn.setAttribute("aria-pressed", String(on));
+    linksBtn.classList.toggle("is-on", on);
+    localStorage.setItem("qubero.links", on ? "1" : "0");
+    if (on) refreshLinks();
+    else {
+      linksNote.textContent = "";
+      view.render();
+    }
+  };
+  linksBtn.addEventListener("click", () => setLinks(linksBtn.getAttribute("aria-pressed") !== "true"));
+  if (localStorage.getItem("qubero.links") === "1") setLinks(true);
+  // How many of the fields it would have drawn were nowhere on screen. Said
+  // rather than left out: an arrow that is not there because the field is a
+  // thousand rows away looks exactly like no dependency at all.
+  view.links.onOffScreen = (n) => {
+    linksNote.textContent = n === 0 ? "" : LINKS.offScreen(n);
+  };
+
   // Hex and Listing are two readings of the same file, so they share the
   // cursor and swap in the same place rather than sitting side by side. The
   // listing carries its own bytes, so showing both would say it twice.
@@ -719,7 +825,7 @@ function build(tab: Tab): Page {
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
-  const hexOnly = [width, mode, column];
+  const hexOnly = [width, mode, column, linksBtn];
   /** Controls that only mean anything over the text. */
   const textOnly = [encoding, wrapping, reading, endings];
   /** True while the listing is showing, which is also while the hex grid's
@@ -806,6 +912,7 @@ function build(tab: Tab): Page {
     width,
     mode,
     column,
+    linksBtn,
     tmpl,
     undoBtn,
     redoBtn,
@@ -814,7 +921,7 @@ function build(tab: Tab): Page {
   // The origin sits after the offset, because it answers a question about the
   // offset: this byte, and where it came from.
   const originLabel = el("span", { className: "tb-origin" });
-  const statusbar = el("footer", { className: "statusbar" }, posLabel, originLabel);
+  const statusbar = el("footer", { className: "statusbar" }, posLabel, originLabel, linksNote);
 
   const refresh = (): void => {
     // What the dump said was read off the file as it was opened. Once it has
