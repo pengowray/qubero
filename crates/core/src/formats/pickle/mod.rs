@@ -216,7 +216,10 @@ fn operand() -> T {
     add(&[0x49], T::decimal(line()));
     add(&[0x46, 0x53, 0x56, 0x50], T::text(line(), Encoding::Unknown));
     add(&[0x4c], decimal_long());
-    add(&[0x63, 0x69], qualified_name());
+    add(&[0x63], qualified_name(None));
+    // `INST` names a class and calls it in one opcode, so unlike `GLOBAL` it
+    // makes something, and the row says what it made.
+    add(&[0x69], qualified_name(Some(T::ComputedText(E::deduced(Deduce::Builds)))));
 
     // The frame, which is the only opcode holding other opcodes.
     add(&[0x95], frame());
@@ -310,16 +313,19 @@ fn decimal_long() -> T {
 /// A module and a name, a line each. `GLOBAL` writes the two so that the
 /// unpickler can import the first and look the second up in it, and `INST`
 /// writes the same pair for a class it is about to call.
-fn qualified_name() -> T {
-    T::structure_named(
-        "QualifiedName",
-        "",
-        "name",
-        vec![
-            ("module", T::text(line(), Encoding::Unknown)),
-            ("name", T::text(line(), Encoding::Unknown)),
-        ],
-    )
+fn qualified_name(builds: Option<T>) -> T {
+    let mut fields = vec![
+        ("module", T::text(line(), Encoding::Unknown)),
+        ("name", T::text(line(), Encoding::Unknown)),
+    ];
+    let value = match builds {
+        Some(what) => {
+            fields.push(("builds", what));
+            "builds"
+        }
+        None => "name",
+    };
+    T::structure_named("QualifiedName", "", value, fields)
 }
 
 /// An eight-byte length and the opcodes it covers.

@@ -330,6 +330,11 @@ fn the_libraries_worth_knowing_are_named() {
         ("proto4-datetime.pickle", "a length of time"),
         ("proto4-collections.pickle", "a dict of counts"),
         ("proto4-builtins.pickle", "a slice"),
+        // Python 2 spelled two of these modules differently, and a pickle
+        // written then still says so.
+        ("handmade-python2-modules.pickle", "an instance via its base class"),
+        ("handmade-python2-modules.pickle", "a complex number"),
+        ("handmade-python2-modules.pickle", "a range: start, stop and step"),
     ];
     let mut checked = 0;
     for (file, phrase) in want {

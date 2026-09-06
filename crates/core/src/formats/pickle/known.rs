@@ -167,7 +167,7 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
         ("collections", "deque") => "a double-ended queue",
         ("builtins", "slice") => "a slice: start, stop and step",
         ("builtins", "complex") => "a complex number",
-        ("builtins", "range") => "a range: start, stop and step",
+        ("builtins", "range" | "xrange") => "a range: start, stop and step",
         ("builtins", "set") => "a set",
         ("builtins", "frozenset") => "a frozenset",
         ("builtins", "bytearray") => "a bytearray",
@@ -185,7 +185,16 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
 /// multiarray`, and the leading underscore off a private one.
 fn root(module: &str) -> &str {
     let top = module.split('.').next().unwrap_or(module);
-    top.strip_prefix('_').unwrap_or(top)
+    // Two of these were spelled differently in Python 2, and a pickle written
+    // then still says so: the unpickler renames them on the way in, from the
+    // same table `_compat_pickle` keeps, and a reader of the file has to do
+    // the same or every `copy_reg._reconstructor` in an old archive reads as
+    // a call nobody knows. Which, until this, is what they did.
+    match top {
+        "__builtin__" => "builtins",
+        "copy_reg" => "copyreg",
+        _ => top.strip_prefix('_').unwrap_or(top),
+    }
 }
 
 /// A run of one dtype: the data, the dtype and the shape, wherever in the
@@ -318,6 +327,11 @@ mod tests {
         assert!(what("torch._utils._rebuild_tensor_v2").is_some_and(|w| w.contains("tensor")));
         assert!(what("sklearn.ensemble._forest.RandomForestClassifier").is_some());
         assert!(what("_codecs.encode").is_some(), "the private module keeps its underscore in the file");
+        // What a Python 2 pickle calls them, which is most of what is in an
+        // old archive.
+        assert_eq!(what("copy_reg._reconstructor"), what("copyreg._reconstructor"));
+        assert_eq!(what("__builtin__.xrange"), what("builtins.range"));
+        assert!(what("__builtin__.complex").is_some());
         assert_eq!(what("mymodule.MyClass"), None, "nothing is invented for a class nobody knows");
         let _ = Arc::<[Value]>::from(&[][..]);
     }
