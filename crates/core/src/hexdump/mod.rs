@@ -920,7 +920,16 @@ fn command(line: &str) -> Option<&str> {
     TOOLS.contains(&name).then_some(body)
 }
 
-
+/// Which test turned the text down, for the tests that check the reasons are
+/// the reasons. It runs the same two functions the reader runs, in the same
+/// order, over the slow path, which reads anything.
+#[cfg(test)]
+fn why_not(bytes: &[u8]) -> Option<Doubt> {
+    let (settled, mark) = lines::reading(bytes);
+    let text = lines::split(settled, mark, bytes, 0);
+    let layout = layout::infer(&sample_of(&text))?;
+    doubt_about_layout(&layout).or_else(|| doubt_about_dump(&irregular(bytes, 0, &text, layout)?))
+}
 
 #[cfg(test)]
 mod tests {
@@ -944,6 +953,7 @@ mod tests {
        a: 1cc8         \tadds\tr0, r1, #0x3
 ";
         assert!(read(text.as_bytes(), 0).is_none());
+        assert_eq!(why_not(text.as_bytes()), Some(Doubt::Line), "two bytes to a line is no tool's output");
     }
 
     /// `file`'s magic descriptions: an offset, a type, a value. A handful of
@@ -959,6 +969,9 @@ mod tests {
 0\tstring\t\tRGB8\t\tIFF raster
 ";
         assert!(read(text.as_bytes(), 0).is_none());
+        // Turned down before there is anything to doubt: no hypothesis about
+        // which token is the address survives, so there is no layout to judge.
+        assert_eq!(why_not(text.as_bytes()), None);
     }
 
     /// A PDF's cross-reference table: ten digits, five more, and a letter.
@@ -982,6 +995,11 @@ startxref
 %%EOF
 ";
         assert!(read(text.as_bytes(), 0).is_none());
+        assert_eq!(
+            why_not(text.as_bytes()),
+            Some(Doubt::Uncorroborated),
+            "five bytes and no address, with the rest of the record after them"
+        );
     }
 
     /// A reflog: two commit hashes, then a name and a message. Forty hex
@@ -994,6 +1012,25 @@ startxref
 38664c3a1b2c3d4e5f60718293a4b5c6d7e8f900 b50824e1f2a3b4c5d6e7f8091a2b3c4d5e6f7081 Pengo <p@example.com> 1756000120 +1000\tcommit: third
 ";
         assert!(read(text.as_bytes(), 0).is_none());
+        assert_eq!(why_not(text.as_bytes()), Some(Doubt::Line), "twenty bytes to a group is no tool's output");
+    }
+
+    /// A run of digits and nothing else is what `xxd -p` and
+    /// `certutil -encodehex` write, and it is the one place a group wider than
+    /// any tool uses is still a dump: the group is the whole line.
+    #[test]
+    fn continuous_hex_with_no_address_is_a_dump() {
+        let text = "\
+000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+404142434445464748494a4b4c4d4e4f
+";
+        let dump = read(text.as_bytes(), 0).expect("a run of digits and nothing else");
+        assert_eq!(dump.byte_count(), 80);
+        assert!(dump.layout.address.is_none());
+        let mut got = [0u8; 80];
+        dump.read_at(0, &mut got);
+        assert_eq!(got, std::array::from_fn::<u8, 80, _>(|i| i as u8));
     }
 
     /// The gate has to let the short things through: two lines is the fewest
