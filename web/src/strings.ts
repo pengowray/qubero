@@ -52,6 +52,10 @@ export const DECODED_NO_HEX = "Offset in the unpacked stream, not a file address
  * that nothing new was stored there.
  */
 export const UNPACKED = {
+  /** Heading over the one row saying which decoder step produced this field's
+   *  bytes. The groups above it say which fields decided the field's shape;
+   *  this says the bytes are there at all. */
+  originHead: "Unpacked from",
   /** Names the tab: what was unpacked, and what out of. */
   tabTitle: (field: string, file: string): string => `${field} unpacked from ${file}`,
   /** On the listing heading and in the inspector, for a stream that opened. */
@@ -63,7 +67,17 @@ export const UNPACKED = {
   readOnly: "Unpacked data cannot be edited yet",
   /** Where the byte under the cursor came from. `bits` is one range of the
    *  compressed run, `step` says what the decoder did there. */
-  origin: (bits: string, file: string, step: string): string => `from bits ${bits} of ${file}: ${step}`,
+  origin: (bits: string, file: string, step: string): string => `from ${UNPACKED.originRow(bits, file, step)}`,
+  /**
+   * The same fact without the leading `from`, for the panel, where the heading
+   * over the row already supplies it.
+   *
+   * The file name stays: several unpacked streams can be open at once, and the
+   * panel is read without a glance at the tab strip, so a bit address with no
+   * file in front of it names nothing. The step stays because it is the half
+   * that says whether anything new was stored there.
+   */
+  originRow: (bits: string, file: string, step: string): string => `bits ${bits} of ${file}: ${step}`,
   /** One end of that range: `0x1a3.5` is bit 5 of byte 0x1a3. */
   bit: (bit: number): string => `0x${Math.floor(bit / 8).toString(16)}.${bit % 8}`,
   /** Both ends together. */
@@ -155,6 +169,19 @@ export function unpackedOrigin(
   field?: string,
 ): string {
   return UNPACKED.origin(UNPACKED.bits(inStart, inEnd), file, UNPACKED.step(kind, len, dist, field));
+}
+
+/** The same for the panel, where the heading over the row says `from`. */
+export function unpackedOriginRow(
+  file: string,
+  inStart: number,
+  inEnd: number,
+  kind: string,
+  len?: number,
+  dist?: number,
+  field?: string,
+): string {
+  return UNPACKED.originRow(UNPACKED.bits(inStart, inEnd), file, UNPACKED.step(kind, len, dist, field));
 }
 
 /** Shown where fields would be when nothing has said what the file's are. */
@@ -713,6 +740,16 @@ export const ROLE_GROUP: Readonly<Record<string, string>> = {
 export function roleLabel(role: string): string {
   return ROLE_GROUP[role] ?? role;
 }
+
+/**
+ * The heading over the other direction: the fields that read this one.
+ *
+ * Not a synonym of "Depends on" and not of "Points to". Those rows are kept
+ * flat, with the role word on each: under this heading a group called `Length`
+ * would mean the *other* field's length, which is the opposite of what the
+ * same word means two inches above it.
+ */
+export const USED_BY = "Used by";
 
 /** The arrows over the hex grid, and the graph view. Both show what the
  *  "Depends on" list shows, so the words for it are here rather than in either

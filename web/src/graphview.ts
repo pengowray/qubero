@@ -141,7 +141,7 @@ export class GraphView {
       row.className = "gv-slider";
       const name = document.createElement("span");
       name.className = "gv-slider-name";
-      name.textContent = GRAPH.force[force] ?? force;
+      name.textContent = GRAPH.force[force];
       const input = document.createElement("input");
       input.type = "range";
       input.min = "0";

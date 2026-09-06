@@ -9,7 +9,7 @@ import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, countText, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOrigin } from "./strings.js";
+import { bitSizeText, childWord, countText, ROLE_GROUP, USED_BY, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
 import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
@@ -1208,8 +1208,46 @@ export class Inspector {
       }
     }
     if (jumps.length > 0) all.push(subhead("Points to"), ...jumps);
+    const used = this.usedBy(path);
+    if (used.length > 0) all.push(subhead(USED_BY), ...used);
     this.origins.replaceChildren(...all);
     this.origins.hidden = false;
+  }
+
+  /**
+   * The other direction: which fields read this one.
+   *
+   * The core answers "what decided this field" one field at a time and has no
+   * call for the reverse, so the reverse is read off the graph of the enclosing
+   * structure and turned round. That is the whole of where an answer can be:
+   * an expression names a field by looking outwards through the structures it
+   * is inside, so nothing outside this field's parent can name it without
+   * naming the parent too, and the parent's own dependents are a question about
+   * the parent.
+   *
+   * Rows stay flat, with the role word on each. Grouped under a heading the
+   * word would flip its referent: `Length` above means what decided this
+   * field's length, and here it would mean the other field's.
+   */
+  private usedBy(path: readonly number[]): Node[] {
+    if (path.length === 0) return [];
+    const reply = this.doc.graph(path.slice(0, -1), USED_BY_LIMIT);
+    if (reply.status !== "ok") return [];
+    const key = path.join("/");
+    const self = reply.node.nodes.findIndex((n) => n.path.join("/") === key);
+    if (self < 0) return [];
+    const rows: Node[] = [];
+    const seen = new Set<string>();
+    for (const e of reply.node.edges) {
+      if (e.from !== self || e.to === self) continue;
+      const to = reply.node.nodes[e.to];
+      if (to === undefined) continue;
+      const at = `${e.role} ${to.path.join("/")}`;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      rows.push(usedRow(e.role, to.name, to.path));
+    }
+    return rows;
   }
 
   /**
@@ -1339,7 +1377,7 @@ export class Inspector {
     const row = document.createElement("div");
     row.className = "insp-origin";
     const what = document.createElement("span");
-    what.textContent = unpackedOrigin(
+    what.textContent = unpackedOriginRow(
       this.doc.name,
       step.in_start,
       step.in_end,
@@ -1349,7 +1387,7 @@ export class Inspector {
       step.field,
     );
     row.append(what);
-    group.append(roleHead("unpacked"), row);
+    group.append(roleHead(UNPACKED.originHead), row);
     return group;
   }
 
@@ -1747,6 +1785,32 @@ type OriginRole = (typeof ROLE_ORDER)[number];
  *  would mix them, while a level is a named structure the reader can click. */
 function moreStepsText(n: number): string {
   return n === 1 ? "1 more level up" : `${n.toLocaleString()} more levels up`;
+}
+
+/**
+ * How many fields of a structure are searched for ones that read this field.
+ *
+ * A structure of more than this is a structure whose dependents are not worth
+ * a wait: the panel is answering a question the reader asked by moving the
+ * cursor, and it has to answer before they move it again.
+ */
+const USED_BY_LIMIT = 400;
+
+/** One field that reads the field at the cursor: what it took from it, and
+ *  what it is called. The role stays on the row; see `usedBy`. */
+function usedRow(role: string, name: string, path: readonly number[]): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "insp-origin";
+  row.dataset["path"] = path.join("/");
+  const what = document.createElement("span");
+  what.className = "insp-origin-role";
+  what.textContent = ROLE_GROUP[role] ?? role;
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "insp-link insp-origin-name";
+  b.textContent = name;
+  row.append(what, b);
+  return row;
 }
 
 /** A `data-path` attribute read back. The empty string is the root of the
