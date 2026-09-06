@@ -3809,8 +3809,15 @@ table.rec tr.is-on td {
   margin-bottom: 8px;
 }
 .gv-slider-name {
-  display: block;
+  display: flex;
+  justify-content: space-between;
   margin-bottom: 2px;
+}
+/* What the slider is set to. Tabular so the label above does not shift as the
+   number changes width while a slider is being dragged. */
+.gv-slider-at {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 .gv-slider input {
   width: 100%;

@@ -57,7 +57,15 @@ export type Weights = {
   sibling: number;
 };
 
-export const DEFAULT_WEIGHTS: Weights = { depends: 1, kind: 0.5, near: 0.35, sibling: 0.6 };
+/**
+ * Where the sliders start.
+ *
+ * Dependencies hardest, because that is the one relation that is a fact about
+ * this file rather than about the type system. The rest are turned down enough
+ * that the dependency arrows still decide the shape, and up enough that each
+ * one visibly does something when a reader drags it further.
+ */
+export const DEFAULT_WEIGHTS: Weights = { depends: 1.2, kind: 0.7, near: 0.5, sibling: 0.8 };
 
 /** The forces, in the order the panel offers them. */
 export const FORCES: readonly (keyof Weights)[] = ["depends", "kind", "near", "sibling"];
@@ -163,16 +171,24 @@ export class GraphView {
       const name = document.createElement("span");
       name.className = "gv-slider-name";
       name.textContent = GRAPH.force[force];
+      // What it is set to, beside the name. Without it a reader turning one
+      // force down cannot say how far down, and so cannot get back to where
+      // they were.
+      const at = document.createElement("span");
+      at.className = "gv-slider-at";
       const input = document.createElement("input");
       input.type = "range";
       input.min = "0";
       input.max = "2";
       input.step = "0.05";
       input.value = String(this.weights[force]);
+      at.textContent = input.value;
       input.addEventListener("input", () => {
         this.weights[force] = Number(input.value);
+        at.textContent = input.value;
         this.relayout();
       });
+      name.append(at);
       row.append(name, input);
       this.controls.append(row);
     }
