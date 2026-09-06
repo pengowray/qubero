@@ -13,10 +13,10 @@
 // after the rows have been laid out and measured. It cannot change a row's
 // height, which is the one thing the hex view will not tolerate.
 
-/** Where a byte is drawn, in the overlay's own coordinates. Null when that
- *  byte is not on screen. */
 import { roleLabel } from "./strings.js";
 
+/** Where a byte is drawn, in the overlay's own coordinates. Null when that
+ *  byte is not on screen. */
 export type ByteBox = (byte: number) => { x: number; y: number; w: number; h: number } | null;
 
 /** One field the selected field depends on, as the overlay needs it. */
