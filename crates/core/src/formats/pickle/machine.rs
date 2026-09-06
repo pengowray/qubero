@@ -547,7 +547,7 @@ fn pair(bytes: &[u8]) -> (Arc<str>, Arc<str>) {
 /// What a memo reference points at, said briefly enough for a row.
 fn describe(v: &Value) -> Option<String> {
     Some(match v {
-        Value::Text(s) if !s.is_empty() && s.chars().count() <= 48 => format!("the string {s:?}"),
+        Value::Text(s) if s.chars().count() <= 48 => format!("the string {s:?}"),
         Value::Int(n) => format!("the number {n}"),
         Value::Global { module, name } => format!("{module}.{name}"),
         Value::Call { callable, .. } => match callable.global() {
@@ -557,8 +557,8 @@ fn describe(v: &Value) -> Option<String> {
         Value::Tuple(items) => format!("a tuple of {}", items.len()),
         Value::Collection => "a list, set or dict".to_string(),
         Value::Bytes { len, .. } => format!("{len} bytes"),
-        // A string too long to have been kept, which is a payload rather than
-        // a name: its length is what there is to say about it.
+        // Longer than a row has room for, so the row says what it is and
+        // leaves the reading of it to the bytes underneath.
         Value::Text(_) => "a string".to_string(),
         Value::Dtype(descr) => format!("the dtype {descr}"),
         _ => return None,

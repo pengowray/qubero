@@ -125,7 +125,7 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
         // scikit-learn. An estimator is a class and a dict of what it learned,
         // and what it learned is numpy arrays, so those type themselves.
         ("sklearn", "Tree") => "a decision tree's nodes and values",
-        ("sklearn", _) => "a scikit-learn estimator",
+        ("sklearn", _) => "part of a scikit-learn model",
 
         // The standard library.
         ("datetime", "date") => "a date",
@@ -135,14 +135,14 @@ pub(super) fn what(callable: &str) -> Option<&'static str> {
         ("datetime", "timezone") => "a fixed offset from UTC",
         ("collections", "OrderedDict") => "a dict that remembers the order it was filled in",
         ("collections", "defaultdict") => "a dict with a value for keys nobody put there",
-        ("collections", "Counter") => "a tally",
-        ("collections", "deque") => "a queue open at both ends",
+        ("collections", "Counter") => "a tally of how many of each",
+        ("collections", "deque") => "a double-ended queue",
         ("builtins", "slice") => "a slice: start, stop and step",
         ("builtins", "complex") => "a complex number",
         ("builtins", "range") => "a range: start, stop and step",
         ("builtins", "set" | "frozenset") => "a set",
         ("builtins", "bytearray") => "a bytearray",
-        ("builtins", "getattr") => "something fetched by name",
+        ("builtins", "getattr") => "an attribute fetched by name",
         ("copyreg", "_reconstructor") => "an object rebuilt the old way, by calling its base class",
         ("copyreg", "__newobj__") => "an object rebuilt by calling its own class",
         ("_codecs", "encode") => "bytes written as text, which is how a pickle before protocol 3 held them",

@@ -185,6 +185,17 @@ fn a_packed_date_is_read_as_the_fields_in_it() {
     assert_eq!(named("Date", "month"), vec![9]);
     assert_eq!(named("Date", "day"), vec![6]);
     assert_eq!(named("Time", "microsecond"), vec![250_000]);
+    // Half past ten and fifteen seconds, in that order. Three one-byte fields
+    // in a row will read as each other if two of them are swapped, and every
+    // other assertion here would still pass.
+    assert_eq!(named("Time", "hour"), vec![10]);
+    assert_eq!(named("Time", "minute"), vec![30]);
+    assert_eq!(named("Time", "second"), vec![15]);
+    // The three datetimes in the order the dict was filled in: the same time
+    // of day, then midnight with a zone on it, then half past two in April.
+    assert_eq!(named("DateTime", "hour"), vec![10, 0, 2]);
+    assert_eq!(named("DateTime", "minute"), vec![30, 0, 30]);
+    assert_eq!(named("DateTime", "second"), vec![15, 0, 0]);
     // One of the three datetimes is the second two o'clock, and the bit that
     // says so is inside the month byte.
     let folds = named("DateTime", "fold");
@@ -243,10 +254,10 @@ fn the_libraries_worth_knowing_are_named() {
         ("proto4-scipy-csr-matrix.pickle", "a CSR sparse matrix"),
         ("proto4-scipy-csc-matrix.pickle", "a CSC sparse matrix"),
         ("proto4-scipy-coo-matrix.pickle", "a COO sparse matrix"),
-        ("proto4-sklearn-random-forest.pickle", "a scikit-learn estimator"),
-        ("proto4-sklearn-pipeline.pickle", "a scikit-learn estimator"),
+        ("proto4-sklearn-random-forest.pickle", "part of a scikit-learn model"),
+        ("proto4-sklearn-pipeline.pickle", "part of a scikit-learn model"),
         ("proto4-datetime.pickle", "a length of time"),
-        ("proto4-collections.pickle", "a tally"),
+        ("proto4-collections.pickle", "a tally of how many of each"),
         ("proto4-builtins.pickle", "a slice"),
     ];
     let mut checked = 0;
