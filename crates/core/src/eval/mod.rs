@@ -17,6 +17,7 @@ use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, 
 use crate::text::{self, Settled};
 
 mod cells;
+mod deduced;
 mod explain;
 mod go;
 mod jsontree;

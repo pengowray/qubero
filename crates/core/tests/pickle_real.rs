@@ -97,6 +97,98 @@ fn the_protocol_a_file_was_written_at_is_the_one_it_says() {
     assert!(checked >= 6, "only {checked} named for their protocol");
 }
 
+/// A pickled array is read as the numbers it holds, not as the bytes they are
+/// written in.
+///
+/// This is the whole point of running the program. A `BINBYTES` says nothing
+/// about its contents; the dtype, the shape and the byte order are three other
+/// opcodes, and they reach the data only across the unpickler's stack. So what
+/// is checked here is that the crossing happened: the payload row of every
+/// numpy and pandas sample is an array of the right element type, and the
+/// object array, whose data is not a buffer at all, is left as bytes.
+#[test]
+fn an_array_is_read_as_the_numbers_it_holds() {
+    let Some(dir) = folder() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let mut checked = 0;
+    for path in pickles(&dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let Some(rest) = ["proto4-numpy-", "proto3-numpy-", "proto5-pandas-"]
+            .iter()
+            .find_map(|prefix| name.strip_prefix(prefix))
+        else {
+            continue;
+        };
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
+        let mut typed = Vec::new();
+        payloads(&doc, &mut ev, &[], &mut typed, 0);
+        checked += 1;
+
+        // An object array's data is a list of pickled objects rather than a
+        // buffer, so nothing should have claimed it.
+        if rest.starts_with("object-array") {
+            assert!(typed.is_empty(), "{name}: an object array read as {typed:?}");
+            continue;
+        }
+        assert!(!typed.is_empty(), "{name}: no array was read as one");
+
+        if rest.starts_with("array") {
+            assert_eq!(typed, vec![("f32 le".to_string(), 24)], "{name}");
+        }
+        // Every width numpy has, so a reader with one of them wrong fails
+        // here rather than quietly reading half an array.
+        if rest.starts_with("dtypes") {
+            let widths: Vec<&str> = typed.iter().map(|(t, _)| t.as_str()).collect();
+            for want in ["i8", "u8", "i16 le", "u16 le", "i32 le", "u32 le", "i64 le", "u64 le", "f16 le", "f32 le", "f64 le"] {
+                assert!(widths.contains(&want), "{name}: no {want} among {widths:?}");
+            }
+        }
+        if rest.starts_with("byte-order") {
+            let widths: Vec<&str> = typed.iter().map(|(t, _)| t.as_str()).collect();
+            assert!(widths.contains(&"f64 be"), "{name}: the big-endian column stayed little: {widths:?}");
+            assert!(widths.contains(&"f64 le"), "{name}: {widths:?}");
+        }
+        // numpy 1 called the module `numpy.core`, and a pickle from before
+        // 2024 is the commoner kind.
+        if rest.starts_with("1-module-names") {
+            assert_eq!(typed, vec![("f64 le".to_string(), 4)], "{name}");
+        }
+        eprintln!("{name}: {typed:?}");
+    }
+    assert!(checked >= 8, "only {checked} array samples found");
+}
+
+/// Every payload that was read as an array rather than as bytes, as the
+/// element's type and how many of them there are.
+fn payloads(
+    doc: &Document<MemSource>,
+    ev: &mut Evaluator,
+    at: &[usize],
+    out: &mut Vec<(String, u64)>,
+    depth: usize,
+) {
+    if depth > 10 {
+        return;
+    }
+    let Ok(node) = ev.node(doc, at) else { return };
+    // The bytes of a byte string, which the template gives the length of the
+    // opcode and the machine gives a type to. Bytes that stayed bytes are not
+    // counted: `bytes[]` is the default and means nothing was recognised.
+    if node.name == "value" && node.composite && node.type_name != "bytes[]" && node.type_name.ends_with("[]") {
+        let elem = node.type_name.trim_end_matches("[]").to_string();
+        out.push((elem, node.child_count));
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = at.to_vec();
+        next.push(i);
+        payloads(doc, ev, &next, out, depth + 1);
+    }
+}
+
 /// Every opcode in the file, in the order the bytes are in, as its name, where
 /// it starts and how long it is. A frame contributes the opcodes inside it and
 /// not itself, since those are the ones covering bytes.

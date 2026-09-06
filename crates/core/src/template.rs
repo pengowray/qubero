@@ -32,6 +32,27 @@ pub enum Endian {
     Big,
 }
 
+/// What a [`Expr::Deduced`] asks the container.
+///
+/// Each is a question about the field the expression sits on, answered by
+/// running the format rather than by reading a neighbouring field. They are
+/// listed rather than left open because every one of them costs a match arm
+/// in the evaluator, and a format that needs a new question is a format that
+/// should have to say so here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Deduce {
+    /// Which of `formats::npy::dtypes()` the bytes under this field hold, as
+    /// an index into that table, or -1 where the pickle does not describe them
+    /// as an array at all.
+    ArrayDtype,
+    /// How many values of that dtype the bytes hold.
+    ArrayElements,
+    /// What the opcode this field belongs to does, in words: the callable a
+    /// `REDUCE` calls, the object a memo reference points at, the class a
+    /// `STACK_GLOBAL` names. Empty where there is nothing to say.
+    Builds,
+}
+
 /// An integer-valued expression. `Ref` names a field that appears earlier in the
 /// same struct, or in an enclosing struct before the current field.
 #[derive(Debug, Clone)]
@@ -123,6 +144,22 @@ pub enum Expr {
     /// The largest number in an earlier array. Tracker modules keep their
     /// pattern count implicitly as the greatest entry in the order table.
     MaxOf(Arc<str>),
+    /// An answer worked out by running the container, for the one shape no
+    /// other expression here reaches: a field whose type is decided by
+    /// something the format only says by being executed.
+    ///
+    /// A pickle is the case that needed it. The bytes of a numpy array sit in
+    /// a `BINBYTES` like any other byte string, and what says they are 24
+    /// little-endian floats is that the opcode before them pushed a shape, the
+    /// one before that pushed a dtype, and a `BUILD` several opcodes later
+    /// hands all of it to `numpy._core.multiarray._reconstruct`. Those are
+    /// stack relationships. No path, no index and no tag reaches them, because
+    /// the thing that relates them is a machine and not a layout.
+    ///
+    /// So the container is run, once, and the answers kept beside the memo the
+    /// way a parsed JSON header is. See [`Deduce`] for what may be asked and
+    /// `formats::pickle::machine` for who answers.
+    Deduced(Deduce),
     /// The next `bits` bits, read without consuming them. A field can then
     /// exist only when the byte at its own start says it does.
     ///
@@ -501,6 +538,10 @@ impl Expr {
         Expr::MaxOf(name.into())
     }
     /// The next `bits` bits without consuming them, read the given way round.
+    pub fn deduced(what: Deduce) -> Expr {
+        Expr::Deduced(what)
+    }
+
     pub fn peek(bits: u32, endian: Endian) -> Expr {
         Expr::Peek { bits, endian }
     }

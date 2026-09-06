@@ -274,6 +274,9 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::SizeOf(n) => format!("sizeof({n})"),
         Expr::BitsOf(n) => format!("bitsof({n})"),
         Expr::Idx => "index".to_string(),
+        // Nothing to point at: the answer comes from running the file, not
+        // from a field a reader could go and look at.
+        Expr::Deduced(_) => return None,
         Expr::Elem { array, index, field } => path(array, index, field)?,
         Expr::ElemWithin { path: into, index, field } => path(&into.join("."), index, field)?,
         Expr::Product { array, index, field } => format!("product({})", path(array, index, field)?),

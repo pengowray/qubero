@@ -115,7 +115,7 @@ pub mod pdf_xref;
 mod pe;
 pub mod pe_tables;
 mod pi1;
-mod pickle;
+pub mod pickle;
 mod picotron;
 mod picotron_pod;
 mod psd;

@@ -312,7 +312,7 @@ fn record_data() -> T {
 /// inside its quotes, what one value of it is, and how many bytes that takes.
 /// Two things ask, and they have to agree: the whole array, which is one dtype
 /// for the file, and one field of a structured dtype, which is one per column.
-fn dtypes() -> Vec<(String, T, i128)> {
+pub(super) fn dtypes() -> Vec<(String, T, i128)> {
     let of = |ty: T, width: i128| (ty, width);
     let int = |bits: u32, e: Endian| T::Int { bits, endian: e };
     let uint = |bits: u32, e: Endian| T::UInt { bits, endian: e };

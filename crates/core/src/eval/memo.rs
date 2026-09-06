@@ -29,6 +29,10 @@ pub(super) struct Memo {
     nodes: FxHashMap<Vec<usize>, Resolved>,
     lists: FxHashMap<Vec<usize>, ListState>,
     json: FxHashMap<Vec<usize>, Arc<json::Val>>,
+    /// What running the whole file as a pickle said about it. One per
+    /// document rather than one per path: a pickle is the file, and the run
+    /// is over the opcodes rather than over any node.
+    deduced: Option<Arc<crate::formats::pickle::machine::Reading>>,
 }
 
 impl Memo {
@@ -137,12 +141,22 @@ impl Memo {
         self.json.insert(path, val);
     }
 
+    /// What running the file said about it, if it has been run.
+    pub(super) fn deduced(&self) -> Option<&Arc<crate::formats::pickle::machine::Reading>> {
+        self.deduced.as_ref()
+    }
+
+    pub(super) fn remember_deduced(&mut self, r: Arc<crate::formats::pickle::machine::Reading>) {
+        self.deduced = Some(r);
+    }
+
     /// Forget everything. For a change to the document that moves bytes about,
     /// or a change of template, after which none of this stands.
     pub(super) fn forget(&mut self) {
         self.nodes.clear();
         self.lists.clear();
         self.json.clear();
+        self.deduced = None;
     }
 
     /// Forget what an overwrite at `bit` could have changed, and keep the
@@ -154,6 +168,9 @@ impl Memo {
         self.nodes.retain(|_, r| r.size.is_some_and(|size| r.offset + size <= bit));
         // The parsed text of a JSON field goes when the field itself does.
         self.json.retain(|path, _| self.nodes.contains_key(path));
+        // A run over the whole file says nothing about which half of it an
+        // edit touched, so an edit anywhere means running it again.
+        self.deduced = None;
         let nodes = &self.nodes;
         self.lists.retain(|path, l| {
             l.checkpoints.retain(|(_, at)| *at <= bit);

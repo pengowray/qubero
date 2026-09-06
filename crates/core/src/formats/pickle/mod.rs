@@ -44,7 +44,11 @@
 //! byte is an opcode like any other, and a file of them looks like a file of
 //! anything. See [`is_pickle`].
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+pub mod arrays;
+pub mod machine;
+
+use crate::formats::npy;
+use crate::template::{Deduce, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// Every opcode, by the byte that spells it, with the name Python gives it.
 ///
@@ -157,9 +161,8 @@ fn operand() -> T {
 
     // A number as wide as the opcode says, and little-endian, which every
     // number in a pickle is except one.
-    add(&[0x4b, 0x68, 0x71, 0x80, 0x82], T::u8());
+    add(&[0x4b, 0x80, 0x82], T::u8());
     add(&[0x4d, 0x83], T::u16(Little));
-    add(&[0x6a, 0x72], T::u32(Little));
     // BININT and EXT4 are signed, and BININT is how a negative number that
     // fits in four bytes is written. Read unsigned, -1 is four thousand
     // million.
@@ -179,9 +182,11 @@ fn operand() -> T {
     add(&[0x8d], counted_text(T::u64(Little), Encoding::Utf8));
     add(&[0x55], counted_text(T::u8(), Encoding::Unknown));
     add(&[0x54], counted_text(T::i32(Little), Encoding::Unknown));
-    add(&[0x43], counted_bytes(T::u8()));
-    add(&[0x42], counted_bytes(T::u32(Little)));
-    add(&[0x8e, 0x96], counted_bytes(T::u64(Little)));
+    // The payload opcodes, whose bytes are an array when the program around
+    // them says so and a run of bytes when it does not. See [`payload`].
+    add(&[0x43], counted_payload(T::u8()));
+    add(&[0x42], counted_payload(T::u32(Little)));
+    add(&[0x8e, 0x96], counted_payload(T::u64(Little)));
 
     // An integer of any size at all: a length, and that many bytes of
     // two's-complement magnitude, little end first. A length of zero is the
@@ -189,9 +194,19 @@ fn operand() -> T {
     add(&[0x8a], counted_bytes(T::u8()));
     add(&[0x8b], counted_bytes(T::i32(Little)));
 
+    // Opcodes with nothing after them that are still worth a word: what a
+    // `REDUCE` calls and what a `BUILD` fills in are on the stack rather than
+    // in the file, so the operand slot they were never going to use says it.
+    // No bytes, so nothing about the layout changes.
+    add(&[0x52, 0x62, 0x93, 0x81, 0x92, 0x6f, 0x51], T::ComputedText(E::deduced(Deduce::Builds)));
+    // The memo, whose one-byte index says nothing on its own.
+    add(&[0x68, 0x71], memo_ref(T::u8()));
+    add(&[0x6a, 0x72], memo_ref(T::u32(Little)));
+    add(&[0x67, 0x70], memo_ref(T::decimal(line())));
+
     // Written as text, one value to a line. The newline belongs to the field,
     // so the opcode after it starts where the field ends.
-    add(&[0x49, 0x67, 0x70], T::decimal(line()));
+    add(&[0x49], T::decimal(line()));
     add(&[0x46, 0x53, 0x56, 0x50], T::text(line(), Encoding::Unknown));
     add(&[0x4c], decimal_long());
     add(&[0x63, 0x69], qualified_name());
@@ -227,6 +242,50 @@ fn counted_bytes(length: T) -> T {
         "",
         "value",
         vec![("length", length), ("value", T::bytes(E::field("length")))],
+    )
+}
+
+/// A length, and that many bytes read as whatever the program says they are.
+fn counted_payload(length: T) -> T {
+    T::structure_named(
+        "CountedBytes",
+        "",
+        "value",
+        vec![("length", length), ("value", T::sized(E::field("length"), payload()))],
+    )
+}
+
+/// The bytes of a byte string, typed by what the pickle does with them.
+///
+/// This is the one place a pickle says something a listing could not work out
+/// from the bytes in front of it. A `BINBYTES` is a length and a run, and the
+/// run is a run: the shape, the dtype and the byte order that make it 24
+/// little-endian floats are three other opcodes away, joined to it only by
+/// what the stack machine does with them. So the machine is asked, and its
+/// answer picks a case here.
+///
+/// The cases are [`npy::dtypes`], the same table the `.npy` reader uses,
+/// because a pickled array and a `.npy` file hold the same bytes described the
+/// same way. Bytes the machine says nothing about stay bytes, which is the
+/// default and is what most byte strings in most pickles are.
+fn payload() -> T {
+    let cases = npy::dtypes()
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_, elem, _))| (i as i128, T::array(elem, E::deduced(Deduce::ArrayElements))))
+        .collect();
+    T::switch(E::deduced(Deduce::ArrayDtype), cases, T::bytes(E::Remaining))
+}
+
+/// A memo index, and what is in the memo there. The index alone says nothing:
+/// `BINGET 5` is a row a reader has to go looking to understand, and the memo
+/// is nowhere in the file to look in.
+fn memo_ref(index: T) -> T {
+    T::structure_named(
+        "MemoRef",
+        "",
+        "holds",
+        vec![("index", index), ("holds", T::ComputedText(E::deduced(Deduce::Builds)))],
     )
 }
 
@@ -308,6 +367,79 @@ pub(super) fn is_pickle(head: &[u8], len: u64) -> bool {
         Walk::Cut => opener && len > head.len() as u64,
         Walk::No => false,
     }
+}
+
+/// Every opcode in the file, for the machine to run.
+///
+/// The same walk `is_pickle` does, keeping what it finds rather than counting
+/// it, so there is one place that knows how wide an operand is and the machine
+/// cannot drift from the listing. It stops where the walk stops: a file that
+/// gives up part way is annotated as far as it got.
+pub fn opcodes(bytes: &[u8]) -> Vec<machine::Op> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while let Some(&code) = bytes.get(at) {
+        if OPCODE.iter().all(|(c, _)| *c != code as i128) {
+            break;
+        }
+        let from = at;
+        at += 1;
+        let Some(end) = operand_size(bytes, at, code) else { break };
+        if end > bytes.len() {
+            break;
+        }
+        // What the opcode is *about*, with the length that measured it left
+        // out: a length prefix is how long the value is, not part of it.
+        let data = (at + prefix_width(code)).min(end);
+        // A trailing newline is the format's, not the value's, the same as a
+        // length prefix is.
+        let value_end = match line_terminated(code) {
+            true => end.saturating_sub(1),
+            false => end,
+        };
+        // A payload may be a gigabyte long and is never read as a value, so
+        // only what is short enough to be one is kept.
+        let operand = match value_end.saturating_sub(data) <= MOST_OPERAND {
+            true => bytes[data..value_end.max(data)].to_vec(),
+            false => Vec::new(),
+        };
+        out.push(machine::Op {
+            code,
+            at: from as u64,
+            end: end as u64,
+            data_at: data as u64,
+            data_len: (end - data) as u64,
+            operand,
+        });
+        at = end;
+        if code == b'.' {
+            break;
+        }
+    }
+    out
+}
+
+/// The longest operand kept as bytes. A module name, a dtype and a line of
+/// digits are all far under this; an array's data is far over, and the machine
+/// wants only where it is.
+const MOST_OPERAND: usize = 4096;
+
+/// How many bytes of an operand are the length that measured the rest. Zero
+/// for every opcode whose operand is not measured that way.
+fn prefix_width(code: u8) -> usize {
+    match code {
+        0x43 | 0x55 | 0x8a | 0x8c => 1,
+        0x42 | 0x54 | 0x58 | 0x8b => 4,
+        0x8d | 0x8e | 0x96 => 8,
+        _ => 0,
+    }
+}
+
+/// Whether the operand is a line, whose newline is the format's rather than
+/// the value's. `GLOBAL` and `INST` write two lines and keep the first one's
+/// newline, which is what separates the module from the name.
+fn line_terminated(code: u8) -> bool {
+    matches!(code, 0x46 | 0x49 | 0x4c | 0x50 | 0x53 | 0x56 | 0x67 | 0x70 | 0x63 | 0x69)
 }
 
 /// How far a walk over the opcodes got.

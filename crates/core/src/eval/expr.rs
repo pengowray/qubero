@@ -34,6 +34,9 @@ impl Evaluator {
             // The index of the element this sits in, which is what a field
             // whose type comes from a list read earlier needs.
             Expr::Idx => self.enclosing_lists(at).first().map_or(0, |(_, i)| *i as i128),
+            // An answer no field holds, worked out by running the container.
+            // See `eval::deduced`.
+            Expr::Deduced(what) => self.deduced_int(doc, at, *what, here)?,
             Expr::Elem { array, index, field } => {
                 let p = self.elem_path(doc, at, array, index, field, here)?;
                 match self.node(doc, &p)?.value.as_int() {
@@ -271,6 +274,11 @@ impl Evaluator {
         e: &Expr,
         here: Option<(u64, u64)>,
     ) -> R<String> {
+        // The one expression whose text is not in any field: it is worked out
+        // by running the container, so there is no path to read it off.
+        if let Expr::Deduced(what) = e {
+            return self.deduced_text(doc, at, *what, here);
+        }
         match self.text_path(doc, at, e, here)? {
             Some(p) => self.text_of(doc, &p),
             None => Ok(String::new()),
