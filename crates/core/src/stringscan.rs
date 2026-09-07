@@ -402,7 +402,7 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
         .map(|(i, r)| !r.enc.wide() || vouched(buf, *r, &counted[i], table[i]))
         .collect();
     let mut ok = vouch.clone();
-    shifted_readings(buf, base, &runs, &vouch, &mut ok);
+    shifted_readings(buf, base, &runs, &vouch, &table, &mut ok);
     let mut ranked: Vec<(Run, bool)> = runs
         .into_iter()
         .enumerate()
@@ -545,7 +545,7 @@ fn in_a_table(runs: &[Run], counted: &[Vec<(PrefixKind, usize, u64)>]) -> Vec<bo
 /// byte, and that flag byte with the next string's length reads as `00 00` to
 /// the shifted run and as nothing at all to the real one, so `System.dll`
 /// reported three and a half thousand strings missing their first letter.
-fn shifted_readings(buf: &[u8], base: u64, runs: &[Run], vouch: &[bool], ok: &mut [bool]) {
+fn shifted_readings(buf: &[u8], base: u64, runs: &[Run], vouch: &[bool], table: &[bool], ok: &mut [bool]) {
     use std::collections::HashMap;
     let mut at: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, r) in runs.iter().enumerate() {
@@ -564,6 +564,14 @@ fn shifted_readings(buf: &[u8], base: u64, runs: &[Run], vouch: &[bool], ok: &mu
             }
             let keep = if ascii_text(buf[runs[i].start]) {
                 i
+            } else if table[i] != table[j] {
+                // Counted the way the rest of the file counts its strings
+                // beats counted once by a number that happens to fit. A
+                // Windows string table packs its strings behind a `u16` and
+                // leaves its empty slots zero, and those zeroes with the next
+                // string's length read as a `u32` or a `u64` in front of the
+                // shifted run, which is wide enough to speak for it.
+                if table[i] { i } else { j }
             } else if vouch[i] != vouch[j] {
                 if vouch[i] { i } else { j }
             } else if runs[i].chars != runs[j].chars {
@@ -1587,6 +1595,46 @@ mod tests {
         }
         b.extend([0x00, 0x00]);
         b
+    }
+
+    /// A Windows STRINGTABLE: sixteen strings to a block, each a count of code
+    /// units then the characters, with nothing terminating any of them. The
+    /// only thing that can speak for these is that the whole block is counted
+    /// the same way, which is what `in_a_table` is for.
+    fn string_table(words: &[&str]) -> Vec<u8> {
+        let mut b = vec![0x00, 0x00];
+        for w in words {
+            b.extend((w.encode_utf16().count() as u16).to_le_bytes());
+            b.extend(utf16le(w));
+        }
+        // A count with nothing behind it, the way a block runs out: two zero
+        // bytes here would hand the last string a terminator, which is the one
+        // thing a string table never gives one.
+        b.extend([0x05, 0x00]);
+        b
+    }
+
+    #[test]
+    fn a_block_of_counted_strings_speaks_for_every_one_of_them() {
+        let words = ["Disk is not formatted", "Open file locat&ion", "(Debug)", "Windows can't format %s", "File"];
+        let hits = all(string_table(&words));
+        assert_eq!(hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(), words);
+        for hit in &hits {
+            assert_eq!(hit.enc, Enc::Utf16Le, "{:?}", hit.text);
+            assert_eq!(hit.term, None, "{:?}", hit.text);
+            assert_eq!(hit.prefix[0].kind, PrefixKind::U16Le, "{:?}", hit.text);
+            assert_eq!(hit.prefix[0].counts, Counts::Units, "{:?}", hit.text);
+            assert!(!hit.prefix[0].weak, "{:?} is counted the way the block is", hit.text);
+        }
+    }
+
+    #[test]
+    fn two_counted_strings_are_not_a_block() {
+        // The same shape, too few to be anything but a coincidence. A number
+        // one code unit wide in front of a run with no terminator is the run's
+        // own boundary read twice until enough of the file agrees.
+        let hits = all(string_table(&["Disk is not formatted", "(Debug)"]));
+        assert!(hits.is_empty(), "{:?}", hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>());
     }
 
     #[test]

@@ -1990,8 +1990,14 @@ around it says it was written as one, and three things can:
   thousand strings and found four numbers in front of them.
 * A neighbour counted the same way. A resource section is a table of counted
   strings laid end to end, where the numbers are one unit wide and there are no
-  terminators at all. One such number says nothing; two in a row, each landing
-  exactly where the string after it starts, is a table.
+  terminators at all. One such number says nothing; a kind that counts three
+  runs, an eighth of the window's runs, and takes three different values, is a
+  table. This is what carries a Windows STRINGTABLE: `shell32.dll.mui` holds
+  fifteen hundred strings with no terminator between them, and every one is
+  reported with the `u16` that counts it. The tally is per window rather than
+  per file, so a kind can be hedged in one window and vouched for in the next,
+  which a reader scrolling a large pickle may notice; a file-level tally is the
+  upgrade, and it would settle chain splits too.
 
 The eight-bit pass is deliberately not held to any of this. Four printable bytes
 in a row is what `strings(1)` reports and what a reader of this view expects,
