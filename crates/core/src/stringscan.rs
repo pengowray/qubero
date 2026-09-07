@@ -774,7 +774,14 @@ fn one_page(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
             // one unit. A .NET user string heap joins its lines that way,
             // three hundred of them, and the allowance below would let the
             // whole heap pass as one string of ten thousand characters.
-            if u & 0xff < 0x20 {
+            //
+            // Nor is one from a part of Unicode nobody writes in. That is
+            // asked of the page the run is mostly from, and a stray has to
+            // answer it too: a dialog template begins `ff ff` and a class
+            // number, which reads as two fullwidth characters in front of the
+            // string, and that reading is two characters longer than the one
+            // that is right.
+            if u & 0xff < 0x20 || !text_page((u >> 8) as u8) {
                 return false;
             }
             stray += 1;
