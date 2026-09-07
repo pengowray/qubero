@@ -17,7 +17,11 @@ pub const SECTOR: usize = 2352;
 /// after it is scrambled before it is written.
 pub const SYNC: [u8; 12] = [0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00];
 
-const MODES: &[(i128, &str)] = &[(0, "empty"), (1, "data"), (2, "XA")];
+/// Mode 0 is named for what it is rather than for its number, since a sector
+/// of nothing is worth saying outright. The other two are named as the disc
+/// names them: "data" would be true of a Mode 2 Form 1 sector as well, and is
+/// already the name of a submode flag and of a field.
+const MODES: &[(i128, &str)] = &[(0, "empty"), (1, "mode 1"), (2, "mode 2")];
 
 /// What the eight bytes after a Mode 2 header say about the sector.
 const SUBMODE: &[(u32, &str)] = &[
@@ -32,7 +36,7 @@ const SUBMODE: &[(u32, &str)] = &[
 ];
 
 pub fn cdrom() -> Template {
-    Template::new("cdrom", T::structure("CdImage", vec![("sectors", T::repeat(sector(), Until::End))]))
+    Template::new("cdrom", T::structure("RawCdImage", vec![("sectors", T::repeat(sector(), Until::End))]))
 }
 
 /// One sector as the disc holds it.
@@ -46,23 +50,27 @@ fn sector() -> T {
         E::lit(SECTOR as i128),
         T::structure_named(
             "CdSector",
-            "mode",
+            "address",
             "body",
             vec![
                 ("sync", T::magic(&SYNC)),
-                // Where the sector sits on the disc, counted in minutes,
-                // seconds and frames of playing time at 75 frames a second.
-                // Sector zero is 00:02:00, since the two seconds before it are
-                // the lead-in.
+                // Where the sector sits on the disc: minutes, seconds and
+                // frames of playing time at 75 frames a second. Sector zero is
+                // 00:02:00, since the two seconds before it are the lead-in.
                 //
-                // Each is two decimal digits packed into one byte, which is
-                // not a number this IR can read: as a `u8` the frame `0x74`
-                // would say 116, and every frame from ten up would be wrong.
-                // Shown as its byte instead, which reads as the two digits it
-                // is. A packed-decimal type is what this really wants.
-                ("minute", T::bytes(E::lit(1))),
-                ("second", T::bytes(E::lit(1))),
-                ("frame", T::bytes(E::lit(1))),
+                // This is what names the row, because it is what tells one
+                // sector from another. Naming them by mode instead gave a
+                // column of sectors all called "data", which is true of every
+                // sector on the disc and no help in finding one.
+                //
+                // Kept as its three bytes rather than read as three numbers.
+                // Each is two decimal digits packed into a byte, which is not
+                // a number this IR can read: as a `u8` the frame `0x74` would
+                // say 116, and every frame from ten up would be wrong. The
+                // bytes show as `00 02 16`, which is the address written the
+                // way a disc writes it. A packed-decimal type is what this
+                // really wants.
+                ("address", T::bytes(E::lit(3))),
                 ("mode", T::enumeration("SectorMode", T::u8(), MODES)),
                 ("body", T::switch(E::field("mode"), vec![(1, mode1()), (2, mode2())], T::bytes(E::Remaining))),
             ],
@@ -78,7 +86,7 @@ fn mode1() -> T {
         vec![
             ("data", T::bytes(E::lit(2048))),
             ("edc", T::u32(Little)),
-            ("blank", T::bytes(E::lit(8))),
+            ("reserved", T::bytes(E::lit(8))),
             ("ecc_p", T::bytes(E::lit(172))),
             ("ecc_q", T::bytes(E::lit(104))),
         ],
@@ -97,14 +105,14 @@ fn mode2() -> T {
     T::structure(
         "Mode2Sector",
         vec![
-            ("file", T::u8()),
-            ("channel", T::u8()),
+            ("file_number", T::u8()),
+            ("channel_number", T::u8()),
             ("submode", T::flags("Submode", T::u8(), SUBMODE)),
             ("coding", T::u8()),
-            ("file_again", T::u8()),
-            ("channel_again", T::u8()),
-            ("submode_again", T::flags("Submode", T::u8(), SUBMODE)),
-            ("coding_again", T::u8()),
+            ("file_number_copy", T::u8()),
+            ("channel_number_copy", T::u8()),
+            ("submode_copy", T::flags("Submode", T::u8(), SUBMODE)),
+            ("coding_copy", T::u8()),
             (
                 "body",
                 T::switch(E::field("submode").and(E::lit(0x20)), vec![(0x20, form2())], form1()),
@@ -115,7 +123,7 @@ fn mode2() -> T {
 
 fn form1() -> T {
     T::structure(
-        "Form1",
+        "Mode2Form1",
         vec![
             ("data", T::bytes(E::lit(2048))),
             ("edc", T::u32(Little)),
@@ -126,7 +134,7 @@ fn form1() -> T {
 }
 
 fn form2() -> T {
-    T::structure("Form2", vec![("data", T::bytes(E::lit(2324))), ("edc", T::u32(Little))])
+    T::structure("Mode2Form2", vec![("data", T::bytes(E::lit(2324))), ("edc", T::u32(Little))])
 }
 
 /// Whether this is a disc read sector by sector rather than file by file.
@@ -198,25 +206,23 @@ mod tests {
     #[test]
     fn a_disc_is_read_sector_by_sector() {
         let mut v = Vec::new();
-        for lba in 0..4 {
+        for lba in 0..21 {
             v.extend(xa_sector(lba, lba == 3));
         }
         assert!(is_cdrom(&v, v.len() as u64));
         let d = Document::new(MemSource(v));
         let mut e = Evaluator::new(cdrom());
-        assert_eq!(e.node(&d, &[0]).unwrap().child_count, 4);
+        assert_eq!(e.node(&d, &[0]).unwrap().child_count, 21);
         assert_eq!(e.node(&d, &[0, 1]).unwrap().size_bits, SECTOR as u64 * 8);
         assert_eq!(e.node(&d, &[0, 1]).unwrap().offset_bits, SECTOR as u64 * 8);
-        // Minute, second and frame: the second sector of the disc is two
-        // seconds and one frame into the playing time, and each is the two
-        // decimal digits packed into a byte that a disc address is written in.
+        // The second sector of the disc is two seconds and one frame into the
+        // playing time, written as three bytes of two decimal digits each.
         let mut digits = |path: &[usize]| match e.node(&d, path).unwrap().value {
             Value::Bytes { preview, .. } => preview,
             other => panic!("{other:?}"),
         };
-        assert_eq!(digits(&[0, 1, 1]), vec![0x00]);
-        assert_eq!(digits(&[0, 1, 2]), vec![0x02]);
-        assert_eq!(digits(&[0, 1, 3]), vec![0x01]);
+        assert_eq!(digits(&[0, 1, 1]), vec![0x00, 0x02, 0x01]);
+        assert_eq!(digits(&[0, 20, 1]), vec![0x00, 0x02, 0x20], "frame 20, not 0x14");
         // Frame 74 is the last of a second, and is written 0x74 rather than
         // 0x4a. That is the whole reason these are not u8. Counted from the
         // start of the playing time, so two seconds ahead of sector zero.
@@ -234,9 +240,9 @@ mod tests {
         let d = Document::new(MemSource(v));
         let mut e = Evaluator::new(cdrom());
         // The body of the XA sector, which is the ninth field of the mode 2
-        // structure sitting in the sector's sixth.
-        let form1 = e.node(&d, &[0, 0, 5, 8]).unwrap();
-        let form2 = e.node(&d, &[0, 3, 5, 8]).unwrap();
+        // structure sitting in the sector's fourth.
+        let form1 = e.node(&d, &[0, 0, 3, 8]).unwrap();
+        let form2 = e.node(&d, &[0, 3, 3, 8]).unwrap();
         assert_eq!(form1.child_count, 4, "form 1 keeps its correction");
         assert_eq!(form2.child_count, 2, "form 2 gives it to the data");
     }

@@ -1485,6 +1485,14 @@ after this one is found by multiplying rather than by reading. A disc is a
 third of a million of them and the evaluator turns a run of same-sized
 elements into a division.
 
+A row is named by the sector's address, not by its mode. Naming by mode gave a
+column of sectors all called `data`, which is true of every sector on a Mode 1
+disc and no help in finding one; the address is what tells them apart and is
+what a cue sheet, a drive and a bug report all name a sector by. The mode names
+are `mode 1` and `mode 2` for the same reason `data` was wrong as a row name:
+`data` is also a submode flag and a field, so one sector could have shown the
+word three times meaning three things.
+
 Mode 1 gives the 2048 bytes to the filesystem and keeps a four-byte EDC and 276
 bytes of Reed-Solomon parity. Mode 2 puts an eight-byte CD-XA subheader first,
 written twice so a reader can tell which copy is wrong, and bit five of its
