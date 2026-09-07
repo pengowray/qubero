@@ -1543,7 +1543,7 @@ export class Inspector {
     } else {
       for (const kid of kids) parts.push(kidRow(kid, this.kidValue(kid)));
       const rest = n.child_count - kids.length;
-      if (rest > 0) parts.push(moreButton(rest, n.child_count, noun));
+      if (rest > 0) parts.push(moreButton(rest, noun));
     }
     this.kids.replaceChildren(...parts);
     this.kids.hidden = false;
@@ -1574,7 +1574,9 @@ export class Inspector {
     this.note.textContent = "";
     this.note.hidden = true;
     if (this.field.dataset["dirty"] === "1" && document.activeElement === this.field) return;
-    this.field.disabled = !n.editable || row !== null;
+    // Read-only rather than disabled: a value shown here is still a value to
+    // select and copy, which a disabled input in most browsers is not.
+    this.field.readOnly = !n.editable || row !== null;
     this.field.classList.remove("invalid");
     this.field.value = row ?? (n.composite ? "" : n.edit_text);
     this.field.placeholder = n.composite && row === null ? countText(n.child_count, childWord(n)) : "";
@@ -1608,7 +1610,8 @@ export class Inspector {
     }
     const editable = n.editable && !shown.truncated && !borrowed;
     this.area.value = shown.text;
-    this.area.disabled = !editable;
+    this.area.disabled = false;
+    this.area.readOnly = !editable;
     this.area.rows = Math.max(2, Math.min(12, Math.ceil(shown.text.length / 30)));
     // Enter puts a newline into the value, so the way to apply has to be said.
     // A note only appears when editing is off, so the two never collide.
@@ -1921,14 +1924,18 @@ function kidRow(kid: TemplateNode, holds: { readonly text: string; readonly coun
   return row;
 }
 
-/** The rest of a list too long to draw at once. A short one is finished off in
- *  one click; a long one is paged, since "show all" of a quarter of a million
- *  items is a promise the panel cannot keep. */
-function moreButton(rest: number, total: number, noun: string): HTMLElement {
+/** The rest of a list too long to draw at once. The glyph says the list is cut
+ *  short and the number says by how much; the words for what a click delivers
+ *  are on the button rather than in it, since a mark and a count read at a
+ *  glance and a sentence in a 190px column does not. */
+function moreButton(rest: number, noun: string): HTMLElement {
   const b = el("button", "insp-kid-more");
   b.type = "button";
   b.dataset["more"] = "";
-  b.textContent = rest <= CHILD_PAGE ? INSIDE.all(countText(total, noun)) : INSIDE.more(countText(rest, noun));
+  b.textContent = INSIDE.more(rest);
+  const said = rest > CHILD_PAGE ? INSIDE.moreTitle(CHILD_PAGE, rest, noun) : INSIDE.moreRest(rest, noun);
+  b.title = said;
+  b.setAttribute("aria-label", said);
   return b;
 }
 

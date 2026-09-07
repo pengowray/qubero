@@ -1309,6 +1309,11 @@ button.welcome-crystal {
   font-family: var(--mono);
   padding: 4px 6px;
   min-height: 28px;
+}
+/* A box to type in is a hole, the way the lens inputs and the long-value box
+   already are. `input[type="text"]` sets the ground for every input in the app,
+   so saying so here has to out-specify it. */
+.insp-field:not([readonly]) {
   background: var(--bg);
 }
 .insp-area {
@@ -1326,6 +1331,14 @@ button.welcome-crystal {
 }
 .insp-area:disabled {
   color: var(--muted);
+}
+/* A value the panel will not take typing for is still a value: shown in the
+   text colour and selectable, on the flat panel ground rather than in a hole.
+   Disabled is kept for the box with nothing in it yet. */
+.insp-field[readonly],
+.insp-area[readonly] {
+  background: var(--panel);
+  color: var(--fg);
 }
 .insp-area.invalid {
   border-color: var(--warn);
@@ -1427,11 +1440,14 @@ button.welcome-crystal {
   color: var(--muted);
   font-size: 11px;
 }
+/* The ellipsis lines up under the child names, so the button reads as the end
+   of the list rather than another row of it. Accent, because a row navigates
+   and this one loads. */
 .insp-kid-more {
   border: 0;
   background: none;
   color: var(--accent);
-  font: inherit;
+  font-family: var(--mono);
   font-size: 12px;
   padding: 2px 3px;
   min-height: 0;

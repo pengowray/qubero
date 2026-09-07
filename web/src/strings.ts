@@ -225,12 +225,17 @@ export function childrenHead(n: { readonly unit?: string; readonly type: string 
 /** The panel at the cursor, where a structure now shows what is in it rather
  *  than only how much. */
 export const INSIDE = {
-  /** The rest of a structure too long to list at once. The listing's own
-   *  wording without its "above"/"below": this list only runs downward, so
-   *  what is left is left. */
-  more: (rest: string): string => `Show more · ${rest} left`,
-  /** The whole of a short one, since a click that ends the paging can say so. */
-  all: (whole: string): string => `Show all ${whole}`,
+  /** The rest of a structure too long to list at once. The ellipsis is the
+   *  mark this app already uses for content elided rather than absent, on the
+   *  chips and on the trail's `… 4 internal levels`. Not a twisty: a twisty
+   *  promises the click folds something shut again, and this one only reads
+   *  more rows. The count stays, since three rows left and three thousand are
+   *  not the same button. */
+  more: (rest: number): string => `… ${rest.toLocaleString()} more`,
+  /** What the glyph does not say, for a screen reader and for hovering. */
+  moreTitle: (page: number, rest: number, noun: string): string => `Show ${page} more ${plural(noun)} (${rest.toLocaleString()} not shown)`,
+  /** The last page, where the click finishes the list rather than paging it. */
+  moreRest: (rest: number, noun: string): string => `Show the remaining ${countText(rest, noun)}`,
 } as const;
 
 /** The row width that is one record of what is on screen, which reads a
