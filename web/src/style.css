@@ -102,6 +102,9 @@ input.invalid {
 }
 button.welcome-crystal {
   display: block;
+  /* A drag across the mark turns it; without this a touch would scroll the
+     page out from under the finger instead. */
+  touch-action: none;
   flex: 0 0 auto;
   width: clamp(5rem, 14vw, 7.5rem);
   padding: 0;
