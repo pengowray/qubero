@@ -389,10 +389,17 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     // A wide run has to say why it is one, and is asked before the readings
     // compete for the bytes, so a run that cannot answer does not take a
     // stretch away from an eight-bit reading that could.
+    let vouch: Vec<bool> = runs
+        .iter()
+        .enumerate()
+        .map(|(i, r)| !r.enc.wide() || vouched(buf, *r, &counted[i], table[i]))
+        .collect();
+    let mut ok = vouch.clone();
+    shifted_readings(buf, base, &runs, &vouch, &mut ok);
     let mut ranked: Vec<(Run, bool)> = runs
         .into_iter()
         .enumerate()
-        .filter(|(i, r)| !r.enc.wide() || vouched(buf, *r, &counted[*i], table[*i]))
+        .filter(|(i, _)| ok[*i])
         .map(|(i, r)| (r, table[i]))
         .collect();
     // One stretch of bytes is one string, so where two readings of it overlap
@@ -504,6 +511,69 @@ fn in_a_table(runs: &[Run], counted: &[Vec<(PrefixKind, usize, u64)>]) -> Vec<bo
         .iter()
         .map(|row| row.iter().any(|&(kind, _, _)| told.get(&kind).copied().unwrap_or(false)))
         .collect()
+}
+
+/// Settles which way round a stretch of wide text was written.
+///
+/// UTF-16 whose characters sit in one page of 256 reads the same at the other
+/// endianness one byte over, less its first character: `70 00 72 00` is "pr"
+/// little-endian and "r" big-endian starting a byte later. Every ASCII string
+/// in a UTF-16 file is like that, so both readings are always found and one of
+/// them has to go. The shifted one is always the later of the two, since what
+/// it loses is the first character.
+///
+/// What tells them apart is the byte the later reading starts on, which is the
+/// second byte of the earlier reading's first character. Little-endian puts
+/// the character first and the zero second, so that byte is a zero and the
+/// byte in front of it is a letter: the later reading has started halfway
+/// through a character and is the shifted one. Big-endian puts the zero first,
+/// so the byte in front is a zero and nothing is settled, which is right,
+/// because for big-endian text the later reading is the shifted one for the
+/// same reason and there is nothing to choose it by. Then the reading the file
+/// vouched for wins, then the longer one, then the one on an even address.
+///
+/// Whichever survives is vouched for by anything either reading found, since a
+/// terminator or a length belongs to the text rather than to one way of
+/// reading it. A .NET `#US` string is a length, its characters, then a flag
+/// byte, and that flag byte with the next string's length reads as `00 00` to
+/// the shifted run and as nothing at all to the real one, so `System.dll`
+/// reported three and a half thousand strings missing their first letter.
+fn shifted_readings(buf: &[u8], base: u64, runs: &[Run], vouch: &[bool], ok: &mut [bool]) {
+    use std::collections::HashMap;
+    let mut at: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, r) in runs.iter().enumerate() {
+        if r.enc.wide() {
+            at.entry(r.start).or_default().push(i);
+        }
+    }
+    for i in 0..runs.len() {
+        if !runs[i].enc.wide() {
+            continue;
+        }
+        let Some(js) = at.get(&(runs[i].start + 1)) else { continue };
+        for &j in js {
+            if runs[j].enc == runs[i].enc {
+                continue;
+            }
+            let keep = if ascii_text(buf[runs[i].start]) {
+                i
+            } else if vouch[i] != vouch[j] {
+                if vouch[i] { i } else { j }
+            } else if runs[i].chars != runs[j].chars {
+                if runs[i].chars > runs[j].chars { i } else { j }
+            } else if (base + runs[i].start as u64) % 2 == 0 {
+                // UTF-16 in a file is nearly always laid on two-byte
+                // boundaries. The two starts are a byte apart, so exactly one
+                // of them is even.
+                i
+            } else {
+                j
+            };
+            let (keep, drop) = if keep == i { (i, j) } else { (j, i) };
+            ok[keep] = vouch[i] || vouch[j];
+            ok[drop] = false;
+        }
+    }
 }
 
 /// Whether anything around a wide run says it was written as a string.
@@ -977,22 +1047,32 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
             }
             if j > start {
                 let (a, b) = trim(buf, start, j, big);
-                let (chars, units, lone) = measure(buf, a, b, enc);
-                // A surrogate with no partner is WTF-16 and is worth keeping,
-                // but a run that is half of them is not a name with one bad
-                // character in it. It is compressed bytes: a Godot pack is
-                // full of runs that read as two unpaired halves and two Hangul
-                // syllables, and every other test here passes them.
-                if chars as usize >= min
-                    && lone * 3 < chars
-                    && wide_enough(buf, a, b, big)
-                    && one_page(buf, a, b, big)
-                    && varied(buf, a, b, big)
-                    && letters(buf, a, b, big)
-                {
-                    let latin = (a..b).step_by(2).all(|k| unit_at(buf, k, big).is_some_and(|u| u < 0x100 || u >= 0xd800));
-                    let quality = if latin { 3 } else { 2 };
-                    out.push(Run { start: a, end: b, enc, chars, units, lone: lone > 0, quality });
+                // The run, and then the run in pieces. Both, because a run is
+                // allowed a stray character and a string that ends in a
+                // separator with the next string behind it is a run with a
+                // stray in it: three hundred lines of a .NET user string heap
+                // read as one run of ten thousand characters. The whole
+                // outranks its pieces and takes the bytes wherever it stands;
+                // where it cannot say it is a string, the pieces are there to
+                // be taken instead. See `page_pieces`.
+                //
+                // If the run held together, its ends have been trimmed and the
+                // pieces come from what is left. If it did not, they come from
+                // the raw run: trimming assumes a run is a string with rubbish
+                // at its ends, and a run that failed may be rubbish with
+                // strings in it. One run of thirteen thousand bytes in
+                // `System.dll` was cut back to a point before the first of the
+                // strings inside it.
+                let (lo, hi) = match consider(buf, a, b, enc, min, out) {
+                    true => (a, b),
+                    false => (start, j),
+                };
+                let mut at = lo;
+                while let Some((p, q)) = page_pieces(buf, at, hi, big) {
+                    if (p, q) != (lo, hi) {
+                        consider(buf, p, q, enc, min, out);
+                    }
+                    at = q;
                 }
                 i = j;
             } else {
@@ -1000,6 +1080,76 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
             }
         }
     }
+}
+
+/// Reports `[start, end)` as a wide run if everything about it says string,
+/// and says whether it did.
+fn consider(buf: &[u8], start: usize, end: usize, enc: Enc, min: usize, out: &mut Vec<Run>) -> bool {
+    let big = enc.big();
+    if start + 2 > end {
+        return false;
+    }
+    // A piece can begin anywhere its page does, which is not always somewhere
+    // a string can begin.
+    if !unit_at(buf, start, big)
+        .and_then(|u| char::from_u32(u as u32))
+        .is_some_and(starter)
+        && !unit_at(buf, start, big).is_some_and(is_high_surrogate)
+    {
+        return false;
+    }
+    let (chars, units, lone) = measure(buf, start, end, enc);
+    // A surrogate with no partner is WTF-16 and is worth keeping, but a run
+    // that is half of them is not a name with one bad character in it. It is
+    // compressed bytes: a Godot pack is full of runs that read as two unpaired
+    // halves and two Hangul syllables, and every other test here passes them.
+    if chars as usize >= min
+        && lone * 3 < chars
+        && wide_enough(buf, start, end, big)
+        && one_page(buf, start, end, big)
+        && varied(buf, start, end, big)
+        && letters(buf, start, end, big)
+    {
+        let latin = (start..end)
+            .step_by(2)
+            .all(|k| unit_at(buf, k, big).is_some_and(|u| u < 0x100 || u >= 0xd800));
+        let quality = if latin { 3 } else { 2 };
+        out.push(Run { start, end, enc, chars, units, lone: lone > 0, quality });
+        return true;
+    }
+    false
+}
+
+/// The next stretch of `[at, end)` whose characters all come from one page.
+///
+/// A maximal run reaches over whatever the compiler left either side of the
+/// string, and one character of the string's own page in among that rubbish
+/// pins the trim in place: in a .NET `#US` heap the byte pairs before
+/// "providerOptions" read as three Han characters with a 'z' between each of
+/// them, so the cut stopped at the first 'z' and a run of four pages went to
+/// the page test and lost. Cutting instead at every change of page offers the
+/// string on its own, and offers the rubbish separately, where it fails on its
+/// own account.
+///
+/// This is only reached when the run as a whole has already failed, so the
+/// allowance for a stray character is untouched: a run that keeps its page is
+/// never cut up.
+fn page_pieces(buf: &[u8], at: usize, end: usize, big: bool) -> Option<(usize, usize)> {
+    if at + 2 > end {
+        return None;
+    }
+    // A surrogate has no page of its own worth the name, so it stays with
+    // whatever it was found next to.
+    let page_of = |i: usize| {
+        let u = unit_at(buf, i, big).unwrap_or(0);
+        (!(0xd800..0xe000).contains(&u)).then_some((u >> 8) as u8)
+    };
+    let page = (at..end).step_by(2).find_map(page_of);
+    let mut b = at + 2;
+    while b + 2 <= end && page_of(b).is_none_or(|p| Some(p) == page) {
+        b += 2;
+    }
+    Some((at, b))
 }
 
 /// Characters, code units and how many surrogates went unpaired, over a range
