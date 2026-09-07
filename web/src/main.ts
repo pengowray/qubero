@@ -1129,12 +1129,18 @@ function build(tab: Tab): Page {
     // Selected as well as pointed at, so the panel says what the bytes are
     // every way they can be read. That is the check on the reading this view
     // picked, in the place that already spells such things out.
+    //
+    // `selectRange` puts the cursor at the front of the run itself. Setting it
+    // again here dropped the selection on its way out, which is why the panel
+    // used to answer about whatever field the string sat inside.
     view.selectRange(at * 8, (at + len) * 8, at * 8);
-    view.setBitCursor(at * 8);
   };
-  strings.onPickPrefix = (at) => {
+  strings.onPickPrefix = (at, len) => {
     nav.recordJump(view.cursorState.bitOffset, at * 8);
-    view.setBitCursor(at * 8);
+    // The number's own bytes, for the same reason the string gets its own:
+    // the panel is where a reader checks a reading, and the reading here is
+    // that these bytes are a length.
+    view.selectRange(at * 8, (at + len) * 8, at * 8);
   };
   graphBtn.addEventListener("click", () => setView("graph"));
   // Picking a character in the text is the same as putting the cursor on its

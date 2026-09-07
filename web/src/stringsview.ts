@@ -113,8 +113,9 @@ export class StringsView {
    *  can be read, which is the check on the reading this view chose. */
   onPick: (at: number, len: number) => void = () => {};
   /** The number in front of a string was picked. It names an address, and an
-   *  address on screen is one a reader will want to look at. */
-  onPickPrefix: (at: number) => void = () => {};
+   *  address on screen is one a reader will want to look at. Its own bytes,
+   *  so the panel reads the number out the way it reads out the string. */
+  onPickPrefix: (at: number, len: number) => void = () => {};
 
   constructor(doc: Doc) {
     this.doc = doc;
@@ -393,6 +394,7 @@ export class StringsView {
         // quieter than the rest of the encoding column.
         if (p.weak) n.classList.add("is-weak");
         n.dataset["prefix"] = String(p.at);
+        n.dataset["prefixLen"] = String(p.bytes.length);
         return n;
       };
       notes.append(say(first, same.slice(1).map((p) => p.kind)));
@@ -507,9 +509,10 @@ export class StringsView {
     if (!(target instanceof Element)) return;
     // The number in front of a string names an address of its own, so
     // clicking it goes there rather than to the text it counts.
-    const prefix = target.closest<HTMLElement>(".sv-prefix")?.dataset["prefix"];
+    const button = target.closest<HTMLElement>(".sv-prefix");
+    const prefix = button?.dataset["prefix"];
     if (prefix !== undefined) {
-      this.onPickPrefix(Number(prefix));
+      this.onPickPrefix(Number(prefix), Number(button?.dataset["prefixLen"] ?? 0));
       return;
     }
     const row = target.closest<HTMLElement>(".sv-row")?.dataset["row"];
