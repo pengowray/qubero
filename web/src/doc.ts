@@ -3,7 +3,7 @@
 
 import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
 import { formatBytes, formatOffset } from "./format.js";
-export { formatBytes, formatOffset } from "./format.js";
+export { byteText, formatBytes, formatOffset, percentText } from "./format.js";
 import { UNPACKED } from "./strings.js";
 
 const CHUNK_SIZE = 64 * 1024;

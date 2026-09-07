@@ -196,6 +196,89 @@ export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu
  *  selected" there would suggest an answer exists and the user missed it. */
 export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";
 
+/**
+ * The treemap: what a rectangle stands for, and what the four ways of
+ * dividing the file are called.
+ *
+ * The dropdown reads as one question with four answers, which is why the
+ * options are singular keys rather than plurals: "group by structure", "group
+ * by byte value". The label is the question and the option finishes it.
+ */
+export const TREEMAP = {
+  /** The toolbar button and the rail's heading. The searchable word, and the
+   *  one anybody who has used WizTree or SpaceSniffer already has. "Map" was
+   *  taken by the byte-class map above it and "Layout" by the strip under it. */
+  title: "Treemap",
+  groupBy: "Group by",
+  modes: { structure: "Structure", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
+  /** Rectangles too small to point at, drawn as one. The leading ellipsis is
+   *  the mark this app uses for content cut short rather than absent. */
+  pooled: (n: number): string => `… ${n.toLocaleString()} more`,
+  pooledTitle: (n: number, noun: string, size: string, share: string): string =>
+    `${countText(n, noun)}, too small to draw · ${size} (${share})`,
+  /** Three things a reader could confuse, told apart by what is known about
+   *  the bytes: these are claimed by nothing, and that is final. */
+  unmappedTitle: (size: string, share: string): string => `${GAP_LABEL} · ${size} (${share}) · no field covers these bytes`,
+  /** And these are not claimed by anything *yet*. Drawn as an empty box, so
+   *  the map's total area stays the whole file: leave them out and every
+   *  share on a half-walked map is quietly inflated. */
+  unwalked: "not read yet",
+  unwalkedTitle: (size: string, share: string): string => `not read yet · ${size} (${share})`,
+  /** The walk behind the field-type map, in the same shape as the byte scan's
+   *  line, which is the line directly above it. */
+  reading: (percent: number): string => `Reading the fields… ${percent}%`,
+  failed: (message: string): string => `Couldn't read the fields: ${message}`,
+  /** The root of the trail, where the root is not a template node with a name
+   *  of its own. */
+  root: "File",
+  /** Both mouse verbs and the way back, in the order a reader meets them. */
+  hint: "Click a rectangle to go to its bytes. Double-click to open it. Backspace goes back up.",
+  /** Byte values, in four contiguous groups. Zero is on its own because it is
+   *  the one value every reader wants isolated, which the plain 00-7F split
+   *  would have buried in among the text. */
+  byteGroups: [
+    { from: 0x00, to: 0x00, label: "00", title: "0x00 · zeros" },
+    { from: 0x01, to: 0x1f, label: "01-1F", title: "0x01 to 0x1F · control characters" },
+    { from: 0x20, to: 0x7f, label: "20-7F", title: "0x20 to 0x7F · printable ASCII" },
+    { from: 0x80, to: 0xff, label: "80-FF", title: "0x80 to 0xFF · high bit set" },
+  ],
+  byteNoun: "byte value",
+  /** Two rectangles are one number, so the number is written out under them.
+   *  What it means is in the title, since a bare 41% says nothing on its own. */
+  bits: { set: "1", clear: "0" },
+  bitsLine: (setShare: string, clearShare: string): string => `1 bits ${setShare} · 0 bits ${clearShare}`,
+  bitsTitle: (which: "1" | "0", count: string, share: string): string =>
+    `${which} bits · ${count} · ${share} (random or compressed data is near 50%; zeros pull it down)`,
+  /** How much of the file, and while a scan or a walk is part way through, how
+   *  much of what has been read. Saying "of file" from half a walk would be
+   *  a share of a number nobody has. */
+  ofFile: (share: string): string => `${share} of file`,
+  ofRead: (share: string, read: string, walking: boolean): string => `${share} of the ${read} ${walking ? "read" : "scanned"}`,
+} as const;
+
+/**
+ * What the treemap calls one field kind. `TemplateNode.kind` is the
+ * evaluator's vocabulary and half of it is not self-explaining: `unread`,
+ * `unset` and `magic` say nothing to someone reading a picture.
+ *
+ * `bytes` and `unread` share one entry because `fieldClass` already treats
+ * them as one colour, and "unread bytes" beside the treemap's own "not read
+ * yet" box would be two different meanings of the same word touching.
+ */
+export const KIND_LABEL: Readonly<Record<string, string>> = {
+  uint: "unsigned ints",
+  int: "signed ints",
+  float: "floats",
+  str: "strings",
+  bytes: "raw bytes",
+  unread: "raw bytes",
+  magic: "magic numbers",
+  enum: "enums",
+  flags: "flags",
+  unset: "unset values",
+  scale: "scale factors",
+};
+
 /** How many children a row stands for, named by what they are: `97,280 blocks`
  *  for a run of quantised weights, `2,560 values` for a run of numbers, and
  *  `items` for a list whose format has no word of its own for them. */

@@ -17,7 +17,7 @@
 // a bucket is judged as a whole, so picking a cell scans that block on its own
 // and reports what the block's bytes turned out to be.
 
-import { formatBytes, formatOffset } from "./doc.js";
+import { byteText, formatBytes, formatOffset, percentText } from "./doc.js";
 import { NO_TEMPLATE, REPORT } from "./strings.js";
 import type { Doc, FocusState, OverviewState, Span } from "./doc.js";
 import type { FieldPick } from "./doc.js";
@@ -179,16 +179,6 @@ function cellText(bytes: number): string {
   return `${bytes / (1024 * 1024 * 1024)} GiB`;
 }
 
-/** A share of the whole: `48%`, or `<1%` rather than a zero that reads as
- *  nothing at all. */
-function percentText(part: number, whole: number): string {
-  if (whole === 0) return "0%";
-  const p = (part / whole) * 100;
-  if (p > 0 && p < 1) return "<1%";
-  if (p < 100 && p > 99) return ">99%";
-  return `${Math.round(p)}%`;
-}
-
 /** The sentence one notable run earns. Position carries most of it: a run at
  *  the very end reads differently from one in the middle. */
 function noteText(run: Run, buckets: number, bucketBytes: number, fileBytes: number): string {
@@ -202,12 +192,6 @@ function noteText(run: Run, buckets: number, bucketBytes: number, fileBytes: num
   if (run.start === 0) return `The first ${size} is ${what}.`;
   if (run.start + run.len === buckets) return `The last ${size} is ${what}.`;
   return `${size} at ${formatOffset(run.start * bucketBytes * 8)} is ${what}.`;
-}
-
-/** A byte as the hex gutter writes it, with its character where it has one. */
-function byteText(v: number): string {
-  const hex = `0x${v.toString(16).padStart(2, "0")}`;
-  return v >= 0x20 && v < 0x7f ? `${hex} ${String.fromCharCode(v)}` : hex;
 }
 
 function pathKey(path: readonly number[]): string {
