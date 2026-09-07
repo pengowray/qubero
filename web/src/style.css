@@ -4133,3 +4133,46 @@ table.rec tr.is-on td {
   stroke: var(--accent);
   stroke-width: 1;
 }
+
+/* ---- treemap ---- */
+/* Boxes are placed absolutely by the layout, so the container owns the size
+   and nothing here reflows when one of them changes. */
+.tm {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--panel);
+}
+.tm-box {
+  position: absolute;
+  overflow: hidden;
+  cursor: pointer;
+  /* The edge is what separates two boxes of the same colour lying side by
+     side, which the padding alone cannot do once the padding is one pixel. */
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.25);
+}
+/* A box with boxes inside it is a frame: its own colour shows only in the
+   strip along the top and the hairline around the children. */
+.tm-frame {
+  cursor: default;
+}
+.tm-name {
+  display: block;
+  padding: 0 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  color: #fff;
+  /* One shadow for every ground: the boxes are whatever colour the caller
+     chose, and white text on a pale one needs the dark behind it. */
+  text-shadow: 0 0 2px rgb(0 0 0 / 0.8), 0 0 4px rgb(0 0 0 / 0.55);
+  pointer-events: none;
+}
+.tm-box.is-on {
+  box-shadow: inset 0 0 0 2px var(--fg);
+}
+.tm-box.is-hover {
+  box-shadow: inset 0 0 0 2px #fff;
+}
