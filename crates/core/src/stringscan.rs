@@ -120,6 +120,8 @@ pub enum PrefixKind {
     U16Be,
     U32Le,
     U32Be,
+    U64Le,
+    U64Be,
     /// Seven bits a byte, low group first, high bit set on every byte but the
     /// last. What .NET's `BinaryWriter` writes, and what a protobuf or a DEX
     /// string is counted by.
@@ -134,6 +136,8 @@ impl PrefixKind {
             PrefixKind::U16Be => "u16 BE",
             PrefixKind::U32Le => "u32 LE",
             PrefixKind::U32Be => "u32 BE",
+            PrefixKind::U64Le => "u64 LE",
+            PrefixKind::U64Be => "u64 BE",
             PrefixKind::Leb128 => "LEB128",
         }
     }
@@ -144,6 +148,7 @@ impl PrefixKind {
             PrefixKind::U8 => Some(1),
             PrefixKind::U16Le | PrefixKind::U16Be => Some(2),
             PrefixKind::U32Le | PrefixKind::U32Be => Some(4),
+            PrefixKind::U64Le | PrefixKind::U64Be => Some(8),
             PrefixKind::Leb128 => None,
         }
     }
@@ -153,7 +158,9 @@ impl PrefixKind {
 /// 32-bit five and nothing else, while `00 00 00 05` reads as a 32-bit five, a
 /// 16-bit five and an 8-bit five at once. Reporting the widest first puts the
 /// whole number in front of the parts of it.
-const PREFIX_ORDER: [PrefixKind; 6] = [
+const PREFIX_ORDER: [PrefixKind; 8] = [
+    PrefixKind::U64Le,
+    PrefixKind::U64Be,
     PrefixKind::U32Le,
     PrefixKind::U32Be,
     PrefixKind::U16Le,
@@ -761,6 +768,15 @@ fn one_page(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
     while i + 2 <= end {
         let u = unit_at(buf, i, big).unwrap_or(0);
         if (u >> 8) as u8 != page && !(0xd800..0xe000).contains(&u) {
+            // A character from somewhere else, with a control byte for its
+            // low half, is not a character at all: it is the end of one
+            // string and the start of the number counting the next, read as
+            // one unit. A .NET user string heap joins its lines that way,
+            // three hundred of them, and the allowance below would let the
+            // whole heap pass as one string of ten thousand characters.
+            if u & 0xff < 0x20 {
+                return false;
+            }
             stray += 1;
         }
         units += 1;
@@ -1243,6 +1259,8 @@ fn prefix_candidates(buf: &[u8], at: usize, kind: PrefixKind) -> Vec<(usize, u64
             PrefixKind::U16Be => u16::from_be_bytes([b[0], b[1]]) as u64,
             PrefixKind::U32Le => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64,
             PrefixKind::U32Be => u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64,
+            PrefixKind::U64Le => u64::from_le_bytes(b[..8].try_into().unwrap()),
+            PrefixKind::U64Be => u64::from_be_bytes(b[..8].try_into().unwrap()),
             PrefixKind::Leb128 => unreachable!(),
         };
         return vec![(start, v)];
@@ -1505,6 +1523,93 @@ mod tests {
     fn a_newline_ends_a_string() {
         let hits = all(b"\x00first line\nsecond line\x00".to_vec());
         assert_eq!(hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(), ["first line", "second line"]);
+    }
+
+    /// A .NET user string heap: a length in bytes, the characters, then a flag
+    /// byte. Nothing terminates a string, so the flag byte and the next
+    /// string's length are what the shifted big-endian reading takes for a
+    /// terminator, and it is the reading with all the evidence.
+    fn us_heap(words: &[&str]) -> Vec<u8> {
+        let mut b = vec![0x00, 0x00];
+        for w in words {
+            let chars = utf16le(w);
+            b.push(chars.len() as u8 + 1);
+            b.extend(chars);
+            b.push(0x00);
+        }
+        b.extend([0x00, 0x00]);
+        b
+    }
+
+    #[test]
+    fn packed_utf16_is_read_the_way_round_it_was_written() {
+        let hits = all(us_heap(&["providerOptions", "Module", "Nothing", "vbc.exe"]));
+        assert_eq!(hits.iter().map(|h| h.enc).collect::<Vec<_>>(), [Enc::Utf16Le; 4]);
+        assert_eq!(
+            hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(),
+            ["providerOptions", "Module", "Nothing", "vbc.exe"]
+        );
+    }
+
+    #[test]
+    fn the_shifted_reading_of_big_endian_text_does_not_take_its_place() {
+        // The same heap the other way round, where the shifted reading is the
+        // little-endian one. Nothing about the bytes says which way round they
+        // were meant except the terminators, so this is what asks whether the
+        // rule that settles it has a side.
+        let mut b = vec![0x00, 0x00];
+        for w in ["providerOptions", "Module", "Nothing"] {
+            b.extend(utf16be(w));
+            b.extend([0x00, 0x00]);
+        }
+        let hits = all(b);
+        assert_eq!(hits.iter().map(|h| h.enc).collect::<Vec<_>>(), [Enc::Utf16Be; 3]);
+        assert_eq!(hits[0].text, "providerOptions");
+    }
+
+    #[test]
+    fn strings_run_together_by_a_separator_are_still_strings() {
+        // A run is allowed a stray character, and the byte ending one line
+        // read together with the byte counting the next is a stray character.
+        // A heap of them is one run of every line at once, and the last line's
+        // terminator speaks for the whole of it.
+        let hits = all(us_heap(&["Do While ", "NotInheritable ", "Protected Friend ", "Structure "]));
+        assert_eq!(
+            hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(),
+            ["Do While ", "NotInheritable ", "Protected Friend ", "Structure "]
+        );
+    }
+
+    #[test]
+    fn a_string_between_two_stretches_of_rubbish_is_found() {
+        // Read two bytes at a time, eight-bit text either side of a wide
+        // string is a run of characters from all over Unicode, and it reaches
+        // over the string. Trimming the ends of that run cannot reach the
+        // string, since the run's own page sits in the rubbish as well.
+        let mut b = vec![0x00, 0x00];
+        b.extend(b"cmdidTileHorz csz psz ");
+        b.push(0x1f);
+        b.extend(utf16le("providerOptions"));
+        b.extend([0x00, 0x05, 0x76, 0x00, 0x62, 0x00, 0x00, 0x00]);
+        let hits = all(b);
+        assert!(
+            hits.iter().any(|h| h.enc == Enc::Utf16Le && h.text == "providerOptions"),
+            "{:?}",
+            hits.iter().map(|h| (h.enc, h.text.as_str())).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_length_eight_bytes_wide_says_so() {
+        // What GGUF counts every key and every string value by.
+        let mut b = vec![0x00, 0x00];
+        b.extend(20u64.to_le_bytes());
+        b.extend(b"general.architecture");
+        b.extend([0x00, 0x00]);
+        let readings = &all(b)[0].prefix;
+        assert_eq!(readings[0].kind, PrefixKind::U64Le);
+        assert_eq!(readings[0].value, 20);
+        assert_eq!(readings[0].counts, Counts::Bytes);
     }
 
     #[test]
