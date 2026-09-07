@@ -122,7 +122,6 @@ pub(super) fn counted_by(buf: &[u8], base: u64, runs: &[Run]) -> Vec<Vec<(Prefix
         })
         .collect()
 }
-// --- the number in front ---------------------------------------------------
 
 /// Every reading of a prefix of a given kind ending just before `at`: where it
 /// starts and what it says.

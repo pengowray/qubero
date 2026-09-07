@@ -7,8 +7,6 @@
 use super::*;
 use super::tables::*;
 
-// --- what counts as text ---------------------------------------------------
-
 /// Whether a character is one a string would hold. Tab is text; the other
 /// controls are not, and a newline ends a run rather than joining two lines
 /// into one string, which is what `strings(1)` does and what makes a list of
