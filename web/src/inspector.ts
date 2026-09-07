@@ -1607,13 +1607,17 @@ export class Inspector {
       note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${n.value_bytes.toLocaleString()}. Too long to edit here; use the hex view.`;
     }
     const editable = n.editable && !shown.truncated && !borrowed;
-    if (borrowed && note === "") note = INSIDE.borrowed(n.name);
     this.area.value = shown.text;
     this.area.disabled = !editable;
     this.area.rows = Math.max(2, Math.min(12, Math.ceil(shown.text.length / 30)));
     // Enter puts a newline into the value, so the way to apply has to be said.
     // A note only appears when editing is off, so the two never collide.
     if (editable && note === "") note = "Ctrl+Enter to apply";
+    if (borrowed && note === "") {
+      this.note.replaceChildren(INSIDE.borrowed.before, el("span", "insp-note-name", n.name), INSIDE.borrowed.after);
+      this.note.hidden = false;
+      return;
+    }
     this.note.textContent = note;
     this.note.hidden = note === "";
   }

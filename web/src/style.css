@@ -1335,6 +1335,11 @@ button.welcome-crystal {
   color: var(--muted);
   margin-top: 4px;
 }
+/* A field named in a sentence, so `text` reads as the field and not the word. */
+.insp-note-name {
+  font-family: var(--mono);
+  color: var(--fg);
+}
 .insp-semantics {
   margin-top: 3px;
 }

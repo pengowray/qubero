@@ -45,7 +45,7 @@ export function insideValue(node: TemplateNode, kids: readonly TemplateNode[]): 
   if (!node.composite || kids.length === 0 || kids.length !== node.child_count) return null;
   const payload = onePayload(kids);
   if (payload !== null && (payload.kind === "str" || payload.kind === "bytes")) return { kind: "payload", node: payload };
-  const row = scalarRow(kids);
+  const row = scalarRow(node, kids);
   return row === null ? null : { kind: "row", text: row };
 }
 
@@ -66,12 +66,18 @@ function onePayload(kids: readonly TemplateNode[]): TemplateNode | null {
   return kids[at] ?? null;
 }
 
-/** A handful of scalars of one kind, as the reader would write them: the four
- *  bytes of a version, the three counts of a header. Kept to one line. */
-function scalarRow(kids: readonly TemplateNode[]): string | null {
+/** A handful of scalars of one kind, as the reader would write them: a
+ *  tensor's two dimensions, the four numbers of a version. A list only, and
+ *  written with the brackets its type already carries: `{count, offset}` is
+ *  two fields with a job each, and `[2, 64]` would call them an array. */
+function scalarRow(node: TemplateNode, kids: readonly TemplateNode[]): string | null {
+  if (!node.type.endsWith("[]")) return null;
   if (kids.length < 2 || kids.length > PREVIEW_ITEMS) return null;
   const first = kids[0];
   if (first === undefined) return null;
+  // Nothing in a row places anything else in it. A list of elements is peers;
+  // a structure that only looks like one is not.
+  if (kids.some((k) => k.consumed_by !== null)) return null;
   if (kids.some((k) => k.composite || k.kind !== first.kind || k.value === "")) return null;
   if (first.kind !== "uint" && first.kind !== "int" && first.kind !== "float" && first.kind !== "enum") return null;
   const text = kids.map((k) => k.value).join(", ");

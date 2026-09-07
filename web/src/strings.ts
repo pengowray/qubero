@@ -232,8 +232,10 @@ export const INSIDE = {
   /** The whole of a short one, since a click that ends the paging can say so. */
   all: (whole: string): string => `Show all ${whole}`,
   /** Why the box cannot be typed in: it is showing a child's value, and that
-   *  child is a row below with an editor of its own. */
-  borrowed: (name: string): string => `Read-only preview. Select ${name} below to edit it.`,
+   *  child is a row below with an editor of its own. One sentence with the
+   *  child's name in the middle, drawn as the identifier it is so that a field
+   *  called `text` is not read as the English word. */
+  borrowed: { before: "Read-only preview. Select ", after: " below to edit it." },
   /** The same for a row of scalars, where no one child is the value. */
   borrowedRow: "Read-only preview. Select a row below to edit it.",
 } as const;
