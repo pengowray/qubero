@@ -1571,8 +1571,8 @@ export class Inspector {
 
   private fillField(n: TemplateNode, inside: Inside | null): void {
     const row = inside?.kind === "row" ? inside.text : null;
-    this.note.textContent = row === null ? "" : INSIDE.borrowedRow;
-    this.note.hidden = row === null;
+    this.note.textContent = "";
+    this.note.hidden = true;
     if (this.field.dataset["dirty"] === "1" && document.activeElement === this.field) return;
     this.field.disabled = !n.editable || row !== null;
     this.field.classList.remove("invalid");
@@ -1613,11 +1613,6 @@ export class Inspector {
     // Enter puts a newline into the value, so the way to apply has to be said.
     // A note only appears when editing is off, so the two never collide.
     if (editable && note === "") note = "Ctrl+Enter to apply";
-    if (borrowed && note === "") {
-      this.note.replaceChildren(INSIDE.borrowed.before, el("span", "insp-note-name", n.name), INSIDE.borrowed.after);
-      this.note.hidden = false;
-      return;
-    }
     this.note.textContent = note;
     this.note.hidden = note === "";
   }
