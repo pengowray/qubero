@@ -22,6 +22,7 @@ mod explain;
 mod go;
 mod graph;
 mod jsontree;
+mod kinds;
 mod listing;
 mod memo;
 mod origin;
@@ -37,9 +38,10 @@ mod walk;
 mod tests;
 
 pub use explain::{Explain, FlagBit};
-pub use graph::{kind_of, Graph, GraphEdge, GraphNode, NO_PARENT};
+pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
 pub use cells::Cell;
+pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
 
@@ -1817,6 +1819,10 @@ impl Evaluator {
     /// The value of a named field directly inside the struct at `path`, as a
     /// number, or nothing when it has no numeric reading.
     fn child_int<S: Source>(&mut self, doc: &Document<S>, path: &[usize], field: &str) -> R<Option<i128>> {
+        // Asked rather than assumed. The memo is a cache and a walk that has
+        // moved past this node may have given it back, so a reading that finds
+        // it gone opens it again instead of indexing into nothing.
+        self.resolve(doc, path)?;
         let idx = match &self.memo[path].ty {
             Ty::Struct(s) => s.fields.iter().position(|f| *f.name == *field),
             _ => None,
@@ -1829,6 +1835,8 @@ impl Evaluator {
 
     /// Raw bytes of a named field directly inside the struct at `path`.
     fn child_raw_bytes<S: Source>(&mut self, doc: &Document<S>, path: &[usize], field: &str) -> R<Vec<u8>> {
+        // The same: opened again if a walk has given it back. See `child_int`.
+        self.resolve(doc, path)?;
         let idx = match &self.memo[path].ty {
             Ty::Struct(s) => s.fields.iter().position(|f| *f.name == *field),
             _ => None,
