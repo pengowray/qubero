@@ -16,9 +16,8 @@
  * shrinks as the reading gets on.
  */
 
-import { byteText, formatBytes, percentText, type Doc, type KindTotal, type KindTotals, type TemplateNode } from "./doc.js";
+import { byteText, formatBytes, formatOffset, percentText, type Doc, type KindTotal, type KindTotals, type TemplateNode } from "./doc.js";
 import { fieldClass, sectionColor, UNMAPPED_COLOR } from "./fieldstyle.js";
-import type { OutlineHeading } from "./outline.js";
 import { childWord, countText, GAP_LABEL, KIND_LABEL, NO_TEMPLATE_HINT, REPORT, TREEMAP } from "./strings.js";
 import type { TreeNode } from "./treemap.js";
 
@@ -54,89 +53,73 @@ export const POOL_UNDER = 20;
 /**
  * The template's parts and what is inside them.
  *
- * The rail is already handed the top two levels as `OutlineHeading`s, with
- * exact sizes, before anything below them has been walked. Deeper levels are
- * asked for a level at a time as the reader drills, which is what keeps a list
- * of a quarter of a million elements out of a picture that has room for forty
- * boxes.
+ * Built from the template rather than from the outline the rail already
+ * holds, which was the first thing tried and was wrong: the outline lists
+ * *some* of a part's sub-parts, so a frame's children summed to a fraction of
+ * the frame. A treemap lays children out to fill their parent whatever they
+ * add up to, so the boxes came out several times too big and nothing said so.
+ * Every set of boxes here tiles its parent, and where the children are more
+ * than are worth reading, the rest is a box of its own.
  */
-export function structureTree(doc: Doc, headings: readonly OutlineHeading[], at: readonly number[] | null): TreemapTree {
+export function structureTree(doc: Doc, at: readonly number[] | null): TreemapTree {
   if (doc.template === null) return nothing(NO_TEMPLATE_HINT);
-  if (at !== null) return { root: nodeTree(doc, at), unit: "bits", progress: null, none: null };
-  const tops = headings.filter((h) => h.level === 0);
-  // No parts yet is not no parts: the listing walks the template as the
-  // bytes arrive, and the picture fills in behind it.
-  if (tops.length === 0) return nothing(REPORT.reading);
-  const kids = tops.map((top) => {
-    const inside = headings.filter((h) => h.level === 1 && h.section === top.section && h.key !== top.key);
-    return heading(top, inside);
-  });
-  return {
-    root: { key: "file", name: TREEMAP.root, value: doc.lengthBits, color: UNMAPPED_COLOR, children: kids },
-    unit: "bits",
-    progress: null,
-    none: null,
-  };
-}
-
-function heading(h: OutlineHeading, inside: readonly OutlineHeading[]): TreeNode {
-  const kids = inside.map((k) => heading(k, []));
-  const base = {
-    key: h.key,
-    name: h.name,
-    value: h.sizeBits,
-    color: sectionColor(h.section),
-    range: { offsetBits: h.offsetBits, sizeBits: h.sizeBits },
-    path: h.path,
-  };
-  return kids.length === 0 ? base : { ...base, children: kids };
+  const root = doc.templateNode(at ?? []);
+  if (root.status === "error") return nothing(root.message);
+  // No parts yet is not no parts: the listing walks the template as the bytes
+  // arrive, and the picture fills in behind it.
+  if (root.status !== "ok") return nothing(REPORT.reading);
+  return { root: nodeTree(doc, root.node, at ?? [], 0), unit: "bits", progress: null, none: null };
 }
 
 /**
- * One node of the template and its children, for a reader who has drilled in.
+ * One node and the levels under it, as deep as is worth reading.
  *
- * Only one level is read: the widget prunes by area anyway, and a level costs
- * one call whether or not it is drawn. Children that have not arrived leave
- * the node a solid box, which is the truth about it.
+ * The widget prunes by area, so reading past the point where a box would be a
+ * sliver is work nobody sees. Three levels covers what fits in the rail and
+ * most of what fits in the view; past that a reader opens a box and gets three
+ * more.
  */
-function nodeTree(doc: Doc, path: readonly number[]): TreeNode {
-  const node = doc.templateNode(path);
-  if (node.status !== "ok") {
-    return { key: "at", name: TREEMAP.root, value: doc.lengthBits, color: UNMAPPED_COLOR };
-  }
-  const n = node.node;
+function nodeTree(doc: Doc, n: TemplateNode, path: readonly number[], depth: number): TreeNode {
+  const section = path[0] ?? 0;
   const self: TreeNode = {
-    key: path.join("/"),
-    name: n.name,
+    key: path.length === 0 ? "file" : String(path[path.length - 1]),
+    name: path.length === 0 ? TREEMAP.root : n.name,
     value: n.size_bits,
-    color: sectionColor(path[0] ?? 0),
+    color: sectionColor(section),
     detail: n.type,
     range: { offsetBits: n.offset_bits, sizeBits: n.size_bits },
     path,
   };
-  if (!n.composite || n.child_count === 0) return self;
-  const kids = doc.templateChildren(path, 0, Math.min(n.child_count, CHILDREN_MAX));
+  if (!n.composite || n.child_count === 0 || depth >= READ_DEPTH) return self;
+  const want = Math.min(n.child_count, CHILDREN_MAX);
+  const kids = doc.templateChildren(path, 0, want);
   if (kids.status !== "ok") return self;
-  return { ...self, children: kids.node.map((k) => childBox(k, path[0] ?? 0)) };
+  const drawn = kids.node.map((k) => nodeTree(doc, k, k.path, depth + 1));
+  // What the children do not account for, so that the boxes inside a frame add
+  // up to the frame: the elements past the cap, and the slack a structure
+  // leaves between or after its fields.
+  const rest = n.size_bits - drawn.reduce((sum, k) => sum + k.value, 0);
+  if (rest > 0) {
+    const over = n.child_count - kids.node.length;
+    // Two different leftovers: elements there was no room to draw, which are
+    // the part's own children faded, and bytes no field covers, which are
+    // hatched because they are not a kind of anything.
+    drawn.push(
+      over > 0
+        ? { key: "rest", name: TREEMAP.pooled(over), value: rest, color: sectionColor(section), colorClass: "tm-pooled", detail: TREEMAP.pooledTitle(over, childWord(n), "", "") }
+        : { key: "rest", name: GAP_LABEL, value: rest, color: UNMAPPED_COLOR, colorClass: "tm-unmapped", detail: UNMAPPED_DETAIL },
+    );
+  }
+  return { ...self, children: drawn };
 }
+
+/** How many levels are read before a reader has to open a box. */
+const READ_DEPTH = 3;
 
 /** How many children of one node are read for a picture of it. Past this the
- *  boxes are under a pixel anyway, and the pooling the widget does needs the
- *  values to pool, so the cap is where reading them stops paying. */
+ *  boxes are under a pixel anyway, and what is left over is one box saying how
+ *  many were not drawn. */
 const CHILDREN_MAX = 400;
-
-function childBox(k: TemplateNode, section: number): TreeNode {
-  const base: TreeNode = {
-    key: String(k.path[k.path.length - 1] ?? 0),
-    name: k.name,
-    value: k.size_bits,
-    color: sectionColor(section),
-    detail: k.type,
-    range: { offsetBits: k.offset_bits, sizeBits: k.size_bits },
-    path: k.path,
-  };
-  return k.composite && k.child_count > 0 ? { ...base, children: [] } : base;
-}
 
 // ---- field kinds ----
 
@@ -324,11 +307,24 @@ export function bitsLine(histogram: readonly number[]): string {
 
 // ---- shared ----
 
-/** The title on a box: what it is, how big, and how much of the file. */
-export function boxTitle(node: TreeNode, whole: number, unit: Unit, partial: { readonly read: number } | null): string {
+/**
+ * The title on a box: what it is, how big, how much of the picture, and where.
+ *
+ * The share is of the whole box rather than of the file, which is the same
+ * number until a reader opens a box and a different one after. What the eye
+ * reads off the picture is the share of what is drawn; the address beside it
+ * is what says which bytes those are.
+ *
+ * While a scan or a walk is part way through, the whole is what has been read
+ * rather than the file, and the wording says so. A share of a number nobody
+ * has yet is not a share.
+ */
+export function boxTitle(node: TreeNode, share: number, unit: Unit, read: number | null): string {
   const size = unit === "bits" ? formatBytes(Math.ceil(node.value / 8)) : `${node.value.toLocaleString()} bytes`;
-  const of = partial === null ? TREEMAP.ofFile(percentText(node.value, whole)) : TREEMAP.ofRead(percentText(node.value, whole), formatBytes(partial.read), unit === "bits");
+  const pct = percentText(share, 1);
+  const of = read === null ? TREEMAP.ofFile(pct) : TREEMAP.ofRead(pct, formatBytes(read), unit === "bits");
   const parts = [node.name, size, of];
+  if (node.range !== undefined) parts.push(formatOffset(node.range.offsetBits));
   return node.detail === undefined ? parts.join(" · ") : `${parts.join(" · ")}\n${node.detail}`;
 }
 

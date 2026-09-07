@@ -14,7 +14,7 @@ import type { Doc, FieldPick } from "./doc.js";
 import type { OutlineHeading } from "./outline.js";
 import { TREEMAP } from "./strings.js";
 import { boxAt, drawTreemap, nodeAt } from "./treemap.js";
-import { bitsLine, bitsTree, bytesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type TreemapMode, type TreemapTree } from "./treemapdata.js";
+import { bitsLine, bitsTree, boxTitle, bytesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type TreemapMode, type TreemapTree } from "./treemapdata.js";
 
 /** The whole-file scan's resolution. The same number the rail's byte-class map
  *  asks for, so both are answered by one scan: the core keeps one per sheet
@@ -36,7 +36,6 @@ export class TreemapPanel {
   private readonly line: HTMLElement;
   private readonly note: HTMLElement;
   private mode: TreemapMode = "structure";
-  private headings: readonly OutlineHeading[] = [];
   /** Which node the map is rooted at, in structure mode. Null is the file. */
   private root: readonly number[] | null = null;
   /** The trail back out, kept as the nodes themselves so a crumb can name what
@@ -136,8 +135,10 @@ export class TreemapPanel {
     doc.onChange(() => this.draw());
   }
 
-  setOutline(headings: readonly OutlineHeading[]): void {
-    this.headings = headings;
+  /** The listing has walked more of the template. Nothing here is built from
+   *  the outline any more, but a new one means there is more of the file to
+   *  draw than there was. */
+  setOutline(_headings: readonly OutlineHeading[]): void {
     this.draw();
   }
 
@@ -205,7 +206,18 @@ export class TreemapPanel {
       return;
     }
     const parent = this.root === null ? null : nodeOf(this.doc, this.root);
-    const map = drawTreemap(t.root, { width, height, poolUnder: POOL_UNDER }, TREEMAP.pooled, (n) => TREEMAP.pooledTitle(n, poolNoun(this.mode, parent), "", ""));
+    const noun = poolNoun(this.mode, parent);
+    // What the shares on the boxes are shares of: the file once the reading is
+    // done, and what has been read while it is not.
+    const read = t.progress === null ? null : this.readSoFar(t.unit);
+    const map = drawTreemap(t.root, {
+      width,
+      height,
+      poolUnder: POOL_UNDER,
+      title: (node, share) => boxTitle(node, share, t.unit, read),
+      poolName: TREEMAP.pooled,
+      poolDetail: (n) => TREEMAP.pooledTitle(n, noun, "", ""),
+    });
     this.plot.replaceChildren(map.el);
   }
 
@@ -217,7 +229,7 @@ export class TreemapPanel {
   }
 
   private build(): TreemapTree {
-    if (this.mode === "structure") return structureTree(this.doc, this.headings, this.root);
+    if (this.mode === "structure") return structureTree(this.doc, this.root);
     // Field type is a walk of the template, not a read of the bytes, so it
     // must not be held up behind the byte scan or report the byte scan's
     // progress as its own.
@@ -247,6 +259,13 @@ export class TreemapPanel {
     if (step.status !== "ok") return null;
     const h = (step.node as { histogram?: readonly number[] }).histogram;
     return h === undefined || h.length !== 256 ? null : h;
+  }
+
+  /** How much of the file the current mode has taken in, in bytes. */
+  private readSoFar(unit: "bits" | "count"): number {
+    if (unit === "count") return this.scanned();
+    const walk = this.doc.kindTotalsStep();
+    return walk.status === "ok" ? Math.ceil(walk.node.reached_bits / 8) : 0;
   }
 
   private scanned(): number {

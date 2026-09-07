@@ -4170,6 +4170,12 @@ table.rec tr.is-on td {
   text-shadow: 0 0 2px rgb(0 0 0 / 0.8), 0 0 4px rgb(0 0 0 / 0.55);
   pointer-events: none;
 }
+/* The boxes there was no room to draw as themselves. They are the same things
+   as their neighbours, so they keep the colour and lose the weight: faded, not
+   a colour of its own that would read as a fifth kind. */
+.tm-pooled {
+  opacity: 0.45;
+}
 /* Bytes no field covers. Hatched rather than another flat grey, because raw
    bytes are already grey and two greys touching say nothing about which is
    which. */
