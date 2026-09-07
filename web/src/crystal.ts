@@ -23,7 +23,7 @@ const TURN = 2400;
 
 // A spring pulling the mark back to rest, in radians per second per radian,
 // and the drag that takes the energy out of it. Stiffness sets how long the
-// return takes and damping sets how much of it is overshoot: a quarter of
+// return takes and damping sets how much of it is overshoot: three tenths of
 // critical gives two visible bounces, which is a spring rather than a slump,
 // and settles inside a second however far it was turned.
 const STIFFNESS = 120;
@@ -87,9 +87,13 @@ export class Crystal {
     this.el.append(this.svg);
     this.draw(0);
     this.el.addEventListener("click", () => {
-      // A press that turned the mark has already had its answer. Spinning it
-      // as well would take the spring's return away from it.
-      if (this.wandered > A_CLICK) return;
+      // A press that turned the mark has already had its answer, and the
+      // spring is busy giving it. Forgotten either way: the next press might
+      // be Enter on the keyboard, which has no pointer to say it went nowhere,
+      // and a mark still remembering a drag would swallow that too.
+      const dragged = this.wandered > A_CLICK;
+      this.wandered = 0;
+      if (dragged) return;
       this.spin();
     });
     this.el.addEventListener("pointerdown", e => this.grab(e));
@@ -122,11 +126,11 @@ export class Crystal {
   // face under the pointer stays roughly under it: a grip on the thing itself
   // rather than a rate the pointer nudges.
   private grab(e: PointerEvent): void {
-    if (this.reduced.matches || this.held !== null) return;
+    // The left button and nothing else. A right-press opens a menu, and a
+    // right-drag that turned the mark under it would be a surprise.
+    if (this.reduced.matches || this.held !== null || e.button !== 0) return;
     const width = this.el.getBoundingClientRect().width;
     if (width === 0) return;
-    cancelAnimationFrame(this.frame);
-    this.frame = 0;
     this.held = e.pointerId;
     this.from = e.clientX;
     this.radiansPerPx = Math.PI / width;
@@ -149,10 +153,19 @@ export class Crystal {
   private turn(e: PointerEvent): void {
     if (this.held !== e.pointerId) return;
     const moved = e.clientX - this.from;
-    this.wandered = Math.max(this.wandered, Math.abs(moved));
-    this.angle = moved * this.radiansPerPx;
+    const was = this.wandered;
+    this.wandered = Math.max(was, Math.abs(moved));
     this.samples.push({ at: e.timeStamp, x: e.clientX });
     while (this.samples.length > 2 && e.timeStamp - this.samples[0]!.at > RECENT) this.samples.shift();
+    // Nothing is drawn until the press is a drag rather than a click's wobble,
+    // and crossing that line is when the drag takes the mark off whatever was
+    // already turning it. A press that never crosses it leaves a spin alone.
+    if (this.wandered <= A_CLICK) return;
+    if (was <= A_CLICK) {
+      cancelAnimationFrame(this.frame);
+      this.frame = 0;
+    }
+    this.angle = moved * this.radiansPerPx;
     this.draw(this.angle);
   }
 
@@ -170,10 +183,14 @@ export class Crystal {
     // running for the spin to find and stand down for, so the mark would take
     // a press and do nothing at all.
     if (this.wandered <= A_CLICK) {
-      this.angle = 0;
       this.speed = 0;
-      this.draw(0);
-      delete this.el.dataset.spinning;
+      // Unless a spin was already running, in which case it still is and the
+      // mark is somewhere in it. Snapping to rest here would jump it.
+      if (this.frame === 0) {
+        this.angle = 0;
+        this.draw(0);
+        delete this.el.dataset.spinning;
+      }
       return;
     }
     // Only what happened just before letting go counts. A press dragged round
@@ -206,6 +223,8 @@ export class Crystal {
         this.angle = 0;
         this.speed = 0;
         this.frame = 0;
+        // A drag that ended in a cancel has no click coming to forget it.
+        this.wandered = 0;
         this.draw(0);
         delete this.el.dataset.spinning;
         // A file that started opening mid-drag gets its turning mark back.

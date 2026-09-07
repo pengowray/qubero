@@ -58,6 +58,15 @@ try {
   await page.waitForFunction(() => !document.querySelector(".welcome-crystal").dataset.spinning, null, { timeout: 4000 });
   assert.equal(await logo.locator("svg").innerHTML(), rest, "the spring puts it back at rest");
 
+  // The keyboard still spins it after a drag. The mark remembers how far the
+  // last press wandered so that a drag does not also fire the click spin, and
+  // a memory never cleared would swallow every Enter that followed.
+  await logo.focus();
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  assert.notEqual(await logo.locator("svg").innerHTML(), rest, "Enter spins it after a drag");
+  await page.waitForFunction(() => !document.querySelector(".welcome-crystal").dataset.spinning, null, { timeout: 4000 });
+
   // A press that turned the mark must not also fire the click spin, which
   // would start a revolution on top of the spring's return.
   await page.mouse.move(mid.x, mid.y);
