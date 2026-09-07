@@ -1460,6 +1460,62 @@ the mission rather than with CCSDS, and that a packet whose APID is all ones
 is an idle packet sent to keep a downlink busy. A capture is mostly those: of
 the 242,725 packets in the one this was tested against, 229,231 are idle.
 
+### A disc read sector by sector
+A `.bin` beside a `.cue` is what a CD reader handed back: 2352 bytes for every
+sector on the disc, of which a filesystem sees 2048. The other 304 are twelve
+bytes of sync, a three-byte address, a mode byte, and then the error detection
+and correction a drive uses to get those 2048 back off a scratched disc. An
+image of the same disc written the other way round, 2048 bytes a sector with
+none of the rest, is an ISO and has a template already.
+
+Nothing in the file says which it is. `.bin` is whatever the dumper called it,
+and the filesystem's own `CD001` sits at logical sector 16, which in a raw
+image is 37,656 bytes in and past the window a sniffer is given. So the shape
+of the sectors is the whole of the evidence, and it is enough. The sync pattern
+is ten `ff` bytes in a row, which a data sector cannot otherwise contain
+because everything after it is scrambled on the way to the disc. It is asked of
+four sectors rather than one: a single sync is a run of `ff` bytes, which
+erased flash has by the thousand, but four of them 2352 bytes apart, each
+carrying the next address in minutes, seconds and frames, is a disc. Measured
+against four pressed PlayStation discs, every `.bin` in a folder of DOS games,
+a firmware image and a telemetry capture: four claimed, none of the rest.
+
+The sector is `sized` rather than left to add itself up, so that the sector
+after this one is found by multiplying rather than by reading. A disc is a
+third of a million of them and the evaluator turns a run of same-sized
+elements into a division.
+
+Mode 1 gives the 2048 bytes to the filesystem and keeps a four-byte EDC and 276
+bytes of Reed-Solomon parity. Mode 2 puts an eight-byte CD-XA subheader first,
+written twice so a reader can tell which copy is wrong, and bit five of its
+submode byte picks the form: Form 1 is the same 2048 bytes and the same checks,
+Form 2 gives the correction bytes back to the data and keeps none, which is
+what streamed audio and video want. A switch on that bit is the whole of the
+difference.
+
+Three things this does not do. An audio track has no sync and no header, being
+nothing but PCM, so a `.bin` of one is unrecognisable from its bytes alone and
+the `.cue` is the only thing that would say; the cue sheet is a sibling file
+and Qubero opens one file. The checks are shown, not verified, so a row says
+where the EDC is and what it holds but not whether it is right. And the address
+is packed decimal, two digits to a byte, which is not a number this IR can
+read: as a `u8` the frame `0x74` would say 116, and every frame from ten up
+would be wrong, so the three bytes are shown as bytes, which is how the digits
+read. A packed-decimal type is what that really wants.
+
+The cue sheet gets a template of its own, since it is the file that says what
+the image is. It is read a line at a time and not split further: the arguments
+differ per command, a quoted filename may hold spaces, and the indentation is
+not structure, so a line of text with its offset and its length is the more
+useful answer. Two of its commands have to be present before a file is claimed
+as one, because `TRACK` alone is a playlist and `FILE` alone is half the
+configuration files ever written.
+
+Not built: the filesystem inside a raw image. The ISO 9660 walker addresses a
+sector as `lba * 2048`, which in a raw image is `lba * 2352 + 16` for Mode 1
+and `+ 24` for Mode 2 Form 1, so showing the file tree in the logical outline
+means a sector geometry passed through it rather than a constant.
+
 ### Four ways to write a package
 A Debian package, an RPM, a Windows cabinet and a macOS installer hold the same
 thing and agree on nothing about how to write it. They went in together, and

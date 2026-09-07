@@ -48,6 +48,7 @@ mod cbor;
 mod claudetheme;
 mod cdf;
 mod cdrom;
+mod cue;
 mod coff;
 mod compress;
 mod corel;
@@ -171,6 +172,7 @@ pub use cbor::cbor;
 pub use claudetheme::claudetheme;
 pub use cdf::cdf;
 pub use cdrom::cdrom;
+pub use cue::cue;
 pub use coff::coff;
 pub use compress::compress;
 pub use corel::{cdr, cmx};
@@ -381,6 +383,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("hdf4", |_| hdf4()),
     ("cdf", |_| cdf()),
     ("cdrom", |_| cdrom()),
+    ("cue", |_| cue()),
     ("vpk", |_| vpk()),
     ("mca", |_| mca()),
     ("tap", |_| tap()),

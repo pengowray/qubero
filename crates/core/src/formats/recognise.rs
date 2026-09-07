@@ -184,6 +184,9 @@ const PROBES: &[Probe] = &[
     // begins with the sync pattern rather than with anything anyone registered,
     // and its filesystem's own CD001 is 37,656 bytes in, past the window.
     Probe::Is("cdrom", cdrom::is_cdrom),
+    // The text file beside it, which needs two of its commands present
+    // before a text file that mentions one of the words is claimed.
+    Probe::Is("cue", cue::is_cue),
     Probe::Is("macbinary", is_macbinary),
     Probe::Is("binhex", |h, _| is_binhex(h)),
     Probe::Is("stuffit", |h, _| is_stuffit(h)),
