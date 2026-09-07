@@ -61,8 +61,10 @@ pub const MAX_BYTES: u64 = 4096;
 /// How many windows one [`scan`] call reads before answering with what it has,
 /// however few strings that was. A binary can hold megabytes with nothing
 /// printable in them, and a call that scanned to the next hit whatever it cost
-/// would hold the thread for as long as that took.
-pub const MAX_WINDOWS: usize = 64;
+/// would hold the thread for as long as that took. Half a megabyte is about
+/// forty milliseconds of scanning with every reading turned on, which is what
+/// a caller can spend without the page being felt to stop.
+pub const MAX_WINDOWS: usize = 8;
 
 /// What `strings(1)` uses, and for the same reason: three printable bytes in a
 /// row happen by accident often enough to bury the ones that did not.
@@ -296,7 +298,10 @@ pub fn scan<S: Source>(src: &S, from: u64, want: usize, opts: Opts) -> Scan {
         }
         let stop = (at + WINDOW).min(end);
         let before = hits.len();
-        window(&buf, lo, at, stop, opts, &mut hits);
+        // Whether the file carries on past what was read. A run that fills the
+        // buffer is cut by the read rather than by the limit, and only this
+        // says which.
+        window(&buf, lo, at, stop, hi < end, opts, &mut hits);
         // A run that reaches past this window was reported here, so the next
         // window starts after it rather than finding its tail and calling that
         // a string of its own. A run cut at MAX_BYTES ends at the cut, and the
@@ -350,7 +355,7 @@ impl Run {
 /// `buf` holds `[base, ...)`, which starts before `from` so that a run at
 /// `from` can have its prefix read. Runs are looked for from `from` only: a
 /// run reaching back before it belongs to the window that already reported it.
-fn window(buf: &[u8], base: u64, from: u64, stop: u64, opts: Opts, out: &mut Vec<Hit>) {
+fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, out: &mut Vec<Hit>) {
     let head = (from - base) as usize;
     let stop_i = (stop - base) as usize;
     let min = opts.min();
@@ -386,15 +391,20 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, opts: Opts, out: &mut Vec
     }
     taken.sort_by_key(|r| r.start);
     for run in taken {
-        emit(buf, base, run, opts, out);
+        emit(buf, base, run, more, opts, out);
     }
 }
 
 /// Split a run where a chain of counted strings tiles it, and read out each
 /// piece. Most runs are one piece.
-fn emit(buf: &[u8], base: u64, run: Run, opts: Opts, out: &mut Vec<Hit>) {
+fn emit(buf: &[u8], base: u64, run: Run, more: bool, opts: Opts, out: &mut Vec<Hit>) {
     let cap = MAX_BYTES as usize;
-    if run.len() > cap {
+    // A run that fills the buffer was stopped by the read and not by its own
+    // end, so its last piece carries on in the next window just as a cut one
+    // does. Saying otherwise would put a string on screen that starts in the
+    // middle of a word with nothing to say why.
+    let unfinished = more && run.end == buf.len();
+    if run.len() > cap || unfinished {
         // Cut on a code unit, so half a UTF-16 character is never a string's
         // last byte. Each piece says it was cut, and the text carries on in
         // the piece after it.
@@ -405,7 +415,7 @@ fn emit(buf: &[u8], base: u64, run: Run, opts: Opts, out: &mut Vec<Hit>) {
             let end = (at + keep).min(run.end);
             let (chars, units, lone) = measure(buf, at, end, run.enc);
             let mut hit = read_hit(buf, base, at, end, run.enc, chars, units, lone);
-            hit.cut = end < run.end;
+            hit.cut = end < run.end || unfinished;
             // Only the last piece can have one: a cut falls inside the text,
             // where the next byte is text and not a zero.
             hit.term = terminator(buf, end, run.enc);
@@ -1329,6 +1339,27 @@ mod tests {
         assert_eq!(hits[1].at, 1 + MAX_BYTES);
         assert_eq!(hits[1].len, 100);
         assert!(!hits[1].cut);
+    }
+
+    #[test]
+    fn a_run_longer_than_one_window_says_so_at_every_join() {
+        // Longer than the window and than the lookahead past it, so the read
+        // stops in the middle of it as well as the length limit does.
+        let mut b = vec![0u8; (WINDOW - 10) as usize];
+        b.extend(vec![b'z'; 20_000]);
+        b.push(0);
+        let hits = all(b);
+        assert!(hits.len() > 4);
+        for pair in hits.windows(2) {
+            let (a, next) = (&pair[0], &pair[1]);
+            assert!(a.cut, "a piece before another one must say the text carries on");
+            assert_eq!(a.at + a.len, next.at, "the pieces have to be one run with no gap");
+        }
+        let last = hits.last().expect("a run this long is at least one string");
+        assert!(!last.cut);
+        assert_eq!(last.term, Some(Term::Nul));
+        let total: u64 = hits.iter().map(|h| h.len).sum();
+        assert_eq!(total, 20_000);
     }
 
     #[test]

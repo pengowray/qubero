@@ -37,7 +37,7 @@ const MAX_CANVAS = 16_000_000;
 /** How many strings one scan call is asked for. Small enough that a stretch of
  *  file that is all text does not arrive as one enormous array, large enough
  *  that a stretch with nothing in it is crossed in few calls. */
-const BATCH = 2000;
+const BATCH = 5000;
 
 /** How much of a very long string goes on the row and in its tooltip. A
  *  four-kilobyte base64 blob is not a tooltip. */
@@ -234,15 +234,20 @@ export class StringsView {
     });
   }
 
-  /** As much of the scan as one turn of idle time is worth. A pass is nearly
-   *  all waiting for the file rather than scanning it, so stopping after one
-   *  call would leave a hundred megabytes paced by the scheduler. */
+  /** As much of the scan as one turn of idle time is worth.
+   *
+   *  A pass is mostly waiting for the file rather than scanning it, so one
+   *  call a turn leaves the reading of six hundred megabytes paced by the
+   *  scheduler rather than by the disk: eight milliseconds of work between
+   *  idle callbacks is a few per cent of the time available, and the scan
+   *  crawls. Thirty is still short of a frame's worth of jank and gets a large
+   *  file read in minutes rather than in half an hour. */
   private async pass(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     const mine = this.generation;
     try {
-      const until = performance.now() + 8;
+      const until = performance.now() + 30;
       do {
         const scan = await this.doc.stringsScan(this.next, BATCH, this.opts());
         if (mine !== this.generation) return;

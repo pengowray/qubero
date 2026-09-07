@@ -1973,10 +1973,19 @@ of ordinary text whose bytes happen to tile under some prefix reading is split
 where nobody split it. The bytes and the arithmetic are on the row, which is
 the answer this project gives to every reading it cannot prove.
 
-Not built: a prefix kind that is used throughout a file is far better evidence
-than the same kind matching one run by luck, and nothing here counts across
-runs. A whole-file tally of which prefix readings recur is the upgrade, and it
-would also settle the chain splits.
+The view holds two hundred thousand strings and stops there, which on a
+six-hundred-megabyte game executable read at the `strings(1)` minimum of four
+characters is reached after twenty-five megabytes. The status line says so
+outright and names the two controls that help, and raising the minimum to ten
+gets the same file scanned end to end in about three minutes. The better answer
+is to keep every string's offset, length and prefix and decode the text only
+for the rows on screen, since the text is nearly all of what a hit costs; that
+is the upgrade when the cap bites.
+
+Not built either: a prefix kind that is used throughout a file is far better
+evidence than the same kind matching one run by luck, and nothing here counts
+across runs. A whole-file tally of which prefix readings recur is the second
+upgrade, and it would also settle the chain splits.
 
 ### What a selection says
 The panel beside the cursor reads a selection as a number. It now reads it as
