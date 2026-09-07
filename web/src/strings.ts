@@ -1,6 +1,8 @@
 // Text that more than one view shows. Two views naming the same thing two ways
 // is the reader's problem, not a detail of whichever file happens to draw it.
 
+import { formatBytes, formatOffset } from "./format.js";
+
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no
  * definition for them. */
@@ -845,3 +847,163 @@ export const GRAPH = {
    *  and it is what lets two groups be compared at a glance. */
   hull: (kind: string, n: number): string => `${kind} \u00b7 ${countText(n, "field")}`,
 };
+
+/**
+ * The strings view: what a file that is not a text file has to say in words.
+ *
+ * The one fact on a row is the text. Everything else says where it is and what
+ * is unusual about it, so a page of ordinary strings reads as a column of text
+ * with a quiet margin, and the rows worth stopping at are the ones with
+ * something in that margin.
+ */
+export const STRINGSVIEW = {
+  /** The main view's button, beside Hex, Listing and Text. */
+  viewButton: "Strings",
+  regionLabel: "Strings found in the file",
+
+  // ---- the controls ----
+
+  minimumLabel: "Minimum length",
+  /** After the number. A hex editor's reader reads a bare 4 as bytes. */
+  minimumUnit: "characters",
+  minimumTitle:
+    "Strings shorter than this are left out. Counted in characters, not bytes: 4 characters of UTF-16 is 8 bytes.",
+  lookForLabel: "Look for",
+  lookForGroup: "Encodings to look for",
+  /** The toggles. ASCII names UTF-8 too, or a reader takes UTF-8 for something
+   *  that is not scanned. */
+  encodingToggle: {
+    ascii: "ASCII and UTF-8",
+    utf16le: "UTF-16 LE",
+    utf16be: "UTF-16 BE",
+  } as Readonly<Record<string, string>>,
+  encodingToggleTitle: {
+    ascii:
+      "One pass finds both: UTF-8 is ASCII with wider characters allowed. A string holding one is tagged UTF-8; one holding none is tagged ASCII.",
+    utf16le:
+      "UTF-16, little-endian, looked for at every byte offset. Not found: strings that are only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 LE chosen.",
+    utf16be:
+      "UTF-16, big-endian, looked for at every byte offset. Not found: strings that are only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 BE chosen.",
+  } as Readonly<Record<string, string>>,
+  /** "Filter" alone, beside the app's Find, would be taken for it. */
+  filterPlaceholder: "Filter strings",
+  filterLabel: "Filter strings by text",
+  filterTitle:
+    "Show only the strings whose text contains this. Case is ignored. Filters what has been found so far; the scan is not affected.",
+
+  // ---- one row ----
+
+  offsetTitle: "First byte of the text. A length prefix, where there is one, sits just before it.",
+  /** What the encoding column says on hover. The names themselves are the
+   *  core's, and are the ones the text view's chooser and the panel use. */
+  encodingTitle: {
+    ASCII: "Printable ASCII, one byte per character",
+    "UTF-8": "UTF-8, with at least one character beyond ASCII",
+    "UTF-16 LE": "UTF-16, little-endian: two bytes per code unit",
+    "UTF-16 BE": "UTF-16, big-endian: two bytes per code unit",
+  } as Readonly<Record<string, string>>,
+  /** The zero that ends a string, drawn as the control picture for it rather
+   *  than spelled out. The common case has to stay quiet, and what a reader
+   *  wants to notice is a row in a column of these that has none. */
+  terminatorMark: "␀",
+  terminatorTitle: (bytes: number): string =>
+    bytes === 1
+      ? "Null-terminated: a zero byte follows the text"
+      : "Null-terminated: two zero bytes follow the text, one UTF-16 code unit",
+
+  /** The number in front of the string, as the row says it. */
+  prefix: (kind: string, bytes: readonly number[], value: number, counts: string, withTerminator: boolean): string => {
+    const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ");
+    const term = withTerminator ? ", terminator included" : "";
+    return `length prefix ${kind} ${hex} = ${countText(value, unitWord(counts))}${term}`;
+  },
+  /** The readings that come to the same number, which is nearly always the
+   *  same number written at narrower widths. Named rather than counted: which
+   *  widths agreed is the fact, and "3 readings" is not. */
+  prefixAlso: (kinds: readonly string[]): string => ` (also ${kinds.join(", ")})`,
+  /** The same, spelled out, one reading a line, with the arithmetic the row
+   *  has no room for. */
+  prefixTitle: (readings: readonly PrefixReading[], lenBytes: number): string => {
+    const lines = readings.map((r) => {
+      const hex = r.bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ");
+      const check =
+        r.counts !== "bytes"
+          ? ` (${countText(lenBytes, "byte")} of text)`
+          : r.with_terminator
+            ? ` (${lenBytes} of text + ${r.value - lenBytes} terminator)`
+            : "";
+      return `${r.kind} at ${formatOffset(r.at * 8)}: ${hex} = ${countText(r.value, unitWord(r.counts))}${check}`;
+    });
+    if (readings.length > 1) {
+      lines.push("Several readings come to the same number. Nothing in the bytes says which width was meant.");
+    }
+    lines.push("Click to put the cursor on the number.");
+    return lines.join("\n");
+  },
+
+  /** A UTF-16 surrogate with no partner. The real term on the row; the name
+   *  for the encoding that allows it goes in the tooltip, where there is room
+   *  to say what it is. */
+  loneSurrogate: "lone surrogate",
+  loneSurrogateTitle:
+    "A UTF-16 surrogate with no partner, shown as �. Not valid UTF-16, but valid WTF-16, which Windows filenames and V8 heap dumps can hold.",
+
+  /** A run cut at the length limit, and the piece that carries it on. Both
+   *  ends are named, because a row that starts in the middle of a word with
+   *  nothing to say why is the one thing worse than a cut. */
+  continuesAt: (offset: number): string => `continues at ${formatOffset(offset * 8)}`,
+  continuesAtTitle: (offset: number, limit: number): string =>
+    `Cut at ${countText(limit, "byte")}. The rest of the text is the string at ${formatOffset(offset * 8)}.`,
+  continuedFrom: (offset: number): string => `continued from ${formatOffset(offset * 8)}`,
+  continuedFromTitle: (offset: number, limit: number): string =>
+    `The rest of the string at ${formatOffset(offset * 8)}, which was cut at ${countText(limit, "byte")}.`,
+
+  /** The length, far right, so a prefix reading has something on the row to be
+   *  checked against. */
+  length: (bytes: number): string => bitSizeText(bytes * 8),
+  /** "of text" says the prefix and the terminator are not counted in it. */
+  lengthTitle: (bytes: number, units: number, chars: number): string => {
+    const parts = [`${countText(bytes, "byte")} of text`];
+    if (units !== bytes) parts.push(countText(units, "code unit"));
+    if (chars !== units) parts.push(countText(chars, "character"));
+    return parts.join(" · ");
+  },
+
+  // ---- the status line ----
+
+  /** Two facts joined by a middle dot, count then progress, in that order
+   *  every time: a reader watching the list grow reads the same two places. */
+  statusFound: (n: number): string => (n === 0 ? "No strings yet" : countText(n, "string")),
+  statusFiltered: (shown: number, n: number): string =>
+    `${shown.toLocaleString()} of ${countText(n, "string")} match`,
+  statusScanning: (scanned: number, total: number): string =>
+    `first ${formatBytes(scanned)} of ${formatBytes(total)} scanned…`,
+  statusWhole: "whole file scanned",
+  /** Scanned to the end and found nothing. Names the minimum, because that is
+   *  the control to reach for and it is on screen. */
+  statusNone: (min: number): string => `No strings of ${min} or more characters · whole file scanned`,
+  /** The list is as long as this view holds, so the rest of the file was not
+   *  scanned. Said outright, with the two things that would let it be. */
+  statusCapped: (scanned: number, total: number): string =>
+    `stopped at ${formatBytes(scanned)} of ${formatBytes(total)}, the most this view holds. To scan further, raise the minimum length or turn off an encoding.`,
+  statusNoEncodings: "All three encodings are off. Turn one on above to scan for strings.",
+  scanProgressLabel: (scanned: number, total: number): string =>
+    `Scanned ${formatBytes(scanned)} of ${formatBytes(total)}`,
+};
+
+/** One reading of the bytes in front of a string, as the view hands it over. */
+export type PrefixReading = {
+  readonly kind: string;
+  readonly at: number;
+  readonly bytes: readonly number[];
+  readonly value: number;
+  readonly counts: string;
+  readonly with_terminator: boolean;
+};
+
+/** The singular of what a length prefix counted, for `countText`. The core
+ *  answers in the plural because that is how a count reads; one of them needs
+ *  the other form. */
+function unitWord(counts: string): string {
+  return counts === "code units" ? "code unit" : counts === "characters" ? "character" : "byte";
+}

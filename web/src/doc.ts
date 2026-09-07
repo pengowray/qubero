@@ -2,6 +2,8 @@
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
 import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
+import { formatBytes, formatOffset } from "./format.js";
+export { formatBytes, formatOffset } from "./format.js";
 import { UNPACKED } from "./strings.js";
 
 const CHUNK_SIZE = 64 * 1024;
@@ -330,6 +332,54 @@ export type TextBack = {
   readonly start: number;
   readonly back: number;
   readonly missing: readonly number[];
+};
+
+/** Which readings the string scan looks for. The names cross the boundary, so
+ *  they are what the core answers to. */
+export type StringEncoding = "ascii" | "utf16le" | "utf16be";
+
+/** What the scan is asked to look for. */
+export type StringScanOpts = {
+  readonly minChars: number;
+  readonly encodings: readonly StringEncoding[];
+};
+
+/** A number in front of a string that comes to its length. `bytes` is what it
+ *  was read from, so the reading can be checked against the file rather than
+ *  taken on trust. */
+export type StringPrefix = {
+  readonly kind: string;
+  readonly at: number;
+  readonly bytes: readonly number[];
+  readonly value: number;
+  readonly counts: string;
+  readonly with_terminator: boolean;
+};
+
+/** One string found in a file that is not a text file. */
+export type StringHit = {
+  readonly at: number;
+  readonly len: number;
+  readonly enc: string;
+  readonly chars: number;
+  readonly units: number;
+  readonly text: string;
+  /** True when a UTF-16 surrogate went unpartnered, which is WTF-16. Such a
+   *  character reads as U+FFFD in `text`. */
+  readonly lone_surrogates: boolean;
+  /** Bytes of zero after the text: none, one, or two after a wide string. */
+  readonly terminator: number;
+  /** True when the run was cut at the limit and carries on in the next hit. */
+  readonly cut: boolean;
+  /** Every reading of the bytes in front that comes to this string's length.
+   *  More than one is usually the same number written at several widths. */
+  readonly prefix: readonly StringPrefix[];
+};
+
+export type StringScan = {
+  readonly hits: readonly StringHit[];
+  readonly missing: readonly number[];
+  readonly next: number;
 };
 
 /** Where the lines in a stretch of the file start, and how they ended. The
@@ -812,7 +862,6 @@ function signatureName(id: Identification): string {
   return (id.mime.split("/").pop() ?? "").replace(/^x-/, "");
 }
 
-
 export type TemplateReply<T> =
   | { readonly status: "ok"; readonly node: T }
   | { readonly status: "pending"; readonly reachedBytes: number }
@@ -893,11 +942,6 @@ function describeReadFailure(offset: number, length: number, cause: unknown): st
 
 /** An offset as `0x1f`, or `0x1f+3b` when it falls inside a byte. Lowercase
  * to match the hex gutter, so every address in the app reads the same way. */
-export function formatOffset(bits: number): string {
-  const byte = Math.floor(bits / 8);
-  const rem = bits % 8;
-  return `0x${byte.toString(16)}${rem === 0 ? "" : `+${rem}b`}`;
-}
 
 /**
  * An address, in whatever space it belongs to. A field of the file gets the
@@ -948,18 +992,6 @@ export function formatLength(bits: number): string {
   const bytes = Math.floor(bits / 8);
   const rem = bits % 8;
   return rem === 0 ? String(bytes) : `${bytes}+${rem}b`;
-}
-
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let x = n / 1024;
-  let i = 0;
-  while (x >= 1024 && i < units.length - 1) {
-    x /= 1024;
-    i++;
-  }
-  return `${x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x)} ${units[i]}`;
 }
 
 /** In-memory bytes as a `ByteSource`, for documents that come out of another
@@ -1696,6 +1728,32 @@ export class Doc {
       await Promise.all(b.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
     }
     return { start: at, back: at, missing: [] };
+  }
+
+  /**
+   * Strings found from `from` onwards, for a file with no template and no
+   * encoding of its own. `from` is zero or whatever the last scan said to
+   * carry on from, never an offset picked out of the air.
+   *
+   * The same retry loop as `textWindow`: the core stops at the first chunk it
+   * has not got, and a round that asks for the same chunks as the one before
+   * it gives up rather than spins.
+   */
+  async stringsScan(from: number, want: number, opts: StringScanOpts): Promise<StringScan> {
+    const encodings = opts.encodings.join(",");
+    if (encodings === "") return { hits: [], missing: [], next: this.lengthBytes };
+    let asked = "";
+    for (let go = 0; go < TEXT_ROUNDS; go++) {
+      const s = JSON.parse(
+        this.editor.strings_scan(this.space, from, want, opts.minChars, encodings),
+      ) as StringScan;
+      if (s.missing.length === 0) return s;
+      const now = s.missing.join(",");
+      if (now === asked) return { hits: [], missing: s.missing, next: from };
+      asked = now;
+      await Promise.all(s.missing.map((c) => this.ensureRange(c * CHUNK_SIZE, CHUNK_SIZE)));
+    }
+    return { hits: [], missing: [], next: from };
   }
 
   /** Resolve once every chunk covering [at, at+len) is loaded. */

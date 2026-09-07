@@ -2088,6 +2088,189 @@ button.welcome-crystal {
   display: none !important;
 }
 
+/* ---- the strings view's toolbar controls ---- */
+/* Checkboxes rather than a menu: the scan looks for every reading that is on,
+   so they are not alternatives and must not be drawn as any. */
+.tb-minbox,
+.tb-lookfor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.tb-lookfor-label {
+  margin-inline-end: 2px;
+}
+.tb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tb-check input {
+  margin: 0;
+  min-height: 0;
+}
+.tb-min {
+  width: 4rem;
+  min-height: 24px;
+}
+.tb-filter {
+  width: 10rem;
+  min-height: 24px;
+}
+
+/* ---- the strings view ---- */
+/* One row per string found, every row the same height, so the row at index i
+   sits at i * --sv-row. Change the height here and in `stringsview.ts`
+   together: the rows are placed by arithmetic on it. */
+.stringsview {
+  --sv-row: 22px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.sv-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  outline: none;
+}
+.sv-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.sv-canvas {
+  position: relative;
+}
+.sv-row {
+  position: absolute;
+  inset-inline: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--sv-row);
+  padding-inline: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sv-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.sv-row.is-on {
+  background: var(--accent-soft);
+}
+.sv-at {
+  flex: none;
+  width: 11ch;
+  color: var(--addr);
+}
+/* Always filled, so the column reads down the page and no row makes the reader
+   remember what a blank one meant. ASCII is the ordinary answer and is dimmed
+   further; the rest keep the muted weight, so a file whose messages are wide
+   and whose names are not shows that pattern without any colour. */
+.sv-enc {
+  flex: none;
+  width: 10ch;
+  color: var(--muted);
+  font-size: 11px;
+}
+.sv-enc.is-plain {
+  opacity: 0.55;
+}
+.sv-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The zero that ends the string, drawn as its control picture. Attached to the
+   text rather than spaced off it: it is where the string stops. */
+.sv-nul {
+  flex: none;
+  margin-inline-start: 1px;
+  color: var(--muted);
+  opacity: 0.6;
+}
+/* What is unusual about this string, and nothing at all where nothing is. It
+   sits after the text, so a page of ordinary strings has an empty margin and
+   the ones worth looking at are the ones with something in it. */
+.sv-notes {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  margin-inline-start: 10px;
+  overflow: hidden;
+}
+.sv-note {
+  padding: 0 4px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 11px;
+  min-height: 0;
+  white-space: nowrap;
+}
+/* A deviation rather than a fact: the same tint the text view gives a line it
+   had to cut or could not read in the encoding it was given. */
+.sv-note.is-odd {
+  background: var(--accent-soft);
+}
+.sv-prefix {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.sv-prefix:hover {
+  color: var(--fg);
+}
+/* Far right, so a length prefix has the number it claims to be to sit beside. */
+.sv-len {
+  flex: none;
+  margin-inline-start: auto;
+  padding-inline-start: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.sv-status {
+  position: relative;
+  flex: none;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding-inline: 8px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+/* How far the scan has reached, along the top edge of the status row. Hidden
+   once it has stopped: a bar that is always full asks a question instead of
+   answering one. */
+.sv-progress {
+  position: absolute;
+  inset-block-start: -1px;
+  inset-inline-start: 0;
+  height: 2px;
+  background: var(--accent);
+}
+.sv-words {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- search ---- */
 .searchbar {
   border-bottom: 1px solid var(--line);

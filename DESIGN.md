@@ -1869,6 +1869,103 @@ Editing a document opened out of a dump changes those bytes and not the digits
 in the dump that spell them. Making the two agree is the redundant-editing work
 below, and this is the first real client of it.
 
+### The text inside a file that is not a text file
+The text view reads a file that was written to be read. The other kind is an
+executable, a game archive, a firmware image, a save file: mostly not text, and
+the text it does hold is the part a reader can recognise with no template at
+all. `crates/core/src/stringscan.rs` is the model and `web/src/stringsview.ts`
+is the fourth main view.
+
+`strings(1)` answers that question with printable ASCII and a minimum length.
+Three things it does not say are the three things worth knowing about a string
+in a binary, and they are what this adds.
+
+**Which encoding.** A Windows binary's user-visible text is UTF-16 LE and its
+internal names are ASCII, often in the same section. UTF-16 is scanned at both
+byte parities, because nothing aligns a string in a binary. A lone surrogate
+does not end a run: that is WTF-16, which a Windows filename or a V8 heap dump
+is full of, and a scanner that refused it would drop exactly the strings worth
+finding. The run says it held one, and the character reads as U+FFFD.
+
+**Where the string ends, and who says so.** A C string ends at a zero byte. A
+Pascal, Java, .NET or protobuf string is counted by a number in front of it.
+Both are recorded, and the number is checked against the run every way it could
+have been meant: u8, u16 and u32 at either endianness, and LEB128 at every
+length its bytes allow, each read as bytes, code units or characters, with and
+without the terminator counted in. Every reading that comes to the run's length
+is reported, because `00 00 00 05` is a 32-bit five, a 16-bit five and an
+8-bit five at once and all three are true of those bytes. The row carries the
+bytes the number was read from and what it came to, so the arithmetic is there
+to be disagreed with. Nothing is scored: this is the same discipline as
+"Showing the IR of the connections between fields", one level down.
+
+**Where one string stops and the next starts.** Two counted strings laid end to
+end are usually two runs, because the number between them is a control byte and
+a control byte is not text. They are one run when the numbers are large enough
+to be printable, which is what a table of strings of a few dozen bytes each
+looks like, and reading that as one string is wrong. So a run that a chain of
+counted strings tiles exactly, in at least two pieces each long enough to have
+been reported alone, is split into the strings it is. A run that only nearly
+tiles is left as the one string it looked like: half an explanation is worse
+than none.
+
+Scanning is windowed like the search and the text view, and the list is built
+like `lineindex`, for the same reason both have: nothing can say how many
+strings a file holds without reading all of it. The scan walks forward from the
+front in the browser's idle time and the list grows behind it; what has been
+found is exact and the status line says how far that reaches. A run longer than
+four kilobytes is cut and says where it carries on, since a base64 blob on one
+line is not a string.
+
+#### Telling text from bytes that look like it
+Almost every sixteen-bit number is some printable character, so the hard part
+is not finding wide text but refusing everything else. Four rules do it, and
+each one names a different way arbitrary bytes imitate a string.
+
+A wide run must have a high byte that is not printable ASCII in half its units.
+Without this every English sentence in the file is also a run of perfectly good
+CJK, because "Hello world" taken two bytes at a time is one. A run that ran on
+past its own end into eight-bit text is trimmed back by the same test.
+
+Its characters must come mostly from one part of Unicode, three quarters of
+them sharing a high byte. Real text does not wander: a run of it is Latin, or
+Greek, or Cyrillic. A stretch of compiled code lands in five scripts in as many
+characters.
+
+No character may take more than two thirds of it. A stretch of `90 90 90 90` is
+x86 padding and reads as one character repeated, which is perfectly coherent
+and passes every other test.
+
+A run may not begin with a combining mark or a format character, and where two
+readings cover the same bytes the one that needs less explaining wins: length
+first, then the reading whose characters are all in the first Unicode page,
+then the one that starts on an even address, since UTF-16 in a file is nearly
+always laid on two-byte boundaries. That last tie-break is what stops `01 02
+03` in front of a UTF-16 LE string being read as two wide characters and the
+rest of it big-endian.
+
+The eight-bit pass has one rule of its own. A run earns its place on a stretch
+of plain ASCII long enough on its own, or on holding two or more wide
+characters. Two bytes of x86 are a valid UTF-8 character often enough that
+taking one at its word turns half a code section into strings: `c6 8b` is a
+perfectly good character, and it welds `)` and `D$P` into a five-character
+string that neither half was.
+
+What this costs, said plainly: wide text that is nothing but CJK or kana is not
+found, because those code units are also pairs of printable ASCII bytes and
+nothing in the bytes says which reading was meant. Nor is a run whose
+characters spread across many Unicode pages with no page holding three quarters
+of them. Both read in the text view with UTF-16 chosen by hand, which is what
+the encoding toggle's tooltip says. And a chain split can be wrong: a long run
+of ordinary text whose bytes happen to tile under some prefix reading is split
+where nobody split it. The bytes and the arithmetic are on the row, which is
+the answer this project gives to every reading it cannot prove.
+
+Not built: a prefix kind that is used throughout a file is far better evidence
+than the same kind matching one run by luck, and nothing here counts across
+runs. A whole-file tally of which prefix readings recur is the upgrade, and it
+would also settle the chain splits.
+
 ### What a selection says
 The panel beside the cursor reads a selection as a number. It now reads it as
 text as well, which is the question a hex editor's reader asks about a stretch

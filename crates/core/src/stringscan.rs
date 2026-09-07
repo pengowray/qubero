@@ -406,6 +406,9 @@ fn emit(buf: &[u8], base: u64, run: Run, opts: Opts, out: &mut Vec<Hit>) {
             let (chars, units, lone) = measure(buf, at, end, run.enc);
             let mut hit = read_hit(buf, base, at, end, run.enc, chars, units, lone);
             hit.cut = end < run.end;
+            // Only the last piece can have one: a cut falls inside the text,
+            // where the next byte is text and not a zero.
+            hit.term = terminator(buf, end, run.enc);
             if at == run.start {
                 hit.prefix = prefix_readings(buf, base, at, hit.len, units, chars, run.enc, None);
             }
@@ -495,6 +498,51 @@ fn ascii_text(b: u8) -> bool {
     b == b'\t' || (0x20..0x7f).contains(&b)
 }
 
+/// Whether a wide run's characters come mostly from one part of Unicode.
+///
+/// This is what tells wide text from arbitrary bytes read two at a time.
+/// Almost every sixteen-bit number is some printable character, so a stretch
+/// of compiled code read as UTF-16 is a run of them, and a scanner with
+/// nothing to say about that reports a page of gibberish beside the strings
+/// worth reading. Real text does not wander: a run of it is Latin, or Greek,
+/// or Cyrillic, and the high byte of its characters says which. Three
+/// quarters of them agreeing leaves room for the punctuation and the odd
+/// emoji in a line of Latin text, and no room for a stretch of compiled code
+/// that lands in five scripts in as many characters.
+fn one_page(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
+    let mut pages = [0u32; 256];
+    let mut units = 0u32;
+    let mut i = start;
+    while i + 2 <= end {
+        pages[(unit_at(buf, i, big).unwrap_or(0) >> 8) as usize] += 1;
+        units += 1;
+        i += 2;
+    }
+    units > 0 && pages.iter().copied().max().unwrap_or(0) * 4 >= units * 3
+}
+
+/// Whether a wide run says more than one thing.
+///
+/// A stretch of 90 90 90 90 is x86 padding and reads as a row of the same
+/// character; so does a run of zeroes in a table, or a fill byte in a disk
+/// image. None of them is a string, and every one of them passes every other
+/// test here, because one character repeated is perfectly coherent. Real text
+/// spreads itself: no character in a line of it takes two thirds of the line.
+fn varied(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
+    let mut seen: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
+    let mut units = 0u32;
+    let mut most = 0u32;
+    let mut i = start;
+    while i + 2 <= end {
+        let n = seen.entry(unit_at(buf, i, big).unwrap_or(0)).or_insert(0);
+        *n += 1;
+        most = most.max(*n);
+        units += 1;
+        i += 2;
+    }
+    units > 0 && most * 3 <= units * 2
+}
+
 /// Whether a run of wide characters is one, or eight-bit text read two bytes
 /// at a time.
 ///
@@ -551,21 +599,37 @@ fn narrow_runs(buf: &[u8], from: usize, min: usize, out: &mut Vec<Run>) {
     while i < buf.len() {
         let start = i;
         let mut chars = 0u32;
-        let mut multi = false;
+        let mut multi = 0u32;
+        // The longest stretch of plain ASCII in the run, which is what the run
+        // would be worth without any wide character in it.
+        let mut plain = 0u32;
+        let mut ascii = 0u32;
         let mut j = i;
         while let Some((c, n)) = utf8_char(buf, j) {
             if if chars == 0 { !starter(c) } else { !printable(c) } {
                 break;
             }
             if n > 1 {
-                multi = true;
+                multi += 1;
+                ascii = 0;
+            } else {
+                ascii += 1;
+                plain = plain.max(ascii);
             }
             chars += 1;
             j += n;
         }
+        // One wide character does not make a run of compiled code into text,
+        // and must not be what carries a run over the minimum. Two bytes of
+        // x86 are a valid UTF-8 character often enough that taking one at its
+        // word turns half a code section into strings: c6 8b is a perfectly
+        // good character, and it welds ")" and "D$P" into a five-character
+        // string that neither half was. So a run earns its place on a stretch
+        // of ASCII long enough on its own, or on holding enough wide
+        // characters that they are what it is made of.
         if j > start {
-            if chars as usize >= min {
-                let enc = if multi { Enc::Utf8 } else { Enc::Ascii };
+            if chars as usize >= min && (plain as usize >= min || multi >= 2) {
+                let enc = if multi > 0 { Enc::Utf8 } else { Enc::Ascii };
                 out.push(Run { start, end: j, enc, chars, units: (j - start) as u32, lone: false, quality: 3 });
             }
             i = j;
@@ -662,7 +726,11 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                     b -= 2;
                 }
                 let (chars, units, lone) = measure(buf, a, b, enc);
-                if chars as usize >= min && wide_enough(buf, a, b, big) {
+                if chars as usize >= min
+                    && wide_enough(buf, a, b, big)
+                    && one_page(buf, a, b, big)
+                    && varied(buf, a, b, big)
+                {
                     let latin = (a..b).step_by(2).all(|k| unit_at(buf, k, big).is_some_and(|u| u < 0x100 || u >= 0xd800));
                     let quality = if latin { 3 } else { 2 };
                     out.push(Run { start: a, end: b, enc, chars, units, lone, quality });

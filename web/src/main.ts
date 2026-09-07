@@ -9,6 +9,7 @@ import { parseSize, syntheticFile } from "./synthetic.js";
 import { ListingReport } from "./listingreport.js";
 import { ListPane } from "./listpane.js";
 import { TextView } from "./textview.js";
+import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY } from "./stringsview.js";
 import { Crystal } from "./crystal.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { Tabs, type Page, type Tab } from "./tabs.js";
@@ -16,7 +17,7 @@ import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence } from "./filetype.js";
-import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
+import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
 
@@ -28,7 +29,7 @@ const formatSize = formatBytes;
 
 /** The main views: one reading of the file at a time, in the same area. The
  *  graph is behind `?graph` and is not offered until it has been unlocked. */
-type View = "hex" | "listing" | "text" | "graph";
+type View = "hex" | "listing" | "text" | "strings" | "graph";
 
 /** Whether the graph view is on offer. Set by `?graph` and kept, so the URL is
  *  needed once rather than every time. Read at startup, before any page is
@@ -51,6 +52,14 @@ tabs.onConfirmClose = (tab) => confirm(`Discard unsaved edits to ${tab.doc.name}
 
 function activeDoc(): Doc | null {
   return tabs.doc;
+}
+
+/** A number kept between visits, checked before it is believed. A stored value
+ *  that is not a number any more falls back rather than leaving a control
+ *  showing nothing. */
+function storedNumber(key: string, fallback: number): number {
+  const saved = Number(localStorage.getItem(key));
+  return Number.isFinite(saved) && saved > 0 ? saved : fallback;
 }
 
 /**
@@ -290,6 +299,8 @@ function build(tab: Tab): Page {
   const listRow = el("div", { className: "listrow" }, structure.el, listPane.el);
   // The file as the text it is, for the files that were written to be read.
   const text = new TextView(doc);
+  // The other reading of a file: not the text it is, but the text inside it.
+  const strings = new StringsView(doc);
   // A text file that turns out to be a dump of another file. The offer sits
   // above the views rather than inside one, because it is a fact about the
   // whole file and not about a field or a place in it.
@@ -889,18 +900,71 @@ function build(tab: Tab): Page {
     inspector.textEncoding = encoding.value === "" ? r.encoding : encoding.value;
   };
 
+  // What the string scan looks for. Kept between visits: a reader who works on
+  // one kind of file sets these once.
+  const minChars = el("input", { className: "tb-min", type: "number" });
+  minChars.min = "1";
+  minChars.max = "1024";
+  minChars.title = STRINGSVIEW.minimumTitle;
+  minChars.value = String(storedNumber(MIN_CHARS_KEY, MIN_CHARS_DEFAULT));
+  strings.setMinimum(Number(minChars.value));
+  minChars.addEventListener("change", () => {
+    strings.setMinimum(Number(minChars.value));
+    minChars.value = String(strings.minimum);
+    localStorage.setItem(MIN_CHARS_KEY, minChars.value);
+  });
+  const minBox = el(
+    "label",
+    { className: "tb-minbox", title: STRINGSVIEW.minimumTitle },
+    el("span", { textContent: STRINGSVIEW.minimumLabel }),
+    minChars,
+    el("span", { textContent: STRINGSVIEW.minimumUnit }),
+  );
+  // Which readings to look for. Checkboxes rather than a menu: they are not
+  // alternatives, and one file holds all three at once.
+  const readingBox = el("div", { className: "tb-lookfor" });
+  readingBox.setAttribute("role", "group");
+  readingBox.setAttribute("aria-label", STRINGSVIEW.lookForGroup);
+  readingBox.append(el("span", { className: "tb-lookfor-label", textContent: STRINGSVIEW.lookForLabel }));
+  const savedEncodings = localStorage.getItem(ENCODINGS_KEY);
+  const wanted = new Set(savedEncodings === null ? ENCODINGS : savedEncodings.split(",").filter((e) => e !== ""));
+  const readingBoxes = ENCODINGS.map((name) => {
+    const box = el("input", { type: "checkbox" });
+    box.checked = wanted.has(name);
+    const label = el(
+      "label",
+      { className: "tb-check", title: STRINGSVIEW.encodingToggleTitle[name] ?? "" },
+      box,
+      el("span", { textContent: STRINGSVIEW.encodingToggle[name] ?? name }),
+    );
+    box.addEventListener("change", () => {
+      const picked = ENCODINGS.filter((_, i) => readingBoxes[i]?.checked === true);
+      strings.setReading(picked);
+      localStorage.setItem(ENCODINGS_KEY, picked.join(","));
+    });
+    readingBox.append(label);
+    return box;
+  });
+  strings.setReading(ENCODINGS.filter((e) => wanted.has(e)));
+  const filter = el("input", { className: "tb-filter", type: "search" });
+  filter.placeholder = STRINGSVIEW.filterPlaceholder;
+  filter.title = STRINGSVIEW.filterTitle;
+  filter.setAttribute("aria-label", STRINGSVIEW.filterLabel);
+  filter.addEventListener("input", () => strings.setFilter(filter.value));
+
   // Where the main views live. The graph is put in here when it arrives, so
   // it takes the same area as the hex grid and the listing rather than a
   // corner of its own.
-  const workspaceLeft = el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, listRow);
+  const workspaceLeft = el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, strings.el, listRow);
 
   const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
   const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
   const textBtn = el("button", { type: "button", textContent: TEXTVIEW.viewButton, className: "tb-view" });
+  const stringsBtn = el("button", { type: "button", textContent: STRINGSVIEW.viewButton, className: "tb-view" });
   // Behind ?graph, and built only when it has been unlocked: an experiment
   // with a button in the main switch would read as a finished view.
   const graphBtn = el("button", { type: "button", textContent: GRAPH.button, className: "tb-view" });
-  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn);
+  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn, stringsBtn);
   if (graphUnlocked) views.append(graphBtn);
   // The graph and everything it needs is a third of a megabyte of layout
   // engine. Fetched when the view is first asked for, so a reader who never
@@ -919,6 +983,8 @@ function build(tab: Tab): Page {
   const hexOnly = [width, mode, column, linksBtn];
   /** Controls that only mean anything over the text. */
   const textOnly = [encoding, wrapping, reading, endings];
+  /** Controls that only mean anything over the strings list. */
+  const stringsOnly = [minBox, readingBox, filter];
   /** True while the listing is showing, which is also while the hex grid's
    *  editing state is not the user's to act on. */
   let listingShowing = false;
@@ -1002,19 +1068,23 @@ function build(tab: Tab): Page {
   const setView = (which: View): void => {
     const listingOn = which === "listing";
     const textOn = which === "text";
+    const stringsOn = which === "strings";
     const graphOn = which === "graph";
     listingShowing = listingOn;
     view.el.hidden = which !== "hex";
     structure.el.hidden = !listingOn;
     listRow.hidden = !listingOn;
     text.el.hidden = !textOn;
+    strings.el.hidden = !stringsOn;
     if (graph !== null) graph.el.hidden = !graphOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
     for (const c of textOnly) c.hidden = !textOn;
+    for (const c of stringsOnly) c.hidden = !stringsOn;
     for (const [btn, on] of [
       [hexBtn, which === "hex"],
       [listBtn, listingOn],
       [textBtn, textOn],
+      [stringsBtn, stringsOn],
       [graphBtn, graphOn],
     ] as const) {
       btn.setAttribute("aria-pressed", String(on));
@@ -1030,15 +1100,42 @@ function build(tab: Tab): Page {
       structure.setBit(view.cursorState.bitOffset);
     } else if (textOn) {
       void text.setByte(Math.floor(view.cursorState.bitOffset / 8));
+    } else if (stringsOn) {
+      strings.enter();
+      strings.setByte(Math.floor(view.cursorState.bitOffset / 8));
     } else if (graphOn) {
       void showGraph();
     } else view.relayout();
-    (listingOn ? structure.el : textOn ? text.el : graphOn && graph !== null ? graph.el : view.el).focus();
+    (listingOn
+      ? structure.el
+      : textOn
+        ? text.el
+        : stringsOn
+          ? strings.el
+          : graphOn && graph !== null
+            ? graph.el
+            : view.el
+    ).focus();
     refresh();
   };
   hexBtn.addEventListener("click", () => setView("hex"));
   listBtn.addEventListener("click", () => setView("listing"));
   textBtn.addEventListener("click", () => setView("text"));
+  stringsBtn.addEventListener("click", () => setView("strings"));
+  // Picking a string is the same as putting the cursor on its first byte,
+  // which is what every other view is looking at.
+  strings.onPick = (at, len) => {
+    nav.recordJump(view.cursorState.bitOffset, at * 8);
+    // Selected as well as pointed at, so the panel says what the bytes are
+    // every way they can be read. That is the check on the reading this view
+    // picked, in the place that already spells such things out.
+    view.selectRange(at * 8, (at + len) * 8, at * 8);
+    view.setBitCursor(at * 8);
+  };
+  strings.onPickPrefix = (at) => {
+    nav.recordJump(view.cursorState.bitOffset, at * 8);
+    view.setBitCursor(at * 8);
+  };
   graphBtn.addEventListener("click", () => setView("graph"));
   // Picking a character in the text is the same as putting the cursor on its
   // first byte, which is what every other view is looking at.
@@ -1080,6 +1177,9 @@ function build(tab: Tab): Page {
     wrapping,
     reading,
     endings,
+    minBox,
+    readingBox,
+    filter,
     saveMsg,
     el("span", { className: "tb-spacer" }),
     goto,
@@ -1245,7 +1345,7 @@ function build(tab: Tab): Page {
     statusbar,
     kind.dialog,
   );
-  const saved = localStorage.getItem("qubero.view");
+  const startView = localStorage.getItem("qubero.view");
   key((e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     const pressed = e.key.toLowerCase();
@@ -1274,7 +1374,9 @@ function build(tab: Tab): Page {
       // A saved "graph" from a browser where it was once unlocked is not a
       // reason to open a view that is no longer on offer.
       const start: View =
-        saved === "listing" || saved === "text" || (saved === "graph" && graphUnlocked) ? saved : "hex";
+        startView === "listing" || startView === "text" || startView === "strings" || (startView === "graph" && graphUnlocked)
+          ? startView
+          : "hex";
       setView(start);
       view.relayout();
       refresh();
@@ -1287,7 +1389,7 @@ function build(tab: Tab): Page {
   };
   if (import.meta.env.DEV) {
     Object.assign(window, {
-      __qubero: { doc, view, inspector, overview, structure, listPane, text, setView, tabs, graph: () => graph },
+      __qubero: { doc, view, inspector, overview, structure, listPane, text, strings, setView, tabs, graph: () => graph },
     });
   }
   return { el: page, shown };
