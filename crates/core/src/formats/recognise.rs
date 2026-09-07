@@ -180,6 +180,10 @@ const PROBES: &[Probe] = &[
     Probe::Is("s3m", |h, _| is_s3m(h)),
     Probe::Is("mod", |h, _| is_mod(h)),
     Probe::Is("mca", is_mca),
+    // A disc read sector by sector. Before the signatures because the file
+    // begins with the sync pattern rather than with anything anyone registered,
+    // and its filesystem's own CD001 is 37,656 bytes in, past the window.
+    Probe::Is("cdrom", cdrom::is_cdrom),
     Probe::Is("macbinary", is_macbinary),
     Probe::Is("binhex", |h, _| is_binhex(h)),
     Probe::Is("stuffit", |h, _| is_stuffit(h)),

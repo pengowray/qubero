@@ -47,6 +47,7 @@ mod bards_tale;
 mod cbor;
 mod claudetheme;
 mod cdf;
+mod cdrom;
 mod coff;
 mod compress;
 mod corel;
@@ -169,6 +170,7 @@ pub use bencode::bencode;
 pub use cbor::cbor;
 pub use claudetheme::claudetheme;
 pub use cdf::cdf;
+pub use cdrom::cdrom;
 pub use coff::coff;
 pub use compress::compress;
 pub use corel::{cdr, cmx};
@@ -378,6 +380,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("parquet", |_| parquet()),
     ("hdf4", |_| hdf4()),
     ("cdf", |_| cdf()),
+    ("cdrom", |_| cdrom()),
     ("vpk", |_| vpk()),
     ("mca", |_| mca()),
     ("tap", |_| tap()),
