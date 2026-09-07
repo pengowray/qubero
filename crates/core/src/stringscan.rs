@@ -113,7 +113,7 @@ impl Enc {
 }
 
 /// How the number in front of a string is written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrefixKind {
     U8,
     U16Le,
@@ -196,6 +196,17 @@ pub struct Prefix {
     pub counts: Counts,
     /// True when the number counts the terminator as well as the text.
     pub with_terminator: bool,
+    /// True when the number is no wider than one character of the run and
+    /// nothing else vouches for it, which makes it the run's own boundary read
+    /// a second time rather than a fact about the file.
+    ///
+    /// A run is maximal, so whatever sits in front of it is a value that could
+    /// not be part of it, and those are the small values, which is also what a
+    /// short string's length looks like. On the sample collection that
+    /// coincidence happened thirteen thousand times. The reading is still
+    /// shown, because the bytes are there and the arithmetic is the reader's
+    /// to check, but it is shown for what it is.
+    pub weak: bool,
 }
 
 /// The zero that ends a string, where there is one.
@@ -359,7 +370,6 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     let head = (from - base) as usize;
     let stop_i = (stop - base) as usize;
     let min = opts.min();
-    #[allow(unused_mut)]
     let mut runs: Vec<Run> = Vec::new();
     if opts.ascii {
         narrow_runs(buf, head, min, &mut runs);
@@ -370,13 +380,21 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     if opts.utf16be {
         wide_runs(buf, head, min, Enc::Utf16Be, &mut runs);
     }
-    // A wide run has to say why it is one. See `wide_evidence`. This is asked
-    // before the readings compete for the bytes, so a run that cannot answer
-    // does not take a stretch away from an eight-bit reading that could.
-    if runs.iter().any(|r| r.enc.wide()) {
-        let told = evidence(buf, base, &runs);
-        runs = runs.into_iter().zip(told).filter(|(_, keep)| *keep).map(|(r, _)| r).collect();
-    }
+    // What counts each run, and which of them are part of a table of counted
+    // strings. Both answers are wanted twice over: they decide whether a wide
+    // run is reported at all, and whether a number exactly one code unit wide
+    // is worth repeating to the reader. See `counted_by` and `in_a_table`.
+    let counted = counted_by(buf, base, &runs);
+    let table = in_a_table(&runs, &counted);
+    // A wide run has to say why it is one, and is asked before the readings
+    // compete for the bytes, so a run that cannot answer does not take a
+    // stretch away from an eight-bit reading that could.
+    let mut ranked: Vec<(Run, bool)> = runs
+        .into_iter()
+        .enumerate()
+        .filter(|(i, r)| !r.enc.wide() || vouched(buf, *r, &counted[*i], table[*i]))
+        .map(|(i, r)| (r, table[i]))
+        .collect();
     // One stretch of bytes is one string, so where two readings of it overlap
     // only one of them is reported. The best account of the bytes takes them,
     // and what is left goes to whatever still fits beside it.
@@ -385,26 +403,110 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     // run at an odd address that is the better reading is still the one taken,
     // which is what finds the wide strings a linker put wherever they fitted.
     let aligned = |r: &Run| (base + r.start as u64) % 2 == 0;
-    runs.sort_by(|a, b| {
+    ranked.sort_by(|(a, _), (b, _)| {
         b.rank().cmp(&a.rank()).then(aligned(b).cmp(&aligned(a))).then(a.start.cmp(&b.start))
     });
     let mut claimed = vec![false; buf.len()];
-    let mut taken: Vec<Run> = Vec::new();
-    for run in runs {
+    let mut taken: Vec<(Run, bool)> = Vec::new();
+    for (run, weak) in ranked {
         if run.start >= stop_i || claimed[run.start..run.end].iter().any(|c| *c) {
             continue;
         }
         claimed[run.start..run.end].fill(true);
-        taken.push(run);
+        taken.push((run, weak));
     }
-    taken.sort_by_key(|r| r.start);
-    for run in taken {
-        emit(buf, base, run, more, opts, out);
+    taken.sort_by_key(|(r, _)| r.start);
+    for (run, weak) in taken {
+        emit(buf, base, run, more, weak, opts, out);
     }
 }
 
-/// Which runs have something in the file saying they are strings, in the order
-/// they were given. An eight-bit run always does; see below.
+/// Which kinds of number in front of each run read as its length, with how
+/// many bytes each takes and what it came to.
+fn counted_by(buf: &[u8], base: u64, runs: &[Run]) -> Vec<Vec<(PrefixKind, usize, u64)>> {
+    runs.iter()
+        .map(|run| {
+            let term = terminator(buf, run.end, run.enc);
+            let len = (run.end - run.start) as u64;
+            prefix_readings(buf, base, run.start, len, run.units, run.chars, run.enc, term)
+                .iter()
+                .map(|p| (p.kind, p.raw.len(), p.value))
+                .collect()
+        })
+        .collect()
+}
+
+/// How many strings a kind of number has to count, and what share of the runs
+/// in the window, before it is taken to be how this file counts its strings.
+///
+/// A one-byte number matches a run's length by accident about one time in a
+/// hundred and sixty, so a window of a thousand runs throws up half a dozen
+/// for nothing. A file that really counts its strings that way counts nearly
+/// all of them. An eighth of the runs is twenty times what chance produces and
+/// well under what a format produces, and the floor stops a window holding
+/// three runs from proving anything.
+const TABLE_LEAST: usize = 3;
+const TABLE_SHARE: usize = 8;
+
+/// How many different numbers a kind has to take before it is counting
+/// anything rather than delimiting it.
+const TABLE_VALUES: usize = 3;
+
+/// Which runs sit in a table of counted strings.
+///
+/// This is the only thing that makes a number no wider than one character
+/// worth anything. A run is maximal, so whatever sits in front of it is a
+/// value that could not be part of it, and the values that could not be are
+/// the small ones, which is also what a short string's length looks like: a
+/// match there is the run's own boundary read a second time, and on the sample
+/// collection it happened eleven thousand times.
+///
+/// What says otherwise is the same kind of number counting a good share of
+/// every string in the window, and taking a different value as it goes. A
+/// pickle, a Thrift structure and a MATLAB file all look like that, their
+/// strings scattered through metadata rather than packed together.
+///
+/// Both halves of that are needed. Without the share, six coincidences in a
+/// thousand runs would speak for the file. Without the variation, a delimiter
+/// would: a run of format strings separated by newlines has 0x0a in front of
+/// every one of them, and `Access: %x`, `Modify: %y` and `Change: %z` are all
+/// ten bytes long, so all three "match" and none of them is counted.
+///
+/// What this cannot do is speak for a table of five counted strings sitting in
+/// a megabyte of code, since five matches in a window of five hundred runs is
+/// what chance looks like too. Those readings are shown as the coincidences
+/// they may be, with the bytes beside them.
+fn in_a_table(runs: &[Run], counted: &[Vec<(PrefixKind, usize, u64)>]) -> Vec<bool> {
+    use std::collections::HashMap;
+    let mut uses: HashMap<PrefixKind, Vec<u64>> = HashMap::new();
+    for row in counted {
+        for &(kind, _, value) in row {
+            uses.entry(kind).or_default().push(value);
+        }
+    }
+    let n = runs.len();
+    let counts = |kind: PrefixKind| {
+        uses.get(&kind).is_some_and(|values| {
+            if values.len() < TABLE_LEAST || values.len() * TABLE_SHARE < n {
+                return false;
+            }
+            let mut seen: Vec<u64> = values.clone();
+            seen.sort_unstable();
+            seen.dedup();
+            seen.len() >= TABLE_VALUES
+        })
+    };
+    // One answer per kind rather than one per run: the question is about the
+    // file, and a window holds thousands of runs.
+    let told: HashMap<PrefixKind, bool> =
+        uses.keys().map(|&kind| (kind, counts(kind))).collect();
+    counted
+        .iter()
+        .map(|row| row.iter().any(|&(kind, _, _)| told.get(&kind).copied().unwrap_or(false)))
+        .collect()
+}
+
+/// Whether anything around a wide run says it was written as a string.
 ///
 /// A wide run gets its evidence too cheaply. Four printable ASCII bytes in a
 /// row are four bytes of a file agreeing; four printable UTF-16 LE characters
@@ -415,82 +517,22 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
 /// thousand nine hundred wide ones, none of them a string.
 ///
 /// So a wide run is reported only when something around it says it was written
-/// as one. Three things can:
-///
-/// * **A zero code unit after it.** Two bytes that had to be anything and are
-///   zero, which is one chance in sixty-five thousand of falling out of noise.
-///
-/// * **A number in front of it wider than one code unit.** A number exactly
-///   one unit wide is worth nothing here: a run is maximal, so the unit in
-///   front of it is one that is not a printable character, and the values that
-///   are not printable characters are the small ones, which is also what a
-///   short string's length looks like. Such a match is the run's own boundary
-///   read a second time. A `u32` in front of a wide run has to carry two more
-///   zero bytes than the boundary needed, and that it does is worth knowing.
-///
-/// * **A neighbour counted the same way.** A table of counted strings laid end
-///   to end is what a resource section is, and there the numbers are one unit
-///   wide and there are no terminators at all. One such number says nothing;
-///   two in a row, each landing exactly where the string after it starts, is a
-///   table.
+/// as one. Three things can: a zero code unit after it, which is two bytes that
+/// had to be anything and are zero; a number in front of it wider than one code
+/// unit, which has to carry bytes the run's own boundary did not need; or a
+/// place in a table, which is what [`in_a_table`] answers.
 ///
 /// The eight-bit pass is deliberately not held to any of this. Four printable
 /// bytes in a row is what `strings(1)` reports and what a reader of this view
 /// expects, noise and all.
-fn evidence(buf: &[u8], base: u64, runs: &[Run]) -> Vec<bool> {
-    use std::collections::HashMap;
-    let mut counted: Vec<Vec<PrefixKind>> = Vec::with_capacity(runs.len());
-    let mut out: Vec<bool> = Vec::with_capacity(runs.len());
-    for run in runs {
-        if !run.enc.wide() {
-            counted.push(Vec::new());
-            out.push(true);
-            continue;
-        }
-        let term = terminator(buf, run.end, run.enc);
-        let len = (run.end - run.start) as u64;
-        let readings = prefix_readings(buf, base, run.start, len, run.units, run.chars, run.enc, term);
-        let unit = run.enc.unit() as usize;
-        out.push(term.is_some() || readings.iter().any(|p| p.raw.len() > unit));
-        counted.push(readings.iter().map(|p| p.kind).collect());
-    }
-    // Where the counted runs begin and end, so a run can ask what sits next to
-    // it without walking the whole list. A table of a thousand strings would
-    // otherwise be a million comparisons.
-    let mut begins: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut ends: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (i, run) in runs.iter().enumerate() {
-        if !counted[i].is_empty() {
-            begins.entry(run.start).or_default().push(i);
-            ends.entry(run.end).or_default().push(i);
-        }
-    }
-    // A pair counted the same way vouches for both halves of itself, so this
-    // asks in both directions and needs no second pass.
-    for i in 0..runs.len() {
-        if out[i] || counted[i].is_empty() {
-            continue;
-        }
-        out[i] = counted[i].iter().copied().any(|kind| {
-            let Some(w) = kind.width() else { return false };
-            let beside = |list: Option<&Vec<usize>>| {
-                list.is_some_and(|js| {
-                    js.iter().any(|&j| j != i && runs[j].enc == runs[i].enc && counted[j].contains(&kind))
-                })
-            };
-            // The string after this one, counted by a number of the same kind
-            // sitting where this one stopped; or the string before it, counted
-            // by one sitting where that one stopped.
-            let before = runs[i].start.checked_sub(w).and_then(|k| ends.get(&k));
-            beside(begins.get(&(runs[i].end + w))) || beside(before)
-        });
-    }
-    out
+fn vouched(buf: &[u8], run: Run, counted: &[(PrefixKind, usize, u64)], table: bool) -> bool {
+    let unit = run.enc.unit() as usize;
+    table || terminator(buf, run.end, run.enc).is_some() || counted.iter().any(|&(_, w, _)| w > unit)
 }
 
 /// Split a run where a chain of counted strings tiles it, and read out each
 /// piece. Most runs are one piece.
-fn emit(buf: &[u8], base: u64, run: Run, more: bool, opts: Opts, out: &mut Vec<Hit>) {
+fn emit(buf: &[u8], base: u64, run: Run, more: bool, weak: bool, opts: Opts, out: &mut Vec<Hit>) {
     let cap = MAX_BYTES as usize;
     // A run that fills the buffer was stopped by the read and not by its own
     // end, so its last piece carries on in the next window just as a cut one
@@ -533,6 +575,13 @@ fn emit(buf: &[u8], base: u64, run: Run, more: bool, opts: Opts, out: &mut Vec<H
     let mut hit = read_hit(buf, base, run.start, run.end, run.enc, run.chars, run.units, run.lone);
     hit.term = terminator(buf, run.end, run.enc);
     hit.prefix = prefix_readings(buf, base, run.start, hit.len, run.units, run.chars, run.enc, hit.term);
+    // A number exactly as wide as one character is the run's own boundary read
+    // a second time unless a neighbour is counted the same way. It is still
+    // shown; it is marked for what it is. See `Prefix::weak` and `in_a_table`.
+    let unit = run.enc.unit() as usize;
+    for p in &mut hit.prefix {
+        p.weak = !weak && p.raw.len() <= unit;
+    }
     out.push(hit);
 }
 
@@ -1097,6 +1146,7 @@ fn prefix_readings(
                 value,
                 counts,
                 with_terminator,
+                weak: false,
             });
             if out.len() >= MAX_PREFIX_READINGS {
                 break 'kinds;
@@ -1209,6 +1259,10 @@ fn chain(buf: &[u8], base: u64, run: Run, opts: Opts) -> Vec<(usize, usize, Pref
                     value,
                     counts: c,
                     with_terminator: false,
+                    // A chain is several numbers agreeing about where the
+                    // strings after them end, which is a fact about the file
+                    // whatever width they are written at.
+                    weak: false,
                 }));
                 let over = at + span;
                 if over == run.end {
@@ -1325,6 +1379,48 @@ mod tests {
         let readings = &all(b)[0].prefix;
         assert_eq!(readings.len(), 1);
         assert_eq!(readings[0].kind, PrefixKind::U32Le);
+    }
+
+    #[test]
+    fn a_lone_byte_length_is_shown_for_what_it_is() {
+        // The byte in front of any run is one that could not be part of it,
+        // and the values that could not be are the small ones, which is what a
+        // short length looks like. So a match here is worth showing and is not
+        // worth believing on its own.
+        let mut b = vec![0xff, 0x0b];
+        b.extend(b"version 1.4");
+        b.push(0xff);
+        let hits = all(b);
+        assert!(hits[0].prefix[0].weak);
+    }
+
+    #[test]
+    fn a_table_of_counted_strings_vouches_for_every_number_in_it() {
+        // The same byte-wide number, once a neighbour is counted the same way.
+        // Two of them landing exactly where the string after them starts is a
+        // table, and a table is a fact about the file.
+        let mut b = vec![0xff];
+        for word in ["version 1.4", "release", "beta 3"] {
+            b.push(word.len() as u8);
+            b.extend(word.as_bytes());
+        }
+        b.push(0xff);
+        let hits = all(b);
+        assert_eq!(hits.len(), 3);
+        for h in &hits {
+            assert_eq!(h.prefix[0].kind, PrefixKind::U8);
+            assert!(!h.prefix[0].weak, "{:?} should be vouched for by its neighbours", h.text);
+        }
+    }
+
+    #[test]
+    fn a_number_wider_than_a_character_is_not_the_run_boundary() {
+        let mut b = vec![0xff, 0x0b, 0x00];
+        b.extend(b"version 1.4");
+        b.push(0xff);
+        let readings = &all(b)[0].prefix;
+        let wide = readings.iter().find(|p| p.kind == PrefixKind::U16Le).expect("a u16 reading");
+        assert!(!wide.weak);
     }
 
     #[test]

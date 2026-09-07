@@ -217,6 +217,9 @@ fn one(h: &Hit) -> String {
             p.counts.name(),
             if p.with_terminator { " +term" } else { "" }
         );
+        if p.weak {
+            out += "?";
+        }
     }
     if let Some(t) = h.term {
         out += match t {

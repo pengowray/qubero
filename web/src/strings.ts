@@ -879,11 +879,11 @@ export const STRINGSVIEW = {
   } as Readonly<Record<string, string>>,
   encodingToggleTitle: {
     ascii:
-      "One pass finds both: UTF-8 is ASCII with wider characters allowed. A string holding one is tagged UTF-8; one holding none is tagged ASCII.",
+      "One pass finds both: UTF-8 is ASCII with wider characters allowed. A string holding one is tagged UTF-8; one holding none is tagged ASCII. Like the Unix strings command, it finds any run of printable ASCII at least the minimum length, noise included.",
     utf16le:
-      "UTF-16, little-endian, looked for at every byte offset. Not found: strings that are only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 LE chosen.",
+      "UTF-16, little-endian, searched for at every byte offset. A match is found only when the bytes around it mark it as a string: a null terminator after it, or a length prefix of more than 2 bytes in front. Not found: unterminated text with no length prefix, and text that is only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 LE chosen.",
     utf16be:
-      "UTF-16, big-endian, looked for at every byte offset. Not found: strings that are only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 BE chosen.",
+      "UTF-16, big-endian, searched for at every byte offset. A match is found only when the bytes around it mark it as a string: a null terminator after it, or a length prefix of more than 2 bytes in front. Not found: unterminated text with no length prefix, and text that is only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 BE chosen.",
   } as Readonly<Record<string, string>>,
   /** "Filter" alone, beside the app's Find, would be taken for it. */
   filterPlaceholder: "Filter strings",
@@ -911,19 +911,39 @@ export const STRINGSVIEW = {
       ? "Null-terminated: a zero byte follows the text"
       : "Null-terminated: two zero bytes follow the text, one UTF-16 code unit",
 
-  /** The number in front of the string, as the row says it. */
-  prefix: (kind: string, bytes: readonly number[], value: number, counts: string, withTerminator: boolean): string => {
+  /** The number in front of the string, as the row says it.
+   *
+   *  A reading the file does not vouch for says "possible" rather than
+   *  carrying a mark of its own. The hedge is in the leading words because
+   *  that is where the eye lands and because a note too long for the row is
+   *  cut from its end, which is where a mark would have been. */
+  prefix: (
+    kind: string,
+    bytes: readonly number[],
+    value: number,
+    counts: string,
+    withTerminator: boolean,
+    weak: boolean,
+  ): string => {
     const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ");
     const term = withTerminator ? ", terminator included" : "";
-    return `length prefix ${kind} ${hex} = ${countText(value, unitWord(counts))}${term}`;
+    const what = weak ? "possible length prefix" : "length prefix";
+    return `${what} ${kind} ${hex} = ${countText(value, unitWord(counts))}${term}`;
   },
+  /** Why a reading is only possible. The number is no wider than one character
+   *  of the string, and nothing else in the file counts a string that way, so
+   *  the match may be the run's own edge read a second time. */
+  prefixWeakTitle: (wide: boolean): string =>
+    wide
+      ? "Probably a coincidence. The code unit before a run of text is never a printable character (it would be part of the run), and neither is a short length stored in one code unit."
+      : "Probably a coincidence. The byte before a run of text is never a printable character (it would be part of the run), and neither is a short length stored in one byte, so the two match by chance about once in 161 runs.",
   /** The readings that come to the same number, which is nearly always the
    *  same number written at narrower widths. Named rather than counted: which
    *  widths agreed is the fact, and "3 readings" is not. */
   prefixAlso: (kinds: readonly string[]): string => ` (also ${kinds.join(", ")})`,
   /** The same, spelled out, one reading a line, with the arithmetic the row
    *  has no room for. */
-  prefixTitle: (readings: readonly PrefixReading[], lenBytes: number): string => {
+  prefixTitle: (readings: readonly PrefixReading[], lenBytes: number, wide: boolean): string => {
     const lines = readings.map((r) => {
       const hex = r.bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ");
       const check =
@@ -934,6 +954,11 @@ export const STRINGSVIEW = {
             : "";
       return `${r.kind} at ${formatOffset(r.at * 8)}: ${hex} = ${countText(r.value, unitWord(r.counts))}${check}`;
     });
+    // Straight after the readings: a reader hovering a "possible" note is
+    // asking why, and that is the answer.
+    if (readings[0]?.weak === true) {
+      lines.push(STRINGSVIEW.prefixWeakTitle(wide));
+    }
     if (readings.length > 1) {
       lines.push("Several readings come to the same number. Nothing in the bytes says which width was meant.");
     }
@@ -999,6 +1024,7 @@ export type PrefixReading = {
   readonly value: number;
   readonly counts: string;
   readonly with_terminator: boolean;
+  readonly weak: boolean;
 };
 
 /** The singular of what a length prefix counted, for `countText`. The core

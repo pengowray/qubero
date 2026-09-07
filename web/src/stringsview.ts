@@ -379,8 +379,13 @@ export class StringsView {
       const say = (p: typeof first, also: readonly string[]): HTMLElement => {
         const n = el("button", "sv-note sv-prefix");
         n.type = "button";
-        n.textContent = SV.prefix(p.kind, p.bytes, p.value, p.counts, p.with_terminator) + (also.length > 0 ? SV.prefixAlso(also) : "");
-        n.title = SV.prefixTitle(also.length > 0 ? same : [p], hit.len);
+        n.textContent =
+          SV.prefix(p.kind, p.bytes, p.value, p.counts, p.with_terminator, p.weak) +
+          (also.length > 0 ? SV.prefixAlso(also) : "");
+        n.title = SV.prefixTitle(also.length > 0 ? same : [p], hit.len, hit.enc.startsWith("UTF-16"));
+        // The common grade is the quieter one, the way the ASCII tag is
+        // quieter than the rest of the encoding column.
+        if (p.weak) n.classList.add("is-weak");
         n.dataset["prefix"] = String(p.at);
         return n;
       };

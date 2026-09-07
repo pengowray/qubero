@@ -354,6 +354,10 @@ export type StringPrefix = {
   readonly value: number;
   readonly counts: string;
   readonly with_terminator: boolean;
+  /** True when the number is no wider than one character of the string and
+   *  nothing else vouches for it, which makes it the run's own boundary read
+   *  a second time rather than a fact about the file. */
+  readonly weak: boolean;
 };
 
 /** One string found in a file that is not a text file. */

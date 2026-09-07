@@ -2721,6 +2721,7 @@ impl Editor {
                             value: p.value as f64,
                             counts: p.counts.name().to_string(),
                             with_terminator: p.with_terminator,
+                            weak: p.weak,
                         })
                         .collect(),
                 })
@@ -2910,6 +2911,7 @@ struct StringPrefixDto {
     value: f64,
     counts: String,
     with_terminator: bool,
+    weak: bool,
 }
 
 #[derive(Serialize)]

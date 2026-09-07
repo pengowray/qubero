@@ -1917,6 +1917,45 @@ found is exact and the status line says how far that reaches. A run longer than
 four kilobytes is cut and says where it carries on, since a base64 blob on one
 line is not a string.
 
+#### A number in front is usually the boundary read twice
+A run of text is the longest stretch of printable characters there, so whatever
+sits immediately in front of it is by definition a value that could not have
+been part of it, and the values that could not be are the small ones. Those are
+also exactly what a short string's length looks like. So when the single byte
+in front of a six-character run reads as six, the likeliest reading is the run's
+own edge, called a length. Across the sample collection sixteen thousand rows
+carry a length-prefix reading and only five thousand seven hundred of them have
+one that is more than this; at roughly one run in a hundred and sixty over one
+and a half million runs, chance accounts for nearly all the rest.
+
+A reading is worth believing when it costs the file something the boundary did
+not. Two things do:
+
+* **The number is wider than one character of the string.** A `u16` or `u32` in
+  front of ASCII text, or a `u32` in front of UTF-16, has to carry bytes the
+  edge never needed.
+* **The same kind of number counts a good share of the strings in the window,
+  and takes a different value as it goes.** A Python pickle, a Thrift structure
+  and a MATLAB file all look like that, their strings scattered through
+  metadata rather than packed together, so an adjacency test misses them and a
+  tally does not. Both halves are needed: without the share, six coincidences
+  in a thousand runs would speak for the file; without the variation, a
+  delimiter would, since a run of format strings separated by newlines has
+  `0a` in front of every one of them, and `Access: %x`, `Modify: %y` and
+  `Change: %z` are all ten bytes long.
+
+Measured, that separates the files that count their strings from the files that
+do not: a pickle has four hundred and ninety-four of its five hundred and
+fourteen byte-wide readings believed, a Parquet file a hundred and thirteen of
+two hundred and thirty-nine, while `busybox` keeps two of a hundred and ten and
+`shell32.dll` three of five hundred and ninety-five.
+
+Nothing is hidden either way. A reading the file does not vouch for is still on
+the row, still with the bytes it was read from, and it says "possible" rather
+than "length prefix". What this cannot do is speak for a table of five counted
+strings sitting in a megabyte of code, because five matches in a window of five
+hundred runs is what chance looks like as well.
+
 #### Telling text from bytes that look like it
 Almost every sixteen-bit number is some printable character, so the hard part
 is not finding wide text but refusing everything else. A first pass over a real

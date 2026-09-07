@@ -2234,6 +2234,12 @@ button.welcome-crystal {
 .sv-note.is-odd {
   background: var(--accent-soft);
 }
+/* A reading the file does not vouch for. Dimmer rather than marked: these
+   outnumber the vouched ones about four to one, and this view's rule is that
+   the common case gets quieter, never louder. */
+.sv-note.is-weak {
+  opacity: 0.55;
+}
 .sv-prefix {
   cursor: pointer;
   text-decoration: underline dotted;
