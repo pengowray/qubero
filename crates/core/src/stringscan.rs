@@ -456,7 +456,18 @@ fn read_hit(buf: &[u8], base: u64, start: usize, end: usize, enc: Enc, chars: u3
 /// into one string, which is what `strings(1)` does and what makes a list of
 /// found strings readable.
 fn printable(c: char) -> bool {
-    c == '\t' || (!c.is_control() && c != '\u{fffd}')
+    if c == '\t' {
+        return true;
+    }
+    if c.is_control() || c == '\u{fffd}' {
+        return false;
+    }
+    // Noncharacters are guaranteed never to be a character, so a run of them
+    // is never text. It is worth naming them: a firmware image padded with
+    // 0xff reads two bytes at a time as U+FFFF over and over, which is
+    // otherwise a perfectly coherent run of one Unicode page.
+    let u = c as u32;
+    !(0xfdd0..=0xfdef).contains(&u) && (u & 0xfffe) != 0xfffe
 }
 
 /// Whether a character can be the first one of a string.

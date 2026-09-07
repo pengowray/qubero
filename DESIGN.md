@@ -1934,7 +1934,19 @@ characters.
 
 No character may take more than two thirds of it. A stretch of `90 90 90 90` is
 x86 padding and reads as one character repeated, which is perfectly coherent
-and passes every other test.
+and passes every other test. Nor may a character be one Unicode guarantees will
+never be assigned: a firmware image padded with `ff` reads two bytes at a time
+as U+FFFF over and over, and that is a coherent run of one page as well.
+
+Both ends of a run are cut back before any of this is asked, because a run is
+maximal and what lies either side of a string in a binary is whatever the
+compiler put there. Two bytes of that are usually some character, so the run
+reaches over the pointer in front of the string and the one behind it, and
+those few characters are why an otherwise coherent run stops looking coherent.
+The units cut are the ones that are eight-bit text read wide, and then the ones
+that are not from the part of Unicode the rest of the run is from. A surrogate
+is never cut: half a pair at the end of a run is the character the reader came
+for.
 
 A run may not begin with a combining mark or a format character, and where two
 readings cover the same bytes the one that needs less explaining wins: length
