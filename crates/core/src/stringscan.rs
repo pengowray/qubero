@@ -549,7 +549,7 @@ fn emit(buf: &[u8], base: u64, run: Run, more: bool, weak: bool, opts: Opts, out
         while at < run.end {
             let end = (at + keep).min(run.end);
             let (chars, units, lone) = measure(buf, at, end, run.enc);
-            let mut hit = read_hit(buf, base, at, end, run.enc, chars, units, lone);
+            let mut hit = read_hit(buf, base, at, end, run.enc, chars, units, lone > 0);
             hit.cut = end < run.end || unfinished;
             // Only the last piece can have one: a cut falls inside the text,
             // where the next byte is text and not a zero.
@@ -566,7 +566,7 @@ fn emit(buf: &[u8], base: u64, run: Run, more: bool, weak: bool, opts: Opts, out
     if pieces.len() > 1 {
         for (start, end, prefix) in pieces {
             let (chars, units, lone) = measure(buf, start, end, run.enc);
-            let mut hit = read_hit(buf, base, start, end, run.enc, chars, units, lone);
+            let mut hit = read_hit(buf, base, start, end, run.enc, chars, units, lone > 0);
             hit.prefix = vec![prefix];
             out.push(hit);
         }
@@ -978,7 +978,13 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
             if j > start {
                 let (a, b) = trim(buf, start, j, big);
                 let (chars, units, lone) = measure(buf, a, b, enc);
+                // A surrogate with no partner is WTF-16 and is worth keeping,
+                // but a run that is half of them is not a name with one bad
+                // character in it. It is compressed bytes: a Godot pack is
+                // full of runs that read as two unpaired halves and two Hangul
+                // syllables, and every other test here passes them.
                 if chars as usize >= min
+                    && lone * 3 < chars
                     && wide_enough(buf, a, b, big)
                     && one_page(buf, a, b, big)
                     && varied(buf, a, b, big)
@@ -986,7 +992,7 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                 {
                     let latin = (a..b).step_by(2).all(|k| unit_at(buf, k, big).is_some_and(|u| u < 0x100 || u >= 0xd800));
                     let quality = if latin { 3 } else { 2 };
-                    out.push(Run { start: a, end: b, enc, chars, units, lone, quality });
+                    out.push(Run { start: a, end: b, enc, chars, units, lone: lone > 0, quality });
                 }
                 i = j;
             } else {
@@ -996,9 +1002,9 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
     }
 }
 
-/// Characters, code units and whether a surrogate went unpaired, over a range
+/// Characters, code units and how many surrogates went unpaired, over a range
 /// already known to be text.
-fn measure(buf: &[u8], start: usize, end: usize, enc: Enc) -> (u32, u32, bool) {
+fn measure(buf: &[u8], start: usize, end: usize, enc: Enc) -> (u32, u32, u32) {
     if !enc.wide() {
         let mut chars = 0u32;
         let mut i = start;
@@ -1014,11 +1020,11 @@ fn measure(buf: &[u8], start: usize, end: usize, enc: Enc) -> (u32, u32, bool) {
                 }
             }
         }
-        return (chars, (end - start) as u32, false);
+        return (chars, (end - start) as u32, 0);
     }
     let big = enc.big();
     let mut chars = 0u32;
-    let mut lone = false;
+    let mut lone = 0u32;
     let mut i = start;
     while i + 2 <= end {
         let u = unit_at(buf, i, big).unwrap_or(0);
@@ -1028,7 +1034,7 @@ fn measure(buf: &[u8], start: usize, end: usize, enc: Enc) -> (u32, u32, bool) {
             continue;
         }
         if is_high_surrogate(u) || is_low_surrogate(u) {
-            lone = true;
+            lone += 1;
         }
         chars += 1;
         i += 2;

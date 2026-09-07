@@ -2017,6 +2017,11 @@ repeated reads as two taking turns. Both are perfectly coherent and neither is a
 word. Nor may a character be one Unicode guarantees will never be assigned: a
 firmware image padded with `ff` reads as U+FFFF over and over.
 
+**A wide run may not be mostly unpaired surrogates.** One is WTF-16 and is the
+reason the scan keeps them at all; half of them is compressed bytes. A Godot
+resource pack is full of runs that read as two unpaired halves and two Hangul
+syllables, and every other test here passes them.
+
 **A wide run's characters must be characters**, not a column of small numbers
 under a constant high byte. A Thrift field header, a table of flags and a run of
 enum values all read as wide text with one page throughout and a low byte that
