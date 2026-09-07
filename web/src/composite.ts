@@ -25,7 +25,7 @@ export const CHILD_PAGE = 12;
 /** Most items joined into a one-line preview, and the longest that line gets.
  *  Past either the box would be showing a fraction of a value while looking
  *  like the whole of it, which the count it replaced never did. */
-const PREVIEW_ITEMS = 8;
+export const PREVIEW_ITEMS = 8;
 const PREVIEW_CHARS = 48;
 
 /** The one value a structure was written to carry, when it has one. */

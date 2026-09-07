@@ -10,7 +10,7 @@ import type { BitRange } from "./hexview.js";
 import type { Doc, FieldGraph, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
 import { bitSizeText, childWord, childrenHead, countText, INSIDE, REPORT, ROLE_GROUP, USED_BY, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
-import { CHILD_PAGE, insideValue, type Inside } from "./composite.js";
+import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.js";
 import { fieldClass } from "./fieldstyle.js";
 import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
@@ -1541,12 +1541,32 @@ export class Inspector {
       row.append(el("span", "insp-kid-value", REPORT.paneWaiting));
       parts.push(row);
     } else {
-      for (const kid of kids) parts.push(kidRow(kid));
+      for (const kid of kids) parts.push(kidRow(kid, this.kidValue(kid)));
       const rest = n.child_count - kids.length;
       if (rest > 0) parts.push(moreButton(rest, n.child_count, noun));
     }
     this.kids.replaceChildren(...parts);
     this.kids.hidden = false;
+  }
+
+  /**
+   * What a child's row says it holds. A structure of its own holds a count,
+   * except where that structure is one value written as several fields, which
+   * is the same question the box above asks and the same answer: the row for a
+   * tensor's `name` says the name, not that a name is two fields.
+   *
+   * Only a short structure is looked into. A row that stood for a page of a
+   * database would send the reader's twelve rows after twelve pages.
+   */
+  private kidValue(kid: TemplateNode): { readonly text: string; readonly count: boolean } {
+    if (!kid.composite) return { text: kid.value, count: false };
+    if (kid.child_count > 0 && kid.child_count <= PREVIEW_ITEMS) {
+      const reply = this.doc.templateChildren(kid.path, 0, kid.child_count);
+      const inside = reply.status === "ok" ? insideValue(kid, reply.node) : null;
+      if (inside?.kind === "row") return { text: inside.text, count: false };
+      if (inside?.kind === "payload") return { text: inside.node.value, count: false };
+    }
+    return { text: countText(kid.child_count, childWord(kid)), count: true };
   }
 
   private fillField(n: TemplateNode, inside: Inside | null): void {
@@ -1892,13 +1912,12 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 /** One child of the structure at the cursor: what it is called, what it holds,
  *  and how long it is. A structure of its own holds a count, drawn as the box
  *  draws one so a count is never read as a value. */
-function kidRow(kid: TemplateNode): HTMLElement {
+function kidRow(kid: TemplateNode, holds: { readonly text: string; readonly count: boolean }): HTMLElement {
   const row = el("div", "insp-kid");
   row.dataset["path"] = kid.path.join("/");
   row.append(el("span", `insp-kid-name ${fieldClass(kid.kind)}`, kid.name));
-  const count = kid.composite;
-  const value = el("span", `insp-kid-value${count ? " insp-kid-count" : ""}`, count ? countText(kid.child_count, childWord(kid)) : kid.value);
-  value.title = value.textContent ?? "";
+  const value = el("span", `insp-kid-value${holds.count ? " insp-kid-count" : ""}`, holds.text);
+  value.title = holds.text;
   row.append(value, el("span", "insp-kid-size", bitSizeText(kid.size_bits)));
   return row;
 }
