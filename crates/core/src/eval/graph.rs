@@ -359,3 +359,74 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         Ty::Switch { .. } | Ty::Match { .. } => "switch".to_string(),
     }
 }
+
+/// The word a field's *value* would be given, worked out from its type rather
+/// than by reading it.
+///
+/// The listing already labels every row this way, but it gets the word out of
+/// the `Value` a read produced. Totalling a whole file by kind cannot afford
+/// that: reading the value of every field means decoding every string and
+/// every packed number in the file to learn something the type already says.
+/// So this asks the type the same question, and answers in exactly the
+/// vocabulary the rows use, because a view colouring a treemap and a view
+/// colouring a listing have to agree about what a field is.
+///
+/// Two of the words a value can carry are facts about the bytes rather than
+/// about the type and so never come out of here: `unread`, which means the
+/// bytes have not arrived, and `unset`, which means a slot holds its format's
+/// "nobody filled this in" value. A `Nullable` answers as the number under it.
+pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
+    match ty {
+        // Wrappers that say where a field is or how wide its window is, and
+        // nothing about what it holds.
+        Ty::Nullable { inner, .. } => value_kind(template, inner),
+        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => value_kind(template, inner),
+        Ty::Named(n) => match template.types.get(&**n) {
+            // A name nothing defines is a template that cannot be read, and
+            // the bytes under it are all anyone can say about it.
+            Some(t) => value_kind(template, t),
+            None => "bytes",
+        },
+        Ty::UInt { .. } | Ty::UIntExpr { .. } | Ty::Vlq | Ty::EbmlVint { .. } => "uint",
+        Ty::Leb128 { signed } => {
+            if *signed { "int" } else { "uint" }
+        }
+        // SQLite's varint is signed, a zigzag is signed by construction, and a
+        // number the file wrote out in digits is read into an `i128` whichever
+        // way it was written. A computed field is a number worked out rather
+        // than read, and `Value::Int` is what carries it.
+        Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::Zigzag | Ty::SqliteVarint | Ty::TextInt { .. } | Ty::Computed(_) => "int",
+        // A fixed-point number reads as the fraction it stands for, not as the
+        // integer it is stored as.
+        Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::F8 { .. } | Ty::Fixed { .. } => "float",
+        Ty::Magic(_) => "magic",
+        Ty::Enum { .. } => "enum",
+        Ty::Flags { .. } => "flags",
+        // An instruction reads as the line the disassembler wrote, and text
+        // found elsewhere in the file reads as that text.
+        Ty::Str { .. } | Ty::Insn { .. } | Ty::ComputedText(_) => "str",
+        // A JSON number may be whole or not, which only the digits say; both
+        // words mean the same thing to a view, and the type column carries the
+        // distinction for anyone who wants it. `true`, `false` and `null` are
+        // shown as the words the file wrote.
+        Ty::Json(shape, _) if shape.composite() => "composite",
+        Ty::Json(crate::json::Shape::Number, _) => "int",
+        Ty::Json(..) => "str",
+        Ty::Bytes(_) => "bytes",
+        // Everything that holds other fields, including the two that hold
+        // fields which are not bits of this file: a stream's contents are at
+        // offsets of the bytes it unpacked to, and a trace's symbols are what
+        // it read to produce them.
+        Ty::Struct(_)
+        | Ty::Array { .. }
+        | Ty::Repeat { .. }
+        | Ty::PointerList { .. }
+        | Ty::Chain { .. }
+        | Ty::At { .. }
+        | Ty::Decoded { .. }
+        | Ty::Traced { .. } => "composite",
+        // A resolved node has taken a case already; reached only from a
+        // declared type, where nothing yet says which shape it will be.
+        Ty::Switch { .. } | Ty::Match { .. } => "bytes",
+    }
+}

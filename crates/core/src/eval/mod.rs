@@ -22,6 +22,7 @@ mod explain;
 mod go;
 mod graph;
 mod jsontree;
+mod kinds;
 mod listing;
 mod memo;
 mod origin;
@@ -37,9 +38,10 @@ mod walk;
 mod tests;
 
 pub use explain::{Explain, FlagBit};
-pub use graph::{kind_of, Graph, GraphEdge, GraphNode, NO_PARENT};
+pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
 pub use cells::Cell;
+pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
 
