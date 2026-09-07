@@ -14,7 +14,7 @@ import type { Doc, FieldPick } from "./doc.js";
 import type { OutlineHeading } from "./outline.js";
 import { TREEMAP } from "./strings.js";
 import { boxAt, drawTreemap, nodeAt } from "./treemap.js";
-import { bitsLine, bitsTree, bytesTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type TreemapMode, type TreemapTree } from "./treemapdata.js";
+import { bitsLine, bitsTree, bytesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type TreemapMode, type TreemapTree } from "./treemapdata.js";
 
 /** The whole-file scan's resolution. The same number the rail's byte-class map
  *  asks for, so both are answered by one scan: the core keeps one per sheet
@@ -76,6 +76,9 @@ export class TreemapPanel {
       this.crumbs = [];
       rememberMode(this.mode);
       this.draw();
+      // Each mode reads the file its own way, so switching starts whichever
+      // reading the new one needs rather than waiting for the next nudge.
+      this.pump();
     });
     // The rail's own heading row: the name on the left and the picker on the
     // right, the way the block section shares its row with its close button.
@@ -153,14 +156,16 @@ export class TreemapPanel {
    * costs nothing and the two never disagree about how far it has got.
    */
   pump(): void {
-    if (this.el.offsetParent === null) return;
-    if (this.mode !== "bytes" && this.mode !== "bits") return;
+    if (this.el.offsetParent === null || this.mode === "structure") return;
     if (this.pumping) return;
     this.pumping = true;
     const until = performance.now() + SCAN_MS;
     let more = false;
     do {
-      const step = this.doc.overviewStep(SCAN_BUCKETS);
+      // Both of these hand back what they have and say whether there is more,
+      // so neither is driven by the document's own wake-up: the panel loops
+      // them under a budget the way the byte map does.
+      const step = this.mode === "kinds" ? this.doc.kindTotalsStep() : this.doc.overviewStep(SCAN_BUCKETS);
       if (step.status !== "ok") break;
       more = !step.node.done;
     } while (more && performance.now() < until);
@@ -216,7 +221,12 @@ export class TreemapPanel {
     // Field type is a walk of the template, not a read of the bytes, so it
     // must not be held up behind the byte scan or report the byte scan's
     // progress as its own.
-    if (this.mode === "kinds") return blank(TREEMAP.reading(0));
+    if (this.mode === "kinds") {
+      const walk = this.doc.kindTotalsStep();
+      if (walk.status === "error") return blank(TREEMAP.failed(walk.message));
+      if (walk.status !== "ok") return blank(TREEMAP.reading(0));
+      return kindsTree(walk.node, this.doc.lengthBits);
+    }
     const scanned = this.scanned();
     const total = this.doc.lengthBytes;
     const h = this.histogram();

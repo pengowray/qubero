@@ -1405,7 +1405,7 @@ function build(tab: Tab): Page {
       // A saved "graph" from a browser where it was once unlocked is not a
       // reason to open a view that is no longer on offer.
       const start: View =
-        startView === "listing" || startView === "text" || startView === "strings" || (startView === "graph" && graphUnlocked)
+        startView === "listing" || startView === "text" || startView === "strings" || startView === "treemap" || (startView === "graph" && graphUnlocked)
           ? startView
           : "hex";
       setView(start);

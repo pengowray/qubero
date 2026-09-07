@@ -16,10 +16,10 @@
  * shrinks as the reading gets on.
  */
 
-import { byteText, formatBytes, percentText, type Doc, type TemplateNode } from "./doc.js";
+import { byteText, formatBytes, percentText, type Doc, type KindTotal, type KindTotals, type TemplateNode } from "./doc.js";
 import { fieldClass, sectionColor, UNMAPPED_COLOR } from "./fieldstyle.js";
 import type { OutlineHeading } from "./outline.js";
-import { childWord, GAP_LABEL, KIND_LABEL, NO_TEMPLATE_HINT, REPORT, TREEMAP } from "./strings.js";
+import { childWord, countText, GAP_LABEL, KIND_LABEL, NO_TEMPLATE_HINT, REPORT, TREEMAP } from "./strings.js";
 import type { TreeNode } from "./treemap.js";
 
 /** Which key the file's bytes are divided by. */
@@ -137,6 +137,72 @@ function childBox(k: TemplateNode, section: number): TreeNode {
   };
   return k.composite && k.child_count > 0 ? { ...base, children: [] } : base;
 }
+
+// ---- field kinds ----
+
+/**
+ * Every field the walk has reached, grouped by kind and then by type.
+ *
+ * The core totals by (kind, type) and never counts a structure's bits twice:
+ * a composite is in the totals only for what its own syntax accounts for over
+ * and above its children, so the braces of a JSON object are there and the
+ * object is not.
+ *
+ * Two boxes here are not kinds of field at all. `unmapped` is bytes inside the
+ * walked region that no field covers, which is a real answer and often a large
+ * one. `not read yet` is the rest of the file, and it is drawn so that the map
+ * keeps meaning the whole file: leave it out and a walk that has reached five
+ * per cent fills the panel and looks like the finished picture.
+ */
+export function kindsTree(totals: KindTotals, fileBits: number): TreemapTree {
+  const byKind = new Map<string, KindTotal[]>();
+  for (const t of totals.totals) {
+    // A computed field is the template working something out in the open. It
+    // occupies no bytes, so it would be a box of no width.
+    if (t.bits <= 0) continue;
+    const group = KIND_LABEL[t.kind] ?? t.kind;
+    const have = byKind.get(group);
+    if (have === undefined) byKind.set(group, [t]);
+    else have.push(t);
+  }
+  const kids: TreeNode[] = [];
+  for (const [label, entries] of byKind) {
+    const bits = entries.reduce((n, t) => n + t.bits, 0);
+    const kind = entries[0]?.kind ?? "bytes";
+    kids.push({
+      key: label,
+      name: label,
+      value: bits,
+      color: UNMAPPED_COLOR,
+      colorClass: fieldClass(kind),
+      detail: countText(entries.reduce((n, t) => n + t.count, 0), "field"),
+      children: entries.map((t) => ({
+        key: t.type,
+        name: t.type,
+        value: t.bits,
+        color: UNMAPPED_COLOR,
+        colorClass: fieldClass(t.kind),
+        detail: countText(t.count, "field"),
+      })),
+    });
+  }
+  // Three boxes could all be read as "not shown as itself", so each is drawn
+  // its own way: a kind is solid, bytes nothing claims are hatched, and bytes
+  // nobody has looked at yet are an empty outline.
+  if (totals.unmapped_bits > 0) {
+    kids.push({ key: "unmapped", name: GAP_LABEL, value: totals.unmapped_bits, color: UNMAPPED_COLOR, colorClass: "tm-unmapped", detail: UNMAPPED_DETAIL });
+  }
+  const left = Math.max(0, fileBits - totals.reached_bits);
+  if (left > 0) kids.push({ key: "unwalked", name: TREEMAP.unwalked, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked", detail: TREEMAP.unwalked });
+  return {
+    root: { key: "file", name: TREEMAP.root, value: fileBits, color: UNMAPPED_COLOR, children: kids },
+    unit: "bits",
+    progress: totals.done ? null : TREEMAP.reading(shareOf(totals.reached_bits, fileBits)),
+    none: null,
+  };
+}
+
+const UNMAPPED_DETAIL = "no field covers these bytes";
 
 // ---- byte values ----
 
@@ -282,6 +348,8 @@ const SCANNING = (percent: number): string => `Scanning the file… ${percent}%`
 function share(part: number, whole: number): number {
   return whole === 0 ? 0 : Math.round((part / whole) * 100);
 }
+
+const shareOf = share;
 
 /** A sentence instead of a picture. A treemap of nothing is a blank box, and a
  *  blank box says the file is empty rather than that nothing is known yet. */

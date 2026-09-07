@@ -4170,6 +4170,20 @@ table.rec tr.is-on td {
   text-shadow: 0 0 2px rgb(0 0 0 / 0.8), 0 0 4px rgb(0 0 0 / 0.55);
   pointer-events: none;
 }
+/* Bytes no field covers. Hatched rather than another flat grey, because raw
+   bytes are already grey and two greys touching say nothing about which is
+   which. */
+.tm-unmapped {
+  --field-color: transparent;
+  background-image: repeating-linear-gradient(45deg, #8a8f98 0 2px, transparent 2px 6px);
+}
+/* Bytes the walk has not got to. Nothing is known about them, so nothing is
+   drawn in them; the box is here to keep the map's area the whole file. */
+.tm-unwalked {
+  --field-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--muted);
+  opacity: 0.7;
+}
 .tm-box.is-on {
   box-shadow: inset 0 0 0 2px var(--fg);
 }
