@@ -1493,15 +1493,18 @@ Form 2 gives the correction bytes back to the data and keeps none, which is
 what streamed audio and video want. A switch on that bit is the whole of the
 difference.
 
-Three things this does not do. An audio track has no sync and no header, being
+Four things this does not do. An audio track has no sync and no header, being
 nothing but PCM, so a `.bin` of one is unrecognisable from its bytes alone and
 the `.cue` is the only thing that would say; the cue sheet is a sibling file
-and Qubero opens one file. The checks are shown, not verified, so a row says
-where the EDC is and what it holds but not whether it is right. And the address
-is packed decimal, two digits to a byte, which is not a number this IR can
-read: as a `u8` the frame `0x74` would say 116, and every frame from ten up
-would be wrong, so the three bytes are shown as bytes, which is how the digits
-read. A packed-decimal type is what that really wants.
+and Qubero opens one file. A dump that kept the 96 bytes of subchannel data
+after each sector is 2448 bytes a sector rather than 2352, and is declined
+rather than misread, since its length is not a whole number of 2352-byte
+sectors. The checks are shown, not verified, so a row says where the EDC is and
+what it holds but not whether it is right. And the address is packed decimal,
+two digits to a byte, which is not a number this IR can read: as a `u8` the
+frame `0x74` would say 116, and every frame from ten up would be wrong, so the
+three bytes are shown as bytes, which is how the digits read. A packed-decimal
+type is what that really wants.
 
 The cue sheet gets a template of its own, since it is the file that says what
 the image is. It is read a line at a time and not split further: the arguments
