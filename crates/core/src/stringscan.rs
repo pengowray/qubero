@@ -768,6 +768,26 @@ fn dominant_page(buf: &[u8], start: usize, end: usize, big: bool) -> Option<u8> 
     (*n > 0).then_some(page as u8)
 }
 
+/// Whether a wide run's characters are characters, or a column of small
+/// numbers under a constant high byte.
+///
+/// A Thrift field header, a table of flags and a run of enum values all read
+/// as wide text with the same page over and over and a low byte that never
+/// leaves the control range: `15 10 15 04 15 06 15 08` is four perfectly good
+/// Canadian Syllabics characters and is a Parquet record. In a script, the low
+/// byte moves through the block: the letters are spread across it, and a word
+/// of four cannot have all four sitting in the first thirty-two places.
+fn letters(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
+    let mut i = start;
+    while i + 2 <= end {
+        if unit_at(buf, i, big).unwrap_or(0) & 0xff >= 0x20 {
+            return true;
+        }
+        i += 2;
+    }
+    false
+}
+
 /// Whether a wide run says more than one thing.
 ///
 /// A stretch of 90 90 90 90 is x86 padding and reads as a row of the same
@@ -962,6 +982,7 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                     && wide_enough(buf, a, b, big)
                     && one_page(buf, a, b, big)
                     && varied(buf, a, b, big)
+                    && letters(buf, a, b, big)
                 {
                     let latin = (a..b).step_by(2).all(|k| unit_at(buf, k, big).is_some_and(|u| u < 0x100 || u >= 0xd800));
                     let quality = if latin { 3 } else { 2 };

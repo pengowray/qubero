@@ -2017,6 +2017,14 @@ repeated reads as two taking turns. Both are perfectly coherent and neither is a
 word. Nor may a character be one Unicode guarantees will never be assigned: a
 firmware image padded with `ff` reads as U+FFFF over and over.
 
+**A wide run's characters must be characters**, not a column of small numbers
+under a constant high byte. A Thrift field header, a table of flags and a run of
+enum values all read as wide text with one page throughout and a low byte that
+never leaves the control range: `15 10 15 04 15 06 15 08` is four perfectly good
+Canadian Syllabics characters and is a Parquet record. In a script the letters
+are spread across the block, so a word of four cannot have all four sitting in
+its first thirty-two places.
+
 **A wide run's high byte must not be printable ASCII**, in half its units.
 Without this every English sentence in the file is also a run of perfectly good
 CJK, because "Hello world" taken two bytes at a time is one.
@@ -2046,10 +2054,12 @@ perfectly good character, and it welds `)` and `D$P` into a five-character
 string that neither half was.
 
 Together these took the sample collection from nine thousand three hundred and
-seventy wide strings to two hundred and forty-four, while `notepad.exe` and
-`shell32.dll` kept five thousand two hundred and twenty-two, and what survives
+seventy wide strings to two hundred and twenty-three, while `notepad.exe` and
+`shell32.dll` kept five thousand two hundred and twenty-eight, and what survives
 in the samples is largely real: a Cyrillic alphabet out of a font table, a Thai
-one, `MACADDRESS`, `*.tar`, `Great Scott Gadgets PortaPack Mayhem`.
+one, `MACADDRESS`, `*.tar`, `Great Scott Gadgets PortaPack Mayhem`. A small
+Parquet file now reads as nothing but its column names and its values, each
+with the Thrift or plain length that counts it.
 
 What this costs, said plainly: wide text that is nothing but CJK or kana is not
 found, because those code units are also pairs of printable ASCII bytes and
