@@ -43,10 +43,11 @@ export type TreemapTree = {
   readonly none: string | null;
 };
 
-/** Boxes below this share of the current root are pooled rather than drawn as
- *  slivers. One in five hundred is about a pixel at the rail's size, which is
- *  the point at which a box stops being something a reader can point at. */
-export const POOL_SHARE = 1 / 500;
+/** The smallest box worth drawing on its own, in square pixels. Under about
+ *  four pixels each way there is nothing to point at, nothing to label and
+ *  nothing to tell apart from its neighbour, so the rest go in one box that
+ *  says how many they were. */
+export const POOL_UNDER = 20;
 
 // ---- structure ----
 

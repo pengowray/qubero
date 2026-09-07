@@ -4176,3 +4176,49 @@ table.rec tr.is-on td {
 .tm-box.is-hover {
   box-shadow: inset 0 0 0 2px #fff;
 }
+
+/* The treemap with its controls, in the rail and as a view of its own. */
+.tmp {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+.tmp-view {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+.tmp-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tmp-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+/* In the rail the map is a fixed strip; as a view it takes what is left after
+   the bar, the trail and the two lines under it. */
+.tmp-view .tmp-plot {
+  flex: 1;
+  min-height: 0;
+}
+.tmp-rail .tmp-plot {
+  height: 168px;
+}
+.tmp-trail {
+  margin-bottom: 0;
+}
+.tmp-line,
+.tmp-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tmp-note {
+  font-size: 11px;
+}
