@@ -881,6 +881,46 @@ fn letters(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
     false
 }
 
+/// Whether a wide run is a column of numbers rather than characters.
+///
+/// A table of offsets into something is a run of sixteen-bit numbers, and read
+/// two bytes at a time that is a run of characters passing every other test
+/// here: `00 a0 08 a0 10 a0 18 a0` is four Yi syllables and is a jump table in
+/// a Godot executable. Two things give one away.
+///
+/// Every entry is aligned, so every character is a multiple of eight. A letter
+/// is a multiple of eight about one time in eight, so five in a row is a table
+/// and not a word, and there are few enough wide runs in a file for one in
+/// thirty thousand to be no risk at all.
+///
+/// Or every entry is the same distance above the last. That is the same table
+/// without the alignment, and a step of one is left alone, since "abcdef" is a
+/// word a file might hold and "0123456789" certainly is.
+///
+/// Both are needed. A table with a gap in it is no longer a progression, and
+/// refusing only the exact ones hands the bytes to a reading of the same table
+/// with a step missing: on a Godot executable the strict test alone removed
+/// forty-two rows and put back seventy-four.
+fn counting(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
+    let units = || (start..end).step_by(2).filter_map(|i| unit_at(buf, i, big));
+    let n = units().count();
+    if n >= 5 && units().fold(0u16, |a, u| a | u) & 7 == 0 {
+        return true;
+    }
+    let mut it = units();
+    let (Some(a), Some(b)) = (it.next(), it.next()) else { return false };
+    let step = b as i32 - a as i32;
+    if step.unsigned_abs() < 2 || n < 4 {
+        return false;
+    }
+    let mut last = b;
+    it.all(|u| {
+        let ok = u as i32 - last as i32 == step;
+        last = u;
+        ok
+    })
+}
+
 /// Whether a wide run says more than one thing.
 ///
 /// A stretch of 90 90 90 90 is x86 padding and reads as a row of the same
@@ -1132,6 +1172,7 @@ fn consider(buf: &[u8], start: usize, end: usize, enc: Enc, min: usize, out: &mu
         && one_page(buf, start, end, big)
         && varied(buf, start, end, big)
         && letters(buf, start, end, big)
+        && !counting(buf, start, end, big)
     {
         let latin = (start..end)
             .step_by(2)

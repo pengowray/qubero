@@ -2033,6 +2033,21 @@ repeated reads as two taking turns. Both are perfectly coherent and neither is a
 word. Nor may a character be one Unicode guarantees will never be assigned: a
 firmware image padded with `ff` reads as U+FFFF over and over.
 
+**A wide run may not be a column of numbers.** A table of offsets into
+something is a run of sixteen-bit numbers, and read two bytes at a time that is
+a run of characters that passes every other rule here: `00 a0 08 a0 10 a0 18 a0`
+is four Yi syllables and is a jump table in a Godot executable. Two things give
+one away. Every entry is aligned, so every character is a multiple of eight, and
+a letter is a multiple of eight about one time in eight, so five in a row is a
+table and not a word. Or every entry is the same distance above the last, which
+is the same table without the alignment; a step of one is left alone, since
+"abcdef" is a word a file might hold and "0123456789" certainly is. Both are
+needed, because a table with a gap in it is no longer a progression, and
+refusing only the exact ones hands the bytes to a reading of the same table with
+a step missing: on a Godot executable the step test alone removed forty-two rows
+and put back seventy-four. Together they took eighty-four rows off that
+executable and twenty-six off `shell32.dll`, every one of them a table.
+
 **A wide run may not be mostly unpaired surrogates.** One is WTF-16 and is the
 reason the scan keeps them at all; half of them is compressed bytes. A Godot
 resource pack is full of runs that read as two unpaired halves and two Hangul
