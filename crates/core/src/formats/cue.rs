@@ -9,7 +9,7 @@
 //! not structure: `TRACK` belongs to the `FILE` above it because it came
 //! after it, not because it is further in.
 
-use crate::template::{Encoding, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, StrLen, Template, Ty as T, Until};
 
 pub fn cue() -> Template {
     Template::new("cue", T::structure("CueSheet", vec![("lines", T::repeat(line(), Until::End))]))
