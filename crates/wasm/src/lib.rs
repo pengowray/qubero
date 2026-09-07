@@ -2676,6 +2676,59 @@ impl Editor {
         .unwrap_or_default()
     }
 
+    /// The strings in the file from `from` onwards, for a file with no
+    /// template and no encoding of its own.
+    ///
+    /// `encodings` names which readings to look for, comma separated, out of
+    /// `ascii`, `utf16le` and `utf16be`; empty means all three. The reply is
+    /// the usual tri-state: strings, or the chunks it needs before it can
+    /// answer. `next` is where the caller carries on from, which is not the
+    /// end of the last string when the scan stopped for want of hits.
+    pub fn strings_scan(&self, space: u32, from: f64, want: u32, min_chars: u32, encodings: &str) -> String {
+        use qubero_core::stringscan;
+        let sh = self.at(space);
+        let pick = |name: &str| encodings.is_empty() || encodings.split(',').any(|e| e.trim() == name);
+        let opts = stringscan::Opts {
+            min_chars: min_chars as usize,
+            ascii: pick("ascii"),
+            utf16le: pick("utf16le"),
+            utf16be: pick("utf16be"),
+        };
+        let s = stringscan::scan(&sh.doc, from as u64, want as usize, opts);
+        serde_json::to_string(&StringsScanDto {
+            next: s.next as f64,
+            missing: s.missing.iter().map(|m| m.chunk as f64).collect(),
+            hits: s
+                .hits
+                .iter()
+                .map(|h| StringHitDto {
+                    at: h.at as f64,
+                    len: h.len as f64,
+                    enc: h.enc.name().to_string(),
+                    chars: h.chars,
+                    units: h.units,
+                    text: h.text.clone(),
+                    lone_surrogates: h.lone_surrogates,
+                    terminator: h.term.map_or(0, |t| t.bytes()) as u32,
+                    cut: h.cut,
+                    prefix: h
+                        .prefix
+                        .iter()
+                        .map(|p| StringPrefixDto {
+                            kind: p.kind.name().to_string(),
+                            at: p.at as f64,
+                            bytes: p.raw.clone(),
+                            value: p.value as f64,
+                            counts: p.counts.name().to_string(),
+                            with_terminator: p.with_terminator,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .unwrap_or_default()
+    }
+
     /// What a selected run of bytes says, read every way text can be read.
     ///
     /// Only a run of whole bytes lying together: a selection made over the bits
@@ -2825,6 +2878,38 @@ struct TextLineDto {
     /// Escape sequences as flat pairs of character index and length.
     escapes: Vec<u32>,
     lossy: bool,
+}
+
+#[derive(Serialize)]
+struct StringsScanDto {
+    hits: Vec<StringHitDto>,
+    missing: Vec<f64>,
+    next: f64,
+}
+
+#[derive(Serialize)]
+struct StringHitDto {
+    at: f64,
+    len: f64,
+    enc: String,
+    chars: u32,
+    units: u32,
+    text: String,
+    lone_surrogates: bool,
+    /// Bytes of zero after the text: none, one, or two after a wide string.
+    terminator: u32,
+    cut: bool,
+    prefix: Vec<StringPrefixDto>,
+}
+
+#[derive(Serialize)]
+struct StringPrefixDto {
+    kind: String,
+    at: f64,
+    bytes: Vec<u8>,
+    value: f64,
+    counts: String,
+    with_terminator: bool,
 }
 
 #[derive(Serialize)]

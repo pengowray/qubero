@@ -28,6 +28,7 @@ pub mod riscv;
 pub mod save;
 pub mod search;
 pub mod source;
+pub mod stringscan;
 pub mod template;
 pub mod text;
 pub mod textview;
