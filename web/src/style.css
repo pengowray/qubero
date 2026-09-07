@@ -2155,6 +2155,7 @@ button.welcome-crystal {
 .sv-row {
   position: absolute;
   inset-inline: 0;
+  container-type: inline-size;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2234,6 +2235,16 @@ button.welcome-crystal {
 .sv-note.is-odd {
   background: var(--accent-soft);
 }
+/* The bytes a length was read from, dropped whole rather than cut off letter
+   by letter when the pane is too narrow for the note. The width is the pane's,
+   not the window's, so this is a container query: the strings view sits beside
+   panels the reader can open and close. */
+@container (max-width: 38rem) {
+  .sv-hex {
+    display: none;
+  }
+}
+
 /* A reading the file does not vouch for. Dimmer rather than marked: these
    outnumber the vouched ones about four to one, and this view's rule is that
    the common case gets quieter, never louder. */

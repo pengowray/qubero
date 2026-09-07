@@ -924,11 +924,16 @@ export const STRINGSVIEW = {
     counts: string,
     withTerminator: boolean,
     weak: boolean,
-  ): string => {
-    const hex = bytes.map((b) => b.toString(16).padStart(2, "0")).join(" ");
+  ): { readonly before: string; readonly hex: string; readonly after: string } => {
     const term = withTerminator ? ", terminator included" : "";
     const what = weak ? "possible length prefix" : "length prefix";
-    return `${what} ${kind} ${hex} = ${countText(value, unitWord(counts))}${term}`;
+    return {
+      before: `${what} ${kind}`,
+      // A leading space and no "=", so that dropping the hex on a narrow pane
+      // leaves "length prefix u64 LE = 20 bytes", which still reads.
+      hex: " " + bytes.map((b) => b.toString(16).padStart(2, "0")).join(" "),
+      after: ` = ${countText(value, unitWord(counts))}${term}`,
+    };
   },
   /** Why a reading is only possible. The number is no wider than one character
    *  of the string, and nothing else in the file counts a string that way, so

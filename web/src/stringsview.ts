@@ -379,9 +379,15 @@ export class StringsView {
       const say = (p: typeof first, also: readonly string[]): HTMLElement => {
         const n = el("button", "sv-note sv-prefix");
         n.type = "button";
-        n.textContent =
-          SV.prefix(p.kind, p.bytes, p.value, p.counts, p.with_terminator, p.weak) +
-          (also.length > 0 ? SV.prefixAlso(also) : "");
+        // The hex is its own span so that a pane too narrow for the note
+        // drops it whole. Truncating from the right would eat the count
+        // first and leave "length prefix", the least specific words here.
+        const said = SV.prefix(p.kind, p.bytes, p.value, p.counts, p.with_terminator, p.weak);
+        n.append(
+          said.before,
+          el("span", "sv-hex", said.hex),
+          said.after + (also.length > 0 ? SV.prefixAlso(also) : ""),
+        );
         n.title = SV.prefixTitle(also.length > 0 ? same : [p], hit.len, hit.enc.startsWith("UTF-16"));
         // The common grade is the quieter one, the way the ASCII tag is
         // quieter than the rest of the encoding column.
