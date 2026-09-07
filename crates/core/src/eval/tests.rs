@@ -3097,6 +3097,45 @@ fn a_run_with_no_count_is_walked_to_the_end_of_its_room() {
     assert_eq!(out.unmapped_bits, 0);
 }
 
+/// A field that points back at bytes its siblings have already described is a
+/// second reading of them, not more of the file. npy writes its dtype as text
+/// and then a record view over the same text; xz lists its blocks and then
+/// points at the whole stream to say what it unpacks to. Counting both would
+/// say the file is twice the size it is.
+#[test]
+fn a_view_over_bytes_the_fields_describe_is_not_counted_twice() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![("a", T::u32(Big)), ("view", T::at_in_window(E::lit(0), T::bytes(E::lit(4))))],
+        ),
+    );
+    let d = doc(&[1, 2, 3, 4]);
+    let mut ev = Evaluator::new(t);
+    let (out, _) = kinds_to_the_end(&mut ev, &d);
+    assert_eq!(spent(&out, "uint", "u32 be"), (32, 1));
+    assert_eq!(spent(&out, "bytes", "bytes[]"), (0, 0));
+    assert_eq!(out.covered_bits, 32);
+    assert_eq!(out.unmapped_bits, 0);
+
+    // The same field pointing somewhere the run has not covered is a field
+    // like any other: this is how an AppleDouble reaches its data fork.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![("a", T::u32(Big)), ("fork", T::at_in_window(E::lit(4), T::bytes(E::lit(4))))],
+        ),
+    );
+    let d = doc(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let mut ev = Evaluator::new(t);
+    let (out, _) = kinds_to_the_end(&mut ev, &d);
+    assert_eq!(spent(&out, "bytes", "bytes[]"), (32, 1));
+    assert_eq!(out.covered_bits, 64);
+    assert_eq!(out.unmapped_bits, 0);
+}
+
 /// Bytes a structure does not cover are a gap. Nothing but the gap is
 /// recorded: a composite's own bits are its children's, and the only bits it
 /// contributes are the ones it is left holding.

@@ -244,8 +244,9 @@ struct OverviewDto {
     read_bytes: f64,
     /// How many of each byte value have been read, value 0 first. The whole
     /// 256 rather than the few commonest: a view drawing the spread of a file
-    /// wants the shape, and the shape is the tail. About a kilobyte of JSON a
-    /// step, against the 256 KiB the step read to fill it in.
+    /// wants the shape, and the shape is the tail. Two kilobytes or so of JSON
+    /// a step, since a count crosses as a float and writes its `.0`, against
+    /// the 256 KiB the step read to fill it in.
     histogram: Vec<f64>,
 }
 
@@ -321,9 +322,10 @@ struct KindTotalDto {
 const COMMON_BYTES: usize = 5;
 
 /// A scan's byte counts as the host reads them. Counts cross the boundary as
-/// `f64` like every other number here, and 256 of them is about a kilobyte of
-/// JSON: nothing beside the quarter of a megabyte the step read to fill it in,
-/// and beside the bucket string that already goes back every step.
+/// `f64` like every other number here, and 256 of them written out with the
+/// `.0` a float carries is a couple of kilobytes of JSON: nothing beside the
+/// quarter of a megabyte the step read to fill it in, or beside the bucket
+/// string that already goes back every step.
 fn histogram(scan: &overview::Scan) -> Vec<f64> {
     scan.histogram().iter().map(|&n| n as f64).collect()
 }
@@ -1756,6 +1758,10 @@ impl Editor {
         sh.bpf = None;
         sh.bpf_complete = false;
         sh.ne = None;
+        // Every path in the walk is a path through the template that was in
+        // use, and under another template the same path is another field. The
+        // byte-class scan beside it is about bytes and stands; this does not.
+        sh.kinds = None;
         sh.template = name.to_string();
         if name.is_empty() {
             sh.eval = None;
@@ -1789,6 +1795,9 @@ impl Editor {
         sh.bpf = None;
         sh.bpf_complete = false;
         sh.ne = None;
+        // The paths the walk holds are paths through the template it is
+        // leaving. See `set_template`.
+        sh.kinds = None;
         sh.template = String::new();
         match magicrule::match_signature(rules, head) {
             Some(sig) => {
