@@ -286,8 +286,8 @@ export function bitsTree(histogram: readonly number[], scanned: number, total: n
       value: set + clear,
       color: UNMAPPED_COLOR,
       children: [
-        { key: "1", name: TREEMAP.bits.set, value: set, color: SET_COLOR, detail: TREEMAP.bitsTitle("1", `${set.toLocaleString()} bits`, percentText(set, set + clear)) },
-        { key: "0", name: TREEMAP.bits.clear, value: clear, color: CLEAR_COLOR, detail: TREEMAP.bitsTitle("0", `${clear.toLocaleString()} bits`, percentText(clear, set + clear)) },
+        { key: "1", name: TREEMAP.bits.set, value: set, color: SET_COLOR, colorClass: "tm-bit-set", detail: TREEMAP.bitsTitle("1", `${set.toLocaleString()} bits`, percentText(set, set + clear)) },
+        { key: "0", name: TREEMAP.bits.clear, value: clear, color: CLEAR_COLOR, colorClass: "tm-bit-clear", detail: TREEMAP.bitsTitle("0", `${clear.toLocaleString()} bits`, percentText(clear, set + clear)) },
       ],
     },
     unit: "count",
@@ -298,7 +298,8 @@ export function bitsTree(histogram: readonly number[], scanned: number, total: n
 
 /** Ink and paper, so the two boxes survive greyscale and colour blindness:
  *  the difference between them is lightness, which is the only channel two
- *  boxes of one number need. */
+ *  boxes of one number need. Kept here as well as in the stylesheet for a
+ *  caller drawing without it. */
 const SET_COLOR = "var(--fg)";
 const CLEAR_COLOR = "var(--line)";
 
