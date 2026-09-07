@@ -99,6 +99,16 @@ impl Memo {
     pub(super) fn forget_node(&mut self, path: &[usize]) {
         self.nodes.remove(path);
         self.lists.remove(path);
+        // How far a sequential walk of the parent had got is a note about
+        // nodes that are in here, and this one has just left. `resolve_upto`
+        // starts from that mark and would step straight over the hole,
+        // leaving the element after it to be placed from a sibling nothing
+        // has read. So the mark comes back to where the hole begins.
+        if let Some((&last, parent)) = path.split_last() {
+            if let Some(l) = self.lists.get_mut(parent) {
+                l.seq_end = l.seq_end.min(last);
+            }
+        }
     }
 
     /// What the list at `path` has learned about itself. A node that is not a
