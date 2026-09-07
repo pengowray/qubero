@@ -1984,7 +1984,10 @@ around it says it was written as one, and three things can:
   characters are the small ones, which is also what a short string's length
   looks like. Such a match is the run's own boundary read a second time. A
   `u32` in front of a wide run has to carry two more zero bytes than the
-  boundary needed, and that it does is worth knowing.
+  boundary needed, and that it does is worth knowing. Numbers of eight bytes
+  are read as well, since GGUF counts every key and every string value by one:
+  before they were read, a scan of a model file listed a hundred and fifty
+  thousand strings and found four numbers in front of them.
 * A neighbour counted the same way. A resource section is a table of counted
   strings laid end to end, where the numbers are one unit wide and there are no
   terminators at all. One such number says nothing; two in a row, each landing
@@ -2001,6 +2004,19 @@ Cyrillic, and the high byte of its characters says which. A MIPS instruction
 word is three characters of one page and one of another, and that is what the
 allowance is scaled to refuse. Half of a surrogate pair never counts as a stray,
 so an emoji in a line of Latin text costs the line nothing.
+
+Two kinds of stray are not allowed at all, however few. One whose low half is a
+control byte is not a character but a boundary read as one: a .NET user string
+heap stores a length, the characters, then a flag byte, and that flag byte read
+together with the next line's length is a stray, so three hundred lines of the
+heap read as a single run of ten thousand characters and the last line's
+terminator spoke for all of them. And one from a part of Unicode nobody writes
+in is refused for the reason the next rule gives, which applies to a stray as
+much as to the page a run is mostly from: a Windows dialog template begins
+`ff ff` and a class number, which reads as two fullwidth characters in front of
+the string and makes that reading two characters longer than the right one.
+Removing that exemption took `shell32.dll.mui` from two hundred and forty-one
+big-endian readings to thirteen without losing a string.
 
 **That part of Unicode must be one text is written in.** Everything above the
 surrogates is private use, compatibility forms, halfwidth and fullwidth forms
@@ -2043,6 +2059,21 @@ units cut are the ones that are eight-bit text read wide, and then the ones that
 are not from the part of Unicode the rest of the run is from. A surrogate is
 never cut: half a pair at the end of a run is the character the reader came for.
 
+**A run is offered in pieces as well as whole**, cut wherever the page changes.
+Trimming works from the ends, so one character of the string's own page sitting
+among the rubbish in front of it pins the cut in place: before "providerOptions"
+in a .NET assembly are three Han characters with a `z` between each of them, and
+the cut stopped at the first `z`, sending a run of four pages to the page test
+to lose. Cutting at every change of page offers the string on its own and offers
+the rubbish separately, where it fails on its own account. The whole run outranks
+its pieces and takes the bytes wherever it still stands, so a run that holds
+together is unaffected; where it cannot say it is a string, the pieces are there
+to be taken instead. If the run held together its pieces come from what the trim
+left, and if it did not they come from the raw run, since trimming assumes a run
+is a string with rubbish at its ends and a failed run may be rubbish with strings
+in it. One run of thirteen thousand bytes was cut back to a point before the
+first of the strings inside it.
+
 **A run may not begin with a combining mark or a format character**, and where
 two readings cover the same bytes the one that needs less explaining wins:
 length first, then the reading whose characters are all in the first Unicode
@@ -2058,8 +2089,42 @@ that taking one at its word turns half a code section into strings: `c6 8b` is a
 perfectly good character, and it welds `)` and `D$P` into a five-character
 string that neither half was.
 
+#### The same bytes read the other way round
+UTF-16 whose characters sit in one page of 256 reads the same at the other
+endianness one byte over, less its first character. `70 00 72 00` is "pr"
+little-endian and "r" big-endian starting a byte later, and since a page of 256
+is what the rules above insist on, every ASCII string in a UTF-16 file is like
+that. Both readings are always found. One of them has to go, and the shifted one
+is always the later of the two, because what it loses is the first character.
+
+Which is shifted cannot be settled by which is better. The shifted reading can
+be the one holding all the evidence: a .NET user string heap puts a flag byte
+after each string, and that byte with the next string's length reads as a
+terminator to the shifted run and as nothing at all to the real one. `System.dll`
+listed three and a half thousand strings missing their first letter, every one
+of them with a terminator to show for it, while the readings that were right had
+nothing to say for themselves and were dropped before the two could compete.
+
+What settles it is the byte the later reading starts on, which is the second
+byte of the earlier reading's first character. Little-endian puts the character
+first and the zero second, so that byte is a zero and the byte in front of it is
+a letter: the later reading has begun halfway through a character and is the
+shifted one. Big-endian puts the zero first, so the byte in front is a zero and
+nothing is settled, which is right, because for big-endian text the later
+reading is shifted for exactly the same reason and there is nothing to choose it
+by. Then evidence decides, then length, then the even address.
+
+Whichever survives keeps what either reading found, since a terminator or a
+length belongs to the text and not to one way of reading it. Deciding the pair
+before the readings compete for the bytes is the whole of the fix: `System.dll`
+went from nine hundred and thirty-seven little-endian strings and three thousand
+seven hundred and fifty-nine big-endian to seven thousand eight hundred and
+eighteen and twenty, and `shell32.dll` from five thousand and ninety-four
+big-endian readings to three. A TrueType font, whose name table really is
+big-endian, still reads as big-endian.
+
 Together these took the sample collection from nine thousand three hundred and
-seventy wide strings to two hundred and twenty-three, while `notepad.exe` and
+seventy wide strings to two hundred and sixty-five, while `notepad.exe` and
 `shell32.dll` kept five thousand two hundred and twenty-eight, and what survives
 in the samples is largely real: a Cyrillic alphabet out of a font table, a Thai
 one, `MACADDRESS`, `*.tar`, `Great Scott Gadgets PortaPack Mayhem`. A small
@@ -2071,7 +2136,12 @@ found, because those code units are also pairs of printable ASCII bytes and
 nothing in the bytes says which reading was meant. Nor is text written entirely
 in fullwidth forms, nor a run whose characters come from several scripts at
 once, nor a short wide string with no zero after it and no number in front of
-it. Every one of those reads in the text view with UTF-16 chosen by hand. And a
+it. Every one of those reads in the text view with UTF-16 chosen by hand. A
+string can also gain a character it never had, where the field in front of it is
+a small number: a Windows menu item stores its id as two bytes and then the
+label, and an id of 80 reads as `P`, so "&Properties" is listed as
+"P&roperties". That is the boundary read twice again, seen from the other side,
+and nothing in the bytes distinguishes a small number from a character. And a
 chain split can be wrong: a long run of ordinary text whose bytes happen to tile
 under some prefix reading is split where nobody split it. The bytes and the
 arithmetic are on the row, which is the answer this project gives to every
