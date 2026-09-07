@@ -378,14 +378,20 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     let stop_i = (stop - base) as usize;
     let min = opts.min();
     let mut runs: Vec<Run> = Vec::new();
+    // Bytes that read as a column of numbers rather than as characters. A
+    // table is a property of the bytes and not of one reading of them, so
+    // every reading of a stretch marked here goes: refusing only the reading
+    // that gave the table away hands the bytes to the shifted one, which is
+    // the same table with its bytes paired up differently and passes.
+    let mut tables = vec![false; buf.len()];
     if opts.ascii {
         narrow_runs(buf, head, min, &mut runs);
     }
     if opts.utf16le {
-        wide_runs(buf, head, min, Enc::Utf16Le, &mut runs);
+        wide_runs(buf, head, min, Enc::Utf16Le, &mut runs, &mut tables);
     }
     if opts.utf16be {
-        wide_runs(buf, head, min, Enc::Utf16Be, &mut runs);
+        wide_runs(buf, head, min, Enc::Utf16Be, &mut runs, &mut tables);
     }
     // What counts each run, and which of them are part of a table of counted
     // strings. Both answers are wanted twice over: they decide whether a wide
@@ -396,6 +402,9 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     // A wide run has to say why it is one, and is asked before the readings
     // compete for the bytes, so a run that cannot answer does not take a
     // stretch away from an eight-bit reading that could.
+    runs.retain(|r| {
+        !r.enc.wide() || tables[r.start..r.end].iter().filter(|t| **t).count() * 2 <= r.end - r.start
+    });
     let vouch: Vec<bool> = runs
         .iter()
         .enumerate()
@@ -612,8 +621,27 @@ fn shifted_readings(buf: &[u8], base: u64, runs: &[Run], vouch: &[bool], table: 
 /// expects, noise and all.
 fn vouched(buf: &[u8], run: Run, counted: &[(PrefixKind, usize, u64)], table: bool) -> bool {
     let unit = run.enc.unit() as usize;
-    table || terminator(buf, run.end, run.enc).is_some() || counted.iter().any(|&(_, w, _)| w > unit)
+    run.chars as usize >= LONG_ENOUGH
+        || table
+        || terminator(buf, run.end, run.enc).is_some()
+        || counted.iter().any(|&(_, w, _)| w > unit)
 }
+
+/// How long a wide run has to be to speak for itself.
+///
+/// The rule above exists because four wide characters are cheap: four bytes of
+/// a file agreeing and four that only have to be zero. They stop being cheap
+/// quickly. Every character after the first has to keep to the same page and
+/// be printable, which is about one arrangement of two bytes in seven, so
+/// sixteen of them in a row is one stretch in `7^15`, and a file would have to
+/// be millions of times larger than any file to throw one up by chance.
+///
+/// The Windows shortcut that made this rule holds
+/// `.shell:::{3080F90D-D7AD-11D9-BD98-0000947B0257}`, forty-six characters of
+/// UTF-16 with a `93` after it rather than a zero and nothing but padding in
+/// front, and it was refused for the same reason a four-character run with
+/// nothing to say for itself is refused.
+const LONG_ENOUGH: usize = 16;
 
 /// Split a run where a chain of counted strings tiles it, and read out each
 /// piece. Most runs are one piece.
@@ -902,8 +930,16 @@ fn letters(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
 /// thirty thousand to be no risk at all.
 ///
 /// Or every entry is the same distance above the last. That is the same table
-/// without the alignment, and a step of one is left alone, since "abcdef" is a
-/// word a file might hold and "0123456789" certainly is.
+/// without the alignment. A step of one is left alone while a run is short,
+/// since "abcdef" is a word a file might hold and "0123456789" certainly is,
+/// but twelve characters each one above the last is a sorted list: a C library
+/// carries its collation tables that way, sixty Han characters in a row in
+/// code point order.
+///
+/// Or every character is written twice. Stereo audio at sixteen bits is a run
+/// of doubled samples, and eighty-five of them in one recording read as
+/// Odia with the same character twice over and over. A word has a double
+/// letter in it here and there; it does not have one in every place.
 ///
 /// Both are needed. A table with a gap in it is no longer a progression, and
 /// refusing only the exact ones hands the bytes to a reading of the same table
@@ -915,10 +951,35 @@ fn counting(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
     if n >= 5 && units().fold(0u16, |a, u| a | u) & 7 == 0 {
         return true;
     }
+    let all: Vec<u16> = units().collect();
+    if n >= 8 && n % 2 == 0 && all.chunks(2).all(|c| c[0] == c[1]) {
+        return true;
+    }
+    // Or every character is above the last, or every one below it. That is a
+    // sorted list of code points, which is what a font's coverage table and a
+    // library's collation table are; a word is not in alphabetical order.
+    // Strictly, so that a field padded with spaces before its letters is not
+    // caught by it.
+    if n >= 8 && (all.windows(2).all(|w| w[0] < w[1]) || all.windows(2).all(|w| w[0] > w[1])) {
+        return true;
+    }
+    // Or it says the same short thing over and over. A font's metrics repeat,
+    // and `$H$H$H$H` for sixty characters is a column of one number written
+    // twice; the leading character that is not part of the cycle is what
+    // carries it past the test for a run that says more than one thing.
+    if n >= 8 {
+        for period in 1..=4 {
+            let same = all.iter().skip(period).zip(&all).filter(|(a, b)| a == b).count();
+            if same * 5 >= (n - period) * 4 {
+                return true;
+            }
+        }
+    }
     let mut it = units();
     let (Some(a), Some(b)) = (it.next(), it.next()) else { return false };
     let step = b as i32 - a as i32;
-    if step.unsigned_abs() < 2 || n < 4 {
+    let least = if step.unsigned_abs() < 2 { 12 } else { 4 };
+    if step == 0 || n < least {
         return false;
     }
     let mut last = b;
@@ -1072,7 +1133,7 @@ fn is_low_surrogate(u: u16) -> bool {
 /// eight-bit reading already explains them and is the simpler account: "Hello
 /// world" read two bytes at a time is a row of CJK characters, and a scanner
 /// that believed that would report every English sentence twice.
-fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) {
+fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>, tables: &mut [bool]) {
     let big = enc.big();
     for parity in 0..2usize {
         let mut i = from + parity;
@@ -1134,14 +1195,14 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                 // strings in it. One run of thirteen thousand bytes in
                 // `System.dll` was cut back to a point before the first of the
                 // strings inside it.
-                let (lo, hi) = match consider(buf, a, b, enc, min, out) {
+                let (lo, hi) = match consider(buf, a, b, enc, min, out, tables) {
                     true => (a, b),
                     false => (start, j),
                 };
                 let mut at = lo;
                 while let Some((p, q)) = page_pieces(buf, at, hi, big) {
                     if (p, q) != (lo, hi) {
-                        consider(buf, p, q, enc, min, out);
+                        consider(buf, p, q, enc, min, out, tables);
                     }
                     at = q;
                 }
@@ -1155,7 +1216,7 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
 
 /// Reports `[start, end)` as a wide run if everything about it says string,
 /// and says whether it did.
-fn consider(buf: &[u8], start: usize, end: usize, enc: Enc, min: usize, out: &mut Vec<Run>) -> bool {
+fn consider(buf: &[u8], start: usize, end: usize, enc: Enc, min: usize, out: &mut Vec<Run>, tables: &mut [bool]) -> bool {
     let big = enc.big();
     if start + 2 > end {
         return false;
@@ -1180,8 +1241,15 @@ fn consider(buf: &[u8], start: usize, end: usize, enc: Enc, min: usize, out: &mu
         && one_page(buf, start, end, big)
         && varied(buf, start, end, big)
         && letters(buf, start, end, big)
-        && !counting(buf, start, end, big)
     {
+        // Asked last, and of runs that would otherwise have been reported,
+        // because a run judged a table takes its bytes out of the reckoning
+        // for every other reading of them. A four-unit scrap from the middle
+        // of a string is not allowed to do that.
+        if counting(buf, start, end, big) {
+            tables[start..end].fill(true);
+            return false;
+        }
         let latin = (start..end)
             .step_by(2)
             .all(|k| unit_at(buf, k, big).is_some_and(|u| u < 0x100 || u >= 0xd800));
@@ -1632,8 +1700,9 @@ mod tests {
     fn two_counted_strings_are_not_a_block() {
         // The same shape, too few to be anything but a coincidence. A number
         // one code unit wide in front of a run with no terminator is the run's
-        // own boundary read twice until enough of the file agrees.
-        let hits = all(string_table(&["Disk is not formatted", "(Debug)"]));
+        // own boundary read twice until enough of the file agrees. Short
+        // strings, since a long one speaks for itself. See `LONG_ENOUGH`.
+        let hits = all(string_table(&["Disk full", "(Debug)"]));
         assert!(hits.is_empty(), "{:?}", hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>());
     }
 

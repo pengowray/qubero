@@ -2042,17 +2042,45 @@ firmware image padded with `ff` reads as U+FFFF over and over.
 **A wide run may not be a column of numbers.** A table of offsets into
 something is a run of sixteen-bit numbers, and read two bytes at a time that is
 a run of characters that passes every other rule here: `00 a0 08 a0 10 a0 18 a0`
-is four Yi syllables and is a jump table in a Godot executable. Two things give
-one away. Every entry is aligned, so every character is a multiple of eight, and
-a letter is a multiple of eight about one time in eight, so five in a row is a
-table and not a word. Or every entry is the same distance above the last, which
-is the same table without the alignment; a step of one is left alone, since
-"abcdef" is a word a file might hold and "0123456789" certainly is. Both are
-needed, because a table with a gap in it is no longer a progression, and
-refusing only the exact ones hands the bytes to a reading of the same table with
-a step missing: on a Godot executable the step test alone removed forty-two rows
-and put back seventy-four. Together they took eighty-four rows off that
-executable and twenty-six off `shell32.dll`, every one of them a table.
+is four Yi syllables and is a jump table in a Godot executable. Five things give
+one away, and each of them had to be added because the one before it left a
+shape behind:
+
+* Every entry is aligned, so every character is a multiple of eight. A letter is
+  a multiple of eight about one time in eight, so five in a row is a table.
+* Every entry is the same distance above the last. A step of one is left alone
+  while a run is short, since "abcdef" is a word a file might hold, but twelve
+  characters each one above the last is a sorted list.
+* Every character is above the last, or every one below it, over eight or more.
+  That is a sorted list of code points without the fixed step, which is what a
+  font's coverage table and a C library's collation table are. Strictly, so
+  that a field padded with spaces before its letters is not caught by it.
+* Every character is written twice. Sixteen-bit stereo is a run of doubled
+  samples, and eighty-five of them in one recording read as Odia.
+* It says the same short thing over and over: `$H$H$H$H` for sixty characters
+  is one number written twice, and the leading character that is not part of
+  the cycle is what carried it past the rule about saying more than one thing.
+
+A stretch judged a table is taken out of the reckoning for every reading of it,
+not just the one that gave it away. This matters more than any of the tests: a
+table read at the other endianness is the same table with its bytes paired up
+differently, so refusing one reading hands the bytes to the other, and the step
+test on its own removed forty-two rows from a Godot executable and put back
+seventy-four.
+
+**A wide run long enough speaks for itself**, at sixteen characters. The rule
+above about a wide run having to say why it is one exists because four wide
+characters are cheap. They stop being cheap quickly: every character after the
+first has to keep to the same page and be printable, about one arrangement of
+two bytes in seven, so sixteen in a row is one stretch in `7^15`. Without this
+a UTF-16 text file yields nothing at all, since nothing terminates its lines and
+no number counts them, and neither does a Windows shortcut: the one that made
+the rule holds `.shell:::{3080F90D-D7AD-11D9-BD98-0000947B0257}` with a `93`
+after it rather than a zero. It found thirteen hundred more real strings in
+`shell32.dll.mui`, whose resource strings mostly have neither a terminator nor a
+length, and it is why the tests above about tables were needed: sixteen
+characters is also within reach of a column of numbers, and a font went from
+twenty-eight wide rows to two hundred and seventeen before they were written.
 
 **A wide run may not be mostly unpaired surrogates.** One is WTF-16 and is the
 reason the scan keeps them at all; half of them is compressed bytes. A Godot
