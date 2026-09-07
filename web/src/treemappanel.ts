@@ -13,7 +13,7 @@
 import type { Doc, FieldPick } from "./doc.js";
 import type { OutlineHeading } from "./outline.js";
 import { TREEMAP } from "./strings.js";
-import { boxAt, drawTreemap, nodeAt, type TreeNode } from "./treemap.js";
+import { boxAt, drawTreemap, nodeAt } from "./treemap.js";
 import { bitsLine, bitsTree, bytesTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type TreemapMode, type TreemapTree } from "./treemapdata.js";
 
 /** The whole-file scan's resolution. The same number the rail's byte-class map
@@ -77,15 +77,20 @@ export class TreemapPanel {
       rememberMode(this.mode);
       this.draw();
     });
-    // In the rail the heading beside it already says what this is; a view has
-    // room to write the question the options answer.
-    if (!compact) {
+    // The rail's own heading row: the name on the left and the picker on the
+    // right, the way the block section shares its row with its close button.
+    // A view has room to write the question the options answer instead.
+    if (compact) {
+      const head = document.createElement("h3");
+      head.textContent = TREEMAP.title;
+      bar.append(head, this.pick);
+    } else {
       const label = document.createElement("label");
       label.className = "tmp-label";
       label.textContent = TREEMAP.groupBy;
       label.append(this.pick);
       bar.append(label);
-    } else bar.append(this.pick);
+    }
 
     this.trail = document.createElement("div");
     this.trail.className = "tmp-trail insp-crumbs";
@@ -109,7 +114,6 @@ export class TreemapPanel {
     this.line.className = "tmp-line";
     this.note = document.createElement("div");
     this.note.className = "tmp-note";
-    this.note.textContent = TREEMAP.hint;
 
     this.el.append(bar, this.trail, this.plot, this.line, this.note);
     // Backspace is the way back out, which is what it means everywhere else a
@@ -189,6 +193,7 @@ export class TreemapPanel {
     if (!this.trail.hidden) this.drawTrail();
     this.line.textContent = t.none ?? t.progress ?? this.underLine();
     this.line.hidden = this.line.textContent === "";
+    this.note.textContent = this.crumbs.length === 0 ? TREEMAP.hint : `${TREEMAP.hint} ${TREEMAP.hintBack}`;
     this.note.hidden = t.none !== null;
     if (t.none !== null || width < 8 || height < 8) {
       this.plot.replaceChildren();
@@ -254,9 +259,10 @@ export class TreemapPanel {
     if (found === null) return;
     const node = found.node;
     if (into) {
-      if (this.mode !== "structure") return;
-      const path = pathOfNode(found.trail);
-      if (path === null) return;
+      const path = node.path;
+      // Only a box that is a node of the template can be opened: a group the
+      // treemap invented has nothing under it to go to.
+      if (this.mode !== "structure" || path === undefined) return;
       this.crumbs.push({ name: node.name, path });
       this.root = path;
       this.draw();
@@ -276,18 +282,6 @@ function rememberMode(mode: TreemapMode): void {
   } catch {
     // A browser that will not remember is a browser that opens on Structure.
   }
-}
-
-/** The template path a trail of boxes names, when every step of it came from
- *  the template rather than from a group the treemap invented. */
-function pathOfNode(trail: readonly TreeNode[]): readonly number[] | null {
-  const steps: number[] = [];
-  for (const node of trail.slice(1)) {
-    const n = Number(node.key.split("/").pop());
-    if (!Number.isInteger(n)) return null;
-    steps.push(n);
-  }
-  return steps.length === 0 ? null : steps;
 }
 
 function nodeOf(doc: Doc, path: readonly number[]): import("./doc.js").TemplateNode | null {

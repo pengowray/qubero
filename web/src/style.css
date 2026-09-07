@@ -4195,6 +4195,15 @@ table.rec tr.is-on td {
   align-items: center;
   gap: 6px;
 }
+/* In the rail the name and the picker share one heading row, the way the
+   block section shares its row with its close button. A picker on a row of
+   its own would cost a row of the map at 256px. */
+.tmp-rail .tmp-bar {
+  justify-content: space-between;
+}
+.tmp-rail .tmp-bar h3 {
+  margin: 0;
+}
 .tmp-label {
   display: inline-flex;
   align-items: center;
@@ -4208,7 +4217,14 @@ table.rec tr.is-on td {
   flex: 1;
   min-height: 0;
 }
+/* A column of flex children shrinks them all by default, and this one has a
+   map with a fixed height in it that must not be squeezed into the rows above
+   and below it. */
+.tmp-rail {
+  flex: 0 0 auto;
+}
 .tmp-rail .tmp-plot {
+  flex: 0 0 auto;
   height: 168px;
 }
 .tmp-trail {

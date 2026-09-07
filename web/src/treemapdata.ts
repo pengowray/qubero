@@ -87,6 +87,7 @@ function heading(h: OutlineHeading, inside: readonly OutlineHeading[]): TreeNode
     value: h.sizeBits,
     color: sectionColor(h.section),
     range: { offsetBits: h.offsetBits, sizeBits: h.sizeBits },
+    path: h.path,
   };
   return kids.length === 0 ? base : { ...base, children: kids };
 }
@@ -111,6 +112,7 @@ function nodeTree(doc: Doc, path: readonly number[]): TreeNode {
     color: sectionColor(path[0] ?? 0),
     detail: n.type,
     range: { offsetBits: n.offset_bits, sizeBits: n.size_bits },
+    path,
   };
   if (!n.composite || n.child_count === 0) return self;
   const kids = doc.templateChildren(path, 0, Math.min(n.child_count, CHILDREN_MAX));
@@ -131,6 +133,7 @@ function childBox(k: TemplateNode, section: number): TreeNode {
     color: sectionColor(section),
     detail: k.type,
     range: { offsetBits: k.offset_bits, sizeBits: k.size_bits },
+    path: k.path,
   };
   return k.composite && k.child_count > 0 ? { ...base, children: [] } : base;
 }

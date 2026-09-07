@@ -231,8 +231,12 @@ export const TREEMAP = {
   /** The root of the trail, where the root is not a template node with a name
    *  of its own. */
   root: "File",
-  /** Both mouse verbs and the way back, in the order a reader meets them. */
-  hint: "Click a rectangle to go to its bytes. Double-click to open it. Backspace goes back up.",
+  /** Both mouse verbs and the way back, in the order a reader meets them. The
+   *  way back is held until there is somewhere to go back to: in a 256px rail
+   *  a third sentence costs a third of the map, and Backspace means nothing
+   *  before a reader has opened anything. */
+  hint: "Click a rectangle to go to its bytes. Double-click to open it.",
+  hintBack: "Backspace goes back up.",
   /** Byte values, in four contiguous groups. Zero is on its own because it is
    *  the one value every reader wants isolated, which the plain 00-7F split
    *  would have buried in among the text. */

@@ -22,6 +22,7 @@ import { NO_TEMPLATE, REPORT } from "./strings.js";
 import type { Doc, FocusState, OverviewState, Span } from "./doc.js";
 import type { FieldPick } from "./doc.js";
 import { fileMap, markMap, segmentWidths } from "./filemap.js";
+import { TreemapPanel } from "./treemappanel.js";
 import type { MapMark, MapSegment } from "./filemap.js";
 import type { OutlineHeading, Viewport } from "./outline.js";
 import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.js";
@@ -287,6 +288,7 @@ export class OverviewPanel {
   private readonly contentsEl: HTMLElement;
   private readonly logicalEl: HTMLElement;
   private readonly notes: HTMLElement;
+  private readonly treemap: TreemapPanel;
 
   private readonly focusEl: HTMLElement;
   private readonly focusHead: HTMLElement;
@@ -440,6 +442,12 @@ export class OverviewPanel {
       this.focusGaps,
     );
 
+    // The same widget the Treemap view mounts, given a column instead of the
+    // workspace. The map above says where things are; this says how much of
+    // the file they are, which is the question the map cannot answer once the
+    // small things are under a pixel.
+    this.treemap = new TreemapPanel(this.doc, true);
+
     this.body = document.createElement("div");
     this.body.className = "ov-body";
     this.body.append(
@@ -448,6 +456,7 @@ export class OverviewPanel {
       this.readout,
       this.legend,
       this.layout,
+      this.treemap.el,
       // Straight under the map the cell was picked on: the cell and the
       // zoomed-in view of it are one thing to look at.
       this.focusEl,
@@ -542,6 +551,7 @@ export class OverviewPanel {
    * parts, so nothing is rebuilt for those.
    */
   setOutline(headings: readonly OutlineHeading[]): boolean {
+    this.treemap.setOutline(headings);
     const old = this.headings;
     const template = this.doc.template;
     const same =
@@ -639,6 +649,7 @@ export class OverviewPanel {
    */
   pump(): void {
     if (this.el.offsetParent === null || this.body.hidden) return;
+    this.treemap.pump();
     this.pumpMap();
     this.pumpFocus();
     if (this.logicalStale && this.tab === "logical") this.scheduleLogical();
