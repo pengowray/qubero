@@ -1919,59 +1919,109 @@ line is not a string.
 
 #### Telling text from bytes that look like it
 Almost every sixteen-bit number is some printable character, so the hard part
-is not finding wide text but refusing everything else. Four rules do it, and
-each one names a different way arbitrary bytes imitate a string.
+is not finding wide text but refusing everything else. A first pass over a real
+binary reported a page of gibberish beside the strings worth reading, and a
+three-hundred-kilobyte recording of a bat produced thirty eight-bit strings and
+four thousand nine hundred wide ones, not one of which was a string.
 
-A wide run must have a high byte that is not printable ASCII in half its units.
+`crates/core/examples/strings.rs` is how each rule below was measured rather
+than guessed at: it runs the scanner over a directory and counts what came out,
+and every number in this section came from pointing it at the sample collection,
+at a Windows `notepad.exe` and `shell32.dll` for files rich in real UTF-16, and
+at that recording for a file with none.
+
+**A wide run has to say why it is one.** This is the rule that does most of the
+work, and it is about evidence rather than about characters. Four printable
+ASCII bytes in a row are four bytes of a file agreeing. Four printable UTF-16 LE
+characters of Latin text are four bytes agreeing and four bytes that only have
+to be zero, and quiet audio, a depth buffer and a table of small integers all
+supply those zeroes for nothing. So a wide run is reported only when something
+around it says it was written as one, and three things can:
+
+* A zero code unit after it. Two bytes that had to be anything, and are zero.
+* A number in front of it wider than one code unit. A number exactly one unit
+  wide is worth nothing here: a run is maximal, so the unit in front of it is
+  one that is not a printable character, and the values that are not printable
+  characters are the small ones, which is also what a short string's length
+  looks like. Such a match is the run's own boundary read a second time. A
+  `u32` in front of a wide run has to carry two more zero bytes than the
+  boundary needed, and that it does is worth knowing.
+* A neighbour counted the same way. A resource section is a table of counted
+  strings laid end to end, where the numbers are one unit wide and there are no
+  terminators at all. One such number says nothing; two in a row, each landing
+  exactly where the string after it starts, is a table.
+
+The eight-bit pass is deliberately not held to any of this. Four printable bytes
+in a row is what `strings(1)` reports and what a reader of this view expects,
+noise and all.
+
+**A wide run's characters must be from one part of Unicode**, with one stray
+allowed for every eight characters, which is none at all at the shortest length
+reported. Real text does not wander: a run of it is Latin, or Greek, or
+Cyrillic, and the high byte of its characters says which. A MIPS instruction
+word is three characters of one page and one of another, and that is what the
+allowance is scaled to refuse. Half of a surrogate pair never counts as a stray,
+so an emoji in a line of Latin text costs the line nothing.
+
+**That part of Unicode must be one text is written in.** Everything above the
+surrogates is private use, compatibility forms, halfwidth and fullwidth forms
+and specials. Nobody writes a string in those, and all of them are where
+sixteen-bit numbers land: eight-bit audio at low amplitude has a high byte of
+`ff`, and read two bytes at a time that is a run of fullwidth punctuation,
+coherent and printable and not a string. This one rule took the bat recording
+from five hundred and eighty-eight strings to thirty-one.
+
+**A wide run must say more than one thing.** No character may take more than two
+thirds of it, and it needs three different characters. A stretch of `90 90 90
+90` is x86 padding and reads as one character over and over; `01 00 00 01`
+repeated reads as two taking turns. Both are perfectly coherent and neither is a
+word. Nor may a character be one Unicode guarantees will never be assigned: a
+firmware image padded with `ff` reads as U+FFFF over and over.
+
+**A wide run's high byte must not be printable ASCII**, in half its units.
 Without this every English sentence in the file is also a run of perfectly good
-CJK, because "Hello world" taken two bytes at a time is one. A run that ran on
-past its own end into eight-bit text is trimmed back by the same test.
+CJK, because "Hello world" taken two bytes at a time is one.
 
-Its characters must come mostly from one part of Unicode, three quarters of
-them sharing a high byte. Real text does not wander: a run of it is Latin, or
-Greek, or Cyrillic. A stretch of compiled code lands in five scripts in as many
-characters.
-
-No character may take more than two thirds of it. A stretch of `90 90 90 90` is
-x86 padding and reads as one character repeated, which is perfectly coherent
-and passes every other test. Nor may a character be one Unicode guarantees will
-never be assigned: a firmware image padded with `ff` reads two bytes at a time
-as U+FFFF over and over, and that is a coherent run of one page as well.
-
-Both ends of a run are cut back before any of this is asked, because a run is
-maximal and what lies either side of a string in a binary is whatever the
+**Both ends of a run are cut back before any of this is asked**, because a run
+is maximal and what lies either side of a string in a binary is whatever the
 compiler put there. Two bytes of that are usually some character, so the run
-reaches over the pointer in front of the string and the one behind it, and
-those few characters are why an otherwise coherent run stops looking coherent.
-The units cut are the ones that are eight-bit text read wide, and then the ones
-that are not from the part of Unicode the rest of the run is from. A surrogate
-is never cut: half a pair at the end of a run is the character the reader came
-for.
+reaches over the pointer in front of the string and the one behind it, and those
+few characters are why an otherwise coherent run stops looking coherent. The
+units cut are the ones that are eight-bit text read wide, and then the ones that
+are not from the part of Unicode the rest of the run is from. A surrogate is
+never cut: half a pair at the end of a run is the character the reader came for.
 
-A run may not begin with a combining mark or a format character, and where two
-readings cover the same bytes the one that needs less explaining wins: length
-first, then the reading whose characters are all in the first Unicode page,
-then the one that starts on an even address, since UTF-16 in a file is nearly
-always laid on two-byte boundaries. That last tie-break is what stops `01 02
-03` in front of a UTF-16 LE string being read as two wide characters and the
-rest of it big-endian.
+**A run may not begin with a combining mark or a format character**, and where
+two readings cover the same bytes the one that needs less explaining wins:
+length first, then the reading whose characters are all in the first Unicode
+page, then the one that starts on an even address, since UTF-16 in a file is
+nearly always laid on two-byte boundaries. That last tie-break is what stops
+`01 02 03` in front of a UTF-16 LE string being read as two wide characters and
+the rest of it big-endian.
 
 The eight-bit pass has one rule of its own. A run earns its place on a stretch
-of plain ASCII long enough on its own, or on holding two or more wide
-characters. Two bytes of x86 are a valid UTF-8 character often enough that
-taking one at its word turns half a code section into strings: `c6 8b` is a
+of plain ASCII long enough on its own, or on holding as many wide characters as
+the minimum asks for. Two bytes of x86 are a valid UTF-8 character often enough
+that taking one at its word turns half a code section into strings: `c6 8b` is a
 perfectly good character, and it welds `)` and `D$P` into a five-character
 string that neither half was.
 
+Together these took the sample collection from nine thousand three hundred and
+seventy wide strings to two hundred and forty-four, while `notepad.exe` and
+`shell32.dll` kept five thousand two hundred and twenty-two, and what survives
+in the samples is largely real: a Cyrillic alphabet out of a font table, a Thai
+one, `MACADDRESS`, `*.tar`, `Great Scott Gadgets PortaPack Mayhem`.
+
 What this costs, said plainly: wide text that is nothing but CJK or kana is not
 found, because those code units are also pairs of printable ASCII bytes and
-nothing in the bytes says which reading was meant. Nor is a run whose
-characters spread across many Unicode pages with no page holding three quarters
-of them. Both read in the text view with UTF-16 chosen by hand, which is what
-the encoding toggle's tooltip says. And a chain split can be wrong: a long run
-of ordinary text whose bytes happen to tile under some prefix reading is split
-where nobody split it. The bytes and the arithmetic are on the row, which is
-the answer this project gives to every reading it cannot prove.
+nothing in the bytes says which reading was meant. Nor is text written entirely
+in fullwidth forms, nor a run whose characters come from several scripts at
+once, nor a short wide string with no zero after it and no number in front of
+it. Every one of those reads in the text view with UTF-16 chosen by hand. And a
+chain split can be wrong: a long run of ordinary text whose bytes happen to tile
+under some prefix reading is split where nobody split it. The bytes and the
+arithmetic are on the row, which is the answer this project gives to every
+reading it cannot prove.
 
 The view holds two hundred thousand strings and stops there, which on a
 six-hundred-megabyte game executable read at the `strings(1)` minimum of four

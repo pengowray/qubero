@@ -359,6 +359,7 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     let head = (from - base) as usize;
     let stop_i = (stop - base) as usize;
     let min = opts.min();
+    #[allow(unused_mut)]
     let mut runs: Vec<Run> = Vec::new();
     if opts.ascii {
         narrow_runs(buf, head, min, &mut runs);
@@ -368,6 +369,13 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     }
     if opts.utf16be {
         wide_runs(buf, head, min, Enc::Utf16Be, &mut runs);
+    }
+    // A wide run has to say why it is one. See `wide_evidence`. This is asked
+    // before the readings compete for the bytes, so a run that cannot answer
+    // does not take a stretch away from an eight-bit reading that could.
+    if runs.iter().any(|r| r.enc.wide()) {
+        let told = evidence(buf, base, &runs);
+        runs = runs.into_iter().zip(told).filter(|(_, keep)| *keep).map(|(r, _)| r).collect();
     }
     // One stretch of bytes is one string, so where two readings of it overlap
     // only one of them is reported. The best account of the bytes takes them,
@@ -393,6 +401,91 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     for run in taken {
         emit(buf, base, run, more, opts, out);
     }
+}
+
+/// Which runs have something in the file saying they are strings, in the order
+/// they were given. An eight-bit run always does; see below.
+///
+/// A wide run gets its evidence too cheaply. Four printable ASCII bytes in a
+/// row are four bytes of a file agreeing; four printable UTF-16 LE characters
+/// of Latin text are four bytes agreeing and four bytes that only have to be
+/// zero, and quiet audio, a depth buffer and a table of small integers all
+/// supply those zeroes for nothing. Measured on a recording of a bat: three
+/// hundred kilobytes of samples produced thirty eight-bit strings and four
+/// thousand nine hundred wide ones, none of them a string.
+///
+/// So a wide run is reported only when something around it says it was written
+/// as one. Three things can:
+///
+/// * **A zero code unit after it.** Two bytes that had to be anything and are
+///   zero, which is one chance in sixty-five thousand of falling out of noise.
+///
+/// * **A number in front of it wider than one code unit.** A number exactly
+///   one unit wide is worth nothing here: a run is maximal, so the unit in
+///   front of it is one that is not a printable character, and the values that
+///   are not printable characters are the small ones, which is also what a
+///   short string's length looks like. Such a match is the run's own boundary
+///   read a second time. A `u32` in front of a wide run has to carry two more
+///   zero bytes than the boundary needed, and that it does is worth knowing.
+///
+/// * **A neighbour counted the same way.** A table of counted strings laid end
+///   to end is what a resource section is, and there the numbers are one unit
+///   wide and there are no terminators at all. One such number says nothing;
+///   two in a row, each landing exactly where the string after it starts, is a
+///   table.
+///
+/// The eight-bit pass is deliberately not held to any of this. Four printable
+/// bytes in a row is what `strings(1)` reports and what a reader of this view
+/// expects, noise and all.
+fn evidence(buf: &[u8], base: u64, runs: &[Run]) -> Vec<bool> {
+    use std::collections::HashMap;
+    let mut counted: Vec<Vec<PrefixKind>> = Vec::with_capacity(runs.len());
+    let mut out: Vec<bool> = Vec::with_capacity(runs.len());
+    for run in runs {
+        if !run.enc.wide() {
+            counted.push(Vec::new());
+            out.push(true);
+            continue;
+        }
+        let term = terminator(buf, run.end, run.enc);
+        let len = (run.end - run.start) as u64;
+        let readings = prefix_readings(buf, base, run.start, len, run.units, run.chars, run.enc, term);
+        let unit = run.enc.unit() as usize;
+        out.push(term.is_some() || readings.iter().any(|p| p.raw.len() > unit));
+        counted.push(readings.iter().map(|p| p.kind).collect());
+    }
+    // Where the counted runs begin and end, so a run can ask what sits next to
+    // it without walking the whole list. A table of a thousand strings would
+    // otherwise be a million comparisons.
+    let mut begins: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut ends: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, run) in runs.iter().enumerate() {
+        if !counted[i].is_empty() {
+            begins.entry(run.start).or_default().push(i);
+            ends.entry(run.end).or_default().push(i);
+        }
+    }
+    // A pair counted the same way vouches for both halves of itself, so this
+    // asks in both directions and needs no second pass.
+    for i in 0..runs.len() {
+        if out[i] || counted[i].is_empty() {
+            continue;
+        }
+        out[i] = counted[i].iter().copied().any(|kind| {
+            let Some(w) = kind.width() else { return false };
+            let beside = |list: Option<&Vec<usize>>| {
+                list.is_some_and(|js| {
+                    js.iter().any(|&j| j != i && runs[j].enc == runs[i].enc && counted[j].contains(&kind))
+                })
+            };
+            // The string after this one, counted by a number of the same kind
+            // sitting where this one stopped; or the string before it, counted
+            // by one sitting where that one stopped.
+            let before = runs[i].start.checked_sub(w).and_then(|k| ends.get(&k));
+            beside(begins.get(&(runs[i].end + w))) || beside(before)
+        });
+    }
+    out
 }
 
 /// Split a run where a chain of counted strings tiles it, and read out each
@@ -519,30 +612,42 @@ fn ascii_text(b: u8) -> bool {
     b == b'\t' || (0x20..0x7f).contains(&b)
 }
 
-/// Whether a wide run's characters come mostly from one part of Unicode.
+/// Whether a wide run's characters all come from one part of Unicode.
 ///
 /// This is what tells wide text from arbitrary bytes read two at a time.
 /// Almost every sixteen-bit number is some printable character, so a stretch
 /// of compiled code read as UTF-16 is a run of them, and a scanner with
 /// nothing to say about that reports a page of gibberish beside the strings
 /// worth reading. Real text does not wander: a run of it is Latin, or Greek,
-/// or Cyrillic, and the high byte of its characters says which. Three
-/// quarters of them agreeing leaves room for the punctuation and the odd
-/// emoji in a line of Latin text, and no room for a stretch of compiled code
-/// that lands in five scripts in as many characters.
+/// or Cyrillic, and the high byte of its characters says which.
+///
+/// How much wandering is allowed depends on how long the run is, because one
+/// stray character out of four is a different claim from one out of forty. A
+/// run is allowed one character from somewhere else for every eight it has,
+/// which is none at all at the shortest length reported. That is what
+/// separates a MIPS instruction word, which is three characters of one page
+/// and one of another, from a sentence.
+///
+/// Half of a surrogate pair is never counted against a run: an emoji in a line
+/// of Latin text is two units from a page of its own and is still the line the
+/// reader wrote.
 fn one_page(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
     let Some(page) = dominant_page(buf, start, end, big) else { return false };
+    if !text_page(page) {
+        return false;
+    }
     let mut units = 0u32;
-    let mut same = 0u32;
+    let mut stray = 0u32;
     let mut i = start;
     while i + 2 <= end {
-        if (unit_at(buf, i, big).unwrap_or(0) >> 8) as u8 == page {
-            same += 1;
+        let u = unit_at(buf, i, big).unwrap_or(0);
+        if (u >> 8) as u8 != page && !(0xd800..0xe000).contains(&u) {
+            stray += 1;
         }
         units += 1;
         i += 2;
     }
-    units > 0 && same * 4 >= units * 3
+    units > 0 && stray <= units / 8
 }
 
 /// The part of a wide run that is the string, without what it ran into at
@@ -584,6 +689,24 @@ fn trim(buf: &[u8], start: usize, end: usize, big: bool) -> (usize, usize) {
     (a, b)
 }
 
+/// Whether a part of Unicode is one a run of text is written in.
+///
+/// Everything above the surrogates is private use, compatibility forms,
+/// halfwidth and fullwidth forms, and specials. Nobody writes a string in
+/// those, and every one of them is where sixteen-bit numbers land: eight-bit
+/// audio at low amplitude has a high byte of 0xff, and read two bytes at a
+/// time that is a run of fullwidth punctuation, coherent and printable and not
+/// a string. Measured on a recording of a bat, this is what the last three
+/// hundred false readings had in common, and every one of them had a zero
+/// after it as well, since a silent sample is two zero bytes.
+///
+/// The cost is a run written entirely in fullwidth forms or halfwidth katakana
+/// and in nothing else, which goes the way CJK-only text goes and for the same
+/// reason. A run with any ordinary text in it keeps its page and is found.
+fn text_page(page: u8) -> bool {
+    page < 0xd8
+}
+
 /// The Unicode page most of a run's characters are from.
 fn dominant_page(buf: &[u8], start: usize, end: usize, big: bool) -> Option<u8> {
     let mut pages = [0u32; 256];
@@ -602,7 +725,8 @@ fn dominant_page(buf: &[u8], start: usize, end: usize, big: bool) -> Option<u8> 
 /// character; so does a run of zeroes in a table, or a fill byte in a disk
 /// image. None of them is a string, and every one of them passes every other
 /// test here, because one character repeated is perfectly coherent. Real text
-/// spreads itself: no character in a line of it takes two thirds of the line.
+/// spreads itself: no character in a line of it takes two thirds of the line,
+/// and even the shortest line has three different characters in it.
 fn varied(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
     let mut seen: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
     let mut units = 0u32;
@@ -615,7 +739,10 @@ fn varied(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
         units += 1;
         i += 2;
     }
-    units > 0 && most * 3 <= units * 2
+    // Three different characters, which every string of four has and an
+    // alternating pair of numbers does not: `01 00 00 01 01 00 00 01` reads as
+    // two characters taking turns, and that is a table, not a word.
+    units > 0 && most * 3 <= units * 2 && (seen.len() >= 3 || units < 3)
 }
 
 /// Whether a run of wide characters is one, or eight-bit text read two bytes
@@ -1413,18 +1540,48 @@ mod tests {
     }
 
     #[test]
-    fn a_wide_string_keeps_itself_and_not_what_sits_either_side_of_it() {
+    fn a_wide_string_keeps_itself_and_not_what_sits_in_front_of_it() {
         // The bytes around a string in a binary are whatever the compiler put
         // there, and two of them are usually some character. The run reaches
         // over them and has to be cut back, or the characters they add make an
         // otherwise coherent run look like six scripts at once.
         let mut b = vec![0xa0, 0xee, 0xe8, 0xb9];
         b.extend(utf16le("Open file"));
-        b.extend([0x5c, 0x7c, 0x29, 0x99]);
+        b.extend([0x00, 0x00, 0x5c, 0x7c]);
         let hits = all(b);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "Open file");
         assert_eq!(hits[0].at, 4);
+        assert_eq!(hits[0].term, Some(Term::NulNul));
+    }
+
+    #[test]
+    fn a_wide_string_keeps_itself_and_not_what_sits_after_it() {
+        // The same at the other end, where the number in front is what says
+        // the run is a string at all.
+        // Twenty-six bytes, counted by a number four bytes wide: two bytes
+        // more than the run's own boundary needed, which is what makes it
+        // worth believing. See `evidence`.
+        let mut b = vec![0xff, 0x1a, 0x00, 0x00, 0x00];
+        b.extend(utf16le("Cannot open a"));
+        b.extend([0x5c, 0x7c, 0x29, 0x99, 0x00]);
+        let hits = all(b);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "Cannot open a");
+        assert_eq!(hits[0].prefix[0].kind, PrefixKind::U32Le);
+        assert_eq!(hits[0].prefix[0].value, 26);
+    }
+
+    #[test]
+    fn a_wide_run_with_nothing_to_say_for_itself_is_not_reported() {
+        // Sixteen-bit numbers that happen to be printable characters. Quiet
+        // audio and a table of small integers both look like this, and neither
+        // is a string: no zero after it, no number in front that comes to its
+        // length.
+        let mut b = vec![0xa0, 0xee, 0xe8, 0xb9];
+        b.extend(utf16le("Open file"));
+        b.extend([0x5c, 0x7c, 0x29, 0x99]);
+        assert!(all(b).is_empty());
     }
 
     #[test]
