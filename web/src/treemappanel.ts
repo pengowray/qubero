@@ -213,18 +213,25 @@ export class TreemapPanel {
 
   private build(): TreemapTree {
     if (this.mode === "structure") return structureTree(this.doc, this.headings, this.root);
-    const h = this.histogram();
-    if (h === null) {
-      return { root: { key: "file", name: TREEMAP.root, value: 0, color: "var(--line)" }, unit: "count", progress: `Scanning the file… 0%`, none: null };
-    }
+    // Field type is a walk of the template, not a read of the bytes, so it
+    // must not be held up behind the byte scan or report the byte scan's
+    // progress as its own.
+    if (this.mode === "kinds") return blank(TREEMAP.reading(0));
     const scanned = this.scanned();
     const total = this.doc.lengthBytes;
+    const h = this.histogram();
+    // The scan is still on its way. The share it has reached is the honest
+    // number to show, and it is the one that moves: a line fixed at 0% reads
+    // as a scan that has stalled rather than one that has started.
+    if (h === null) return blank(SCANNING(percent(scanned, total)));
     if (this.mode === "bytes") return bytesTree(h, scanned, total);
-    if (this.mode === "bits") return bitsTree(h, scanned, total);
-    // Field type waits on the walk the core does not do yet.
-    return { root: { key: "file", name: TREEMAP.root, value: 0, color: "var(--line)" }, unit: "bits", progress: null, none: TREEMAP.reading(0) };
+    return bitsTree(h, scanned, total);
   }
 
+  /** The 256 byte counts the whole-file scan has accumulated, or null while it
+   *  has not reported them. A core built before the counts were put on the
+   *  wire reports none at all, which is the same answer as far as this is
+   *  concerned: there is nothing yet to draw. */
   private histogram(): readonly number[] | null {
     const step = this.doc.overviewStep(SCAN_BUCKETS);
     if (step.status !== "ok") return null;
@@ -272,6 +279,19 @@ export class TreemapPanel {
     if (range === undefined) return;
     this.onJump(range.offsetBits, range.offsetBits + range.sizeBits);
   }
+}
+
+/** A map with nothing in it yet, and the line saying why. */
+function blank(progress: string): TreemapTree {
+  return { root: { key: "file", name: TREEMAP.root, value: 0, color: "var(--line)" }, unit: "count", progress, none: null };
+}
+
+/** The whole-file scan's own line, so the treemap and the byte map above it
+ *  never report one scan two different ways. */
+const SCANNING = (share: number): string => `Scanning the file… ${share}%`;
+
+function percent(part: number, whole: number): number {
+  return whole === 0 ? 0 : Math.round((part / whole) * 100);
 }
 
 const MODE_KEY = "qubero.treemap.mode";
