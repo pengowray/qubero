@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{Step as MapStep, StepKind};
-use qubero_core::eval::{Explain, Graph, Origin, SpaceId, NO_PARENT};
+use qubero_core::eval::{Explain, Graph, KindWalk, Origin, SpaceId, NO_PARENT};
 use qubero_core::hexdump;
 use qubero_core::textview;
 use qubero_core::source::Source;
@@ -57,6 +57,10 @@ struct Sheet {
     /// The same over the one block a reader has picked out, at whatever
     /// resolution that block's own size allows.
     focus: Option<overview::Scan>,
+    /// The walk that totals the file's bits by field kind and type, run a step
+    /// at a time. Thrown away on any edit for the same reason the scan is:
+    /// every offset in it describes bytes that may have moved.
+    kinds: Option<KindWalk>,
 }
 
 impl Sheet {
@@ -110,6 +114,7 @@ impl Sheet {
             template: String::new(),
             scan: None,
             focus: None,
+            kinds: None,
         }
     }
 }
@@ -237,6 +242,11 @@ struct OverviewDto {
     zero_bytes: f64,
     text_bytes: f64,
     read_bytes: f64,
+    /// How many of each byte value have been read, value 0 first. The whole
+    /// 256 rather than the few commonest: a view drawing the spread of a file
+    /// wants the shape, and the shape is the tail. About a kilobyte of JSON a
+    /// step, against the 256 KiB the step read to fill it in.
+    histogram: Vec<f64>,
 }
 
 /// The same for one block, with what the whole block's bytes turned out to be
@@ -253,6 +263,9 @@ struct FocusDto {
     zero_bytes: f64,
     text_bytes: f64,
     read_bytes: f64,
+    /// The same full spread as the whole-file scan carries, so a view reading
+    /// one can read the other. `common` below is this sorted and cut short.
+    histogram: Vec<f64>,
     /// Entropy over the block's bytes, and the most a block this long could
     /// reach. The pair is the honest reading: 7.9 out of 8 means dense, 7.9
     /// out of 7.9 means only that there are not many bytes here.
@@ -271,10 +284,49 @@ struct CommonByteDto {
     count: f64,
 }
 
+/// Where the file's bits have gone, as far as the walk has got. The same
+/// stepped shape the byte-class scan answers in: partial totals every time,
+/// and `done` saying when to stop asking.
+#[derive(Serialize)]
+struct KindTotalsDto {
+    done: bool,
+    /// How far into the file the walk has reached. What is past this is in
+    /// none of the numbers below, so a view derives what is left to do as the
+    /// file's length less this.
+    reached_bits: f64,
+    /// Bits some field covers, which is the sum of `totals`.
+    covered_bits: f64,
+    /// Bits inside the reached region that no field covers.
+    unmapped_bits: f64,
+    totals: Vec<KindTotalDto>,
+}
+
+/// One kind-and-type pair, and what the file spends on it.
+#[derive(Serialize)]
+struct KindTotalDto {
+    /// The same word a field's row carries: "uint" | "int" | "float" |
+    /// "bytes" | "str" | "magic" | "enum" | "flags" | "composite". Worked out
+    /// from the type rather than from a value, so the two a value alone can
+    /// carry, "unread" and "unset", never appear here.
+    kind: &'static str,
+    #[serde(rename = "type")]
+    type_name: String,
+    bits: f64,
+    count: f64,
+}
+
 /// How many of a block's commonest byte values are worth naming. Enough to
 /// show a block is mostly two or three values; past that the count is the
 /// answer, not the list.
 const COMMON_BYTES: usize = 5;
+
+/// A scan's byte counts as the host reads them. Counts cross the boundary as
+/// `f64` like every other number here, and 256 of them is about a kilobyte of
+/// JSON: nothing beside the quarter of a megabyte the step read to fill it in,
+/// and beside the bucket string that already goes back every step.
+fn histogram(scan: &overview::Scan) -> Vec<f64> {
+    scan.histogram().iter().map(|&n| n as f64).collect()
+}
 
 #[derive(Serialize)]
 struct TextDto {
@@ -1179,6 +1231,20 @@ fn cell_dto(c: qubero_core::eval::Cell) -> CellDto {
     }
 }
 
+fn kind_totals_dto(t: qubero_core::eval::KindTotals) -> KindTotalsDto {
+    KindTotalsDto {
+        done: t.done,
+        reached_bits: t.reached_bits as f64,
+        covered_bits: t.covered_bits as f64,
+        unmapped_bits: t.unmapped_bits as f64,
+        totals: t
+            .totals
+            .into_iter()
+            .map(|k| KindTotalDto { kind: k.kind, type_name: k.type_name, bits: k.bits as f64, count: k.count as f64 })
+            .collect(),
+    }
+}
+
 fn wanted(e: &Evaluator) -> Vec<f64> {
     e.wanted().into_iter().map(|m| m.chunk as f64).collect()
 }
@@ -1519,6 +1585,7 @@ impl Editor {
         sh.ne = None;
         sh.scan = None;
         sh.focus = None;
+        sh.kinds = None;
     }
 
     /// An edit that replaced bits in place at `bit`. What the template made of
@@ -1535,6 +1602,7 @@ impl Editor {
         sh.ne = None;
         sh.scan = None;
         sh.focus = None;
+        sh.kinds = None;
     }
 
     /// One step of the byte-class scan behind the overview: at most a window
@@ -1564,6 +1632,7 @@ impl Editor {
                 zero_bytes: scan.zero_bytes() as f64,
                 text_bytes: scan.text_bytes() as f64,
                 read_bytes: scan.read_bytes() as f64,
+                histogram: histogram(scan),
             })),
         }
     }
@@ -1607,6 +1676,7 @@ impl Editor {
                     zero_bytes: scan.zero_bytes() as f64,
                     text_bytes: scan.text_bytes() as f64,
                     read_bytes: scan.read_bytes() as f64,
+                    histogram: hist.iter().map(|&n| n as f64).collect(),
                     entropy,
                     entropy_max,
                     distinct: scan.distinct() as f64,
@@ -1614,6 +1684,34 @@ impl Editor {
                 }))
             }
         }
+    }
+
+    /// One step of the walk that totals the file's bits by field kind and
+    /// type. The reply is the usual tri-state, with `node` carrying the totals
+    /// so far, so a view can draw a partial answer while the rest is worked
+    /// out. `done` on the node says when to stop asking.
+    ///
+    /// What has not been walked yet is in none of the totals. The caller has
+    /// `reached_bits` and the file's length and derives the rest from those,
+    /// rather than being handed a bucket for it that would look like a finding
+    /// about the file.
+    ///
+    /// An edit throws the walk away, and the next step starts it over.
+    pub fn kind_totals_step(&mut self, space: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let len = sh.doc.len_bits();
+        let Some(e) = &mut sh.eval else {
+            return reply::<KindTotalsDto>(Err(EvalError::Failed("no template".into())));
+        };
+        // A walk built for a file of another length is about other bytes.
+        if !matches!(&sh.kinds, Some(w) if w.file_bits() == len) {
+            sh.kinds = Some(KindWalk::new(len));
+        }
+        let walk = sh.kinds.as_mut().expect("just built");
+        e.begin_slice();
+        let out = e.kind_totals_step(&sh.doc, walk);
+        reply_with(out.map(kind_totals_dto), (e.reached_bits() / 8) as f64, Vec::new())
     }
 
     // ----- templates -----

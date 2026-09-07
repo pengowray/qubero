@@ -282,6 +282,10 @@ export type OverviewState = {
   readonly text_bytes: number;
   /** How far the scan has read, in bytes. */
   readonly read_bytes: number;
+  /** How many of each byte value have been read, value 0 first, 256 entries.
+   *  The whole spread rather than the commonest few: what a reader wants from
+   *  it is the shape, and the shape is in the tail. */
+  readonly histogram: readonly number[];
 };
 
 /** The same scan over one block, with what the block's bytes turned out to be
@@ -294,8 +298,41 @@ export type FocusState = OverviewState & {
   readonly entropy: number;
   readonly entropy_max: number;
   readonly distinct: number;
-  /** The values that appear most, commonest first. */
+  /** The values that appear most, commonest first. `histogram` sorted and cut
+   *  short, for a view that wants only the peaks. */
   readonly common: readonly { readonly value: number; readonly count: number }[];
+};
+
+/** One kind of field, of one type, and what the file spends on it. */
+export type KindTotal = {
+  /** The same word `TemplateNode.kind` carries, worked out from the type
+   *  rather than from a value: `unread` and `unset` are facts about bytes
+   *  rather than about types and never appear here. */
+  readonly kind: string;
+  /** The type as the type column writes it: `u16 le`, `cstr`, `ZipRecord`. */
+  readonly type: string;
+  readonly bits: number;
+  readonly count: number;
+};
+
+/** Where the file's bits have gone, as far as the walk has got. */
+export type KindTotals = {
+  /** True once the whole file is accounted for; until then ask again. */
+  readonly done: boolean;
+  /** How far into the file the walk has reached. What is past this is in none
+   *  of the numbers below, so bits still to do is the file's length less
+   *  this. */
+  readonly reached_bits: number;
+  /** Bits some field covers, which is the sum of `totals`. */
+  readonly covered_bits: number;
+  /** Bits inside the reached region that no field covers: the slack at the end
+   *  of a structure, padding between records, the tail of a file whose
+   *  template describes only its header. */
+  readonly unmapped_bits: number;
+  /** Biggest first. A composite is here only for the bits its children leave
+   *  over that its own syntax accounts for, so a structure's bytes are never
+   *  counted twice. */
+  readonly totals: readonly KindTotal[];
 };
 
 /** How the text in the search bar is read. */
@@ -1399,6 +1436,16 @@ export class Doc {
    */
   overviewFocusStep(from: number, to: number, buckets: number): TemplateReply<FocusState> {
     return this.handleReply<FocusState>(this.editor.overview_focus_step(this.space, from, to, buckets));
+  }
+
+  /**
+   * One step of the walk that totals the file's bits by field kind and type.
+   * The node carries the totals so far, so a partial answer can be drawn while
+   * the rest is worked out; `done` says when to stop asking. An edit throws the
+   * walk away, and the next step starts it over.
+   */
+  kindTotalsStep(): TemplateReply<KindTotals> {
+    return this.handleReply<KindTotals>(this.editor.kind_totals_step(this.space));
   }
 
   /** What is wrong with what the search bar holds, or "" when nothing is.
