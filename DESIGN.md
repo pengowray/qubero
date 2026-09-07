@@ -1941,8 +1941,9 @@ The text view reads a file that was written to be read. The other kind is an
 executable, a game archive, a firmware image, a save file: mostly not text, and
 the text it does hold is the part a reader can recognise with no template at
 all. `crates/core/src/stringscan/` is the model and `web/src/stringsview.ts`
-is the fourth main view. The scanner is four things and a file each: `runs.rs`
-finds where a run starts and stops and asks whether it is text, `pairs.rs`
+is the fourth main view. The scanner is a file per thing it does: `text.rs`
+says what a character is and whether a stretch of them is text, `runs.rs`
+walks the buffer and asks it where a run starts and stops, `pairs.rs`
 settles which way round a stretch of UTF-16 was written, `tables.rs` tells a
 table of numbers from a run of text, and `prefix.rs` reads the number in front
 of a string. `mod.rs` keeps the window, the public shape and what a hit says.

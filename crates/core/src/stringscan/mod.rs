@@ -43,6 +43,7 @@ mod pairs;
 mod prefix;
 mod runs;
 mod tables;
+mod text;
 #[cfg(test)]
 mod tests;
 
@@ -50,6 +51,7 @@ use pairs::*;
 use prefix::*;
 use runs::*;
 use tables::*;
+use text::*;
 pub use prefix::{Counts, Prefix, PrefixKind, MAX_PREFIX_READINGS};
 
 /// Bytes scanned in one window.

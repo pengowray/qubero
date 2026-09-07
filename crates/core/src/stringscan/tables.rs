@@ -5,7 +5,7 @@
 //! text does not.
 
 use super::*;
-use super::runs::*;
+use super::text::*;
 
 /// How many strings a kind of number has to count, and what share of the runs
 /// in the window, before it is taken to be how this file counts its strings.

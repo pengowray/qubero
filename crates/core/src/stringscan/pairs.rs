@@ -5,7 +5,7 @@
 //! file meant. Settled here, before the two readings compete for the bytes.
 
 use super::*;
-use super::runs::*;
+use super::text::*;
 
 /// Settles which way round a stretch of wide text was written.
 ///

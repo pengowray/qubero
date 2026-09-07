@@ -5,7 +5,7 @@
 //! arithmetic is reported rather than scored.
 
 use super::*;
-use super::runs::*;
+use super::text::*;
 
 /// The most readings of one prefix that are reported. Several are usually the
 /// same number written at different widths, and the fourth adds nothing.
