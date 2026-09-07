@@ -105,18 +105,30 @@ fn mode2() -> T {
     T::structure(
         "Mode2Sector",
         vec![
+            ("subheader", subheader()),
+            ("subheader_copy", subheader()),
+            (
+                "body",
+                T::switch(E::within(&["subheader", "submode"]).and(E::lit(0x20)), vec![(0x20, form2())], form1()),
+            ),
+        ],
+    )
+}
+
+/// The eight bytes that say what this sector is part of and how to play it.
+///
+/// Written twice, so the two copies are two rows rather than eight fields with
+/// four of them suffixed. `within` reaches the first copy's submode from the
+/// body's switch, which is a path down into a field declared earlier: the same
+/// thing a nested length field does, and no new IR.
+fn subheader() -> T {
+    T::structure(
+        "Subheader",
+        vec![
             ("file_number", T::u8()),
             ("channel_number", T::u8()),
             ("submode", T::flags("Submode", T::u8(), SUBMODE)),
             ("coding", T::u8()),
-            ("file_number_copy", T::u8()),
-            ("channel_number_copy", T::u8()),
-            ("submode_copy", T::flags("Submode", T::u8(), SUBMODE)),
-            ("coding_copy", T::u8()),
-            (
-                "body",
-                T::switch(E::field("submode").and(E::lit(0x20)), vec![(0x20, form2())], form1()),
-            ),
         ],
     )
 }
@@ -239,10 +251,10 @@ mod tests {
         }
         let d = Document::new(MemSource(v));
         let mut e = Evaluator::new(cdrom());
-        // The body of the XA sector, which is the ninth field of the mode 2
+        // The body of the XA sector, which is the third field of the mode 2
         // structure sitting in the sector's fourth.
-        let form1 = e.node(&d, &[0, 0, 3, 8]).unwrap();
-        let form2 = e.node(&d, &[0, 3, 3, 8]).unwrap();
+        let form1 = e.node(&d, &[0, 0, 3, 2]).unwrap();
+        let form2 = e.node(&d, &[0, 3, 3, 2]).unwrap();
         assert_eq!(form1.child_count, 4, "form 1 keeps its correction");
         assert_eq!(form2.child_count, 2, "form 2 gives it to the data");
     }
