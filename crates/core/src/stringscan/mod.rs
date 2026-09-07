@@ -50,7 +50,7 @@ use pairs::*;
 use prefix::*;
 use runs::*;
 use tables::*;
-pub use prefix::{Counts, Prefix, PrefixKind};
+pub use prefix::{Counts, Prefix, PrefixKind, MAX_PREFIX_READINGS};
 
 /// Bytes scanned in one window.
 pub const WINDOW: u64 = 64 * 1024;
