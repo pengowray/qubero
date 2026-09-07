@@ -109,6 +109,27 @@ struct Frame {
     /// everything they skipped over a gap and then count the siblings that
     /// fill it as well.
     sequential: bool,
+    /// Children of this node that place *their* children by offset, kept back
+    /// until the ones laid out in order are done.
+    ///
+    /// A format sometimes describes one stretch twice. npy writes its dtype as
+    /// text and then, over the same text, a record view of the fields it
+    /// names; xz lists its header, blocks, index and footer and then points at
+    /// the whole stream to say what it unpacks to. Both are answers to "what
+    /// does this come to" rather than claims on bytes, and counting them would
+    /// say the file is bigger than it is. What tells them from a field the
+    /// format keeps elsewhere -- an AppleDouble's data fork, an ELF section --
+    /// is whether they land inside what the fields laid out in order already
+    /// cover, and that is only known once those fields are done. So they wait,
+    /// and are then judged against the cursor's final resting place.
+    deferred: Vec<u64>,
+    /// How many of `deferred` have been taken.
+    taking: usize,
+    /// The stretch the run that placed this node had already covered, for a
+    /// node whose children an offset puts somewhere. A child that lands wholly
+    /// inside it is a second view of bytes that run has described, and is
+    /// passed over. `(0, 0)` for everything else, which lets nothing through.
+    already: (u64, u64),
     /// Direct children this frame has resolved, to give back when it closes.
     /// Empty for a guarded list, which drops as it goes instead.
     born: Vec<Vec<usize>>,
@@ -138,7 +159,7 @@ struct Opening {
 }
 
 impl Opening {
-    fn frame(self, r: &Resolved, scale: u64, end: u64) -> Frame {
+    fn frame(self, r: &Resolved, scale: u64, end: u64, already: (u64, u64)) -> Frame {
         Frame {
             path: self.path,
             end,
@@ -153,13 +174,22 @@ impl Opening {
             // itself has left a gap.
             framed: matches!(&r.ty, Ty::Json(shape, _) if shape.composite()) && self.count > 0,
             type_name: r.ty.display_name(),
-            sequential: !matches!(r.ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::At { .. }),
+            sequential: !places(&r.ty),
+            deferred: Vec::new(),
+            taking: 0,
+            already,
             born: Vec::new(),
             prev: None,
             guarded: self.guarded,
             uniform: self.uniform,
         }
     }
+}
+
+/// Whether this node's children are wherever an offset read from the file put
+/// them, rather than one after another.
+fn places(ty: &Ty) -> bool {
+    matches!(ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::At { .. })
 }
 
 /// The walk, kept between goes. Held beside the evaluator rather than inside
@@ -294,8 +324,10 @@ impl Evaluator {
                 return Ok(());
             };
             // A run whose length only walking it settles stops when its room
-            // runs out; everything else stops when its children do.
-            let ends = f.next >= f.count || (f.count == u64::MAX && f.cursor >= f.end);
+            // runs out; everything else stops when its children do. The ones
+            // held back for later come after all of them: see `deferred`.
+            let in_order = f.next < f.count && !(f.count == u64::MAX && f.cursor >= f.end);
+            let ends = !in_order && f.taking >= f.deferred.len();
             let at = f.cursor;
             if ends {
                 self.close_frame(walk);
@@ -304,7 +336,7 @@ impl Evaluator {
             // One element of the allowance per child, which is what gives the
             // page a turn part-way through a long run rather than freezing it.
             self.spend(at)?;
-            self.one_child(doc, walk)?;
+            self.one_child(doc, walk, in_order)?;
         }
     }
 
@@ -324,32 +356,37 @@ impl Evaluator {
             return Ok(());
         }
         let opening = self.opening(doc, &[], &r)?;
-        walk.stack.push(opening.frame(&r, 1, walk.file_bits));
+        walk.stack.push(opening.frame(&r, 1, walk.file_bits, (0, 0)));
         Ok(())
     }
 
     /// Account for the next child of the frame on top, and open a frame over
     /// it when it holds anything.
-    fn one_child<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk) -> R<()> {
+    fn one_child<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk, in_order: bool) -> R<()> {
         let top = walk.stack.len() - 1;
         let (path, idx, scale, sequential) = {
             let f = &walk.stack[top];
+            let i = if in_order { f.next } else { f.deferred[f.taking] };
             let mut p = f.path.clone();
-            p.push(f.next as usize);
-            (p, f.next, f.scale, f.sequential)
+            p.push(i as usize);
+            // A child taken from the queue is one that puts its own children
+            // somewhere: it is not the next thing along, so it moves no cursor
+            // and leaves no gap behind it.
+            (p, i, f.scale, f.sequential && in_order)
         };
         let sized = self.resolve(doc, &path).and_then(|()| self.size_of(doc, &path));
         let size = match sized {
             Ok(size) => size,
             Err(e) if e.interrupted() => return Err(e),
-            // A field that will not read takes the rest of its parent with it
-            // rather than the walk: a structure places its fields one after
-            // another, so nothing after the one that failed can be placed
-            // either. What is left of the parent is a stretch the template
-            // could not read, and reads here as a gap, which is what the
-            // annotation column says about the same bytes.
+            // A field that will not read ends the run it is in rather than the
+            // walk: a structure places its fields one after another, so
+            // nothing after the one that failed can be placed either. What is
+            // left of the parent is a stretch the template could not read, and
+            // reads here as a gap, which is what the annotation column says
+            // about the same bytes. Fields it had put aside are still reached:
+            // those are placed by an offset and do not depend on this one.
             Err(_) => {
-                self.close_frame(walk);
+                walk.stack[top].next = walk.stack[top].count;
                 return Ok(());
             }
         };
@@ -359,7 +396,24 @@ impl Evaluator {
         // front of those. Reached only if a stream were descended into, which
         // `descends` refuses; kept here so that it stays refused.
         if r.space != 0 {
-            walk.stack[top].next += 1;
+            self.step_past(walk, top, in_order);
+            return Ok(());
+        }
+        // A field that puts its own children somewhere waits until the ones
+        // laid out in order are done, so that where they landed can be judged
+        // against what those cover. See `deferred`.
+        if in_order && places(&r.ty) {
+            let f = &mut walk.stack[top];
+            f.deferred.push(idx);
+            f.next += 1;
+            return Ok(());
+        }
+        // A second view of bytes the run that placed this has already
+        // described. See `already`.
+        let already = walk.stack[top].already;
+        if already.1 > already.0 && r.offset >= already.0 && r.offset + size <= already.1 {
+            self.note_born(walk, top, &path);
+            self.step_past(walk, top, in_order);
             return Ok(());
         }
         // Everything that can want bytes or run out of the allowance happens
@@ -382,7 +436,7 @@ impl Evaluator {
             // this one did, so the run would ask the same question of the same
             // offset for ever. `count_from` refuses the same thing.
             if walk.stack[top].count == u64::MAX && now == cursor {
-                self.close_frame(walk);
+                walk.stack[top].next = u64::MAX;
                 return Ok(());
             }
         } else {
@@ -407,7 +461,7 @@ impl Evaluator {
                 scale.saturating_mul(n).max(1)
             }
             _ => {
-                walk.stack[top].next += 1;
+                self.step_past(walk, top, in_order);
                 scale
             }
         };
@@ -417,8 +471,24 @@ impl Evaluator {
             walk.add(kind, r.ty.display_name(), size.saturating_mul(scale), scale);
             return Ok(());
         };
-        walk.stack.push(opening.frame(&r, scale, r.offset + size));
+        // What the run that placed this has already covered, for judging where
+        // its children land. Only a field held back until the end has one: by
+        // then the cursor has stopped moving, and anything inside it is a
+        // second view rather than more bytes.
+        let already = if in_order { (0, 0) } else { (walk.stack[top].offset, walk.stack[top].cursor) };
+        walk.stack.push(opening.frame(&r, scale, r.offset + size, already));
         Ok(())
+    }
+
+    /// Step the frame past the child just dealt with, whichever queue it came
+    /// from.
+    fn step_past(&mut self, walk: &mut KindWalk, top: usize, in_order: bool) {
+        let f = &mut walk.stack[top];
+        if in_order {
+            f.next += 1;
+        } else {
+            f.taking += 1;
+        }
     }
 
     /// Note a child so that the frame it belongs to can give it back.
@@ -453,7 +523,12 @@ impl Evaluator {
             Err(e) if e.interrupted() => return Err(e),
             Err(_) => 0,
         };
-        let guarded = self.guarded(doc, path, r)?;
+        // Dropped as the walk goes past, either because `walk.rs` already
+        // treats this list that way, or because its children are placed one
+        // per offset and so do not need each other: a zip's central directory
+        // is sixty thousand entries and remembering all of them to say what
+        // they came to is the memory this walk exists to not spend.
+        let guarded = self.guarded(doc, path, r)? || places(&r.ty);
         let uniform = if count > 1 && count != u64::MAX { self.exact_stride(doc, path, &r.ty)? } else { None };
         Ok(Opening { path: path.to_vec(), count, guarded, uniform })
     }
@@ -462,7 +537,11 @@ impl Evaluator {
     /// give the children back.
     fn close_frame(&mut self, walk: &mut KindWalk) {
         let f = walk.stack.pop().expect("called with a frame open");
-        let leftover = f.end.saturating_sub(f.cursor);
+        // A node whose children are wherever an offset put them tiles nothing
+        // and so leaves nothing over. The stretch it was declared across is
+        // the enclosing run's to account for; calling it a gap here would
+        // count the same bytes as missing and as covered at once.
+        let leftover = if f.sequential { f.end.saturating_sub(f.cursor) } else { 0 };
         if leftover > 0 {
             let bits = leftover.saturating_mul(f.scale);
             if f.framed {
