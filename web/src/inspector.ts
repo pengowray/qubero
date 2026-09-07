@@ -9,7 +9,9 @@ import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, FieldGraph, Origin, Relation, TemplateNode } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, countText, ROLE_GROUP, USED_BY, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
+import { bitSizeText, childWord, childrenHead, countText, INSIDE, REPORT, ROLE_GROUP, USED_BY, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
+import { CHILD_PAGE, insideValue, type Inside } from "./composite.js";
+import { fieldClass } from "./fieldstyle.js";
 import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
@@ -56,6 +58,11 @@ export class Inspector {
   /** Long values (bytes, text) are edited here instead, wrapped over lines. */
   private readonly area: HTMLTextAreaElement;
   private readonly note: HTMLElement;
+  /** The type and size of what the box is showing, under the box: the reader's
+   *  first question about a value is what it is. */
+  private readonly shape: HTMLElement;
+  /** What a structure holds, listed under it. */
+  private readonly kids: HTMLElement;
   private readonly detail: HTMLElement;
   /** Shift-and-mask for a value that does not start on a byte boundary. */
   private readonly formula: HTMLElement;
@@ -102,6 +109,11 @@ export class Inspector {
   /** Deep parser-only paths start compact. The omitted middle can be expanded
    * in place when somebody does need to inspect the underlying wrappers. */
   private crumbsExpanded = false;
+  /** How many of a structure's children the list has been asked to show.
+   *  Grows a page at a time and starts over on a different field, so opening
+   *  one long list does not make the next one long. */
+  private childCap = CHILD_PAGE;
+  private childCapFor = "";
   /** Which field's dependencies have the far ancestors unfolded, as its path
    *  written the way `data-path` writes it. Kept on the panel rather than in
    *  the DOM so that re-reading the same field does not fold them up again,
@@ -285,7 +297,32 @@ export class Inspector {
     this.openAs = document.createElement("div");
     this.openAs.className = "insp-openas";
     this.openAs.hidden = true;
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.note, this.semantics, this.openAs, this.origins, this.types);
+    this.shape = document.createElement("div");
+    this.shape.className = "insp-detail insp-shape";
+    this.shape.hidden = true;
+    // A structure's children, which are the value it does not have one of.
+    // The rows behave as the origin rows do: a click goes to the child, and
+    // pointing at one lights it in the views while the pointer rests here.
+    this.kids = document.createElement("div");
+    this.kids.className = "insp-kids";
+    this.kids.hidden = true;
+    this.kids.addEventListener("click", (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      if (t.dataset["more"] !== undefined) {
+        this.childCap += CHILD_PAGE;
+        this.render();
+        return;
+      }
+      const p = t.closest<HTMLElement>("[data-path]")?.dataset["path"];
+      if (p !== undefined) this.onPick(pathOf(p));
+    });
+    this.kids.addEventListener("mouseover", (e) => {
+      const t = e.target;
+      this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
+    });
+    this.kids.addEventListener("mouseleave", () => this.markHover(null));
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.shape, this.note, this.kids, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -779,8 +816,13 @@ export class Inspector {
     // stream, not of the file, and the two look the same written down. The
     // trail above already says which stream; this says which space the number
     // belongs to, beside the number.
+    // The type and the size used to be here too. They moved under the box,
+    // beside the value they describe: a reader who wants to know what they
+    // are looking at looks at the value first and the line under it next.
     const inside = n.space === 0 ? "" : ` ${DECODED_INSIDE}`;
-    this.detail.replaceChildren(at, `${inside} · ${n.type} · ${bitSizeText(n.size_bits)}`);
+    this.detail.replaceChildren(at, inside);
+    this.shape.textContent = `${n.type} · ${bitSizeText(n.size_bits)}`;
+    this.shape.hidden = false;
     // The formula reads bytes of the file by address. There is no address of
     // the file for these bytes, so there is no formula to write.
     if (n.space === 0) this.showFormula(n.offset_bits, n.size_bits, false);
@@ -793,11 +835,7 @@ export class Inspector {
       const why = DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER;
       this.detail.append(` · ${why}`);
     }
-    const long = !n.composite && (n.kind === "bytes" || n.kind === "str");
-    this.area.hidden = !long;
-    this.field.hidden = long;
-    if (long) this.fillArea(n);
-    else this.fillField(n);
+    this.fillValue(path, n);
     this.fillOrigins(path);
     this.fillTypes(path, n);
     this.fillSemantics(path, n);
@@ -1139,6 +1177,9 @@ export class Inspector {
     this.markHover(null);
     this.fieldRow.hidden = true;
     this.detail.hidden = true;
+    this.shape.hidden = true;
+    this.kids.hidden = true;
+    this.kids.replaceChildren();
     this.formula.hidden = true;
   }
 
@@ -1371,7 +1412,7 @@ export class Inspector {
    * null unmarks whatever was marked and says nothing is being pointed at.
    */
   private markHover(row: HTMLElement | null): void {
-    const on = row !== null && this.origins.contains(row) ? row : null;
+    const on = row !== null && (this.origins.contains(row) || this.kids.contains(row)) ? row : null;
     if (on === this.hoverRow) return;
     this.hoverRow?.classList.remove("is-hover");
     this.hoverRow = on;
@@ -1450,13 +1491,73 @@ export class Inspector {
     else this.status.textContent = "";
   }
 
-  private fillField(n: TemplateNode): void {
-    this.note.hidden = true;
+  /**
+   * What goes in the box, and what goes under it.
+   *
+   * A structure has no value of its own, so the box used to say how many
+   * children it had. For the two shapes that are one value written as several
+   * fields, a length beside its string and a short row of numbers, the box
+   * shows that value instead, read-only: what it is showing belongs to a child
+   * with an editor of its own, which is a row in the list underneath.
+   */
+  private fillValue(path: readonly number[], n: TemplateNode): void {
+    const key = path.join("/");
+    if (key !== this.childCapFor) {
+      this.childCapFor = key;
+      this.childCap = CHILD_PAGE;
+    }
+    const want = Math.min(n.child_count, this.childCap);
+    const reply = n.composite && want > 0 ? this.doc.templateChildren(path, 0, want) : null;
+    const kids = reply?.status === "ok" ? reply.node : null;
+    const inside = kids === null ? null : insideValue(n, kids);
+    const shown = inside?.kind === "payload" ? inside.node : n;
+    const long = !shown.composite && (shown.kind === "bytes" || shown.kind === "str");
+    this.area.hidden = !long;
+    this.field.hidden = long;
+    if (long) this.fillArea(shown, n, inside);
+    else this.fillField(n, inside);
+    this.fillKids(n, kids, reply?.status === "pending" || reply?.status === "working");
+  }
+
+  /** A structure's children, listed. Each row leads to the child, which is
+   *  where it can be read whole and edited. */
+  private fillKids(n: TemplateNode, kids: readonly TemplateNode[] | null, waiting: boolean): void {
+    if (!n.composite || n.child_count === 0) {
+      this.kids.hidden = true;
+      this.kids.replaceChildren();
+      return;
+    }
+    // Children that would not read are not an empty list; the error is on the
+    // status line, and a heading over nothing would say the structure is empty.
+    if (kids === null && !waiting) {
+      this.kids.hidden = true;
+      this.kids.replaceChildren();
+      return;
+    }
+    const noun = childWord(n);
+    const parts: Node[] = [subhead(childrenHead(n))];
+    if (kids === null) {
+      const row = el("div", "insp-kid insp-kid-waiting");
+      row.append(el("span", "insp-kid-value", REPORT.paneWaiting));
+      parts.push(row);
+    } else {
+      for (const kid of kids) parts.push(kidRow(kid));
+      const rest = n.child_count - kids.length;
+      if (rest > 0) parts.push(moreButton(rest, n.child_count, noun));
+    }
+    this.kids.replaceChildren(...parts);
+    this.kids.hidden = false;
+  }
+
+  private fillField(n: TemplateNode, inside: Inside | null): void {
+    const row = inside?.kind === "row" ? inside.text : null;
+    this.note.textContent = row === null ? "" : INSIDE.borrowedRow;
+    this.note.hidden = row === null;
     if (this.field.dataset["dirty"] === "1" && document.activeElement === this.field) return;
-    this.field.disabled = !n.editable;
+    this.field.disabled = !n.editable || row !== null;
     this.field.classList.remove("invalid");
-    this.field.value = n.composite ? "" : n.edit_text;
-    this.field.placeholder = n.composite ? countText(n.child_count, childWord(n)) : "";
+    this.field.value = row ?? (n.composite ? "" : n.edit_text);
+    this.field.placeholder = n.composite && row === null ? countText(n.child_count, childWord(n)) : "";
     this.field.setAttribute("aria-label", `${n.name}, ${n.type}`);
   }
 
@@ -1465,10 +1566,13 @@ export class Inspector {
    * byte field, the text itself for a text field. Read from the document rather
    * than from the node, whose value is a preview once a field gets long.
    */
-  private fillArea(n: TemplateNode): void {
+  private fillArea(n: TemplateNode, owner: TemplateNode, inside: Inside | null): void {
+    // `n` is the field at the cursor, except where the cursor is on a length
+    // and its string together, when it is the string and `owner` is the pair.
+    const borrowed = inside?.kind === "payload";
     if (this.area.dataset["dirty"] === "1" && document.activeElement === this.area) return;
     this.area.classList.remove("invalid");
-    this.area.setAttribute("aria-label", `${n.name}, ${n.type}`);
+    this.area.setAttribute("aria-label", `${owner.name}, ${n.type}`);
     this.area.placeholder = "";
     const shown = n.kind === "str" ? this.readText(n) : this.readHex(n);
     if (shown === null) {
@@ -1482,7 +1586,8 @@ export class Inspector {
     if (shown.truncated) {
       note = `Showing the first ${SHOW_LIMIT.toLocaleString()} bytes of ${n.value_bytes.toLocaleString()}. Too long to edit here; use the hex view.`;
     }
-    const editable = n.editable && !shown.truncated;
+    const editable = n.editable && !shown.truncated && !borrowed;
+    if (borrowed && note === "") note = INSIDE.borrowed(n.name);
     this.area.value = shown.text;
     this.area.disabled = !editable;
     this.area.rows = Math.max(2, Math.min(12, Math.ceil(shown.text.length / 30)));
@@ -1772,6 +1877,41 @@ function readBits(doc: Doc, ranges: readonly BitRange[], reverseBytes = false): 
 function signed(v: bigint, bits: number): bigint {
   const top = 1n << BigInt(bits - 1);
   return (v & top) === 0n ? v : v - (1n << BigInt(bits));
+}
+
+/** A tagged element with a class and its text, the way `listpane.ts` and
+ *  `listingdraw.ts` each keep one. Three copies of four lines is two too many;
+ *  they want collecting into `dom.ts`, whose own `el` takes properties. */
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/** One child of the structure at the cursor: what it is called, what it holds,
+ *  and how long it is. A structure of its own holds a count, drawn as the box
+ *  draws one so a count is never read as a value. */
+function kidRow(kid: TemplateNode): HTMLElement {
+  const row = el("div", "insp-kid");
+  row.dataset["path"] = kid.path.join("/");
+  row.append(el("span", `insp-kid-name ${fieldClass(kid.kind)}`, kid.name));
+  const count = kid.composite;
+  const value = el("span", `insp-kid-value${count ? " insp-kid-count" : ""}`, count ? countText(kid.child_count, childWord(kid)) : kid.value);
+  value.title = value.textContent ?? "";
+  row.append(value, el("span", "insp-kid-size", bitSizeText(kid.size_bits)));
+  return row;
+}
+
+/** The rest of a list too long to draw at once. A short one is finished off in
+ *  one click; a long one is paged, since "show all" of a quarter of a million
+ *  items is a promise the panel cannot keep. */
+function moreButton(rest: number, total: number, noun: string): HTMLElement {
+  const b = el("button", "insp-kid-more");
+  b.type = "button";
+  b.dataset["more"] = "";
+  b.textContent = rest <= CHILD_PAGE ? INSIDE.all(countText(total, noun)) : INSIDE.more(countText(rest, noun));
+  return b;
 }
 
 function subhead(text: string): HTMLElement {

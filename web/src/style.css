@@ -1375,6 +1375,72 @@ button.welcome-crystal {
   color: var(--muted);
   margin-bottom: 2px;
 }
+/* The type and size, under the box rather than above the trail. */
+.insp-shape {
+  margin: 4px 0 0;
+}
+.insp-kids {
+  margin-top: 2px;
+}
+.insp-kid {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+/* Lit the same way an origin row is, since it does the same thing: the views
+   mark the child while the pointer rests on its row here. */
+.insp-kid:hover,
+.insp-kid.is-hover {
+  background: var(--accent-soft);
+}
+.insp-kid-waiting {
+  cursor: default;
+  color: var(--muted);
+}
+.insp-kid-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insp-kid-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+/* A count is not a value, and is drawn the way the box draws one. */
+.insp-kid-count {
+  color: var(--muted);
+  font-style: italic;
+}
+.insp-kid-size {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.insp-kid-more {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 3px;
+  min-height: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.insp-kid-more:hover {
+  text-decoration: underline;
+}
 .insp-table {
   width: 100%;
   border-collapse: collapse;

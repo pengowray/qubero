@@ -214,6 +214,30 @@ export function childWord(n: { readonly unit?: string; readonly type: string }):
   return n.unit ?? (n.type.endsWith("[]") || n.type.startsWith("offsets ") ? "item" : "field");
 }
 
+/** The same word as a heading over the children themselves: `Fields` over a
+ *  structure, `Tensors` over a list the format names. One fixed word would be
+ *  a third name for what the count beside it already calls tensors. */
+export function childrenHead(n: { readonly unit?: string; readonly type: string }): string {
+  const word = plural(childWord(n));
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/** The panel at the cursor, where a structure now shows what is in it rather
+ *  than only how much. */
+export const INSIDE = {
+  /** The rest of a structure too long to list at once. The listing's own
+   *  wording without its "above"/"below": this list only runs downward, so
+   *  what is left is left. */
+  more: (rest: string): string => `Show more · ${rest} left`,
+  /** The whole of a short one, since a click that ends the paging can say so. */
+  all: (whole: string): string => `Show all ${whole}`,
+  /** Why the box cannot be typed in: it is showing a child's value, and that
+   *  child is a row below with an editor of its own. */
+  borrowed: (name: string): string => `Read-only preview. Select ${name} below to edit it.`,
+  /** The same for a row of scalars, where no one child is the value. */
+  borrowedRow: "Read-only preview. Select a row below to edit it.",
+} as const;
+
 /** The row width that is one record of what is on screen, which reads a
  *  stream of records as the table it is: the same field of every record in the
  *  same column. `every` is false where the records are only mostly that
