@@ -2150,6 +2150,7 @@ button.welcome-crystal {
 }
 .sv-canvas {
   position: relative;
+  overflow: hidden;
 }
 .sv-row {
   position: absolute;
@@ -2186,9 +2187,11 @@ button.welcome-crystal {
 .sv-enc.is-plain {
   opacity: 0.55;
 }
+/* The one fact on the row, so it is the last thing to give up space: a note
+   about a string must never be shown instead of the string. */
 .sv-text {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 12ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2204,11 +2207,16 @@ button.welcome-crystal {
    sits after the text, so a page of ordinary strings has an empty margin and
    the ones worth looking at are the ones with something in it. */
 .sv-notes {
-  flex: none;
+  flex: 0 1 auto;
   display: flex;
   gap: 6px;
+  min-width: 0;
   margin-inline-start: 10px;
   overflow: hidden;
+}
+.sv-notes > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sv-note {
   padding: 0 4px;

@@ -510,15 +510,69 @@ fn ascii_text(b: u8) -> bool {
 /// emoji in a line of Latin text, and no room for a stretch of compiled code
 /// that lands in five scripts in as many characters.
 fn one_page(buf: &[u8], start: usize, end: usize, big: bool) -> bool {
-    let mut pages = [0u32; 256];
+    let Some(page) = dominant_page(buf, start, end, big) else { return false };
     let mut units = 0u32;
+    let mut same = 0u32;
     let mut i = start;
     while i + 2 <= end {
-        pages[(unit_at(buf, i, big).unwrap_or(0) >> 8) as usize] += 1;
+        if (unit_at(buf, i, big).unwrap_or(0) >> 8) as u8 == page {
+            same += 1;
+        }
         units += 1;
         i += 2;
     }
-    units > 0 && pages.iter().copied().max().unwrap_or(0) * 4 >= units * 3
+    units > 0 && same * 4 >= units * 3
+}
+
+/// The part of a wide run that is the string, without what it ran into at
+/// either end.
+///
+/// A run is maximal, and what lies either side of a string in a binary is
+/// whatever the compiler put there. Two bytes of that are usually some
+/// character, so a run reaches back over the pointer in front of the string
+/// and forward over the one behind it, and those characters are why an
+/// otherwise coherent run stops looking coherent. Both ends are cut back:
+/// first the units that are eight-bit text read wide, then the units that are
+/// not from the part of Unicode the rest of the run is from. What is left is
+/// the string, and the tests that follow are asked about that rather than
+/// about it plus its neighbours.
+///
+/// A surrogate is never cut, since half of a pair at the end of a run is the
+/// character the reader came for.
+fn trim(buf: &[u8], start: usize, end: usize, big: bool) -> (usize, usize) {
+    let high = usize::from(!big);
+    let mut a = start;
+    let mut b = end;
+    while a + 2 <= b && ascii_text(buf[a + high]) {
+        a += 2;
+    }
+    while b >= a + 2 && ascii_text(buf[b - 2 + high]) {
+        b -= 2;
+    }
+    let Some(page) = dominant_page(buf, a, b, big) else { return (a, b) };
+    let odd = |i: usize| {
+        let u = unit_at(buf, i, big).unwrap_or(0);
+        (u >> 8) as u8 != page && !(0xd800..0xe000).contains(&u)
+    };
+    while a + 2 <= b && odd(a) {
+        a += 2;
+    }
+    while b >= a + 2 && odd(b - 2) {
+        b -= 2;
+    }
+    (a, b)
+}
+
+/// The Unicode page most of a run's characters are from.
+fn dominant_page(buf: &[u8], start: usize, end: usize, big: bool) -> Option<u8> {
+    let mut pages = [0u32; 256];
+    let mut i = start;
+    while i + 2 <= end {
+        pages[(unit_at(buf, i, big).unwrap_or(0) >> 8) as usize] += 1;
+        i += 2;
+    }
+    let (page, n) = pages.iter().enumerate().max_by_key(|(_, n)| **n)?;
+    (*n > 0).then_some(page as u8)
 }
 
 /// Whether a wide run says more than one thing.
@@ -625,10 +679,10 @@ fn narrow_runs(buf: &[u8], from: usize, min: usize, out: &mut Vec<Run>) {
         // word turns half a code section into strings: c6 8b is a perfectly
         // good character, and it welds ")" and "D$P" into a five-character
         // string that neither half was. So a run earns its place on a stretch
-        // of ASCII long enough on its own, or on holding enough wide
-        // characters that they are what it is made of.
+        // of ASCII long enough on its own, or on holding a run of wide
+        // characters long enough on its own.
         if j > start {
-            if chars as usize >= min && (plain as usize >= min || multi >= 2) {
+            if chars as usize >= min && (plain as usize >= min || multi as usize >= min) {
                 let enc = if multi > 0 { Enc::Utf8 } else { Enc::Ascii };
                 out.push(Run { start, end: j, enc, chars, units: (j - start) as u32, lone: false, quality: 3 });
             }
@@ -667,8 +721,6 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
         while i + 1 < buf.len() {
             let start = i;
             let mut chars = 0u32;
-            let mut lone = false;
-            let mut latin = true;
             let mut j = i;
             while let Some(u) = unit_at(buf, j, big) {
                 if is_high_surrogate(u) {
@@ -683,7 +735,6 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                         // stretch of arbitrary bytes that happens to land in
                         // the surrogate block is not a string.
                         _ if chars > 0 => {
-                            lone = true;
                             chars += 1;
                             j += 2;
                             continue;
@@ -695,16 +746,12 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                     if chars == 0 {
                         break;
                     }
-                    lone = true;
                     chars += 1;
                     j += 2;
                     continue;
                 }
                 match char::from_u32(u as u32) {
                     Some(c) if if chars == 0 { starter(c) } else { printable(c) } => {
-                        if u >= 0x100 {
-                            latin = false;
-                        }
                         chars += 1;
                         j += 2;
                     }
@@ -712,19 +759,7 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                 }
             }
             if j > start {
-                // A wide run that ran on into eight-bit text keeps only the
-                // part that is wide. The units at the ends are what say so: a
-                // wide character of a Latin script has a zero where an
-                // eight-bit character has a letter.
-                let high = usize::from(!big);
-                let mut a = start;
-                let mut b = j;
-                while a + 2 <= b && ascii_text(buf[a + high]) {
-                    a += 2;
-                }
-                while b >= a + 2 && ascii_text(buf[b - 2 + high]) {
-                    b -= 2;
-                }
+                let (a, b) = trim(buf, start, j, big);
                 let (chars, units, lone) = measure(buf, a, b, enc);
                 if chars as usize >= min
                     && wide_enough(buf, a, b, big)
@@ -735,7 +770,6 @@ fn wide_runs(buf: &[u8], from: usize, min: usize, enc: Enc, out: &mut Vec<Run>) 
                     let quality = if latin { 3 } else { 2 };
                     out.push(Run { start: a, end: b, enc, chars, units, lone, quality });
                 }
-                let _ = latin;
                 i = j;
             } else {
                 i += 2;
@@ -1324,6 +1358,51 @@ mod tests {
         let opts = Opts { ascii: false, ..Opts::default() };
         let hits = scan(&src, 0, 100, opts).hits;
         assert_eq!(hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(), ["Open file"]);
+    }
+
+    #[test]
+    fn one_wide_character_repeated_is_padding_and_not_a_string() {
+        // x86 pads with 0x90, which two bytes at a time is one character over
+        // and over. Coherent, printable, and not a string.
+        let mut b = vec![0x00, 0x00];
+        b.extend(vec![0x90u8; 40]);
+        b.extend([0x00, 0x00]);
+        assert!(all(b).is_empty());
+    }
+
+    #[test]
+    fn a_wide_string_keeps_itself_and_not_what_sits_either_side_of_it() {
+        // The bytes around a string in a binary are whatever the compiler put
+        // there, and two of them are usually some character. The run reaches
+        // over them and has to be cut back, or the characters they add make an
+        // otherwise coherent run look like six scripts at once.
+        let mut b = vec![0xa0, 0xee, 0xe8, 0xb9];
+        b.extend(utf16le("Open file"));
+        b.extend([0x5c, 0x7c, 0x29, 0x99]);
+        let hits = all(b);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "Open file");
+        assert_eq!(hits[0].at, 4);
+    }
+
+    #[test]
+    fn a_wide_character_does_not_carry_compiled_code_over_the_minimum() {
+        // c6 8b is a valid UTF-8 character and welds ")" onto "D$P". Neither
+        // half is four characters long and neither is a string.
+        let b = b"\x00)\xc6\x8bD$P\x00".to_vec();
+        assert!(all(b).is_empty());
+    }
+
+    #[test]
+    fn a_run_of_wide_characters_from_six_scripts_is_not_a_string() {
+        // Every one of these is a printable character and no two are from the
+        // same part of Unicode, which is what a stretch of compiled code read
+        // two bytes at a time looks like.
+        let units: [u16; 6] = [0x0045, 0x6400, 0x0a86, 0xa000, 0xfb2c, 0x0069];
+        let mut b = vec![0x00, 0x00];
+        b.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+        b.extend([0x00, 0x00]);
+        assert!(all(b).is_empty());
     }
 
     #[test]
