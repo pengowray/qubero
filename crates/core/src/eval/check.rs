@@ -279,10 +279,16 @@ impl Evaluator {
     /// A digest is read as the bytes it is; anything narrower is read as the
     /// number the template gave an endianness to, which is the only thing that
     /// knows whether a PNG's four bytes are the same number as a ZIP's.
+    ///
+    /// The field's own bytes are read first either way, and that is not a
+    /// wasted read: it is what reports bytes still on their way. A value asked
+    /// for without it can come back as a run nobody has fetched, which has no
+    /// number in it, which would read as a field that checks nothing rather
+    /// than as a field whose bytes have not arrived.
     fn stored_value<S: Source>(&mut self, doc: &Document<S>, path: &[usize], of: Checksum) -> R<Option<String>> {
+        let want = of.digits() as u64 / 2;
+        let (bytes, more) = self.field_bytes(doc, path, want.max(WIDEST_SUM))?;
         if of.is_digest() {
-            let want = of.digits() as u64 / 2;
-            let (bytes, more) = self.field_bytes(doc, path, want)?;
             if more || bytes.len() as u64 != want {
                 return Ok(None);
             }
@@ -291,6 +297,11 @@ impl Evaluator {
         Ok(self.node(doc, path)?.value.as_int().map(|v| of.stored(v as u128)))
     }
 }
+
+/// How many bytes of a check field are read to make sure it is there. Wider
+/// than any sum here is written, so a field holding a narrow sum in a wide slot
+/// is still read whole and still reports what has not arrived.
+const WIDEST_SUM: u64 = 32;
 
 fn too_large(len: u64) -> String {
     format!(
@@ -687,6 +698,31 @@ mod tests {
             Err(EvalError::Pending(_)) => {}
             other => panic!("bytes that have not arrived are pending, not {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_sum_field_whose_own_bytes_are_missing_is_asked_for_again() {
+        // The other half of the rule, and the easier one to get wrong: the
+        // covered run is here and the field holding the sum is not. A number
+        // read out of bytes nobody fetched is not a number, and answering "no
+        // check here" would make the check vanish from the panel the moment a
+        // reader scrolled past the end of a loaded chunk.
+        let made = || made_up(Covers::Run { at: E::lit(0), len: E::lit(2) });
+        let mut store = crate::source::ChunkStore::new(3, 2, 8);
+        store.insert(0, Box::new([1, 2]));
+        let doc = Document::new(store);
+        let mut ev = Evaluator::new(made());
+        match ev.run_check(&doc, &[2]) {
+            Err(EvalError::Pending(_)) => {}
+            other => panic!("the sum field's own bytes are pending, not {other:?}"),
+        }
+        // And with them, the same file answers.
+        let mut store = crate::source::ChunkStore::new(3, 2, 8);
+        store.insert(0, Box::new([1, 2]));
+        store.insert(1, Box::new([3]));
+        let doc = Document::new(store);
+        let mut ev = Evaluator::new(made());
+        assert!(ev.run_check(&doc, &[2]).unwrap().unwrap().ok);
     }
 
     #[test]
