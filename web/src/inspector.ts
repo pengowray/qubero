@@ -1226,12 +1226,12 @@ export class Inspector {
       this.origins.replaceChildren();
       return;
     }
-    const all: Node[] = [subhead(PROPERTIES.head)];
+    const all: Node[] = [subhead(PROPERTIES.title)];
     for (const p of rows) all.push(this.propertyEl(p));
     if (above.length > 0) {
       const open = this.openProps.has(ABOVE_KEY);
-      all.push(this.disclosure(ABOVE_KEY, open, PROPERTIES.above(above.length, above[0]?.name ?? "")));
-      if (open) for (const block of above) all.push(...block.rows);
+      all.push(this.disclosure(ABOVE_KEY, open, PROPERTIES.enclosing(above.length)));
+      if (open) for (const block of above) all.push(...block);
     }
     this.origins.replaceChildren(...all);
     this.origins.hidden = false;
@@ -1296,25 +1296,22 @@ export class Inspector {
     // have an answer for every field; the rest of the rows appear only when
     // there is something to put on them.
     if (!terse || said_(["position"])) {
-      const detail = this.working(["position"], from, how);
+      const value = formatAddress(n.offset_bits, n.space);
+      const clause = this.placedHow(path, shape, from);
+      const detail = this.working(["position"], from, how, value, clause);
       if (!terse) detail.push(...this.insideRows(path, n), ...this.unpackedRows(path, stream));
-      out.push({
-        key: `${prefix}position`,
-        label: PROPERTIES.position,
-        value: formatAddress(n.offset_bits, n.space),
-        bit: null,
-        how: this.placedHow(path, n, shape, from),
-        detail,
-      });
+      out.push({ key: `${prefix}position`, label: PROPERTIES.row.position, value, bit: null, how: clause, detail });
     }
     if (!terse || said_(["length", "width"])) {
+      const value = bitSizeText(n.size_bits);
+      const clause = this.sizedHow(path, n, shape, from);
       out.push({
         key: `${prefix}length`,
-        label: PROPERTIES.length,
-        value: bitSizeText(n.size_bits),
+        label: PROPERTIES.row.length,
+        value,
         bit: null,
-        how: this.sizedHow(path, shape, from),
-        detail: this.working(["length", "width"], from, how),
+        how: clause,
+        detail: this.working(["length", "width"], from, how, value, clause),
       });
     }
     // The type, only where the file rather than the template settled it: the
@@ -1322,50 +1319,60 @@ export class Inspector {
     // it to say the template said so is a row that never varies.
     if (said_(["type"])) {
       const one = only(from.get("type"));
+      // The value beside the field is the half a reader checks: `from
+      // compression` alone sends them to the field to find out which case this
+      // was. Two fields and there is no value to show, only a count.
+      const clause = one === null ? this.fromHow(from.get("type")) : { text: PROPERTIES.typeFrom(one.label, one.value), path: one.path };
       out.push({
         key: `${prefix}type`,
-        label: PROPERTIES.type,
+        label: PROPERTIES.row.type,
         value: n.type,
         bit: null,
-        how: one === null ? null : { text: PROPERTIES.type_from(one.label, one.value), path: one.path },
-        detail: this.working(["type"], from, how),
+        how: clause,
+        detail: this.working(["type"], from, how, n.type, clause),
       });
     }
     if (said_(["count"])) {
-      const one = only(from.get("count"));
+      const value = countText(n.child_count, childWord(n));
+      const clause = this.fromHow(from.get("count"));
       out.push({
         key: `${prefix}count`,
-        label: PROPERTIES.count,
-        value: countText(n.child_count, childWord(n)),
+        label: PROPERTIES.row.count,
+        value,
         bit: null,
-        how: one === null ? null : { text: originClause(one), path: one.path },
-        detail: this.working(["count"], from, how),
+        how: clause,
+        detail: this.working(["count"], from, how, value, clause),
       });
     }
     // A field of no bytes whose value other fields come to. The editor above
-    // shows what it says; this says what it was worked out from.
+    // shows what it says; the fact here is the expression it was worked out
+    // by, which needs no clause under it: it names its own fields.
     if (said_(["value"])) {
       const one = only(from.get("value"));
+      const sum = only(how.get("value"));
+      const value = sum !== null ? sum.written : one === null ? "" : one.label;
       out.push({
         key: `${prefix}computed`,
-        label: PROPERTIES.computed,
-        value: one === null ? "" : one.label,
+        label: PROPERTIES.row.formula,
+        value,
         bit: null,
         how: null,
-        detail: this.working(["value"], from, how),
+        detail: this.working(["value"], from, how, value, null),
       });
     }
     // Where the name on the row came from, when the file rather than the
     // template spells it.
     if (said_(["name"])) {
       const one = only(from.get("name"));
+      const value = one === null ? "" : one.value;
+      const clause = this.fromHow(from.get("name"));
       out.push({
         key: `${prefix}name`,
-        label: PROPERTIES.name,
-        value: one === null ? "" : one.label,
+        label: PROPERTIES.row.name,
+        value,
         bit: null,
-        how: null,
-        detail: this.working(["name"], from, how),
+        how: clause,
+        detail: this.working(["name"], from, how, value, clause),
       });
     }
     if (terse) return out;
@@ -1375,25 +1382,25 @@ export class Inspector {
     for (const [i, o] of jumps.entries()) {
       out.push({
         key: `${prefix}points:${i}`,
-        label: PROPERTIES.points,
+        label: PROPERTIES.row.pointsTo,
         value: formatOffset(o.target_bits ?? 0),
         bit: o.target_bits,
         how: { text: o.label, path: null },
         detail: [],
       });
     }
-    const used = this.usedBy(path);
-    if (used.length > 0) {
-      out.push({
-        key: `${prefix}readby`,
-        label: PROPERTIES.readBy,
-        value: PROPERTIES.readByCount(used.length),
-        bit: null,
-        how: null,
-        detail: used,
-      });
-    }
+    const read = this.readByRow(path, prefix);
+    if (read !== null) out.push(read);
     return out;
+  }
+
+  /** The clause shared by every row a single field settles: which field, or
+   *  how many when it took more than one. */
+  private fromHow(named: readonly Origin[] | undefined): How | null {
+    const one = only(named);
+    if (one !== null) return { text: PROPERTIES.sized.expression({ field: one.label }), path: one.path };
+    const count = named?.length ?? 0;
+    return count > 1 ? { text: PROPERTIES.sized.expression({ fields: count }), path: null } : null;
   }
 
   /**
@@ -1408,8 +1415,29 @@ export class Inspector {
    * is and how wide one value in it is are different questions with the same
    * unit.
    */
-  private working(roles: readonly OriginRole[], from: Map<OriginRole, Origin[]>, how: Map<OriginRole, Relation[]>): Node[] {
+  private working(
+    roles: readonly OriginRole[],
+    from: Map<OriginRole, Origin[]>,
+    how: Map<OriginRole, Relation[]>,
+    value: string,
+    clause: How | null,
+  ): Node[] {
     const filled = roles.filter((r) => (from.get(r)?.length ?? 0) + (how.get(r)?.length ?? 0) > 0);
+    // Nothing behind a row that would only say the row again. One field, no
+    // arithmetic, the clause already naming it and already showing what it
+    // holds: the triangle would promise something and deliver the line above
+    // it. The clause leads to the field itself, so nothing is lost with it.
+    const one = filled.length === 1 ? only(from.get(filled[0] as OriginRole)) : null;
+    if (
+      one !== null &&
+      (how.get(filled[0] as OriginRole)?.length ?? 0) === 0 &&
+      clause !== null &&
+      clause.path !== null &&
+      clause.path.join("/") === one.path.join("/") &&
+      (one.value === "" || value === one.value || value.startsWith(`${one.value} `) || clause.text.endsWith(`= ${one.value}`))
+    ) {
+      return [];
+    }
     const out: Node[] = [];
     for (const role of filled) {
       if (filled.length > 1) out.push(roleHead(ROLE_GROUP[role] ?? role));
@@ -1428,81 +1456,58 @@ export class Inspector {
    * read exactly like a fact the file gave. Where the core says it does not
    * know, this says nothing.
    */
-  private placedHow(path: readonly number[], n: TemplateNode, shape: TemplateReply<Shape>, from: Map<OriginRole, Origin[]>): How | null {
+  private placedHow(path: readonly number[], shape: TemplateReply<Shape>, from: Map<OriginRole, Origin[]>): How | null {
     if (shape.status !== "ok") return null;
-    const one = only(from.get("position"));
+    const placed = shape.node.placed;
+    const named = from.get("position") ?? [];
+    const one = only(named);
     const up = path.slice(0, -1);
     const parent = this.nameOf(up);
     const idx = path[path.length - 1] ?? 0;
-    switch (shape.node.placed) {
-      case "root":
-        return { text: PROPERTIES.placed.root, path: null };
-      case "first":
-        return parent === null ? null : { text: PROPERTIES.placed.first(parent), path: up };
-      case "follows": {
-        // The field before it, by name: "after the field before it" is a fact
-        // the reader can already see in the listing, and the name is what lets
-        // them go to it.
-        const prev = [...up, idx - 1];
-        const before = idx > 0 ? this.nameOf(prev) : null;
-        if (before === null) return { text: PROPERTIES.placed.followsPlain, path: null };
-        return { text: PROPERTIES.placed.follows(before), path: prev };
-      }
-      case "element":
-        return parent === null
-          ? { text: PROPERTIES.placed.elementPlain(idx), path: null }
-          : { text: PROPERTIES.placed.element(idx, parent), path: up };
-      case "pointer":
-        return one === null ? { text: PROPERTIES.placed.pointerPlain, path: null } : { text: PROPERTIES.placed.pointer(one.label), path: one.path };
-      case "chain":
-        return one === null ? { text: PROPERTIES.placed.chainPlain, path: null } : { text: PROPERTIES.placed.chain(one.label), path: one.path };
-      case "address":
-        return one === null ? { text: PROPERTIES.placed.addressPlain, path: null } : { text: PROPERTIES.placed.address(one.label), path: one.path };
-      case "trace":
-        return { text: PROPERTIES.placed.trace, path: null };
-      case "stream":
-        return parent === null ? { text: PROPERTIES.placed.streamPlain, path: null } : { text: PROPERTIES.placed.stream(parent), path: up };
-      default:
-        return n.space === 0 ? null : { text: PROPERTIES.placed.streamPlain, path: null };
-    }
+    // The field before it, by name: "after the previous field" is a fact the
+    // reader can already see in the listing, and the name is what lets them
+    // go to it.
+    const prev = placed === "follows" && idx > 0 ? [...up, idx - 1] : null;
+    const before = prev === null ? null : this.nameOf(prev);
+    const field = placed === "follows" ? before : one === null ? null : one.label;
+    const text = PROPERTIES.placed[placed]({
+      ...(field !== null ? { field } : named.length > 1 ? { fields: named.length } : {}),
+      ...(parent !== null ? { parent } : {}),
+      ...(placed === "element" ? { index: idx } : {}),
+    });
+    if (text === "") return null;
+    // Where the clause leads: the field it names, or the structure it is a
+    // part of when it names one of those instead.
+    const to =
+      placed === "follows"
+        ? (before === null ? null : prev)
+        : placed === "first" || placed === "element" || placed === "stream"
+          ? (parent === null ? null : up)
+          : (one?.path ?? null);
+    return { text, path: to };
   }
 
   /** How the field's length was settled, in one clause. Read off the core's
    *  word for it, for the reason `placedHow` is. */
-  private sizedHow(path: readonly number[], shape: TemplateReply<Shape>, from: Map<OriginRole, Origin[]>): How | null {
+  private sizedHow(path: readonly number[], n: TemplateNode, shape: TemplateReply<Shape>, from: Map<OriginRole, Origin[]>): How | null {
     if (shape.status !== "ok") return null;
-    const parent = this.nameOf(path.slice(0, -1));
-    switch (shape.node.sized) {
-      case "fixed":
-        return { text: PROPERTIES.sized.fixed, path: null };
-      case "expression": {
-        // Named only where one field settles it. Two fields and an expression
-        // over them is a formula, and half of a formula on the row would read
-        // as the whole of it.
-        const one = only(from.get("length")) ?? only(from.get("width"));
-        return one === null ? { text: PROPERTIES.sized.expressionPlain, path: null } : { text: PROPERTIES.sized.expression(one.label), path: one.path };
-      }
-      case "terminated":
-        return { text: PROPERTIES.sized.terminated, path: null };
-      case "remaining":
-        return parent === null
-          ? { text: PROPERTIES.sized.remainingPlain, path: null }
-          : { text: PROPERTIES.sized.remaining(parent), path: path.slice(0, -1) };
-      case "children":
-        return { text: PROPERTIES.sized.children, path: null };
-      case "count": {
-        const one = only(from.get("count"));
-        return one === null ? { text: PROPERTIES.sized.countPlain, path: null } : { text: PROPERTIES.sized.count(one.label), path: one.path };
-      }
-      case "encoded":
-        return { text: PROPERTIES.sized.encoded, path: null };
-      case "trace":
-        return { text: PROPERTIES.sized.trace, path: null };
-      case "nothing":
-        return { text: PROPERTIES.sized.nothing, path: null };
-      default:
-        return null;
-    }
+    const sized = shape.node.sized;
+    // A count is settled by the counting field; every other length by the
+    // fields the size expression reads. Named only where there is one of
+    // them: two fields and an expression over them is a formula, and half a
+    // formula on the row would read as the whole of it.
+    const named = sized === "count" ? (from.get("count") ?? []) : [...(from.get("length") ?? []), ...(from.get("width") ?? [])];
+    const one = only(named);
+    const up = path.slice(0, -1);
+    const parent = this.nameOf(up);
+    const text = PROPERTIES.sized[sized]({
+      ...(one !== null ? { field: one.label } : named.length > 1 ? { fields: named.length } : {}),
+      ...(parent !== null ? { parent } : {}),
+      child: childWord(n),
+    });
+    if (text === "") return null;
+    const to = one?.path ?? (sized === "remaining" && parent !== null ? up : null);
+    return { text, path: to };
   }
 
   /**
@@ -1524,11 +1529,14 @@ export class Inspector {
       // here: the field is at an offset of the unpacked bytes and its stream
       // is at an offset of the file.
       if (a.status !== "ok" || a.node.space !== n.space) continue;
+      // A structure that starts where addresses count from gives the address
+      // over again with a plus in front of it.
+      if (a.node.offset_bits === 0) continue;
       const delta = n.offset_bits - a.node.offset_bits;
       if (delta < 0) continue;
       rows.push(insideRow(a.node.name, delta, at));
     }
-    return rows.length === 0 ? [] : [roleHead(PROPERTIES.inside), ...rows];
+    return rows.length === 0 ? [] : [roleHead(PROPERTIES.within), ...rows];
   }
 
   /**
@@ -1566,15 +1574,15 @@ export class Inspector {
    * A reader who did not ask about that field has to be told whose length this
    * is, so the heading is the field's name and leads to it.
    */
-  private aboveBlocks(path: readonly number[]): { name: string; rows: Node[] }[] {
-    const out: { name: string; rows: Node[] }[] = [];
+  private aboveBlocks(path: readonly number[]): Node[][] {
+    const out: Node[][] = [];
     for (let i = path.length - 1; i >= 0; i--) {
       const at = path.slice(0, i);
       const node = this.doc.templateNode(at);
       if (node.status !== "ok") continue;
       const rows = this.properties(at, node.node, `${at.join("/")}:`, true);
       if (rows.length === 0) continue;
-      out.push({ name: node.node.name, rows: [this.stepHead(at), ...rows.map((p) => this.propertyEl(p))] });
+      out.push([this.stepHead(at), ...rows.map((p) => this.propertyEl(p))]);
     }
     return out;
   }
@@ -1674,11 +1682,25 @@ export class Inspector {
     return b;
   }
 
-  /** What a field is called, for a clause that names it. Null when it cannot
-   *  be read, which is when the clause has to be worded without it. */
+  /**
+   * What a field is called, for a clause that names it. Null when it cannot be
+   * read, which is when the clause has to be worded without it.
+   *
+   * An element of a run is called `[3]`, which names nothing on its own. The
+   * run it belongs to is what a reader knows it by, and is what the breadcrumb
+   * and every origin label already call it, so the name is built back up to
+   * `tensors[3]` the same way.
+   */
   private nameOf(path: readonly number[]): string | null {
     const node = this.doc.templateNode(path);
-    return node.status === "ok" ? node.node.name : null;
+    if (node.status !== "ok") return null;
+    let name = node.node.name;
+    for (let i = path.length - 1; i >= 1 && name.startsWith("["); i--) {
+      const up = this.doc.templateNode(path.slice(0, i));
+      if (up.status !== "ok") break;
+      name = up.node.name + name;
+    }
+    return name;
   }
 
   /**
@@ -1700,17 +1722,35 @@ export class Inspector {
    * word would flip its referent: `Length` above means what decided this
    * field's length, and here it would mean the other field's.
    */
-  private usedBy(path: readonly number[]): Node[] {
-    if (path.length === 0) return [];
+  private readByRow(path: readonly number[], prefix: string): Property | null {
+    // Nothing reads the whole file, and the row would be a heading over an
+    // answer that cannot be anything else.
+    if (path.length === 0) return null;
+    const up = path.slice(0, -1);
+    const parent = this.nameOf(up);
     const found = this.reverseGraph(path);
-    if (found === null) return [];
-    const { graph, self } = found;
+    // A search that did not happen is not a search that found nothing, and the
+    // two must not read alike: the reader is about to edit a length field on
+    // the strength of this row.
+    if (found === null) {
+      const node = this.doc.templateNode(up);
+      const big = node.status === "ok" && node.node.child_count > USED_BY_LIMIT;
+      return {
+        key: `${prefix}readby`,
+        label: PROPERTIES.row.readBy,
+        value: PROPERTIES.readBy.notSearched,
+        bit: null,
+        how: big && parent !== null ? { text: PROPERTIES.readBy.tooMany(parent, node.node.child_count, USED_BY_LIMIT), path: up } : null,
+        detail: [],
+      };
+    }
+    const { graph, self, whole } = found;
     const rows: Node[] = [];
     const seen = new Set<string>();
     for (const e of graph.edges) {
-      // A `points` edge is the pointer this field holds, and the section above
-      // has already shown where it points. Under this heading the same fact
-      // would read the other way round, as the far end using this field.
+      // A `points` edge is the pointer this field holds, and the Points to row
+      // has already shown where it goes. Here the same fact would read the
+      // other way round, as the far end reading this field.
       if (e.from !== self || e.to === self || e.role === "points") continue;
       const to = graph.nodes[e.to];
       if (to === undefined) continue;
@@ -1719,20 +1759,38 @@ export class Inspector {
       seen.add(at);
       rows.push(usedRow(e.role, to.name, to.path));
     }
-    return rows;
+    return {
+      key: `${prefix}readby`,
+      label: PROPERTIES.row.readBy,
+      value: PROPERTIES.readBy.found(rows.length),
+      bit: null,
+      // A count of what one structure holds is a count of part of the answer,
+      // so the row says where the search stopped rather than letting the
+      // number stand for the file.
+      how: whole || parent === null ? null : { text: PROPERTIES.readBy.partial(parent), path: up },
+      detail: rows,
+    };
   }
 
   /**
-   * A graph holding the field at `path` that was walked to the end, and where
-   * the field is in it. Null when neither the file nor the enclosing structure
-   * could be walked whole.
+   * A graph holding the field at `path` that was walked to the end, where the
+   * field is in it, and whether that was the whole file. Null when neither the
+   * file nor the enclosing structure could be walked whole.
+   *
+   * Which subtree is the whole question. Only the file gives a complete
+   * answer: an expression can reach a field by a path from anywhere
+   * (`header.record[2].format`), so a field inside one structure can be read by
+   * a field in another. The file is tried first for that reason, with the
+   * enclosing structure as the fallback where the file is too big to walk. In
+   * the fallback the list is what that structure knows, which is most of the
+   * answer and not all of it, and `whole` is how the row says so.
    *
    * A walk that hit the cap is thrown away rather than used. What it holds is
    * whichever fields it reached first, and a list of dependents that is
    * silently a sample of them is worse than no list, because nothing on screen
    * says which it is.
    */
-  private reverseGraph(path: readonly number[]): { graph: FieldGraph; self: number } | null {
+  private reverseGraph(path: readonly number[]): { graph: FieldGraph; self: number; whole: boolean } | null {
     const key = path.join("/");
     for (const root of [[] as readonly number[], path.slice(0, -1)]) {
       // A structure of more fields than the cap cannot come back whole, so it
@@ -1743,7 +1801,7 @@ export class Inspector {
       const reply = this.doc.graph(root, USED_BY_LIMIT);
       if (reply.status !== "ok" || reply.node.omitted > 0) continue;
       const self = reply.node.nodes.findIndex((n) => n.path.join("/") === key);
-      if (self >= 0) return { graph: reply.node, self };
+      if (self >= 0) return { graph: reply.node, self, whole: root.length === 0 };
     }
     return null;
   }
@@ -2305,7 +2363,7 @@ function insideRow(name: string, delta: number, path: readonly number[]): HTMLEl
   row.dataset["path"] = path.join("/");
   const what = document.createElement("span");
   what.className = "insp-origin-name";
-  what.textContent = PROPERTIES.insideAt(name, `+${formatOffset(delta)}`);
+  what.textContent = PROPERTIES.withinAt(name, `+${formatOffset(delta)}`);
   row.append(what);
   return row;
 }
@@ -2345,14 +2403,16 @@ type OriginRole = (typeof ROLE_ORDER)[number];
 const USED_BY_LIMIT = 400;
 
 /** One field that reads the field at the cursor: what it took from it, and
- *  what it is called. The role stays on the row; see `usedBy`. */
+ *  what it is called. A phrase rather than a bare role word, because under
+ *  this row a bare `Length` reads as this field's length and it is the other
+ *  field's. */
 function usedRow(role: string, name: string, path: readonly number[]): HTMLElement {
   const row = document.createElement("div");
   row.className = "insp-origin";
   row.dataset["path"] = path.join("/");
   const what = document.createElement("span");
   what.className = "insp-origin-role";
-  what.textContent = ROLE_GROUP[role] ?? role;
+  what.textContent = PROPERTIES.readBy.what(role);
   const b = document.createElement("button");
   b.type = "button";
   b.className = "insp-link insp-origin-name";

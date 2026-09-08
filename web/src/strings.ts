@@ -2,6 +2,9 @@
 // is the reader's problem, not a detail of whichever file happens to draw it.
 
 import { formatBytes, formatOffset } from "./format.js";
+// Type only, and erased: `doc.ts` imports this file at run time, and the
+// clause tables below are keyed by the words the core sends in `Shape`.
+import type { Shape } from "./doc.js";
 
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no
@@ -844,80 +847,6 @@ export const REPLACED = (n: number): string => (n === 1 ? "Replaced 1 match." : 
 export const BAD_REPLACEMENT = "Replacement is hex too: pairs of digits, like 00 ff";
 
 /**
- * The properties section of the inspector: one row per question about the
- * field at the cursor, the answer on the row, and how it was settled under it.
- *
- * Every clause here is an answer, never a sentence about the tool. The reader
- * is a programmer looking at a file they may not know the layout of, and what
- * they are owed is the same plain fact a specification would give: this field
- * is where it is because the field in front of it ended there.
- *
- * Nothing is worded for a case the core cannot answer. Where it says it does
- * not know, the panel prints no clause at all, because a clause in this place
- * reads as a fact the file gave.
- */
-export const PROPERTIES = {
-  head: "Properties",
-  position: "Position",
-  length: "Length",
-  type: "Type",
-  count: "Count",
-  /** Not `Value`: the editor above already has that heading, and this row is
-   *  about a value with no bytes, worked out from fields elsewhere. */
-  computed: "Worked out from",
-  name: "Name",
-  points: "Points to",
-  /** The other direction: fields that read this one to settle their own shape.
-   *  Not the reverse of `Points to`, which is a pointer table placing a child
-   *  and is already the answer on that child's `Position` row. */
-  readBy: "Read by",
-  readByCount: (n: number): string => (n === 1 ? "1 field" : `${n.toLocaleString()} fields`),
-  /** Heading over the offsets of this field inside the structures around it. */
-  inside: "Inside",
-  insideAt: (name: string, at: string): string => `${at} in ${name}`,
-  /** The control over what the structures above the field settled. A run of
-   *  weights is 128 bytes because of a record three levels up, and that is the
-   *  field the reader wants; it is still not the field they are standing on. */
-  above: (n: number, nearest: string): string =>
-    n === 1 ? `Set by ${nearest}` : `Set by ${nearest} and ${(n - 1).toLocaleString()} more above`,
-  /** How the field's start was settled, one case per answer the core gives. */
-  placed: {
-    root: "the whole file",
-    first: (parent: string): string => `starts where ${parent} does`,
-    follows: (prev: string): string => `after ${prev}`,
-    followsPlain: "after the field before it",
-    element: (index: number, run: string): string => `element ${index.toLocaleString()} of ${run}`,
-    elementPlain: (index: number): string => `element ${index.toLocaleString()} of the run`,
-    pointer: (field: string): string => `at the offset in ${field}`,
-    pointerPlain: "at an offset read from a table",
-    chain: (field: string): string => `at the address in ${field}`,
-    chainPlain: "at the address the element before it holds",
-    address: (field: string): string => `at the address in ${field}`,
-    addressPlain: "at an address worked out from the file",
-    trace: "where the decoder had reached",
-    stream: (name: string): string => `the start of what ${name} unpacked to`,
-    streamPlain: "the start of the unpacked bytes",
-  },
-  /** How the field's length was settled. */
-  sized: {
-    fixed: "fixed by the type",
-    expression: (field: string): string => `as long as ${field} says`,
-    expressionPlain: "worked out from the file",
-    terminated: "up to the terminator",
-    remaining: (parent: string): string => `the rest of ${parent}`,
-    remainingPlain: "the rest of what holds it",
-    children: "as long as the fields inside it",
-    count: (field: string): string => `as many elements as ${field} says`,
-    countPlain: "as many elements as the count says",
-    encoded: "its own bytes say where it ends",
-    trace: "as much as the decoder read",
-    nothing: "no bytes of its own",
-  },
-  /** Which field picked the type, and what it said. */
-  type_from: (field: string, value: string): string => (value === "" ? `chosen by ${field}` : `chosen by ${field} = ${value}`),
-} as const;
-
-/**
  * What each group of rows decided, where several roles sit under one property.
  * One noun each: the property above them has already supplied the subject and
  * the verb, so a heading repeated down one narrow panel says the one word that
@@ -943,6 +872,199 @@ export const ROLE_GROUP: Readonly<Record<string, string>> = {
 export function roleLabel(role: string): string {
   return ROLE_GROUP[role] ?? role;
 }
+
+/**
+ * What one clause is allowed to name. Every field is optional because the
+ * panel supplies what it can read: a run whose parent will not resolve has no
+ * name to put in the sentence, and the clause has to hold without it.
+ */
+export type HowContext = {
+  /** The one field the answer names, as the reader would name it (`len`,
+   *  `tensors[3].offset`), when there is exactly one. */
+  readonly field?: string;
+  /** How many fields the expression reads, when it is not exactly one. */
+  readonly fields?: number;
+  /** What the field sits in, by name. For a stream field, the compressed run. */
+  readonly parent?: string;
+  /** Its index in that parent, zero-based, as the core labels `tensors[3]`. */
+  readonly index?: number;
+  /** What the parent calls its children (`childWord`): `field`, `tensor`, `item`. */
+  readonly child?: string;
+};
+
+/** The clause every row that reads the file shares. One field is named; more
+ *  than one are counted, because two dotted paths do not fit the line and the
+ *  expansion lists them anyway; none at all is still an expression, and the
+ *  expansion shows it. */
+function fromFields(c: HowContext): string {
+  if (c.field !== undefined) return `from ${c.field}`;
+  if (c.fields !== undefined && c.fields > 1) return `from ${c.fields.toLocaleString()} fields`;
+  return "from an expression";
+}
+
+/**
+ * The properties list: for the field at the cursor, where it is, how long it
+ * is, and how each of those was settled.
+ *
+ * Every clause here is the second, muted line under a fact the panel has
+ * already printed: `Position 0x40`, and under it `after machine`. So a clause
+ * never repeats the number and never says "this field"; the row supplies
+ * both. What it adds is the one thing the number cannot say, which is whether
+ * the file decided it or the template did, and through which field.
+ *
+ * The two tables are keyed by the words the core sends in `Shape` and typed
+ * against them, so a case the core grows is a compile error here rather than
+ * a silent blank in the panel. `unknown` is an empty string on purpose: the
+ * core says it when it does not know, and a clause invented to fill the line
+ * would print in the same place and the same voice as the ones it does know.
+ * The panel prints nothing for it, and draws no triangle.
+ *
+ * `from {field}` is the one pattern shared across the rows. A reader learns
+ * it once on Position and reads it at a glance on Length, Count, Type and
+ * Name; five verbs would be five things to learn.
+ */
+export const PROPERTIES = {
+  /**
+   * The section heading. What every inspector calls the list of a selected
+   * thing's attributes, from DevTools to Blender, so it costs nothing to
+   * learn. "Layout" was the runner-up and lost on Type, Name and Read by,
+   * which are not layout. "Depends on", which this replaces, named the edges;
+   * these rows are about the field.
+   */
+  title: "Properties",
+
+  /**
+   * The label column. One noun each, and the same nouns the arrows over the
+   * hex grid use (`ROLE_GROUP`), so a row and an arrow about the same thing
+   * say the same word.
+   *
+   * Two differ. `Formula`: the editor above is already headed `Value`, so the
+   * row for a value worked out from other fields cannot be, and what its fact
+   * column holds is the expression, so the label says that. `Read by` rather
+   * than `Used by`: the other field's expression reads this one's value, and
+   * "read" says exactly that without suggesting the field is consumed. Not
+   * `Referenced by`: too long for the column, and a pointer references a
+   * field too, which is the `Points to` row.
+   */
+  row: {
+    position: "Position",
+    length: "Length",
+    type: "Type",
+    count: "Count",
+    formula: "Formula",
+    name: "Name",
+    pointsTo: "Points to",
+    readBy: "Read by",
+  },
+
+  /**
+   * How the field came to be where it is, keyed by `Shape.placed`.
+   *
+   * `after machine` says only that: the field starts where the one before it
+   * ended. How long that one was is that field's own Length row, and nothing
+   * here claims to have read it. `index 3 in tensors` rather than "element 3":
+   * the breadcrumb two inches up calls the same element `tensors[3]`, and
+   * "index" is the word programmers read zero-based. `linked from` covers both
+   * ends of a chain: for the head, the named field is a pointer in a header
+   * and not a previous element, so nothing here may say "the element before
+   * it". `where offsets[3] points` is the plain reading of a pointer table
+   * entry, and the reciprocal of the `Points to` row on that entry. The
+   * stream case keeps "unpacked", the word every other string uses for it.
+   */
+  placed: {
+    root: (): string => "the whole file",
+    first: (c: HowContext): string => `first field of ${c.parent ?? "its parent"}`,
+    follows: (c: HowContext): string => (c.field === undefined ? "after the previous field" : `after ${c.field}`),
+    element: (c: HowContext): string =>
+      c.index === undefined ? `an element of ${c.parent ?? "a run"}` : `index ${c.index.toLocaleString()} in ${c.parent ?? "its parent"}`,
+    pointer: (c: HowContext): string => (c.field === undefined ? "where an offset table points" : `where ${c.field} points`),
+    chain: (c: HowContext): string => (c.field === undefined ? "linked from another field" : `linked from ${c.field}`),
+    address: fromFields,
+    trace: (): string => "where the decoder read it",
+    stream: (c: HowContext): string => (c.parent === undefined ? "start of the unpacked stream" : `start of unpacked ${c.parent}`),
+    unknown: (): string => "",
+  } satisfies Record<Shape["placed"], (c: HowContext) => string>,
+
+  /**
+   * How long it turned out to be, keyed by `Shape.sized`.
+   *
+   * `fixed by the type` names whose decision it was, which is the question
+   * the row answers: a u32 is 4 bytes because it is a u32, and no byte of the
+   * file could make it 5. "Fixed size" describes the field and skips the
+   * question. `ends after its last field` rather than "sum of its fields",
+   * which reads as adding the values up. `its own bytes mark the end` says
+   * the varint case without pretending there is a number: a LEB128 holds no
+   * length, only a bit on its last byte. `no bytes of its own` sits under a
+   * fact of `0 bytes`, so the zero reads as a kind of field and not as a
+   * measurement that failed. `counted by e_shnum` and not "count from":
+   * a clause that opens with a verb reads as an instruction.
+   */
+  sized: {
+    fixed: (): string => "fixed by the type",
+    expression: fromFields,
+    terminated: (): string => "ends at a terminator",
+    remaining: (c: HowContext): string => `rest of ${c.parent ?? "its parent"}`,
+    children: (c: HowContext): string => `ends after its last ${c.child ?? "field"}`,
+    /** A list of places rather than a stretch of bytes: the elements are
+     *  wherever the offsets said, and the run covers what is left of the
+     *  structure it was declared in because that is as far as they can be. */
+    scattered: (): string => "wherever its offsets point",
+    count: (c: HowContext): string => (c.field === undefined ? "from a count" : `counted by ${c.field}`),
+    encoded: (): string => "its own bytes mark the end",
+    trace: (): string => "set by the decoder",
+    nothing: (): string => "no bytes of its own",
+    unknown: (): string => "",
+  } satisfies Record<Shape["sized"], (c: HowContext) => string>,
+
+  /** A switch picked the type. The value is the case that matched, and it is
+   *  the half the reader checks: `from chunk_type` alone would send them to
+   *  the field to find out which case this was. Without a value to show, which
+   *  is what a table read out of a decoder's block has, the field alone. */
+  typeFrom: (field: string, value: string): string => (value === "" ? `from ${field}` : `from ${field} = ${value}`),
+
+  /** Over the list of structures round the field, each with the field's
+   *  offset inside it: `section_headers[3]  +0x14`, nearest first. "Offset"
+   *  because that is what `+0x14` is; "within" because the rows are the
+   *  things it is within. */
+  within: "Offset within",
+  withinAt: (name: string, at: string): string => `${at} in ${name}`,
+
+  /**
+   * The control under the rows that opens the same rows for each structure
+   * the field sits inside. Counts structures, not levels: "3 more levels up"
+   * is a direction and says nothing about what it opens, while an enclosing
+   * structure is a thing the reader can name and click. `n` is how many of
+   * them have anything to say; a struct the template placed and sized
+   * outright has no rows and is not counted.
+   */
+  enclosing: (n: number): string => countText(n, "enclosing structure"),
+
+  /**
+   * The Read by row: fields elsewhere whose length, count, position, type,
+   * bit width or name reads this field's value.
+   *
+   * Three answers that must not look alike: none found, not searched, and
+   * found in part. `none` is a finding, and the one a reader about to edit a
+   * length field most wants; hiding the row would make it look like `not
+   * searched`. The partial case is the file too big to walk and only the
+   * enclosing structure walked: a bare count there is a count of some of the
+   * answer, so the clause says where the search stopped. The limit is
+   * printed with the size that broke it, because "too many" with no number
+   * is a verdict and not a fact.
+   */
+  readBy: {
+    found: (n: number): string => (n === 0 ? "none" : countText(n, "field")),
+    partial: (parent: string): string => `only ${parent} searched`,
+    notSearched: "not searched",
+    tooMany: (parent: string, n: number, limit: number): string =>
+      `${parent} has ${n.toLocaleString()} fields, limit ${limit.toLocaleString()}`,
+    /** One row of the expansion, before the field's name, which is a link:
+     *  `length of` data. A phrase rather than a column of role words, because
+     *  under this heading a bare `Length` reads as this field's length, and
+     *  it is the other field's. */
+    what: (role: string): string => `${roleLabel(role).toLowerCase()} of`,
+  },
+} as const;
 
 /** The arrows over the hex grid, and the graph view. Both show what the
  *  properties list shows, so the words for it are here rather than in either

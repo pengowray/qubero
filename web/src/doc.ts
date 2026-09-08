@@ -549,10 +549,22 @@ export type Shape = {
   readonly placed: "root" | "first" | "follows" | "element" | "pointer" | "chain" | "address" | "trace" | "stream" | "unknown";
   /** `fixed` the type's own width; `expression` worked out from the file;
    *  `terminated` ends at a terminator; `remaining` fills what is left of its
-   *  container; `children` as long as the fields inside it; `count` as many
-   *  elements as a count says; `encoded` its own bytes say where it ends;
-   *  `trace` as much as the decoder read; `nothing` no bytes of its own. */
-  readonly sized: "fixed" | "expression" | "terminated" | "remaining" | "children" | "count" | "encoded" | "trace" | "nothing" | "unknown";
+   *  container; `children` as long as the fields inside it; `scattered` a list
+   *  whose elements are wherever its offsets point; `count` as many elements
+   *  as a count says; `encoded` its own bytes say where it ends; `trace` as
+   *  much as the decoder read; `nothing` no bytes of its own. */
+  readonly sized:
+    | "fixed"
+    | "expression"
+    | "terminated"
+    | "remaining"
+    | "children"
+    | "scattered"
+    | "count"
+    | "encoded"
+    | "trace"
+    | "nothing"
+    | "unknown";
 };
 
 /** One field of a subtree, as much of it as an arrow needs. No value: what a

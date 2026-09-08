@@ -369,6 +369,13 @@ struct Resolved {
     limit: u64,
     /// Size fixed by an enclosing `Sized`, if any.
     declared_size: Option<u64>,
+    /// How that size was arrived at: a number the template wrote down, an
+    /// expression that read the file, or whatever room was left. Kept here
+    /// because this is the only place that sees the expression: the walk down
+    /// the declaration passes switches, and by the time a panel asks, which
+    /// case was taken is settled and the `Sized` inside it is out of reach.
+    /// See [`shape::Sizing`].
+    sized_how: Option<shape::Sizing>,
     /// True when a [`Ty::Origin`] was unwrapped to reach this type, so the
     /// offsets under it count from here. See [`Anchor::Origin`].
     origin: bool,
@@ -1058,6 +1065,10 @@ impl Evaluator {
                         cursor: pr.offset,
                         limit: pr.offset,
                         declared_size: Some(0),
+                        // An entry pointing at nothing covers no bytes, and
+                        // that is a fact about the entry rather than a size
+                        // anything worked out.
+                        sized_how: Some(shape::Sizing::Nothing),
                         origin: false,
                         size: Some(0),
                         computed: None,
@@ -1422,6 +1433,7 @@ impl Evaluator {
         space: u32,
     ) -> R<Resolved> {
         let mut declared_size = None;
+        let mut sized_how = None;
         let mut origin = false;
         let mut hops = 0;
         loop {
@@ -1447,6 +1459,7 @@ impl Evaluator {
                     }
                     limit = offset + bits;
                     declared_size = Some(bits);
+                    sized_how = Some(shape::expr_sizing(&size));
                     ty = *inner;
                 }
                 Ty::SizedBits { bits, inner } => {
@@ -1454,6 +1467,7 @@ impl Evaluator {
                     if n < 0 {
                         return fail("negative size");
                     }
+                    sized_how = Some(shape::expr_sizing(&bits));
                     let bits = n as u64;
                     if offset + bits > limit {
                         return fail(format!("{bits} bits run past the end of the container"));
@@ -1514,6 +1528,7 @@ impl Evaluator {
                         cursor: offset,
                         limit,
                         declared_size,
+                        sized_how,
                         origin,
                         size: None,
                         computed: None,

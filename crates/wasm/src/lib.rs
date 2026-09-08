@@ -563,7 +563,7 @@ struct ShapeDto {
     /// "address" | "trace" | "stream" | "unknown"
     placed: &'static str,
     /// "fixed" | "expression" | "terminated" | "remaining" | "children" |
-    /// "count" | "encoded" | "trace" | "nothing" | "unknown"
+    /// "scattered" | "count" | "encoded" | "trace" | "nothing" | "unknown"
     sized: &'static str,
 }
 

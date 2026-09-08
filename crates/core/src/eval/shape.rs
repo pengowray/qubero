@@ -99,6 +99,13 @@ pub enum Sizing {
     Remaining,
     /// As long as the fields inside it come to.
     Children,
+    /// A list of places rather than a stretch of bytes: its elements are
+    /// wherever the offsets it read said, and what it covers is what is left
+    /// of the thing it was declared in, because that is as far as they can
+    /// reach. Told apart from `Remaining` because a reader who is told a
+    /// pointer list is "the rest of the header" will go looking in the header
+    /// for it.
+    Scattered,
     /// As many elements as the count says, each as long as its type.
     Count,
     /// Its own bytes say where it ends: a variable-length integer that marks
@@ -122,6 +129,7 @@ impl Sizing {
             Sizing::Terminated => "terminated",
             Sizing::Remaining => "remaining",
             Sizing::Children => "children",
+            Sizing::Scattered => "scattered",
             Sizing::Count => "count",
             Sizing::Encoded => "encoded",
             Sizing::Trace => "trace",
@@ -210,8 +218,13 @@ impl Evaluator {
         if matches!(r.ty, Ty::At { .. } | Ty::Chain { .. } | Ty::Computed(_) | Ty::ComputedText(_)) {
             return Sizing::Nothing;
         }
+        // A window around the field settles its length before the field's own
+        // type gets to measure itself. How that window's size was arrived at
+        // is worked out where the size is: by the time there is a node to ask,
+        // the declaration has been walked past, and a `Sized` inside a case of
+        // a switch cannot be found again from here.
         if r.declared_size.is_some() {
-            return self.window_sizing(path);
+            return r.sized_how.unwrap_or(Sizing::Unknown);
         }
         if fixed_bits(&r.ty).is_some() {
             return Sizing::Fixed;
@@ -243,34 +256,9 @@ impl Evaluator {
             Ty::UIntExpr { bits, .. } => expr_sizing(bits),
             Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::EbmlVint { .. } | Ty::Insn { .. } => Sizing::Encoded,
             Ty::Traced { .. } => Sizing::Trace,
-            // The stretch its offsets point into, which runs to the end of
-            // what it sits in.
-            Ty::PointerList { .. } => Sizing::Remaining,
+            Ty::PointerList { .. } => Sizing::Scattered,
             _ => Sizing::Unknown,
         }
-    }
-
-    /// How the size of a window around a field was arrived at.
-    ///
-    /// The window is in the declaration rather than in the resolved type,
-    /// which has been unwrapped by the time there is a node to ask. The walk
-    /// down to it is the one `relations` makes, and it stops where that one
-    /// does: a `Sized` inside a case of a switch is behind a choice this cannot
-    /// remake, and Unknown is what is left to say.
-    fn window_sizing(&self, path: &[usize]) -> Sizing {
-        let Ok(mut ty) = self.declared_ty(path) else { return Sizing::Unknown };
-        for _ in 0..64 {
-            match ty {
-                Ty::Named(n) => match self.template.types.get(&*n) {
-                    Some(t) => ty = t.clone(),
-                    None => return Sizing::Unknown,
-                },
-                Ty::Origin { inner } => ty = *inner,
-                Ty::Sized { size: e, .. } | Ty::SizedBits { bits: e, .. } => return expr_sizing(&e),
-                _ => return Sizing::Unknown,
-            }
-        }
-        Sizing::Unknown
     }
 
     /// What a field was declared as, with the names looked up. Used to tell a
@@ -293,7 +281,7 @@ impl Evaluator {
 /// What a length expression says about how the length was settled: it fills
 /// the room left, it is worked out from the file, or it is a number the
 /// template wrote down.
-fn expr_sizing(e: &Expr) -> Sizing {
+pub(super) fn expr_sizing(e: &Expr) -> Sizing {
     let (remaining, read) = expr_reads(e);
     if remaining {
         Sizing::Remaining
