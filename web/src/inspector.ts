@@ -1765,6 +1765,23 @@ export class Inspector {
       seen.add(at);
       rows.push(usedRow(e.role, to.name, to.path));
     }
+    // Most fields are read by nothing, so the row was on nearly every field
+    // saying so, and a row that is almost always the same answer is a row a
+    // reader stops seeing. It is left off once the search has finished and
+    // found none, which makes its absence mean exactly that: nothing reads
+    // this field. The two cases that keep it are the ones where absence would
+    // be a lie or a waste.
+    //
+    // A search that did not finish is the lie: the rows above already say so
+    // and the row stays, so nothing is ever left off because it was not
+    // looked for.
+    //
+    // Machinery is the waste. The template marks a field as machinery when it
+    // is there to describe other fields, and machinery nothing reads is worth
+    // knowing about: a length that settles no length is either something this
+    // reader has not found yet or something the template has wrong. That is
+    // the one place where "none" is a finding rather than the norm.
+    if (rows.length === 0 && whole && !this.isMachinery(path)) return null;
     return {
       key: `${prefix}readby`,
       label: PROPERTIES.row.readBy,
@@ -1776,6 +1793,13 @@ export class Inspector {
       how: whole || parent === null ? null : { text: PROPERTIES.readBy.partial(parent), path: up },
       detail: rows,
     };
+  }
+
+  /** Whether the template calls this field machinery: a field that is there to
+   *  describe other fields rather than to hold any of the file's content. */
+  private isMachinery(path: readonly number[]): boolean {
+    const n = this.doc.templateNode(path);
+    return n.status === "ok" && n.node.machinery === true;
   }
 
   /**

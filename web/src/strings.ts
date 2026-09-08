@@ -1163,9 +1163,12 @@ export const PROPERTIES = {
    * bit width or name reads this field's value.
    *
    * Three answers that must not look alike: none found, not searched, and
-   * found in part. `none` is a finding, and the one a reader about to edit a
-   * length field most wants; hiding the row would make it look like `not
-   * searched`. The partial case is the file too big to walk and only the
+   * found in part. `none` is shown only where it is a finding: on a field the
+   * template calls machinery, where a length that settles no length is worth
+   * knowing about. Everywhere else the row is left off, because nearly every
+   * field is read by nothing and a row that always says the same thing is a
+   * row nobody reads. What keeps that honest is that `not searched` is never
+   * left off, so an absent row means the search finished and found none. The partial case is the file too big to walk and only the
    * enclosing structure walked: a bare count there is a count of some of the
    * answer, so the clause says where the search stopped. `searched only in
    * header`, not "only header searched": read cold, "only header" parses as
