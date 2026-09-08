@@ -99,6 +99,74 @@ fn property_id() -> T {
     T::enumeration_hex("PropertyId", T::u8(), PROPERTY_IDS)
 }
 
+/// The codecs a coder can name, by the numbers 7-Zip's own registry binds them
+/// to and under the names it prints for them.
+///
+/// An id is written most significant byte first in as few bytes as it takes,
+/// with the count of them in the low nibble of the coder's flags, so `00` and
+/// `030101` are one number each and never collide however long they were
+/// written. That is why one list answers for all four widths.
+///
+/// The names are 7-Zip's registered spellings rather than tidied ones, so that
+/// a row here reads as the same word `7z l -slt` prints. Beware the one-byte
+/// filter ids: `03` is Delta and `0a`/`0b` are ARM64 and RISCV, but the `04`
+/// to `09` run that looks like it should continue them is **xz's** filter
+/// numbering and means nothing in a 7z header, where x86 is the four-byte
+/// `03030103`. 7-Zip looks an id up by exact match and keeps no aliases.
+const CODEC_IDS: &[(i128, &str)] = &[
+    (0x00, "Copy"),
+    (0x03, "Delta"),
+    (0x0a, "ARM64"),
+    (0x0b, "RISCV"),
+    (0x21, "LZMA2"),
+    (0x02_0302, "Swap2"),
+    (0x02_0304, "Swap4"),
+    (0x03_0101, "LZMA"),
+    (0x03_0401, "PPMD"),
+    (0x04_0108, "Deflate"),
+    (0x04_0109, "Deflate64"),
+    (0x04_0202, "BZip2"),
+    (0x0303_0103, "BCJ"),
+    (0x0303_011b, "BCJ2"),
+    (0x0303_0205, "PPC"),
+    (0x0303_0401, "IA64"),
+    (0x0303_0501, "ARM"),
+    (0x0303_0701, "ARMT"),
+    (0x0303_0805, "SPARC"),
+    (0x04f7_1101, "ZSTD"),
+    (0x04f7_1102, "BROTLI"),
+    (0x04f7_1104, "LZ4"),
+    (0x04f7_1105, "LZ5"),
+    (0x04f7_1106, "LIZARD"),
+    (0x06f1_0701, "7zAES"),
+];
+
+/// Which codec a coder runs, as the number it is rather than the bytes it was
+/// written in.
+///
+/// The length is the low nibble of the flags byte, which is why this is a
+/// switch and not a field: the same value is one, two, three or four bytes
+/// wide depending on what the archiver had to spend. Reading it as a number is
+/// what lets anything switch on it, and the block below is the first thing
+/// that does.
+///
+/// A length the format cannot mean stays bytes. The nibble holds up to fifteen
+/// and 7-Zip writes at most four, so nothing else is a coder anything reads.
+fn codec_id() -> T {
+    let id_size = E::field("flags").and(E::lit(0x0f));
+    let named = |inner: T| T::enumeration_hex("CodecId", inner, CODEC_IDS);
+    T::switch(
+        id_size.clone(),
+        vec![
+            (1, named(T::u8())),
+            (2, named(T::UInt { bits: 16, endian: Big })),
+            (3, named(T::UInt { bits: 24, endian: Big })),
+            (4, named(T::u32(Big))),
+        ],
+        T::bytes(id_size),
+    )
+}
+
 /// Every count, size and offset in the header. See [`T::SevenZipNumber`].
 fn number() -> T {
     T::sevenzip_number()
@@ -194,7 +262,7 @@ fn coder() -> T {
             // coder takes more than one stream in or gives more than one out,
             // and bit 5 that it was given settings.
             ("flags", T::u8()),
-            ("codec_id", T::bytes(E::field("flags").and(E::lit(0x0f)))),
+            ("codec_id", codec_id()),
             (
                 // Two counts, not streams: `streams` already means byte runs
                 // at the front of the file and a whole `StreamsInfo` in the
@@ -1001,9 +1069,12 @@ mod tests {
     /// can still say where that stream is, and says so about nothing else: the
     /// files are in the run before it, which only the compressed header
     /// describes.
-    #[test]
-    fn a_compressed_header_places_its_own_stream_and_no_others() {
-        // kEncodedHeader, then a streams info with no tag of its own.
+    /// A `kEncodedHeader` describing one stream of twenty bytes, a hundred
+    /// bytes into the packed region, unpacking to three hundred. The shape
+    /// 7-Zip writes when it compresses its own header, with numbers small
+    /// enough to check by eye; the stream itself is zeros, so nothing here
+    /// unpacks.
+    fn encoded_header() -> Vec<u8> {
         let mut h = vec![0x17, 0x06];
         h.extend(num(100));
         h.extend(num(1));
@@ -1018,7 +1089,12 @@ mod tests {
         h.push(0x0c);
         h.extend(num(300));
         h.extend([0x00, 0x00]);
-        let (d, mut e) = read(archive(&vec![0u8; 120], &h));
+        h
+    }
+
+    #[test]
+    fn a_compressed_header_places_its_own_stream_and_no_others() {
+        let (d, mut e) = read(archive(&vec![0u8; 120], &encoded_header()));
         let id = e.node(&d, &[8, 0]).unwrap();
         assert_eq!(id.value, Value::Enum { raw: 0x17, name: Some("kEncodedHeader".into()), hex: true });
         // The hundred bytes before the header's own stream are named as bytes
@@ -1044,6 +1120,22 @@ mod tests {
         assert_eq!(e.node(&d, &[7, 1]).unwrap().size_bits, 0);
         assert_eq!(e.node(&d, &[7, 2]).unwrap().child_count, 0);
         assert_eq!(e.node(&d, &[7, 3]).unwrap().size_bits, 12 * 8);
+    }
+
+    /// The codec id is as many bytes as the flags nibble says, read as one
+    /// number whichever that was. A store coder writes it in one byte and LZMA
+    /// in three, and the two answer from the same list.
+    #[test]
+    fn a_coder_says_which_codec_it_runs() {
+        let (d, mut e) = read(archive(b"abc", &header(&[3], &["a"])));
+        let stored = e.node(&d, &[8, 2, 2, 4, 0, 1, 0, 1]).unwrap();
+        assert_eq!(stored.value, Value::Enum { raw: 0x00, name: Some("Copy".into()), hex: true });
+        assert_eq!(stored.size_bits, 8, "one byte, because the flags nibble said one");
+
+        let (d, mut e) = read(archive(&vec![0u8; 120], &encoded_header()));
+        let lzma = e.node(&d, &[8, 1, 1, 4, 0, 1, 0, 1]).unwrap();
+        assert_eq!(lzma.value, Value::Enum { raw: 0x03_0101, name: Some("LZMA".into()), hex: true });
+        assert_eq!(lzma.size_bits, 3 * 8, "three bytes, and the same number a one-byte id would be");
     }
 
     /// `kEmptyStream` is a bit per file, and a count of files that is not a
