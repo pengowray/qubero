@@ -108,6 +108,7 @@ mod mseed;
 mod nes;
 mod netcdf;
 mod npy;
+mod ogg;
 mod old_mac;
 mod omf;
 mod pak;
@@ -227,6 +228,7 @@ pub use mseed::mseed;
 pub use nes::nes;
 pub use netcdf::netcdf;
 pub use npy::npy;
+pub use ogg::ogg;
 pub use old_mac::{binhex, compactpro, macbinary, stuffit};
 pub use omf::omf;
 pub use pe::pe;
@@ -367,6 +369,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("netcdf", |_| netcdf()),
     ("grib", |_| grib()),
     ("npy", |_| npy()),
+    ("ogg", |_| ogg()),
     ("fits", |_| fits()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),

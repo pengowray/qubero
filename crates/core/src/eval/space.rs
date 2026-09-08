@@ -272,6 +272,15 @@ mod tests {
         let mut e = Evaluator::new(make_named("no_such_field"));
         assert!(e.node(&d, &[3]).is_ok(), "a run that will not open is still a field");
         assert_eq!(e.open_space(&d, 0, &[3]).unwrap(), None, "a name that is not there is not an error");
+
+        // The two say different things, which is the point of telling them
+        // apart. Nothing read the bytes in the second case, so nothing is
+        // claiming they are wrong: a reader told unpacking failed there would
+        // go looking for damage in a file that has none.
+        let mut e = Evaluator::new(make_named("no_such_field"));
+        assert_eq!(e.node(&d, &[3]).unwrap().refused.as_deref(), Some("settings"));
+        let mut e = Evaluator::new(make_named("props"));
+        assert_eq!(e.node(&wrong, &[3]).unwrap().refused.as_deref(), Some("failed"));
     }
 
     /// A file that is one zlib stream, over whatever is handed in.

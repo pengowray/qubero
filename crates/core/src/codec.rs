@@ -19,6 +19,7 @@ pub mod compress;
 pub mod fastlz;
 pub mod frames;
 pub mod inflate;
+pub mod lha;
 pub mod lzma;
 pub mod lz4;
 pub mod pico8;
@@ -85,6 +86,18 @@ pub enum Codec {
     /// [`Codec::Lzma1`] nothing outside the stream has to describe it. What
     /// 7z packs with by default and what an xz block holds.
     Lzma2,
+    /// One LHA entry's data, packed the way its method string names.
+    ///
+    /// `-lh5-` and its neighbours are LZSS against a window, with the matches
+    /// and the literals under Huffman codes rebuilt every few thousand
+    /// symbols. What differs between `-lh4-`, `-lh5-`, `-lh6-` and `-lh7-` is
+    /// how far back a match may reach and nothing else, so the window is the
+    /// setting and the method string is where a template reads it.
+    ///
+    /// `-lh1-` is not this: it packs against a 4K window with an adaptive
+    /// Huffman tree that changes with every symbol, which is a different
+    /// decoder, and it stays bytes.
+    Lha { window_bits: u8 },
     /// A whole bzip2 stream, from its `BZh` onwards.
     ///
     /// The run is the stream and not a block: bzip2 packs its blocks to the
@@ -149,6 +162,7 @@ impl Codec {
             Codec::Lzip => "lzip",
             Codec::Lzma1 { .. } => "lzma",
             Codec::Lzma2 => "lzma2",
+            Codec::Lha { .. } => "lzhuf",
             Codec::Bzip2 => "bzip2",
             Codec::Compress => "compress",
             Codec::Gzip => "gzip",
@@ -173,6 +187,17 @@ pub enum Refusal {
     Failed,
     /// The run does not start on a byte, and no decoder reads half a byte.
     Unaligned,
+    /// How the run was packed could not be worked out, so no decoder was
+    /// asked. Told apart from [`Refusal::Failed`] on purpose: nothing here
+    /// tried to read these bytes and nothing here is saying they are wrong.
+    ///
+    /// What a codec whose settings are fields runs into. See
+    /// [`Packing`](crate::template::Packing): a 7z coder writes how it packed
+    /// a stream into the archive's header, and a coder that packed nothing,
+    /// or one this cannot read the properties of, leaves the numbers with
+    /// nowhere to come from. A reader told "unpacking failed" there would go
+    /// looking for damage in a file that has none.
+    Settings,
 }
 
 impl Refusal {
@@ -181,6 +206,7 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too-large",
             Refusal::Failed => "failed",
+            Refusal::Settings => "settings",
             Refusal::Unaligned => "unaligned",
         }
     }
@@ -738,6 +764,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Lzip => lzma::lzip(data)?,
         Codec::Lzma1 { props, dict_size, unpacked } => lzma::lzma1(data, props, dict_size, unpacked)?,
         Codec::Lzma2 => lzma::lzma2(data)?,
+        Codec::Lha { window_bits } => lha::entry(data, window_bits)?,
         Codec::Bzip2 => bzip2::stream(data)?,
         Codec::Compress => compress::lzw(data)?,
         Codec::Gzip => inflate::gzip(data)?,
@@ -776,6 +803,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Lzip
         | Codec::Lzma1 { .. }
         | Codec::Lzma2
+        | Codec::Lha { .. }
         | Codec::Bzip2
         | Codec::Compress
         | Codec::Gzip

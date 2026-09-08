@@ -35,6 +35,14 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
   "too-large": "too large to unpack (over 64 MiB)",
   failed: "unpacking failed",
   unaligned: "not on a byte boundary",
+  /**
+   * The file did not say how the run was packed, so nothing tried to unpack
+   * it. Kept apart from `failed`, which says a decoder read these bytes and
+   * would not have them: a reader told unpacking failed goes looking for
+   * damage, and there is none to find here. What a 7z coder that packed
+   * nothing, or one whose properties this cannot read, comes to.
+   */
+  settings: "the file doesn't say how this was packed",
 };
 
 /** The same, for a run whose reason is one this build does not know. */
