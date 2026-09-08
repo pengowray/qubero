@@ -143,11 +143,13 @@ fn version2() -> T {
         ("file_base", T::u64(Little)),
         ("reserved", T::array(T::u32(Little), E::lit(16))),
     ];
-    let mut open = vec![("file_count", T::u32(Little))];
-    open.extend(directory(2, E::field("file_base")).into_iter().skip(1));
     fields.push((
         "directory",
-        T::switch(E::field("pack_flags").bit(0), vec![(1, encrypted())], T::structure("PackDirectory", open)),
+        T::switch(
+            E::field("pack_flags").bit(0),
+            vec![(1, encrypted())],
+            T::structure("PackDirectory", directory(2, E::field("file_base"))),
+        ),
     ));
     T::structure("GodotPack2", fields)
 }
@@ -320,6 +322,41 @@ mod tests {
         assert_eq!(e.node(&d, &[5, 2, 0, 1]).unwrap().value, Value::Str("res://only.txt".into()));
         let placed = e.node(&d, &[5, 3, 0]).unwrap();
         assert_eq!(placed.offset_bits / 8, start);
+        assert_eq!(placed.size_bits / 8, 5);
+    }
+
+    /// Version 2, which Godot 4.0 to 4.2 wrote: a flags word and a file base
+    /// like the later ones, and the directory in front of the files like the
+    /// earlier one.
+    #[test]
+    fn a_version_2_pack_keeps_its_directory_before_the_files() {
+        let mut b = MAGIC.to_vec();
+        b.extend(u32le(2)); // pack version
+        b.extend(u32le(4));
+        b.extend(u32le(1));
+        b.extend(u32le(0));
+        b.extend(u32le(2)); // offsets relative to the pack
+        let base_at = b.len();
+        b.extend(0u64.to_le_bytes());
+        b.extend([0; 64]); // reserved
+        b.extend(u32le(1)); // one entry
+        b.extend(u32le(16));
+        b.extend_from_slice(b"res://only.txt\0\0");
+        b.extend(0u64.to_le_bytes()); // at the file base itself
+        b.extend(5u64.to_le_bytes());
+        b.extend([0; 16]); // md5
+        b.extend(u32le(0)); // flags, which version 1 does not have
+        let file_base = b.len() as u64;
+        b[base_at..base_at + 8].copy_from_slice(&file_base.to_le_bytes());
+        b.extend_from_slice(b"bytes");
+
+        let (d, mut e) = ev(b);
+        assert_eq!(e.node(&d, &[1]).unwrap().value, Value::UInt(2));
+        assert_eq!(e.node(&d, &[5, 3, 1, 0, 1]).unwrap().value, Value::Str("res://only.txt".into()));
+        // The offset counts from the base rather than from the start of the
+        // pack, which is the whole of what version 2 added.
+        let placed = e.node(&d, &[5, 3, 2, 0]).unwrap();
+        assert_eq!(placed.offset_bits / 8, file_base);
         assert_eq!(placed.size_bits / 8, 5);
     }
 
