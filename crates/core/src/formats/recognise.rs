@@ -73,9 +73,8 @@ const MAGIC: &[(&[u8], &str)] = &[
     (sevenzip::MAGIC, "7z"),
     (rar5::MAGIC, "rar5"),
     (uf2::MAGIC, "uf2"),
-    // A Godot resource or packed scene, plain and compressed. Only the third
-    // letter tells the two apart, and one template reads both.
-    (godot::MAGIC, "godot"),
+    // A Godot resource with its body compressed. The plain one shares its
+    // four letters with LabVIEW and is a probe instead; this one does not.
     (godot::MAGIC_COMPRESSED, "godot"),
     (godot_pck::MAGIC, "godotpck"),
     (b"DIRC", "gitindex"),
@@ -195,6 +194,9 @@ const PROBES: &[Probe] = &[
     // A Godot scene or resource saved as text. One word at the front of the
     // file is the whole of the evidence, and no other format opens with it.
     Probe::Is("godottext", godot_text::is_godot_text),
+    // The binary form. `RSRC` alone is LabVIEW's too, so the byte-order word
+    // after it has to be looked at before this is claimed.
+    Probe::Is("godot", godot::is_godot),
     Probe::Is("macbinary", is_macbinary),
     Probe::Is("binhex", |h, _| is_binhex(h)),
     Probe::Is("stuffit", |h, _| is_stuffit(h)),

@@ -69,6 +69,24 @@ pub const MAGIC: &[u8] = b"RSRC";
 /// nothing else in the two headers lines up.
 pub const MAGIC_COMPRESSED: &[u8] = b"RSCC";
 
+/// Whether this is a Godot resource rather than the other format that opens
+/// with these four letters.
+///
+/// A LabVIEW file starts `RSRC\r\n\0\x03`, and National Instruments got there
+/// first: the `file` command has had a rule for it since 2005. Four bytes are
+/// not enough to tell them apart, but eight are. What follows Godot's magic is
+/// the byte order, written by `store_32` as 0 or 1 and never as anything else,
+/// so the word is `00 00 00 00` or `01 00 00 00`. LabVIEW's is `0d 0a 00 03`,
+/// which is neither.
+///
+/// Claiming a `.vi` would be worse than not claiming a `.res`: the template
+/// would read a byte order of fifty million, take the big-endian branch and
+/// report a version and a resource type out of the middle of somebody else's
+/// header.
+pub fn is_godot(head: &[u8], _len: u64) -> bool {
+    head.starts_with(MAGIC) && matches!(head.get(4..8), Some([0 | 1, 0, 0, 0]))
+}
+
 /// Which engine's rules this file follows. Settled from `format_version`,
 /// which is the field that governs the encoding; `engine_version_major` says
 /// the same thing and is what the file calls itself.
@@ -876,6 +894,131 @@ mod tests {
 
     fn ev(bytes: Vec<u8>) -> (Document<MemSource>, Evaluator) {
         (Document::new(MemSource(bytes)), Evaluator::new(godot()))
+    }
+
+    /// One property, its name written out in place so that these files need no
+    /// string table, and `value` as the tag and bytes of its variant.
+    fn prop(name: &str, value: &[u8]) -> Vec<u8> {
+        let mut v = u32le(0x8000_0000 | (name.len() + 1) as u32);
+        v.extend_from_slice(name.as_bytes());
+        v.push(0);
+        v.extend_from_slice(value);
+        v
+    }
+
+    /// One whole resource: the class name, how many properties, and them.
+    fn resource_body(props: &[Vec<u8>]) -> Vec<u8> {
+        let mut v = gstr("Resource");
+        v.extend(u32le(props.len() as u32));
+        for p in props {
+            v.extend_from_slice(p);
+        }
+        v
+    }
+
+    /// A Godot 4 file with the header flags and resources given, and no tables
+    /// in front of them. For the header switches the sample file cannot reach:
+    /// every file Godot has been seen to write has flags of 3.
+    fn built(flags: u32, script_class: Option<&str>, bodies: &[Vec<u8>]) -> Vec<u8> {
+        let mut b = MAGIC.to_vec();
+        b.extend(u32le(0)); // little-endian
+        b.extend(u32le(0)); // use_real64
+        b.extend(u32le(4));
+        b.extend(u32le(3));
+        b.extend(u32le(6));
+        b.extend(gstr("Resource"));
+        b.extend(0u64.to_le_bytes());
+        b.extend(u32le(flags));
+        b.extend(u64::MAX.to_le_bytes());
+        if let Some(s) = script_class {
+            b.extend(gstr(s));
+        }
+        b.extend([0; 44]);
+        b.extend(u32le(0)); // no strings
+        b.extend(u32le(0)); // no dependencies
+        b.extend(u32le(bodies.len() as u32));
+        let mut slots = Vec::new();
+        for i in 0..bodies.len() {
+            b.extend(gstr(&format!("local://{i}")));
+            slots.push(b.len());
+            b.extend(0u64.to_le_bytes());
+        }
+        for (i, body) in bodies.iter().enumerate() {
+            let at = b.len() as u64;
+            b[slots[i]..slots[i] + 8].copy_from_slice(&at.to_le_bytes());
+            b.extend_from_slice(body);
+        }
+        b.extend_from_slice(MAGIC);
+        b
+    }
+
+    /// The flag that says every `real` in the file is a double is the one
+    /// thing standing between a correct read and a plausible wrong one: the
+    /// same bytes read as floats give numbers, and they are not these numbers.
+    #[test]
+    fn a_file_whose_flags_say_doubles_reads_its_vectors_as_doubles() {
+        let mut value = u32le(10); // vector2
+        value.extend(1.5f64.to_le_bytes());
+        value.extend((-2.5f64).to_le_bytes());
+        let (d, mut e) = ev(built(4, None, &[resource_body(&[prop("size", &value)])]));
+
+        let vector = [CONTENTS, &[12, 0, 2, 0, 2, 1][..]].concat();
+        assert_eq!(e.node(&d, &vector).unwrap().size_bits / 8, 16);
+        assert_eq!(e.node(&d, &[vector.clone(), vec![0]].concat()).unwrap().value, Value::Float(1.5));
+        assert_eq!(e.node(&d, &[vector, vec![1]].concat()).unwrap().value, Value::Float(-2.5));
+    }
+
+    /// The other header switch: a name after the UID, there only when a flag
+    /// says so, and everything after it moved along by its length.
+    #[test]
+    fn a_script_class_is_read_only_when_the_flags_say_there_is_one() {
+        let body = resource_body(&[prop("n", &[u32le(3), (7i32).to_le_bytes().to_vec()].concat())]);
+        let with = built(8, Some("Sword"), &[body.clone()]);
+        let without = built(0, None, &[body]);
+        assert_eq!(with.len(), without.len() + 10); // four for the length, six for "Sword\0"
+
+        let (d, mut e) = ev(with);
+        assert_eq!(e.node(&d, &[CONTENTS, &[4, 1][..]].concat()).unwrap().value, Value::Str("Sword".into()));
+        let (d2, mut e2) = ev(without);
+        assert_eq!(e2.node(&d2, &[CONTENTS, &[4][..]].concat()).unwrap().size_bits, 0);
+        // The table after it starts wherever the name left off, in both.
+        assert_eq!(e.node(&d, &[CONTENTS, &[6][..]].concat()).unwrap().value, Value::UInt(0));
+        assert_eq!(e2.node(&d2, &[CONTENTS, &[6][..]].concat()).unwrap().value, Value::UInt(0));
+    }
+
+    /// A variant tag no engine defines says nothing about how long its value
+    /// is, so the rest of *that resource* is claimed and the read stops there.
+    /// The resource after it is still placed by its own table row, and nothing
+    /// reaches past the resource it went wrong in.
+    #[test]
+    fn a_tag_no_engine_defines_stops_at_the_end_of_its_own_resource() {
+        let good = prop("n", &[u32le(3), (7i32).to_le_bytes().to_vec()].concat());
+        let bad = prop("broken", &u32le(99));
+        let (d, mut e) = ev(built(1, None, &[resource_body(&[good.clone(), bad]), resource_body(&[good])]));
+
+        let second = e.node(&d, &[CONTENTS, &[12, 1][..]].concat()).unwrap();
+        assert_eq!(
+            e.node(&d, &[CONTENTS, &[11, 1, 1][..]].concat()).unwrap().value,
+            Value::UInt((second.offset_bits / 8).into())
+        );
+        // The unread run ends exactly where the next resource begins.
+        let stopped = e.node(&d, &[CONTENTS, &[12, 0, 2, 1, 2, 1][..]].concat()).unwrap();
+        assert_eq!(stopped.offset_bits + stopped.size_bits, second.offset_bits);
+        // And the resource it stopped in claims no more than its own room.
+        let first = e.node(&d, &[CONTENTS, &[12, 0][..]].concat()).unwrap();
+        assert_eq!(first.offset_bits + first.size_bits, second.offset_bits);
+    }
+
+    /// A LabVIEW file opens with the same four letters, and reading one as a
+    /// Godot resource would report a byte order in the tens of millions and a
+    /// version out of somebody else's header.
+    #[test]
+    fn a_labview_file_is_not_claimed_as_a_godot_resource() {
+        assert!(is_godot(b"RSRC\0\0\0\0\x04\0\0\0", 3071));
+        assert!(is_godot(b"RSRC\x01\0\0\0\x04\0\0\0", 3071)); // saved big-endian
+        assert!(!is_godot(b"RSRC\r\n\0\x03LVINLBVW", 4096));
+        assert!(!is_godot(b"RSRC", 4)); // nothing after the magic to check
+        assert!(!is_godot(b"RSCCabcd", 8));
     }
 
     /// magic, endianness, then the file: version fields, then the contents.
