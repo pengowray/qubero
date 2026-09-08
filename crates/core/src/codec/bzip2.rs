@@ -10,8 +10,15 @@
 //! it says nothing about where a block ended, and the block boundaries are the
 //! only shape a bzip2 stream has. A map guessed from the byte positions of the
 //! block magic would be right one time in eight, so this says what it knows,
-//! which is that these bytes made those bytes. See
-//! [`frames::whole`](super::frames::whole).
+//! which is that these bytes made those bytes. See `frames::whole`.
+//!
+//! One stream, not a file of them. A `.bz2` may hold several streams end to
+//! end, which is what `pbzip2` writes and what concatenating two of them
+//! gives, and the `bzip2` tool reads all of them. This reads the first and
+//! stops at its end-of-stream marker, so the bytes after that are not opened
+//! and nothing says they were skipped. Fixing it means knowing how many bytes
+//! the first stream took, which this crate does not report; the low-level
+//! `Decoder` keeps the number and does not expose it.
 
 use std::io::Read;
 
@@ -44,7 +51,7 @@ mod tests {
     /// A real stream over `data`, written by the other implementation of the
     /// format. `level` is the block size in hundreds of kilobytes, so a low
     /// one over enough data is how a multi-block stream is had.
-    pub(crate) fn pack(data: &[u8], level: u32) -> Vec<u8> {
+    fn pack(data: &[u8], level: u32) -> Vec<u8> {
         use std::io::Write;
         let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::new(level));
         e.write_all(data).expect("writes");
@@ -101,6 +108,26 @@ mod tests {
         assert_eq!(out.len(), text.len(), "the stream came back a different length");
         assert!(out == text.as_bytes(), "the stream came back as something else");
         trace.check_tiles().expect("tiles");
+    }
+
+    /// What this does *not* read, written down so the next person finds it
+    /// here rather than in a file. Both of these come back `Ok` with the first
+    /// stream's bytes and no note saying anything was left over.
+    #[test]
+    fn a_second_stream_after_the_first_is_not_read() {
+        let one = pack(b"first stream", 9);
+
+        // `pbzip2` writes a file like this, and so does `cat a.bz2 b.bz2`.
+        // The `bzip2` tool reads both halves; this reads the first.
+        let mut both = one.clone();
+        both.extend_from_slice(&pack(b"second stream", 9));
+        assert_eq!(stream(&both).expect("a stream").0, b"first stream");
+
+        // The same stop, reached the same way: whatever follows the
+        // end-of-stream marker is not looked at.
+        let mut tail = one.clone();
+        tail.extend_from_slice(b"trailing garbage");
+        assert_eq!(stream(&tail).expect("a stream").0, b"first stream");
     }
 
     /// The trace tiles the run whatever came out of it: one step, from the
