@@ -182,6 +182,12 @@ export class MinimapPanel {
   private focusState: FocusState | null = null;
   /** The block being looked at, in bytes, or null when none is. */
   private block: { from: number; to: number } | null = null;
+  /** The cell of the whole-file map the reader picked, marked while the rest of
+   *  the map stays as it was. Dimming the file to show one cell was the first
+   *  try and was the wrong shape of answer: a mark says "this one", and dimming
+   *  says "not those", which for one cell out of a thousand throws the picture
+   *  away to point at a speck of it. */
+  private mark: { from: number; to: number } | null = null;
   /** Which cell of the block map was last picked, so it stays marked while the
    *  rest of the scan fills in around it. */
   private picked: number | null = null;
@@ -417,7 +423,7 @@ export class MinimapPanel {
   private drawMain(): void {
     const s = this.state;
     if (s === null) return;
-    this.drawMap(this.canvas, s.classes, this.highlight, this.viewCells(s));
+    this.drawMap(this.canvas, s.classes, this.highlight, this.viewCells(s), this.mark);
   }
 
   /** The run of cells the main view is showing, or null when it shows none of
@@ -445,6 +451,7 @@ export class MinimapPanel {
     classes: string,
     bright: { from: number; to: number } | null,
     outline: { from: number; to: number } | null = null,
+    mark: { from: number; to: number } | null = null,
   ): void {
     const width = this.innerWidth();
     if (width <= 0) return;
@@ -470,7 +477,11 @@ export class MinimapPanel {
       ctx.fillRect(MAP_PAD + (i % cols) * (CELL + GAP), MAP_PAD + Math.floor(i / cols) * (CELL + GAP), CELL, CELL);
     }
     ctx.globalAlpha = 1;
-    if (outline !== null && outline.to > outline.from) this.strokeRun(ctx, cols, outline.from, outline.to);
+    // Two marks, told apart by colour: the accent is the stretch the view is
+    // showing, and the foreground is the cell the reader picked, which is the
+    // same colour the treemap marks a picked box with.
+    if (outline !== null && outline.to > outline.from) this.strokeRun(ctx, cols, outline.from, outline.to, "--accent");
+    if (mark !== null && mark.to > mark.from) this.strokeRun(ctx, cols, mark.from, mark.to, "--fg");
   }
 
   /**
@@ -479,7 +490,7 @@ export class MinimapPanel {
    * the page's background colour goes under a narrower one in the accent
    * colour, so the border reads against a cell of any class.
    */
-  private strokeRun(ctx: CanvasRenderingContext2D, cols: number, from: number, to: number): void {
+  private strokeRun(ctx: CanvasRenderingContext2D, cols: number, from: number, to: number, colour: string): void {
     const step = CELL + GAP;
     const last = to - 1;
     const r0 = Math.floor(from / cols);
@@ -509,13 +520,13 @@ export class MinimapPanel {
       path.closePath();
     }
     const style = getComputedStyle(this.el);
-    const accent = style.getPropertyValue("--accent").trim();
+    const ink = style.getPropertyValue(colour).trim();
     const ground = style.getPropertyValue("--bg").trim();
     ctx.lineJoin = "miter";
     ctx.strokeStyle = ground === "" ? "#fff" : ground;
     ctx.lineWidth = 4;
     ctx.stroke(path);
-    ctx.strokeStyle = accent === "" ? "#2457c5" : accent;
+    ctx.strokeStyle = ink === "" ? "#2457c5" : ink;
     ctx.lineWidth = 2;
     ctx.stroke(path);
   }
@@ -625,25 +636,26 @@ export class MinimapPanel {
 
   // ----- lighting the map -----
 
-  /** Dim the rest of the map, so the range asked for shows where its bytes
-   *  sit. Passing null puts the map back to the picked block, or to all of it
-   *  when no block is picked. */
+  /**
+   * Dim the rest of the map, so the range asked for shows where its bytes sit.
+   * Passing null puts the whole map back.
+   *
+   * Dimming is for one job only: a part of the file under the pointer in the
+   * Contents list, where the question is "where does this part live" and the
+   * answer can be a run scattered over the whole map. It is the wrong answer
+   * for a single cell somebody pressed, which is a mark; the map used to dim
+   * for that too, and pressing one cell in a thousand greyed out the file.
+   */
   private highlightRange(range: { offsetBits: number; sizeBits: number } | null): void {
     const s = this.state;
     if (s === null) return;
     const bucketBits = s.bucket_bytes * 8;
-    const lit = range ?? this.blockBuckets();
-    if (lit === null) this.highlight = null;
+    if (range === null) this.highlight = null;
     else {
-      const from = Math.floor(lit.offsetBits / bucketBits);
-      this.highlight = { from, to: Math.max(from + 1, Math.ceil((lit.offsetBits + lit.sizeBits) / bucketBits)) };
+      const from = Math.floor(range.offsetBits / bucketBits);
+      this.highlight = { from, to: Math.max(from + 1, Math.ceil((range.offsetBits + range.sizeBits) / bucketBits)) };
     }
     this.drawMain();
-  }
-
-  private blockBuckets(): { offsetBits: number; sizeBits: number } | null {
-    const b = this.block;
-    return b === null ? null : { offsetBits: b.from * 8, sizeBits: (b.to - b.from) * 8 };
   }
 
   // ----- the block being looked at -----
@@ -664,8 +676,12 @@ export class MinimapPanel {
     if (s === null || i === null) return;
     const from = i * s.bucket_bytes;
     const to = Math.min(this.doc.lengthBytes, from + s.bucket_bytes);
-    this.highlight = { from: i, to: i + 1 };
+    // Pressing the marked cell again takes the mark off, the way pressing a lit
+    // box on the treemap does.
+    const same = this.mark !== null && this.mark.from === i && this.mark.to === i + 1;
+    this.mark = same ? null : { from: i, to: i + 1 };
     this.drawMain();
+    if (same) return;
     this.onPressed();
     this.onJump(from * 8, to * 8);
   }
@@ -684,7 +700,7 @@ export class MinimapPanel {
       return;
     }
     this.setBlock(from, to);
-    this.highlight = { from: i, to: i + 1 };
+    this.mark = { from: i, to: i + 1 };
     this.drawMain();
   }
 
@@ -697,8 +713,10 @@ export class MinimapPanel {
     if (f === null || i === null) return;
     const from = f.start + i * f.bucket_bytes;
     const to = Math.min(f.end, from + f.bucket_bytes);
+    // Marked, not dimmed, for the reason the whole-file map is: a block map of
+    // five hundred cells with one bright cell in it is a picture thrown away.
     this.picked = i;
-    this.drawMap(this.focusCanvas, f.classes, { from: i, to: i + 1 });
+    this.drawMap(this.focusCanvas, f.classes, null, null, { from: i, to: i + 1 });
     this.onPressed();
     this.onJump(from * 8, to * 8);
   }
@@ -743,7 +761,7 @@ export class MinimapPanel {
     );
     const f = this.focusState;
     const cell = this.picked;
-    if (f !== null) this.drawMap(this.focusCanvas, f.classes, cell === null ? null : { from: cell, to: cell + 1 });
+    if (f !== null) this.drawMap(this.focusCanvas, f.classes, null, null, cell === null ? null : { from: cell, to: cell + 1 });
     this.drawFocusStats(f);
     this.drawGaps(block);
   }

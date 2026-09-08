@@ -1045,18 +1045,24 @@ export const PROPERTIES = {
    * "index" is the word programmers read zero-based. `linked from` covers both
    * ends of a chain: for the head, the named field is a pointer in a header
    * and not a previous element, so nothing here may say "the element before
-   * it". `where offsets[3] points` is the plain reading of a pointer table
-   * entry, and the reciprocal of the `Points to` row on that entry. The
-   * stream case keeps "unpacked", the word every other string uses for it.
+   * it". With no field to name, the chain clause says what the field is, an
+   * element of a linked list, which is true of the head and of every link
+   * after it; "linked from another field" named nothing and read as a clue.
+   * `where offsets[3] points` is the plain reading of a pointer table entry,
+   * and the reciprocal of the `Points to` row on that entry. The stream case
+   * keeps "unpacked", the word every other string uses for it. The element
+   * fallback without an index cannot fire, since the panel always passes one;
+   * it says "its parent" like the other fallbacks and not "a run", which is
+   * this app's word for a repeat and not the reader's.
    */
   placed: {
     root: (): string => "the whole file",
     first: (c: HowContext): string => `first field of ${c.parent ?? "its parent"}`,
     follows: (c: HowContext): string => (c.field === undefined ? "after the previous field" : `after ${c.field}`),
     element: (c: HowContext): string =>
-      c.index === undefined ? `an element of ${c.parent ?? "a run"}` : `index ${c.index.toLocaleString()} in ${c.parent ?? "its parent"}`,
+      c.index === undefined ? `an element of ${c.parent ?? "its parent"}` : `index ${c.index.toLocaleString()} in ${c.parent ?? "its parent"}`,
     pointer: (c: HowContext): string => (c.field === undefined ? "where an offset table points" : `where ${c.field} points`),
-    chain: (c: HowContext): string => (c.field === undefined ? "linked from another field" : `linked from ${c.field}`),
+    chain: (c: HowContext): string => (c.field === undefined ? "an element of a linked list" : `linked from ${c.field}`),
     address: fromFields,
     trace: (): string => "where the decoder read it",
     stream: (c: HowContext): string => (c.parent === undefined ? "start of the unpacked stream" : `start of unpacked ${c.parent}`),
@@ -1066,34 +1072,65 @@ export const PROPERTIES = {
   /**
    * How long it turned out to be, keyed by `Shape.sized`.
    *
-   * `fixed by the type` names whose decision it was, which is the question
-   * the row answers: a u32 is 4 bytes because it is a u32, and no byte of the
-   * file could make it 5. "Fixed size" describes the field and skips the
-   * question. `ends after its last field` rather than "sum of its fields",
-   * which reads as adding the values up. `its own bytes mark the end` says
-   * the varint case without pretending there is a number: a LEB128 holds no
-   * length, only a bit on its last byte. `no bytes of its own` sits under a
-   * fact of `0 bytes`, so the zero reads as a kind of field and not as a
-   * measurement that failed. `counted by e_shnum` and not "count from":
-   * a clause that opens with a verb reads as an instruction.
+   * Each clause says what settled the length, plainly, and none is a hint
+   * for the reader to work out. Two used to be: `fixed by the type` named
+   * the wrong thing once the core told `type` from `fixed`, and `ends after
+   * its last field` described a struct ending, which every struct does, and
+   * left it to the reader to infer that the fields inside had set the length.
+   *
+   * `fixed by the format` says whose decision it was, which is the question
+   * the row answers and the one the number cannot settle: a FITS card is 80
+   * bytes because the format says so, and `Card` above it does not say 80.
+   * "Fixed size" describes the field and skips the question; "always this
+   * length" cannot say whether it means this file or every file. "Format"
+   * rather than "template": the format is what fixed the 80 and the template
+   * only writes it down, and "format" is a word the reader had before they
+   * opened this app.
+   * `total length of its fields`, not "sum of its fields", which reads as
+   * adding the values up. `element count from e_phnum`, not "counted by
+   * e_phnum": a field is not an actor, and "element count" says what was
+   * taken from it. `no bytes of its own` sits under a fact of `0 bytes`, so
+   * the zero reads as a kind of field and not as a measurement that failed;
+   * "not stored in the file" would be false for a pointer holder, whose
+   * bytes are all at the target.
    */
   sized: {
     /** Nothing. The length row already reads `8 bytes` and the type row above
      *  it already reads `u64 le`, so a clause saying the second explains the
      *  first is a line the reader has to read to find out it says nothing. */
     type: (): string => "",
-    fixed: (): string => "fixed by the type",
+    fixed: (): string => "fixed by the format",
     expression: fromFields,
     terminated: (): string => "ends at a terminator",
     remaining: (c: HowContext): string => `rest of ${c.parent ?? "its parent"}`,
-    children: (c: HowContext): string => `ends after its last ${c.child ?? "field"}`,
+    children: (c: HowContext): string => `total length of its ${plural(c.child ?? "field")}`,
     /** A list of places rather than a stretch of bytes: the elements are
-     *  wherever the offsets said, and the run covers what is left of the
-     *  structure it was declared in because that is as far as they can be. */
-    scattered: (): string => "wherever its offsets point",
-    count: (c: HowContext): string => (c.field === undefined ? "from a count" : `counted by ${c.field}`),
-    encoded: (): string => "its own bytes mark the end",
-    trace: (): string => "set by the decoder",
+     *  wherever the offsets said, and the number is measured to the end of the
+     *  structure the list was declared in, because that is as far as they can
+     *  be. The elements come first because the line wraps at this width, and
+     *  "to the end of header" on a line of its own is the misreading this
+     *  case exists to prevent: a reader going into the header for a block
+     *  that is not there. */
+    scattered: (c: HowContext): string => `elements where its offsets point; measured to the end of ${c.parent ?? "its parent"}`,
+    /** Named where one field holds the count; counted where an expression
+     *  reads more than one, since the expansion lists them. With neither the
+     *  count is a literal or a bare expression, and the core does not say
+     *  which, so the clause can only say the length follows from the count. */
+    count: (c: HowContext): string => {
+      if (c.field !== undefined) return `element count from ${c.field}`;
+      if (c.fields !== undefined && c.fields > 1) return `element count from ${c.fields.toLocaleString()} fields`;
+      return "from its element count";
+    },
+    /** The varint, the instruction and the JSON scalar alike: each was
+     *  measured by decoding it, and none holds a length. Not "self-delimiting",
+     *  which is the varint's word and not the instruction's, and not "its own
+     *  bytes mark the end", which made the bytes the actor and read as a
+     *  riddle. */
+    encoded: (): string => "decoded from its own bytes",
+    /** "Measured" rather than "set": the decoder found out how many bits it
+     *  took, it did not choose. Nothing with "read" in it, because the row two
+     *  lines down is labelled `Read by`. */
+    trace: (): string => "measured by the decoder",
     nothing: (): string => "no bytes of its own",
     unknown: (): string => "",
   } satisfies Record<Shape["sized"], (c: HowContext) => string>,
@@ -1130,16 +1167,19 @@ export const PROPERTIES = {
    * length field most wants; hiding the row would make it look like `not
    * searched`. The partial case is the file too big to walk and only the
    * enclosing structure walked: a bare count there is a count of some of the
-   * answer, so the clause says where the search stopped. The limit is
-   * printed with the size that broke it, because "too many" with no number
-   * is a verdict and not a fact.
+   * answer, so the clause says where the search stopped. `searched only in
+   * header`, not "only header searched": read cold, "only header" parses as
+   * a noun first, and the verb-first order is the one the reader would say.
+   * The limit is printed with the size that broke it, because "too many"
+   * with no number is a verdict and not a fact, and it is called the search
+   * limit because a bare "limit" leaves the reader asking a limit on what.
    */
   readBy: {
     found: (n: number): string => (n === 0 ? "none" : countText(n, "field")),
-    partial: (parent: string): string => `only ${parent} searched`,
+    partial: (parent: string): string => `searched only in ${parent}`,
     notSearched: "not searched",
     tooMany: (parent: string, n: number, limit: number): string =>
-      `${parent} has ${n.toLocaleString()} fields, limit ${limit.toLocaleString()}`,
+      `${parent} has ${n.toLocaleString()} fields, search limit ${limit.toLocaleString()}`,
     /** One row of the expansion, before the field's name, which is a link:
      *  `length of` data. A phrase rather than a column of role words, because
      *  under this heading a bare `Length` reads as this field's length, and
