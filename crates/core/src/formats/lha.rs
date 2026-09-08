@@ -26,6 +26,7 @@
 //! 256 or 512 bytes ends early. That is what the format leaves ambiguous, and
 //! every tool that reads these files has the same problem.
 
+use crate::codec::Codec;
 use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// The method five characters name, which is also the window size: `-lh5-`
@@ -116,18 +117,80 @@ fn entry() -> T {
     .counted_as("entry")
 }
 
-/// The stored method, `-lh0-`, which writes the file in verbatim. Read as a
-/// forty-bit big-endian number, which is what the five characters come to.
+/// The methods that open, each read as the forty-bit big-endian number its
+/// five characters come to.
+///
+/// `-lh0-` writes the file in verbatim. The other four are one algorithm under
+/// four window sizes, which is the number beside each: LZSS against that much
+/// history, with the literals and the matches under Huffman codes rebuilt
+/// every few thousand symbols. See [`crate::codec::lha`], which also says why
+/// the window turns out to settle less than its name suggests.
+///
+/// `-lh1-` is missing on purpose. It packs against a 4K window with an
+/// adaptive Huffman tree reordered after every symbol, which is a different
+/// decoder and is not written; `-lh2-` and `-lh3-` are two more schemes again,
+/// and `-lhd-` is a directory with no data at all. Those stay bytes.
 const STORED: i128 = 0x2d_6c_68_30_2d;
+const LH4: i128 = 0x2d_6c_68_34_2d;
+const LH5: i128 = 0x2d_6c_68_35_2d;
+const LH6: i128 = 0x2d_6c_68_36_2d;
+const LH7: i128 = 0x2d_6c_68_37_2d;
 
-/// What an entry's `crc` covers: the file, which is the bytes after the header
-/// only when nothing compressed them. Every other method here would have the
-/// sum taken over the packed bytes, which matches nothing and would call every
-/// valid archive broken; the guard is the difference between a check and a
-/// lie. Both header layouts write the same field and both use this.
+/// An entry's data, opened by whichever decoder its method names.
+///
+/// Both header layouts reach this, and both have worked out a
+/// `compressed_size` by the time they do: level 2 reads one, and levels 0 and
+/// 1 compute one, since the number level 1 writes counts the extended headers
+/// as well as the data.
+///
+/// A method nothing here reads stays bytes. That is not an omission but the
+/// template saying so, and it is what holds the check below honest.
+fn data() -> T {
+    let run = |window_bits: u8| {
+        T::decoded(E::field("compressed_size"), Codec::Lha { window_bits }, super::decoded_text())
+    };
+    T::switch(
+        E::field("method"),
+        vec![
+            (STORED, T::decoded(E::field("compressed_size"), Codec::Stored, super::decoded_text())),
+            (LH4, run(12)),
+            (LH5, run(13)),
+            (LH6, run(15)),
+            (LH7, run(16)),
+        ],
+        T::bytes(E::field("compressed_size")),
+    )
+}
+
+/// Whether this entry's method is one of the five that open, which is exactly
+/// when its `crc` can be checked. `Or` answers the first of its two sides that
+/// is not zero, so a chain of them is the "one of these" this needs.
+fn opens() -> E {
+    E::field("method")
+        .equals(E::lit(STORED))
+        .or(E::field("method").equals(E::lit(LH4)))
+        .or(E::field("method").equals(E::lit(LH5)))
+        .or(E::field("method").equals(E::lit(LH6)))
+        .or(E::field("method").equals(E::lit(LH7)))
+}
+
+/// What an entry's `crc` covers: the file, which is what the run unpacks to
+/// rather than the packed bytes themselves. For a stored entry the two are the
+/// same run and a reader can be sent to it; for a packed one the summed bytes
+/// are nowhere in the file, which is what [`Covers::Unpacked`] is for.
+///
+/// The guard is the difference between a check and a lie. A method no decoder
+/// here reads leaves `data` as plain bytes, and summing those would match
+/// nothing and call every valid archive broken. `-lhd-` is the sharpest case:
+/// a directory entry has no data and a stored CRC of zero, and a sum of no
+/// bytes is zero, so an unguarded check would report a pass it had not made.
+///
+/// `original_size` is only so an interface can decide whether the work is
+/// worth doing; the sum is over whatever the decoder actually produced. Both
+/// header layouts write both fields under these names and both use this.
 fn file_crc() -> Check {
-    Check::of(Checksum::Crc16Arc, Covers::Field { name: Named::here("data") })
-        .only_when(E::field("method").equals(E::lit(STORED)))
+    Check::of(Checksum::Crc16Arc, Covers::Unpacked { name: Named::here("data"), len: Some(E::field("original_size")) })
+        .only_when(opens())
 }
 
 /// Levels 0 and 1.
@@ -168,7 +231,7 @@ fn header() -> T {
                     T::computed(E::field("packed_size")),
                 ),
             ),
-            ("data", T::bytes(E::field("compressed_size"))),
+            ("data", data()),
         ],
     )
     // Every byte of the header after the checksum itself, added up. The count
@@ -210,7 +273,7 @@ fn level2() -> T {
             // for it. A level 2 header may be padded out to an even length,
             // and what the chain does not fill reads as the gap it is.
             ("extensions", T::sized(E::field("header_bytes").sub(E::lit(26)), extended_headers())),
-            ("data", T::bytes(E::field("compressed_size"))),
+            ("data", data()),
         ],
     )
     .field_check("crc", file_crc())
@@ -328,6 +391,163 @@ mod tests {
         v.extend_from_slice(&chain);
         v.extend_from_slice(data);
         v
+    }
+
+    /// A `-lh5-` stream written by hand.
+    ///
+    /// Every table it writes is the single-symbol kind, which is a code of no
+    /// bits, so a block is its own header and the symbols in it cost nothing.
+    /// That is a real stream and the decoder reads it by the same path a
+    /// packed one takes; it is simply the one shape a test can write without a
+    /// Huffman encoder standing behind it. One block a byte is wasteful and
+    /// perfectly legal.
+    #[derive(Default)]
+    struct Packer {
+        data: Vec<u8>,
+        bits: u32,
+    }
+
+    impl Packer {
+        fn bit(&mut self, set: bool) {
+            if self.bits % 8 == 0 {
+                self.data.push(0);
+            }
+            if set {
+                let last = self.data.len() - 1;
+                self.data[last] |= 1 << (7 - self.bits % 8);
+            }
+            self.bits += 1;
+        }
+
+        /// `n` bits of `val`, the highest first, which is how LHA writes them.
+        fn val(&mut self, val: u32, n: u32) {
+            for i in (0..n).rev() {
+                self.bit(val >> i & 1 != 0);
+            }
+        }
+
+        /// A block of `count` symbols, every one of them `sym`, with any match
+        /// among them reading its distance under `off_sym`. A count of zero
+        /// entries in a table means one symbol follows and its code is empty.
+        fn block(&mut self, count: u32, sym: u32, off_sym: u32) {
+            self.val(count, 16);
+            self.val(0, 5); // the code-length table: one symbol, never read
+            self.val(0, 5);
+            self.val(0, 9); // the literal/length table: one symbol
+            self.val(sym, 9);
+            self.val(0, 4); // the offset table, four bits wide for a 8K window
+            self.val(off_sym, 4);
+        }
+
+        /// One byte, in a block of its own.
+        fn literal(&mut self, byte: u8) {
+            self.block(1, byte as u32, 0);
+        }
+
+        /// A block of `count` matches, each three bytes from three back.
+        fn matches(&mut self, count: u32) {
+            // Symbol 256 is the shortest match, three bytes. Offset symbol 2
+            // means a distance of two plus one more bit, and a zero bit makes
+            // that three.
+            self.block(count, 256, 2);
+            for _ in 0..count {
+                self.bit(false);
+            }
+        }
+    }
+
+    /// A level 0 entry saying what it holds, so a test can set the method and
+    /// the CRC rather than take the ones `level0` hardcodes.
+    fn packed(method: &[u8; 5], name: &str, original: u32, crc: u16, data: &[u8]) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.extend_from_slice(method);
+        h.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        h.extend_from_slice(&original.to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes());
+        h.push(0x20);
+        h.push(0); // level 0
+        h.push(name.len() as u8);
+        h.extend_from_slice(name.as_bytes());
+        h.extend_from_slice(&crc.to_le_bytes());
+
+        let mut v = vec![h.len() as u8, 0];
+        v.extend_from_slice(&h);
+        v.extend_from_slice(data);
+        v.push(0); // the header size that ends the archive
+        v
+    }
+
+    /// The whole point of the exercise: a packed entry opens, and the CRC-16
+    /// the archive wrote about the *file* then checks what the decoder
+    /// produced. Over the packed bytes that number matches nothing.
+    #[test]
+    fn a_packed_entry_opens_and_its_crc_is_of_what_came_out() {
+        let mut p = Packer::default();
+        p.literal(b'a');
+        p.literal(b'b');
+        p.literal(b'c');
+        p.matches(2);
+        let text = b"abcabcabc";
+        let v = packed(b"-lh5-", "ABC.TXT", text.len() as u32, crate::checksum::crc16_arc(text), &p.data);
+
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(lha());
+        let data = e.node(&d, &[0, 0, 1, 12]).unwrap();
+        assert!(data.decoded && data.refused.is_none(), "the stream opened: {data:?}");
+        let crc = e.child_named(&d, &[0, 0, 1], "crc").unwrap().expect("a crc field");
+        let got = e.run_check(&d, &crc).unwrap().expect("the sum is of the file, so of what unpacks");
+        assert!(got.ok, "computed {}, stored {}", got.computed, got.stored);
+    }
+
+    /// A stored entry opens too, through the codec that copies, and its check
+    /// is of the same bytes read the same way.
+    #[test]
+    fn a_stored_entry_opens_and_checks() {
+        let text = b"stored, so the packed bytes are the file";
+        let v = packed(b"-lh0-", "PLAIN.TXT", text.len() as u32, crate::checksum::crc16_arc(text), text);
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(lha());
+        let data = e.node(&d, &[0, 0, 1, 12]).unwrap();
+        assert!(data.decoded && data.refused.is_none(), "{data:?}");
+        let crc = e.child_named(&d, &[0, 0, 1], "crc").unwrap().expect("a crc field");
+        let got = e.run_check(&d, &crc).unwrap().expect("a stored entry's sum is of its own bytes");
+        assert!(got.ok, "computed {}, stored {}", got.computed, got.stored);
+    }
+
+    /// A method no decoder here reads stays bytes and says nothing at all
+    /// about its CRC. `-lh1-` is a different decoder that is not written, and
+    /// `-lhd-` is a directory with no data: an unguarded check would sum no
+    /// bytes to zero, find the stored zero, and report a pass it never made.
+    #[test]
+    fn a_method_nothing_reads_stays_bytes_and_checks_nothing() {
+        for method in [b"-lh1-", b"-lhd-", b"-lh2-"] {
+            let v = packed(method, "X.BIN", 40, 0, &[0xee; 6]);
+            let d = Document::new(MemSource(v));
+            let mut e = Evaluator::new(lha());
+            let data = e.node(&d, &[0, 0, 1, 12]).unwrap();
+            let name = String::from_utf8_lossy(method).to_string();
+            assert!(!data.decoded, "{name} must stay bytes: {data:?}");
+            let crc = e.child_named(&d, &[0, 0, 1], "crc").unwrap().expect("a crc field");
+            assert!(e.check_of(&d, &crc).unwrap().is_none(), "{name} must declare no check");
+            assert!(e.run_check(&d, &crc).unwrap().is_none(), "{name} must run no check");
+        }
+    }
+
+    /// A packed run that is not a stream is refused, and the entry is still
+    /// placed and still measured: a decoder that will not read the bytes must
+    /// not take the rest of the archive with it.
+    #[test]
+    fn a_run_that_will_not_unpack_is_refused_rather_than_guessed_at() {
+        let v = packed(b"-lh5-", "BAD.BIN", 40, 0x1234, &[0xff; 24]);
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(lha());
+        let data = e.node(&d, &[0, 0, 1, 12]).unwrap();
+        assert_eq!(data.size_bits, 24 * 8, "the run is as long as it was said to be");
+        assert!(data.refused.is_some(), "the decoder would not take it: {data:?}");
+        // And the check says it could not be made, with a reason, rather than
+        // reporting a mismatch on bytes it never summed.
+        let crc = e.child_named(&d, &[0, 0, 1], "crc").unwrap().expect("a crc field");
+        assert!(e.run_check(&d, &crc).is_err(), "a run that will not unpack must refuse, not fail");
     }
 
     #[test]

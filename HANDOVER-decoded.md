@@ -27,6 +27,7 @@ depends on the codec:
 | FastLZ | per sequence | the token, the literals it carries, and each back-reference as `match(len, dist)` |
 | lzip, bzip2 | per stream | one step over the whole run: neither decoder says where a block ended, and bzip2's blocks are packed to the bit |
 | compress | per code | the three header bytes, each code as the byte it names or the stretch of output it repeats, the code that starts the table over, and the zero bits a group of eight was padded out with |
+| LHA `-lh4-` to `-lh7-` | per symbol | each block's count of the symbols in it, all three of its code-length tables entry by entry with the runs of unused symbols named as runs, each literal or `match(len, dist)`, and the bits the last byte was padded out with. `-lh1-` is a different decoder and is not read: those entries stay bytes |
 | PNG unfilter | per row | each row's filter byte, named, and the row it applies to as one run |
 | low bits argb, low bits rgba 11 | per pixel | one step a pixel: the four channels in, the byte they carry out |
 | PICO-8 pxa | per symbol | each literal by the table position that named it, each `match(len, dist)`, a run stored as it is a byte at a time, and the bits the last byte was padded out with |

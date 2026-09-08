@@ -690,12 +690,17 @@ mod tests {
     }
 
     #[test]
-    fn a_compressed_lha_entry_offers_no_file_check() {
-        // The same entry with a method nothing here unpacks. The bytes after
-        // the header are not the file, and a CRC-16 of them matches nothing:
-        // the check has to disappear rather than fail.
+    fn an_lha_entry_packed_by_a_decoder_we_lack_offers_no_file_check() {
+        // The same entry under `-lh1-`, which packs against an adaptive
+        // Huffman tree that no decoder here reads. The bytes after the header
+        // are not the file, and a CRC-16 of them matches nothing: the check
+        // has to disappear rather than fail.
+        //
+        // `-lh5-` used to stand here for the same reason and no longer can,
+        // since it unpacks: see `codec::lha`. What the rule turns on is
+        // whether the run opens, not whether it was compressed.
         let mut bytes = lha(b"verbatim bytes");
-        bytes[2..7].copy_from_slice(b"-lh5-");
+        bytes[2..7].copy_from_slice(b"-lh1-");
         let head = bytes[0] as usize;
         bytes[1] = sum8(&bytes[2..2 + head]);
         let mut r = Read::of("lha", bytes);
@@ -706,6 +711,25 @@ mod tests {
         // The header check is not conditional and is still made.
         let sum = r.at(&header, "header_checksum");
         assert!(r.must(&sum).ok);
+    }
+
+    /// A method that *does* unpack declares its check over what came out,
+    /// rather than over the packed bytes that are not the file. The run it
+    /// points a reader at is the compressed one, since the summed bytes are
+    /// nowhere in the file at all.
+    #[test]
+    fn an_lha_entry_we_can_unpack_checks_the_file_it_unpacks_to() {
+        let mut bytes = lha(b"verbatim bytes");
+        bytes[2..7].copy_from_slice(b"-lh5-");
+        let head = bytes[0] as usize;
+        bytes[1] = sum8(&bytes[2..2 + head]);
+        let mut r = Read::of("lha", bytes);
+        let header = r.at(&[0, 0], "header");
+        let crc = r.at(&header, "crc");
+        let info = r.info(&crc).expect("a method that unpacks checks its file");
+        assert_eq!(info.algorithm, "crc16");
+        assert_eq!(info.over, None, "the summed bytes are not a run of the file");
+        assert_eq!(info.unpacked_from, Some((29, 14)), "but the packed run is, and a reader can be sent to it");
     }
 
     /// A git index with no entries: a header, nothing, and the SHA-1 that
