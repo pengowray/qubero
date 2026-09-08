@@ -16,7 +16,7 @@ import { Tabs, type Page, type Tab } from "./tabs.js";
 import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
-import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence } from "./filetype.js";
+import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence, templateTypeName } from "./filetype.js";
 import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
@@ -671,7 +671,18 @@ function build(tab: Tab): Page {
       }
       // What the template read beats what the rules matched, where it has
       // anything to say: the rules see a theme as JSON and stop there.
-      const said = (name === null ? null : templateSentence(doc, name)) ?? id.message;
+      //
+      // And where the rules only half matched. A file(1) rule builds its
+      // sentence out of nested clauses, so an answer that ends in a comma is
+      // one whose first line matched and whose every branch under it did not:
+      // a Godot resource starts `RSRC`, which is also what a LabVIEW file
+      // starts with, and the rules said "National Instruments," and stopped.
+      // Four bytes against a template that read the file is not a contest, so
+      // the template's own name wins; the comma is trimmed either way, since a
+      // sentence ending in one is unfinished however it got there.
+      const rules = id.message.replace(/,\s*$/, "");
+      const half = rules !== id.message;
+      const said = (name === null ? null : templateSentence(doc, name) ?? (half ? templateTypeName(name) : null)) ?? rules;
       kind.named(said);
       overview.setIdentity(said);
       void kind.addTools(doc, id, name);
