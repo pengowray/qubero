@@ -633,7 +633,7 @@ mod tests {
         use crate::eval::{Placed, Role, Sizing};
         let d = Document::new(MemSource(object()));
         let mut ev = Evaluator::new(elf());
-        let table = ev.origins(&d, &[7, 14, 0]).unwrap();
+        let table = ev.origins(&d, &[7, 15, 0]).unwrap();
         let roles: Vec<_> = table.iter().map(|x| (x.role, x.label.as_str(), x.value.as_str())).collect();
         assert!(roles.contains(&(Role::Position, "section_header_offset", "80")), "{roles:?}");
         assert!(roles.contains(&(Role::Count, "section_header_count", "2")), "{roles:?}");
@@ -641,17 +641,17 @@ mod tests {
         // bytes where it sits, and the offset it names placed its contents
         // rather than it. Saying so there would put `section_header_offset`
         // under a position of 0x40, which is where the declaration is.
-        let declared: Vec<_> = ev.origins(&d, &[7, 14]).unwrap().into_iter().map(|x| x.role).collect();
+        let declared: Vec<_> = ev.origins(&d, &[7, 15]).unwrap().into_iter().map(|x| x.role).collect();
         assert!(!declared.contains(&Role::Position), "{declared:?}");
         // Placed at an address the file gave, and as long as the count says.
-        let shape = ev.shape(&d, &[7, 14, 0]).unwrap();
+        let shape = ev.shape(&d, &[7, 15, 0]).unwrap();
         assert_eq!((shape.placed, shape.sized), (Placed::Address, Sizing::Count));
         // A field of the header, for contrast: after the one before it, and as
         // wide as its own type.
         let plain = ev.shape(&d, &[7, 5]).unwrap();
         assert_eq!((plain.placed, plain.sized), (Placed::Follows, Sizing::Fixed));
         // A section's bytes are wherever its own header said.
-        let code = ev.shape(&d, &[7, 15, 1]).unwrap();
+        let code = ev.shape(&d, &[7, 16, 1]).unwrap();
         assert_eq!(code.placed, Placed::Pointer);
     }
 
