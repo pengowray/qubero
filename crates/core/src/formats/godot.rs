@@ -229,10 +229,14 @@ fn nothing() -> T {
 /// A count of bytes and then that many bytes of UTF-8, the last of which is a
 /// NUL. Every string in the file is written this way, and the count includes
 /// the terminator, so a `length` of 1 is the empty string.
+///
+/// Named by its own text as well as read as it. The string table is a quarter
+/// of a small resource and forty-odd rows of it, and a table of `[0]` to
+/// `[45]` is a wall: what a reader wants from it is that row 3 is `position`.
 fn string(e: Endian) -> T {
     T::structure_named(
         "String",
-        "",
+        "text",
         "text",
         vec![
             ("length", T::u32(e)),
@@ -326,7 +330,7 @@ fn packed_bytes(name: &str, e: Endian) -> T {
 fn string_id(e: Endian) -> T {
     T::structure_named(
         "StringId",
-        "",
+        "name",
         "name",
         vec![
             ("id", T::u32(e)),
@@ -894,6 +898,12 @@ mod tests {
         assert_eq!(e.node(&d, &at(7)).unwrap().child_count, 2); // string table
         assert_eq!(e.node(&d, &at(9)).unwrap().child_count, 1); // ext resources
         assert_eq!(e.node(&d, &at(11)).unwrap().child_count, 1); // internal
+        // Each row of the string table reads as the string in it, so a table
+        // that is a quarter of the file is a list of words rather than a list
+        // of numbers.
+        assert!(e.node(&d, &at(7)).unwrap().child_count > 0);
+        assert!(e.node(&d, &[CONTENTS, &[7, 0][..]].concat()).unwrap().name.contains("position"));
+        assert!(e.node(&d, &[CONTENTS, &[7, 1][..]].concat()).unwrap().name.contains("tint"));
     }
 
     #[test]
