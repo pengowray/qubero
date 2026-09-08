@@ -41,23 +41,39 @@ const PACKED_BODY: &[usize] = &[5, 0, 0, 0];
 /// bytes it wrote and the compressed one was never handed a magic to write.
 const MAGIC_BYTES: u64 = 4;
 
+/// Both compressed probes: the one the engine saved, and the one built round a
+/// block the engine packed with the mode the saver never picks. Each is the
+/// same resource as `godot4-probe.res`, so each has to read as it.
 #[test]
 fn a_compressed_resource_reads_the_same_fields_as_the_plain_one() {
     let Some(dir) = collection() else {
         eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
         return;
     };
+    let mut read = 0;
+    for (name, codec) in [("godot4-probe-compressed.res", "zstd"), ("godot4-probe-fastlz.res", "fastlz")] {
+        read += usize::from(alike(&dir, name, codec));
+    }
+    assert!(read > 0, "no compressed godot4 probe in {}", dir.display());
+}
+
+/// One compressed probe against the plain one. False when the pair is not in
+/// hand, so a collection without the newer file still says something about the
+/// older one.
+fn alike(dir: &std::path::Path, name: &str, codec: &str) -> bool {
     let plain_path = dir.join("godot4-probe.res");
-    let packed_path = dir.join("godot4-probe-compressed.res");
+    let packed_path = dir.join(name);
     if !plain_path.is_file() || !packed_path.is_file() {
-        eprintln!("skipped: no godot4 probe pair in {}", dir.display());
-        return;
+        eprintln!("skipped: no {name} beside godot4-probe.res in {}", dir.display());
+        return false;
     }
     let (plain_doc, mut plain) = reading(&plain_path);
     let (packed_doc, mut packed) = reading(&packed_path);
 
-    // The block opened at all, and into as many bytes as the wrapper said.
+    // The block opened at all, as the codec the header named, and into as many
+    // bytes as the wrapper said.
     let total = packed.node(&packed_doc, &[3]).unwrap().value;
+    assert_eq!(packed.node(&packed_doc, &[5, 0]).unwrap().type_name, codec, "{name}");
     let stream = packed.node(&packed_doc, &[5, 0, 0]).unwrap();
     assert_eq!(stream.type_name, "GodotResource");
     assert_eq!(Value::UInt((stream.size_bits / 8).into()), total);
@@ -98,9 +114,10 @@ fn a_compressed_resource_reads_the_same_fields_as_the_plain_one() {
     // A probe file carrying one property of every variant type is a few
     // thousand nodes; a walk that compared six of them and stopped would pass
     // as loudly as one that worked.
-    assert!(nodes > 1000, "only {nodes} nodes compared");
-    assert!(offsets > 0, "no internal resource offsets were compared");
-    eprintln!("{nodes} nodes read alike, {offsets} of them table offsets");
+    assert!(nodes > 1000, "only {nodes} nodes compared for {name}");
+    assert!(offsets > 0, "no internal resource offsets were compared for {name}");
+    eprintln!("{name}: {nodes} nodes read alike, {offsets} of them table offsets");
+    true
 }
 
 /// The same node in both readings, and then the same of every child.
