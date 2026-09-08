@@ -20,7 +20,7 @@
 //! which is a list of identifiers and each filter's own properties.
 
 use crate::codec::Codec;
-use crate::template::{Endian::{Big, Little}, Expr as E, Part, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Endian::{Big, Little}, Expr as E, Part, Template, Ty as T};
 
 /// What one of these starts with.
 pub const MAGIC: &[u8] = b"\xfd7zXZ\x00";
@@ -36,6 +36,13 @@ const CHECKS: &[(i128, &str)] = &[(0, "none"), (1, "crc32"), (4, "crc64"), (10, 
 /// distance is in bits, and negative, which is what reads from the end.
 fn index_size() -> E {
     E::peek_at(E::lit(-8 * 8), 32, Little).add(E::lit(1)).mul(E::lit(4))
+}
+
+/// A CRC-32 of bytes of the file, which is what all four of xz's own sums are.
+/// The data's own check is a different thing and is not one of these: it is
+/// over what a block unpacks to, and nothing here unpacks a block on its own.
+fn crc32_over(at: E, len: E) -> Check {
+    Check { algorithm: Checksum::Crc32, over: Covers::Run { at, len }, when: None }
 }
 
 pub fn xz() -> Template {
@@ -82,7 +89,11 @@ pub fn part(inner: T) -> Part {
                 ("decoded", T::at_in_window(E::lit(0), T::decoded(E::Remaining, Codec::Xz, inner))),
 
             ],
-        ),
+        )
+        // The two flag bytes after the magic, and nothing else. The second of
+        // the two is split into two four-bit fields here, so the length is
+        // written down rather than measured off fields that round to nothing.
+        .field_check("stream_flags_crc32", crc32_over(E::size_of("magic"), E::lit(2))),
     )
 }
 
@@ -152,6 +163,13 @@ fn block() -> T {
         ],
     )
     .counted_as("block")
+    // The block header, from its first byte to the sum itself. The first byte
+    // gives the header's whole length in units of four, written one short, and
+    // the four bytes of the sum come off the end of that.
+    .field_check(
+        "header_crc32",
+        crc32_over(E::lit(0), E::field("header_size").add(E::lit(1)).mul(E::lit(4)).sub(E::lit(4))),
+    )
 }
 
 /// The index: one record per block, saying what the block cost and what it
@@ -183,6 +201,19 @@ fn index() -> T {
             ("index_crc32", T::u32(Little)),
         ],
     )
+    // Everything in the index but the sum. Measured off the fields rather than
+    // off the window they sit in, since what the window comes to is worked out
+    // from the far end of the file and means nothing from in here.
+    .field_check(
+        "index_crc32",
+        crc32_over(
+            E::lit(0),
+            E::size_of("indicator")
+                .add(E::size_of("record_count"))
+                .add(E::size_of("records"))
+                .add(E::size_of("index_padding")),
+        ),
+    )
 }
 
 /// The last twelve bytes, which say how long the index is and repeat the
@@ -196,6 +227,12 @@ fn footer() -> T {
             ("stream_flags", T::u16(Big)),
             ("magic", T::magic(FOOTER_MAGIC)),
         ],
+    )
+    // The two fields after it, which is the one sum here that covers bytes
+    // written later than itself rather than earlier.
+    .field_check(
+        "footer_crc32",
+        crc32_over(E::size_of("footer_crc32"), E::size_of("backward_size").add(E::size_of("stream_flags"))),
     )
 }
 
