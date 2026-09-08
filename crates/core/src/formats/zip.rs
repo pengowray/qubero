@@ -297,13 +297,22 @@ fn local() -> T {
             ("data_size", T::computed(data_len())),
             ("unpacked_size", T::computed(unpacked_len())),
             // Method 8 is deflate, and a deflate run opens: what came out of
-            // it, and the blocks the decoder read to get there. Every other
-            // method is bytes, including method 0, which is the file itself.
+            // it, and the blocks the decoder read to get there.
+            //
+            // Method 0 is the file written into the archive verbatim, so those
+            // bytes are already a document and open too, through the codec
+            // that copies. They used to be plain bytes, which meant an archive
+            // of stored files offered nothing to open anywhere: not in the
+            // listing, not on a chip, not as a tab. A method nothing here
+            // decodes stays bytes, which is the honest answer for it.
             (
                 "data",
                 T::switch(
                     E::field("compression"),
-                    vec![(8, T::decoded(E::field("data_size"), Codec::Deflate, super::decoded_text()))],
+                    vec![
+                        (0, T::decoded(E::field("data_size"), Codec::Stored, super::decoded_text())),
+                        (8, T::decoded(E::field("data_size"), Codec::Deflate, super::decoded_text())),
+                    ],
                     T::bytes(E::field("data_size")),
                 ),
             ),

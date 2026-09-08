@@ -222,6 +222,10 @@ export type Span = {
    *  are which is decode knowledge and comes from the core; only the words
    *  beside the split are the view's. */
   readonly bits: BitRoles | null;
+  /** These bytes are a document of their own: a compressed run that unpacked,
+   *  or the contents of one. What the annotation column marks so a reader
+   *  running down the bytes can see there is a file in front of them. */
+  readonly opens: boolean;
 };
 
 /** One element of a folded run, for the value table beside the bytes. A span

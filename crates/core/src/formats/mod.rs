@@ -124,6 +124,7 @@ mod picotron_pod;
 mod psd;
 mod pnm;
 mod qoi;
+mod rar4;
 mod rar5;
 mod rpm;
 mod sac;
@@ -235,6 +236,7 @@ pub use bdb::bdb;
 pub use c16::c16;
 pub use pnm::pnm;
 pub use qoi::qoi;
+pub use rar4::rar4;
 pub use rar5::rar5;
 pub use rpm::rpm;
 pub use sac::sac;
@@ -366,6 +368,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("lz4", |_| lz4()),
     ("tar", |_| tar()),
     ("7z", |_| sevenzip()),
+    ("rar4", |_| rar4()),
     ("rar5", |_| rar5()),
     ("gwf", |_| gwf()),
     ("uf2", |_| uf2()),
