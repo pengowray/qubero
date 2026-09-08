@@ -191,6 +191,12 @@ fn read(data: &[u8], mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refusal> {
             // The padding belongs to the block that ended: it is the tail of
             // the group that block's last code was written into.
             pad(&mut b, &mut at, &mut group, n_bits, out.len(), coarse);
+            // Once the codes have stopped being named, the blocks stop too,
+            // and what is left of the file is the one block the coarsening
+            // opened. This is where `inflate` and this part company: a deflate
+            // block still has a header to show after its symbols are given up
+            // on, and a table here has nothing but its codes, so keeping the
+            // boundaries would be rows holding one step apiece saying nothing.
             if !coarse {
                 b.close_block(HEADER_BITS + at, out.len() as u64, BlockKind::Sequences, false);
                 b.open_block(HEADER_BITS + at, out.len() as u64);
