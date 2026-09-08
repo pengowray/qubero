@@ -139,17 +139,14 @@ export class TreemapPanel {
     // reader has gone into something, and Escape puts a full-screen map back
     // in the rail.
     this.el.tabIndex = -1;
-    this.el.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this.big) {
-        e.preventDefault();
-        this.setBig(false);
-        return;
-      }
-      if (e.key !== "Backspace" || this.crumbs.length === 0) return;
-      e.preventDefault();
-      this.crumbs.pop();
-      this.selected = null;
-      this.draw();
+    this.el.addEventListener("keydown", (e) => this.key(e));
+    // Over the window the panel is the page, so its keys have to work wherever
+    // the focus went. Pressing a box moves focus to nothing, since the boxes
+    // are divs, and Escape on a panel nobody is focused on would be a
+    // full-screen map with no way out but the mouse.
+    document.addEventListener("keydown", (e) => {
+      if (!this.big || this.el.contains(document.activeElement)) return;
+      this.key(e);
     });
 
     const saved = localStorage.getItem(MODE_KEY);
@@ -170,6 +167,26 @@ export class TreemapPanel {
    *  rather than the panel's own, because a panel that measured itself while
    *  hidden would draw a map one pixel wide and keep it. */
   relayout(): void {
+    this.draw();
+  }
+
+  /** Escape puts a full-screen map back in the rail, and Backspace is the way
+   *  back out of a box, which is what it means everywhere else a reader has
+   *  gone into something. */
+  private key(e: KeyboardEvent): void {
+    if (e.key === "Escape" && this.big) {
+      e.preventDefault();
+      this.setBig(false);
+      return;
+    }
+    if (e.key !== "Backspace") return;
+    // Swallowed whether or not there is anywhere to go back to. A browser that
+    // still reads Backspace as Back would otherwise leave the file, which is a
+    // long way to fall for a key that means "up one level" here.
+    e.preventDefault();
+    if (this.crumbs.length === 0) return;
+    this.crumbs.pop();
+    this.selected = null;
     this.draw();
   }
 
