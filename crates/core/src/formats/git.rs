@@ -16,7 +16,7 @@
 //! IR can say all of that, and the count comes out of the fanout by asking
 //! for element 255.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 /// The file modes git records, which are four of the many a filesystem has.
 const MODE: &[(i128, &str)] = &[
@@ -46,10 +46,13 @@ pub fn git_pack_index() -> Template {
                 // over two gigabytes.
                 ("offsets", T::array(T::u32(Big), count).counted_as("offset")),
                 ("large_offsets", T::bytes(E::Remaining.sub(E::lit(40)))),
+                // The SHA-1 of the pack this indexes, which is a different
+                // file: nothing here can check it.
                 ("pack_checksum", sha1()),
                 ("checksum", sha1()),
             ],
-        ),
+        )
+        .field_check("checksum", seal()),
     )
 }
 
@@ -71,8 +74,16 @@ pub fn git_index() -> Template {
                 ("extensions", T::bytes(E::Remaining.sub(E::lit(20)))),
                 ("checksum", sha1()),
             ],
-        ),
+        )
+        .field_check("checksum", seal()),
     )
+}
+
+/// What both files end with: a SHA-1 of every byte before it. Written to catch
+/// a write that stopped halfway, and it is the one checksum here that a reader
+/// can take without knowing anything about the format above it.
+fn seal() -> Check {
+    Check { algorithm: Checksum::Sha1, over: Covers::UpToHere, when: None }
 }
 
 /// One staged path. Everything above the object name is there so that git can

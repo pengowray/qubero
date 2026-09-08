@@ -1,6 +1,6 @@
 //! PNG: signature plus a chunk stream that ends at IEND.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// PNG colour types. 1, 5 and 7 are not defined by the spec, so a file holding
 /// one shows the number with no name.
@@ -11,6 +11,21 @@ const COLOR_TYPE: &[(i128, &str)] = &[
     (4, "greyscale alpha"),
     (6, "rgba"),
 ];
+
+/// What a chunk's CRC-32 covers: the type and the data, and neither the length
+/// in front of them nor the sum itself. Written once and used by both chunk
+/// definitions below, which differ only in what they read a chunk's payload as.
+fn chunk_crc() -> Check {
+    Check {
+        algorithm: Checksum::Crc32,
+        // From the end of the length to the start of the CRC. The declared
+        // length is used rather than the measured size of `data`, because
+        // measuring `data` in a cartridge would unpack the image to answer a
+        // question that is written down four bytes earlier.
+        over: Covers::Run { at: E::size_of("length"), len: E::size_of("type").add(E::field("length")) },
+        when: None,
+    }
+}
 
 /// The header chunk, which every PNG opens with and which says what shape the
 /// image is. Shared with the cartridge templates, PICO-8 and Picotron, which
@@ -72,7 +87,8 @@ pub(crate) fn cart_png(name: &'static str, idat: T) -> T {
             ),
             ("crc", T::u32(Big)),
         ],
-    );
+    )
+    .field_check("crc", chunk_crc());
     T::structure(
         name,
         vec![
@@ -197,7 +213,8 @@ pub(crate) fn image() -> T {
             ),
             ("crc", T::u32(Big)),
         ],
-    );
+    )
+    .field_check("crc", chunk_crc());
     T::structure(
         "PNG",
         vec![

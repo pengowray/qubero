@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::json;
+pub use crate::checksum::Checksum;
 
 /// Which end of the field the low bits come from.
 ///
@@ -706,6 +707,17 @@ impl Expr {
     pub fn less_than(self, rhs: Expr) -> Expr {
         Expr::Less(Box::new(self), Box::new(rhs))
     }
+    /// One when the two are the same number, zero otherwise.
+    ///
+    /// There is no equality in [`Expr`] and this does not add one: it is the
+    /// pair of comparisons that says the same thing, neither below nor above,
+    /// which is how a template asks the question today with six terms written
+    /// by hand. What wanted it in one term is [`Check::when`], where a guard
+    /// naming a compression method is the difference between a check that means
+    /// something and one that calls every valid file broken.
+    pub fn equals(self, rhs: Expr) -> Expr {
+        Expr::lit(1).sub(self.clone().less_than(rhs.clone())).sub(rhs.less_than(self))
+    }
     /// This, or `rhs` when `rhs` is the smaller: what a length that must not
     /// run past the end of its container is written as.
     pub fn at_most(self, rhs: Expr) -> Expr {
@@ -1037,6 +1049,80 @@ pub struct Field {
     /// genuinely described twice; a field that reaches bytes nothing else
     /// covers is the only thing describing them and has to be counted.
     pub aside: bool,
+    /// What this field checks, when it is a checksum rather than a number the
+    /// format uses for something. See [`Check`].
+    pub check: Option<Check>,
+}
+
+/// A field is a sum over some other bytes, and this says which sum and which
+/// bytes.
+///
+/// Declared where the field is, because that is where the answer is known: a
+/// template already writes down that a ZIP entry's data is deflate and how long
+/// it is, and the thing nothing but the template can say is that the `crc32`
+/// four fields above it is a sum of what that data unpacks to. Written out
+/// there, every reader gets the same answer: the panel, the listing, a total
+/// over a whole archive. Left to the interface, only whichever view has the
+/// hand-written case for that format gets it, which is what this replaces.
+///
+/// Nothing here reads bytes. [`Evaluator::check_of`](crate::eval::Evaluator::check_of)
+/// says what a field checks and how much of the file that is; taking the sum is
+/// [`Evaluator::run_check`](crate::eval::Evaluator::run_check), and it is asked
+/// for rather than done on the way past.
+#[derive(Debug, Clone)]
+pub struct Check {
+    pub algorithm: Checksum,
+    pub over: Covers,
+    /// The check is only made when this comes to something other than zero.
+    ///
+    /// Not a nicety. An LHA entry's `crc` is a sum of the file, and the bytes
+    /// after the header are the file only when the method is `-lh0-`; run over
+    /// a compressed member it reports every valid archive as broken. There is
+    /// no equality in [`Expr`], so a guard is written with [`Expr::equals`].
+    ///
+    /// Evaluated where the rest of a check's expressions are: see [`Covers`].
+    pub when: Option<Expr>,
+}
+
+/// Which bytes a check is over.
+///
+/// Every expression in here, and in [`Check::when`], is worked out as though it
+/// stood at the end of the structure the check field sits in, so it may name a
+/// field written *after* the checksum. That is the one place a template looks
+/// forward, and it has to: a RAR block's checksum is its first field and the
+/// size it covers is its fourth, and a format that could not say so would have
+/// no way to describe a header that seals itself. [`Expr::Remaining`] has
+/// nothing to measure from there and is not available.
+///
+/// Offsets are counted from the start of the structure the check field sits in,
+/// not from the start of the file, so the same declaration works for the
+/// thousandth chunk as for the first.
+#[derive(Debug, Clone)]
+pub enum Covers {
+    /// The bytes of a field named here: a sibling, or a field of a structure
+    /// this one sits inside, which is how a RAR 5 file header's `data_crc32`
+    /// reaches the data area declared one level out.
+    Field { name: Arc<str> },
+    /// What that field's compressed run unpacks to, rather than its own bytes:
+    /// a ZIP entry's CRC-32 is of the file, not of the deflate stream. The
+    /// field has to be a [`Ty::Decoded`], and a template whose switch leaves it
+    /// plain bytes for a method nothing here unpacks is saying, correctly, that
+    /// the check cannot be made.
+    ///
+    /// `len` is what the file says the unpacked run comes to, where it says it
+    /// anywhere: it is only there so an interface can decide whether to run the
+    /// check without being asked, and nothing is decided by it. The sum is over
+    /// what the decoder actually produced.
+    ///
+    /// A run stored rather than compressed is answered as [`Covers::Field`]
+    /// would answer it, since those bytes are in the file and a reader can be
+    /// sent to them.
+    Unpacked { name: Arc<str>, len: Option<Expr> },
+    /// A run of the enclosing structure: where it starts, and how long it is.
+    Run { at: Expr, len: Expr },
+    /// From the start of the file to the first byte of the check field itself.
+    /// Git's index hash and gzip's header CRC are this.
+    UpToHere,
 }
 
 #[derive(Debug, Clone)]
@@ -1626,7 +1712,10 @@ impl Ty {
     pub fn structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
         Ty::Struct(Arc::new(StructDef {
             name: name.to_string(),
-            fields: fields.into_iter().map(|(n, ty)| Field { name: n.into(), ty, name_from: None, aside: false }).collect(),
+            fields: fields
+                .into_iter()
+                .map(|(n, ty)| Field { name: n.into(), ty, name_from: None, aside: false, check: None })
+                .collect(),
             named_by: None,
             contents: None,
             unit: None,
@@ -1673,6 +1762,25 @@ impl Ty {
                 let mut s = (*s).clone();
                 if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
                     f.aside = true;
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say that `field` is a checksum, and over what. See [`Check`].
+    ///
+    /// Silently does nothing to anything but a structure, and to a name no
+    /// field of it has, the way the two builders above do. `checks_resolve` in
+    /// `formats` walks every template and fails on either, so a typo is caught
+    /// when the tests run rather than by a panel showing nothing.
+    pub fn field_check(self, field: &str, check: Check) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.check = Some(check);
                 }
                 Ty::Struct(Arc::new(s))
             }

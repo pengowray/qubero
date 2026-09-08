@@ -26,7 +26,7 @@
 //! 256 or 512 bytes ends early. That is what the format leaves ambiguous, and
 //! every tool that reads these files has the same problem.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// The method five characters name, which is also the window size: `-lh5-`
 /// compresses against the last 8K, `-lh7-` against the last 64K.
@@ -116,6 +116,23 @@ fn entry() -> T {
     .counted_as("entry")
 }
 
+/// The stored method, `-lh0-`, which writes the file in verbatim. Read as a
+/// forty-bit big-endian number, which is what the five characters come to.
+const STORED: i128 = 0x2d_6c_68_30_2d;
+
+/// What an entry's `crc` covers: the file, which is the bytes after the header
+/// only when nothing compressed them. Every other method here would have the
+/// sum taken over the packed bytes, which matches nothing and would call every
+/// valid archive broken; the guard is the difference between a check and a
+/// lie. Both header layouts write the same field and both use this.
+fn file_crc() -> Check {
+    Check {
+        algorithm: Checksum::Crc16Arc,
+        over: Covers::Field { name: "data".into() },
+        when: Some(E::field("method").equals(E::lit(STORED))),
+    }
+}
+
 /// Levels 0 and 1.
 fn header() -> T {
     T::structure_named(
@@ -157,6 +174,16 @@ fn header() -> T {
             ("data", T::bytes(E::field("compressed_size"))),
         ],
     )
+    // Every byte of the header after the checksum itself, added up. The count
+    // is the entry's own size byte, which is what that byte means in levels 0
+    // and 1: how much header there is once the two bytes in front of it are
+    // off.
+    .field_check("header_checksum", Check {
+        algorithm: Checksum::Sum8,
+        over: Covers::Run { at: E::lit(1), len: E::field("header_size") },
+        when: None,
+    })
+    .field_check("crc", file_crc())
 }
 
 /// Level 2, which threw out the checksum, gave the header a sixteen-bit size,
@@ -190,6 +217,7 @@ fn level2() -> T {
             ("data", T::bytes(E::field("compressed_size"))),
         ],
     )
+    .field_check("crc", file_crc())
 }
 
 /// What level 1 puts after the CRC: the system it was written on, and then a

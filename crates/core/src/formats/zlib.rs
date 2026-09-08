@@ -13,7 +13,7 @@
 //! gzip member's body is.
 
 use crate::codec::Codec;
-use crate::template::{Endian::Big, Expr as E, Part, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Endian::Big, Expr as E, Part, Template, Ty as T};
 
 /// The compression level the header names, which says how hard the encoder
 /// tried rather than anything a decoder needs.
@@ -54,7 +54,16 @@ pub fn part(inner: T) -> Part {
                 // one thing in this format that is not little-endian.
                 ("adler32", T::u32(Big)),
             ],
-        ),
+        )
+        // What came out of the stream, not the stream. A zlib decoder checks
+        // this on its way past and refuses the run if it is wrong, so a
+        // stream that opened at all has already passed; what this adds is
+        // saying so, and saying it of a run the decoder never looked at.
+        .field_check("adler32", Check {
+            algorithm: Checksum::Adler32,
+            over: Covers::Unpacked { name: "compressed".into(), len: None },
+            when: None,
+        }),
     )
 }
 
