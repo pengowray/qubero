@@ -197,10 +197,10 @@ export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu
 export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";
 
 /**
- * The treemap: what a rectangle stands for, and what the four ways of
- * dividing the file are called.
+ * The treemap: what a box stands for, and what the five ways of dividing the
+ * file are called.
  *
- * The dropdown reads as one question with four answers, which is why the
+ * The dropdown reads as one question with five answers, which is why the
  * options are singular keys rather than plurals: "group by structure", "group
  * by byte value". The label is the question and the option finishes it.
  */
@@ -213,6 +213,10 @@ export const TREEMAP = {
    *  subtitle saying so; this one shares its row with the picker and the
    *  corner button. */
   title: "Treemap",
+  /** The heading's tooltip, mirroring the minimap's. A picture whose partner
+   *  says what it is for and which says nothing itself leaves the reader to
+   *  work out the difference. */
+  what: "How much of the file each part is. Every box's area is its share, and boxes inside a box are the parts of it. Click a box to go to its bytes. Double-click to open it.",
   /** The picker's label, on its tooltip and for a screen reader; what shows
    *  in the picker is the mode itself. The spreadsheet and file-manager phrase
    *  for choosing what one thing is divided by. */
@@ -232,17 +236,13 @@ export const TREEMAP = {
    *  nothing, and a bare " · ()" is what they used to get. */
   pooledTitle: (n: number, noun: string, size: string, share: string): string =>
     `${countText(n, noun)}, too small to draw${size === "" ? "" : ` · ${size} (${share})`}`,
-  /** Three things a reader could confuse, told apart by what is known about
-   *  the bytes: these are claimed by nothing, and that is final. */
-  unmappedTitle: (size: string, share: string): string => `${GAP_LABEL} · ${size} (${share}) · no field covers these bytes`,
-  /** And these are not claimed by anything *yet*. Drawn as an empty box, so
+  /** Bytes that are not claimed by anything *yet*. Drawn as an empty box, so
    *  the map's total area stays the whole file: leave them out and every
    *  share on a half-walked map is quietly inflated. "Read" is the word of
    *  the progress line over this map ("Reading the fields…"); the byte-class
    *  map's own pending box says "not scanned yet" to match its line, and
    *  "unmapped" beside either is the final answer, not a pending one. */
   unwalked: "not read yet",
-  unwalkedTitle: (size: string, share: string): string => `not read yet · ${size} (${share})`,
   /** The walk behind the field-type map, in the same shape as the byte scan's
    *  line, which is the line directly above it. */
   reading: (percent: number): string => `Reading the fields… ${percent}%`,
@@ -305,7 +305,7 @@ export const TREEMAP = {
   classDetail: (runs: number): string => (runs === 1 ? "in one run" : `in ${runs.toLocaleString()} separate runs`),
   /** The tail of a file the scan has not reached. Drawn empty, so the map's
    *  area stays the whole file while it fills in. "Scanned" to match the
-   *  "Scanning the file\u2026" line it sits under, and to be a different word
+   *  "Scanning the file…" line it sits under, and to be a different word
    *  from the field walk's "not read yet". */
   unscanned: "not scanned yet",
   byteNoun: "byte value",
@@ -319,11 +319,14 @@ export const TREEMAP = {
   bitsLine: (setShare: string, clearShare: string): string => `1 bits ${setShare} · 0 bits ${clearShare}`,
   bitsTitle: (which: "1" | "0", count: string, share: string): string =>
     `${which} bits · ${count} · ${share} (random or compressed data is near 50%; zeros pull it down)`,
-  /** How much of the file, and while a scan or a walk is part way through, how
-   *  much of what has been read. Saying "of file" from half a walk would be
-   *  a share of a number nobody has. */
+  /** How much of the picture a box is, and what the picture is of. Every mode
+   *  draws the whole file, with what it has not read yet as a box of its own,
+   *  so an unopened share is a share of the file however far the reading has
+   *  got. Once a reader opens a box, that box is the picture, and the share
+   *  has to say so: "12% of file" from inside a part is a wrong number in
+   *  confident words. */
   ofFile: (share: string): string => `${share} of file`,
-  ofRead: (share: string, read: string, walking: boolean): string => `${share} of the ${read} ${walking ? "read" : "scanned"}`,
+  ofPart: (share: string, part: string): string => `${share} of ${part}`,
 } as const;
 
 /**

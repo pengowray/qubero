@@ -4216,6 +4216,19 @@ table.rec tr.is-on td {
   --field-color: transparent;
   box-shadow: inset 0 0 0 1px var(--muted);
   opacity: 0.7;
+  /* No cushion either. The point of the box is that nothing is known about
+     these bytes, and a lit edge would give it a solidity it has not earned. */
+  background-image: none;
+}
+/* Bytes the walk went over and reported no kind for. Not the same as bytes
+   nobody has looked at yet and not the same as bytes no field covers, so not
+   drawn as either: a dotted edge, for a box that is a question. */
+.tm-nokind {
+  --field-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  outline: 1px dashed var(--muted);
+  outline-offset: -1px;
 }
 /* Set bits and clear ones, as ink on paper: the difference between them is
    lightness, which is the only channel two boxes of one number need. Their

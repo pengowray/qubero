@@ -74,6 +74,10 @@ export class TreemapPanel {
     bar.className = "tmp-bar";
     const head = document.createElement("h3");
     head.textContent = TREEMAP.title;
+    // The minimap's heading carries the question it answers, so this one does
+    // too. Two pictures of one file where only one says what it is for is two
+    // pictures a reader has to work out the difference between.
+    head.title = TREEMAP.what;
     this.pick = document.createElement("select");
     this.pick.className = "insp-reading-pick";
     this.pick.setAttribute("aria-label", TREEMAP.groupBy);
@@ -252,6 +256,17 @@ export class TreemapPanel {
     const height = this.big ? Math.floor(this.plot.clientHeight) : RAIL_HEIGHT;
     const t = this.zoomed(this.build(width * Math.max(height, 1)));
     this.tree = t;
+    // The picker says what is on screen, which is not always what the reader
+    // chose: without a template two of the modes cannot be drawn, so they are
+    // greyed and the picker moves to the one that is. A picker reading
+    // "Structure" over a map of byte classes is the panel telling the reader
+    // something untrue about its own state.
+    const showing = this.showing();
+    const noTemplate = this.doc.template === null;
+    for (const option of this.pick.options) {
+      option.disabled = noTemplate && (option.value === "structure" || option.value === "kinds");
+    }
+    if (this.pick.value !== showing) this.pick.value = showing;
     this.trail.hidden = this.crumbs.length === 0;
     if (!this.trail.hidden) this.drawTrail();
     this.drawWhere(t.root);
@@ -266,14 +281,16 @@ export class TreemapPanel {
     const rooted = this.rootedAt();
     const parent = rooted === null ? null : nodeOf(this.doc, rooted.path);
     const noun = poolNoun(this.mode, parent);
-    // What the shares on the boxes are shares of: the file once the reading is
-    // done, and what has been read while it is not.
-    const read = t.progress === null ? null : this.readSoFar(t.unit);
+    // What the shares on the boxes are shares of. Null while the picture is
+    // the file; once a reader has opened something it is that, named, because
+    // a share of an opened box that said "of file" was a wrong number with
+    // confident wording on it.
+    const inside = this.crumbs.length === 0 ? null : t.root.name;
     const map = drawTreemap(t.root, {
       width,
       height,
       poolUnder: POOL_UNDER,
-      title: (node, share) => boxTitle(node, share, t.unit, read),
+      title: (node, share) => boxTitle(node, share, t.unit, inside),
       poolName: TREEMAP.pooled,
       poolDetail: (n) => TREEMAP.pooledTitle(n, noun, "", ""),
       ...(t.ordered === true ? { ordered: true } : {}),
@@ -299,7 +316,10 @@ export class TreemapPanel {
     const whole = this.doc.lengthBits;
     const bits = this.tree?.unit === "bits" ? root.value : root.value * 8;
     const size = formatBytes(Math.ceil(bits / 8));
-    const share = whole > 0 && this.tree?.unit === "bits" ? percentText(bits, whole) : null;
+    // Counted in bytes or in bits, a box is still some share of the file, and
+    // the share is the number that says whether a zoomed picture is most of
+    // the file or a corner of it.
+    const share = whole > 0 ? percentText(bits, whole) : null;
     const at = root.range === undefined ? null : formatOffset(root.range.offsetBits);
     this.where.textContent = TREEMAP.zoomedTo(root.name, size, share, at);
     this.where.hidden = false;
@@ -322,11 +342,26 @@ export class TreemapPanel {
     return null;
   }
 
+  /**
+   * The mode actually drawn.
+   *
+   * Structure and Field type both need a template, and plenty of files worth
+   * opening have none. Rather than spend the panel on a sentence saying so,
+   * they fall through to the one division that always has an answer: what the
+   * bytes are like. What the reader chose is kept, so a template arriving
+   * later brings their mode back with it.
+   */
+  private showing(): TreemapMode {
+    const needsTemplate = this.mode === "structure" || this.mode === "kinds";
+    return this.doc.template === null && needsTemplate ? "classes" : this.mode;
+  }
+
   private build(pixels: number): TreemapTree {
-    if (this.mode === "structure") return structureTree(this.doc, this.rootedAt(), pixels);
+    const mode = this.showing();
+    if (mode === "structure") return structureTree(this.doc, this.rootedAt(), pixels);
     // What the map above this one is coloured by. It comes from the same scan
     // and needs nothing else, so it answers as soon as the first buckets land.
-    if (this.mode === "classes") {
+    if (mode === "classes") {
       const step = this.doc.overviewStep(SCAN_BUCKETS);
       if (step.status === "error") return blank(TREEMAP.failed(step.message));
       if (step.status !== "ok") return blank(SCANNING(0));
@@ -336,7 +371,7 @@ export class TreemapPanel {
     // Field type is a walk of the template, not a read of the bytes, so it
     // must not be held up behind the byte scan or report the byte scan's
     // progress as its own.
-    if (this.mode === "kinds") {
+    if (mode === "kinds") {
       const walk = this.doc.kindTotalsStep();
       if (walk.status === "error") return blank(TREEMAP.failed(walk.message));
       if (walk.status !== "ok") return blank(TREEMAP.reading(0));
@@ -349,7 +384,7 @@ export class TreemapPanel {
     // number to show, and it is the one that moves: a line fixed at 0% reads
     // as a scan that has stalled rather than one that has started.
     if (h === null) return blank(SCANNING(percent(scanned, total)));
-    if (this.mode === "bytes") return bytesTree(h, scanned, total);
+    if (mode === "bytes") return bytesTree(h, scanned, total);
     return bitsTree(h, scanned, total);
   }
 
@@ -385,13 +420,6 @@ export class TreemapPanel {
     if (step.status !== "ok") return null;
     const h = (step.node as { histogram?: readonly number[] }).histogram;
     return h === undefined || h.length !== 256 ? null : h;
-  }
-
-  /** How much of the file the current mode has taken in, in bytes. */
-  private readSoFar(unit: "bits" | "count"): number {
-    if (unit === "count") return this.scanned();
-    const walk = this.doc.kindTotalsStep();
-    return walk.status === "ok" ? Math.ceil(walk.node.reached_bits / 8) : 0;
   }
 
   private scanned(): number {
@@ -440,10 +468,15 @@ export class TreemapPanel {
       this.draw();
       return;
     }
+    // Lit here rather than by a redraw. Going to the bytes moves the cursor,
+    // and nothing a cursor move sets off comes back to this panel, so a box
+    // that waited for a redraw to be marked was a box that never got marked.
     this.selected = key;
+    for (const on of this.plot.querySelectorAll(".tm-box.is-on")) on.classList.remove("is-on");
+    const box = this.plot.querySelector(`[data-key="${CSS.escape(key)}"]`);
+    box?.classList.add("is-on");
     const range = node.range;
     if (range !== undefined) this.onJump(range.offsetBits, range.offsetBits + range.sizeBits);
-    else this.draw();
   }
 }
 

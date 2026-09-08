@@ -396,7 +396,7 @@ export function classesTree(classes: string, bucketBytes: number, fileBytes: num
   }
   const left = Math.max(0, fileBytes - classes.length * bucketBytes);
   if (left > 0 && scanned < fileBytes) {
-    kids.push({ key: "unscanned", name: TREEMAP.unscanned, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked", detail: TREEMAP.unscanned });
+    kids.push({ key: "unscanned", name: TREEMAP.unscanned, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked" });
   }
   return {
     root: { key: "file", name: TREEMAP.root, value: Math.max(fileBytes, 1), color: UNMAPPED_COLOR, children: kids },
@@ -470,9 +470,9 @@ export function kindsTree(totals: KindTotals, fileBits: number): TreemapTree {
   // areas and the numbers saying the same thing.
   const counted = kids.reduce((n, k) => n + k.value, 0);
   const short = Math.max(0, Math.min(totals.reached_bits, fileBits) - counted);
-  if (short > 0) kids.push({ key: "unclassified", name: NO_KIND, value: short, color: UNMAPPED_COLOR, colorClass: "tm-unwalked", detail: NO_KIND_DETAIL });
+  if (short > 0) kids.push({ key: "unclassified", name: NO_KIND, value: short, color: UNMAPPED_COLOR, colorClass: "tm-nokind", detail: NO_KIND_DETAIL });
   const left = Math.max(0, fileBits - totals.reached_bits);
-  if (left > 0) kids.push({ key: "unwalked", name: TREEMAP.unwalked, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked", detail: TREEMAP.unwalked });
+  if (left > 0) kids.push({ key: "unwalked", name: TREEMAP.unwalked, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked" });
   // How far along the walk is, counted by what it has said something about
   // rather than by how far it claims to have reached. A file whose walk has
   // saturated `reached_bits` and is still going reported "100%" and sat there,
@@ -491,8 +491,8 @@ const UNMAPPED_DETAIL = "no field covers these bytes";
  *  wording rather than `unmapped`, which means the opposite: those bytes are
  *  known not to belong to a field, and these belong to one that did not say
  *  what it was. */
-const NO_KIND = "no type reported";
-const NO_KIND_DETAIL = "inside the walk, but no field kind was totalled for them";
+const NO_KIND = "type not reported";
+const NO_KIND_DETAIL = "read by the template, but not counted under any field type";
 
 // ---- byte values ----
 
@@ -513,6 +513,7 @@ const NO_KIND_DETAIL = "inside the walk, but no field kind was totalled for them
  */
 export function bytesTree(histogram: readonly number[], scanned: number, total: number): TreemapTree {
   const read = histogram.reduce((n, c) => n + c, 0);
+  const left = Math.max(0, total - read);
   const groups = TREEMAP.byteGroups.map((g) => {
     let sum = 0;
     const values: TreeNode[] = [];
@@ -544,8 +545,14 @@ export function bytesTree(histogram: readonly number[], scanned: number, total: 
     const node: TreeNode = { key: g.label, name: g.label, value: sum, color, detail: g.title };
     kids.push(values.length === 0 ? node : { ...node, children: values });
   }
+  // The tail the scan has not reached, drawn empty and last. Every mode's
+  // picture is the whole file, so every share on it is a share of the file and
+  // the wording never has to say which: a map that stopped at what had been
+  // read would put 0x00 at nine per cent of a tenth of the file and call it
+  // nine per cent.
+  if (left > 0) kids.push({ key: "unscanned", name: TREEMAP.unscanned, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked" });
   return {
-    root: { key: "file", name: TREEMAP.root, value: read, color: UNMAPPED_COLOR, children: kids },
+    root: { key: "file", name: TREEMAP.root, value: Math.max(read + left, 1), color: UNMAPPED_COLOR, children: kids },
     unit: "count",
     progress: scanned >= total ? null : SCANNING(share(scanned, total)),
     none: null,
@@ -602,15 +609,17 @@ export function bitsTree(histogram: readonly number[], scanned: number, total: n
     set += count * popcount(v);
   }
   const clear = bytes * 8 - set;
+  const left = Math.max(0, total - scanned) * 8;
   return {
     root: {
       key: "file",
       name: TREEMAP.root,
-      value: set + clear,
+      value: set + clear + left,
       color: UNMAPPED_COLOR,
       children: [
         { key: "1", name: TREEMAP.bits.set, value: set, color: SET_COLOR, colorClass: "tm-bit-set", detail: TREEMAP.bitsTitle("1", `${set.toLocaleString()} bits`, percentText(set, set + clear)) },
         { key: "0", name: TREEMAP.bits.clear, value: clear, color: CLEAR_COLOR, colorClass: "tm-bit-clear", detail: TREEMAP.bitsTitle("0", `${clear.toLocaleString()} bits`, percentText(clear, set + clear)) },
+        ...(left > 0 ? [{ key: "unscanned", name: TREEMAP.unscanned, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked" }] : []),
       ],
     },
     unit: "count",
@@ -650,19 +659,20 @@ export function bitsLine(histogram: readonly number[]): string {
 /**
  * The title on a box: what it is, how big, how much of the picture, and where.
  *
- * The share is of the whole box rather than of the file, which is the same
- * number until a reader opens a box and a different one after. What the eye
- * reads off the picture is the share of what is drawn; the address beside it
- * is what says which bytes those are.
+ * The share is of the whole box, which is what the eye reads off the picture,
+ * and the wording names what that box is: the file until a reader opens
+ * something, and whatever they opened after. It said "of file" either way and
+ * was wrong from the moment anyone went in.
  *
- * While a scan or a walk is part way through, the whole is what has been read
- * rather than the file, and the wording says so. A share of a number nobody
- * has yet is not a share.
+ * Every mode's picture is the whole file even while its reading is part way
+ * through, because what has not been read is drawn as a box of its own. So an
+ * unopened share is a share of the file whatever the reading has got to, and
+ * there is no second form of words for a half-read map.
  */
-export function boxTitle(node: TreeNode, share: number, unit: Unit, read: number | null): string {
+export function boxTitle(node: TreeNode, share: number, unit: Unit, inside: string | null): string {
   const size = unit === "bits" ? formatBytes(Math.ceil(node.value / 8)) : `${node.value.toLocaleString()} bytes`;
   const pct = percentText(share, 1);
-  const of = read === null ? TREEMAP.ofFile(pct) : TREEMAP.ofRead(pct, formatBytes(read), unit === "bits");
+  const of = inside === null ? TREEMAP.ofFile(pct) : TREEMAP.ofPart(pct, inside);
   const parts = [node.name, size, of];
   if (node.range !== undefined) parts.push(formatOffset(node.range.offsetBits));
   const head = node.detail === undefined ? parts.join(" · ") : `${parts.join(" · ")}\n${node.detail}`;
