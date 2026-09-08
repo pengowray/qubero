@@ -1186,13 +1186,22 @@ button.insp-prop-head:hover {
 /* How the answer was arrived at: quieter than the answer, and indented under
    it, because it is read second and only where the answer surprised. */
 .insp-prop-how {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+  min-height: 0;
   font-family: var(--sans);
   font-size: 11px;
   color: var(--muted);
+  text-align: left;
   padding: 0 4px 1px 19px;
   border-radius: 3px;
   overflow-wrap: anywhere;
 }
+/* A clause naming a field leads to it, and is a button so the keyboard can
+   reach it: with the working folded away this line is often the only way
+   there. It stays the quiet second line, not another link. */
 .insp-prop-how[data-path] {
   cursor: pointer;
 }

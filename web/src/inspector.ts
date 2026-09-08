@@ -1625,10 +1625,16 @@ export class Inspector {
     }
     box.append(head);
     if (p.how !== null) {
-      const how = document.createElement("div");
-      how.className = "insp-prop-how";
       // The clause names a field the reader can go to and light up, so the
-      // whole line carries the path the way an origin row does.
+      // whole line carries the path the way an origin row does, and is a
+      // button where it names one: with the working folded away, and folded
+      // away for good where it would only repeat the row, this line is the
+      // only way to that field, and a line only a mouse can reach is no way
+      // at all.
+      const named = p.how.path !== null;
+      const how = document.createElement(named ? "button" : "div");
+      how.className = "insp-prop-how";
+      if (how instanceof HTMLButtonElement) how.type = "button";
       if (p.how.path !== null) how.dataset["path"] = p.how.path.join("/");
       how.textContent = p.how.text;
       box.append(how);
