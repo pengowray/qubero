@@ -70,6 +70,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (xz::MAGIC, "xz"),
     (zstd::MAGIC, "zstd"),
     (lz4::MAGIC, "lz4"),
+    // The frame the first releases wrote. Nothing else has this magic, and a
+    // file of them is an LZ4 file whatever its extension says.
+    (lz4::LEGACY_MAGIC, "lz4"),
     (sevenzip::MAGIC, "7z"),
     // The two RAR formats, which share their first six bytes and differ at the
     // seventh: a zero ends RAR 4's seven, and RAR 5 writes a 1 and a 0. Neither
