@@ -553,10 +553,24 @@ struct OriginDto {
     target_bits: Option<f64>,
 }
 
+/// How a field was placed and how it was sized, in one word each. What the
+/// panel says before any other field is named: most fields are placed and
+/// sized by the template alone and have no origins at all, and a section that
+/// answers only when another field is involved answers for almost nothing.
+#[derive(Serialize)]
+struct ShapeDto {
+    /// "root" | "first" | "follows" | "element" | "pointer" | "chain" |
+    /// "address" | "trace" | "stream" | "unknown"
+    placed: &'static str,
+    /// "fixed" | "expression" | "terminated" | "remaining" | "children" |
+    /// "count" | "encoded" | "trace" | "nothing" | "unknown"
+    sized: &'static str,
+}
+
 /// One relationship behind a field's shape, written both ways.
 #[derive(Serialize)]
 struct RelationDto {
-    /// "length" | "count" | "type" | "value"
+    /// "length" | "count" | "type" | "value" | "position"
     role: &'static str,
     /// The expression as the template writes it.
     written: String,
@@ -1840,6 +1854,25 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.origins(&sh.doc, &p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
+            }
+        }
+    }
+
+    /// How the field at `path` was placed and how it was sized, in one word
+    /// each. JSON, in the same reply shape as the rest.
+    ///
+    /// Answered for every field, which is what tells it from `origins`: a `u32`
+    /// in a header has no origins and is still somewhere for a reason, and the
+    /// reason is that the field in front of it ended there.
+    pub fn shape(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut sh.eval {
+            None => reply::<ShapeDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.shape(&sh.doc, &p).map(|s| ShapeDto { placed: s.placed.as_str(), sized: s.sized.as_str() }))
             }
         }
     }

@@ -60,6 +60,17 @@ impl Evaluator {
     pub fn relations<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Vec<Relation>> {
         self.resolve(doc, path)?;
         let mut out = Vec::new();
+        // The address that put this node here, for the contents of an `At`.
+        // Written out against the field that declared it, because that is the
+        // frame the address was worked out in: `e_shoff` is a field of the
+        // header, and reading it from inside the table it places would find
+        // nothing of that name.
+        if let Some((_, parent)) = path.split_last() {
+            if let Some(Ty::At { at, .. }) = self.memo.get(parent).map(|r| &r.ty) {
+                let at = at.clone();
+                self.relation(doc, parent, &at, Role::Position, None, &mut out);
+            }
+        }
         if let Some(from) = self.name_from(path) {
             self.relation(doc, path, &from, Role::Name, None, &mut out);
         }
@@ -79,6 +90,13 @@ impl Evaluator {
                 Ty::Sized { size, inner } => {
                     let room = self.before_window(path);
                     self.relation(doc, path, &size, Role::Length, room, &mut out);
+                    ty = *inner;
+                }
+                // Where the field says its contents are. Written out for the
+                // same reason a length is: `e_shoff + 64` is arithmetic a
+                // reader should be able to check rather than redo.
+                Ty::At { at, inner, .. } => {
+                    self.relation(doc, path, &at, Role::Position, None, &mut out);
                     ty = *inner;
                 }
                 Ty::Origin { inner } => ty = *inner,

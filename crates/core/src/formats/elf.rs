@@ -563,6 +563,34 @@ mod tests {
         assert_eq!(ev.node(&d, &[7, 15, 1, 0, 4]).unwrap().value, Value::Int(2));
     }
 
+    /// A table a header points at is somewhere for a reason, and the reason is
+    /// a field of the header. Asked of the table itself, which is the node the
+    /// cursor lands on: the field that declares it covers no bytes.
+    #[test]
+    fn a_table_the_header_points_at_names_the_offset_that_placed_it() {
+        use crate::eval::{Placed, Role, Sizing};
+        let d = Document::new(MemSource(object()));
+        let mut ev = Evaluator::new(elf());
+        let table = ev.origins(&d, &[7, 14, 0]).unwrap();
+        let roles: Vec<_> = table.iter().map(|x| (x.role, x.label.as_str(), x.value.as_str())).collect();
+        assert!(roles.contains(&(Role::Position, "section_header_offset", "80")), "{roles:?}");
+        assert!(roles.contains(&(Role::Count, "section_header_count", "2")), "{roles:?}");
+        // And the same from the field as the header declares it, which is
+        // where the listing shows the name.
+        let declared: Vec<_> = ev.origins(&d, &[7, 14]).unwrap().into_iter().map(|x| (x.role, x.label)).collect();
+        assert!(declared.contains(&(Role::Position, "section_header_offset".into())), "{declared:?}");
+        // Placed at an address the file gave, and as long as the count says.
+        let shape = ev.shape(&d, &[7, 14, 0]).unwrap();
+        assert_eq!((shape.placed, shape.sized), (Placed::Address, Sizing::Count));
+        // A field of the header, for contrast: after the one before it, and as
+        // wide as its own type.
+        let plain = ev.shape(&d, &[7, 5]).unwrap();
+        assert_eq!((plain.placed, plain.sized), (Placed::Follows, Sizing::Fixed));
+        // A section's bytes are wherever its own header said.
+        let code = ev.shape(&d, &[7, 15, 1]).unwrap();
+        assert_eq!(code.placed, Placed::Pointer);
+    }
+
     /// The same object with the machine changed to x86-64, whose code the
     /// header's own field is what picks a decoder for.
     #[test]

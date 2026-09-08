@@ -135,6 +135,7 @@ impl Evaluator {
     fn collect_origins<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
         self.resolve(doc, path)?;
         self.placed_by(doc, path, out)?;
+        self.placed_from(doc, path, out)?;
         // Where the name on the row came from, when the file rather than the
         // template says what the field is called.
         if let Some(from) = self.name_from(path) {
@@ -234,6 +235,54 @@ impl Evaluator {
             }
             label = format!("{label}.{}", field.join("."));
         }
+        let o = self.origin(doc, out.values, Role::Position, label, p);
+        out.push(o);
+        Ok(())
+    }
+
+    /// The address that placed a field, for the two ways a format writes one
+    /// down that are not a table of offsets.
+    ///
+    /// Both are facts about the thing above: what an `At` holds is at the
+    /// address the `At` names, and an element of a chain is where the element
+    /// before it said. The node the cursor lands on is the child in either
+    /// case, since neither the `At` nor the chain covers any bytes of its own,
+    /// so answering only for the parent would answer for a node nobody is
+    /// standing on.
+    fn placed_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
+        let Some((_, parent)) = path.split_last() else { return Ok(()) };
+        let Some(r) = self.memo.get(parent) else { return Ok(()) };
+        match &r.ty {
+            // Read where the `At` was declared, which is where its expression
+            // was evaluated: `program_header_offset` is a field of the header,
+            // not of the table it places.
+            Ty::At { at, .. } => {
+                let at = at.clone();
+                self.from_expr(doc, parent, &at, Role::Position, out)
+            }
+            Ty::Chain { .. } => self.placed_in_chain(doc, path, out),
+            _ => Ok(()),
+        }
+    }
+
+    /// Where one element of a chain came from: the expression that found the
+    /// first element, or the field of the element before it that named this
+    /// one. The second is the answer a reader of a linked list wants, and it is
+    /// a field they can go to and read.
+    fn placed_in_chain<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
+        let Some((&idx, list)) = path.split_last() else { return Ok(()) };
+        let Some(r) = self.memo.get(list) else { return Ok(()) };
+        let Ty::Chain { first, next, .. } = &r.ty else { return Ok(()) };
+        let (first, next, name) = (first.clone(), next.clone(), r.name.text());
+        if idx == 0 {
+            return self.from_expr(doc, list, &first, Role::Position, out);
+        }
+        let mut p = list.to_vec();
+        p.push(idx - 1);
+        if !self.descend(doc, &mut p, &next)? {
+            return Ok(());
+        }
+        let label = format!("{name}[{}].{}", idx - 1, next.join("."));
         let o = self.origin(doc, out.values, Role::Position, label, p);
         out.push(o);
         Ok(())
@@ -342,6 +391,14 @@ impl Evaluator {
                 },
                 Ty::Sized { size, inner } => {
                     self.from_expr(doc, path, &size, Role::Length, out)?;
+                    ty = *inner;
+                }
+                // The address a field names for its own contents. Asked here
+                // as well as in `placed_from` because the two are different
+                // nodes: this is the field as the structure declares it, and
+                // that is the thing it points at.
+                Ty::At { at, inner, .. } => {
+                    self.from_expr(doc, path, &at, Role::Position, out)?;
                     ty = *inner;
                 }
                 Ty::Origin { inner } => ty = *inner,

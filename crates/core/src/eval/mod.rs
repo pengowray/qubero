@@ -30,6 +30,7 @@ mod placed;
 mod expr;
 mod read;
 mod relate;
+mod shape;
 mod size;
 mod space;
 mod traced;
@@ -58,6 +59,7 @@ pub struct ExtentEstimate {
 }
 pub use origin::{Origin, Role};
 pub use relate::Relation;
+pub use shape::{Placed, Shape, Sizing};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalError {
