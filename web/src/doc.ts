@@ -514,6 +514,50 @@ export type Origin = {
 };
 
 /**
+ * What a field checks, when it is a checksum rather than a number the format
+ * uses for something.
+ *
+ * The core answers this from the template, so a view never has to recognise a
+ * format to know that a field is a sum or what it covers. Nothing is read to
+ * answer it: `over` and `unpacked_from` are where the bytes are, not the bytes,
+ * and taking the sum is `runCheck`.
+ *
+ * Exactly one of `over` and `unpacked_from` is set. `over` is a run of the file
+ * and a reader can be sent to it. `unpacked_from` is the compressed run whose
+ * *contents* are summed, for a sum over bytes that are nowhere in the file: a
+ * ZIP entry's CRC-32 is of the file, not of the deflate stream, and the stream
+ * is the nearest thing there is to point at.
+ */
+export type FieldCheck = {
+  /** What to call it. `crc16` covers two different sixteen-bit sums; which
+   *  polynomial a format chose is not something an interface can act on. */
+  readonly algorithm: "crc32" | "crc16" | "sum8" | "sha1" | "adler32";
+  /** `[offset, length]` in bytes, when the summed bytes are in the file. */
+  readonly over: readonly [number, number] | null;
+  /** `[offset, length]` in bytes of the compressed run, when they are not. */
+  readonly unpacked_from: readonly [number, number] | null;
+  /** How many bytes the sum is over: the unpacked length where the file writes
+   *  one down, so a view can decide whether to run the check unasked. What the
+   *  file claims, not what a decoder produced. */
+  readonly covered_bytes: number;
+};
+
+/**
+ * What came of taking a checksum. Both forms are printed to the algorithm's own
+ * width, so they compare as strings and line up on screen: `0x2cab616f` for a
+ * CRC-32, `0x1f` for a sum-8, forty characters for a SHA-1.
+ *
+ * There is no third state here. A check that cannot be made never comes back as
+ * a mismatch: bytes still arriving are `pending`, and a run too large or a
+ * stream that will not unpack is an error carrying the reason.
+ */
+export type Verdict = {
+  readonly computed: string;
+  readonly stored: string;
+  readonly ok: boolean;
+};
+
+/**
  * One relationship behind a field's shape, written out. `origins` says which
  * fields decided a length; this says what was done with them, so a reader can
  * check the number instead of taking it.
@@ -1568,6 +1612,31 @@ export class Doc {
    */
   shape(path: readonly number[]): TemplateReply<Shape> {
     return this.handleReply<Shape>(this.editor.shape(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * What the field at `path` checks, or null when it checks nothing.
+   *
+   * Cheap enough to ask of every field the cursor lands on: no byte of the run
+   * it covers is read. `covered_bytes` is what to decide on before calling
+   * `runCheck`, which does the reading.
+   */
+  checkOf(path: readonly number[]): TemplateReply<FieldCheck | null> {
+    return this.handleReply<FieldCheck | null>(this.editor.check_of(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * Take the checksum at `path` and compare it with what the file wrote. Null
+   * when the field checks nothing.
+   *
+   * This reads the covered bytes, and unpacks the covered stream where the sum
+   * is over what a run comes to rather than over the run, so it is asked for
+   * rather than done on the way past. A run whose bytes have not arrived is
+   * `pending` like any other read; a check that cannot be made at all is an
+   * error with the reason in it.
+   */
+  runCheck(path: readonly number[]): TemplateReply<Verdict | null> {
+    return this.handleReply<Verdict | null>(this.editor.run_check(this.space, Uint32Array.from(path)));
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */

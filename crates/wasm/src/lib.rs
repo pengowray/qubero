@@ -567,6 +567,29 @@ struct ShapeDto {
     sized: &'static str,
 }
 
+/// What a field checks, and how much of the file that is. No bytes were read
+/// to answer it, which is what lets a panel ask on every move of the cursor.
+#[derive(Serialize)]
+struct CheckDto {
+    /// "crc32" | "crc16" | "sum8" | "sha1" | "adler32"
+    algorithm: &'static str,
+    /// The bytes summed, as [offset, length], when they are a run of the file.
+    over: Option<[f64; 2]>,
+    /// The compressed run whose contents are summed, as [offset, length], when
+    /// the summed bytes are nowhere in the file.
+    unpacked_from: Option<[f64; 2]>,
+    covered_bytes: f64,
+}
+
+/// What came of taking a checksum: the two forms, printed to the algorithm's
+/// own width so they can be compared and shown side by side.
+#[derive(Serialize)]
+struct VerdictDto {
+    computed: String,
+    stored: String,
+    ok: bool,
+}
+
 /// One relationship behind a field's shape, written both ways.
 #[derive(Serialize)]
 struct RelationDto {
@@ -1876,6 +1899,57 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.shape(&sh.doc, &p).map(|s| ShapeDto { placed: s.placed.as_str(), sized: s.sized.as_str() }))
+            }
+        }
+    }
+
+    /// What the field at `path` checks, or null when it checks nothing. JSON,
+    /// in the same reply shape as the rest.
+    ///
+    /// Cheap, and asked of any field: no bytes of the covered run are read, so
+    /// a panel can ask on every move of the cursor and decide from
+    /// `covered_bytes` whether to take the sum without being asked. Taking it
+    /// is `run_check`.
+    pub fn check_of(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut sh.eval {
+            None => reply::<Option<CheckDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.check_of(&sh.doc, &p).map(|c| {
+                    c.map(|c| CheckDto {
+                        algorithm: c.algorithm,
+                        over: c.over.map(|(at, len)| [at as f64, len as f64]),
+                        unpacked_from: c.unpacked_from.map(|(at, len)| [at as f64, len as f64]),
+                        covered_bytes: c.covered_bytes as f64,
+                    })
+                }))
+            }
+        }
+    }
+
+    /// Take the checksum at `path` and compare it with what the file wrote.
+    /// JSON, in the same reply shape as the rest; null when the field checks
+    /// nothing.
+    ///
+    /// This reads the covered bytes and unpacks the covered stream, so it is
+    /// asked for rather than done on the way past, and it answers `pending`
+    /// like any other read when the bytes are not here yet. A check that
+    /// cannot be made is an error with the reason in it, never a mismatch.
+    pub fn run_check(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut sh.eval {
+            None => reply::<Option<VerdictDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(
+                    e.run_check(&sh.doc, &p)
+                        .map(|v| v.map(|v| VerdictDto { computed: v.computed, stored: v.stored, ok: v.ok })),
+                )
             }
         }
     }
