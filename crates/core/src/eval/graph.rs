@@ -315,8 +315,10 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         // does, so there is no width to put in the name.
         Ty::UIntExpr { .. } => "uint".to_string(),
         // Every number written a byte at a time until it says it has finished.
-        // Which of the six spellings is a fact about the format, not a kind.
-        Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::EbmlVint { .. } => "varint".to_string(),
+        // Which of the spellings is a fact about the format, not a kind.
+        Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::SevenZipNumber | Ty::EbmlVint { .. } => {
+            "varint".to_string()
+        }
         Ty::F16(_) => "f16".to_string(),
         Ty::BF16(_) => "bf16".to_string(),
         Ty::F32(_) => "f32".to_string(),
@@ -387,7 +389,7 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
             Some(t) => value_kind(template, t),
             None => "bytes",
         },
-        Ty::UInt { .. } | Ty::UIntExpr { .. } | Ty::Vlq | Ty::EbmlVint { .. } => "uint",
+        Ty::UInt { .. } | Ty::UIntExpr { .. } | Ty::Vlq | Ty::EbmlVint { .. } | Ty::SevenZipNumber => "uint",
         Ty::Leb128 { signed } => {
             if *signed { "int" } else { "uint" }
         }

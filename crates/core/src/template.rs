@@ -1233,6 +1233,23 @@ pub enum Ty {
     /// of its bits. `Vlq` stops at four bytes and never does that, so it
     /// cannot stand in.
     SqliteVarint,
+    /// 7z's NUMBER: the first byte says in its top bits how many bytes follow,
+    /// those bytes are the bottom of the value written low byte first, and
+    /// whatever is left of the first byte is the top of it.
+    ///
+    /// The count is unary from the top: a first byte of `0xxxxxxx` has no
+    /// bytes after it and seven bits of value, `10xxxxxx` has one after it and
+    /// six bits above that one, and `11111111` has eight after it and none of
+    /// its own. So the same number may be written more than one way and the
+    /// short form is the one an archiver picks.
+    ///
+    /// None of the four varints already here reads it. LEB128 and MIDI's VLQ
+    /// spend a bit a byte on the count and put the groups in an order this
+    /// does not use; EBML counts in leading zeros and is big-endian
+    /// throughout; SQLite's is seven bits a byte, most significant first. Read
+    /// as any of them, `81 9f` is a different number from 415, which is the
+    /// kind of wrong that places a field somewhere plausible and empty.
+    SevenZipNumber,
     /// A field of no bits whose contents are read somewhere else: `inner`,
     /// placed at `at` bytes from `anchor`, with nothing of it where the field
     /// itself is declared.
@@ -1780,6 +1797,10 @@ impl Ty {
     pub fn sqlite_varint() -> Ty {
         Ty::SqliteVarint
     }
+    /// 7z's own variable-length number. See [`Ty::SevenZipNumber`].
+    pub fn sevenzip_number() -> Ty {
+        Ty::SevenZipNumber
+    }
     /// `inner`, read at `at` bytes from the start of the file, in a field that
     /// takes up no room where it is declared. See [`Ty::At`].
     pub fn at(at: Expr, inner: Ty) -> Ty {
@@ -1953,6 +1974,10 @@ impl Ty {
             // the bytes needs to know there are none to check against.
             Ty::ComputedText(_) => "computed text".into(),
             Ty::SqliteVarint => "varint".into(),
+            // Not `varint`: four of those are already in here and they read
+            // the same bytes as different numbers, so the column has to say
+            // which one this is.
+            Ty::SevenZipNumber => "7z number".into(),
             Ty::Leb128 { signed: false } => "leb128".into(),
             Ty::Leb128 { signed: true } => "sleb128".into(),
             Ty::Zigzag => "zigzag".into(),

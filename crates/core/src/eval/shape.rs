@@ -269,7 +269,7 @@ impl Evaluator {
                 StrLen::Scan { .. } | StrLen::Terminated { .. } => Sizing::Terminated,
             },
             Ty::UIntExpr { bits, .. } => expr_sizing(bits),
-            Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::EbmlVint { .. } | Ty::Insn { .. } => Sizing::Encoded,
+            Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::SevenZipNumber | Ty::EbmlVint { .. } | Ty::Insn { .. } => Sizing::Encoded,
             Ty::Traced { .. } => Sizing::Trace,
             Ty::PointerList { .. } => Sizing::Scattered,
             _ => Sizing::Unknown,

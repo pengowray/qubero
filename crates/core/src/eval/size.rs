@@ -263,6 +263,7 @@ impl Evaluator {
                 // which runs to the end of its container.
                 Ty::PointerList { .. } => r.limit - r.offset,
                 Ty::SqliteVarint => self.read_sqlite_varint(doc, &r)?.1 * 8,
+                Ty::SevenZipNumber => self.read_sevenzip_number(doc, &r)?.1 * 8,
                 // Reached only through a wrapper over something that is
                 // neither a number nor a run of bytes, which is a template
                 // saying something it cannot mean. An error rather than a
