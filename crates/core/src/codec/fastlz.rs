@@ -17,7 +17,7 @@
 //!
 //! **Which one a file holds.** `fastlz_compress` picks level 1 under 64 KiB
 //! and level 2 at or above it, and Godot hands it one block at a time at a
-//! default block size of 4096, so a resource compressed by the engine is level
+//! default block size of 4096, so anything the engine packs this way is level
 //! 1 unless a caller asked `FileAccessCompressed` for blocks sixteen times the
 //! usual size. Both are read here; only one is likely to be seen.
 //!

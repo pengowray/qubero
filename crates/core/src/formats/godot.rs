@@ -1266,6 +1266,39 @@ mod tests {
         assert_eq!(e.node(&d, &[6]).unwrap().size_bits / 8, 4);
     }
 
+    /// The block table counts one more block than the division gives, so a
+    /// resource whose length divides by the block size ends on a block of no
+    /// bytes. That one is not a stream and is not offered as one: a row saying
+    /// a decoder would not read it would be a complaint about a block that was
+    /// never meant to hold anything.
+    #[test]
+    fn the_empty_block_at_the_end_is_not_offered_as_a_stream() {
+        let mut b = MAGIC_COMPRESSED.to_vec();
+        b.extend(u32le(2)); // zstd
+        b.extend(u32le(64)); // block size
+        b.extend(u32le(64)); // exactly one block's worth, so the table holds two
+        b.extend(u32le(20));
+        b.extend(u32le(0)); // and the second of them is empty
+        b.extend(std::iter::repeat_n(0xccu8, 20));
+        b.extend_from_slice(MAGIC_COMPRESSED);
+
+        let (d, mut e) = ev(b);
+        assert_eq!(e.node(&d, &[4]).unwrap().child_count, 2);
+        // The first block is a stream, and one of nonsense, so it is refused
+        // rather than opened. That is a fact about the bytes and is said as one.
+        let first = e.node(&d, &[5, 0]).unwrap();
+        assert!(first.decoded);
+        assert_eq!(first.refused.as_deref(), Some("failed"));
+        // The second is not a stream at all, so there is nothing to refuse.
+        let last = e.node(&d, &[5, 1]).unwrap();
+        assert!(!last.decoded, "an empty block should not be opened as a stream");
+        assert_eq!(last.refused, None);
+        assert_eq!(last.size_bits, 0);
+        // And a file of several blocks holds bytes in them, not a resource:
+        // one document across several runs is not something a space can say.
+        assert_eq!(e.node(&d, &[6]).unwrap().size_bits / 8, 4);
+    }
+
     /// A format version from no engine leaves everything below it unread
     /// rather than placing the tables at offsets guessed from the wrong
     /// layout.

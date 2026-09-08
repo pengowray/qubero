@@ -79,9 +79,14 @@ pub enum Codec {
     /// A whole gzip member, header and all. What Godot writes for its third
     /// compression mode, and the wrapper `gzip.rs` reads as fields.
     Gzip,
-    /// One FastLZ block, with no header and no length in front of it. Godot's
-    /// default compression, and level 1 and level 2 of the same format told
-    /// apart by the top bits of the first byte.
+    /// One FastLZ block, with no header and no length in front of it. The
+    /// first of Godot's five compression modes, and level 1 and level 2 of the
+    /// same format told apart by the top bits of the first byte.
+    ///
+    /// The mode a Godot file is likeliest not to be in: the resource saver
+    /// leaves the choice at its default, which is zstd. It is what
+    /// `PackedByteArray.compress` picks when nothing says otherwise, though,
+    /// so it reaches a file wherever a project asked for it by name.
     FastLz,
     /// Not compression: PNG's per-row filtering, undone. What comes out of an
     /// IDAT's zlib stream is rows of `1 + stride` bytes, a filter byte and a
