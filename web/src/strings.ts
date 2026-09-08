@@ -844,10 +844,84 @@ export const REPLACED = (n: number): string => (n === 1 ? "Replaced 1 match." : 
 export const BAD_REPLACEMENT = "Replacement is hex too: pairs of digits, like 00 ff";
 
 /**
- * What each group of rows decided. One noun each: the "Depends on" heading
- * above them has already supplied the subject and the verb, so a heading
- * repeated up to seven times down one narrow panel says the one word that is
- * not already on screen.
+ * The properties section of the inspector: one row per question about the
+ * field at the cursor, the answer on the row, and how it was settled under it.
+ *
+ * Every clause here is an answer, never a sentence about the tool. The reader
+ * is a programmer looking at a file they may not know the layout of, and what
+ * they are owed is the same plain fact a specification would give: this field
+ * is where it is because the field in front of it ended there.
+ *
+ * Nothing is worded for a case the core cannot answer. Where it says it does
+ * not know, the panel prints no clause at all, because a clause in this place
+ * reads as a fact the file gave.
+ */
+export const PROPERTIES = {
+  head: "Properties",
+  position: "Position",
+  length: "Length",
+  type: "Type",
+  count: "Count",
+  /** Not `Value`: the editor above already has that heading, and this row is
+   *  about a value with no bytes, worked out from fields elsewhere. */
+  computed: "Worked out from",
+  name: "Name",
+  points: "Points to",
+  /** The other direction: fields that read this one to settle their own shape.
+   *  Not the reverse of `Points to`, which is a pointer table placing a child
+   *  and is already the answer on that child's `Position` row. */
+  readBy: "Read by",
+  readByCount: (n: number): string => (n === 1 ? "1 field" : `${n.toLocaleString()} fields`),
+  /** Heading over the offsets of this field inside the structures around it. */
+  inside: "Inside",
+  insideAt: (name: string, at: string): string => `${at} in ${name}`,
+  /** The control over what the structures above the field settled. A run of
+   *  weights is 128 bytes because of a record three levels up, and that is the
+   *  field the reader wants; it is still not the field they are standing on. */
+  above: (n: number, nearest: string): string =>
+    n === 1 ? `Set by ${nearest}` : `Set by ${nearest} and ${(n - 1).toLocaleString()} more above`,
+  /** How the field's start was settled, one case per answer the core gives. */
+  placed: {
+    root: "the whole file",
+    first: (parent: string): string => `starts where ${parent} does`,
+    follows: (prev: string): string => `after ${prev}`,
+    followsPlain: "after the field before it",
+    element: (index: number, run: string): string => `element ${index.toLocaleString()} of ${run}`,
+    elementPlain: (index: number): string => `element ${index.toLocaleString()} of the run`,
+    pointer: (field: string): string => `at the offset in ${field}`,
+    pointerPlain: "at an offset read from a table",
+    chain: (field: string): string => `at the address in ${field}`,
+    chainPlain: "at the address the element before it holds",
+    address: (field: string): string => `at the address in ${field}`,
+    addressPlain: "at an address worked out from the file",
+    trace: "where the decoder had reached",
+    stream: (name: string): string => `the start of what ${name} unpacked to`,
+    streamPlain: "the start of the unpacked bytes",
+  },
+  /** How the field's length was settled. */
+  sized: {
+    fixed: "fixed by the type",
+    expression: (field: string): string => `as long as ${field} says`,
+    expressionPlain: "worked out from the file",
+    terminated: "up to the terminator",
+    remaining: (parent: string): string => `the rest of ${parent}`,
+    remainingPlain: "the rest of what holds it",
+    children: "as long as the fields inside it",
+    count: (field: string): string => `as many elements as ${field} says`,
+    countPlain: "as many elements as the count says",
+    encoded: "its own bytes say where it ends",
+    trace: "as much as the decoder read",
+    nothing: "no bytes of its own",
+  },
+  /** Which field picked the type, and what it said. */
+  type_from: (field: string, value: string): string => (value === "" ? `chosen by ${field}` : `chosen by ${field} = ${value}`),
+} as const;
+
+/**
+ * What each group of rows decided, where several roles sit under one property.
+ * One noun each: the property above them has already supplied the subject and
+ * the verb, so a heading repeated down one narrow panel says the one word that
+ * is not already on screen.
  *
  * `Bit width` is the exception. Beside `Length` a bare `Width` reads as a
  * synonym of it, and the unit is the entire difference between the two
@@ -870,18 +944,8 @@ export function roleLabel(role: string): string {
   return ROLE_GROUP[role] ?? role;
 }
 
-/**
- * The heading over the other direction: the fields that read this one.
- *
- * Not a synonym of "Depends on" and not of "Points to". Those rows are kept
- * flat, with the role word on each: under this heading a group called `Length`
- * would mean the *other* field's length, which is the opposite of what the
- * same word means two inches above it.
- */
-export const USED_BY = "Used by";
-
 /** The arrows over the hex grid, and the graph view. Both show what the
- *  "Depends on" list shows, so the words for it are here rather than in either
+ *  properties list shows, so the words for it are here rather than in either
  *  view, and neither can drift from the other. */
 export const LINKS = {
   button: "Dependencies",

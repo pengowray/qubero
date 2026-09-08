@@ -7,9 +7,9 @@
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
-import type { Doc, FieldGraph, Origin, Relation, TemplateNode } from "./doc.js";
+import type { Doc, FieldGraph, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, childrenHead, countText, INSIDE, REPORT, ROLE_GROUP, USED_BY, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
+import { bitSizeText, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.js";
 import { fieldClass } from "./fieldstyle.js";
 import { withPictures } from "./textview.js";
@@ -114,12 +114,16 @@ export class Inspector {
    *  one long list does not make the next one long. */
   private childCap = CHILD_PAGE;
   private childCapFor = "";
-  /** Which field's dependencies have the far ancestors unfolded, as its path
-   *  written the way `data-path` writes it. Kept on the panel rather than in
-   *  the DOM so that re-reading the same field does not fold them up again,
-   *  and cleared by moving to another field, whose own ancestors are a
-   *  different list and start folded. */
-  private originsExpandedFor: string | null = null;
+  /** Which property rows are unfolded, and which field they belong to, as its
+   *  path written the way `data-path` writes it. Kept on the panel rather than
+   *  in the DOM so that re-reading the same field does not fold them up again,
+   *  and cleared by moving to another field, whose properties are other
+   *  questions and start folded. */
+  private openProps = new Set<string>();
+  private openPropsFor: string | null = null;
+  /** A row unfolded from the keyboard, whose head went with the rest of the
+   *  section when it was rebuilt. Focus goes back to the row that replaced it. */
+  private focusProp: string | null = null;
   /** The dependency row the pointer is resting on, so it can be unmarked when
    *  the pointer moves off it or the section is rebuilt underneath it. */
   private hoverRow: HTMLElement | null = null;
@@ -836,7 +840,7 @@ export class Inspector {
       this.detail.append(` · ${why}`);
     }
     this.fillValue(path, n);
-    this.fillOrigins(path);
+    this.fillProperties(path, n);
     this.fillTypes(path, n);
     this.fillSemantics(path, n);
     this.fillOpenAs(path, n);
@@ -1184,75 +1188,497 @@ export class Inspector {
   }
 
   /**
-   * Which other fields settled the shape of the one at the cursor, and where it
-   * points when it holds an offset.
+   * What is true of the field at the cursor, one question to a row.
    *
-   * The field the reader asked about comes first. Under it come the steps of
-   * the path above it, nearest first: 128 bytes of packed weights are 128 bytes
-   * because of the tensor record three levels up, and that record is what the
-   * reader wants to see. Only the nearest of those steps is shown outright,
-   * because a deep path has an answer at every level and printing all of them
-   * buries the field the reader is standing on; the rest wait behind a control
-   * that unfolds them.
+   * The section used to be arranged the other way about: a heading per *other*
+   * field, saying what that field had settled here. That answers a question a
+   * reader only has once they know one was asked, and it had nothing at all to
+   * say about the fields nobody decided anything about, which is most of a
+   * file. What a reader asks first is plainer and is always the same handful of
+   * things: where is this, how long is it, why is it this type, what points at
+   * it. So each row is one of those questions, the answer is on the row, and
+   * the field that settled it is the working behind the answer rather than the
+   * heading over it.
+   *
+   * Every row folds. Its own line carries the fact and one short clause saying
+   * how the fact was arrived at, which is what a reader passing through wants;
+   * the fields named and the arithmetic over them are one click below. The
+   * structures above the field fold away together at the end, because 128 bytes
+   * of packed weights are 128 bytes because of a record three levels up, and
+   * that record is worth reaching and is still not the field the reader is
+   * standing on.
    */
-  private fillOrigins(path: readonly number[]): void {
+  private fillProperties(path: readonly number[], n: TemplateNode): void {
     // The rows are about to be thrown away, so whatever the pointer was
     // resting on is no longer there to point at. Say so before it goes.
     this.markHover(null);
-    const jumps: Node[] = [];
-    const reply = this.doc.origins(path);
-    // Only the field itself can point somewhere: an ancestor's pointer is not
-    // what the cursor is on.
-    if (reply.status === "ok") {
-      for (const o of reply.node) {
-        if (o.role === "points" && o.target_bits !== null) jumps.push(pointsRow(o));
-      }
+    const key = path.join("/");
+    // Unfolding is about one field's questions, so it is forgotten as soon as
+    // the panel is about another field.
+    if (this.openPropsFor !== key) {
+      this.openPropsFor = key;
+      this.openProps.clear();
     }
-    const own = this.originStep(path);
-    // Where this field came from, for a field in an unpacked stream: which step
-    // of the decoder produced its first byte, and which bits of the compressed
-    // run that step read. It is an origin like any other and goes under the
-    // rest of the field's own, because the fields above decided this field's
-    // shape while this decided that the bytes exist at all.
-    const unpacked = this.unpackedGroup(path);
-    if (unpacked !== null) own.push(unpacked);
-    // Each step above the field, nearest first, and each headed by the field it
-    // is about: a reader who did not ask about that field has to be told whose
-    // length this is.
-    const above: Node[][] = [];
-    for (let i = path.length - 1; i >= 0; i--) {
-      const at = path.slice(0, i);
-      const rows = this.originStep(at);
-      if (rows.length === 0) continue;
-      rows.unshift(this.stepHead(at));
-      above.push(rows);
-    }
-    if (own.length === 0 && above.length === 0 && jumps.length === 0) {
+    const rows = this.properties(path, n, "", false);
+    const above = this.aboveBlocks(path);
+    if (rows.length === 0 && above.length === 0) {
       this.origins.hidden = true;
       this.origins.replaceChildren();
       return;
     }
-    const all: Node[] = [];
-    if (own.length > 0 || above.length > 0) {
-      all.push(subhead("Depends on"), ...own);
-      const [nearest, ...far] = above;
-      if (nearest !== undefined) all.push(...nearest);
-      if (far.length > 0) {
-        const key = path.join("/");
-        // Unfolding is about one field's ancestors, so it is forgotten as soon
-        // as the panel is about another field. Coming back to the first field
-        // starts it folded again, which is where every field starts.
-        if (this.originsExpandedFor !== null && this.originsExpandedFor !== key) this.originsExpandedFor = null;
-        const open = this.originsExpandedFor === key;
-        all.push(this.moreSteps(key, open, far.length));
-        if (open) for (const rows of far) all.push(...rows);
-      }
+    const all: Node[] = [subhead(PROPERTIES.head)];
+    for (const p of rows) all.push(this.propertyEl(p));
+    if (above.length > 0) {
+      const open = this.openProps.has(ABOVE_KEY);
+      all.push(this.disclosure(ABOVE_KEY, open, PROPERTIES.above(above.length, above[0]?.name ?? "")));
+      if (open) for (const block of above) all.push(...block.rows);
     }
-    if (jumps.length > 0) all.push(subhead("Points to"), ...jumps);
-    const used = this.usedBy(path);
-    if (used.length > 0) all.push(subhead(USED_BY), ...used);
     this.origins.replaceChildren(...all);
     this.origins.hidden = false;
+    // The head that was clicked went with the rest of the section. Focus lands
+    // on the one that replaced it, so unfolding a row from the keyboard does
+    // not put the reader back at the top of the panel.
+    if (this.focusProp !== null) {
+      this.origins.querySelector<HTMLElement>(`[data-prop="${this.focusProp}"]`)?.focus();
+      this.focusProp = null;
+    }
+  }
+
+  /**
+   * The questions worth asking about one field, in the order a reader asks
+   * them: where it is, how much of it there is, what it is, and only then what
+   * it has to do with other fields.
+   *
+   * `terse` is for the structures above the field, where a row is worth
+   * printing only if another field settled it: that a record's own length is
+   * fixed by its type is a fact about the record, and the reader is looking at
+   * something inside it.
+   */
+  private properties(path: readonly number[], n: TemplateNode, prefix: string, terse: boolean): Property[] {
+    const from = new Map<OriginRole, Origin[]>();
+    const jumps: Origin[] = [];
+    // The stream these bytes were unpacked out of, which the core reports as an
+    // origin of the field's value. It is not one of the fields a value was
+    // worked out from: it is where the bytes came from at all, so it belongs
+    // under Position with the rest of the answer to "why is it here". What
+    // tells the two apart is that a stream is above the field and a field read
+    // by an expression never is.
+    const stream: Origin[] = [];
+    const reply = this.doc.origins(path);
+    // Two accounts of the same window name the same field twice: the length of
+    // the sized window around a run of bytes, and the length of the bytes
+    // inside it. One fact, so one row. An origin with no field of its own has
+    // no identity to compare and is always kept.
+    const seen = new Set<string>();
+    if (reply.status === "ok") {
+      for (const o of reply.node) {
+        if (o.role === "points") {
+          if (o.target_bits !== null) jumps.push(o);
+          continue;
+        }
+        const at = `${o.role} ${o.path.join("/")}`;
+        if (o.path.length > 0) {
+          if (seen.has(at)) continue;
+          seen.add(at);
+        }
+        if (o.role === "value" && encloses(o.path, path)) stream.push(o);
+        else push(from, o.role, o);
+      }
+    }
+    const how = new Map<OriginRole, Relation[]>();
+    const said = this.doc.relations(path);
+    if (said.status === "ok") for (const r of said.node) push(how, r.role, r);
+    const shape = this.doc.shape(path);
+    const said_ = (roles: readonly OriginRole[]): boolean =>
+      roles.some((r) => (from.get(r)?.length ?? 0) + (how.get(r)?.length ?? 0) > 0);
+    const out: Property[] = [];
+    // Where it is, and how long. Both are answered for every field, since both
+    // have an answer for every field; the rest of the rows appear only when
+    // there is something to put on them.
+    if (!terse || said_(["position"])) {
+      const detail = this.working(["position"], from, how);
+      if (!terse) detail.push(...this.insideRows(path, n), ...this.unpackedRows(path, stream));
+      out.push({
+        key: `${prefix}position`,
+        label: PROPERTIES.position,
+        value: formatAddress(n.offset_bits, n.space),
+        bit: null,
+        how: this.placedHow(path, n, shape, from),
+        detail,
+      });
+    }
+    if (!terse || said_(["length", "width"])) {
+      out.push({
+        key: `${prefix}length`,
+        label: PROPERTIES.length,
+        value: bitSizeText(n.size_bits),
+        bit: null,
+        how: this.sizedHow(path, shape, from),
+        detail: this.working(["length", "width"], from, how),
+      });
+    }
+    // The type, only where the file rather than the template settled it: the
+    // line under the value already says what the type is, and a row repeating
+    // it to say the template said so is a row that never varies.
+    if (said_(["type"])) {
+      const one = only(from.get("type"));
+      out.push({
+        key: `${prefix}type`,
+        label: PROPERTIES.type,
+        value: n.type,
+        bit: null,
+        how: one === null ? null : { text: PROPERTIES.type_from(one.label, one.value), path: one.path },
+        detail: this.working(["type"], from, how),
+      });
+    }
+    if (said_(["count"])) {
+      const one = only(from.get("count"));
+      out.push({
+        key: `${prefix}count`,
+        label: PROPERTIES.count,
+        value: countText(n.child_count, childWord(n)),
+        bit: null,
+        how: one === null ? null : { text: originClause(one), path: one.path },
+        detail: this.working(["count"], from, how),
+      });
+    }
+    // A field of no bytes whose value other fields come to. The editor above
+    // shows what it says; this says what it was worked out from.
+    if (said_(["value"])) {
+      const one = only(from.get("value"));
+      out.push({
+        key: `${prefix}computed`,
+        label: PROPERTIES.computed,
+        value: one === null ? "" : one.label,
+        bit: null,
+        how: null,
+        detail: this.working(["value"], from, how),
+      });
+    }
+    // Where the name on the row came from, when the file rather than the
+    // template spells it.
+    if (said_(["name"])) {
+      const one = only(from.get("name"));
+      out.push({
+        key: `${prefix}name`,
+        label: PROPERTIES.name,
+        value: one === null ? "" : one.label,
+        bit: null,
+        how: null,
+        detail: this.working(["name"], from, how),
+      });
+    }
+    if (terse) return out;
+    // Where this field's own value points, when it holds an offset. One row
+    // each: a field that is two pointers is rare, and folding them together
+    // would need a heading saying which is which.
+    for (const [i, o] of jumps.entries()) {
+      out.push({
+        key: `${prefix}points:${i}`,
+        label: PROPERTIES.points,
+        value: formatOffset(o.target_bits ?? 0),
+        bit: o.target_bits,
+        how: { text: o.label, path: null },
+        detail: [],
+      });
+    }
+    const used = this.usedBy(path);
+    if (used.length > 0) {
+      out.push({
+        key: `${prefix}readby`,
+        label: PROPERTIES.readBy,
+        value: PROPERTIES.readByCount(used.length),
+        bit: null,
+        how: null,
+        detail: used,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * The working behind one property: the fields it names, and the arithmetic
+   * done over them.
+   *
+   * The fields and the sentence they appear in belong together. The rows name
+   * which fields settled this much of the field's shape; the expression under
+   * them says what was done with those fields, so the number can be checked
+   * rather than taken. A role heading appears only where one property covers
+   * two of them, which is Length over a run of packed numbers: how long the run
+   * is and how wide one value in it is are different questions with the same
+   * unit.
+   */
+  private working(roles: readonly OriginRole[], from: Map<OriginRole, Origin[]>, how: Map<OriginRole, Relation[]>): Node[] {
+    const filled = roles.filter((r) => (from.get(r)?.length ?? 0) + (how.get(r)?.length ?? 0) > 0);
+    const out: Node[] = [];
+    for (const role of filled) {
+      if (filled.length > 1) out.push(roleHead(ROLE_GROUP[role] ?? role));
+      for (const o of from.get(role) ?? []) out.push(originRow(o));
+      for (const r of how.get(role) ?? []) out.push(relationRow(r));
+    }
+    return out;
+  }
+
+  /**
+   * How the field's start was settled, in one clause.
+   *
+   * Read off the core's word for it rather than worked out here: the panel has
+   * no way of telling a field that follows the one before it from one an
+   * address put in the same place, and a clause guessed in this position would
+   * read exactly like a fact the file gave. Where the core says it does not
+   * know, this says nothing.
+   */
+  private placedHow(path: readonly number[], n: TemplateNode, shape: TemplateReply<Shape>, from: Map<OriginRole, Origin[]>): How | null {
+    if (shape.status !== "ok") return null;
+    const one = only(from.get("position"));
+    const up = path.slice(0, -1);
+    const parent = this.nameOf(up);
+    const idx = path[path.length - 1] ?? 0;
+    switch (shape.node.placed) {
+      case "root":
+        return { text: PROPERTIES.placed.root, path: null };
+      case "first":
+        return parent === null ? null : { text: PROPERTIES.placed.first(parent), path: up };
+      case "follows": {
+        // The field before it, by name: "after the field before it" is a fact
+        // the reader can already see in the listing, and the name is what lets
+        // them go to it.
+        const prev = [...up, idx - 1];
+        const before = idx > 0 ? this.nameOf(prev) : null;
+        if (before === null) return { text: PROPERTIES.placed.followsPlain, path: null };
+        return { text: PROPERTIES.placed.follows(before), path: prev };
+      }
+      case "element":
+        return parent === null
+          ? { text: PROPERTIES.placed.elementPlain(idx), path: null }
+          : { text: PROPERTIES.placed.element(idx, parent), path: up };
+      case "pointer":
+        return one === null ? { text: PROPERTIES.placed.pointerPlain, path: null } : { text: PROPERTIES.placed.pointer(one.label), path: one.path };
+      case "chain":
+        return one === null ? { text: PROPERTIES.placed.chainPlain, path: null } : { text: PROPERTIES.placed.chain(one.label), path: one.path };
+      case "address":
+        return one === null ? { text: PROPERTIES.placed.addressPlain, path: null } : { text: PROPERTIES.placed.address(one.label), path: one.path };
+      case "trace":
+        return { text: PROPERTIES.placed.trace, path: null };
+      case "stream":
+        return parent === null ? { text: PROPERTIES.placed.streamPlain, path: null } : { text: PROPERTIES.placed.stream(parent), path: up };
+      default:
+        return n.space === 0 ? null : { text: PROPERTIES.placed.streamPlain, path: null };
+    }
+  }
+
+  /** How the field's length was settled, in one clause. Read off the core's
+   *  word for it, for the reason `placedHow` is. */
+  private sizedHow(path: readonly number[], shape: TemplateReply<Shape>, from: Map<OriginRole, Origin[]>): How | null {
+    if (shape.status !== "ok") return null;
+    const parent = this.nameOf(path.slice(0, -1));
+    switch (shape.node.sized) {
+      case "fixed":
+        return { text: PROPERTIES.sized.fixed, path: null };
+      case "expression": {
+        // Named only where one field settles it. Two fields and an expression
+        // over them is a formula, and half of a formula on the row would read
+        // as the whole of it.
+        const one = only(from.get("length")) ?? only(from.get("width"));
+        return one === null ? { text: PROPERTIES.sized.expressionPlain, path: null } : { text: PROPERTIES.sized.expression(one.label), path: one.path };
+      }
+      case "terminated":
+        return { text: PROPERTIES.sized.terminated, path: null };
+      case "remaining":
+        return parent === null
+          ? { text: PROPERTIES.sized.remainingPlain, path: null }
+          : { text: PROPERTIES.sized.remaining(parent), path: path.slice(0, -1) };
+      case "children":
+        return { text: PROPERTIES.sized.children, path: null };
+      case "count": {
+        const one = only(from.get("count"));
+        return one === null ? { text: PROPERTIES.sized.countPlain, path: null } : { text: PROPERTIES.sized.count(one.label), path: one.path };
+      }
+      case "encoded":
+        return { text: PROPERTIES.sized.encoded, path: null };
+      case "trace":
+        return { text: PROPERTIES.sized.trace, path: null };
+      case "nothing":
+        return { text: PROPERTIES.sized.nothing, path: null };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Where the field sits inside the structures around it.
+   *
+   * An absolute address answers where it is in the file, which is not the
+   * question a reader of a record has: a local file header's `crc32` is at
+   * `+0xe` of that header wherever in the zip the header landed, and that is
+   * the number the specification prints. The nearest few are enough; a member
+   * eight levels down a JSON tree has eight of these and only the first are
+   * about anything the reader can hold in their head.
+   */
+  private insideRows(path: readonly number[], n: TemplateNode): Node[] {
+    const rows: Node[] = [];
+    for (let i = path.length - 1; i >= 1 && rows.length < INSIDE_LEVELS; i--) {
+      const at = path.slice(0, i);
+      const a = this.doc.templateNode(at);
+      // A stretch counted in another address space is not a distance from
+      // here: the field is at an offset of the unpacked bytes and its stream
+      // is at an offset of the file.
+      if (a.status !== "ok" || a.node.space !== n.space) continue;
+      const delta = n.offset_bits - a.node.offset_bits;
+      if (delta < 0) continue;
+      rows.push(insideRow(a.node.name, delta, at));
+    }
+    return rows.length === 0 ? [] : [roleHead(PROPERTIES.inside), ...rows];
+  }
+
+  /**
+   * Where the bytes came from, for a field that was read out of a compressed
+   * run rather than out of the file.
+   *
+   * Two halves of one answer: which run it was unpacked from, which is a field
+   * of this document with a place to go and look at, and, for a stream opened
+   * as a document of its own, which step of the decoder produced the byte under
+   * the cursor and which bits of the compressed run that step read. The second
+   * is the same sentence as the status bar, deliberately: it is the same fact,
+   * and a reader who has seen it below should recognise it here.
+   */
+  private unpackedRows(path: readonly number[], stream: readonly Origin[]): Node[] {
+    const rows: Node[] = stream.map(originRow);
+    const n = this.doc.templateNode(path);
+    if (!this.doc.isFile && n.status === "ok") {
+      const step = this.doc.mapOut(Math.floor(n.node.offset_bits / 8));
+      if (step !== null) {
+        const row = document.createElement("div");
+        row.className = "insp-origin";
+        const what = document.createElement("span");
+        what.textContent = unpackedOriginRow(this.doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist, step.field);
+        row.append(what);
+        rows.push(row);
+      }
+    }
+    return rows.length === 0 ? [] : [roleHead(UNPACKED.originHead), ...rows];
+  }
+
+  /**
+   * What the structures above the field settled about it, nearest first, each
+   * headed by the field it is about.
+   *
+   * A reader who did not ask about that field has to be told whose length this
+   * is, so the heading is the field's name and leads to it.
+   */
+  private aboveBlocks(path: readonly number[]): { name: string; rows: Node[] }[] {
+    const out: { name: string; rows: Node[] }[] = [];
+    for (let i = path.length - 1; i >= 0; i--) {
+      const at = path.slice(0, i);
+      const node = this.doc.templateNode(at);
+      if (node.status !== "ok") continue;
+      const rows = this.properties(at, node.node, `${at.join("/")}:`, true);
+      if (rows.length === 0) continue;
+      out.push({ name: node.node.name, rows: [this.stepHead(at), ...rows.map((p) => this.propertyEl(p))] });
+    }
+    return out;
+  }
+
+  /**
+   * One property as it is drawn: the label and the answer on one line, the
+   * clause saying how it was settled under it, and the working folded away
+   * below that.
+   *
+   * The head is a button only where there is something behind it, so a row that
+   * folds and a row that does not are told apart before the triangle is read.
+   * The clause is outside the head rather than in it, because it leads to the
+   * field it names and a link inside a button is neither valid nor operable.
+   */
+  private propertyEl(p: Property): HTMLElement {
+    const box = document.createElement("div");
+    box.className = "insp-prop";
+    const open = this.openProps.has(p.key);
+    const foldable = p.detail.length > 0;
+    const head = document.createElement(foldable ? "button" : "div");
+    head.className = "insp-prop-head";
+    const mark = document.createElement("span");
+    mark.className = "insp-prop-mark";
+    mark.setAttribute("aria-hidden", "true");
+    mark.textContent = foldable ? (open ? "▾" : "▸") : "";
+    const label = document.createElement("span");
+    label.className = "insp-prop-name";
+    label.textContent = p.label;
+    head.append(mark, label, this.propertyValue(p));
+    if (head instanceof HTMLButtonElement) {
+      head.type = "button";
+      head.setAttribute("aria-expanded", String(open));
+      head.dataset["prop"] = p.key;
+      head.addEventListener("click", () => {
+        if (open) this.openProps.delete(p.key);
+        else this.openProps.add(p.key);
+        this.focusProp = p.key;
+        this.render();
+      });
+    }
+    box.append(head);
+    if (p.how !== null) {
+      const how = document.createElement("div");
+      how.className = "insp-prop-how";
+      // The clause names a field the reader can go to and light up, so the
+      // whole line carries the path the way an origin row does.
+      if (p.how.path !== null) how.dataset["path"] = p.how.path.join("/");
+      how.textContent = p.how.text;
+      box.append(how);
+    }
+    if (foldable && open) {
+      const detail = document.createElement("div");
+      detail.className = "insp-prop-detail";
+      detail.append(...p.detail);
+      box.append(detail);
+    }
+    return box;
+  }
+
+  /** The answer itself. An answer that is a place in the file is a link to
+   *  that place; every other answer is a word. */
+  private propertyValue(p: Property): HTMLElement {
+    const value = document.createElement(p.bit === null ? "span" : "button");
+    value.className = p.bit === null ? "insp-prop-value" : "insp-prop-value insp-link addr";
+    if (value instanceof HTMLButtonElement) {
+      value.type = "button";
+      value.dataset["bit"] = String(p.bit);
+    }
+    value.textContent = p.value;
+    return value;
+  }
+
+  /**
+   * A control that folds a block away, and the count of what is behind it.
+   *
+   * The same words open or shut. A disclosure whose label changes asks the
+   * reader to read it twice to find out which way it is; the triangle beside it
+   * already says that.
+   */
+  private disclosure(key: string, open: boolean, text: string): HTMLElement {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "insp-link insp-origin-more";
+    b.setAttribute("aria-expanded", String(open));
+    b.dataset["prop"] = key;
+    const mark = document.createElement("span");
+    mark.className = "insp-origin-mark";
+    mark.textContent = open ? "▾" : "▸";
+    mark.setAttribute("aria-hidden", "true");
+    b.append(mark, text);
+    b.addEventListener("click", () => {
+      if (open) this.openProps.delete(key);
+      else this.openProps.add(key);
+      this.focusProp = key;
+      this.render();
+    });
+    return b;
+  }
+
+  /** What a field is called, for a clause that names it. Null when it cannot
+   *  be read, which is when the clause has to be worded without it. */
+  private nameOf(path: readonly number[]): string | null {
+    const node = this.doc.templateNode(path);
+    return node.status === "ok" ? node.node.name : null;
   }
 
   /**
@@ -1322,52 +1748,8 @@ export class Inspector {
     return null;
   }
 
-  /**
-   * One step of the path as groups: what was settled about it, and under each
-   * of those the fields that settled it and the expression they were read by.
-   *
-   * The fields and the sentence they appear in belong together. The rows name
-   * which fields decided this much of the step's shape; the expression under
-   * them says what was done with those fields, so the number can be checked
-   * rather than taken. Empty for a step the template placed and sized outright,
-   * which is most of them.
-   */
-  private originStep(at: readonly number[]): Node[] {
-    const from = new Map<OriginRole, Origin[]>();
-    const reply = this.doc.origins(at);
-    // Two accounts of the same window name the same field twice: the length of
-    // the sized window around a run of bytes, and the length of the bytes
-    // inside it. One fact, so one row. An origin with no field of its own has
-    // no identity to compare and is always kept.
-    const seen = new Set<string>();
-    if (reply.status === "ok") {
-      for (const o of reply.node) {
-        if (o.role === "points") continue;
-        const key = `${o.role} ${o.path.join("/")}`;
-        if (o.path.length > 0) {
-          if (seen.has(key)) continue;
-          seen.add(key);
-        }
-        push(from, o.role, o);
-      }
-    }
-    const how = new Map<OriginRole, Relation[]>();
-    const said = this.doc.relations(at);
-    if (said.status === "ok") for (const r of said.node) push(how, r.role, r);
-    const groups: Node[] = [];
-    for (const role of ROLE_ORDER) {
-      const fields = from.get(role) ?? [];
-      const sums = how.get(role) ?? [];
-      if (fields.length === 0 && sums.length === 0) continue;
-      const group = document.createElement("div");
-      group.className = "insp-role";
-      group.append(roleHead(ROLE_GROUP[role] ?? role), ...fields.map(originRow), ...sums.map(relationRow));
-      groups.push(group);
-    }
-    return groups;
-  }
-
-  /** The field a group of steps is about, as a link to it. */
+  /** The field a block of properties is about, when it is not the field at the
+   *  cursor, as a link to it. */
   private stepHead(at: readonly number[]): HTMLElement {
     const node = this.doc.templateNode(at);
     const b = document.createElement("button");
@@ -1375,34 +1757,6 @@ export class Inspector {
     b.className = "insp-link insp-origin-group";
     b.dataset["path"] = at.join("/");
     b.textContent = node.status === "ok" ? node.node.name : "…";
-    return b;
-  }
-
-  /**
-   * The control that unfolds the steps above the nearest one, and folds them
-   * back. `hidden` is how many are waiting behind it, which is the one thing
-   * worth knowing before opening it.
-   */
-  private moreSteps(key: string, open: boolean, hidden: number): HTMLElement {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "insp-link insp-origin-more";
-    b.setAttribute("aria-expanded", String(open));
-    // The same words open or shut. A disclosure whose label changes asks the
-    // reader to read it twice to find out which way it is; the triangle beside
-    // it already says that, and the count says how much is behind it.
-    const mark = document.createElement("span");
-    mark.className = "insp-origin-mark";
-    mark.textContent = open ? "\u25be" : "\u25b8";
-    mark.setAttribute("aria-hidden", "true");
-    b.append(mark, moreStepsText(hidden));
-    b.addEventListener("click", () => {
-      this.originsExpandedFor = open ? null : key;
-      this.render();
-      // The button that was clicked went with the rest of the section, so the
-      // keyboard is put back on the one that replaced it.
-      this.origins.querySelector<HTMLElement>(".insp-origin-more")?.focus();
-    });
     return b;
   }
 
@@ -1423,44 +1777,6 @@ export class Inspector {
     on.classList.add("is-hover");
     const p = on.dataset["path"];
     this.onHoverField(p === undefined ? null : pathOf(p));
-  }
-
-  /**
-   * The one connection a field of an unpacked stream has that no other field
-   * has: the step of the decoder that produced it, and the bits of the file
-   * that step read. Null for a field of the file, and for a byte the codec kept
-   * no trace of.
-   *
-   * A group like the rest, headed the same way, because it settles the same
-   * kind of question about the field even though it is not one of the roles the
-   * core names.
-   *
-   * The same sentence as the status bar, deliberately: it is the same fact, and
-   * a reader who has seen it below should recognise it here.
-   */
-  private unpackedGroup(path: readonly number[]): HTMLElement | null {
-    if (this.doc.isFile) return null;
-    const n = this.doc.templateNode(path);
-    if (n.status !== "ok") return null;
-    const step = this.doc.mapOut(Math.floor(n.node.offset_bits / 8));
-    if (step === null) return null;
-    const group = document.createElement("div");
-    group.className = "insp-role";
-    const row = document.createElement("div");
-    row.className = "insp-origin";
-    const what = document.createElement("span");
-    what.textContent = unpackedOriginRow(
-      this.doc.name,
-      step.in_start,
-      step.in_end,
-      step.kind,
-      step.len,
-      step.dist,
-      step.field,
-    );
-    row.append(what);
-    group.append(roleHead(UNPACKED.originHead), row);
-    return group;
   }
 
   /** The section below the editor. See `insp-type`. */
@@ -1946,21 +2262,66 @@ function subhead(text: string): HTMLElement {
   return h;
 }
 
-/** Where a field holding an offset points. */
-function pointsRow(o: Origin): HTMLElement {
+/**
+ * One question about the field at the cursor, answered on one line.
+ *
+ * `value` is the answer itself: an address, a size, a type name. `how` is the
+ * clause under it saying how that answer was arrived at, and names a field
+ * where one field settled it. `detail` is the working, which the row folds
+ * away: an empty one is a row with nothing behind it and no triangle.
+ */
+type Property = {
+  /** What the unfolded set remembers, so a row stays open across a redraw. */
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+  /** For an answer that is a place in the file: the bit it leads to. */
+  readonly bit: number | null;
+  readonly how: How | null;
+  readonly detail: Node[];
+};
+
+/** How an answer was arrived at, and the field it names, when it names one. */
+type How = { readonly text: string; readonly path: readonly number[] | null };
+
+/** The one thing in a list, or nothing: a clause naming a field can only name
+ *  one, and where two fields settled something the row says so without
+ *  pretending either of them did it alone. */
+function only<T>(list: readonly T[] | undefined): T | null {
+  return list !== undefined && list.length === 1 ? (list[0] ?? null) : null;
+}
+
+/** Whether `above` is a field this one sits inside. What tells the stream a
+ *  field was unpacked from apart from a field an expression read: an
+ *  expression reads leaves, and never one of its own ancestors. */
+function encloses(above: readonly number[], path: readonly number[]): boolean {
+  return above.length < path.length && above.every((step, i) => step === path[i]);
+}
+
+/** Where the field sits inside one of the structures around it. */
+function insideRow(name: string, delta: number, path: readonly number[]): HTMLElement {
   const row = document.createElement("div");
   row.className = "insp-origin";
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = "insp-link addr";
-  b.dataset["bit"] = String(o.target_bits);
-  b.textContent = formatOffset(o.target_bits ?? 0);
+  row.dataset["path"] = path.join("/");
   const what = document.createElement("span");
-  what.className = "insp-origin-val";
-  what.textContent = o.label;
-  row.append(b, what);
+  what.className = "insp-origin-name";
+  what.textContent = PROPERTIES.insideAt(name, `+${formatOffset(delta)}`);
+  row.append(what);
   return row;
 }
+
+/** A clause that is only the field's name and what it says: what a count or a
+ *  name was taken from needs no verb, since the label supplies it. */
+function originClause(o: Origin): string {
+  return o.value === "" ? o.label : `${o.label} = ${grouped(o.value)}`;
+}
+
+/** How many of the structures a field sits inside are worth an offset each. */
+const INSIDE_LEVELS = 3;
+
+/** The one block that is not a property of the field: what the structures
+ *  above it settled. */
+const ABOVE_KEY = "above";
 
 /** A count of four million reads as one. */
 function grouped(value: string): string {
@@ -1968,20 +2329,11 @@ function grouped(value: string): string {
 }
 
 /**
- * What one field decided about another, and the order the groups of them are
- * read in: where the field is, then how much of it there is, then what it
- * holds. `points` is not here because it is the other direction and has a
- * section of its own.
+ * What one field decided about another. `points` is not here because it is the
+ * other direction: this field holds an offset, and that is where it leads.
  */
 const ROLE_ORDER = ["position", "length", "width", "count", "type", "value", "name"] as const;
 type OriginRole = (typeof ROLE_ORDER)[number];
-
-/** The control that folds the steps above the nearest one away, counted in
- *  levels rather than rows: a row is a field or a formula and counting both
- *  would mix them, while a level is a named structure the reader can click. */
-function moreStepsText(n: number): string {
-  return n === 1 ? "1 more level up" : `${n.toLocaleString()} more levels up`;
-}
 
 /**
  * How many fields of a structure are searched for ones that read this field.
