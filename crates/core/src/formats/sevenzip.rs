@@ -22,17 +22,27 @@
 //! whole point: without them an archive is two blobs, and with them it is its
 //! contents.
 //!
+//! **The compressed header.** 7z compresses its own header by default, and
+//! what the offset then points at is a `kEncodedHeader` describing the one
+//! stream the real header was packed into. That stream is raw LZMA1, which
+//! carries none of what a decoder needs: the properties byte, the dictionary
+//! size and how much comes out are all written *in the header out here*, in
+//! the coder of the folder that packed it. So the reading taken from inside
+//! the packed region goes as far as that coder, and the stream is opened with
+//! what it says. See [`pack_info_ahead`] and [`encoded_header_stream`].
+//!
+//! What comes out is a `kHeader`, read by the same declarations below in a
+//! space of its own. An archive written the default way and one written with
+//! `7z a -mhc=off` are the same reading, one of them a level further in.
+//!
 //! **What is not read here.**
 //!
-//! - **The compressed header.** 7z compresses its own header by default, and
-//!   what the offset then points at is a `kEncodedHeader` describing a stream
-//!   that unpacks into the real one. That stream is raw LZMA1, whose five
-//!   property bytes and unpacked size are written in the header rather than in
-//!   front of the stream, and a [`crate::codec::Codec`] is a value fixed when
-//!   the template is built and cannot carry either. So an archive written the
-//!   default way reads down to the description of that one stream and stops:
-//!   the names and the folders are inside it. `7z a -mhc=off` writes the
-//!   header uncompressed, and everything below is read for one of those.
+//! - **The files inside a folder.** An unpacked header describes the archive's
+//!   streams by where they are in the file it came out of, so dividing a
+//!   folder into its files would mean a template inside the unpacked space
+//!   naming offsets in space 0, which nothing can express yet: a space's
+//!   fields count from its own start and reach nothing outside it. The names
+//!   are read; which bytes of the file each of them is, is not.
 //! - **Which entries are empty.** `kEmptyFile` and `kAnti` hold one bit per
 //!   *empty stream*, not per file, and how many of those there are is a count
 //!   of the bits set in `kEmptyStream`. Their bytes are shown and not divided.
