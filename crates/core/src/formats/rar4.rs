@@ -190,6 +190,10 @@ fn file_block() -> T {
     let mut fields = base(T::flags("Rar4FileFlags", T::u16(Little), FILE_FLAGS));
     fields.extend(vec![
         ("pack_size", T::u32(Little)),
+        // What it unpacks to. All ones with no high half beside it is how RAR
+        // says it does not know, which is what packing from a pipe leaves: the
+        // end of the file is then a mark in the compressed bits and nowhere
+        // else.
         ("unp_size", T::u32(Little)),
         ("host_os", T::enumeration("Rar4HostOs", T::u8(), HOST_OS)),
         ("file_crc", T::u32(Little)),
