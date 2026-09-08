@@ -840,8 +840,7 @@ fn no_unpack_info() -> T {
     )
 }
 
-/// Enough of the end header to place the packed streams, and for a compressed
-/// header, enough to open the one stream it describes.
+/// Enough of the end header to place the packed streams, and to open them.
 ///
 /// Read here, from inside the packed region, because that is where the answer
 /// is wanted and an expression only ever reaches backwards: the header is the
@@ -849,18 +848,20 @@ fn no_unpack_info() -> T {
 /// been placed. The same bytes are read again there, in full, and counted
 /// there; this reading is put aside so that nothing counts them twice.
 ///
-/// Every branch answers with a `kPackInfo` under that name and with the tag
-/// the header started with, so the runs below ask one question rather than one
-/// per kind. A header this cannot read the start of answers `kEnd`, which no
-/// header begins with, so asking what kind is ahead never has to be preceded
-/// by asking whether there is one.
+/// Every branch answers with a `kPackInfo` and a `kUnPackInfo` under those
+/// names and with the tag the header started with, so the runs below ask one
+/// question rather than one per kind. A header this cannot read the start of
+/// answers `kEnd`, which no header begins with, so asking what kind is ahead
+/// never has to be preceded by asking whether there is one; a header with no
+/// folder block answers no folders, for the same reason and to a stricter
+/// reader.
 ///
-/// Both branches go one block further and read the `kUnPackInfo` after the
-/// `kPackInfo`. That is where the folders are, and a folder is what says which
-/// codec packed a stream and how it was set up: LZMA1 wrote down the three
-/// numbers its stream does not carry, and every other codec is at least named.
-/// A packed stream that cannot reach its folder cannot be opened, whether it
-/// holds the archive's own header or the archive's files.
+/// The `kUnPackInfo` is why the reading goes past the sizes at all. That is
+/// where the folders are, and a folder is what says which codec packed a
+/// stream and how it was set up: LZMA1 wrote down the three numbers its stream
+/// does not carry, and every other codec is at least named. A packed stream
+/// that cannot reach its folder cannot be opened, whether it holds the
+/// archive's own header or the archive's files.
 fn pack_info_ahead() -> T {
     let start = |name: &str, before: Vec<(&'static str, T)>| {
         let mut fields = vec![("id", property_id())];
@@ -1628,6 +1629,32 @@ mod tests {
         let node = e.node(&d, &[7, 2, 0]).expect("the stream is still a field");
         assert_eq!(node.size_bits, 4 * 8, "as long as kSize said, opened or not");
         assert!(!node.decoded, "a chain is not something this can run");
+    }
+
+    /// A folder standing behind one that took two packed streams stays bytes,
+    /// even though it is a plain folder this could otherwise open.
+    ///
+    /// This is the guard that matters. A stream is the folder at its own index
+    /// only while every folder in front has taken one stream each, and after a
+    /// folder that took two the numbering has slipped: stream 1 belongs to
+    /// folder 0 and folder 1's own stream is number 2. Finding that out from
+    /// here would mean searching the folders backwards for the one whose run
+    /// covers this index, which no expression can say, so the answer is bytes
+    /// rather than the wrong file.
+    #[test]
+    fn a_folder_behind_one_that_took_two_streams_stays_bytes() {
+        // A coder that says its stream counts out loud: two in, one out. No
+        // output is bound to an input, so both inputs are fed by packed
+        // streams and the folder writes down which is which.
+        let wide = vec![0x01, 0x11, 0x00, 0x02, 0x01, 0x00, 0x01];
+        let header = header_of(&[2, 3, 4], &[wide, vec![0x01, 0x01, 0x00]], &[5, 4], &["wide", "plain"], &[]);
+        let (d, mut e) = read(archive(b"aabbbcccc", &header));
+        // The second folder is one store coder and nothing else, and it is
+        // still not opened: what it cannot be told is which stream is its.
+        assert_eq!(e.node(&d, &[8, 2, 2, 4, 1, 0]).expect("num_coders").value.as_int(), Some(1));
+        for i in 0..3 {
+            assert!(!e.node(&d, &[7, 2, i]).expect("a field").decoded, "stream {i}");
+        }
     }
 
     /// A stream no folder claims stays bytes. Which folder owns a stream is
