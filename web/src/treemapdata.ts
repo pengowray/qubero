@@ -455,23 +455,44 @@ export function kindsTree(totals: KindTotals, fileBits: number): TreemapTree {
       })),
     });
   }
-  // Three boxes could all be read as "not shown as itself", so each is drawn
-  // its own way: a kind is solid, bytes nothing claims are hatched, and bytes
-  // nobody has looked at yet are an empty outline.
+  // Boxes could all be read as "not shown as itself", so each is drawn its own
+  // way: a kind is solid, bytes nothing claims are hatched, and bytes nobody
+  // has looked at yet are an empty outline.
   if (totals.unmapped_bits > 0) {
     kids.push({ key: "unmapped", name: GAP_LABEL, value: totals.unmapped_bits, color: UNMAPPED_COLOR, colorClass: "tm-unmapped", detail: UNMAPPED_DETAIL });
   }
+  // Bytes the walk says it reached and then reported no kind for. On a file
+  // whose totals add up this is nothing. Where it is not nothing it has to be
+  // drawn, because a treemap fills its parent with whatever its children come
+  // to: leave four hundred kilobytes out of a megabyte and the boxes that are
+  // left stretch over it, and the biggest kind reads as almost the whole file
+  // while its own tooltip says fifty-eight per cent. The box is what keeps the
+  // areas and the numbers saying the same thing.
+  const counted = kids.reduce((n, k) => n + k.value, 0);
+  const short = Math.max(0, Math.min(totals.reached_bits, fileBits) - counted);
+  if (short > 0) kids.push({ key: "unclassified", name: NO_KIND, value: short, color: UNMAPPED_COLOR, colorClass: "tm-unwalked", detail: NO_KIND_DETAIL });
   const left = Math.max(0, fileBits - totals.reached_bits);
   if (left > 0) kids.push({ key: "unwalked", name: TREEMAP.unwalked, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked", detail: TREEMAP.unwalked });
+  // How far along the walk is, counted by what it has said something about
+  // rather than by how far it claims to have reached. A file whose walk has
+  // saturated `reached_bits` and is still going reported "100%" and sat there,
+  // which reads as a scan that has hung rather than one that is working.
+  const along = Math.min(totals.reached_bits, counted + short);
   return {
     root: { key: "file", name: TREEMAP.root, value: fileBits, color: UNMAPPED_COLOR, children: kids },
     unit: "bits",
-    progress: totals.done ? null : TREEMAP.reading(shareOf(totals.reached_bits, fileBits)),
+    progress: totals.done ? null : TREEMAP.reading(shareOf(along, fileBits)),
     none: null,
   };
 }
 
 const UNMAPPED_DETAIL = "no field covers these bytes";
+/** Bytes inside the walked region that the walk reported no kind for. Its own
+ *  wording rather than `unmapped`, which means the opposite: those bytes are
+ *  known not to belong to a field, and these belong to one that did not say
+ *  what it was. */
+const NO_KIND = "no type reported";
+const NO_KIND_DETAIL = "inside the walk, but no field kind was totalled for them";
 
 // ---- byte values ----
 

@@ -17,6 +17,10 @@ export function fieldClass(kind: string): string {
     case "unset":
       return "field-number";
     case "str":
+    // Machine code is not text, but a disassembled line reads like one and
+    // sits among the strings in every view that shows values. Its own kind for
+    // counting the file up, the text colour for looking at it.
+    case "insn":
       return "field-text";
     case "magic":
     // The scale a packed block keeps for the weights after it. It is a number,

@@ -205,23 +205,42 @@ export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from t
  * by byte value". The label is the question and the option finishes it.
  */
 export const TREEMAP = {
-  /** The toolbar button and the rail's heading. The searchable word, and the
-   *  one anybody who has used WizTree or SpaceSniffer already has. "Map" was
-   *  taken by the byte-class map above it and "Layout" by the strip under it. */
+  /** The rail's heading over the treemap. The word anybody who has used
+   *  WizTree or SpaceSniffer already has, and the partner of "Minimap" over
+   *  the byte-class map above it: two words a reader can look up, whose known
+   *  meanings are the two questions the rail's two pictures answer, where a
+   *  thing is and how much of the file it is. Neither heading has room for a
+   *  subtitle saying so; this one shares its row with the picker and the
+   *  corner button. */
   title: "Treemap",
+  /** The picker's label, on its tooltip and for a screen reader; what shows
+   *  in the picker is the mode itself. The spreadsheet and file-manager phrase
+   *  for choosing what one thing is divided by. */
   groupBy: "Group by",
+  /** The five ways of dividing the file. "Byte class" is the five classes the
+   *  minimap's legend names, at the minimap's own cell size; "Byte value" is
+   *  the 256 values. A category and a number, and the value map's four groups
+   *  (00, 01-1F, 20-7F, 80-FF) are not called classes anywhere, so the two
+   *  words do not collide. */
   modes: { structure: "Structure", classes: "Byte class", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
   /** Rectangles too small to point at, drawn as one. The leading ellipsis is
    *  the mark this app uses for content cut short rather than absent. */
   pooled: (n: number): string => `… ${n.toLocaleString()} more`,
+  /** The second line of the pooled box's tooltip. The first line already
+   *  carries its size and share like any other box's, so those are written
+   *  here only when a caller has something to put in them; both callers pass
+   *  nothing, and a bare " · ()" is what they used to get. */
   pooledTitle: (n: number, noun: string, size: string, share: string): string =>
-    `${countText(n, noun)}, too small to draw · ${size} (${share})`,
+    `${countText(n, noun)}, too small to draw${size === "" ? "" : ` · ${size} (${share})`}`,
   /** Three things a reader could confuse, told apart by what is known about
    *  the bytes: these are claimed by nothing, and that is final. */
   unmappedTitle: (size: string, share: string): string => `${GAP_LABEL} · ${size} (${share}) · no field covers these bytes`,
   /** And these are not claimed by anything *yet*. Drawn as an empty box, so
    *  the map's total area stays the whole file: leave them out and every
-   *  share on a half-walked map is quietly inflated. */
+   *  share on a half-walked map is quietly inflated. "Read" is the word of
+   *  the progress line over this map ("Reading the fields…"); the byte-class
+   *  map's own pending box says "not scanned yet" to match its line, and
+   *  "unmapped" beside either is the final answer, not a pending one. */
   unwalked: "not read yet",
   unwalkedTitle: (size: string, share: string): string => `not read yet · ${size} (${share})`,
   /** The walk behind the field-type map, in the same shape as the byte scan's
@@ -232,20 +251,23 @@ export const TREEMAP = {
    *  of its own. */
   root: "File",
   /** Both mouse verbs and the way back, in the order a reader meets them. The
-   *  way back is held until there is somewhere to go back to: in a 256px rail
-   *  a third sentence costs a third of the map, and Backspace means nothing
-   *  before a reader has opened anything. */
-  hint: "Click a rectangle to go to its bytes. Double-click to open it.",
-  hintBack: "Backspace goes back up.",
+   *  same two verbs as the minimap above, and "box" because that is what a
+   *  reader calls the shape. The way back is held until there is somewhere to
+   *  go back to: in a 256px rail a third sentence costs a third of the map,
+   *  and Backspace means nothing before a reader has opened anything. "One
+   *  level" is what it does: one crumb off the trail, not the whole trail. */
+  hint: "Click a box to go to its bytes. Double-click to open it.",
+  hintBack: "Backspace goes back one level.",
   /** On the tooltip of a box with more inside it than the picture is showing,
    *  since nothing about a drawn box says whether opening it would add
    *  anything. */
   openHint: "Double-click to open",
   /** The map over the whole window and back in the rail. A glance and a read
    *  are different jobs and the same map does both, so the control that
-   *  switches between them is a corner button rather than a mode. */
+   *  switches between them is a corner button rather than a mode. Escape
+   *  also puts it back, and this tooltip is the one place that says so. */
   grow: "Fill the window",
-  shrink: "Back to the sidebar",
+  shrink: "Back to the sidebar (Esc)",
   growIcon: "\u2922",
   shrinkIcon: "\u2921",
   /** What a zoomed map is a picture of. A treemap fills its box whatever it
@@ -268,21 +290,29 @@ export const TREEMAP = {
   ],
   /** A run of an array too long to draw one box per element. Indexes rather
    *  than offsets: the box beside it is the next run of the same array, and
-   *  what tells them apart is which elements they hold. */
+   *  what tells them apart is which elements they hold. The detail is the
+   *  count alone: a run is openable, so the tooltip's last line already says
+   *  "Double-click to open", and this line was saying it a second time. */
   runName: (from: number, to: number): string => `[${from.toLocaleString()}\u2013${to.toLocaleString()}]`,
-  runDetail: (n: number, noun: string): string => `${countText(n, noun)} \u00b7 double-click to open`,
+  runDetail: (n: number, noun: string): string => countText(n, noun),
   /** The five things a stretch of bytes can be when nothing describes it. The
-   *  same words the legend over the map uses, because they are the same five
+   *  same words the minimap's legend uses, because they are the same five
    *  colours and the same scan. */
   classLabel: ["Zeros", "One repeated byte", "Text", "Data", "High entropy"] as readonly string[],
-  classDetail: (runs: number): string => (runs === 1 ? "in one stretch" : `in ${runs.toLocaleString()} stretches`),
+  /** Under a class box: how many separate places in the file the class sits
+   *  in. "Runs" because the pooled box beside it counts runs too, and
+   *  "separate" so that "12 runs" is not read as twelve passes of the scan. */
+  classDetail: (runs: number): string => (runs === 1 ? "in one run" : `in ${runs.toLocaleString()} separate runs`),
   /** The tail of a file the scan has not reached. Drawn empty, so the map's
-   *  area stays the whole file while it fills in. */
+   *  area stays the whole file while it fills in. "Scanned" to match the
+   *  "Scanning the file\u2026" line it sits under, and to be a different word
+   *  from the field walk's "not read yet". */
   unscanned: "not scanned yet",
   byteNoun: "byte value",
-  /** One byte value's tooltip: how many of it there are, and which of the four
-   *  groups it is in, since a zoomed map may not be showing the group. */
-  byteDetail: (count: number, group: string): string => `${count.toLocaleString()} bytes \u00b7 ${group}`,
+  /** One byte value's tooltip: which of the four groups it is in, since a
+   *  zoomed map may not be showing the group. The count is not repeated here
+   *  because the tooltip's first line already says "1,234 bytes". */
+  byteDetail: (_count: number, group: string): string => group,
   /** Two rectangles are one number, so the number is written out under them.
    *  What it means is in the title, since a bare 41% says nothing on its own. */
   bits: { set: "1", clear: "0" },
@@ -310,6 +340,10 @@ export const KIND_LABEL: Readonly<Record<string, string>> = {
   int: "signed ints",
   float: "floats",
   str: "strings",
+  // Its own row rather than one more kind of text. A disassembled line reads
+  // like a string and is not one, and a picture that told a reader six hundred
+  // kilobytes of a program were strings was wrong about the file.
+  insn: "machine code",
   bytes: "raw bytes",
   unread: "raw bytes",
   magic: "magic numbers",

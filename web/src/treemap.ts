@@ -292,7 +292,10 @@ function labelLayer(nodes: readonly HierarchyRectangularNode<TreeNode>[], boxes:
     const size = LABEL_SIZES[Math.min(node.depth - 1, LABEL_SIZES.length - 1)] ?? 10;
     const lineH = size + 2 * LABEL_PAD_Y + 2;
     const text = node.data.name;
-    const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X;
+    // Room for the plate and the pixel of box either side of it. Without the
+    // slack a name whose box was two pixels short of holding it was drawn and
+    // then cut off, which for `0x8d` means showing a different byte value.
+    const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X + 3;
     if (h < lineH || w < need) continue;
     const wanted = text.length * size * CHAR_RATIO + 2 * LABEL_PAD_X;
     const width = Math.min(wanted, w - 2);

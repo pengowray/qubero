@@ -88,9 +88,20 @@ const CLASS_PROSE = ["zeros", "one repeated byte", "text", "data", "high-entropy
 
 const TITLE = "Overview";
 /** The class map's own heading. The rail holds two pictures of the file and
- *  they answer different questions, so each says which. */
-const MAP_TITLE = "Where";
-const MAP_WHAT = "Every cell is an equal stretch of the file, coloured by what its bytes are like. Click a cell to go there; double-click to measure it on its own.";
+ *  they answer different questions: this one says where things are, the
+ *  treemap under it says how much of the file they are. Each is named by the
+ *  word a reader can look up and already has from other tools: this map is a
+ *  minimap in the editor sense (the whole file scaled down, in order, the
+ *  viewed range outlined on it, a click to go there), and its partner is
+ *  "Treemap". "Where" would have named the question, not the thing. */
+const MAP_TITLE = "Minimap";
+/** The tooltip on the heading and on the map itself. It opens with the
+ *  question the picture answers, then what a cell is, then the two mouse
+ *  verbs, which are the same two the treemap uses. The double-click names
+ *  the Block section by its heading so a reader can find where the block
+ *  went. */
+const MAP_WHAT =
+  "Where each kind of byte is in the file. One cell per equal-sized block, in file order, coloured by the kind of bytes in it; the legend names the colours. Click a cell to go to those bytes. Double-click to open that block in the Block section below.";
 const SIZE_LABEL = "Size";
 const TYPE_LABEL = "Type";
 const SCALE_LABEL = (cell: string): string => `1 cell = ${cell}`;

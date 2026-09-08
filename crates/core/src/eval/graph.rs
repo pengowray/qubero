@@ -402,9 +402,15 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         Ty::Magic(_) => "magic",
         Ty::Enum { .. } => "enum",
         Ty::Flags { .. } => "flags",
-        // An instruction reads as the line the disassembler wrote, and text
-        // found elsewhere in the file reads as that text.
-        Ty::Str { .. } | Ty::Insn { .. } | Ty::ComputedText(_) => "str",
+        // Text found in the file, and text a template worked out, read as
+        // that text.
+        Ty::Str { .. } | Ty::ComputedText(_) => "str",
+        // An instruction *reads* as the line the disassembler wrote, and used
+        // to be counted as text for that reason. It is not text. Six hundred
+        // kilobytes of a busybox binary are machine code, and a picture of
+        // what the file is made of that called them strings was answering a
+        // question about how they are displayed rather than what they are.
+        Ty::Insn { .. } => "insn",
         // A JSON number may be whole or not, which only the digits say; both
         // words mean the same thing to a view, and the type column carries the
         // distinction for anyone who wants it. `true`, `false` and `null` are
