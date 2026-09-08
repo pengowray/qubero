@@ -7,16 +7,628 @@
 //! checksum over those three so that a truncated file is told from a corrupt
 //! one.
 //!
-//! The header itself is where the names, the sizes, the times and the folder
-//! structure live, and it is normally compressed: what the offset points at is
-//! then not the header but an encoded stream that unpacks into one. So the
-//! interesting half of this format is behind an LZMA decoder, and what is left
-//! is the front, which is the part that says whether the file is whole.
+//! The header is a tree of tagged blocks. A byte names the block, its contents
+//! follow, and a zero byte closes the run; the blocks inside a run come in a
+//! fixed order and any of them may be missing, so what says a block is there
+//! is the tag byte sitting at the cursor and nothing else. That is why nearly
+//! every field here is a switch on a peek rather than a field: 7z writes no
+//! length in front of a block, and the only way to find the end of one is to
+//! read all of it.
+//!
+//! **What the header is read for.** `kPackInfo` gives a base offset and a size
+//! per packed stream, and the front of the file is then not one run of
+//! compressed bytes but the several the archiver actually wrote. `kFilesInfo`
+//! holds the names, as UTF-16 with a NUL after each. Reading those is the
+//! whole point: without them an archive is two blobs, and with them it is its
+//! contents.
+//!
+//! **What is not read here.**
+//!
+//! - **The compressed header.** 7z compresses its own header by default, and
+//!   what the offset then points at is a `kEncodedHeader` describing a stream
+//!   that unpacks into the real one. That stream is raw LZMA1, whose five
+//!   property bytes and unpacked size are written in the header rather than in
+//!   front of the stream, and a [`crate::codec::Codec`] is a value fixed when
+//!   the template is built and cannot carry either. So an archive written the
+//!   default way reads down to the description of that one stream and stops:
+//!   the names and the folders are inside it. `7z a -mhc=off` writes the
+//!   header uncompressed, and everything below is read for one of those.
+//! - **Digests nobody defined.** A run of CRCs may be preceded by a bit vector
+//!   saying which streams have one, and how many bits in it are set decides
+//!   how many CRCs follow. Counting set bits is not something an expression
+//!   here can do, so a block written that way is read as far as the bit vector
+//!   and the rest of the header is left as `unread`. 7-Zip writes a CRC for
+//!   every stream, so this is the shape of a file from somewhere else.
+//! - **Which entries are empty.** `kEmptyFile` and `kAnti` hold one bit per
+//!   *empty stream*, not per file, and how many of those there are is again a
+//!   count of set bits. Their bytes are shown and not divided.
+//! - **Folders held in another stream.** `external` says the folder list is
+//!   somewhere else in the archive rather than here. Nothing writes it.
+//! - **The substream CRC count when the folders already have one.** A folder
+//!   holding exactly one substream lends it its own CRC, and that substream
+//!   then has no digest of its own. Working out how many streams that leaves
+//!   needs a sum with a condition in it, which is a shape no expression here
+//!   has. 7-Zip writes folder digests only where there is no `kSubStreamsInfo`
+//!   to disagree with, so the two never meet in a file it wrote; in one where
+//!   they do, the walk reads too many digests and the tag that should follow
+//!   them reads as something other than `kEnd`, which is where a reader can
+//!   see it went wrong.
 
-use crate::template::{Endian::Little, Expr as E, Template, Ty as T};
+use crate::template::{
+    Encoding,
+    Endian::{Big, Little},
+    Expr as E, StrLen, Template, Ty as T, Until,
+};
 
 /// What one of these starts with.
 pub const MAGIC: &[u8] = b"7z\xbc\xaf\x27\x1c";
+
+/// The start header: the magic, the version, and the three numbers locating
+/// the end header, with the two checksums. Every offset the format writes is
+/// counted from the end of it rather than from the start of the file.
+const START_HEADER: i128 = 32;
+
+/// The tags 7z labels the parts of its header with. One list, because one
+/// byte in this format is always one of these however deep in the tree it
+/// sits, and a reader looking at a tag wants its name whether or not the
+/// template expected it there.
+const PROPERTY_IDS: &[(i128, &str)] = &[
+    (0x00, "kEnd"),
+    (0x01, "kHeader"),
+    (0x02, "kArchiveProperties"),
+    (0x03, "kAdditionalStreamsInfo"),
+    (0x04, "kMainStreamsInfo"),
+    (0x05, "kFilesInfo"),
+    (0x06, "kPackInfo"),
+    (0x07, "kUnPackInfo"),
+    (0x08, "kSubStreamsInfo"),
+    (0x09, "kSize"),
+    (0x0a, "kCRC"),
+    (0x0b, "kFolder"),
+    (0x0c, "kCodersUnPackSize"),
+    (0x0d, "kNumUnPackStream"),
+    (0x0e, "kEmptyStream"),
+    (0x0f, "kEmptyFile"),
+    (0x10, "kAnti"),
+    (0x11, "kName"),
+    (0x12, "kCTime"),
+    (0x13, "kATime"),
+    (0x14, "kMTime"),
+    (0x15, "kWinAttributes"),
+    (0x16, "kComment"),
+    (0x17, "kEncodedHeader"),
+    (0x18, "kStartPos"),
+    (0x19, "kDummy"),
+];
+
+fn property_id() -> T {
+    T::enumeration_hex("PropertyId", T::u8(), PROPERTY_IDS)
+}
+
+/// Every count, size and offset in the header. See [`T::SevenZipNumber`].
+fn number() -> T {
+    T::sevenzip_number()
+}
+
+/// A field of no bytes, for a block that is not there.
+fn nothing() -> T {
+    T::bytes(E::lit(0))
+}
+
+/// The rest of the header, which the walk stopped being able to read.
+///
+/// Taking everything that is left is what makes stopping honest. The blocks
+/// after this one are declared with [`T::if_room`], so once this has claimed
+/// the room they quietly become nothing rather than reading a `kEnd` out of
+/// the middle of a CRC.
+fn unread() -> T {
+    T::bytes(E::Remaining)
+}
+
+/// A block that is there only when the tag at the cursor is its own.
+///
+/// The switch is what makes the peek safe as well as what makes it optional:
+/// a case is only resolved once it is chosen, so a block at the very end of
+/// the header never looks past it for a tag that is not there.
+fn tagged(id: i128, body: T) -> T {
+    T::if_room(T::switch(E::peek(8, Big), vec![(id, body)], nothing()))
+}
+
+/// A CRC-32 for each of `count` streams, behind a byte saying whether every
+/// one of them has one.
+fn digests(count: E) -> T {
+    let bit_vector = count.clone().add(E::lit(7)).div(E::lit(8));
+    T::structure(
+        "Digests",
+        vec![
+            ("id", property_id()),
+            ("all_defined", T::u8()),
+            (
+                "crcs",
+                T::switch(
+                    E::field("all_defined"),
+                    vec![(1, T::array(T::u32(Little), count))],
+                    // A bit per stream saying which ones have a CRC, and then
+                    // one CRC for each bit that is set. Counting set bits is
+                    // the one thing between here and the rest of the header
+                    // that no expression can do, so the walk stops.
+                    T::inline_structure(
+                        "SomeDigests",
+                        vec![("defined", T::bytes(bit_vector)), ("unread", unread())],
+                    ),
+                ),
+            ),
+        ],
+    )
+}
+
+/// Where the packed streams are and how long each one is. The only block the
+/// front of the file needs, and the reason the header is read at all.
+fn pack_info() -> T {
+    T::structure(
+        "PackInfo",
+        vec![
+            ("id", property_id()),
+            // Counted from the end of the start header, like everything else.
+            ("pack_pos", number()),
+            ("num_pack_streams", number()),
+            // 7-Zip's own reader treats the sizes as required and gives up
+            // without them, so a block that leaves them out is not a 7z
+            // anything reads. Declared rather than peeked at for that reason:
+            // a tag that is not `kSize` here should be visible as one.
+            ("size_id", property_id()),
+            ("pack_sizes", T::array(number(), E::field("num_pack_streams"))),
+            ("crcs", tagged(0x0a, digests(E::field("num_pack_streams")))),
+            ("end", T::if_room(property_id())),
+        ],
+    )
+}
+
+/// One step of the pipeline a folder runs its bytes through: which codec, and
+/// what it was set up with.
+fn coder() -> T {
+    T::structure(
+        "Coder",
+        vec![
+            // The low four bits are how long the codec id is; bit 4 says the
+            // coder takes more than one stream in or gives more than one out,
+            // and bit 5 that it was given settings.
+            ("flags", T::u8()),
+            ("codec_id", T::bytes(E::field("flags").and(E::lit(0x0f)))),
+            (
+                "streams",
+                T::switch(
+                    E::field("flags").bit(4),
+                    vec![(
+                        1,
+                        T::inline_structure(
+                            "CoderStreams",
+                            vec![("num_in_streams", number()), ("num_out_streams", number())],
+                        ),
+                    )],
+                    // One in, one out, written nowhere: the ordinary coder is
+                    // the common case and 7z spends no bytes saying so. Read
+                    // as fields all the same, so that the arithmetic below has
+                    // the same two names to add up whichever kind it is.
+                    T::inline_structure(
+                        "CoderStreams",
+                        vec![
+                            ("num_in_streams", T::computed(E::lit(1))),
+                            ("num_out_streams", T::computed(E::lit(1))),
+                        ],
+                    ),
+                ),
+            ),
+            (
+                "properties",
+                T::switch(
+                    E::field("flags").bit(5),
+                    vec![(
+                        1,
+                        T::inline_structure(
+                            "CoderProperties",
+                            vec![("properties_size", number()), ("properties", T::bytes(E::field("properties_size")))],
+                        ),
+                    )],
+                    nothing(),
+                ),
+            ),
+            // How many streams the coders up to and including this one take
+            // and give. A folder says how many bind pairs and packed streams
+            // it has by not saying: they are worked out from these totals, and
+            // nothing can add a column up across records, so each record
+            // carries the running total instead.
+            (
+                "in_streams_so_far",
+                T::computed(E::prev("in_streams_so_far").add(E::within(&["streams", "num_in_streams"]))),
+            ),
+            (
+                "out_streams_so_far",
+                T::computed(E::prev("out_streams_so_far").add(E::within(&["streams", "num_out_streams"]))),
+            ),
+        ],
+    )
+    .counted_as("coder")
+    .machinery(&["in_streams_so_far", "out_streams_so_far"])
+}
+
+/// A pipeline of coders and the wiring between them, unpacking to one stream.
+/// One folder is one solid block: everything in it has to be unpacked to get
+/// at anything in it.
+fn folder() -> T {
+    let last_coder = |field: &str| E::elem_field("coders", E::field("num_coders").sub(E::lit(1)), &[field]);
+    // Every output but the last is wired to an input, and every input not
+    // wired to an output is fed by a packed stream. Neither count is written
+    // down; both fall out of the totals.
+    let bind_pairs = last_coder("out_streams_so_far").sub(E::lit(1));
+    let packed = last_coder("in_streams_so_far").sub(bind_pairs.clone());
+    T::structure(
+        "Folder",
+        vec![
+            ("num_coders", number()),
+            ("coders", T::array(coder(), E::field("num_coders"))),
+            (
+                "bind_pairs",
+                T::array(
+                    T::inline_structure("BindPair", vec![("in_index", number()), ("out_index", number())])
+                        .counted_as("pair"),
+                    bind_pairs,
+                ),
+            ),
+            // Which packed stream feeds which input, written only when there
+            // is more than one and the order could be in doubt.
+            (
+                "packed_indices",
+                T::switch(E::lit(1).less_than(packed.clone()), vec![(1, T::array(number(), packed))], nothing()),
+            ),
+            ("out_streams_so_far", T::computed(E::prev("out_streams_so_far").add(last_coder("out_streams_so_far")))),
+        ],
+    )
+    .counted_as("folder")
+    .machinery(&["out_streams_so_far"])
+}
+
+/// The folders, and how large each one comes out.
+fn unpack_info() -> T {
+    let num_folders = E::field("num_folders");
+    // One size per output stream of every folder, in folder order, which is
+    // the last folder's running total.
+    let out_streams = E::elem_field("folders", num_folders.clone().sub(E::lit(1)), &["out_streams_so_far"]);
+    T::structure(
+        "UnPackInfo",
+        vec![
+            ("id", property_id()),
+            ("folder_id", property_id()),
+            ("num_folders", number()),
+            ("external", T::u8()),
+            (
+                "folders",
+                T::switch(
+                    E::field("external"),
+                    vec![(0, T::array(folder(), num_folders.clone()))],
+                    // The folders are in one of the archive's own streams
+                    // rather than here. Nothing writes this, and following it
+                    // would mean unpacking a stream to find out how to unpack
+                    // the streams.
+                    T::inline_structure(
+                        "ExternalFolders",
+                        vec![("data_stream_index", number()), ("unread", unread())],
+                    ),
+                ),
+            ),
+            ("unpack_size_id", property_id()),
+            (
+                "unpack_sizes",
+                T::switch(
+                    num_folders.clone(),
+                    vec![(0, T::array(number(), E::lit(0)))],
+                    T::array(number(), out_streams),
+                ),
+            ),
+            ("folder_crcs", tagged(0x0a, digests(num_folders))),
+            ("end", T::if_room(property_id())),
+        ],
+    )
+}
+
+/// How the folders divide into the files that came out of them. A solid
+/// archive is one folder holding every file, and this is what says which
+/// stretch of it each file is.
+fn substreams_info() -> T {
+    let num_folders = E::within(&["unpack_info", "num_folders"]);
+    T::structure(
+        "SubStreamsInfo",
+        vec![
+            ("id", property_id()),
+            ("count_id", T::switch(E::peek(8, Big), vec![(0x0d, property_id())], nothing())),
+            (
+                "num_unpack_streams",
+                T::switch(
+                    E::size_of("count_id"),
+                    // Written nowhere when every folder holds one file, which
+                    // is what a non-solid archive is. Read as a one for each
+                    // folder rather than left out, so that the sums below have
+                    // a list to add up either way.
+                    vec![(0, T::array(T::computed(E::lit(1)), num_folders.clone()))],
+                    T::array(number(), num_folders.clone()),
+                ),
+            ),
+            ("size_id", T::switch(E::peek(8, Big), vec![(0x09, property_id())], nothing())),
+            // The last file in a folder has no size written for it: it is
+            // whatever is left of the folder. So a folder of `n` files spends
+            // `n - 1` numbers here, and one of a single file spends none,
+            // which is why an archive of one file per folder has no `kSize` at
+            // all and this count comes to nought on its own.
+            ("unpack_sizes", T::array(number(), E::sum_of("num_unpack_streams").sub(num_folders))),
+            ("crcs", tagged(0x0a, digests(E::sum_of("num_unpack_streams")))),
+            ("end", T::if_room(property_id())),
+        ],
+    )
+}
+
+/// Where the archive's bytes are, what unpacks them, and how they divide.
+/// The same three blocks whether they describe the archive's contents or the
+/// one stream a compressed header is kept in.
+///
+/// `tagged_itself` is the difference between the two. Inside a header the run
+/// is introduced by `kMainStreamsInfo` and that byte belongs to it; inside a
+/// `kEncodedHeader` the tag has already been spent naming the header, and the
+/// blocks start straight away.
+fn streams_info(name: &str, tagged_itself: bool) -> T {
+    let mut fields = Vec::new();
+    if tagged_itself {
+        fields.push(("id", property_id()));
+    }
+    fields.extend([
+        ("pack_info", tagged(0x06, pack_info())),
+        ("unpack_info", tagged(0x07, unpack_info())),
+        ("substreams_info", tagged(0x08, substreams_info())),
+        ("end", T::if_room(property_id())),
+    ]);
+    T::structure(name, fields)
+}
+
+/// A value written once per file, for the files that have one.
+fn per_file(elem: T) -> T {
+    T::structure(
+        "PerFile",
+        vec![
+            ("all_defined", T::u8()),
+            (
+                "defined",
+                T::switch(
+                    E::field("all_defined"),
+                    vec![(1, nothing())],
+                    T::bytes(E::field("num_files").add(E::lit(7)).div(E::lit(8))),
+                ),
+            ),
+            ("external", T::u8()),
+            (
+                "values",
+                T::switch(
+                    E::field("all_defined").mul(E::lit(1).sub(E::field("external"))),
+                    vec![(1, T::array(elem, E::field("num_files")))],
+                    // Either the values are in one of the archive's own
+                    // streams, or how many there are is a count of set bits.
+                    // The block says how long it is, so stopping here costs
+                    // only this block.
+                    T::bytes(E::Remaining),
+                ),
+            ),
+        ],
+    )
+}
+
+/// The names, one after another, as UTF-16 with a NUL between them. A
+/// directory is written as a name with slashes in it and nothing else marks
+/// it: what says an entry is a directory is that it has no stream.
+fn names() -> T {
+    T::structure(
+        "Names",
+        vec![
+            ("external", T::u8()),
+            (
+                "names",
+                T::switch(
+                    E::field("external"),
+                    vec![(
+                        0,
+                        T::repeat(
+                            T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Utf16(Little)),
+                            Until::End,
+                        ),
+                    )],
+                    T::bytes(E::Remaining),
+                ),
+            ),
+        ],
+    )
+}
+
+/// What one of the per-file blocks holds. Every one of them says how long it
+/// is, so a block this does not divide costs nothing but itself.
+fn property_value() -> T {
+    T::switch(
+        E::field("id"),
+        vec![
+            // One bit per file, in file order, saying which entries have no
+            // stream of their own: the directories, and the files of no bytes.
+            (0x0e, T::array(T::UInt { bits: 1, endian: Big }, E::field("num_files"))),
+            (0x11, names()),
+            (0x12, per_file(T::u64(Little))),
+            (0x13, per_file(T::u64(Little))),
+            (0x14, per_file(T::u64(Little))),
+            (0x15, per_file(T::u32(Little))),
+        ],
+        // `kEmptyFile` and `kAnti` hold a bit per empty stream rather than per
+        // file, and how many of those there are is a count of set bits.
+        // `kDummy` is padding an archiver put in to line the names up. Both
+        // read as what they are: bytes.
+        T::bytes(E::Remaining),
+    )
+}
+
+/// One tagged block of the file table, with its length in front of it.
+///
+/// This is the one run in the header a reader can walk without understanding
+/// it, because every block here says how long it is. That is why the file
+/// table is a list and the stream blocks above are named fields: only these
+/// can be stepped over.
+fn file_property() -> T {
+    T::structure_named(
+        "FileProperty",
+        "id",
+        "body",
+        vec![
+            ("id", property_id()),
+            (
+                "body",
+                T::switch(
+                    E::field("id"),
+                    vec![(0x00, nothing())],
+                    T::inline_structure(
+                        "PropertyBody",
+                        vec![("size", number()), ("value", T::sized(E::field("size"), property_value()))],
+                    ),
+                ),
+            ),
+        ],
+    )
+    .counted_as("property")
+}
+
+/// The file table: how many entries there are, and then a block per column.
+///
+/// Not a record per file. 7z writes the names together, then the times
+/// together, then the attributes, so a file is a position in several lists
+/// rather than a run of bytes anywhere.
+fn files_info() -> T {
+    T::structure(
+        "FilesInfo",
+        vec![
+            ("id", property_id()),
+            ("num_files", number()),
+            (
+                "properties",
+                T::repeat(file_property(), Until::FieldValue { field: "id".to_string(), value: 0 }),
+            ),
+        ],
+    )
+}
+
+/// The header proper: what is in the archive, and what the archive holds.
+fn header() -> T {
+    T::structure(
+        "Header",
+        vec![
+            ("id", property_id()),
+            ("archive_properties", tagged(0x02, archive_properties())),
+            ("main_streams", tagged(0x04, streams_info("MainStreamsInfo", true))),
+            ("files_info", tagged(0x05, files_info())),
+            ("end", T::if_room(property_id())),
+            // Nought for a header this read all of. Anything else is a header
+            // that stopped making sense partway, and saying so beats letting
+            // the bytes go uncounted.
+            ("unread", T::if_room(unread())),
+        ],
+    )
+}
+
+/// Whatever the archiver wanted to record about the archive as a whole. Each
+/// one says how long it is, so they are walked without being understood.
+fn archive_properties() -> T {
+    T::structure(
+        "ArchiveProperties",
+        vec![
+            ("id", property_id()),
+            (
+                "properties",
+                T::repeat(
+                    T::structure_named(
+                        "ArchiveProperty",
+                        "id",
+                        "body",
+                        vec![
+                            ("id", property_id()),
+                            (
+                                "body",
+                                T::switch(
+                                    E::field("id"),
+                                    vec![(0x00, nothing())],
+                                    T::inline_structure(
+                                        "ArchivePropertyBody",
+                                        vec![("size", number()), ("value", T::bytes(E::field("size")))],
+                                    ),
+                                ),
+                            ),
+                        ],
+                    )
+                    .counted_as("property"),
+                    Until::FieldValue { field: "id".to_string(), value: 0 },
+                ),
+            ),
+        ],
+    )
+}
+
+/// What the offset at the front of the file points at: the header, or a
+/// description of the one stream the header was compressed into.
+fn next_header() -> T {
+    T::switch(
+        E::peek(8, Big),
+        vec![
+            (0x01, header()),
+            (
+                0x17,
+                T::structure(
+                    "EncodedHeader",
+                    vec![
+                        ("id", property_id()),
+                        ("streams", streams_info("EncodedHeaderStreams", false)),
+                        ("unread", T::if_room(unread())),
+                    ],
+                ),
+            ),
+        ],
+        // A tag that is neither is a file this cannot read past its first
+        // byte. Read as a tag and a run all the same: which byte it is, is
+        // the thing worth seeing.
+        T::structure("UnknownHeader", vec![("id", property_id()), ("unread", T::if_room(unread()))]),
+    )
+}
+
+/// The compressed bytes at the front of the file, divided into the streams
+/// `kPackInfo` says they are.
+///
+/// `pack_info` is the path from the root down to that block, which differs by
+/// one name between a plain header and a compressed one and is otherwise the
+/// same walk.
+fn packed_streams(pack_info: &[&str]) -> T {
+    let within = |name: &str| {
+        let mut path = pack_info.to_vec();
+        path.push(name);
+        E::within(&path)
+    };
+    let mut sizes = pack_info.to_vec();
+    sizes.push("pack_sizes");
+    T::structure(
+        "PackedStreams",
+        vec![
+            // Nought for an archive whose header is not compressed. For one
+            // whose header is, this is every file in the archive: the header
+            // out here describes only the stream it was itself compressed
+            // into, and puts that stream after everything else.
+            ("described_in_the_compressed_header", T::bytes(within("pack_pos"))),
+            (
+                "streams",
+                T::array(T::bytes(E::elem_within(&sizes, E::idx(), &[])), within("num_pack_streams")),
+            ),
+            // Room between the last stream and the header that no stream
+            // claims. Nought in anything 7-Zip writes.
+            ("unclaimed", T::bytes(E::Remaining)),
+        ],
+    )
+}
 
 pub fn sevenzip() -> Template {
     Template::new(
@@ -35,13 +647,39 @@ pub fn sevenzip() -> Template {
                 ("next_header_offset", T::u64(Little)),
                 ("next_header_size", T::u64(Little)),
                 ("next_header_crc", T::u32(Little)),
-                // Everything the archive holds, as the archiver packed it:
-                // runs of compressed bytes whose boundaries are described in
-                // the header and nowhere else.
-                ("packed_streams", T::bytes(E::field("next_header_offset"))),
-                // The header, which is usually itself a compressed stream and
-                // is left as bytes either way.
-                ("next_header", T::bytes(E::field("next_header_size"))),
+                // Read where it is, which is the end of the file, in a field
+                // that takes up no room here. It has to be read before the
+                // packed streams because it is what says where they are, and
+                // an expression only ever reaches backwards.
+                (
+                    "next_header",
+                    T::at(
+                        E::lit(START_HEADER).add(E::field("next_header_offset")),
+                        T::sized(E::field("next_header_size"), T::if_room(next_header())),
+                    ),
+                ),
+                // Everything the archive holds, as the archiver packed it.
+                (
+                    "packed_streams",
+                    T::sized(
+                        E::field("next_header_offset"),
+                        T::if_room(T::switch(
+                            // An archive with nothing in it has no header to
+                            // ask. Asked first because the question below
+                            // reads a field of one.
+                            E::field("next_header_size"),
+                            vec![(0, T::bytes(E::Remaining))],
+                            T::switch(
+                                E::within(&["next_header", "id"]),
+                                vec![
+                                    (0x01, packed_streams(&["next_header", "main_streams", "pack_info"])),
+                                    (0x17, packed_streams(&["next_header", "streams", "pack_info"])),
+                                ],
+                                T::bytes(E::Remaining),
+                            ),
+                        )),
+                    ),
+                ),
             ],
         ),
     )
@@ -50,8 +688,29 @@ pub fn sevenzip() -> Template {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{document::Document, eval::Evaluator, source::MemSource};
+    use crate::{document::Document, eval::Evaluator, eval::Value, source::MemSource};
 
+    /// A number in the shortest form 7z writes it in: the count of bytes to
+    /// follow as leading ones, whatever is left of the first byte as the top
+    /// of the value, and the rest low byte first.
+    fn num(v: u64) -> Vec<u8> {
+        for extra in 0..8u32 {
+            let bits = (7 - extra) + 8 * extra;
+            if v < (1u64 << bits) {
+                let mark = if extra == 0 { 0 } else { (0xffu16 << (8 - extra)) as u8 };
+                let mut out = vec![mark | (v >> (8 * extra)) as u8];
+                out.extend((0..extra).map(|i| (v >> (8 * i)) as u8));
+                return out;
+            }
+        }
+        let mut out = vec![0xff];
+        out.extend_from_slice(&v.to_le_bytes());
+        out
+    }
+
+    /// The thirty-two bytes at the front, then the packed bytes, then the
+    /// header. The checksums are left at zero: nothing here reads them, and a
+    /// test that had to keep them right would be testing CRC-32.
     fn archive(packed: &[u8], header: &[u8]) -> Vec<u8> {
         let mut v = MAGIC.to_vec();
         v.extend_from_slice(&[0, 4]);
@@ -64,23 +723,181 @@ mod tests {
         v
     }
 
+    /// A name as `kName` writes it: UTF-16, little end first, and a NUL.
+    fn utf16(name: &str) -> Vec<u8> {
+        name.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect()
+    }
+
+    /// A header describing one stream per size, one folder each, with the
+    /// names given. The shape 7-Zip writes for `-mhc=off -ms=off`.
+    fn header(sizes: &[u64], names: &[&str]) -> Vec<u8> {
+        let mut h = vec![0x01, 0x04, 0x06];
+        h.extend(num(0));
+        h.extend(num(sizes.len() as u64));
+        h.push(0x09);
+        for s in sizes {
+            h.extend(num(*s));
+        }
+        h.push(0x00);
+        h.extend([0x07, 0x0b]);
+        h.extend(num(sizes.len() as u64));
+        h.push(0x00);
+        for _ in sizes {
+            // One coder, a one-byte codec id, and that id is `00`, which is
+            // store. Nothing here unpacks anything, so which codec it is only
+            // has to be a codec.
+            h.extend([0x01, 0x01, 0x00]);
+        }
+        h.push(0x0c);
+        for s in sizes {
+            h.extend(num(*s));
+        }
+        h.extend([0x00, 0x00]);
+        h.push(0x05);
+        h.extend(num(names.len() as u64));
+        h.push(0x11);
+        let mut body = vec![0x00];
+        for n in names {
+            body.extend(utf16(n));
+        }
+        h.extend(num(body.len() as u64));
+        h.extend(body);
+        h.extend([0x00, 0x00]);
+        h
+    }
+
+    fn read(bytes: Vec<u8>) -> (Document<MemSource>, Evaluator) {
+        (Document::new(MemSource(bytes)), Evaluator::new(sevenzip()))
+    }
+
     #[test]
     fn the_front_places_the_packed_streams_and_the_header_after_them() {
-        let d = Document::new(MemSource(archive(b"packed bytes", b"\x01\x00")));
-        let mut e = Evaluator::new(sevenzip());
-        assert_eq!(e.node(&d, &[7]).unwrap().offset_bits, 32 * 8);
-        assert_eq!(e.node(&d, &[7]).unwrap().size_bits, 12 * 8);
-        assert_eq!(e.node(&d, &[8]).unwrap().offset_bits, 44 * 8);
-        assert_eq!(e.node(&d, &[8]).unwrap().size_bits, 2 * 8);
+        let (d, mut e) = read(archive(b"packed bytes", &header(&[12], &["one"])));
+        assert_eq!(e.node(&d, &[8]).unwrap().offset_bits, 32 * 8);
+        assert_eq!(e.node(&d, &[8]).unwrap().size_bits, 12 * 8);
+        // The header takes no room where it is declared and all of its room
+        // where it turned out to be, which is after the packed streams.
+        assert_eq!(e.node(&d, &[7]).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[7, 0]).unwrap().offset_bits, 44 * 8);
     }
 
     /// An archive with nothing in it: the header sits straight after the
     /// front, because there are no packed streams to skip.
     #[test]
     fn an_empty_archive_has_no_packed_streams_at_all() {
-        let d = Document::new(MemSource(archive(b"", b"\x01\x00")));
-        let mut e = Evaluator::new(sevenzip());
-        assert_eq!(e.node(&d, &[7]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[8]).unwrap().offset_bits, 32 * 8);
+        let (d, mut e) = read(archive(b"", b""));
+        assert_eq!(e.node(&d, &[8]).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[7]).unwrap().offset_bits, 32 * 8);
+    }
+
+    /// The one number format in here that nothing else reads. `81 9f` is 415:
+    /// the count of bytes to follow is unary from the top of the first byte,
+    /// the bytes after it are the bottom of the value, and the bits left in
+    /// the first byte sit above them. Read as a LEB128 it is 4001, as an EBML
+    /// size 415 by accident and 0x19f nowhere.
+    #[test]
+    fn a_number_keeps_its_high_bits_in_the_byte_that_counts_the_rest() {
+        for value in [0u64, 1, 127, 128, 205, 415, 3891, 0xffff, 0x1234_5678, u64::MAX] {
+            let written = num(value);
+            let (d, mut e) = read(archive(b"", &header(&[value], &["x"])));
+            // The first pack size, which is where the number under test went.
+            let node = e.node(&d, &[7, 0, 2, 1, 4, 0]).unwrap();
+            assert_eq!(node.value, Value::UInt(value as u128), "{value} written as {written:02x?}");
+            assert_eq!(node.size_bits, written.len() as u64 * 8, "{value} is {} bytes", written.len());
+        }
+    }
+
+    /// What the whole exercise is for: the front of the file stops being one
+    /// blob and becomes the streams the archiver actually wrote, each at its
+    /// own offset and its own length.
+    #[test]
+    fn the_pack_info_divides_the_front_of_the_file_into_streams() {
+        let packed = vec![0u8; 3 + 5 + 400];
+        let (d, mut e) = read(archive(&packed, &header(&[3, 5, 400], &["a", "b", "c"])));
+        assert_eq!(e.node(&d, &[8, 1]).unwrap().child_count, 3);
+        let at = |e: &mut Evaluator, i: usize| {
+            let n = e.node(&d, &[8, 1, i]).unwrap();
+            (n.offset_bits / 8, n.size_bits / 8)
+        };
+        assert_eq!(at(&mut e, 0), (32, 3));
+        assert_eq!(at(&mut e, 1), (35, 5));
+        assert_eq!(at(&mut e, 2), (40, 400));
+        // Nothing before the first stream and nothing after the last: the
+        // streams tile the whole of the packed region.
+        assert_eq!(e.node(&d, &[8, 0]).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[8, 2]).unwrap().size_bits, 0);
+    }
+
+    #[test]
+    fn the_file_table_reads_every_name_as_the_text_it_is() {
+        let names = ["docs", "docs/chapter one.md", "\u{e9}t\u{e9}.txt"];
+        let (d, mut e) = read(archive(b"abc", &header(&[3], &names)));
+        // files_info, its properties, the first of them, its body, its value,
+        // and the names inside that.
+        assert_eq!(e.node(&d, &[7, 0, 3, 2, 0, 1, 1, 1]).unwrap().child_count, 3);
+        for (i, want) in names.iter().enumerate() {
+            let node = e.node(&d, &[7, 0, 3, 2, 0, 1, 1, 1, i]).unwrap();
+            assert_eq!(node.value, Value::Str((*want).into()));
+            // Two bytes a character, and the NUL that ends it.
+            assert_eq!(node.size_bits / 8, want.encode_utf16().count() as u64 * 2 + 2);
+        }
+    }
+
+    /// A coder that says nothing about its streams takes one in and gives one
+    /// out, and a folder of one such coder has no bind pairs and no list of
+    /// packed stream indices. None of those numbers is written in the file.
+    #[test]
+    fn a_plain_coder_takes_one_stream_in_and_gives_one_out() {
+        let (d, mut e) = read(archive(b"abc", &header(&[3], &["a"])));
+        let folder = [7usize, 0, 2, 2, 4, 0];
+        let streams = [folder.as_slice(), &[1, 0, 2]].concat();
+        assert_eq!(e.node(&d, &[streams.as_slice(), &[0]].concat()).unwrap().value, Value::Int(1));
+        assert_eq!(e.node(&d, &[streams.as_slice(), &[1]].concat()).unwrap().value, Value::Int(1));
+        // Worked out rather than read, so they cost no bytes.
+        assert_eq!(e.node(&d, &streams).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[folder.as_slice(), &[2]].concat()).unwrap().child_count, 0);
+        assert_eq!(e.node(&d, &[folder.as_slice(), &[3]].concat()).unwrap().size_bits, 0);
+    }
+
+    /// A header 7z compressed into a stream of its own. The archive out here
+    /// can still say where that stream is, and says so about nothing else: the
+    /// files are in the run before it, which only the compressed header
+    /// describes.
+    #[test]
+    fn a_compressed_header_places_its_own_stream_and_no_others() {
+        // kEncodedHeader, then a streams info with no tag of its own.
+        let mut h = vec![0x17, 0x06];
+        h.extend(num(100));
+        h.extend(num(1));
+        h.push(0x09);
+        h.extend(num(20));
+        h.extend([0x00, 0x07, 0x0b]);
+        h.extend(num(1));
+        h.push(0x00);
+        // One LZMA1 coder with five bytes of settings, which is what 7-Zip
+        // compresses a header with.
+        h.extend([0x01, 0x23, 0x03, 0x01, 0x01, 0x05, 0x5d, 0x00, 0x10, 0x00, 0x00]);
+        h.push(0x0c);
+        h.extend(num(300));
+        h.extend([0x00, 0x00]);
+        let (d, mut e) = read(archive(&vec![0u8; 120], &h));
+        let id = e.node(&d, &[7, 0, 0]).unwrap();
+        assert_eq!(id.value, Value::Enum { raw: 0x17, name: Some("kEncodedHeader".into()), hex: true });
+        // The hundred bytes before the header's own stream are named as bytes
+        // this cannot divide, rather than divided wrongly.
+        assert_eq!(e.node(&d, &[8, 0]).unwrap().size_bits, 100 * 8);
+        let stream = e.node(&d, &[8, 1, 0]).unwrap();
+        assert_eq!((stream.offset_bits / 8, stream.size_bits / 8), (132, 20));
+        assert_eq!(e.node(&d, &[8, 2]).unwrap().size_bits, 0);
+    }
+
+    /// A header whose first byte is neither kind still reads as far as that
+    /// byte, and the packed bytes stay one run rather than becoming an error.
+    #[test]
+    fn a_header_of_an_unknown_kind_leaves_the_packed_bytes_whole() {
+        let (d, mut e) = read(archive(b"packed bytes", &[0x42, 0x99, 0x99]));
+        assert_eq!(e.node(&d, &[7, 0, 0]).unwrap().value, Value::Enum { raw: 0x42, name: None, hex: true });
+        assert_eq!(e.node(&d, &[7, 0, 1]).unwrap().size_bits, 2 * 8);
+        assert_eq!(e.node(&d, &[8]).unwrap().size_bits, 12 * 8);
     }
 }

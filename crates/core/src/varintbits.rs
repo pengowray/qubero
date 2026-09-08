@@ -67,6 +67,9 @@ pub const RULE_SQLITE_NINTH: &str = "sqlite_ninth";
 pub const RULE_EBML_SIZE: &str = "ebml_size";
 /// EBML element ID: the same framing, kept as part of the number.
 pub const RULE_EBML_ID: &str = "ebml_id";
+/// 7z's NUMBER: leading ones in the first byte count the bytes after it, and
+/// what is left of that byte is the top of the value.
+pub const RULE_SEVENZIP: &str = "sevenzip_number";
 
 /// Longest field this is worth answering for. Every scheme here is over well
 /// before it, and a run of bytes longer than one is not a varint at all.
@@ -79,7 +82,7 @@ fn bits_of(b: u8, from: u32, count: u32) -> String {
 /// Whether a field of this type has a split worth drawing at all. Asked before
 /// its bytes are fetched, so that a plain integer never causes a read.
 pub fn splits(ty: &Ty) -> bool {
-    matches!(ty.base(), Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::EbmlVint { .. })
+    matches!(ty.base(), Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq | Ty::SqliteVarint | Ty::SevenZipNumber | Ty::EbmlVint { .. })
 }
 
 /// How the bytes of one field of this type divide into framing and value.
@@ -93,8 +96,39 @@ pub fn bit_roles(ty: &Ty, bytes: &[u8]) -> Option<BitRoles> {
         Ty::Leb128 { .. } | Ty::Zigzag | Ty::Vlq => Some(continuation(bytes, false)),
         Ty::SqliteVarint => Some(continuation(bytes, true)),
         Ty::EbmlVint { strip_marker } => ebml(bytes, *strip_marker),
+        Ty::SevenZipNumber => sevenzip(bytes),
         _ => None,
     }
+}
+
+/// 7z's NUMBER: the leading ones of the first byte count the bytes after it,
+/// the zero that closes the run is framing, and the bits below it are the top
+/// of the value. Every byte after the first is value.
+///
+/// Drawn the other way round from EBML's, which counts in leading zeros and
+/// puts the rest of the number after the marker in the same order. Here the
+/// bits left in the first byte are the *high* part and the bytes after it are
+/// the low part, so the two halves of one number are drawn in opposite
+/// directions and the split is the only thing that says so.
+fn sevenzip(bytes: &[u8]) -> Option<BitRoles> {
+    let first = *bytes.first()?;
+    let extra = first.leading_ones();
+    // Eight leading ones leave no room for the zero that would close the run,
+    // and the first byte is then all framing.
+    let width = (extra + 1).min(8);
+    // A field whose first byte asks for more bytes than it was given is not
+    // this number, and splitting it would be an invention.
+    if extra as usize + 1 != bytes.len() {
+        return None;
+    }
+    let mut groups = vec![BitGroup { bits: bits_of(first, 0, width), role: BitRole::Width }];
+    if width < 8 {
+        groups.push(BitGroup { bits: bits_of(first, width, 8 - width), role: BitRole::Payload });
+    }
+    for &b in &bytes[1..] {
+        groups.push(BitGroup { bits: bits_of(b, 0, 8), role: BitRole::Payload });
+    }
+    Some(BitRoles { rule: RULE_SEVENZIP, groups })
 }
 
 /// A bit per byte saying whether another follows. `ninth` is SQLite's rule that
@@ -167,6 +201,29 @@ mod tests {
         let r = bit_roles(&Ty::SqliteVarint, &bytes).expect("nine bytes split");
         assert_eq!(r.rule, RULE_SQLITE_NINTH);
         assert_eq!(r.groups.last().expect("a last group"), &BitGroup { bits: "10000001".into(), role: BitRole::Payload });
+    }
+
+    /// 7z's `81 9f` is 415: one leading one asks for one more byte, the zero
+    /// after it closes the count, and the six bits left hold the top of the
+    /// number while the byte after it holds the bottom.
+    #[test]
+    fn a_sevenzip_number_splits_after_the_ones_that_count_its_bytes() {
+        let r = bit_roles(&Ty::SevenZipNumber, &[0x81, 0x9f]).expect("a number splits");
+        assert_eq!(r.rule, RULE_SEVENZIP);
+        assert_eq!(r.groups[0], BitGroup { bits: "10".into(), role: BitRole::Width });
+        assert_eq!(r.groups[1], BitGroup { bits: "000001".into(), role: BitRole::Payload });
+        assert_eq!(r.groups[2], BitGroup { bits: "10011111".into(), role: BitRole::Payload });
+    }
+
+    /// A first byte of all ones counts eight more and keeps none of the value,
+    /// so there is no zero to close the run and nothing left to draw beside it.
+    #[test]
+    fn a_sevenzip_number_of_nine_bytes_keeps_none_of_the_first_one() {
+        let r = bit_roles(&Ty::SevenZipNumber, &[0xff; 9]).expect("nine bytes split");
+        assert_eq!(r.groups[0], BitGroup { bits: "11111111".into(), role: BitRole::Width });
+        assert_eq!(r.groups.len(), 9);
+        // A first byte asking for more than it was given is not this number.
+        assert!(bit_roles(&Ty::SevenZipNumber, &[0x81]).is_none());
     }
 
     #[test]

@@ -368,6 +368,30 @@ impl Evaluator {
         Ok((value as i64 as i128, 9))
     }
 
+    /// 7z's NUMBER, and how many bytes it took. The first byte's top bits are
+    /// a unary count of the bytes after it; those are the bottom of the value,
+    /// low byte first; what is left of the first byte sits above them. See
+    /// [`Ty::SevenZipNumber`].
+    pub(super) fn read_sevenzip_number<S: Source>(&self, doc: &Document<S>, r: &Resolved) -> R<(i128, u64)> {
+        let first = self.read(doc, r, r.offset, 8)?[0];
+        let mut value: u64 = 0;
+        let mut mask: u8 = 0x80;
+        for i in 0..8u64 {
+            if first & mask == 0 {
+                // The bits below the count are the top of the number, above
+                // every byte that was read after the first.
+                value |= ((first & (mask - 1)) as u64) << (8 * i);
+                return Ok((value as i128, i + 1));
+            }
+            let b = self.read(doc, r, r.offset + (i + 1) * 8, 8)?[0];
+            value |= (b as u64) << (8 * i);
+            mask >>= 1;
+        }
+        // A first byte of all ones keeps none of the value: the eight bytes
+        // after it are the whole of it.
+        Ok((value as i128, 9))
+    }
+
     pub(super) fn primitive_value<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             // A value inside JSON was read when its text was parsed.
@@ -427,6 +451,9 @@ impl Evaluator {
                 Value::Str(self.text_at(doc, at, &e.clone(), Some((r.offset, r.limit)))?)
             }
             Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
+            // Unsigned: every number 7z writes is a count, a size or an
+            // offset, and the format has no negative ones.
+            Ty::SevenZipNumber => Value::UInt(self.read_sevenzip_number(doc, r)?.0 as u128),
             Ty::Magic(want) => {
                 let bytes = self.read(doc, r, r.offset, size)?;
                 Value::Magic { ok: bytes == *want, bytes, expected: want.clone() }

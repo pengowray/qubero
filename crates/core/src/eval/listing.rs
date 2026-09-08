@@ -179,6 +179,7 @@ pub(super) fn plain(ty: &Ty) -> bool {
         | Ty::EbmlVint { .. }
         | Ty::Vlq
         | Ty::SqliteVarint
+        | Ty::SevenZipNumber
         | Ty::F8 { .. }
         | Ty::Magic(_)
         | Ty::TextInt { .. }
