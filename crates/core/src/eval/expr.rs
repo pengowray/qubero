@@ -74,6 +74,10 @@ impl Evaluator {
                 let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
                 self.maximum(doc, &p, name)?
             }
+            Expr::PopCount(name) => {
+                let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
+                self.set_bits(doc, &p, name)?
+            }
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
                 (None, _) => return fail(format!("{name} is not a number")),
@@ -397,6 +401,33 @@ impl Evaluator {
             total = next;
         }
         Ok(total)
+    }
+
+    /// How many bits are set in a field's own bytes.
+    ///
+    /// Over the field's bits rather than its bytes: a vector of five items
+    /// lives in one byte, and the three bits past the end of it are padding
+    /// that a format is free to leave as it finds them. Counting the whole
+    /// byte would let that padding decide how many rows the table after it
+    /// has.
+    ///
+    /// Bits are numbered from the top of each byte, which is how every format
+    /// that writes one of these lays it out: 7z, ZIP's extra-field vectors and
+    /// PNG's interlace passes all read the first item out of the high bit.
+    fn set_bits<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<i128> {
+        self.resolve(doc, path)?;
+        let size = self.size_of(doc, path)?;
+        let r = self.memo[path].clone();
+        let bytes = self.read(doc, &r, r.offset, size)?;
+        let mut set: i128 = 0;
+        for bit in 0..size {
+            let byte = bytes.get((bit / 8) as usize).copied().unwrap_or(0);
+            if byte >> (7 - (bit % 8)) & 1 == 1 {
+                set += 1;
+            }
+        }
+        let _ = what;
+        Ok(set)
     }
 
     /// The largest number in a list. An empty list answers zero.

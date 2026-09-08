@@ -460,7 +460,7 @@ impl Evaluator {
                     out.push(o);
                 }
             }
-            Expr::ProductOf(name) | Expr::SumOf(name) | Expr::MaxOf(name) => {
+            Expr::ProductOf(name) | Expr::SumOf(name) | Expr::MaxOf(name) | Expr::PopCount(name) => {
                 if let Some(p) = self.find_field(at, name) {
                     let mut o = self.origin(doc, out.values, role, name.to_string(), p);
                     // An aggregate reads every element of the list it names, so

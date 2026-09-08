@@ -172,7 +172,7 @@ fn strlen_refs(len: &StrLen, out: &mut Vec<Arc<str>>) {
 
 fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
     match e {
-        Expr::Ref(n) | Expr::SizeOf(n) | Expr::BitsOf(n) | Expr::ProductOf(n) | Expr::SumOf(n) | Expr::MaxOf(n) | Expr::Prev(n) => {
+        Expr::Ref(n) | Expr::SizeOf(n) | Expr::BitsOf(n) | Expr::ProductOf(n) | Expr::SumOf(n) | Expr::MaxOf(n) | Expr::PopCount(n) | Expr::Prev(n) => {
             out.push(n.clone())
         }
         Expr::Elem { array, index, .. } | Expr::Product { array, index, .. } => {

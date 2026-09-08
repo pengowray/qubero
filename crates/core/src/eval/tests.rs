@@ -2280,6 +2280,45 @@ fn a_list_inside_a_sibling_can_be_indexed() {
     assert_eq!(rel[0].written, "header.widths[index] * 8");
 }
 
+/// A bit vector says which of a list of things has something, and the table
+/// after it has one row per bit that was set. That count is written nowhere,
+/// which is what `PopCount` is for.
+#[test]
+fn a_table_can_be_counted_by_the_bits_set_in_the_vector_before_it() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("present", T::bytes(E::lit(2))),
+            ("values", T::array(T::u8(), E::pop_count("present"))),
+        ],
+    );
+    // 0b1010_0001 0b0000_0110: five bits set, so five values follow.
+    let d = doc(b"\xa1\x06\x0a\x0b\x0c\x0d\x0e");
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 5);
+    assert_eq!(ev.node(&d, &[1, 4]).unwrap().value.as_int(), Some(0x0e));
+}
+
+/// Counted over the field's own bits, not its bytes. A vector of five items
+/// lives in one byte, and whatever a format left in the three bits past the
+/// end of it must not decide how long the table is.
+#[test]
+fn the_padding_at_the_end_of_a_bit_vector_is_not_counted() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("present", T::UInt { bits: 5, endian: crate::template::Endian::Big }),
+            ("padding", T::UInt { bits: 3, endian: crate::template::Endian::Big }),
+            ("values", T::array(T::u8(), E::pop_count("present"))),
+        ],
+    );
+    // 0b1010_0111: two of the top five bits set, and the three padding bits
+    // all set. Counting the byte would ask for five values.
+    let d = doc(b"\xa7\x0a\x0b\x0c");
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[2]).unwrap().child_count, 2);
+}
+
 #[test]
 fn a_field_can_take_its_displayed_name_from_the_file() {
     // The name is written in a table earlier in the file, and the field it

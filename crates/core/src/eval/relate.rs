@@ -299,6 +299,10 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::ProductOf(n) => format!("product({n})"),
         Expr::SumOf(n) => format!("sum({n})"),
         Expr::MaxOf(n) => format!("max({n})"),
+        // "set bits" rather than "popcount": the panel writes this beside a
+        // length, where a reader wants what was counted and not the name of
+        // the machine instruction that counts it.
+        Expr::PopCount(n) => format!("set bits in {n}"),
         Expr::Prev(n) => format!("previous {n}"),
         Expr::Sibling(f) | Expr::Within(f) => f.join("."),
         // The list, the question asked of each element, and what is read from

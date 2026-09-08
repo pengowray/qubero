@@ -180,6 +180,24 @@ pub enum Expr {
     /// The largest number in an earlier array. Tracker modules keep their
     /// pattern count implicitly as the greatest entry in the order table.
     MaxOf(Arc<str>),
+    /// How many bits are set in the bytes of an earlier field.
+    ///
+    /// A bit vector is how a format says which of a list of things has
+    /// something, one bit each, and what comes after it is a table with one
+    /// row per bit that was set. So the length of that table is a count of set
+    /// bits and is written down nowhere: 7z says which of its files are empty
+    /// in a bit vector and then writes an entry for each of them, and the same
+    /// shape decides how many of its digests are present.
+    ///
+    /// Unlike [`Expr::SumOf`], which adds up an array's children, this reads
+    /// the field's own bytes. A bit vector has no children to add: it is a run
+    /// of bytes whose bits are the values, and nothing else in the IR can look
+    /// at them.
+    ///
+    /// Counted over the field's own bits, so a vector of five items in one
+    /// byte counts five and not eight, and the padding a format leaves at the
+    /// end of the last byte cannot inflate the answer.
+    PopCount(Arc<str>),
     /// An answer worked out by running the container, for the one shape no
     /// other expression here reaches: a field whose type is decided by
     /// something the format only says by being executed.
@@ -572,6 +590,11 @@ impl Expr {
     /// is empty.
     pub fn max_of(name: &str) -> Expr {
         Expr::MaxOf(name.into())
+    }
+    /// How many bits are set in the earlier field `name`. See
+    /// [`Expr::PopCount`].
+    pub fn pop_count(name: &str) -> Expr {
+        Expr::PopCount(name.into())
     }
     /// The next `bits` bits without consuming them, read the given way round.
     pub fn deduced(what: Deduce) -> Expr {
