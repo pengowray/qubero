@@ -16,7 +16,6 @@ import { withPictures } from "./textview.js";
 import { typePanel } from "./typepanel.js";
 import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
 import { extraction } from "./bitextract.js";
-import { crc32, hex32, hexBytes, lhaCrc16, sha1, sum8 } from "./integrity.js";
 import {
   CODEPAGE_A_DEFAULT,
   CODEPAGE_A_KEY,
@@ -75,6 +74,46 @@ function overFile(what: string, at: number, bytes: number): Covered {
 /** A checksum over what a run of the file unpacks to. */
 function overUnpacked(what: string, at: number, bytes: number): Covered {
   return { what, at: null, from: { at, bytes } };
+}
+
+/** What each algorithm is called on screen. The core answers in the short form
+ *  a view can switch on; a reader wants the name the format's own
+ *  documentation uses. */
+const ALGORITHM: Readonly<Record<string, string>> = {
+  crc32: "CRC-32",
+  crc16: "CRC-16",
+  sum8: "Checksum",
+  sha1: "SHA-1",
+  adler32: "Adler-32",
+};
+
+/**
+ * What to call the check: the algorithm, and the format's own name for the
+ * field where that says anything the algorithm does not.
+ *
+ * Two checks in one file have to be told apart by what they are of rather than
+ * by which was read first, and a name like `head_crc` does that. A field
+ * called `crc32` does not: beside "CRC-32" it is the same word twice, which is
+ * a longer label that says less.
+ */
+function checkLabel(algorithm: string, field: string): string {
+  const name = ALGORITHM[algorithm] ?? algorithm;
+  const bare = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return bare(name).includes(bare(field)) ? name : `${name} ${field}`;
+}
+
+/**
+ * What a sum over bytes of the file is a sum of, in words.
+ *
+ * The core says where the bytes are; only the reader's own vocabulary says
+ * what they are, and it depends on where the field sits. A check on a field at
+ * the top of the file covers what came before it; one inside a record covers
+ * that record. Both are true of every format that has them, which is why this
+ * is read off the shape of the path rather than off the format's name.
+ */
+function coveredWhat(path: readonly number[], n: TemplateNode): string {
+  if (path.length <= 1) return CHECKED.upTo;
+  return n.name.includes("head") ? CHECKED.header : CHECKED.file;
 }
 
 /** Structure reads the template's field; the other two read raw bytes. */
@@ -1021,132 +1060,44 @@ export class Inspector {
     return reply.status === "ok" ? reply.node : [];
   }
 
+  /**
+   * What the field at `path` checks, if it checks anything.
+   *
+   * Asked of the core, which reads it off the template. It used to be seven
+   * cases written out here, keyed on the template's name and the field's:
+   * `template === "png" && name === "crc"`. That meant the core knew a file's
+   * structure and not what verified it, every new format needed a case added
+   * to a panel, and nothing but this panel could ever say a check had failed.
+   * Twenty-one checks across ten formats are declared in the templates now,
+   * and this asks one question.
+   */
   private integrityPlan(path: readonly number[], n: TemplateNode): IntegrityPlan | null {
-    const siblings = this.siblings(path);
-    if (this.doc.isPng && n.name === "crc") {
-      const numeric = Number(n.edit_text);
-      if (!Number.isFinite(numeric)) return null;
-      const expected = numeric >>> 0;
-      const type = siblings.find((x) => x.name === "type");
-      if (type === undefined || type.offset_bits % 8 !== 0 || n.offset_bits % 8 !== 0) return null;
-      const at = type.offset_bits / 8;
-      const bytes = n.offset_bits / 8 - at;
-      return {
-        label: "PNG CRC-32",
-        bytes,
-        covers: overFile(CHECKED.chunk, at, bytes),
-        check: async () => ({ actual: hex32(crc32(await this.loadBytes(at, bytes))), expected: hex32(expected) }),
-      };
-    }
-    if (this.doc.isZip && n.name === "crc32") {
-      const numeric = Number(n.edit_text);
-      if (!Number.isFinite(numeric)) return null;
-      const expected = numeric >>> 0;
-      const compression = siblings.find((x) => x.name === "compression");
-      const data = siblings.find((x) => x.name === "data");
-      const uncompressedSize =
-        siblings.find((x) => x.name === "unpacked_size") ?? siblings.find((x) => x.name === "uncompressed_size");
-      if (compression === undefined || data === undefined || data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
-      const method = fieldNumber(compression);
-      const packedBytes = data.size_bits / 8;
-      const coveredBytes = uncompressedSize === undefined ? packedBytes : Number(uncompressedSize.edit_text);
-      if (method !== 0 && method !== 8) return null;
-      const dataAt = data.offset_bits / 8;
-      return {
-        label: "ZIP CRC-32",
-        bytes: Number.isFinite(coveredBytes) ? coveredBytes : packedBytes,
-        // Stored, the sum is over bytes of the file; deflated, it is over
-        // bytes that are nowhere in the file, and the run they come out of is
-        // what a reader can be sent to instead.
-        covers: method === 0 ? overFile(CHECKED.file, dataAt, packedBytes) : overUnpacked(CHECKED.unpacked, dataAt, packedBytes),
-        check: async () => {
-          const packed = await this.loadBytes(data.offset_bits / 8, packedBytes);
-          const unpacked = method === 0 ? packed : await decompress(packed, "deflate-raw");
-          return { actual: hex32(crc32(unpacked)), expected: hex32(expected) };
-        },
-      };
-    }
-    if (this.doc.template === "gzip" && n.name === "header_crc" && n.size_bits === 16 && n.offset_bits % 8 === 0) {
-      const bytes = n.offset_bits / 8;
-      return {
-        label: "gzip header CRC-16",
-        bytes,
-        covers: overFile(CHECKED.header, 0, bytes),
-        check: async () => {
-          const stored = await this.loadBytes(n.offset_bits / 8, 2);
-          const expected = stored[0]! | (stored[1]! << 8);
-          return { actual: hex16(crc32(await this.loadBytes(0, bytes)) & 0xffff), expected: hex16(expected) };
-        },
-      };
-    }
-    if (this.doc.template === "gzip" && n.name === "crc32") {
-      const numeric = Number(n.edit_text);
-      if (!Number.isFinite(numeric)) return null;
-      const expected = numeric >>> 0;
-      const compressed = siblings.find((x) => x.name === "compressed");
-      const originalSize = siblings.find((x) => x.name === "original_size");
-      if (compressed === undefined || compressed.offset_bits % 8 !== 0 || compressed.size_bits % 8 !== 0) return null;
-      const packedBytes = compressed.size_bits / 8;
-      const declaredBytes = originalSize === undefined ? packedBytes : Number(originalSize.edit_text);
-      // ISIZE is modulo 2^32. A non-empty stream declaring zero may really
-      // expand to 4 GiB, so never start that case merely because it says zero.
-      const expandedBytes = declaredBytes === 0 && packedBytes > 2 ? 0x1_0000_0000 : declaredBytes;
-      return {
-        label: "gzip CRC-32",
-        bytes: Number.isFinite(expandedBytes) ? expandedBytes : packedBytes,
-        covers: overUnpacked(CHECKED.unpacked, compressed.offset_bits / 8, packedBytes),
-        check: async () => {
-          const packed = await this.loadBytes(compressed.offset_bits / 8, packedBytes);
-          const unpacked = await decompress(packed, "deflate-raw");
-          return { actual: hex32(crc32(unpacked)), expected: hex32(expected) };
-        },
-      };
-    }
-    if ((this.doc.template === "gitindex" || this.doc.template === "gitpackidx") && n.name === "checksum" && path.length === 1 && n.size_bits === 160 && n.offset_bits % 8 === 0) {
-      const bytes = n.offset_bits / 8;
-      return {
-        label: "Git file SHA-1",
-        bytes,
-        covers: overFile(CHECKED.upTo, 0, bytes),
-        check: async () => ({
-          actual: await sha1(await this.loadBytes(0, bytes)),
-          expected: hexBytes(await this.loadBytes(n.offset_bits / 8, 20)),
-        }),
-      };
-    }
-    if (this.doc.template === "lha" && n.name === "header_checksum" && n.size_bits === 8 && n.offset_bits % 8 === 0) {
-      const entry = this.doc.templateChildren(path.slice(0, -2), 0, 8);
-      if (entry.status !== "ok") return null;
-      const headerSize = entry.node.find((x) => x.name === "header_size");
-      const expected = Number(n.edit_text);
-      if (headerSize === undefined || !Number.isFinite(expected)) return null;
-      const bytes = Number(headerSize.edit_text);
-      const at = n.offset_bits / 8 + 1;
-      return {
-        label: "LHA header checksum",
-        bytes,
-        covers: overFile(CHECKED.header, at, bytes),
-        check: async () => ({ actual: hex8(sum8(await this.loadBytes(at, bytes))), expected: hex8(expected) }),
-      };
-    }
-    if (this.doc.template === "lha" && n.name === "crc" && n.size_bits === 16) {
-      const method = siblings.find((x) => x.name === "method");
-      const data = siblings.find((x) => x.name === "data");
-      const expected = Number(n.edit_text);
-      // -lh0- is the stored method; compressed LHA methods need their own
-      // decoders before their CRC of the uncompressed file can be checked.
-      if (method === undefined || fieldNumber(method) !== 0x2d_6c_68_30_2d || data === undefined || !Number.isFinite(expected)) return null;
-      if (data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
-      const bytes = data.size_bits / 8;
-      return {
-        label: "LHA CRC-16",
-        bytes,
-        covers: overFile(CHECKED.file, data.offset_bits / 8, bytes),
-        check: async () => ({ actual: hex16(lhaCrc16(await this.loadBytes(data.offset_bits / 8, bytes))), expected: hex16(expected) }),
-      };
-    }
-    return null;
+    const reply = this.doc.checkOf(path);
+    if (reply.status !== "ok" || reply.node === null) return null;
+    const check = reply.node;
+    const over = check.over ?? check.unpacked_from;
+    if (over === null) return null;
+    const label = checkLabel(check.algorithm, n.name);
+    return {
+      label,
+      bytes: check.covered_bytes,
+      covers:
+        check.over === null
+          ? overUnpacked(CHECKED.unpacked, over[0], over[1])
+          : overFile(coveredWhat(path, n), over[0], over[1]),
+      check: async () => {
+        // Loaded here rather than in the core: the core refuses a run whose
+        // bytes have not arrived, and what a reader wants is for them to
+        // arrive. Asking for them and then asking again is the whole fix.
+        await this.doc.ensureRange(over[0], over[1]);
+        const verdict = this.doc.runCheck(path);
+        if (verdict.status === "error") throw new Error(verdict.message);
+        if (verdict.status !== "ok" || verdict.node === null) throw new Error(CHECKED.missingBytes);
+        return { actual: verdict.node.computed, expected: verdict.node.stored };
+      },
+    };
   }
+
 
   private integrityWidget(plan: IntegrityPlan): HTMLElement {
     const box = document.createElement("div");
@@ -2644,14 +2595,6 @@ function pad(value: number): string {
   return value.toString().padStart(2, "0");
 }
 
-function hex8(value: number): string {
-  return `0x${(value & 0xff).toString(16).padStart(2, "0")}`;
-}
-
-function hex16(value: number): string {
-  return `0x${(value & 0xffff).toString(16).padStart(4, "0")}`;
-}
-
 function unixDate(seconds: number, suffix: string): string {
   if (seconds === 0 && suffix === "not specified") return "Not specified (stored as 0)";
   const date = new Date(seconds * 1000);
@@ -2667,10 +2610,3 @@ function quickTimeDate(seconds: number): string {
   return `${date.toISOString().replace("T", " ").replace(".000Z", "")} (QuickTime epoch, UTC)`;
 }
 
-async function decompress(bytes: Uint8Array, format: "gzip" | "deflate-raw"): Promise<Uint8Array> {
-  if (typeof DecompressionStream === "undefined") throw new Error("This browser cannot decompress data for the check.");
-  // Current Chromium implements deflate-raw; older DOM typings only name
-  // gzip and deflate.
-  const stream = new Blob([Uint8Array.from(bytes)]).stream().pipeThrough(new DecompressionStream(format as CompressionFormat));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
