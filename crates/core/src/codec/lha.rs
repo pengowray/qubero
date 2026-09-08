@@ -383,14 +383,20 @@ pub fn entry(data: &[u8], window_bits: u8) -> Result<(Vec<u8>, Trace), Refusal> 
 /// The decoding, over a builder the caller made. Only the test that has to
 /// reach the coarsening path passes anything but a default one.
 fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refusal> {
-    // lhasa's OFFSET_BITS, and LHa for UNIX's `pbit`.
-    let count_bits: u32 = match window_bits <= 13 {
-        true => 4,
-        false => 5,
+    // How wide the offset table's count is written, and how many symbols that
+    // table may hold. LHa for UNIX calls these `pbit` and `np` and sets them
+    // exactly here, in `decode_start_st1`; the alphabet is one past the widest
+    // distance the window holds, since symbol `w` names distances up to 2^w,
+    // except that `-lh4-` shares `-lh5-`'s and so is one wider than it needs.
+    //
+    // lhasa instead allows `(1 << pbit) - 1` symbols, which is 15 or 31: looser
+    // than this, and no different for any file an encoder writes, since the
+    // count comes from the stream and no encoder writes a symbol it cannot use.
+    let (count_bits, offset_alphabet): (u32, usize) = match window_bits {
+        0..=13 => (4, 14),
+        14..=15 => (5, 16),
+        _ => (5, 17),
     };
-    // One more than the widest distance the window holds, since symbol `w`
-    // names distances up to 2^w.
-    let offset_alphabet = window_bits as usize + 2;
 
     let mut bits = Bits::new(data);
     let mut out: Vec<u8> = Vec::new();
