@@ -4235,6 +4235,30 @@ table.rec tr.is-on td {
   opacity: 0.9;
 }
 
+/* What a checksum is of, above its verdict. A pair of rows in the same shape
+   as the facts above them, because they are facts of the same kind: this is
+   what was summed, and this is where those bytes are. */
+.insp-covers {
+  margin: 2px 0 4px;
+}
+.insp-covers dd {
+  font-family: var(--mono);
+}
+/* The range, as a button: a checksum a reader cannot go and look at is a
+   verdict they have to take on trust. */
+.insp-goto {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.insp-goto:hover {
+  text-decoration: underline;
+}
+
 /* ---- treemap ---- */
 /* Boxes are placed absolutely by the layout, so the container owns the size
    and nothing here reflows when one of them changes. */

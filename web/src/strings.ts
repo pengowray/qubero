@@ -56,6 +56,36 @@ export const DECODED_NO_HEX = "Offset in the unpacked stream, not a file address
  * twelve back, and a reader who has never written an inflater can still tell
  * that nothing new was stored there.
  */
+/**
+ * The Integrity section: what a checksum is of, and where those bytes are.
+ *
+ * The section used to say only whether a check passed. Over an archive entry
+ * that is three different claims, since the sum could be over the stored
+ * bytes, over the file they unpack to, or over the header in front of them,
+ * and a reader asking whether their file is intact was answered about one of
+ * them without being told which.
+ */
+export const CHECKED = {
+  /** The row naming the sum and what it is taken over. */
+  sumLabel: "Checks",
+  of: (what: string, size: string): string => `${what}, ${size}`,
+  /** The bytes summed, when they are bytes of the file. */
+  overLabel: "Over",
+  /** The bytes those were made from, when the sum is over something unpacked
+   *  and so over bytes that are nowhere in the file. Its own word, because
+   *  "over" would be a different and wrong claim. */
+  fromLabel: "Unpacked from",
+  range: (from: string, to: string, size: string): string => `${from} to ${to} · ${size}`,
+  /** What is being summed, in words. */
+  chunk: "this chunk's type and data",
+  header: "the header",
+  file: "the file's stored bytes",
+  unpacked: "the file these bytes unpack to",
+  upTo: "everything before this checksum",
+  /** The button for a sum too big to take without being asked. */
+  run: (label: string): string => `Check the ${label}`,
+} as const;
+
 export const UNPACKED = {
   /** Heading over the one row saying which decoder step produced this field's
    *  bytes. The groups above it say which fields decided the field's shape;
