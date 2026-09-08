@@ -33,15 +33,9 @@
 //!   default way reads down to the description of that one stream and stops:
 //!   the names and the folders are inside it. `7z a -mhc=off` writes the
 //!   header uncompressed, and everything below is read for one of those.
-//! - **Digests nobody defined.** A run of CRCs may be preceded by a bit vector
-//!   saying which streams have one, and how many bits in it are set decides
-//!   how many CRCs follow. Counting set bits is not something an expression
-//!   here can do, so a block written that way is read as far as the bit vector
-//!   and the rest of the header is left as `unparsed`. 7-Zip writes a CRC for
-//!   every stream, so this is the shape of a file from somewhere else.
 //! - **Which entries are empty.** `kEmptyFile` and `kAnti` hold one bit per
-//!   *empty stream*, not per file, and how many of those there are is again a
-//!   count of set bits. Their bytes are shown and not divided.
+//!   *empty stream*, not per file, and how many of those there are is a count
+//!   of the bits set in `kEmptyStream`. Their bytes are shown and not divided.
 //! - **Folders held in another stream.** `external` says the folder list is
 //!   somewhere else in the archive rather than here. Nothing writes it.
 //! - **The substream CRC count when the folders already have one.** A folder
@@ -155,12 +149,12 @@ fn digests(count: E) -> T {
                     E::field("all_defined"),
                     vec![(1, T::array(T::u32(Little), count))],
                     // A bit per stream saying which ones have a CRC, and then
-                    // one CRC for each bit that is set. Counting set bits is
-                    // the one thing between here and the rest of the header
-                    // that no expression can do, so the walk stops.
+                    // one CRC for each bit that is set. The vector is a run of
+                    // bytes with no children to add up, so the count comes
+                    // from the bits themselves.
                     T::inline_structure(
                         "SparseDigests",
-                        vec![("defined", T::bytes(bit_vector)), ("unparsed", unparsed())],
+                        vec![("defined", T::bytes(bit_vector)), ("crcs", T::array(T::u32(Little), E::pop_count("defined")))],
                     ),
                 ),
             ),
@@ -841,6 +835,59 @@ mod tests {
         h.extend(body);
         h.extend([0x00, 0x00]);
         h
+    }
+
+    /// The same header, with a `kCRC` block inside `kUnPackInfo` whose
+    /// `AllAreDefined` byte is zero: a bit vector saying which folders have a
+    /// checksum, and then one checksum for each bit that is set.
+    fn header_with_sparse_crcs(sizes: &[u64], names: &[&str], defined: &[bool]) -> Vec<u8> {
+        let whole = header_with(sizes, names, &[]);
+        // `kUnPackInfo` ends with the two zero bytes before `kFilesInfo`.
+        let at = whole.windows(3).position(|w| w == [0x00, 0x00, 0x05]).expect("end of kUnPackInfo");
+        let mut bits = vec![0u8; defined.len().div_ceil(8)];
+        for (i, on) in defined.iter().enumerate() {
+            if *on {
+                bits[i / 8] |= 0x80 >> (i % 8);
+            }
+        }
+        let mut block = vec![0x0a, 0x00];
+        block.extend(bits);
+        for (i, on) in defined.iter().enumerate() {
+            if *on {
+                block.extend((0x1000_0000u32 + i as u32).to_le_bytes());
+            }
+        }
+        let mut out = whole[..at].to_vec();
+        out.extend(block);
+        out.extend_from_slice(&whole[at..]);
+        out
+    }
+
+    /// A checksum for some of the folders and not others. How many follow is a
+    /// count of the bits set in the vector, which nothing in the file writes
+    /// down; before there was an expression for it the block was read as far
+    /// as the vector and the rest of the header was given up on.
+    #[test]
+    fn a_sparse_digest_block_has_a_checksum_for_each_bit_that_is_set() {
+        let sizes = [4u64, 4, 4];
+        let bytes = archive(b"aaaabbbbcccc", &header_with_sparse_crcs(&sizes, &["a", "b", "c"], &[true, false, true]));
+        let (d, mut e) = read(bytes);
+        // The digest block of the unpack info: a bit vector, then a checksum
+        // for each bit set in it.
+        let sparse = [8usize, 2, 2, 7, 2];
+        assert_eq!(e.node(&d, &sparse).unwrap().type_name, "SparseDigests");
+        let crcs = [8usize, 2, 2, 7, 2, 1];
+        assert_eq!(e.node(&d, &crcs).unwrap().child_count, 2, "two bits set, two checksums");
+        assert_eq!(e.node(&d, &[8, 2, 2, 7, 2, 1, 0]).unwrap().value, Value::UInt(0x1000_0000));
+        assert_eq!(e.node(&d, &[8, 2, 2, 7, 2, 1, 1]).unwrap().value, Value::UInt(0x1000_0002));
+        // And the header past the block still reads, so the walk stepped over
+        // exactly the bytes the count accounted for.
+        // And nothing is left over: the walk stepped past the block over
+        // exactly the bytes the count accounted for, so the file table after
+        // it read as a file table rather than as the rest of the header.
+        let over = e.child_named(&d, &[8], "unparsed").unwrap().expect("unparsed");
+        assert_eq!(e.node(&d, &over).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[8, 3, 1]).unwrap().value.as_int(), Some(3), "three files, read past the digests");
     }
 
     fn read(bytes: Vec<u8>) -> (Document<MemSource>, Evaluator) {
