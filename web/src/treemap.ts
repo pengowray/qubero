@@ -8,11 +8,21 @@
  * because the small things vanish into a pixel and the big things look like
  * everything else.
  *
- * The layout is `d3-hierarchy`'s squarified treemap, which keeps rectangles
- * near square so their areas can be compared by eye. What is written here is
- * everything around it: which nodes are worth descending into at a given size,
- * what a rectangle small enough to be a sliver becomes instead, and how the
- * drawn boxes carry a click and a hover back to the caller.
+ * The layout is `d3-hierarchy`'s treemap, squarified where the order of the
+ * boxes carries nothing and binary where it does, so a caller whose children
+ * are a sequence (the byte values 00 to FF) gets them laid out in that
+ * sequence instead of largest first. What is written here is everything
+ * around it: which nodes are worth descending into at a given size, what a
+ * rectangle small enough to be a sliver becomes instead, where the names go,
+ * and how the drawn boxes carry a click and a hover back to the caller.
+ *
+ * Names are drawn in a layer over the boxes rather than inside them. A frame
+ * that kept a strip along its top for its own name would be taking that strip
+ * out of its children's area, so the children would draw smaller than they
+ * are and nothing on the picture would say so. Over the top the name costs no
+ * area at all, and the rule for two names in one place is the useful one: the
+ * outer name is bigger and wins, which is what tells a reader which box they
+ * are inside.
  *
  * The widget knows nothing about files. It takes a tree of values with colours
  * already chosen and gives back an element; what the values mean is the
@@ -20,7 +30,7 @@
  * structure, its field kinds, its byte values and its bits.
  */
 
-import { hierarchy, treemap, treemapSquarify, type HierarchyRectangularNode } from "d3-hierarchy";
+import { hierarchy, treemap, treemapBinary, treemapSquarify, type HierarchyRectangularNode } from "d3-hierarchy";
 
 /** One box. `value` is in whatever unit the caller is counting, and only its
  *  share of the total matters here. A node with children is drawn as a frame
@@ -50,6 +60,14 @@ export type TreeNode = {
    *  opens a box into, and not derivable from the keys: a box's key is only
    *  unique among its siblings and a listing's key is not a path at all. */
   readonly path?: readonly number[];
+  /** Which elements of its parent this box stands for, where it stands for a
+   *  run of them rather than one node of the template. A long array is drawn
+   *  as a handful of index ranges, and opening one has to say which. */
+  readonly span?: { readonly from: number; readonly to: number; readonly offsetBits: number; readonly sizeBits: number };
+  /** True when there is more inside this box than the tree carries, so a
+   *  reader who opens it gets something they cannot already see. A box with
+   *  drawn children can still be worth opening; a byte value never is. */
+  readonly openable?: boolean;
   readonly children?: readonly TreeNode[];
 };
 
@@ -59,6 +77,8 @@ export type TreemapPick = {
   readonly node: TreeNode;
   /** Root first, this node last: the way back out, for a trail. */
   readonly trail: readonly TreeNode[];
+  /** The identity the widget knows the box by, for lighting it. */
+  readonly key: string;
 };
 
 export type TreemapOptions = {
@@ -78,24 +98,47 @@ export type TreemapOptions = {
    *  is how small it comes out, and a child of a small parent is small however
    *  large its share of the whole happens to be. */
   readonly poolUnder?: number | null;
+  /** Lay the children out in the order the caller gave them instead of
+   *  largest first. For a sequence, which the byte values are: 0x00 belongs at
+   *  the top left and 0xFF at the bottom right, and a picture that put the
+   *  commonest value at the top left would be sorted by the one thing the
+   *  reader can already see. */
+  readonly ordered?: boolean;
+  /** The box drawn lit, by the identity a pick gave back. */
+  readonly selected?: string | null;
 };
 
 /**
  * A box has to be about this big before its children are worth drawing inside
- * it. Below it the frame and the gaps eat the area the children were supposed
- * to show, and a reader sees texture rather than parts.
+ * it. Below it the gaps eat the area the children were supposed to show, and
+ * a reader sees texture rather than parts.
  */
-const NEST_AREA = 1400;
-/** The strip along the top of a frame that holds its name. */
-const HEAD_PX = 13;
-/** A box gets its name written in it once it can hold the text. Below that the
- *  name is in the tooltip, which is where a reader who wants it will look. */
-const LABEL_WIDTH = 34;
-const LABEL_HEIGHT = 15;
+const NEST_AREA = 700;
+/** The border a frame keeps around its children, so its own colour shows as
+ *  an edge. Even on all four sides, so nesting costs a box the same share of
+ *  its width as of its height and no direction is quietly squeezed. */
+const FRAME_PAD = 2;
+/** A long name is written over its box once this much of it fits, and cut off
+ *  with an ellipsis. A short one has to fit whole or not be drawn at all:
+ *  `program_header_off…` is still worth reading and `0x8…` is not, because a
+ *  cut-off byte value is a different byte value. */
+const MIN_CHARS = 9;
 /** No tree is descended past this, however much room there is. A file whose
  *  structure runs forty levels deep would otherwise spend the whole box on
  *  frames. */
-const MAX_DEPTH = 6;
+const MAX_DEPTH = 7;
+
+/** How big a name is drawn, by how deep the box is. The outermost boxes are
+ *  the ones a reader is orienting by, so their names are the ones worth
+ *  reading across the room; a name four levels in is a detail and is drawn
+ *  like one. Past the end of the list every level is the last size. */
+const LABEL_SIZES = [17, 14, 12, 11, 10];
+/** How wide one character is at one size, near enough to place a name by. The
+ *  face is the monospace stack, so this is a ratio and not a guess. */
+const CHAR_RATIO = 0.6;
+/** Room around a name inside its plate. */
+const LABEL_PAD_X = 4;
+const LABEL_PAD_Y = 1;
 
 /** The same node with nothing inside it. Not `children: undefined`, which
  *  under `exactOptionalPropertyTypes` is a different type from a node that
@@ -117,8 +160,11 @@ function pruned(node: TreeNode, area: number, depth: number, pool: Pool): TreeNo
   if (kids.length === 0 || !roomy) return leafOf(node);
   const total = kids.reduce((n, k) => n + Math.max(0, k.value), 0);
   if (total <= 0) return leafOf(node);
-  // The frame's own strip and edges are not the children's to divide.
-  const inner = Math.max(0, area - HEAD_PX * Math.sqrt(area));
+  // The border the frame keeps is not the children's to divide. Taken off
+  // both sides of a square of the same area, which is what the layout will
+  // roughly hand back.
+  const side = Math.max(0, Math.sqrt(area) - 2 * FRAME_PAD);
+  const inner = side * side;
   const kept: TreeNode[] = [];
   let pooledValue = 0;
   let pooledCount = 0;
@@ -142,7 +188,11 @@ function pruned(node: TreeNode, area: number, depth: number, pool: Pool): TreeNo
       detail: pool.detail(pooledCount),
     });
   }
-  if (kept.length === 0) return leafOf(node);
+  // Everything pooled is nothing shown. A frame holding one box the size of
+  // itself is a box with a second name written over it and a border stealing
+  // two pixels, so the node goes back to being what it looks like: solid, and
+  // still openable, which is where the parts a reader wants are.
+  if (kept.length === 0 || (kept.length === 1 && pooledCount > 0)) return leafOf(node);
   return { ...node, children: kept };
 }
 
@@ -183,30 +233,122 @@ export function drawTreemap(root: TreeNode, opts: TreemapOptions): Treemap {
     detail: opts.poolDetail,
   });
 
+  const tree = hierarchy<TreeNode>(shaped, (d) => d.children as TreeNode[] | undefined).sum((d) =>
+    d.children === undefined || d.children.length === 0 ? Math.max(0, d.value) : 0,
+  );
+  // Sorting is what puts the biggest box at the top left, and it is right
+  // whenever the order of the children says nothing. Where the order is the
+  // point, both the sort and the squarified tiling have to go: squarify walks
+  // the children in order and would still scatter a sequence, where the binary
+  // tiling keeps it and stays near enough to square to compare areas by eye.
+  if (opts.ordered !== true) tree.sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
   const laid = treemap<TreeNode>()
     .size([opts.width, opts.height])
-    .tile(treemapSquarify)
+    .tile(opts.ordered === true ? treemapBinary : treemapSquarify)
     .paddingOuter(1)
     .paddingInner(1)
-    .paddingTop((d) => (d.children === undefined || d.children.length === 0 ? 1 : HEAD_PX))
-    .round(true)(
-    hierarchy<TreeNode>(shaped, (d) => d.children as TreeNode[] | undefined)
-      .sum((d) => (d.children === undefined || d.children.length === 0 ? Math.max(0, d.value) : 0))
-      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0)),
-  );
+    // Even on every side. A frame keeps a border of its own colour and takes
+    // nothing else: the strip a treemap usually reserves along the top for its
+    // name is area stolen from the children, who then draw smaller than they
+    // are with nothing on the picture to say so. The names go over the top.
+    .paddingTop((d) => (d.children === undefined || d.children.length === 0 ? 1 : FRAME_PAD))
+    .round(true)(tree);
 
   // The root itself is the widget's own box, so it is not drawn; everything
   // under it is, parents before children, which is what puts a child on top of
   // the frame it sits in without a stacking context per level.
+  const named: HierarchyRectangularNode<TreeNode>[] = [];
   for (const node of laid.descendants()) {
     if (node.depth === 0) continue;
-    const box = drawBox(node, opts.title(node.data, whole === 0 ? 0 : (node.value ?? 0) / whole));
+    const key = identity(node);
+    const box = drawBox(node, key, opts.title(node.data, whole === 0 ? 0 : (node.value ?? 0) / whole));
     if (box === null) continue;
-    boxes.set(identity(node), box);
+    if (key === opts.selected) box.classList.add("is-on");
+    boxes.set(key, box);
     el.append(box);
+    named.push(node);
   }
+  el.append(labelLayer(named, boxes));
   return { el, boxes };
 }
+
+/**
+ * The names, in one layer over the boxes.
+ *
+ * Placed outermost first, and a name that would land on one already placed is
+ * left off. That order is the whole rule: the box a reader is orienting by is
+ * the one whose name they need, and the names inside it are the ones they can
+ * get from the tooltip. It is also why the outer names may be drawn large
+ * without crowding anything out permanently, since opening that box makes it
+ * the outermost and its children's names the large ones.
+ */
+function labelLayer(nodes: readonly HierarchyRectangularNode<TreeNode>[], boxes: ReadonlyMap<string, HTMLElement>): HTMLElement {
+  const layer = document.createElement("div");
+  layer.className = "tm-names";
+  const placed: Rect[] = [];
+  for (const node of nodes) {
+    const w = node.x1 - node.x0;
+    const h = node.y1 - node.y0;
+    const size = LABEL_SIZES[Math.min(node.depth - 1, LABEL_SIZES.length - 1)] ?? 10;
+    const lineH = size + 2 * LABEL_PAD_Y + 2;
+    const text = node.data.name;
+    // Room for the plate and the pixel of box either side of it. Without the
+    // slack a name whose box was two pixels short of holding it was drawn and
+    // then cut off, which for `0x8d` means showing a different byte value.
+    const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X + 3;
+    if (h < lineH || w < need) continue;
+    const wanted = text.length * size * CHAR_RATIO + 2 * LABEL_PAD_X;
+    const width = Math.min(wanted, w - 2);
+    const rect = free({ x0: node.x0 + 1, y0: node.y0 + 1, x1: node.x0 + 1 + width, y1: node.y0 + 1 + lineH }, placed, node.y1 - 1);
+    if (rect === null) continue;
+    placed.push(rect);
+    const label = document.createElement("span");
+    label.className = "tm-name";
+    label.textContent = text;
+    label.style.left = `${node.x0 + 1}px`;
+    label.style.top = `${rect.y0}px`;
+    label.style.maxWidth = `${w - 2}px`;
+    label.style.fontSize = `${size}px`;
+    label.style.lineHeight = `${size + 2}px`;
+    // The name of a frame is drawn over its children, so a press on it has to
+    // reach the frame rather than whichever child happens to be under it.
+    const key = identity(node);
+    label.dataset["key"] = key;
+    const box = boxes.get(key);
+    if (box !== undefined) label.title = box.title;
+    layer.append(label);
+  }
+  return layer;
+}
+
+type Rect = { x0: number; y0: number; x1: number; y1: number };
+
+/**
+ * Somewhere in the box for a name, given the names already down.
+ *
+ * A name wants the top left of its box, and so does the name of every frame
+ * around it: a chain of nested frames all start within a pixel or two of the
+ * same corner. Refusing every name but the outermost would hide exactly the
+ * chain a reader needs, which is what says how the box they have opened sits
+ * inside the one they came from, so a name that lands on one already down is
+ * dropped a line and tried again. A few lines in it has run out of box, and
+ * then it is genuinely not drawn.
+ */
+function free(want: Rect, placed: readonly Rect[], bottom: number): Rect | null {
+  const height = want.y1 - want.y0;
+  let rect = want;
+  for (let tries = 0; tries < STACKED_NAMES; tries++) {
+    const hit = placed.find((p) => p.x0 < rect.x1 && rect.x0 < p.x1 && p.y0 < rect.y1 && rect.y0 < p.y1);
+    if (hit === undefined) return rect.y1 <= bottom ? rect : null;
+    rect = { ...rect, y0: hit.y1, y1: hit.y1 + height };
+  }
+  return null;
+}
+
+/** How many names may stack down one corner. Four levels of containment is
+ *  more than a reader is holding at once, and past that the names have walked
+ *  far enough down the box to stop reading as its own. */
+const STACKED_NAMES = 4;
 
 /** A node's identity among all the drawn boxes: the keys from the root down,
  *  so two children of different parents with the same key stay apart. */
@@ -218,7 +360,7 @@ function identity(node: HierarchyRectangularNode<TreeNode>): string {
     .join("/");
 }
 
-function drawBox(node: HierarchyRectangularNode<TreeNode>, title: string): HTMLElement | null {
+function drawBox(node: HierarchyRectangularNode<TreeNode>, key: string, title: string): HTMLElement | null {
   const w = node.x1 - node.x0;
   const h = node.y1 - node.y0;
   // A box the layout gave nothing to is not drawn at all. Rounding leaves
@@ -227,23 +369,15 @@ function drawBox(node: HierarchyRectangularNode<TreeNode>, title: string): HTMLE
   const frame = node.children !== undefined && node.children.length > 0;
   const box = document.createElement("div");
   const paint = node.data.colorClass;
-  box.className = `${frame ? "tm-box tm-frame" : "tm-box"}${paint === undefined ? "" : ` ${paint}`}`;
+  const open = node.data.openable === true;
+  box.className = `tm-box${frame ? " tm-frame" : ""}${open ? " tm-open" : ""}${paint === undefined ? "" : ` ${paint}`}`;
   box.style.left = `${node.x0}px`;
   box.style.top = `${node.y0}px`;
   box.style.width = `${w}px`;
   box.style.height = `${h}px`;
   box.style.background = paint === undefined ? node.data.color : "var(--field-color)";
-  box.dataset["key"] = identity(node);
+  box.dataset["key"] = key;
   box.title = title;
-  // A frame's name goes in the strip its children were kept out of; a solid
-  // box's goes in the middle of it, where there is room for it.
-  const room = frame ? w >= LABEL_WIDTH && h >= HEAD_PX + 4 : w >= LABEL_WIDTH && h >= LABEL_HEIGHT;
-  if (room) {
-    const label = document.createElement("span");
-    label.className = "tm-name";
-    label.textContent = node.data.name;
-    box.append(label);
-  }
   return box;
 }
 
@@ -270,5 +404,5 @@ export function nodeAt(root: TreeNode, identityPath: string): TreemapPick | null
     trail.push(next);
     at = next;
   }
-  return { node: at, trail };
+  return { node: at, trail, key: identityPath };
 }

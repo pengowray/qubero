@@ -138,7 +138,7 @@ export type TemplateNode = {
   readonly edit_text: string;
   /** `unset` is a number holding the value its format writes for a slot
    *  nobody filled in; `edit_text` is still the number underneath it. */
-  readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "magic" | "enum" | "flags" | "unset" | "composite";
+  readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "insn" | "magic" | "enum" | "flags" | "unset" | "composite";
   readonly ok: boolean;
   readonly child_count: number;
   /** What one child is called, for counting them. Absent when they are items. */

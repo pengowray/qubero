@@ -18,9 +18,10 @@
 // and reports what the block's bytes turned out to be.
 
 import { byteText, formatBytes, formatOffset, percentText } from "./doc.js";
-import { NO_TEMPLATE, REPORT } from "./strings.js";
+import { NO_TEMPLATE, REPORT, TREEMAP } from "./strings.js";
 import type { Doc, FocusState, OverviewState, Span } from "./doc.js";
 import type { FieldPick } from "./doc.js";
+import { byteClassColors } from "./fieldstyle.js";
 import { fileMap, markMap, segmentWidths } from "./filemap.js";
 import { TreemapPanel } from "./treemappanel.js";
 import type { MapMark, MapSegment } from "./filemap.js";
@@ -72,13 +73,9 @@ const LOGICAL_PAGE = 80;
 /** How far each level of the logical tree steps in. */
 const LOGICAL_INDENT_PX = 12;
 
-/** Fill colours for the map cells, light and dark, by class digit. The legend
- *  swatches use the same values, so a colour on the map can be looked up. */
-const LIGHT = ["#e9ebee", "#b9bec7", "#4c9a63", "#6b8fd8", "#d08a2e"];
-const DARK = ["#23252b", "#4a4f58", "#4f9e63", "#6f93e8", "#cf9440"];
-
-/** What each class is called, by digit. */
-const CLASS_LABEL = ["Zeros", "One repeated byte", "Text", "Data", "High entropy"];
+/** What each class is called, by digit. The fill colours live in
+ *  `fieldstyle`, since the treemap of the same scan paints in them too. */
+const CLASS_LABEL = TREEMAP.classLabel;
 const CLASS_TITLE = [
   "Every byte is 0x00",
   "Every byte is the same value, such as 0xFF padding",
@@ -90,9 +87,24 @@ const CLASS_TITLE = [
 const CLASS_PROSE = ["zeros", "one repeated byte", "text", "data", "high-entropy data, likely compressed or encrypted"];
 
 const TITLE = "Overview";
+/** The class map's own heading. The rail holds two pictures of the file and
+ *  they answer different questions: this one says where things are, the
+ *  treemap under it says how much of the file they are. Each is named by the
+ *  word a reader can look up and already has from other tools: this map is a
+ *  minimap in the editor sense (the whole file scaled down, in order, the
+ *  viewed range outlined on it, a click to go there), and its partner is
+ *  "Treemap". "Where" would have named the question, not the thing. */
+const MAP_TITLE = "Minimap";
+/** The tooltip on the heading and on the map itself. It opens with the
+ *  question the picture answers, then what a cell is, then the two mouse
+ *  verbs, which are the same two the treemap uses. The double-click names
+ *  the Block section by its heading so a reader can find where the block
+ *  went. */
+const MAP_WHAT =
+  "Where each kind of byte is in the file. One cell per equal-sized block, in file order, coloured by the kind of bytes in it; the legend names the colours. Click a cell to go to those bytes. Double-click to open that block in the Block section below.";
 const SIZE_LABEL = "Size";
 const TYPE_LABEL = "Type";
-const SCALE_LABEL = "Scale";
+const SCALE_LABEL = (cell: string): string => `1 cell = ${cell}`;
 const UNKNOWN_TYPE = "Not identified";
 /** The strip under the class map, when pointed at. */
 const LAYOUT_TITLE = "The parts of the file in order, each as wide as its share of the bytes";
@@ -112,7 +124,6 @@ const LOGICAL_MORE = (count: number, label: string): string =>
 const LOGICAL_UNLISTED = (n: number): string => `${n.toLocaleString()} more objects not listed`;
 const BLOCK_TITLE = "Block";
 const CLOSE_BLOCK = "Close block";
-const PICK_BLOCK = "Pick a cell on the map to measure that part of the file on its own.";
 const SCANNING = (percent: number): string => `Scanning the file… ${percent}%`;
 /** Keeps the line under the map from collapsing when the pointer leaves it,
  *  which would jump everything below by a row. */
@@ -277,6 +288,8 @@ export class OverviewPanel {
   readonly el: HTMLElement;
   private readonly body: HTMLElement;
   private readonly facts: HTMLElement;
+  private readonly mapHead: HTMLElement;
+  private readonly mapScale: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly readout: HTMLElement;
   private readonly legend: HTMLElement;
@@ -396,8 +409,17 @@ export class OverviewPanel {
 
     this.facts = document.createElement("dl");
     this.facts.className = "ov-facts";
+    this.mapHead = document.createElement("div");
+    this.mapHead.className = "ov-head";
+    this.mapScale = document.createElement("span");
+    this.mapScale.className = "ov-scale";
+    const mapTitle = document.createElement("h3");
+    mapTitle.textContent = MAP_TITLE;
+    mapTitle.title = MAP_WHAT;
+    this.mapHead.append(mapTitle, this.mapScale);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "ov-map";
+    this.canvas.title = MAP_WHAT;
     this.readout = document.createElement("p");
     this.readout.className = "ov-readout";
     this.readout.textContent = BLANK;
@@ -446,20 +468,24 @@ export class OverviewPanel {
     // workspace. The map above says where things are; this says how much of
     // the file they are, which is the question the map cannot answer once the
     // small things are under a pixel.
-    this.treemap = new TreemapPanel(this.doc, true);
+    this.treemap = new TreemapPanel(this.doc);
 
     this.body = document.createElement("div");
     this.body.className = "ov-body";
+    // Two pictures of one file, each with its heading, and in the order the
+    // questions come: what it is, where the bytes of each kind are, then the
+    // block a reader opened out of that map, then how much of the file each
+    // part is. The block goes straight under the map the cell was picked on,
+    // because the cell and the close look at it are one thing to read.
     this.body.append(
       this.facts,
+      this.mapHead,
       this.canvas,
       this.readout,
       this.legend,
       this.layout,
-      this.treemap.el,
-      // Straight under the map the cell was picked on: the cell and the
-      // zoomed-in view of it are one thing to look at.
       this.focusEl,
+      this.treemap.el,
       this.tabs,
       this.contentsEl,
       this.logicalEl,
@@ -497,6 +523,7 @@ export class OverviewPanel {
       this.readout.textContent = BLANK;
     });
     this.canvas.addEventListener("click", (e) => this.onMapClick(e));
+    this.canvas.addEventListener("dblclick", (e) => this.onMapOpen(e));
     this.focusCanvas.addEventListener("pointermove", (e) => this.onFocusHover(e));
     this.focusCanvas.addEventListener("pointerleave", () => {
       this.focusReadout.textContent = BLANK;
@@ -739,8 +766,11 @@ export class OverviewPanel {
     const rows: [string, string][] = [[SIZE_LABEL, size]];
     const type = this.identity !== "" ? this.identity : this.doc.template ?? (this.identified ? UNKNOWN_TYPE : "");
     if (type !== "") rows.push([TYPE_LABEL, type]);
-    rows.push([SCALE_LABEL, `1 cell = ${cellText(s.bucket_bytes)}`]);
     this.facts.replaceChildren(...rows.flatMap(([k, v]) => this.factRow(k, v)));
+    // What one cell stands for belongs on the map, not in a list of facts
+    // about the file: it is a fact about the drawing, and read among Size and
+    // Type it looked like one more thing the file was.
+    this.mapScale.textContent = SCALE_LABEL(cellText(s.bucket_bytes));
   }
 
   private factRow(key: string, value: string): HTMLElement[] {
@@ -751,8 +781,8 @@ export class OverviewPanel {
     return [dt, dd];
   }
 
-  private colors(): string[] {
-    return matchMedia("(prefers-color-scheme: dark)").matches ? DARK : LIGHT;
+  private colors(): readonly string[] {
+    return byteClassColors();
   }
 
   /** One map, wherever it is drawn. Cells outside `bright` are dimmed, which
@@ -1415,22 +1445,44 @@ export class OverviewPanel {
 
   // ----- the block being looked at -----
 
+  /**
+   * A press on the map selects the cell and goes to its bytes; a second press
+   * opens it and measures it on its own.
+   *
+   * The same two verbs as the treemap under it, and for the same reason: two
+   * pictures of one file side by side that answered a press differently would
+   * be two things to learn rather than one. Selecting is the cheap one and it
+   * is what a single press does, so a reader can run along the map without
+   * setting a scan going at every cell.
+   */
   private onMapClick(e: MouseEvent): void {
     const s = this.state;
     const i = this.bucketAt(this.canvas, s?.classes.length ?? 0, e);
     if (s === null || i === null) return;
     const from = i * s.bucket_bytes;
     const to = Math.min(this.doc.lengthBytes, from + s.bucket_bytes);
-    // The cell already open closes: the same press that opened it, again.
-    // Closing is not a place to go, so the view stays where it is.
+    this.highlight = { from: i, to: i + 1 };
+    this.drawMain();
+    this.mapPressAt = performance.now();
+    this.onJump(from * 8, to * 8);
+  }
+
+  /** The second press: look at that stretch of the file on its own. Pressing
+   *  the cell that is already open closes it again. */
+  private onMapOpen(e: MouseEvent): void {
+    const s = this.state;
+    const i = this.bucketAt(this.canvas, s?.classes.length ?? 0, e);
+    if (s === null || i === null) return;
+    const from = i * s.bucket_bytes;
+    const to = Math.min(this.doc.lengthBytes, from + s.bucket_bytes);
     const open = this.block;
     if (open !== null && open.from === from && open.to === to) {
       this.setBlock(0, 0);
       return;
     }
     this.setBlock(from, to);
-    this.mapPressAt = performance.now();
-    this.onJump(from * 8, to * 8);
+    this.highlight = { from: i, to: i + 1 };
+    this.drawMain();
   }
 
   /** A cell of the block map is a stretch of the block, and picking one marks
@@ -1460,8 +1512,12 @@ export class OverviewPanel {
 
   private renderFocus(): void {
     const block = this.block;
+    // No block open is nothing to say, not a sentence saying so. The line that
+    // used to sit here explained a press the map itself now signposts, and it
+    // held a section's worth of space open for something that was not there.
+    this.focusEl.hidden = block === null;
     if (block === null) {
-      this.focusEl.replaceChildren(this.noneLine(PICK_BLOCK));
+      this.focusEl.replaceChildren();
       return;
     }
     const close = document.createElement("button");
