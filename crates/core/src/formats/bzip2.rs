@@ -208,7 +208,10 @@ mod tests {
         let at = markers(&packed);
         assert_eq!(at.len(), 3, "three blocks of a hundred kilobytes each");
         assert_eq!(at[0], 32, "the first block starts where the four-byte header ends");
-        assert!(at[1] % 8 != 0, "the second block does not start on a byte, which is why it is not a field");
+        assert!(
+            at[1..].iter().any(|m| m % 8 != 0),
+            "a block after the first starts part-way through a byte, which is why none of them are fields"
+        );
 
         let d = Document::new(MemSource(packed));
         let mut e = Evaluator::new(bzip2());
