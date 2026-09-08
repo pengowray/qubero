@@ -70,6 +70,9 @@ mod ggml;
 pub mod ggml_quant;
 mod gguf;
 mod git;
+mod godot;
+mod godot_pck;
+mod godot_text;
 mod gif;
 mod grib;
 mod grubenv;
@@ -191,6 +194,9 @@ pub use ne_disasm::Program as NeProgram;
 pub use elf_disasm::Program as ElfProgram;
 pub use gguf::gguf;
 pub use git::{git_index, git_pack_index};
+pub use godot::godot;
+pub use godot_pck::godot_pck;
+pub use godot_text::godot_text;
 pub use gif::gif;
 pub use grib::grib;
 pub use grubenv::grubenv;
@@ -338,6 +344,11 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("ne", |_| ne()),
     ("macho", |_| macho()),
     ("gguf", |_| gguf()),
+    // Godot: a resource or a packed scene, the text forms of the same two,
+    // and the pack a game ships in.
+    ("godot", |_| godot()),
+    ("godottext", |_| godot_text()),
+    ("godotpck", |_| godot_pck()),
     ("root", |_| root()),
     ("whisper", |_| whisper()),
     ("safetensors", |_| safetensors()),
