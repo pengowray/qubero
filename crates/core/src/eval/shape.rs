@@ -154,7 +154,12 @@ impl Evaluator {
     /// types.
     pub fn shape<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Shape> {
         self.resolve(doc, path)?;
-        Ok(Shape { placed: self.placed(path), sized: self.sizing(path) })
+        // Measured, not only typed: a node a decoder laid out covers bits its
+        // type says nothing about, and answering from the type alone would
+        // print "no bytes of its own" beside a length of five bits. The panel
+        // asking this has already paid for the measurement.
+        let size = self.size_of(doc, path).unwrap_or(0);
+        Ok(Shape { placed: self.placed(path), sized: self.sizing(path, size) })
     }
 
     /// Which of the ways a format has of saying where something goes put this
@@ -208,13 +213,18 @@ impl Evaluator {
     /// field settles its length before the field's own type gets to measure
     /// itself, so asking the type first would answer about a measurement that
     /// never happened.
-    fn sizing(&self, path: &[usize]) -> Sizing {
+    fn sizing(&self, path: &[usize], size: u64) -> Sizing {
         let Some(r) = self.memo.get(path) else { return Sizing::Unknown };
         // Asked before `fixed_bits`, which answers `Some(0)` for these: they
         // are fixed at no bits, which is true and is not what a reader wants
         // to be told about a field that is a place or a computation.
+        //
+        // Unless it covers bits after all, which happens where a decoder laid
+        // the node out: a deflate block's `hlit` is written as a computation
+        // and is five bits of the compressed stream, because the trace says
+        // where it starts and ends.
         if matches!(r.ty, Ty::At { .. } | Ty::Chain { .. } | Ty::Computed(_) | Ty::ComputedText(_)) {
-            return Sizing::Nothing;
+            return if size == 0 { Sizing::Nothing } else { Sizing::Trace };
         }
         // A window around the field settles its length before the field's own
         // type gets to measure itself. How that window's size was arrived at
