@@ -765,6 +765,10 @@ fn compressed() -> T {
             ("uncompressed_size", T::u32(Little)),
             ("block_sizes", T::array(T::u32(Little), blocks())),
             ("blocks", T::array(T::bytes(E::elem("block_sizes", E::idx())), blocks())),
+            // The wrapper writes its own magic at the end as well, the same
+            // way the resource writes `RSRC` at the end of an uncompressed
+            // one. Nothing reads it back; it is there to be looked at.
+            ("end_magic", T::magic(MAGIC_COMPRESSED)),
         ],
     )
 }
@@ -992,6 +996,29 @@ mod tests {
         let prop = [CONTENTS, &[9, 0, 2, 0][..]].concat();
         assert_eq!(e.node(&d, &[prop.clone(), vec![1]].concat()).unwrap().value, Value::Str("size".into()));
         assert_eq!(e.node(&d, &[prop, vec![2, 1, 0]].concat()).unwrap().value, Value::Float(3.5));
+    }
+
+    /// A compressed resource is a different file with a different header, and
+    /// the magic is the only thing that says which one is in front of you.
+    #[test]
+    fn a_compressed_resource_reads_its_block_table() {
+        let mut b = MAGIC_COMPRESSED.to_vec();
+        b.extend(u32le(2)); // zstd
+        b.extend(u32le(4096)); // block size
+        b.extend(u32le(5000)); // what it unpacks to: two blocks
+        b.extend(u32le(40));
+        b.extend(u32le(9));
+        b.extend(std::iter::repeat_n(0xccu8, 49));
+        b.extend_from_slice(MAGIC_COMPRESSED);
+
+        let (d, mut e) = ev(b);
+        assert_eq!(e.node(&d, &[1]).unwrap().value.as_int(), Some(2));
+        assert_eq!(e.node(&d, &[3]).unwrap().value, Value::UInt(5000));
+        assert_eq!(e.node(&d, &[4]).unwrap().child_count, 2);
+        // Each block is as long as its own row of the table says.
+        assert_eq!(e.node(&d, &[5, 0]).unwrap().size_bits / 8, 40);
+        assert_eq!(e.node(&d, &[5, 1]).unwrap().size_bits / 8, 9);
+        assert_eq!(e.node(&d, &[6]).unwrap().size_bits / 8, 4);
     }
 
     /// A format version from no engine leaves everything below it unread
