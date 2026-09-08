@@ -1566,8 +1566,8 @@ impl Evaluator {
         // something it cannot mean, and the run stays bytes with the reason on
         // it, the way a stream that will not unpack does.
         let Some(codec) = self.codec_at(doc, path)? else {
-            self.spaces.refuse(path, Refusal::Failed);
-            return Ok(space::Opened::Refused(Refusal::Failed));
+            self.spaces.refuse(path, Refusal::Settings);
+            return Ok(space::Opened::Refused(Refusal::Settings));
         };
         // No decoder reads half a byte, and a compressed run that does not
         // start on one is a template saying something it cannot mean.

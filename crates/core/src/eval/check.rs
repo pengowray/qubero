@@ -410,6 +410,7 @@ fn refused(why: Refusal) -> String {
         Refusal::TooLarge => "unpacks to more than the limit",
         Refusal::Unaligned => "doesn't start on a byte",
         Refusal::Failed => "wouldn't unpack",
+        Refusal::Settings => "doesn't say how it was packed",
     })
 }
 
