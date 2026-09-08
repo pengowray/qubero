@@ -40,6 +40,22 @@ pub enum Checksum {
     /// and twelve bytes reaches 0x1fe00, and the bottom eight bits of that are
     /// a different number that no tar wrote down.
     ByteSum,
+    /// The *unreflected* CRC-32 an Ogg page seals itself with: the same
+    /// polynomial 0x04c11db7 as [`Checksum::Crc32`] and nothing else the
+    /// same. The bits of each byte go in the other way round, nothing is
+    /// fed in at the start and nothing is taken out at the end.
+    ///
+    /// A different number from `Crc32` over the same bytes, not a variant
+    /// spelling of it: `0x89a1897f` against `0xcbf43926` over `123456789`.
+    /// Pointing the reflected one at an Ogg page reports every valid file as
+    /// broken.
+    Crc32Ogg,
+    /// The same arithmetic again with all ones fed in and all ones taken out,
+    /// which is what bzip2 writes over a block and over a stream. Not
+    /// declared by any template yet: a block's sum covers that block's share
+    /// of the unpacked bytes, and until a trace says where the blocks end
+    /// there is nothing to sum it over. See `formats::bzip2`.
+    Crc32Bzip2,
     /// Adler-32, the zlib trailer: two running sums modulo 65521.
     Adler32,
     /// SHA-1, which git writes at the end of a file to seal it.
@@ -59,6 +75,7 @@ impl Checksum {
         match self {
             Checksum::Crc32 => "crc32",
             Checksum::Crc32Low16 | Checksum::Crc16Arc => "crc16",
+            Checksum::Crc32Ogg | Checksum::Crc32Bzip2 => "crc32",
             Checksum::Sum8 => "sum8",
             Checksum::ByteSum => "sum",
             Checksum::Adler32 => "adler32",
@@ -70,7 +87,7 @@ impl Checksum {
     /// the stored form of it can be compared as strings.
     pub fn digits(self) -> usize {
         match self {
-            Checksum::Crc32 | Checksum::Adler32 => 8,
+            Checksum::Crc32 | Checksum::Crc32Ogg | Checksum::Crc32Bzip2 | Checksum::Adler32 => 8,
             Checksum::Crc32Low16 | Checksum::Crc16Arc => 4,
             Checksum::Sum8 => 2,
             Checksum::ByteSum => 6,
@@ -91,6 +108,8 @@ impl Checksum {
             Checksum::Sha1 => hex_bytes(&sha1(bytes)),
             Checksum::Crc32 => hex(crc32(bytes) as u128, self),
             Checksum::Crc32Low16 => hex((crc32(bytes) & 0xffff) as u128, self),
+            Checksum::Crc32Ogg => hex(crc32_msb(bytes, 0, 0) as u128, self),
+            Checksum::Crc32Bzip2 => hex(crc32_msb(bytes, !0, !0) as u128, self),
             Checksum::Crc16Arc => hex(crc16_arc(bytes) as u128, self),
             Checksum::Sum8 => hex(sum8(bytes) as u128, self),
             Checksum::ByteSum => hex(byte_sum(bytes) as u128, self),
@@ -150,6 +169,37 @@ pub fn crc32(bytes: &[u8]) -> u32 {
         crc = t[((crc ^ b as u32) & 0xff) as usize] ^ (crc >> 8);
     }
     !crc
+}
+
+/// The table the unreflected CRC-32 is worked out from, built once. The same
+/// polynomial as [`crc32_table`] and the other way up: the bits of a byte are
+/// fed in from the top rather than from the bottom, so the shifts go the
+/// other way and the polynomial is written as it is spelled rather than
+/// reversed.
+fn crc32_msb_table() -> &'static [u32; 256] {
+    static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = [0u32; 256];
+        for (n, slot) in t.iter_mut().enumerate() {
+            let mut c = (n as u32) << 24;
+            for _ in 0..8 {
+                c = if c & 0x8000_0000 == 0 { c << 1 } else { (c << 1) ^ 0x04c1_1db7 };
+            }
+            *slot = c;
+        }
+        t
+    })
+}
+
+/// The unreflected CRC-32, with whatever a format feeds in at the start and
+/// takes out at the end. Ogg does neither; bzip2 does both with all ones.
+pub fn crc32_msb(bytes: &[u8], init: u32, xor_out: u32) -> u32 {
+    let t = crc32_msb_table();
+    let mut crc = init;
+    for &b in bytes {
+        crc = (crc << 8) ^ t[(((crc >> 24) ^ b as u32) & 0xff) as usize];
+    }
+    crc ^ xor_out
 }
 
 /// LHA's CRC-16: reflected, polynomial 0xa001, nothing in and nothing out.
@@ -250,6 +300,32 @@ pub fn sha1(bytes: &[u8]) -> [u8; 20] {
         out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
     }
     out
+}
+
+/// The check value every CRC catalogue prints: the sum over the nine ASCII
+/// digits. Three sums here share a polynomial and agree on nothing else, and
+/// a table built the wrong way up passes every test written against its own
+/// output.
+#[cfg(test)]
+mod crc_check_values {
+    use super::*;
+
+    #[test]
+    fn each_crc32_gives_the_number_its_catalogue_prints() {
+        assert_eq!(crc32(b"123456789"), 0xcbf4_3926, "reflected, as PNG and ZIP write it");
+        assert_eq!(crc32_msb(b"123456789", 0, 0), 0x89a1_897f, "Ogg: nothing in, nothing out");
+        assert_eq!(crc32_msb(b"123456789", !0, !0), 0xfc89_1918, "bzip2: all ones in and out");
+    }
+
+    /// The two are not two spellings of one number, which is the mistake a
+    /// template makes by reaching for the sum it already had.
+    #[test]
+    fn the_reflected_and_unreflected_sums_are_different_numbers() {
+        for text in [b"".as_slice(), b"a", b"OggS", b"the quick brown fox"] {
+            assert_ne!(crc32(text) == 0, crc32_msb(text, 0, 0) != 0, "{text:?}");
+        }
+        assert_ne!(crc32(b"OggS"), crc32_msb(b"OggS", 0, 0));
+    }
 }
 
 #[cfg(test)]

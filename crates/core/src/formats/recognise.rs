@@ -69,6 +69,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (lzip::MAGIC, "lzip"),
     (xz::MAGIC, "xz"),
     (zstd::MAGIC, "zstd"),
+    (ogg::MAGIC, "ogg"),
     (lz4::MAGIC, "lz4"),
     // The frame the first releases wrote. Nothing else has this magic, and a
     // file of them is an LZ4 file whatever its extension says.
