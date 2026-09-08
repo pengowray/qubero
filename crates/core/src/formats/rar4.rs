@@ -38,7 +38,7 @@
 //! reached, sized and placed; what it holds is left as the bytes it is.
 
 use crate::codec::Codec;
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// What one of these starts with. RAR 5 has the same first six bytes and one
 /// more at the end, so the seventh byte is what tells the two apart: a zero
@@ -167,6 +167,27 @@ fn block() -> T {
     )
 }
 
+/// What a block's `head_crc` covers: the header from the kind byte to the end
+/// of what the size measures, summed as a CRC-32 and kept to sixteen bits.
+///
+/// The two bytes it skips are the sum itself, which is why the run starts at
+/// two rather than at nothing. `head_size` counts from the front of the block,
+/// so what is left once the sum is off the front is the size less two.
+fn head_crc(when: Option<E>) -> Check {
+    Check {
+        algorithm: Checksum::Crc32Low16,
+        over: Covers::Run { at: E::lit(2), len: E::field("head_size").sub(E::lit(2)) },
+        when,
+    }
+}
+
+/// One when the named bit of the block's flags is off. Every guard here is of
+/// this shape: a flag says the header is not laid out the way the sum above
+/// assumes, so the check disappears rather than failing.
+fn without(bit: u32) -> E {
+    E::lit(1).sub(E::field("head_flags").bit(bit))
+}
+
 /// The four fields every block opens with. The checksum covers the header from
 /// the kind byte to the end of what the size measures, so it is the one field
 /// of a block not under its own checksum.
@@ -269,7 +290,38 @@ fn file_block() -> T {
             },
         ),
     ]);
-    T::structure_named("Rar4File", "name", "data", fields).counted_as("block")
+    T::structure_named("Rar4File", "name", "data", fields)
+        .counted_as("block")
+        // A 2.x file block with its comment inside the header is summed only
+        // as far as the comment starts, which is a layout nothing here reads:
+        // the check has to disappear for it rather than call the archive
+        // broken.
+        .field_check("head_crc", head_crc(Some(without(3))))
+        // The file, which the data area is only when nothing packed it. The
+        // switch above leaves the data as plain bytes for every other method,
+        // and that is what says the check cannot be made.
+        //
+        // Encrypted, and split across volumes, are the two other ways the data
+        // area stops being the file: one has the plaintext nowhere in the
+        // archive, and the other has only part of the file here while the sum
+        // is over the whole of it.
+        .field_check("file_crc", Check {
+            algorithm: Checksum::Crc32,
+            over: Covers::Unpacked {
+                name: "data".into(),
+                len: Some(E::field("unp_size").add(E::field("high_unp_size").shl(E::lit(32)))),
+            },
+            // A directory is a file block with no file: RAR writes a zero
+            // sum and no bytes, and a check that passed over nothing would be
+            // a green tick meaning nothing. Three bits of the flags say so,
+            // and seven of them is the mark.
+            when: Some(
+                without(0)
+                    .mul(without(1))
+                    .mul(without(2))
+                    .mul(E::lit(1).sub(E::field("dictionary").equals(E::lit(7)))),
+            ),
+        })
 }
 
 /// The archive header, which is the first block of every RAR 4 and says what
@@ -290,7 +342,7 @@ fn main_block() -> T {
         ),
         ("data", T::bytes(bounded(E::field("add_size")))),
     ]);
-    T::structure("Rar4Main", fields).counted_as("block")
+    T::structure("Rar4Main", fields).counted_as("block").field_check("head_crc", head_crc(Some(without(1))))
 }
 
 /// The block that ends the archive, and the only thing that says where the
@@ -310,7 +362,7 @@ fn end_block() -> T {
             )),
         ),
     ]);
-    T::structure("Rar4End", fields).counted_as("block")
+    T::structure("Rar4End", fields).counted_as("block").field_check("head_crc", head_crc(None))
 }
 
 /// Every other kind. There is nothing to read in them that the four fields
