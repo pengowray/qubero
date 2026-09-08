@@ -51,7 +51,15 @@ fn a_compressed_resource_reads_the_same_fields_as_the_plain_one() {
         return;
     };
     let mut read = 0;
-    for (name, codec) in [("godot4-probe-compressed.res", "zstd"), ("godot4-probe-fastlz.res", "fastlz")] {
+    for (name, codec) in [
+        ("godot4-probe-compressed.res", "zstd"),
+        ("godot4-probe-fastlz.res", "fastlz"),
+        // Mode 1 is called deflate and is a zlib stream, which is the whole
+        // reason this file is in the collection: read as raw deflate it
+        // refuses, and a refusal is quiet.
+        ("godot4-probe-deflate.res", "zlib"),
+        ("godot4-probe-gzip.res", "gzip"),
+    ] {
         read += usize::from(alike(&dir, name, codec));
     }
     assert!(read > 0, "no compressed godot4 probe in {}", dir.display());

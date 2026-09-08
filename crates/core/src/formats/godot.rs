@@ -810,10 +810,13 @@ fn compressed_block(inner: T) -> T {
     let open = |codec| T::decoded(size(), codec, inner.clone());
     T::switch(
         size().equals(E::lit(0)),
-        // The block table counts one more block than the division gives, so a
-        // file whose length divides by the block size ends on an empty one. A
-        // run of no bytes is not a stream, and opening it would spend a row
-        // saying so about a block that was never meant to hold anything.
+        // A block the table says is no bytes long. Not what the engine writes:
+        // the table counts one block more than the division gives, and a file
+        // whose length divides by the block size ends on a block of *nothing
+        // compressed*, which is eight bytes of zlib or nine of zstd and not
+        // nought of anything. So this is for a file that has been damaged, and
+        // it is here because handing a decoder no bytes is a refusal and a red
+        // row about a block that never held anything.
         vec![(1, T::bytes(size()))],
         T::switch(
             E::field("compression"),
@@ -1266,13 +1269,14 @@ mod tests {
         assert_eq!(e.node(&d, &[6]).unwrap().size_bits / 8, 4);
     }
 
-    /// The block table counts one more block than the division gives, so a
-    /// resource whose length divides by the block size ends on a block of no
-    /// bytes. That one is not a stream and is not offered as one: a row saying
-    /// a decoder would not read it would be a complaint about a block that was
-    /// never meant to hold anything.
+    /// A block table row of zero, which is a damaged file rather than an
+    /// ordinary one. The table counts one block more than the division gives,
+    /// and what the engine writes in that last row is nothing *compressed*,
+    /// which is a few bytes and unpacks to none. A row of zero is neither, and
+    /// handing no bytes to a decoder would be a refusal and a red row about a
+    /// block that never held anything.
     #[test]
-    fn the_empty_block_at_the_end_is_not_offered_as_a_stream() {
+    fn a_block_the_table_says_is_empty_is_not_offered_as_a_stream() {
         let mut b = MAGIC_COMPRESSED.to_vec();
         b.extend(u32le(2)); // zstd
         b.extend(u32le(64)); // block size
