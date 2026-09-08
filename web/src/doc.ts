@@ -518,13 +518,53 @@ export type Origin = {
  * never infers a relationship of its own.
  */
 export type Relation = {
-  readonly role: "length" | "count" | "type" | "value" | "name" | "width";
+  readonly role: "length" | "count" | "type" | "value" | "name" | "width" | "position";
   /** The expression as the template writes it: `header_size - sizeof(header_size)`. */
   readonly written: string;
   /** The same with every field's value in its place: `4 - 1`. */
   readonly substituted: string;
   /** What it comes to. */
   readonly result: string;
+};
+
+/**
+ * How a field came to be where it is, and how long it turned out to be: one
+ * word for each question, answered for every field.
+ *
+ * `origins` answers with fields, and only for the fields another field decided
+ * something about, which is a small minority. This answers for all of them, so
+ * a panel can say why a plain `u32` is where it is instead of showing an empty
+ * list. Which *field* settled it, where one did, is still `origins`.
+ *
+ * `unknown` means the core does not recognise the shape. It is a real answer
+ * and the view says nothing at all for it: a reason invented to fill the line
+ * would read exactly like a reason the file gave.
+ */
+export type Shape = {
+  /** `root` the whole file; `first` the first field of what holds it; `follows`
+   *  after the field before it; `element` one element of a run; `pointer` a
+   *  table of offsets placed it; `chain` the element before it named it;
+   *  `address` an address the file gave; `trace` where a decoder had got to;
+   *  `stream` the front of what a compressed run unpacked to. */
+  readonly placed: "root" | "first" | "follows" | "element" | "pointer" | "chain" | "address" | "trace" | "stream" | "unknown";
+  /** `fixed` the type's own width; `expression` worked out from the file;
+   *  `terminated` ends at a terminator; `remaining` fills what is left of its
+   *  container; `children` as long as the fields inside it; `scattered` a list
+   *  whose elements are wherever its offsets point; `count` as many elements
+   *  as a count says; `encoded` its own bytes say where it ends; `trace` as
+   *  much as the decoder read; `nothing` no bytes of its own. */
+  readonly sized:
+    | "fixed"
+    | "expression"
+    | "terminated"
+    | "remaining"
+    | "children"
+    | "scattered"
+    | "count"
+    | "encoded"
+    | "trace"
+    | "nothing"
+    | "unknown";
 };
 
 /** One field of a subtree, as much of it as an arrow needs. No value: what a
@@ -1509,6 +1549,17 @@ export class Doc {
    */
   relations(path: readonly number[]): TemplateReply<Relation[]> {
     return this.handleReply<Relation[]>(this.editor.relations(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * How the field at `path` was placed, and how its length was settled.
+   *
+   * Answered for every field, which is what tells it from `origins`: a `u32` in
+   * a header has no origins and is still where it is for a reason, and the
+   * reason is that the field in front of it ended there.
+   */
+  shape(path: readonly number[]): TemplateReply<Shape> {
+    return this.handleReply<Shape>(this.editor.shape(this.space, Uint32Array.from(path)));
   }
 
   /** What the type at `path` permits: enum values, magic bytes, flag bits. */

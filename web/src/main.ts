@@ -350,7 +350,7 @@ function build(tab: Tab): Page {
    *
    * The core is asked the same question the sidebar asks: which fields settled
    * this one's shape. Nothing new is inferred here, so an arrow can never say
-   * something the "Depends on" list does not.
+   * something the properties list does not.
    *
    * Only fields whose offsets are bits of the file are drawn. A field read out
    * of a compressed stream is at an offset of that stream, and pointing at the
@@ -526,7 +526,7 @@ function build(tab: Tab): Page {
     overview.reveal(path);
     structure.reveal(path);
   };
-  // Pointing at a row in the "Depends on" list marks that field over the bytes.
+  // Pointing at a row in the properties list marks that field over the bytes.
   // The sidebar names the field and the grid says where it is; between them
   // that is the whole answer, and neither has to be clicked for it.
   inspector.onHoverField = (path) => {

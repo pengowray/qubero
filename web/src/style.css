@@ -1139,6 +1139,77 @@ button.welcome-crystal {
 .insp-origins {
   margin-top: 2px;
 }
+/* One question about the field at the cursor and its answer. The label sits in
+   a column of its own so a run of rows reads down as a list of questions, and
+   the answer is what the eye lands on at the end of each. */
+.insp-prop {
+  margin-bottom: 1px;
+}
+.insp-prop-head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  border: 0;
+  background: none;
+  min-height: 0;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+button.insp-prop-head {
+  cursor: pointer;
+}
+button.insp-prop-head:hover {
+  background: var(--accent-soft);
+}
+/* The triangle keeps its column on every row, so the labels line up whether or
+   not there is anything folded behind them. */
+.insp-prop-mark {
+  flex: 0 0 9px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.insp-prop-name {
+  flex: 0 0 auto;
+  min-width: 56px;
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--muted);
+}
+.insp-prop-value {
+  overflow-wrap: anywhere;
+}
+/* How the answer was arrived at: quieter than the answer, and indented under
+   it, because it is read second and only where the answer surprised. */
+.insp-prop-how {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+  min-height: 0;
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: left;
+  padding: 0 4px 1px 19px;
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
+/* A clause naming a field leads to it, and is a button so the keyboard can
+   reach it: with the working folded away this line is often the only way
+   there. It stays the quiet second line, not another link. */
+.insp-prop-how[data-path] {
+  cursor: pointer;
+}
+/* The fields named and the arithmetic over them, under the row they explain. */
+.insp-prop-detail {
+  margin: 1px 0 5px;
+  padding-left: 10px;
+}
 .insp-origin {
   display: flex;
   gap: 6px;
@@ -1240,7 +1311,8 @@ button.welcome-crystal {
 /* The row the pointer is resting on. The views mark the field it names at the
    same moment, so both ends of one connection are lit at once. */
 .insp-origin.is-hover,
-.insp-origin-group.is-hover {
+.insp-origin-group.is-hover,
+.insp-prop-how.is-hover {
   background: var(--accent-soft);
 }
 /* A whole row leads to the field it names, not only the name in it. */
