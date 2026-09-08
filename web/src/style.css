@@ -4296,13 +4296,14 @@ table.rec tr.is-on td {
   pointer-events: auto;
   cursor: pointer;
 }
-/* A name running down the left edge of a tall narrow box. Turned about its own
-   top-left corner, so the caller positions it exactly as it does an upright
-   one and the corner it grows from is the same corner. */
+/* A name running down a tall narrow box. Laid out downwards rather than turned
+   with a transform: the element's box is then the shape it looks, so the
+   caller places and clips it with the same arithmetic as an upright name.
+   Rotating it meant the box stayed wide and short while the ink went tall and
+   thin, and every corner was somewhere other than where it was put. */
 .tm-name-down {
-  transform: rotate(90deg);
-  transform-origin: 0 0;
-  translate: 100% 0;
+  writing-mode: vertical-rl;
+  padding: 4px 1px;
 }
 /* The boxes there was no room to draw as themselves. They are the same things
    as their neighbours, so they keep the colour and lose the weight: faded, not
