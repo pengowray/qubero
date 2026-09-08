@@ -759,7 +759,8 @@ fn no_pack_info() -> T {
     )
 }
 
-/// Enough of the end header to place the packed streams, and no more.
+/// Enough of the end header to place the packed streams, and for a compressed
+/// header, enough to open the one stream it describes.
 ///
 /// Read here, from inside the packed region, because that is where the answer
 /// is wanted and an expression only ever reaches backwards: the header is the
@@ -767,19 +768,31 @@ fn no_pack_info() -> T {
 /// been placed. The same bytes are read again there, in full, and counted
 /// there; this reading is put aside so that nothing counts them twice.
 ///
-/// Both kinds of header hold a `kPackInfo` and differ only in what comes in
-/// front of it, so every branch answers with a field of that name and the runs
-/// below ask one question rather than one per kind.
+/// Every branch answers with a `kPackInfo` under that name and with the tag
+/// the header started with, so the runs below ask one question rather than one
+/// per kind. A header this cannot read the start of answers `kEnd`, which no
+/// header begins with, so asking what kind is ahead never has to be preceded
+/// by asking whether there is one.
+///
+/// The `kEncodedHeader` branch goes one block further and reads the
+/// `kUnPackInfo` after it. That is where the folder is, and the folder's coder
+/// is where LZMA wrote down the three numbers its stream does not carry; a
+/// packed stream that cannot reach them cannot be opened. No other branch
+/// needs it: the streams a plain header describes are the archive's files, and
+/// opening those is a different job.
 fn pack_info_ahead() -> T {
-    let start = |name: &str, before: Vec<(&'static str, T)>| {
+    let start = |name: &str, before: Vec<(&'static str, T)>, after: Vec<(&'static str, T)>| {
         let mut fields = vec![("id", property_id())];
         fields.extend(before);
         fields.push(("pack_info", pack_info_or_none()));
+        fields.extend(after);
         T::structure(name, fields)
     };
+    let no_start =
+        |name: &str| T::structure(name, vec![("id", T::computed(E::lit(0))), ("pack_info", no_pack_info())]);
     T::switch(
         E::Remaining,
-        vec![(0, T::structure("NoHeader", vec![("pack_info", no_pack_info())]))],
+        vec![(0, no_start("NoHeader"))],
         T::switch(
             E::peek(8, Big),
             vec![
@@ -791,11 +804,15 @@ fn pack_info_ahead() -> T {
                             ("archive_properties", tagged(0x02, archive_properties())),
                             ("main_streams_id", T::if_room(property_id())),
                         ],
+                        Vec::new(),
                     ),
                 ),
-                (0x17, start("EncodedHeaderStart", Vec::new())),
+                (
+                    0x17,
+                    start("EncodedHeaderStart", Vec::new(), vec![("unpack_info", tagged(0x07, unpack_info()))]),
+                ),
             ],
-            T::structure("UnknownHeaderStart", vec![("pack_info", no_pack_info())]),
+            no_start("UnknownHeaderStart"),
         ),
     )
 }
@@ -1202,6 +1219,26 @@ mod tests {
         let lzma = e.node(&d, &[8, 1, 1, 4, 0, 1, 0, 1]).unwrap();
         assert_eq!(lzma.value, Value::Enum { raw: 0x03_0101, name: Some("LZMA".into()), hex: true });
         assert_eq!(lzma.size_bits, 3 * 8, "three bytes, and the same number a one-byte id would be");
+    }
+
+    /// The reading taken from inside the packed region goes as far as the
+    /// folder when the header is a compressed one, so the settings its coder
+    /// wrote down are in scope where the stream is placed. Reaching them is
+    /// what lets that stream be opened.
+    #[test]
+    fn the_reading_ahead_finds_the_coder_that_packed_a_compressed_header() {
+        let (d, mut e) = read(archive(&vec![0u8; 120], &encoded_header()));
+        // packed_streams, the reading ahead, what it read, its unpack info.
+        let props = [7usize, 0, 0, 2, 4, 0, 1, 0, 3, 1, 0];
+        assert_eq!(e.node(&d, &props).unwrap().value, Value::UInt(0x5d));
+        // And it still costs nothing where it stands: these bytes are counted
+        // at the end of the file, where the header actually is.
+        assert_eq!(e.node(&d, &[7, 0]).unwrap().size_bits, 0);
+        // An archive whose header is plain reads no folder here. It has no
+        // need of one, and the tag says which kind is ahead either way.
+        let (d, mut e) = read(archive(b"packed bytes", &header(&[12], &["one"])));
+        assert_eq!(e.node(&d, &[7, 0, 0, 0]).unwrap().value.as_int(), Some(0x01));
+        assert!(e.child_named(&d, &[7, 0, 0], "unpack_info").unwrap().is_none());
     }
 
     /// The five bytes an LZMA coder writes are five bytes of settings, and
