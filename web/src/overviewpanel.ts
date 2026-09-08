@@ -112,7 +112,6 @@ const LOGICAL_MORE = (count: number, label: string): string =>
 const LOGICAL_UNLISTED = (n: number): string => `${n.toLocaleString()} more objects not listed`;
 const BLOCK_TITLE = "Block";
 const CLOSE_BLOCK = "Close block";
-const PICK_BLOCK = "Pick a cell on the map to measure that part of the file on its own.";
 const SCANNING = (percent: number): string => `Scanning the file… ${percent}%`;
 /** Keeps the line under the map from collapsing when the pointer leaves it,
  *  which would jump everything below by a row. */
@@ -446,7 +445,7 @@ export class OverviewPanel {
     // workspace. The map above says where things are; this says how much of
     // the file they are, which is the question the map cannot answer once the
     // small things are under a pixel.
-    this.treemap = new TreemapPanel(this.doc, true);
+    this.treemap = new TreemapPanel(this.doc);
 
     this.body = document.createElement("div");
     this.body.className = "ov-body";
@@ -497,6 +496,7 @@ export class OverviewPanel {
       this.readout.textContent = BLANK;
     });
     this.canvas.addEventListener("click", (e) => this.onMapClick(e));
+    this.canvas.addEventListener("dblclick", (e) => this.onMapOpen(e));
     this.focusCanvas.addEventListener("pointermove", (e) => this.onFocusHover(e));
     this.focusCanvas.addEventListener("pointerleave", () => {
       this.focusReadout.textContent = BLANK;
@@ -1415,22 +1415,44 @@ export class OverviewPanel {
 
   // ----- the block being looked at -----
 
+  /**
+   * A press on the map selects the cell and goes to its bytes; a second press
+   * opens it and measures it on its own.
+   *
+   * The same two verbs as the treemap under it, and for the same reason: two
+   * pictures of one file side by side that answered a press differently would
+   * be two things to learn rather than one. Selecting is the cheap one and it
+   * is what a single press does, so a reader can run along the map without
+   * setting a scan going at every cell.
+   */
   private onMapClick(e: MouseEvent): void {
     const s = this.state;
     const i = this.bucketAt(this.canvas, s?.classes.length ?? 0, e);
     if (s === null || i === null) return;
     const from = i * s.bucket_bytes;
     const to = Math.min(this.doc.lengthBytes, from + s.bucket_bytes);
-    // The cell already open closes: the same press that opened it, again.
-    // Closing is not a place to go, so the view stays where it is.
+    this.highlight = { from: i, to: i + 1 };
+    this.drawMain();
+    this.mapPressAt = performance.now();
+    this.onJump(from * 8, to * 8);
+  }
+
+  /** The second press: look at that stretch of the file on its own. Pressing
+   *  the cell that is already open closes it again. */
+  private onMapOpen(e: MouseEvent): void {
+    const s = this.state;
+    const i = this.bucketAt(this.canvas, s?.classes.length ?? 0, e);
+    if (s === null || i === null) return;
+    const from = i * s.bucket_bytes;
+    const to = Math.min(this.doc.lengthBytes, from + s.bucket_bytes);
     const open = this.block;
     if (open !== null && open.from === from && open.to === to) {
       this.setBlock(0, 0);
       return;
     }
     this.setBlock(from, to);
-    this.mapPressAt = performance.now();
-    this.onJump(from * 8, to * 8);
+    this.highlight = { from: i, to: i + 1 };
+    this.drawMain();
   }
 
   /** A cell of the block map is a stretch of the block, and picking one marks
@@ -1460,8 +1482,12 @@ export class OverviewPanel {
 
   private renderFocus(): void {
     const block = this.block;
+    // No block open is nothing to say, not a sentence saying so. The line that
+    // used to sit here explained a press the map itself now signposts, and it
+    // held a section's worth of space open for something that was not there.
+    this.focusEl.hidden = block === null;
     if (block === null) {
-      this.focusEl.replaceChildren(this.noneLine(PICK_BLOCK));
+      this.focusEl.replaceChildren();
       return;
     }
     const close = document.createElement("button");

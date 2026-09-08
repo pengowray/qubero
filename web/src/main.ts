@@ -10,7 +10,6 @@ import { ListingReport } from "./listingreport.js";
 import { ListPane } from "./listpane.js";
 import { TextView } from "./textview.js";
 import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY } from "./stringsview.js";
-import { TreemapPanel } from "./treemappanel.js";
 import { Crystal } from "./crystal.js";
 import { OverviewPanel } from "./overviewpanel.js";
 import { Tabs, type Page, type Tab } from "./tabs.js";
@@ -18,7 +17,7 @@ import { markFromRange, markFromStep } from "./unpackedlink.js";
 import { SearchBar } from "./searchbar.js";
 import { el } from "./dom.js";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence } from "./filetype.js";
-import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, TREEMAP, UNPACKED, unpackedOrigin } from "./strings.js";
+import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
 
@@ -30,7 +29,7 @@ const formatSize = formatBytes;
 
 /** The main views: one reading of the file at a time, in the same area. The
  *  graph is behind `?graph` and is not offered until it has been unlocked. */
-type View = "hex" | "listing" | "text" | "strings" | "treemap" | "graph";
+type View = "hex" | "listing" | "text" | "strings" | "graph";
 
 /** Whether the graph view is on offer. Set by `?graph` and kept, so the URL is
  *  needed once rather than every time. Read at startup, before any page is
@@ -956,11 +955,7 @@ function build(tab: Tab): Page {
   // Where the main views live. The graph is put in here when it arrives, so
   // it takes the same area as the hex grid and the listing rather than a
   // corner of its own.
-  // The treemap is the same component the rail carries, given the whole
-  // workspace instead of a column: one widget, two sizes.
-  const treemap = new TreemapPanel(doc, false);
-  treemap.el.hidden = true;
-  const workspaceLeft = el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, strings.el, treemap.el, listRow);
+  const workspaceLeft = el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, strings.el, listRow);
 
   const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
   const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
@@ -969,8 +964,7 @@ function build(tab: Tab): Page {
   // Behind ?graph, and built only when it has been unlocked: an experiment
   // with a button in the main switch would read as a finished view.
   const graphBtn = el("button", { type: "button", textContent: GRAPH.button, className: "tb-view" });
-  const treemapBtn = el("button", { type: "button", textContent: TREEMAP.title, className: "tb-view" });
-  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn, stringsBtn, treemapBtn);
+  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn, stringsBtn);
   if (graphUnlocked) views.append(graphBtn);
   // The graph and everything it needs is a third of a megabyte of layout
   // engine. Fetched when the view is first asked for, so a reader who never
@@ -1075,7 +1069,6 @@ function build(tab: Tab): Page {
     const listingOn = which === "listing";
     const textOn = which === "text";
     const stringsOn = which === "strings";
-    const treemapOn = which === "treemap";
     const graphOn = which === "graph";
     listingShowing = listingOn;
     view.el.hidden = which !== "hex";
@@ -1083,7 +1076,6 @@ function build(tab: Tab): Page {
     listRow.hidden = !listingOn;
     text.el.hidden = !textOn;
     strings.el.hidden = !stringsOn;
-    treemap.el.hidden = !treemapOn;
     if (graph !== null) graph.el.hidden = !graphOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
     for (const c of textOnly) c.hidden = !textOn;
@@ -1093,7 +1085,6 @@ function build(tab: Tab): Page {
       [listBtn, listingOn],
       [textBtn, textOn],
       [stringsBtn, stringsOn],
-      [treemapBtn, treemapOn],
       [graphBtn, graphOn],
     ] as const) {
       btn.setAttribute("aria-pressed", String(on));
@@ -1112,9 +1103,6 @@ function build(tab: Tab): Page {
     } else if (stringsOn) {
       strings.enter();
       strings.setByte(Math.floor(view.cursorState.bitOffset / 8));
-    } else if (treemapOn) {
-      treemap.relayout();
-      treemap.pump();
     } else if (graphOn) {
       void showGraph();
     } else view.relayout();
@@ -1124,11 +1112,9 @@ function build(tab: Tab): Page {
         ? text.el
         : stringsOn
           ? strings.el
-          : treemapOn
-            ? treemap.el
-            : graphOn && graph !== null
-              ? graph.el
-              : view.el
+          : graphOn && graph !== null
+            ? graph.el
+            : view.el
     ).focus();
     refresh();
   };
@@ -1156,7 +1142,6 @@ function build(tab: Tab): Page {
     // that these bytes are a length.
     view.selectRange(at * 8, (at + len) * 8, at * 8);
   };
-  treemapBtn.addEventListener("click", () => setView("treemap"));
   graphBtn.addEventListener("click", () => setView("graph"));
   // Picking a character in the text is the same as putting the cursor on its
   // first byte, which is what every other view is looking at.
@@ -1305,7 +1290,6 @@ function build(tab: Tab): Page {
     view.relayout();
     structure.relayout();
     listPane.relayout();
-    if (!treemap.el.hidden) treemap.relayout();
     overview.pump();
   };
   // Picking a part moves the cursor everywhere, the same as picking a row in
@@ -1322,16 +1306,7 @@ function build(tab: Tab): Page {
   // and the hex view draws their headings. The rail says whether they changed,
   // so a walk that named the same parts again redraws nothing.
   structure.onOutline = (headings) => {
-    treemap.setOutline(headings);
     if (overview.setOutline(headings)) view.setSections(headings);
-  };
-  // A box on the treemap is a stretch of the file, so clicking one does what
-  // clicking a cell of the map does: put the cursor on it and light it.
-  treemap.onJump = (startBit, endBit) => {
-    view.setHighlight({ startBit, endBit });
-    picking = true;
-    view.setBitCursor(startBit, { pane: "hex" });
-    picking = false;
   };
   // Only the view on screen says where the reader is. A hidden listing still
   // walks the file and would otherwise drag the rail's mark to wherever it
@@ -1405,7 +1380,7 @@ function build(tab: Tab): Page {
       // A saved "graph" from a browser where it was once unlocked is not a
       // reason to open a view that is no longer on offer.
       const start: View =
-        startView === "listing" || startView === "text" || startView === "strings" || startView === "treemap" || (startView === "graph" && graphUnlocked)
+        startView === "listing" || startView === "text" || startView === "strings" || (startView === "graph" && graphUnlocked)
           ? startView
           : "hex";
       setView(start);

@@ -237,6 +237,26 @@ export const TREEMAP = {
    *  before a reader has opened anything. */
   hint: "Click a rectangle to go to its bytes. Double-click to open it.",
   hintBack: "Backspace goes back up.",
+  /** On the tooltip of a box with more inside it than the picture is showing,
+   *  since nothing about a drawn box says whether opening it would add
+   *  anything. */
+  openHint: "Double-click to open",
+  /** The map over the whole window and back in the rail. A glance and a read
+   *  are different jobs and the same map does both, so the control that
+   *  switches between them is a corner button rather than a mode. */
+  grow: "Fill the window",
+  shrink: "Back to the sidebar",
+  growIcon: "\u2922",
+  shrinkIcon: "\u2921",
+  /** What a zoomed map is a picture of. A treemap fills its box whatever it
+   *  is a picture of, so without this line nothing says whether the boxes on
+   *  screen are the file or half a per cent of it. */
+  zoomedTo: (name: string, size: string, share: string | null, at: string | null): string => {
+    const parts = [size];
+    if (share !== null) parts.push(`${share} of file`);
+    if (at !== null) parts.push(at);
+    return `${name} \u00b7 ${parts.join(" \u00b7 ")}`;
+  },
   /** Byte values, in four contiguous groups. Zero is on its own because it is
    *  the one value every reader wants isolated, which the plain 00-7F split
    *  would have buried in among the text. */
@@ -246,7 +266,15 @@ export const TREEMAP = {
     { from: 0x20, to: 0x7f, label: "20-7F", title: "0x20 to 0x7F · printable ASCII" },
     { from: 0x80, to: 0xff, label: "80-FF", title: "0x80 to 0xFF · high bit set" },
   ],
+  /** A run of an array too long to draw one box per element. Indexes rather
+   *  than offsets: the box beside it is the next run of the same array, and
+   *  what tells them apart is which elements they hold. */
+  runName: (from: number, to: number): string => `[${from.toLocaleString()}\u2013${to.toLocaleString()}]`,
+  runDetail: (n: number, noun: string): string => `${countText(n, noun)} \u00b7 double-click to open`,
   byteNoun: "byte value",
+  /** One byte value's tooltip: how many of it there are, and which of the four
+   *  groups it is in, since a zoomed map may not be showing the group. */
+  byteDetail: (count: number, group: string): string => `${count.toLocaleString()} bytes \u00b7 ${group}`,
   /** Two rectangles are one number, so the number is written out under them.
    *  What it means is in the title, since a bare 41% says nothing on its own. */
   bits: { set: "1", clear: "0" },
