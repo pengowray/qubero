@@ -696,7 +696,8 @@ const FIELDS: [StepField; 20] = [
 /// reader which bits of the run made which bytes of what came out. How fine
 /// the trace is depends on the codec: deflate and LZ4 are read by our own
 /// decoders and traced per symbol, zstd and xz keep their crates and are
-/// traced per block.
+/// traced per block, and bzip2 keeps a crate that will not say where a block
+/// ended, so it is one step over the whole stream.
 pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     if data.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -819,6 +820,7 @@ mod tests {
         assert_eq!(decode(Codec::Zlib, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Zstd, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Xz, b"not compressed"), Err(Refusal::Failed));
+        assert_eq!(decode(Codec::Lzip, b"not compressed at all, not even a bit"), Err(Refusal::Failed));
     }
 
 }

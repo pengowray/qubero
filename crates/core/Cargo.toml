@@ -12,6 +12,11 @@ proptest = "1"
 # every level.
 miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode", "std"] }
+# The bzip2 encoder the tests compress with, since nothing that ships writes
+# one. Default features are `libbz2-rs-sys`, the pure-Rust port of the C
+# library, so this needs no C toolchain either. A second implementation of the
+# format as well as an encoder: what it writes is what `bzip2-rs` has to read.
+bzip2 = "0.6.1"
 
 [dependencies]
 # Hashing a path of child indices happens several times per field; the default
@@ -37,3 +42,14 @@ lz4_flex = { version = "0.14", default-features = false, features = ["safe-decod
 # one xz block is a step of a decoder's state and does not stand on its own,
 # which is why the template opens the stream and not the block.
 lzma-rs = { version = "0.3", default-features = false }
+# bzip2, pure Rust. It takes a whole stream and gives bytes: bzip2 packs its
+# blocks to the bit, so a block is not a run anything else can address and the
+# stream is the unit. Decoding only, which is the half of the format that ships,
+# and it forbids unsafe outright, which matters for something reading files
+# nobody vouched for. The `bzip2` crate with `libbz2-rs-sys` also builds for
+# wasm32 and is the better maintained of the two, but it is a port of the C
+# library, pointers and all, and carries an encoder this never calls; that one
+# is the dev-dependency here instead, so the two are checked against each other.
+# The default features are the empty set; the `rustc_*` ones only tell its own
+# dependencies which language version to assume.
+bzip2-rs = { version = "0.1.2", default-features = false }

@@ -297,7 +297,9 @@ fn local() -> T {
             ("data_size", T::computed(data_len())),
             ("unpacked_size", T::computed(unpacked_len())),
             // Method 8 is deflate, and a deflate run opens: what came out of
-            // it, and the blocks the decoder read to get there.
+            // it, and the blocks the decoder read to get there. Method 12 is a
+            // whole bzip2 stream written where the deflate would be, and opens
+            // the same way.
             //
             // Method 0 is the file written into the archive verbatim, so those
             // bytes are already a document and open too, through the codec
@@ -312,6 +314,7 @@ fn local() -> T {
                     vec![
                         (0, T::decoded(E::field("data_size"), Codec::Stored, super::decoded_text())),
                         (8, T::decoded(E::field("data_size"), Codec::Deflate, super::decoded_text())),
+                        (12, T::decoded(E::field("data_size"), Codec::Bzip2, super::decoded_text())),
                     ],
                     T::bytes(E::field("data_size")),
                 ),
@@ -608,6 +611,34 @@ mod tests {
         let mut e = Evaluator::new(zip());
         let v = e.run_check(&d, &[0, 1, 1, 0]).unwrap().expect("the check applies");
         assert!(!v.ok, "computed {}, stored {}", v.computed, v.stored);
+    }
+
+    /// Method 12 is a whole bzip2 stream where the deflate would be. The
+    /// entry's CRC-32 is of the file, so declaring the run decoded is what
+    /// makes the check of a bzip2 entry possible at all: over the packed
+    /// bytes it would match nothing.
+    #[test]
+    fn a_bzip2_entry_opens_and_its_crc_is_of_what_came_out() {
+        let text = b"a bzip2 entry in a zip, which is a method few writers pick\n";
+        let packed = {
+            use std::io::Write;
+            let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::new(9));
+            e.write_all(text).expect("writes");
+            e.finish().expect("finishes")
+        };
+        let mut v = entry(b"a.txt", 0, packed.len() as u32, text.len() as u32, &[], &packed);
+        // The method, which `entry` leaves at zero.
+        v[8..10].copy_from_slice(&12u16.to_le_bytes());
+        v[14..18].copy_from_slice(&crate::checksum::crc32(text).to_le_bytes());
+        v.extend_from_slice(&end_record());
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(zip());
+        let data = e.node(&d, &[0, 0, 1, 14]).unwrap();
+        assert_eq!(data.type_name, "bzip2");
+        assert!(data.decoded && data.refused.is_none(), "the stream opened: {data:?}");
+        let crc = e.child_named(&d, &[0, 0, 1], "crc32").unwrap().expect("a crc32 field");
+        let v = e.run_check(&d, &crc).unwrap().expect("the sum is of the file, so of what unpacks");
+        assert!(v.ok, "computed {}, stored {}", v.computed, v.stored);
     }
 
     /// A writer told to use ZIP64 whatever the sizes writes 0xFFFFFFFF in the

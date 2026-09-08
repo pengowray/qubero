@@ -1161,9 +1161,9 @@ So a template may say what a run is compressed with, and the reading opens it.
 `Ty::Decoded { codec, inner }` is applied to a run of bytes and changes nothing
 about the run: the field is at the offset it is at, it is as long as the file
 makes it, and its bytes are the compressed bytes. What it gains is one child,
-`inner`, read over the bytes the run comes to. Eleven codecs so far: zlib, raw
-deflate, zstd, one LZ4 block, xz, `compress`'s LZW, undoing a PNG's per-row
-filters, reading the
+`inner`, read over the bytes the run comes to. Thirteen codecs so far: zlib,
+raw deflate, zstd, one LZ4 block, xz, an lzip member, a bzip2 stream,
+`compress`'s LZW, undoing a PNG's per-row filters, reading the
 low bits of ARGB pixels and of RGBA 1-1 pixels, and PICO-8's pxa packing and
 the older code packing before it. A compressed stream never says how long it is, so one with
 no length of its own is written inside a `Sized` that does.
@@ -2498,7 +2498,7 @@ thread never blocks on reads.
 ### Compressed streams and archives
 Ten formats whose bytes are mostly not readable: zlib, bzip2, xz, zstd, lz4,
 lzip, compress, tar, 7z and RAR 5. When these were written none of them
-decompressed anything, and that was the point of writing them down; five of
+decompressed anything, and that was the point of writing them down; seven of
 them do now, and the paragraphs below are still the reason the frame is worth
 reading whether or not anything opens the run. See "A stream read as the
 fields inside it" for what opening one means. What a compressed file has to say about

@@ -1,7 +1,8 @@
 //! The one-stream files in the sample collection, which is not in this
-//! repository: `hello.zz`, `hello.txt.xz`, `hello.txt.zst` and `hello.lz4`
-//! under a directory `QUBERO_SAMPLES` names (several, separated by `;`), or
-//! under `qubero-samples` beside the checkout. Skips when there is none.
+//! repository: `hello.zz`, `hello.txt.xz`, `hello.txt.zst`, `hello.lz4`,
+//! `hello.lz`, `hello.txt.bz2` and `words.Z` under a directory
+//! `QUBERO_SAMPLES` names (several, separated by `;`), or under
+//! `qubero-samples` beside the checkout. Skips when there is none.
 //!
 //! What a made-up file cannot show is that the stream is the one the real
 //! compressor wrote. Each of these was written by its own tool over the same
@@ -28,6 +29,8 @@ fn a_file_that_is_one_stream_reads_as_what_the_stream_holds() {
         ("hello.txt.xz", "xz"),
         ("hello.txt.zst", "zstd"),
         ("hello.lz4", "lz4"),
+        ("hello.lz", "lzip"),
+        ("hello.txt.bz2", "bzip2"),
         ("words.Z", "compress"),
     ];
     let mut read = 0;
