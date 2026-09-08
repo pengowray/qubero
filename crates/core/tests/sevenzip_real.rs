@@ -1,5 +1,5 @@
-//! A 7z archive whose header 7z compressed into a stream of its own, read as
-//! its contents.
+//! A 7z archive read as what it holds: the header 7z packed away, and the
+//! files the header describes.
 //!
 //! The collection is not in this repository: point `QUBERO_SAMPLES` at it, or
 //! keep it beside the checkout as `qubero-samples`. With neither, this says so
@@ -10,7 +10,11 @@
 //! `nested-dirs-header-lzma.7z` is what 7-Zip writes by default, with the
 //! header packed into a stream the file describes and nothing else. So there
 //! is an answer to check against that no template produced: what the names
-//! are, in a file that says them out loud.
+//! are, in a file that says them out loud, and what the files hold, in an
+//! archive that packs each of them on its own.
+//!
+//! All three pack with LZMA2, which is what 7-Zip reaches for unless told
+//! otherwise, and pack the header itself with LZMA1.
 
 use std::path::{Path, PathBuf};
 
@@ -100,6 +104,75 @@ fn a_compressed_header_reads_as_the_names_the_plain_one_says_out_loud() {
     let space = e.space_mut(id).expect("it is there");
     let (se, sd) = space.reading();
     assert_eq!(names_in(se, sd, &[]), want);
+}
+
+/// The four files that have bytes, in the order the archives pack them, which
+/// is the order `kCodersUnPackSize` puts their folders in: the two documents,
+/// the blob, and the readme.
+///
+/// Written out here rather than taken from an archive. What the streams unpack
+/// to has to be checked against something no reading of a 7z produced, and
+/// this is that thing: the same four values `tools/make_7z_samples.py` in the
+/// sample collection writes before it calls the archiver.
+fn contents() -> Vec<Vec<u8>> {
+    vec![
+        "# Chapter One\n\nA paragraph with enough text to compress.\n".repeat(12).into_bytes(),
+        "nested file, repeated line\n".repeat(40).into_bytes(),
+        (0..2048u32).map(|i| ((i * 37) % 251) as u8).collect(),
+        b"Qubero sample archive. The quick brown fox jumps over the lazy dog. 0123456789.".to_vec(),
+    ]
+}
+
+/// What the whole exercise is for, one level further in: the front of the file
+/// stops being four runs of compressed bytes and becomes the four files.
+///
+/// Checked three ways, because "something opened" is not the claim. The bytes
+/// are the bytes the sample builder wrote; they match the CRC-32 7-Zip itself
+/// put in `kSubStreamsInfo`, which is a number no reader here produced; and
+/// the solid archive, which holds the same files as one block, unpacks to the
+/// four of them run together in the same order.
+#[test]
+fn a_folder_opens_as_the_files_it_packed() {
+    let (Some(nonsolid), Some(solid)) = (find("nested-dirs-nonsolid.7z"), find("nested-dirs-solid.7z")) else {
+        eprintln!("skipped: no nested-dirs 7z samples in hand. Set QUBERO_SAMPLES to the collection.");
+        return;
+    };
+    let want = contents();
+
+    // One folder per file, so one packed stream per file.
+    let bytes = std::fs::read(&nonsolid).expect("reads");
+    let d = Document::new(MemSource(bytes));
+    let mut e = Evaluator::new(formats::builtin("7z").expect("7z"));
+    assert_eq!(e.node(&d, &[7, 2]).expect("the streams").child_count as usize, want.len());
+    for (i, file) in want.iter().enumerate() {
+        let id = e.open_space(&d, 0, &[7, 2, i]).expect("no error").unwrap_or_else(|| panic!("stream {i} opens"));
+        assert_eq!(e.space(id).expect("it is there").bytes(), &file[..], "stream {i}");
+        // And the archive says the same, in a digest it wrote itself. One
+        // file to a folder means one substream to a folder, so these are in
+        // the same order as the streams.
+        let crc = e.node(&d, &[8, 2, 3, 5, 2, i]).expect("a substream kCRC").value.as_int().expect("a number");
+        assert_eq!(i128::from(checksum::crc32(file)), crc, "stream {i} against the kCRC 7-Zip wrote");
+    }
+
+    // The same files packed as one solid block. There is one stream and it
+    // opens as all four at once: where one of them stops is in the substream
+    // sizes, and laying those over the unpacked run is the thing that cannot
+    // be said. So the bytes are checked whole, and then at the boundaries the
+    // header does name.
+    let bytes = std::fs::read(&solid).expect("reads");
+    let d = Document::new(MemSource(bytes));
+    let mut e = Evaluator::new(formats::builtin("7z").expect("7z"));
+    assert_eq!(e.node(&d, &[7, 2]).expect("the streams").child_count, 1, "one folder, one stream");
+    let id = e.open_space(&d, 0, &[7, 2, 0]).expect("no error").expect("the solid folder opens");
+    assert_eq!(e.space(id).expect("it is there").bytes(), &want.concat()[..]);
+    let mut at = 0;
+    for (i, file) in want.iter().enumerate() {
+        let crc = e.node(&d, &[8, 2, 3, 5, 2, i]).expect("a substream kCRC").value.as_int().expect("a number");
+        let run = &e.space(id).expect("it is there").bytes()[at..at + file.len()];
+        assert_eq!(i128::from(checksum::crc32(run)), crc, "the solid folder's file {i}");
+        at += file.len();
+    }
+    assert_eq!(at, e.space(id).expect("it is there").len_bytes() as usize, "and nothing left over");
 }
 
 fn find(name: &str) -> Option<PathBuf> {
