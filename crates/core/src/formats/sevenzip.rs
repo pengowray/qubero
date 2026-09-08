@@ -1575,21 +1575,37 @@ mod tests {
     /// stream says none of how it was packed, so the properties byte and the
     /// dictionary size come from the coder and the size that comes out from
     /// `kCodersUnPackSize`, all three of them read where the stream is placed.
+    /// Two of them, because these are the only settings read per stream rather
+    /// than fixed by the template, and a second folder is what says they are
+    /// read at the stream asking. At the first stream an expression that had
+    /// lost its place would answer the same as one that had not.
     #[test]
     fn an_lzma_folder_opens_with_the_settings_its_coder_wrote_down() {
-        let text = b"a folder packed with LZMA1, which carries none of how it was packed. ".repeat(8);
-        let mut alone = Vec::new();
-        lzma_rs::lzma_compress(&mut &text[..], &mut alone).expect("packs");
-        // What `lzma` writes in front of the stream is what 7z writes into the
-        // coder instead: the properties byte, the dictionary size, and then
-        // eight bytes of unpacked size this leaves for `kCodersUnPackSize`.
-        let (props, dict, stream) = (alone[0], &alone[1..5], &alone[13..]);
-        let mut folder = vec![0x01, 0x23, 0x03, 0x01, 0x01, 0x05, props];
-        folder.extend_from_slice(dict);
-        let header = header_of(&[stream.len() as u64], &[folder], &[text.len() as u64], &["packed.txt"], &[]);
-        let (d, mut e) = read(archive(stream, &header));
-        let id = e.open_space(&d, 0, &[7, 2, 0]).expect("no error").expect("the folder opens");
-        assert_eq!(e.space(id).expect("it is there").bytes(), &text[..]);
+        let texts: [Vec<u8>; 2] = [
+            b"a folder packed with LZMA1, which carries none of how it was packed. ".repeat(8),
+            b"the second folder, packed on its own, with its own coder to say so. ".repeat(3),
+        ];
+        let (mut folders, mut packed, mut pack_sizes, mut unpack_sizes) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for text in &texts {
+            let mut alone = Vec::new();
+            lzma_rs::lzma_compress(&mut &text[..], &mut alone).expect("packs");
+            // What `lzma` writes in front of the stream is what 7z writes into
+            // the coder instead: the properties byte and the dictionary size,
+            // and then eight bytes of unpacked size, which 7z keeps in
+            // `kCodersUnPackSize` rather than here.
+            let mut folder = vec![0x01, 0x23, 0x03, 0x01, 0x01, 0x05, alone[0]];
+            folder.extend_from_slice(&alone[1..5]);
+            folders.push(folder);
+            pack_sizes.push((alone.len() - 13) as u64);
+            unpack_sizes.push(text.len() as u64);
+            packed.extend_from_slice(&alone[13..]);
+        }
+        let header = header_of(&pack_sizes, &folders, &unpack_sizes, &["first.txt", "second.txt"], &[]);
+        let (d, mut e) = read(archive(&packed, &header));
+        for (i, text) in texts.iter().enumerate() {
+            let id = e.open_space(&d, 0, &[7, 2, i]).expect("no error").unwrap_or_else(|| panic!("folder {i} opens"));
+            assert_eq!(e.space(id).expect("it is there").bytes(), &text[..], "folder {i}");
+        }
     }
 
     /// The codecs whose settings are a property of the format rather than of
