@@ -11,6 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
+use qubero_core::checksum;
+use qubero_core::codec::{self, Codec, StepField, StepKind};
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats;
@@ -21,7 +23,13 @@ const SENTENCE: &str = "Qubero reads the shape of a compressed file without deco
 
 #[test]
 fn a_file_that_is_one_stream_reads_as_what_the_stream_holds() {
-    let names = [("hello.zz", "zlib"), ("hello.txt.xz", "xz"), ("hello.txt.zst", "zstd"), ("hello.lz4", "lz4")];
+    let names = [
+        ("hello.zz", "zlib"),
+        ("hello.txt.xz", "xz"),
+        ("hello.txt.zst", "zstd"),
+        ("hello.lz4", "lz4"),
+        ("words.Z", "compress"),
+    ];
     let mut read = 0;
     for (name, template) in names {
         let Some(path) = find(name) else { continue };
@@ -62,6 +70,52 @@ fn a_file_that_is_one_stream_reads_as_what_the_stream_holds() {
     if read == 0 {
         eprintln!("skipped: no one-stream sample in hand. Set QUBERO_SAMPLES to a directory holding one.");
     }
+}
+
+/// What `words.Z` holds, as `gzip -dc` read it when the file was written.
+///
+/// A `.Z` carries no checksum of its own, so there is nothing in the file to
+/// check the decoding against and nothing in this repository that reads the
+/// format but the decoder being tested. These two numbers are the way out:
+/// they are of gzip's output, taken by the script that built the sample and
+/// written into `sources.tsv` beside it, so what this asserts is that our
+/// decoder and gzip make the same file out of the same bytes.
+const WORDS_BYTES: usize = 65_564;
+const WORDS_CRC32: u32 = 0xa52d_d4a8;
+
+/// The one sample here whose decoder can be wrong in an interesting way.
+///
+/// `ab.Z` is six bytes and never leaves nine-bit codes, so a decoder that
+/// knows nothing about widths that grow or tables that are cleared reads it
+/// perfectly. This one crosses nine, ten, eleven and twelve bits and clears
+/// the table twice, and each of those is a place where the rest of a group of
+/// eight codes may be padding to be skipped.
+#[test]
+fn the_compress_sample_comes_out_as_gzip_reads_it() {
+    let Some(path) = find("words.Z") else {
+        eprintln!("skipped: no words.Z in hand. Set QUBERO_SAMPLES to a directory holding one.");
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("reads");
+    let (out, trace) = codec::decode_traced(Codec::Compress, &bytes).expect("the stream opens");
+    assert_eq!(out.len(), WORDS_BYTES, "{}: a different number of bytes than gzip gives", path.display());
+    assert_eq!(checksum::crc32(&out), WORDS_CRC32, "{}: the same length as gzip gives and other bytes", path.display());
+    assert!(out.starts_with(SENTENCE.as_bytes()));
+    trace.check_tiles().expect("the steps tile");
+    // Three tables, because the file clears twice, and every block but the
+    // last ends on a clear.
+    assert_eq!(trace.blocks().len(), 3, "{}: the table was not cleared twice", path.display());
+    let clears = trace.steps().filter(|s| s.kind == StepKind::EndOfBlock).count();
+    assert_eq!(clears, 2);
+    // The padding is only ever where a clear left it: in block mode a width
+    // change lands on a group boundary and costs nothing.
+    let pads: Vec<_> = trace
+        .steps()
+        .filter(|s| matches!(s.kind, StepKind::Header(StepField::Padding, _)))
+        .map(|s| s.in_bits.end - s.in_bits.start)
+        .collect();
+    assert_eq!(pads, vec![12, 24], "{}: padding somewhere other than the two clears", path.display());
+    eprintln!("--- {}: compress, {} bytes in, {} out, {} steps", path.display(), bytes.len(), out.len(), trace.len());
 }
 
 /// The whole file, for the one sample whose blocks were stored rather than

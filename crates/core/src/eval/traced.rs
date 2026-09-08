@@ -161,6 +161,7 @@ pub(super) fn symbol_ty(step: &Step) -> (String, T) {
                 (3, "stored"),
                 (4, "not named"),
                 (5, "pixel"),
+                (6, "padding"),
             ],
         )
     };
@@ -178,6 +179,12 @@ pub(super) fn symbol_ty(step: &Step) -> (String, T) {
             ],
         ),
         StepKind::EndOfBlock => ("end of block".to_string(), vec![("kind", kind(2))]),
+        // Bits between the symbols that are not a symbol. A `compress` stream
+        // pads the rest of its group of eight codes out with zeroes whenever
+        // the width grows or the table is cleared, and those bits are as real
+        // as any others: a reader standing on one is told what they are rather
+        // than shown whichever code is nearest.
+        StepKind::Header(StepField::Padding, _) => ("padding".to_string(), vec![("kind", kind(6))]),
         StepKind::Stored => (
             "literals".to_string(),
             vec![("kind", kind(3)), ("length", T::computed(E::lit(bytes as i128)))],
