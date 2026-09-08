@@ -272,6 +272,14 @@ export class OverviewPanel {
     // the file they are, which is the question the map cannot answer once the
     // small things are under a pixel.
     this.treemap = new TreemapPanel(this.doc);
+    // A box is a stretch of the file, so pressing one does what pressing a
+    // cell of the minimap does. It was never wired: a press marked the box and
+    // went nowhere, which made the two pictures answer the same gesture two
+    // different ways, and the hint under the map promised the one that did not
+    // happen.
+    this.treemap.onJump = (startBit, endBit) => this.onJump(startBit, endBit);
+    this.treemap.onPick = (pick) => this.onPick(pick);
+    this.treemap.onResize = () => this.pump();
 
     this.body = document.createElement("div");
     this.body.className = "ov-body";
