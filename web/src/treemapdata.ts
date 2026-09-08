@@ -95,7 +95,52 @@ export function structureTree(doc: Doc, at: StructureAt, pixels: number): Treema
   // can see where in its parent it came from. The one box that is not in file
   // order is the pooled remainder, which is drawn faded and last because it
   // is not one place in the file at all.
-  return { root: node, unit: "bits", progress: null, none: null, ordered: true };
+  return { root: whole(doc, node, at), unit: "bits", progress: null, none: null, ordered: true };
+}
+
+/**
+ * The map's root made to be the file, whatever the template covers.
+ *
+ * A template that describes seven bytes of a file describes seven bytes, and a
+ * treemap fills its box with whatever its children come to: a 375 MiB archive
+ * nothing but the signature was read from drew one box called `signature`
+ * across the whole panel. The picture said the file was its own magic number.
+ *
+ * So at the top the boxes are the template's root and, where the template
+ * stops short, everything after it. The same rule every other mode follows and
+ * the one this mode was missing: the areas are of the file, so a box's share
+ * is its share of the file and no reading can inflate itself by having read
+ * almost nothing.
+ *
+ * Only at the top. Inside an opened box the picture is that box, which is what
+ * the trail and the caption above it say it is.
+ */
+function whole(doc: Doc, node: TreeNode, at: StructureAt): TreeNode {
+  // `at` and not the path: a reader who opens the template's own box is rooted
+  // at the same empty path the file is, and testing the path would wrap it
+  // again and leave them where they started.
+  if (at !== null) return node;
+  const after = (node.range?.offsetBits ?? 0) + node.value;
+  const rest = doc.lengthBits - after;
+  if (rest <= 0) return node;
+  return {
+    key: "file",
+    name: TREEMAP.root,
+    value: doc.lengthBits,
+    color: UNMAPPED_COLOR,
+    children: [
+      { ...node, key: "template" },
+      {
+        key: "rest",
+        name: GAP_LABEL,
+        value: rest,
+        color: UNMAPPED_COLOR,
+        colorClass: "tm-unmapped",
+        detail: UNMAPPED_DETAIL,
+        range: { offsetBits: after, sizeBits: rest },
+      },
+    ],
+  };
 }
 
 /** Where the picture is rooted: a node of the template, and, where the reader
