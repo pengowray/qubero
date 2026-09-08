@@ -21,14 +21,59 @@ fn every_check_names_fields_that_exist() {
     let mut declared = 0;
     for name in formats::builtin_names() {
         let Some(t) = formats::builtin(name) else { continue };
+        // Most templates declare nothing to check, and the walk below is
+        // scoped: a named type reachable by five paths is walked five times,
+        // because what a check may name depends on which path it came by. This
+        // pass is not scoped and steps into each named type once, so it settles
+        // "is there anything here" for the other two hundred templates in the
+        // time the scoped walk takes for one.
+        if !any_check(&t.root, &t.types, &mut HashSet::new()) {
+            continue;
+        }
         let mut w = Walk { name, seen: HashSet::new(), scope: Vec::new(), found: 0 };
         w.ty(&t.root, &t.types);
         declared += w.found;
     }
     // A guard against the walk quietly stopping finding anything: the seven
     // the inspector used to hand-write are the floor.
-    assert!(declared >= 7, "only {declared} checks found across every template");
-    eprintln!("{declared} checks declared");
+    //
+    // The number counts places, not declarations: a check inside a type two
+    // formats share is validated once for each way of reaching it, since what
+    // its names resolve to depends on which way that was. That is the point of
+    // the scoped walk and is why the number is far larger than the count of
+    // `field_check` calls in the templates.
+    assert!(declared >= 7, "only {declared} check sites found across every template");
+    eprintln!("{declared} check sites validated");
+}
+
+/// Whether a type tree holds a check anywhere in it, scope disregarded. Each
+/// named type is stepped into once and never again, which is what makes this
+/// cheap and is why it cannot answer the question the walk below answers.
+fn any_check<'a>(ty: &'a Ty, types: &'a HashMap<String, Ty>, seen: &mut HashSet<&'a str>) -> bool {
+    match ty {
+        Ty::Struct(s) => s.fields.iter().any(|f| f.check.is_some() || any_check(&f.ty, types, seen)),
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => any_check(elem, types, seen),
+        Ty::PointerList { elem, .. } => any_check(elem, types, seen),
+        Ty::Nullable { inner, .. }
+        | Ty::At { inner, .. }
+        | Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::Decoded { inner, .. }
+        | Ty::Enum { inner, .. }
+        | Ty::Flags { inner, .. } => any_check(inner, types, seen),
+        Ty::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, t)| any_check(t, types, seen)) || any_check(default, types, seen)
+        }
+        Ty::Match { cases, default, .. } => {
+            cases.iter().any(|(_, t)| any_check(t, types, seen)) || any_check(default, types, seen)
+        }
+        Ty::Named(n) => match types.get_key_value(&**n) {
+            Some((key, t)) => seen.insert(key) && any_check(t, types, seen),
+            None => false,
+        },
+        _ => false,
+    }
 }
 
 struct Walk<'a> {
