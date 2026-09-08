@@ -210,7 +210,7 @@ export const TREEMAP = {
    *  taken by the byte-class map above it and "Layout" by the strip under it. */
   title: "Treemap",
   groupBy: "Group by",
-  modes: { structure: "Structure", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
+  modes: { structure: "Structure", classes: "Byte class", kinds: "Field type", bytes: "Byte value", bits: "Bit value" },
   /** Rectangles too small to point at, drawn as one. The leading ellipsis is
    *  the mark this app uses for content cut short rather than absent. */
   pooled: (n: number): string => `… ${n.toLocaleString()} more`,
@@ -271,6 +271,14 @@ export const TREEMAP = {
    *  what tells them apart is which elements they hold. */
   runName: (from: number, to: number): string => `[${from.toLocaleString()}\u2013${to.toLocaleString()}]`,
   runDetail: (n: number, noun: string): string => `${countText(n, noun)} \u00b7 double-click to open`,
+  /** The five things a stretch of bytes can be when nothing describes it. The
+   *  same words the legend over the map uses, because they are the same five
+   *  colours and the same scan. */
+  classLabel: ["Zeros", "One repeated byte", "Text", "Data", "High entropy"] as readonly string[],
+  classDetail: (runs: number): string => (runs === 1 ? "in one stretch" : `in ${runs.toLocaleString()} stretches`),
+  /** The tail of a file the scan has not reached. Drawn empty, so the map's
+   *  area stays the whole file while it fills in. */
+  unscanned: "not scanned yet",
   byteNoun: "byte value",
   /** One byte value's tooltip: how many of it there are, and which of the four
    *  groups it is in, since a zoomed map may not be showing the group. */

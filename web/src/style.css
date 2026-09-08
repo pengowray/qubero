@@ -4237,6 +4237,25 @@ table.rec tr.is-on td {
   box-shadow: inset 0 0 0 2px #fff;
 }
 
+/* Each picture in the rail gets a heading row: its name on the left and what
+   it is drawn at on the right, the same shape as the treemap's own bar so the
+   two read as two of a kind. */
+.ov-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ov-head h3 {
+  margin: 0;
+}
+.ov-scale {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
 /* The treemap with its controls: a section of the rail, or thrown over the
    whole window when a reader wants to read it rather than glance at it. */
 .tmp {

@@ -21,7 +21,7 @@ import type { OutlineHeading } from "./outline.js";
 import { formatBytes, formatOffset, percentText } from "./doc.js";
 import { TREEMAP } from "./strings.js";
 import { boxAt, drawTreemap, nodeAt, type TreeNode } from "./treemap.js";
-import { bitsLine, bitsTree, boxTitle, bytesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type StructureAt, type TreemapMode, type TreemapTree } from "./treemapdata.js";
+import { bitsLine, bitsTree, boxTitle, bytesTree, classesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type StructureAt, type TreemapMode, type TreemapTree } from "./treemapdata.js";
 
 /** The whole-file scan's resolution. The same number the rail's byte-class map
  *  asks for, so both are answered by one scan: the core keeps one per sheet
@@ -307,6 +307,15 @@ export class TreemapPanel {
 
   private build(pixels: number): TreemapTree {
     if (this.mode === "structure") return structureTree(this.doc, this.rootedAt(), pixels);
+    // What the map above this one is coloured by. It comes from the same scan
+    // and needs nothing else, so it answers as soon as the first buckets land.
+    if (this.mode === "classes") {
+      const step = this.doc.overviewStep(SCAN_BUCKETS);
+      if (step.status === "error") return blank(TREEMAP.failed(step.message));
+      if (step.status !== "ok") return blank(SCANNING(0));
+      const s = step.node;
+      return classesTree(s.classes, s.bucket_bytes, this.doc.lengthBytes, s.read_bytes);
+    }
     // Field type is a walk of the template, not a read of the bytes, so it
     // must not be held up behind the byte scan or report the byte scan's
     // progress as its own.

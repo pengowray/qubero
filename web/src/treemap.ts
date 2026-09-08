@@ -118,10 +118,11 @@ const NEST_AREA = 700;
  *  an edge. Even on all four sides, so nesting costs a box the same share of
  *  its width as of its height and no direction is quietly squeezed. */
 const FRAME_PAD = 2;
-/** A box gets its name written over it once it can hold this many characters
- *  of it at the smallest size. Below that the name is in the tooltip, which is
- *  where a reader who wants it will look. */
-const MIN_CHARS = 3;
+/** A long name is written over its box once this much of it fits, and cut off
+ *  with an ellipsis. A short one has to fit whole or not be drawn at all:
+ *  `program_header_off…` is still worth reading and `0x8…` is not, because a
+ *  cut-off byte value is a different byte value. */
+const MIN_CHARS = 9;
 /** No tree is descended past this, however much room there is. A file whose
  *  structure runs forty levels deep would otherwise spend the whole box on
  *  frames. */
@@ -290,8 +291,9 @@ function labelLayer(nodes: readonly HierarchyRectangularNode<TreeNode>[], boxes:
     const h = node.y1 - node.y0;
     const size = LABEL_SIZES[Math.min(node.depth - 1, LABEL_SIZES.length - 1)] ?? 10;
     const lineH = size + 2 * LABEL_PAD_Y + 2;
-    if (h < lineH || w < MIN_CHARS * size * CHAR_RATIO + 2 * LABEL_PAD_X) continue;
     const text = node.data.name;
+    const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X;
+    if (h < lineH || w < need) continue;
     const wanted = text.length * size * CHAR_RATIO + 2 * LABEL_PAD_X;
     const width = Math.min(wanted, w - 2);
     const rect = free({ x0: node.x0 + 1, y0: node.y0 + 1, x1: node.x0 + 1 + width, y1: node.y0 + 1 + lineH }, placed, node.y1 - 1);

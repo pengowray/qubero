@@ -23,14 +23,14 @@
  */
 
 import { byteText, formatBytes, formatOffset, percentText, type Doc, type KindTotal, type KindTotals, type TemplateNode } from "./doc.js";
-import { fieldClass, UNMAPPED_COLOR } from "./fieldstyle.js";
+import { byteClassColor, fieldClass, UNMAPPED_COLOR } from "./fieldstyle.js";
 import { childWord, countText, GAP_LABEL, KIND_LABEL, NO_TEMPLATE_HINT, REPORT, TREEMAP } from "./strings.js";
 import type { TreeNode } from "./treemap.js";
 
 /** Which key the file's bytes are divided by. */
-export type TreemapMode = "structure" | "kinds" | "bytes" | "bits";
+export type TreemapMode = "structure" | "classes" | "kinds" | "bytes" | "bits";
 
-export const TREEMAP_MODES: readonly TreemapMode[] = ["structure", "kinds", "bytes", "bits"];
+export const TREEMAP_MODES: readonly TreemapMode[] = ["structure", "classes", "kinds", "bytes", "bits"];
 
 /** How the caller says what a box is worth: bits everywhere except the byte
  *  histogram, whose numbers are counts of a value rather than sizes of a run.
@@ -346,6 +346,66 @@ const READ_AREA = 600;
  *  many were not drawn. */
 const CHILDREN_MAX = 400;
 
+// ---- byte classes ----
+
+/**
+ * What the map above this one is coloured by, as amounts instead of places.
+ *
+ * The rail's map says where the zeros and the compressed middle are; it cannot
+ * say how much of the file they are, because a cell is a cell whether it holds
+ * a per cent or a thousandth. This is the other half of that map, in the same
+ * five colours with the same legend over it, and it is the answer for a file
+ * no template covers: a tail of padding and a compressed body show up whether
+ * or not anything describes them.
+ *
+ * Inside each class are its runs, in file order and biggest first, so the
+ * question after "a third of this file is high entropy" has an answer in the
+ * picture: which third, and in how many pieces.
+ */
+export function classesTree(classes: string, bucketBytes: number, fileBytes: number, scanned: number): TreemapTree {
+  const runs = new Map<number, { from: number; len: number }[]>();
+  for (let i = 0; i < classes.length; i++) {
+    const cls = Number(classes[i]);
+    const list = runs.get(cls) ?? [];
+    const last = list[list.length - 1];
+    if (last !== undefined && last.from + last.len === i) last.len += 1;
+    else list.push({ from: i, len: 1 });
+    runs.set(cls, list);
+  }
+  const kids: TreeNode[] = [];
+  for (const [cls, list] of [...runs].sort((a, b) => a[0] - b[0])) {
+    const cells = list.reduce((n, r) => n + r.len, 0);
+    const label = TREEMAP.classLabel[cls] ?? TREEMAP.classLabel[3] ?? "Data";
+    const color = byteClassColor(cls);
+    const bytesOf = (from: number, len: number): number => Math.min(fileBytes - from * bucketBytes, len * bucketBytes);
+    kids.push({
+      key: String(cls),
+      name: label,
+      value: cells * bucketBytes,
+      color,
+      detail: TREEMAP.classDetail(list.length),
+      children: list.map((r) => ({
+        key: String(r.from),
+        name: formatOffset(r.from * bucketBytes * 8),
+        value: bytesOf(r.from, r.len),
+        color,
+        detail: label,
+        range: { offsetBits: r.from * bucketBytes * 8, sizeBits: bytesOf(r.from, r.len) * 8 },
+      })),
+    });
+  }
+  const left = Math.max(0, fileBytes - classes.length * bucketBytes);
+  if (left > 0 && scanned < fileBytes) {
+    kids.push({ key: "unscanned", name: TREEMAP.unscanned, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked", detail: TREEMAP.unscanned });
+  }
+  return {
+    root: { key: "file", name: TREEMAP.root, value: Math.max(fileBytes, 1), color: UNMAPPED_COLOR, children: kids },
+    unit: "count",
+    progress: scanned >= fileBytes ? null : SCANNING(share(scanned, fileBytes)),
+    none: null,
+  };
+}
+
 // ---- field kinds ----
 
 /**
@@ -453,7 +513,10 @@ export function bytesTree(histogram: readonly number[], scanned: number, total: 
   const kids: TreeNode[] = [];
   for (const { g, sum, values } of groups) {
     const color = BYTE_GROUP_COLOR[g.label] ?? UNMAPPED_COLOR;
-    if (!grouped) {
+    // A group of one value is that value. `00` is the whole of its group, and
+    // a frame round it would put the group's name over the value's own and
+    // spend a border saying nothing.
+    if (!grouped || values.length === 1) {
       kids.push(...values);
       continue;
     }
@@ -590,6 +653,7 @@ export function boxTitle(node: TreeNode, share: number, unit: Unit, read: number
 export function poolNoun(mode: TreemapMode, parent: TemplateNode | null): string {
   if (mode === "bytes") return TREEMAP.byteNoun;
   if (mode === "kinds") return "type";
+  if (mode === "classes") return "run";
   return parent === null ? "part" : childWord(parent);
 }
 

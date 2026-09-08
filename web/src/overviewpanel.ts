@@ -18,9 +18,10 @@
 // and reports what the block's bytes turned out to be.
 
 import { byteText, formatBytes, formatOffset, percentText } from "./doc.js";
-import { NO_TEMPLATE, REPORT } from "./strings.js";
+import { NO_TEMPLATE, REPORT, TREEMAP } from "./strings.js";
 import type { Doc, FocusState, OverviewState, Span } from "./doc.js";
 import type { FieldPick } from "./doc.js";
+import { byteClassColors } from "./fieldstyle.js";
 import { fileMap, markMap, segmentWidths } from "./filemap.js";
 import { TreemapPanel } from "./treemappanel.js";
 import type { MapMark, MapSegment } from "./filemap.js";
@@ -72,13 +73,9 @@ const LOGICAL_PAGE = 80;
 /** How far each level of the logical tree steps in. */
 const LOGICAL_INDENT_PX = 12;
 
-/** Fill colours for the map cells, light and dark, by class digit. The legend
- *  swatches use the same values, so a colour on the map can be looked up. */
-const LIGHT = ["#e9ebee", "#b9bec7", "#4c9a63", "#6b8fd8", "#d08a2e"];
-const DARK = ["#23252b", "#4a4f58", "#4f9e63", "#6f93e8", "#cf9440"];
-
-/** What each class is called, by digit. */
-const CLASS_LABEL = ["Zeros", "One repeated byte", "Text", "Data", "High entropy"];
+/** What each class is called, by digit. The fill colours live in
+ *  `fieldstyle`, since the treemap of the same scan paints in them too. */
+const CLASS_LABEL = TREEMAP.classLabel;
 const CLASS_TITLE = [
   "Every byte is 0x00",
   "Every byte is the same value, such as 0xFF padding",
@@ -90,9 +87,13 @@ const CLASS_TITLE = [
 const CLASS_PROSE = ["zeros", "one repeated byte", "text", "data", "high-entropy data, likely compressed or encrypted"];
 
 const TITLE = "Overview";
+/** The class map's own heading. The rail holds two pictures of the file and
+ *  they answer different questions, so each says which. */
+const MAP_TITLE = "Where";
+const MAP_WHAT = "Every cell is an equal stretch of the file, coloured by what its bytes are like. Click a cell to go there; double-click to measure it on its own.";
 const SIZE_LABEL = "Size";
 const TYPE_LABEL = "Type";
-const SCALE_LABEL = "Scale";
+const SCALE_LABEL = (cell: string): string => `1 cell = ${cell}`;
 const UNKNOWN_TYPE = "Not identified";
 /** The strip under the class map, when pointed at. */
 const LAYOUT_TITLE = "The parts of the file in order, each as wide as its share of the bytes";
@@ -276,6 +277,8 @@ export class OverviewPanel {
   readonly el: HTMLElement;
   private readonly body: HTMLElement;
   private readonly facts: HTMLElement;
+  private readonly mapHead: HTMLElement;
+  private readonly mapScale: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly readout: HTMLElement;
   private readonly legend: HTMLElement;
@@ -395,8 +398,17 @@ export class OverviewPanel {
 
     this.facts = document.createElement("dl");
     this.facts.className = "ov-facts";
+    this.mapHead = document.createElement("div");
+    this.mapHead.className = "ov-head";
+    this.mapScale = document.createElement("span");
+    this.mapScale.className = "ov-scale";
+    const mapTitle = document.createElement("h3");
+    mapTitle.textContent = MAP_TITLE;
+    mapTitle.title = MAP_WHAT;
+    this.mapHead.append(mapTitle, this.mapScale);
     this.canvas = document.createElement("canvas");
     this.canvas.className = "ov-map";
+    this.canvas.title = MAP_WHAT;
     this.readout = document.createElement("p");
     this.readout.className = "ov-readout";
     this.readout.textContent = BLANK;
@@ -449,16 +461,20 @@ export class OverviewPanel {
 
     this.body = document.createElement("div");
     this.body.className = "ov-body";
+    // Two pictures of one file, each with its heading, and in the order the
+    // questions come: what it is, where the bytes of each kind are, then the
+    // block a reader opened out of that map, then how much of the file each
+    // part is. The block goes straight under the map the cell was picked on,
+    // because the cell and the close look at it are one thing to read.
     this.body.append(
       this.facts,
+      this.mapHead,
       this.canvas,
       this.readout,
       this.legend,
       this.layout,
-      this.treemap.el,
-      // Straight under the map the cell was picked on: the cell and the
-      // zoomed-in view of it are one thing to look at.
       this.focusEl,
+      this.treemap.el,
       this.tabs,
       this.contentsEl,
       this.logicalEl,
@@ -739,8 +755,11 @@ export class OverviewPanel {
     const rows: [string, string][] = [[SIZE_LABEL, size]];
     const type = this.identity !== "" ? this.identity : this.doc.template ?? (this.identified ? UNKNOWN_TYPE : "");
     if (type !== "") rows.push([TYPE_LABEL, type]);
-    rows.push([SCALE_LABEL, `1 cell = ${cellText(s.bucket_bytes)}`]);
     this.facts.replaceChildren(...rows.flatMap(([k, v]) => this.factRow(k, v)));
+    // What one cell stands for belongs on the map, not in a list of facts
+    // about the file: it is a fact about the drawing, and read among Size and
+    // Type it looked like one more thing the file was.
+    this.mapScale.textContent = SCALE_LABEL(cellText(s.bucket_bytes));
   }
 
   private factRow(key: string, value: string): HTMLElement[] {
@@ -751,8 +770,8 @@ export class OverviewPanel {
     return [dt, dd];
   }
 
-  private colors(): string[] {
-    return matchMedia("(prefers-color-scheme: dark)").matches ? DARK : LIGHT;
+  private colors(): readonly string[] {
+    return byteClassColors();
   }
 
   /** One map, wherever it is drawn. Cells outside `bright` are dimmed, which

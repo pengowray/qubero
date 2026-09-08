@@ -73,3 +73,28 @@ const FIELD_HUES = ["#5b8dd6", "#62c48b", "#c9a45c", "#b48ce0", "#d98a9e"];
 export function fieldHue(index: number): string {
   return FIELD_HUES[((index % FIELD_HUES.length) + FIELD_HUES.length) % FIELD_HUES.length] ?? FIELD_HUES[0] ?? "#888";
 }
+
+/**
+ * What a stretch of bytes is like, without a template: zeros, one repeated
+ * byte, text, structured data, or bytes using the whole range about evenly.
+ *
+ * A fourth palette and the widest question of the four. It is the only one
+ * that answers for a file nothing describes, which is why the rail's map is
+ * painted in it, and it is here rather than in that panel so the treemap of
+ * the same classes is the same five colours: two pictures of one scan that
+ * disagreed about which colour "high entropy" is would be two scans as far as
+ * a reader is concerned.
+ */
+const CLASS_LIGHT = ["#e9ebee", "#b9bec7", "#4c9a63", "#6b8fd8", "#d08a2e"];
+const CLASS_DARK = ["#23252b", "#4a4f58", "#4f9e63", "#6f93e8", "#cf9440"];
+
+/** The five in the theme on screen. Read afresh each time: the theme follows
+ *  the system, and a palette read once is a palette that goes wrong at dusk. */
+export function byteClassColors(): readonly string[] {
+  return matchMedia("(prefers-color-scheme: dark)").matches ? CLASS_DARK : CLASS_LIGHT;
+}
+
+export function byteClassColor(cls: number): string {
+  const all = byteClassColors();
+  return all[cls] ?? all[3] ?? "#888";
+}
