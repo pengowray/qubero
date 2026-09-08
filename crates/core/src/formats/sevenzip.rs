@@ -252,6 +252,69 @@ fn pack_info() -> T {
     )
 }
 
+/// How LZMA was set up: one byte packing three numbers, and the dictionary.
+///
+/// The byte is `lc + 9 * (lp + 5 * pb)`, so the three come back out by
+/// dividing rather than by masking, which is why they are worked out rather
+/// than read: they are not bit fields and no run of bits holds any of them.
+/// `5d` is 3, 0 and 2, which is what every 7-Zip since the first writes unless
+/// it was told otherwise.
+///
+/// These five bytes are the whole of what a raw LZMA1 stream does not carry,
+/// which is why a 7z header can be unpacked at all: see [`packed_streams`].
+fn lzma_properties() -> T {
+    let props = E::field("props");
+    let lp_and_pb = props.clone().div(E::lit(9));
+    T::inline_structure(
+        "LzmaProperties",
+        vec![
+            ("props", T::u8()),
+            ("literal_context_bits", T::computed(props.clone().sub(lp_and_pb.clone().mul(E::lit(9))))),
+            (
+                "literal_pos_bits",
+                T::computed(lp_and_pb.clone().sub(lp_and_pb.clone().div(E::lit(5)).mul(E::lit(5)))),
+            ),
+            ("pos_bits", T::computed(lp_and_pb.div(E::lit(5)))),
+            ("dict_size", T::u32(Little)),
+            ("unparsed", T::if_room(unparsed())),
+        ],
+    )
+}
+
+/// How LZMA2 was set up: one byte standing for the dictionary size, which is
+/// `(2 | (b & 1)) << (b / 2 + 11)` for every value but 40, where it is one
+/// byte short of four gigabytes. Read as the code it is; nothing here unpacks
+/// LZMA2, and multiplying it out would be a number no run of the file holds.
+fn lzma2_properties() -> T {
+    T::inline_structure(
+        "Lzma2Properties",
+        vec![("dict_size_code", T::u8()), ("unparsed", T::if_room(unparsed()))],
+    )
+}
+
+/// The settings a coder wrote down, read as the fields they are rather than as
+/// the run of bytes they sit in.
+///
+/// Switched on the codec id, and on its width before that. A width the format
+/// does not write leaves the id as bytes, and bytes hold no number to switch
+/// on; asking the width first is what keeps a coder whose id is nonsense from
+/// taking the folder around it down with it. Each id has one width, so the two
+/// questions cost one row between them.
+///
+/// Every other codec keeps its settings as bytes. That is not a gap to be
+/// filled in one go: a codec whose settings nothing here reads has none worth
+/// dividing until something reads them.
+fn coder_settings() -> T {
+    T::switch(
+        E::field("flags").and(E::lit(0x0f)),
+        vec![
+            (1, T::switch(E::field("codec_id"), vec![(0x21, lzma2_properties())], unparsed())),
+            (3, T::switch(E::field("codec_id"), vec![(0x03_0101, lzma_properties())], unparsed())),
+        ],
+        unparsed(),
+    )
+}
+
 /// One step of the pipeline a folder runs its bytes through: which codec, and
 /// what it was set up with.
 fn coder() -> T {
@@ -299,7 +362,10 @@ fn coder() -> T {
                         1,
                         T::inline_structure(
                             "CoderProperties",
-                            vec![("properties_size", number()), ("properties", T::bytes(E::field("properties_size")))],
+                            vec![
+                                ("properties_size", number()),
+                                ("settings", T::sized(E::field("properties_size"), coder_settings())),
+                            ],
                         ),
                     )],
                     nothing(),
@@ -1136,6 +1202,56 @@ mod tests {
         let lzma = e.node(&d, &[8, 1, 1, 4, 0, 1, 0, 1]).unwrap();
         assert_eq!(lzma.value, Value::Enum { raw: 0x03_0101, name: Some("LZMA".into()), hex: true });
         assert_eq!(lzma.size_bits, 3 * 8, "three bytes, and the same number a one-byte id would be");
+    }
+
+    /// The five bytes an LZMA coder writes are five bytes of settings, and
+    /// what they say is reachable rather than shown as a blob. The properties
+    /// byte is three numbers got by dividing, not by masking.
+    #[test]
+    fn an_lzma_coder_says_how_it_packed_the_stream() {
+        let (d, mut e) = read(archive(&vec![0u8; 120], &encoded_header()));
+        let settings = [8usize, 1, 1, 4, 0, 1, 0, 3, 1];
+        let at = |e: &mut Evaluator, i: usize| e.node(&d, &[settings.as_slice(), &[i]].concat()).unwrap().value;
+        assert_eq!(at(&mut e, 0), Value::UInt(0x5d));
+        assert_eq!(at(&mut e, 1), Value::Int(3), "literal context bits");
+        assert_eq!(at(&mut e, 2), Value::Int(0), "literal position bits");
+        assert_eq!(at(&mut e, 3), Value::Int(2), "position bits");
+        // `00 10 00 00`, low byte first: four kibibytes, which is all the
+        // dictionary a header of a few hundred bytes can use.
+        assert_eq!(at(&mut e, 4), Value::UInt(4096));
+        // The three worked-out numbers cost no bytes, and the block is the
+        // five the coder said it was.
+        let block = e.node(&d, &settings).unwrap();
+        assert_eq!(block.size_bits, 5 * 8);
+        assert_eq!(e.node(&d, &[settings.as_slice(), &[5]].concat()).unwrap().size_bits, 0, "nothing left over");
+    }
+
+    /// A codec whose settings nothing here reads keeps them as the bytes they
+    /// are, and the walk steps over exactly as many as the block said.
+    #[test]
+    fn a_codec_this_does_not_know_keeps_its_settings_whole() {
+        // A one-byte id of 0xfe, which is no codec, with three bytes of
+        // settings behind it.
+        let mut h = vec![0x01, 0x04, 0x06];
+        h.extend([num(0), num(1)].concat());
+        h.push(0x09);
+        h.extend(num(4));
+        h.extend([0x00, 0x07, 0x0b]);
+        h.extend(num(1));
+        h.extend([0x00, 0x01, 0x21, 0xfe, 0x03, 0xaa, 0xbb, 0xcc, 0x0c]);
+        h.extend(num(4));
+        h.extend([0x00, 0x00, 0x05]);
+        h.extend(num(1));
+        h.push(0x11);
+        let body = [vec![0x00], utf16("kept")].concat();
+        h.extend(num(body.len() as u64));
+        h.extend(body);
+        h.extend([0x00, 0x00]);
+        let (d, mut e) = read(archive(b"abcd", &h));
+        let settings = [8usize, 2, 2, 4, 0, 1, 0, 3, 1];
+        assert_eq!(e.node(&d, &settings).unwrap().size_bits, 3 * 8);
+        // And the file table past it still reads, so nothing was miscounted.
+        assert_eq!(e.node(&d, &[8, 3, 2, 0, 1, 1, 1, 0]).unwrap().value, Value::Str("kept".into()));
     }
 
     /// `kEmptyStream` is a bit per file, and a count of files that is not a
