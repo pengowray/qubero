@@ -1255,6 +1255,15 @@ export class Doc {
     return this.template === "zip" || this.template === "zarrzip";
   }
 
+  /** Whether the file is a PNG, whatever else it also is. A PICO-8 cartridge
+   *  and a Picotron one are both PNGs with a payload hidden in the low bits of
+   *  the pixels, and they read under their own templates, so anything asking
+   *  "is this a PNG" by name alone said no and skipped the chunk checksums a
+   *  PNG carries either way. */
+  get isPng(): boolean {
+    return this.template === "png" || this.template === "p8png" || this.template === "p64png";
+  }
+
   /** Best current projection for a variable-size array still being walked. */
   extentEstimate(): ExtentEstimate | null {
     const raw = this.editor.extent_estimate(this.space);

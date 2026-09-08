@@ -1023,7 +1023,7 @@ export class Inspector {
 
   private integrityPlan(path: readonly number[], n: TemplateNode): IntegrityPlan | null {
     const siblings = this.siblings(path);
-    if (this.doc.template === "png" && n.name === "crc") {
+    if (this.doc.isPng && n.name === "crc") {
       const numeric = Number(n.edit_text);
       if (!Number.isFinite(numeric)) return null;
       const expected = numeric >>> 0;
@@ -1163,7 +1163,12 @@ export class Inspector {
         result.textContent = ok ? `Valid · ${actual}` : `Mismatch · calculated ${actual}, stored ${expected}`;
       } catch (cause) {
         result.classList.add("bad");
-        result.textContent = cause instanceof Error ? cause.message : "Could not check this data.";
+        // Prefixed, whatever went wrong. What lands here is any thrown
+        // message, including a browser's own decompression error, and in the
+        // slot under "Integrity" a bare sentence about loading or about a
+        // stream reads as a finding about the file rather than as a check that
+        // did not happen.
+        result.textContent = CHECKED.notChecked(cause instanceof Error ? cause.message : CHECKED.unknownFailure);
       }
     };
     box.append(subhead("Integrity"), this.coveredRows(plan));
@@ -1203,7 +1208,7 @@ export class Inspector {
       dd.append(value);
       rows.append(dt, dd);
     };
-    add(CHECKED.sumLabel, `${plan.label} · ${CHECKED.of(plan.covers.what, formatBytes(plan.bytes))}`);
+    add(CHECKED.sumLabel, CHECKED.of(plan.label, plan.covers.what, formatBytes(plan.bytes)));
     const run = plan.covers.at ?? plan.covers.from;
     if (run !== null) {
       const b = document.createElement("button");
@@ -1225,7 +1230,10 @@ export class Inspector {
   private async loadBytes(at: number, len: number): Promise<Uint8Array> {
     await this.doc.ensureRange(at, len);
     const read = this.doc.read(at, len);
-    if (!read.complete) throw new Error("Some bytes could not be loaded.");
+    // Only what went wrong: the state in front of it is added where every
+    // failure is caught, so a browser's own decompression error gets the same
+    // treatment as this one.
+    if (!read.complete) throw new Error(CHECKED.missingBytes);
     return read.bytes;
   }
 

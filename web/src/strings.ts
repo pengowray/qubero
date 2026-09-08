@@ -66,23 +66,71 @@ export const DECODED_NO_HEX = "Offset in the unpacked stream, not a file address
  * them without being told which.
  */
 export const CHECKED = {
-  /** The row naming the sum and what it is taken over. */
-  sumLabel: "Checks",
-  of: (what: string, size: string): string => `${what}, ${size}`,
-  /** The bytes summed, when they are bytes of the file. */
-  overLabel: "Over",
-  /** The bytes those were made from, when the sum is over something unpacked
-   *  and so over bytes that are nowhere in the file. Its own word, because
-   *  "over" would be a different and wrong claim. */
-  fromLabel: "Unpacked from",
+  /**
+   * The row naming the sum and what it is taken over. A noun, like `Position`
+   * and `Length` further down: the row is a fact about the field, and the
+   * field is the checksum. `Checks`, which this replaces, made the field the
+   * one doing the checking, and on a line of its own it was a verb with no
+   * subject. Git calls its trailing SHA-1 a checksum too, so the word holds
+   * there.
+   */
+  sumLabel: "Checksum",
+  /**
+   * That row's fact: `ZIP CRC-32 of the unpacked file · 252 B`. `of` between
+   * the sum and its subject rather than a dot, so the row says what the sum
+   * is over instead of leaving the reader to guess the relation between two
+   * phrases. The dot is kept for the size, as on the address row, so the two
+   * rows' sizes sit in the same place and can be compared at a glance, which
+   * for a compressed entry is the whole point: 252 B was summed, 178 B is
+   * what is in the file.
+   */
+  of: (label: string, what: string, size: string): string => `${label} of ${what} · ${size}`,
+  /**
+   * Label on the address row when the summed bytes are bytes of the file.
+   * The checksum is its subject, as it is for `Points to` and `Read by`, and
+   * it is true before the check has run: a sum too big to take unasked
+   * covers its bytes whether or not the button has been pressed, which is
+   * where `Bytes checked` fell down. `Over` was a bare preposition on a line
+   * of its own.
+   */
+  overLabel: "Covers",
+  /**
+   * Label on the address row when the sum is over something unpacked, so the
+   * bytes at that address are not what was summed but what the summed bytes
+   * came out of. Names those bytes for what they are, so the row is a true
+   * fact on its own and a reader who reads only it cannot take the sum to be
+   * over them; the row above says what it is over. `Unpacked from` lost: the
+   * Properties list uses those words over a row about the field at the
+   * cursor, and here they would have been about the file the field checks.
+   */
+  fromLabel: "Compressed bytes",
   range: (from: string, to: string, size: string): string => `${from} to ${to} · ${size}`,
-  /** What is being summed, in words. */
+  /** What is being summed, in words, after `of`. This and the four below name
+   *  the thing; the exact bytes are the address row's to say. Here, PNG: the
+   *  chunk's type and data, and not the length in front of them. */
   chunk: "this chunk's type and data",
-  header: "the header",
-  file: "the file's stored bytes",
-  unpacked: "the file these bytes unpack to",
+  /** gzip's header CRC-16 and LHA's header checksum. `this` rather than
+   *  `the`, since an LHA archive has a header per entry. */
+  header: "this header",
+  /** A stored archive entry: its data as it sits in the archive. `entry`
+   *  rather than `the file`, which in a hex editor means the document being
+   *  edited. Both users of this string, ZIP and LHA, are archives of entries. */
+  file: "this entry's stored data",
+  /** A deflated entry or a gzip stream: the sum is over what unpacks, and
+   *  those bytes are nowhere in the file. `the file these bytes unpack to`
+   *  lost: `these bytes` pointed at a row the reader had not reached. */
+  unpacked: "the unpacked file",
+  /** Git index and pack index: the trailing SHA-1 over the whole file before
+   *  it, in the words git's own format doc uses. */
   upTo: "everything before this checksum",
-  /** The button for a sum too big to take without being asked. */
+  /** A check that did not happen, which is neither a pass nor a failure and
+   *  must not read as one: the slot it lands in is the slot that otherwise
+   *  says Valid or Mismatch. The state first, then what went wrong. */
+  notChecked: (why: string): string => `Not checked · ${why}`,
+  missingBytes: "some bytes could not be loaded",
+  unknownFailure: "the check could not be run",
+  /** The button for a sum too big to take without being asked. The size it
+   *  would read is on the row above it. */
   run: (label: string): string => `Check the ${label}`,
 } as const;
 
