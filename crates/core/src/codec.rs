@@ -79,9 +79,14 @@ pub enum Codec {
     /// A whole gzip member, header and all. What Godot writes for its third
     /// compression mode, and the wrapper `gzip.rs` reads as fields.
     Gzip,
-    /// One FastLZ block, with no header and no length in front of it. Godot's
-    /// default compression, and level 1 and level 2 of the same format told
-    /// apart by the top bits of the first byte.
+    /// One FastLZ block, with no header and no length in front of it. The
+    /// first of Godot's five compression modes, and level 1 and level 2 of the
+    /// same format told apart by the top bits of the first byte.
+    ///
+    /// The mode a Godot file is likeliest not to be in: the resource saver
+    /// leaves the choice at its default, which is zstd. It is what
+    /// `PackedByteArray.compress` picks when nothing says otherwise, though,
+    /// so it reaches a file wherever a project asked for it by name.
     FastLz,
     /// Not compression: PNG's per-row filtering, undone. What comes out of an
     /// IDAT's zlib stream is rows of `1 + stride` bytes, a filter byte and a
@@ -195,11 +200,12 @@ pub enum StepField {
     /// Bytes before or after the deflate stream a wrapper put there: zlib's
     /// two header bytes and its Adler-32.
     Wrapper,
-    /// LZ4: the byte holding the literal run's length and the match's.
+    /// LZ4 and FastLZ: the byte that says whether literals or a match follow,
+    /// and how much of each.
     Token,
-    /// LZ4: the bytes extending a length past what the token could hold.
+    /// The bytes extending a length past what the token could hold.
     LengthExtra,
-    /// LZ4: how far back the match reads.
+    /// How far back the match reads.
     Offset,
     /// zstd, xz: a frame header.
     FrameHeader,
