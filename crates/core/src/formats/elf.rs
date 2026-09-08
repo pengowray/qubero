@@ -575,10 +575,12 @@ mod tests {
         let roles: Vec<_> = table.iter().map(|x| (x.role, x.label.as_str(), x.value.as_str())).collect();
         assert!(roles.contains(&(Role::Position, "section_header_offset", "80")), "{roles:?}");
         assert!(roles.contains(&(Role::Count, "section_header_count", "2")), "{roles:?}");
-        // And the same from the field as the header declares it, which is
-        // where the listing shows the name.
-        let declared: Vec<_> = ev.origins(&d, &[7, 14]).unwrap().into_iter().map(|x| (x.role, x.label)).collect();
-        assert!(declared.contains(&(Role::Position, "section_header_offset".into())), "{declared:?}");
+        // Not from the field as the header declares it: that one covers no
+        // bytes where it sits, and the offset it names placed its contents
+        // rather than it. Saying so there would put `section_header_offset`
+        // under a position of 0x40, which is where the declaration is.
+        let declared: Vec<_> = ev.origins(&d, &[7, 14]).unwrap().into_iter().map(|x| x.role).collect();
+        assert!(!declared.contains(&Role::Position), "{declared:?}");
         // Placed at an address the file gave, and as long as the count says.
         let shape = ev.shape(&d, &[7, 14, 0]).unwrap();
         assert_eq!((shape.placed, shape.sized), (Placed::Address, Sizing::Count));

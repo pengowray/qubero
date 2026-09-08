@@ -92,13 +92,10 @@ impl Evaluator {
                     self.relation(doc, path, &size, Role::Length, room, &mut out);
                     ty = *inner;
                 }
-                // Where the field says its contents are. Written out for the
-                // same reason a length is: `e_shoff + 64` is arithmetic a
-                // reader should be able to check rather than redo.
-                Ty::At { at, inner, .. } => {
-                    self.relation(doc, path, &at, Role::Position, None, &mut out);
-                    ty = *inner;
-                }
+                // The address is where this field's contents are, not where
+                // the field is, so it is written out against the contents. See
+                // the `At` parent handled above.
+                Ty::At { inner, .. } => ty = *inner,
                 Ty::Origin { inner } => ty = *inner,
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.relation(doc, path, &on, Role::Type, None, &mut out);

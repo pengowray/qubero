@@ -393,14 +393,12 @@ impl Evaluator {
                     self.from_expr(doc, path, &size, Role::Length, out)?;
                     ty = *inner;
                 }
-                // The address a field names for its own contents. Asked here
-                // as well as in `placed_from` because the two are different
-                // nodes: this is the field as the structure declares it, and
-                // that is the thing it points at.
-                Ty::At { at, inner, .. } => {
-                    self.from_expr(doc, path, &at, Role::Position, out)?;
-                    ty = *inner;
-                }
+                // Not the address an `At` names: that is where its *contents*
+                // are, and the field itself sits where it was declared and
+                // covers nothing. Answering here would put the expression
+                // under a position it did not decide. See `placed_from`, which
+                // answers for the node that is actually at that address.
+                Ty::At { inner, .. } => ty = *inner,
                 Ty::Origin { inner } => ty = *inner,
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.from_expr(doc, path, &on, Role::Type, out)?;

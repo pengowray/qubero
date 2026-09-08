@@ -160,15 +160,13 @@ impl Evaluator {
     /// Which of the ways a format has of saying where something goes put this
     /// field where it is.
     ///
-    /// The field's own declaration is asked before the thing it sits in,
-    /// because a field declared at an address is at that address whatever the
-    /// structure around it does. Everything else is a fact about the parent:
-    /// what places a field is whatever holds it.
+    /// A fact about the thing it sits in: what places a field is whatever
+    /// holds it. A field declared at an address is the one that looks like an
+    /// exception and is not. The field itself sits where it was declared and
+    /// covers no bytes there; what the address places is the one thing it
+    /// holds, and that is the node this answers `Address` for.
     fn placed(&self, path: &[usize]) -> Placed {
         let Some((&idx, parent)) = path.split_last() else { return Placed::Root };
-        if matches!(self.settled_declaration(path), Some(Ty::At { .. })) {
-            return Placed::Address;
-        }
         let Some(pr) = self.memo.get(parent) else { return Placed::Unknown };
         match &pr.ty {
             Ty::PointerList { .. } => Placed::Pointer,
@@ -261,21 +259,6 @@ impl Evaluator {
         }
     }
 
-    /// What a field was declared as, with the names looked up. Used to tell a
-    /// field placed at an address from one placed after the field before it,
-    /// which the resolved type cannot answer: resolving an `At` hands back what
-    /// it points at.
-    fn settled_declaration(&self, path: &[usize]) -> Option<Ty> {
-        let mut ty = self.declared_ty(path).ok()?;
-        for _ in 0..64 {
-            match ty {
-                Ty::Named(n) => ty = self.template.types.get(&*n)?.clone(),
-                Ty::Origin { inner } => ty = *inner,
-                other => return Some(other),
-            }
-        }
-        None
-    }
 }
 
 /// What a length expression says about how the length was settled: it fills
