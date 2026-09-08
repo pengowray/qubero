@@ -44,11 +44,11 @@
 //!
 //! **What this does not read.**
 //!
-//! - The contents of a compressed resource (`RSCC`). The header, the block
-//!   size and the table of per-block compressed sizes are read, and the blocks
-//!   are left as runs of bytes. Each block is separately compressed and the
-//!   resource straddles them, so unpacking one block would show half a header;
-//!   putting them back together is a decoder, not a layout.
+//! - A compressed resource (`RSCC`) written across more than one block. Every
+//!   block opens as the codec the header names, but the resource straddles
+//!   them and nothing in the IR says "one space stitched from several runs",
+//!   so a block of such a file holds bytes rather than a resource. See
+//!   [`compressed`].
 //! - Tag 21, an image written inline, and tag 25, an input event. Both are
 //!   Godot 2 leftovers that Godot 3 kept a number for and dropped the reader
 //!   for, and neither engine writes one. They are named, and reading one stops.
@@ -59,6 +59,7 @@
 //!   format's business rather than the container's.
 //! - Encrypted packs. See [`super::godot_pck`].
 
+use crate::codec::Codec;
 use crate::template::{Anchor, Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 /// A resource written plainly. Also the last four bytes of one: the saver
@@ -326,6 +327,16 @@ fn packed_reals(name: &str, elem_name: &str, comps: &[&str], v: Ver, e: Endian) 
 /// A run of raw bytes, padded out to a multiple of four. The only packed array
 /// that is padded, because it is the only one whose element is not already
 /// four bytes wide or more.
+///
+/// The bytes open as a document of their own. A byte array is where a resource
+/// keeps whatever the variant types have no word for: the PNG a texture was
+/// imported from, a mesh's vertex buffer, a whole second resource saved into
+/// this one. Read as a run they are a grey wall the length of the file; read
+/// through the codec that copies, `recognise` gets a look at them and says
+/// which of those it is, and everything that hangs off a stream -- Open
+/// unpacked, the chips in the hex view, a tab of its own -- works on them.
+/// Bytes that are only bytes cost a memcpy and read as bytes, which is what
+/// they were.
 fn packed_bytes(name: &str, e: Endian) -> T {
     T::structure_named(
         name,
@@ -333,7 +344,7 @@ fn packed_bytes(name: &str, e: Endian) -> T {
         "values",
         vec![
             ("count", T::u32(e)),
-            ("values", T::bytes(E::field("count"))),
+            ("values", T::decoded(E::field("count"), Codec::Stored, super::decoded_text())),
             ("padding", T::bytes(E::field("count").pad_to(4))),
         ],
     )
@@ -746,24 +757,79 @@ fn file(e: Endian) -> T {
     )
 }
 
+/// Everything a resource is except its magic.
+///
+/// Shared rather than written twice, because the compressed wrapper's stream
+/// is exactly this: the saver writes `RSRC` only when it is not compressing,
+/// since the wrapper's own `RSCC` stands in for it, so what a block unpacks to
+/// begins at `endianness`.
+fn body() -> Vec<(&'static str, T)> {
+    vec![
+        // Read little-endian whatever it says, because the loader reads it
+        // before it knows which way round the file is.
+        ("endianness", T::enumeration("Endianness", T::u32(Little), ENDIANNESS)),
+        // Anything but zero means big-endian, which is how the loader tests it.
+        ("file", T::switch(E::field("endianness"), vec![(0, file(Little))], file(Big))),
+    ]
+}
+
 /// A resource written plainly.
 ///
 /// Wrapped in an origin so that the offsets in the internal resource table
 /// count from the start of the resource rather than the start of the file,
 /// which is the same place until a copy of one is embedded in something else.
 fn uncompressed() -> T {
-    T::origin(T::structure(
-        "GodotResource",
-        vec![
-            ("magic", T::magic(MAGIC)),
-            // Read little-endian whatever it says, because the loader reads it
-            // before it knows which way round the file is.
-            ("endianness", T::enumeration("Endianness", T::u32(Little), ENDIANNESS)),
-            // Anything but zero means big-endian, which is how the loader
-            // tests it.
-            ("file", T::switch(E::field("endianness"), vec![(0, file(Little))], file(Big))),
-        ],
-    ))
+    let mut fields = vec![("magic", T::magic(MAGIC))];
+    fields.extend(body());
+    T::origin(T::structure("GodotResource", fields))
+}
+
+/// The same resource as it comes out of a compressed block, which is the same
+/// file a field shorter: the magic is the wrapper's and is not in the stream.
+///
+/// The origin sits at the front of the stream rather than four bytes before
+/// it, and that is what the file itself says. The saver takes the offsets it
+/// writes into the internal resource table from the position of the
+/// `FileAccessCompressed` it is writing through, and that position counts the
+/// bytes it was handed, none of which is a magic. So the same table row means
+/// four bytes further along in a plain file than in a compressed one, and both
+/// readings are right.
+fn unpacked() -> T {
+    T::origin(T::structure("GodotResource", body()))
+}
+
+/// One block of the wrapper, opened as whichever codec the header named.
+///
+/// Each block is compressed on its own, which is what makes it a stream a
+/// decoder can be handed: the mode is written once, at the front, and governs
+/// all of them. Brotli is left as the bytes it is, which is the honest answer
+/// while nothing here reads one, and so is a mode from an engine that does not
+/// exist yet.
+fn compressed_block(inner: T) -> T {
+    let size = || E::elem("block_sizes", E::idx());
+    let open = |codec| T::decoded(size(), codec, inner.clone());
+    T::switch(
+        size().equals(E::lit(0)),
+        // The block table counts one more block than the division gives, so a
+        // file whose length divides by the block size ends on an empty one. A
+        // run of no bytes is not a stream, and opening it would spend a row
+        // saying so about a block that was never meant to hold anything.
+        vec![(1, T::bytes(size()))],
+        T::switch(
+            E::field("compression"),
+            vec![
+                (0, open(Codec::FastLz)),
+                // zlib, not raw deflate: `Compression::compress` calls
+                // `deflateInit2` with fifteen window bits for this mode, which
+                // is the wrapped format. Sixteen more would be gzip, and that
+                // is the mode two along.
+                (1, open(Codec::Zlib)),
+                (2, open(Codec::Zstd)),
+                (3, open(Codec::Gzip)),
+            ],
+            T::bytes(size()),
+        ),
+    )
 }
 
 /// The same file with its body compressed, block by block.
@@ -786,7 +852,33 @@ fn compressed() -> T {
             ("block_size", T::u32(Little)),
             ("uncompressed_size", T::u32(Little)),
             ("block_sizes", T::array(T::u32(Little), blocks())),
-            ("blocks", T::array(T::bytes(E::elem("block_sizes", E::idx())), blocks())),
+            // What a block holds depends on how many there are. A resource
+            // that fits in one block *is* that block, so the stream reads as
+            // the whole resource and a compressed `.res` opens as the thing it
+            // is rather than as a table of sizes.
+            //
+            // A resource written across several blocks is one document spread
+            // over several runs, and nothing in the IR can say that: a space
+            // is fed by one run, so block 1 opened on its own would start
+            // partway through whatever field block 0 ended in. Those stay
+            // bytes. A known gap rather than an oversight, and closing it
+            // means a space that more than one run can fill.
+            //
+            // The count is asked outside the stream on purpose. A field name
+            // inside a decoded space is looked up in that space's own tree,
+            // and `uncompressed_size` is a field of the wrapper, which is not
+            // in there.
+            (
+                "blocks",
+                T::array(
+                    T::switch(
+                        blocks().equals(E::lit(1)),
+                        vec![(1, compressed_block(unpacked()))],
+                        compressed_block(super::decoded_object()),
+                    ),
+                    blocks(),
+                ),
+            ),
             // The wrapper writes its own magic at the end as well, the same
             // way the resource writes `RSRC` at the end of an uncompressed
             // one. Nothing reads it back; it is there to be looked at.
