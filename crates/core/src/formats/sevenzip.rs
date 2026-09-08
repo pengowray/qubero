@@ -1289,6 +1289,28 @@ mod tests {
         assert!(e.child_named(&d, &[7, 0, 0], "unpack_info").unwrap().is_none());
     }
 
+    /// A compressed header packed some way this cannot work out stays the
+    /// bytes it is. The coder here is `copy`, which writes no properties at
+    /// all, so the three numbers LZMA would need are not there to be found.
+    #[test]
+    fn a_compressed_header_this_cannot_unpack_stays_bytes() {
+        let mut h = vec![0x17, 0x06];
+        h.extend(num(100));
+        h.extend(num(1));
+        h.push(0x09);
+        h.extend(num(20));
+        h.extend([0x00, 0x07, 0x0b]);
+        h.extend(num(1));
+        // One coder, a one-byte id, and that id is `00`: no settings follow.
+        h.extend([0x00, 0x01, 0x01, 0x00, 0x0c]);
+        h.extend(num(300));
+        h.extend([0x00, 0x00]);
+        let (d, mut e) = read(archive(&vec![0u8; 120], &h));
+        let stream = e.node(&d, &[7, 2, 0]).expect("the stream is still a field");
+        assert_eq!(stream.size_bits, 20 * 8, "as long as kSize said, opened or not");
+        assert_eq!(e.open_space(&d, 0, &[7, 2, 0]).expect("an answer, not an error"), None);
+    }
+
     /// The five bytes an LZMA coder writes are five bytes of settings, and
     /// what they say is reachable rather than shown as a blob. The properties
     /// byte is three numbers got by dividing, not by masking.

@@ -1608,15 +1608,34 @@ impl Evaluator {
     /// sits inside. Nothing when one of them will not resolve or holds a
     /// number the codec cannot take: a run packed a way this cannot work out
     /// is a run that stays bytes.
+    ///
+    /// A name that is not there is one of the ways that happens, and it must
+    /// answer nothing rather than fail. The field holding the settings is
+    /// often chosen by a switch on what the file says the codec is, so the
+    /// template naming it is right for the archives that have it and names
+    /// nothing in the ones that do not: a 7z header packed with `copy` writes
+    /// no properties at all. A run whose reason to stay bytes took the whole
+    /// listing down with it would be the one refusal that is worse than the
+    /// bytes. `Pending` is not one of these and is passed on, as everywhere:
+    /// bytes that have not arrived are asked for again.
     pub(super) fn codec_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<crate::codec::Codec>> {
         let Some(Ty::Decoded { codec, .. }) = self.memo.get(path).map(|r| r.ty.clone()) else { return Ok(None) };
+        macro_rules! number {
+            ($e:expr) => {
+                match self.eval_expr(doc, path, $e) {
+                    Ok(v) => v,
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => return Ok(None),
+                }
+            };
+        }
         Ok(match codec {
             Packing::Fixed(c) => Some(c),
             Packing::Lzma1 { props, dict_size, unpacked } => {
-                let props = self.eval_expr(doc, path, &props)?;
-                let dict = self.eval_expr(doc, path, &dict_size)?;
+                let props = number!(&props);
+                let dict = number!(&dict_size);
                 let out = match unpacked {
-                    Some(e) => Some(self.eval_expr(doc, path, &e)?),
+                    Some(e) => Some(number!(&e)),
                     None => None,
                 };
                 let (Ok(props), Ok(dict_size)) = (u8::try_from(props), u32::try_from(dict)) else {

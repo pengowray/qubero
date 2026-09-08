@@ -225,7 +225,7 @@ mod tests {
         bytes.extend_from_slice(&(text.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&alone[13..]);
 
-        let make = || Template::new(
+        let make_named = |props: &str| Template::new(
             "made-up",
             T::structure(
                 "Packed",
@@ -238,7 +238,7 @@ mod tests {
                         T::decoded_as(
                             E::Remaining,
                             Packing::Lzma1 {
-                                props: E::field("props"),
+                                props: E::field(props),
                                 dict_size: E::field("dict_size"),
                                 unpacked: Some(E::field("unpacked_size")),
                             },
@@ -248,9 +248,8 @@ mod tests {
                 ],
             ),
         );
-        let (t, t2) = (make(), make());
         let d = Document::new(MemSource(bytes));
-        let mut e = Evaluator::new(t);
+        let mut e = Evaluator::new(make_named("props"));
         let id = e.open_space(&d, 0, &[3]).unwrap().expect("the stream opens");
         assert_eq!(e.space(id).expect("it is there").bytes(), text);
 
@@ -260,9 +259,19 @@ mod tests {
         // is what it is and the node says why, rather than other bytes.
         let mut wrong = d.source().0.clone();
         wrong[0] = 0xff;
-        let d = Document::new(MemSource(wrong));
-        let mut e = Evaluator::new(t2);
-        assert_eq!(e.open_space(&d, 0, &[3]).unwrap(), None, "a stream packed a way this cannot read stays bytes");
+        let wrong = Document::new(MemSource(wrong));
+        let mut e = Evaluator::new(make_named("props"));
+        assert_eq!(e.open_space(&wrong, 0, &[3]).unwrap(), None, "a stream packed a way this cannot read stays bytes");
+
+        // And a template naming a field this file has none of answers the same
+        // way. Which field holds a codec's settings is often chosen by a switch
+        // on what the file says the codec is, so a template that is right for
+        // the files that have them names nothing in the files that do not: a
+        // 7z header packed with `copy` writes no properties at all. The run
+        // stays bytes, and the node it sits in still reads.
+        let mut e = Evaluator::new(make_named("no_such_field"));
+        assert!(e.node(&d, &[3]).is_ok(), "a run that will not open is still a field");
+        assert_eq!(e.open_space(&d, 0, &[3]).unwrap(), None, "a name that is not there is not an error");
     }
 
     /// A file that is one zlib stream, over whatever is handed in.
