@@ -1845,6 +1845,20 @@ button.welcome-crystal {
   white-space: nowrap;
   overflow: hidden;
 }
+/* The minimap and everything that belongs to it: its heading, the map, the
+   readout, the legend, the notes those colours add up to, the layout strip and
+   the block a reader opened out of the map. One section of the body rather
+   than eight loose rows of it, and it carries the body's own column and gap so
+   the rows sit exactly where they did before they were gathered up. */
+.ov-minimap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Nothing in here may be squeezed to make room for the lists below: a canvas
+     drawn at a fixed height would be scaled, not shortened. */
+  flex: 0 0 auto;
+  min-width: 0;
+}
 .ov-map {
   cursor: pointer;
   align-self: start;
