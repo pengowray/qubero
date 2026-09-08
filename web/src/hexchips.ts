@@ -85,6 +85,13 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   if (s.gap) cls += " hv-chip-gap";
   else cls += ` ${fieldClass(s.kind)}`;
   if (c.carried) cls += " hv-chip-carried";
+  // A file inside the file. The listing has always offered to open one; the
+  // annotation column could not say there was one, so a reader running down
+  // the bytes went straight past it. The mark is a corner glyph the stylesheet
+  // draws, rather than a third element in the chip: this function writes the
+  // name and the value by `firstElementChild` and `lastElementChild`, and
+  // anything appended here would be written over on the next redraw.
+  if (s.opens) cls += " hv-chip-opens";
   if (el.className !== cls) el.className = cls;
   setText(el.firstElementChild as HTMLElement, name);
   const shown = extra ? continuedDetail(detail) : detail;
@@ -110,12 +117,27 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   } else {
     title = `${path} · ${s.type}`;
   }
+  // Said in words as well as drawn: a glyph in a corner is a thing to work
+  // out, and this is the one chip whose second gesture does something a reader
+  // has no way of guessing.
+  if (s.opens) title = `${title}\n${OPENS}`;
   if (el.title !== title) el.title = title;
   if (label === null) el.removeAttribute("aria-label");
   else el.setAttribute("aria-label", label);
   el._path = s.gap ? undefined : s.path;
+  // Read back by the view's own listener rather than by a handler per chip:
+  // there are six hundred of these on screen and they are reused across
+  // redraws, so what a chip offers has to live on the element.
+  if (s.opens) el.dataset["opens"] = s.path.join(".");
+  else delete el.dataset["opens"];
   el.disabled = s.gap;
 }
+
+/** What a chip marked as holding a file says on the end of its tooltip. Kept
+ *  here rather than in `strings.ts` because this module is loaded by the tests
+ *  under `node --test`, which will not follow a `.js` specifier from a `.ts`
+ *  file. */
+const OPENS = "Double-click to open these bytes as a document of their own";
 
 /**
  * Put the chips a block wants into it, reusing the elements already there and

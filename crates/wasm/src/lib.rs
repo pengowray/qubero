@@ -1058,6 +1058,8 @@ struct SpanDto {
     /// How a variable-length number's bits divide into framing and value.
     /// Null for a field that reads as whole bytes, which is most of them.
     bits: Option<BitRolesDto>,
+    /// These bytes are a document of their own and can be opened as one.
+    opens: bool,
 }
 
 /// The bit split of one variable-length number, in the order it is stored.
@@ -1132,6 +1134,7 @@ fn span_dto(s: Span) -> SpanDto {
         line: s.line,
         sample: s.sample,
         parts: s.parts.into_iter().map(span_part_dto).collect(),
+        opens: s.opens,
         bits: s.bits.map(|b| BitRolesDto {
             rule: b.rule,
             groups: b
