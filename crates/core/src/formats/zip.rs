@@ -297,16 +297,24 @@ fn local() -> T {
             ("data_size", T::computed(data_len())),
             ("unpacked_size", T::computed(unpacked_len())),
             // Method 8 is deflate, and a deflate run opens: what came out of
-            // it, and the blocks the decoder read to get there. Method 12 is a
-            // whole bzip2 stream written where the deflate would be, and opens
-            // the same way.
+            // it, and the blocks the decoder read to get there. Methods 12, 93
+            // and 95 are a whole bzip2, zstd or xz stream written where the
+            // deflate would be, and open the same way.
             //
             // Method 0 is the file written into the archive verbatim, so those
             // bytes are already a document and open too, through the codec
             // that copies. They used to be plain bytes, which meant an archive
             // of stored files offered nothing to open anywhere: not in the
-            // listing, not on a chip, not as a tab. A method nothing here
-            // decodes stays bytes, which is the honest answer for it.
+            // listing, not on a chip, not as a tab.
+            //
+            // Two are named in the table above and not here. Method 9 is
+            // deflate64, which nothing here reads. Method 14 is LZMA behind
+            // nine bytes of ZIP's own preamble: the properties are inside the
+            // run rather than in a field, so no expression can name them, and
+            // a decoder handed the run whole would read the preamble as the
+            // stream. It wants a codec that knows that preamble, the way
+            // `Codec::Lzip` knows lzip's header. A method nothing here decodes
+            // stays bytes, which is the honest answer for it.
             (
                 "data",
                 T::switch(
@@ -315,6 +323,8 @@ fn local() -> T {
                         (0, T::decoded(E::field("data_size"), Codec::Stored, super::decoded_text())),
                         (8, T::decoded(E::field("data_size"), Codec::Deflate, super::decoded_text())),
                         (12, T::decoded(E::field("data_size"), Codec::Bzip2, super::decoded_text())),
+                        (93, T::decoded(E::field("data_size"), Codec::Zstd, super::decoded_text())),
+                        (95, T::decoded(E::field("data_size"), Codec::Xz, super::decoded_text())),
                     ],
                     T::bytes(E::field("data_size")),
                 ),
@@ -639,6 +649,40 @@ mod tests {
         let crc = e.child_named(&d, &[0, 0, 1], "crc32").unwrap().expect("a crc32 field");
         let v = e.run_check(&d, &crc).unwrap().expect("the sum is of the file, so of what unpacks");
         assert!(v.ok, "computed {}, stored {}", v.computed, v.stored);
+    }
+
+    /// The three methods that are a whole stream of another format written
+    /// where the deflate would be. Each opens, and each entry's CRC-32 is then
+    /// a check of the file rather than of nothing: over the packed bytes it
+    /// would match nothing at all.
+    #[test]
+    fn an_entry_packed_with_another_format_opens_and_its_crc_is_of_the_file() {
+        let text = b"a zip entry packed with something other than deflate\n".repeat(4);
+        for (method, packed) in [
+            (12u16, {
+                use std::io::Write;
+                let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::new(9));
+                e.write_all(&text).expect("writes");
+                e.finish().expect("finishes")
+            }),
+            (95, {
+                let mut out = Vec::new();
+                lzma_rs::xz_compress(&mut &text[..], &mut out).expect("packs");
+                out
+            }),
+        ] {
+            let mut v = entry(b"a.txt", 0, packed.len() as u32, text.len() as u32, &[], &packed);
+            v[8..10].copy_from_slice(&method.to_le_bytes());
+            v[14..18].copy_from_slice(&crate::checksum::crc32(&text).to_le_bytes());
+            v.extend_from_slice(&end_record());
+            let d = Document::new(MemSource(v));
+            let mut e = Evaluator::new(zip());
+            let data = e.node(&d, &[0, 0, 1, 14]).unwrap();
+            assert!(data.decoded && data.refused.is_none(), "method {method}: {data:?}");
+            let crc = e.child_named(&d, &[0, 0, 1], "crc32").unwrap().expect("a crc32 field");
+            let v = e.run_check(&d, &crc).unwrap().unwrap_or_else(|| panic!("method {method} checks nothing"));
+            assert!(v.ok, "method {method}: computed {}, stored {}", v.computed, v.stored);
+        }
     }
 
     /// A writer told to use ZIP64 whatever the sizes writes 0xFFFFFFFF in the

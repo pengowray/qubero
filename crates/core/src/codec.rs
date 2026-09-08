@@ -81,6 +81,10 @@ pub enum Codec {
     /// `unpacked` is what the container says comes out. `None` reads to the
     /// end-of-stream marker, which lzip writes and 7z does not.
     Lzma1 { props: u8, dict_size: u32, unpacked: Option<u64> },
+    /// LZMA2: chunks that carry their own packing, so unlike
+    /// [`Codec::Lzma1`] nothing outside the stream has to describe it. What
+    /// 7z packs with by default and what an xz block holds.
+    Lzma2,
     /// A whole bzip2 stream, from its `BZh` onwards.
     ///
     /// The run is the stream and not a block: bzip2 packs its blocks to the
@@ -144,6 +148,7 @@ impl Codec {
             Codec::Xz => "xz",
             Codec::Lzip => "lzip",
             Codec::Lzma1 { .. } => "lzma",
+            Codec::Lzma2 => "lzma2",
             Codec::Bzip2 => "bzip2",
             Codec::Compress => "compress",
             Codec::Gzip => "gzip",
@@ -732,6 +737,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Xz => frames::xz(data)?,
         Codec::Lzip => lzma::lzip(data)?,
         Codec::Lzma1 { props, dict_size, unpacked } => lzma::lzma1(data, props, dict_size, unpacked)?,
+        Codec::Lzma2 => lzma::lzma2(data)?,
         Codec::Bzip2 => bzip2::stream(data)?,
         Codec::Compress => compress::lzw(data)?,
         Codec::Gzip => inflate::gzip(data)?,
@@ -769,6 +775,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::PicotronPxu
         | Codec::Lzip
         | Codec::Lzma1 { .. }
+        | Codec::Lzma2
         | Codec::Bzip2
         | Codec::Compress
         | Codec::Gzip

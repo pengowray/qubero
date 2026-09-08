@@ -112,6 +112,25 @@ pub fn lzma1(data: &[u8], props: u8, dict: u32, unpacked: Option<u64>) -> Result
     Ok((out, frames::whole(data.len(), n)))
 }
 
+/// An LZMA2 stream: chunks, each saying whether it is packed and whether it
+/// resets the state, with the packing written into the chunk headers.
+///
+/// Nothing has to be told how it was made, which is the difference from
+/// LZMA1 and the reason 7z and xz both moved to it. The dictionary size a
+/// container writes down is only a hint about memory, so it is not asked for
+/// here: a decoder that allocates what the stream turns out to need reads
+/// every stream a smaller one would, and refuses none it should not.
+pub fn lzma2(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    let mut input = data;
+    let mut out = Vec::new();
+    lzma_rs::lzma2_decompress(&mut input, &mut out).map_err(|_| Refusal::Failed)?;
+    if out.len() > CAP_BYTES {
+        return Err(Refusal::TooLarge);
+    }
+    let n = out.len();
+    Ok((out, frames::whole(data.len(), n)))
+}
+
 /// The dictionary size the header byte names, or nothing when it names one
 /// the format does not have.
 ///
