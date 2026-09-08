@@ -19,11 +19,21 @@
 //! field that holds the answer costs no bytes where it stands.
 //!
 //! A file may hold several members one after another, each with its own
-//! header and trailer. This reads the first, whose trailer says how long it
-//! is, and a second member would be past where this template stops.
+//! header and trailer, which is what `lzip -b` writes and what concatenating
+//! two of them gives. Reading forward, nothing says where a member ends: the
+//! trailer that measures it comes last, and the stream in front of it stops
+//! at a marker only a decoder can see. So the stream is measured to the next
+//! member's magic, less the twenty bytes of trailer in front of it, and to
+//! the end of the file when there is no next member.
+//!
+//! An LZMA stream could hold those four bytes by chance and be split in two
+//! here. What happens then is a short member whose trailer reads as nonsense
+//! and whose stream will not unpack, and a reader has both numbers in front
+//! of them: `member_size` says how long the member claimed to be. The same
+//! trade ZIP makes scanning for the next `PK`.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Endian::{Big, Little}, Expr as E, Named, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Endian::{Big, Little}, Expr as E, Named, Template, Ty as T, Until};
 
 /// What one of these starts with.
 pub const MAGIC: &[u8] = b"LZIP";
@@ -32,8 +42,14 @@ pub const MAGIC: &[u8] = b"LZIP";
 const TRAILER: i128 = 20;
 
 pub fn lzip() -> Template {
-    Template::new(
-        "lzip",
+    Template::new("lzip", T::structure("Lzip", vec![("members", T::repeat(member(), Until::End))]))
+}
+
+fn member() -> T {
+    // Each member is its own origin, so that the field opening it counts from
+    // the member's first byte rather than the file's. Without it the second
+    // member of a file would open the first.
+    T::origin(
         T::structure(
             "LzipMember",
             vec![
@@ -48,7 +64,7 @@ pub fn lzip() -> Template {
                 // so it is measured backwards from the trailer. What it holds
                 // is opened by `decoded` below, over the member rather than
                 // over these bytes alone.
-                ("lzma_stream", T::bytes(E::Remaining.sub(E::lit(TRAILER)))),
+                ("lzma_stream", T::bytes(E::to_bytes(MAGIC).sub(E::lit(TRAILER)))),
                 ("crc32", T::u32(Little)),
                 ("data_size", T::u64(Little)),
                 // The whole member including this field, which is what makes
@@ -59,7 +75,17 @@ pub fn lzip() -> Template {
                 // decoder needs are in the six bytes in front of it, so the
                 // field that holds the answer is the member. It costs no bytes
                 // where it stands and covers the member from its first one.
-                ("decoded", T::at_in_window(E::lit(0), T::decoded(E::Remaining, Codec::Lzip, super::decoded_text()))),
+                //
+                // As long as the member says it is, which by here is a field
+                // that has been read. `Remaining` would be the rest of the
+                // file, which for the first member of several is every member.
+                (
+                    "decoded",
+                    T::at_origin(
+                        E::lit(0),
+                        T::decoded(E::field("member_size"), Codec::Lzip, super::decoded_text()),
+                    ),
+                ),
             ],
         )
         // What went in, not the stream it came out as. `data_size` is only for
@@ -68,7 +94,8 @@ pub fn lzip() -> Template {
         .field_check(
             "crc32",
             Check::of(Checksum::Crc32, Covers::Unpacked { name: Named::here("decoded"), len: Some(E::field("data_size")) }),
-        ),
+        )
+        .counted_as("member"),
     )
 }
 
@@ -89,14 +116,48 @@ mod tests {
         v
     }
 
+    /// The path of a named field of member `n`.
+    fn at(e: &mut Evaluator, d: &Document<MemSource>, n: usize, name: &str) -> Vec<usize> {
+        e.child_named(d, &[0, n], name).unwrap().unwrap_or_else(|| panic!("no field called {name}"))
+    }
+
     #[test]
     fn the_stream_is_measured_back_from_the_trailer() {
         let d = Document::new(MemSource(member(b"\x00\x01\x02\x03\x04")));
         let mut e = Evaluator::new(lzip());
-        assert_eq!(e.node(&d, &[2]).unwrap().value.as_int(), Some(0));
-        assert_eq!(e.node(&d, &[3]).unwrap().value.as_int(), Some(12));
-        assert_eq!(e.node(&d, &[4]).unwrap().size_bits, 5 * 8);
-        assert_eq!(e.node(&d, &[7]).unwrap().value.as_int(), Some(31));
+        for (name, want) in [("dict_size_fraction", 0), ("dict_size_base", 12), ("member_size", 31)] {
+            let p = at(&mut e, &d, 0, name);
+            assert_eq!(e.node(&d, &p).unwrap().value.as_int(), Some(want), "{name}");
+        }
+        let stream = at(&mut e, &d, 0, "lzma_stream");
+        assert_eq!(e.node(&d, &stream).unwrap().size_bits, 5 * 8);
+    }
+
+    /// Two members end to end, which is what `lzip -b` writes and what
+    /// concatenating two files gives. The template read the first and stopped,
+    /// so the rest of such a file was nowhere.
+    #[test]
+    fn a_file_of_two_members_reads_as_two() {
+        let (one, two) = ("the first member.\n".repeat(30), "and the second, packed apart.\n".repeat(20));
+        let mut v = packed_member(one.as_bytes());
+        let first = v.len();
+        v.extend_from_slice(&packed_member(two.as_bytes()));
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(lzip());
+        assert_eq!(e.node(&d, &[0]).unwrap().child_count, 2);
+        // Each member is measured by its own trailer, and the second starts
+        // where the first stopped.
+        let size = at(&mut e, &d, 0, "member_size");
+        assert_eq!(e.node(&d, &size).unwrap().value.as_int(), Some(first as i128));
+        assert_eq!(e.node(&d, &[0, 1]).unwrap().offset_bits, first as u64 * 8);
+        // And each opens into its own text, not into the file from its start.
+        for (n, want) in [(0usize, &one), (1usize, &two)] {
+            let sum = at(&mut e, &d, n, "crc32");
+            let v = e.run_check(&d, &sum).unwrap().unwrap_or_else(|| panic!("member {n} checks nothing"));
+            assert!(v.ok, "member {n}: computed {}, stored {}", v.computed, v.stored);
+            let info = e.check_of(&d, &sum).unwrap().expect("it checks something");
+            assert_eq!(info.covered_bytes, want.len() as u64, "member {n}");
+        }
     }
 
     /// A member holding a real stream. `lzma-rs` writes the thirteen-byte
@@ -128,7 +189,8 @@ mod tests {
         // byte rather than from anywhere in the file. The whole of it is
         // there; only what the value shows is cut, at the same 256 bytes
         // every text field is cut at.
-        let text = e.node(&d, &[8, 0, 0, 0]).unwrap();
+        let decoded = at(&mut e, &d, 0, "decoded");
+        let text = e.node(&d, &[decoded, vec![0, 0, 0]].concat()).unwrap();
         assert_ne!(text.space, 0);
         assert_eq!(text.offset_bits, 0);
         assert_eq!(text.size_bits, payload.len() as u64 * 8);
@@ -138,11 +200,12 @@ mod tests {
         // the file, and it is over every one of them rather than over the 256
         // the value shows. What a reader can be sent to is the member the
         // stream came out of.
-        let info = e.check_of(&d, &[5]).unwrap().expect("crc32 checks something");
+        let sum = at(&mut e, &d, 0, "crc32");
+        let info = e.check_of(&d, &sum).unwrap().expect("crc32 checks something");
         assert_eq!(info.algorithm, "crc32");
         assert_eq!(info.over, None);
         assert_eq!(info.unpacked_from, Some((0, d.len_bytes())));
         assert_eq!(info.covered_bytes, payload.len() as u64);
-        assert!(e.run_check(&d, &[5]).unwrap().expect("a verdict").ok);
+        assert!(e.run_check(&d, &sum).unwrap().expect("a verdict").ok);
     }
 }
