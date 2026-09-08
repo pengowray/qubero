@@ -820,6 +820,7 @@ mod tests {
         assert_eq!(decode(Codec::Zlib, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Zstd, b"not compressed"), Err(Refusal::Failed));
         assert_eq!(decode(Codec::Xz, b"not compressed"), Err(Refusal::Failed));
+        assert_eq!(decode(Codec::Lzip, b"not compressed at all, not even a bit"), Err(Refusal::Failed));
     }
 
 }

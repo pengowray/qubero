@@ -301,7 +301,26 @@ impl Evaluator {
     }
 
     /// The field a check names, wherever [`Named`] says to look for it.
+    ///
+    /// A field whose contents are somewhere else in the file is its contents,
+    /// as it is everywhere else a path is walked (see `descend` in `expr`).
+    /// [`Ty::At`] costs no bytes where it is declared, so the node standing
+    /// there has an empty run and its first child is the thing. A check that
+    /// stopped at the declaration would sum no bytes and print a pass over
+    /// nothing, which is the one answer this file exists to prevent. What xz
+    /// and lzip need, where the run is the whole of the member and the header
+    /// is fields laid over the front of it.
     fn named_field<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &Named) -> R<Option<Vec<usize>>> {
+        let Some(mut p) = self.field_named(doc, path, name)? else { return Ok(None) };
+        while matches!(self.memo[&p].ty, Ty::At { .. }) {
+            p.push(0);
+            self.resolve(doc, &p)?;
+        }
+        Ok(Some(p))
+    }
+
+    /// Where the name lands, before that peeling.
+    fn field_named<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &Named) -> R<Option<Vec<usize>>> {
         match name {
             Named::Here(name) => self.field_out_from(doc, path, name),
             // Backwards through the records, and never forwards. A ZIP data
@@ -964,6 +983,33 @@ mod tests {
         );
         let mut r = Read::with(t, vec![3, 1, 2]);
         assert_eq!(r.info(&[0]), None);
+    }
+
+    /// A check over a field that put its bytes somewhere else reaches the
+    /// bytes, not the empty slot the field stands in.
+    ///
+    /// The failure this stops is the worst kind here: the node at the
+    /// declaration costs no bytes, so the run resolves, it is zero long, and
+    /// the sum of nothing is a number a stored zero can agree with. A pass
+    /// over no bytes reads exactly like a pass.
+    #[test]
+    fn a_check_over_a_field_placed_elsewhere_sums_what_is_there() {
+        let t = Template::new(
+            "placed",
+            T::structure(
+                "Placed",
+                vec![
+                    ("sum", T::u8()),
+                    ("at", T::u8()),
+                    ("body", T::at_in_window(E::field("at"), T::bytes(E::lit(3)))),
+                ],
+            )
+            .field_check("sum", Check::of(Checksum::Sum8, Covers::Field { name: Named::here("body") })),
+        );
+        let mut r = Read::with(t, vec![15, 3, 0, 4, 5, 6]);
+        let info = r.info(&[0]).expect("the sum reaches the placed run");
+        assert_eq!(info.over, Some((3, 3)), "the bytes it points at, not the slot it stands in");
+        assert!(r.must(&[0]).ok, "four and five and six come to fifteen");
     }
 
     #[test]
