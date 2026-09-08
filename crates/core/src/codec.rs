@@ -187,6 +187,17 @@ pub enum Refusal {
     Failed,
     /// The run does not start on a byte, and no decoder reads half a byte.
     Unaligned,
+    /// How the run was packed could not be worked out, so no decoder was
+    /// asked. Told apart from [`Refusal::Failed`] on purpose: nothing here
+    /// tried to read these bytes and nothing here is saying they are wrong.
+    ///
+    /// What a codec whose settings are fields runs into. See
+    /// [`Packing`](crate::template::Packing): a 7z coder writes how it packed
+    /// a stream into the archive's header, and a coder that packed nothing,
+    /// or one this cannot read the properties of, leaves the numbers with
+    /// nowhere to come from. A reader told "unpacking failed" there would go
+    /// looking for damage in a file that has none.
+    Settings,
 }
 
 impl Refusal {
@@ -195,6 +206,7 @@ impl Refusal {
         match self {
             Refusal::TooLarge => "too-large",
             Refusal::Failed => "failed",
+            Refusal::Settings => "settings",
             Refusal::Unaligned => "unaligned",
         }
     }
