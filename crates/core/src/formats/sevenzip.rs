@@ -37,7 +37,7 @@
 //!   saying which streams have one, and how many bits in it are set decides
 //!   how many CRCs follow. Counting set bits is not something an expression
 //!   here can do, so a block written that way is read as far as the bit vector
-//!   and the rest of the header is left as `unread`. 7-Zip writes a CRC for
+//!   and the rest of the header is left as `unparsed`. 7-Zip writes a CRC for
 //!   every stream, so this is the shape of a file from somewhere else.
 //! - **Which entries are empty.** `kEmptyFile` and `kAnti` hold one bit per
 //!   *empty stream*, not per file, and how many of those there are is again a
@@ -115,13 +115,19 @@ fn nothing() -> T {
     T::bytes(E::lit(0))
 }
 
-/// The rest of the header, which the walk stopped being able to read.
+/// The rest of the header, from wherever the walk stopped being able to read
+/// it.
 ///
 /// Taking everything that is left is what makes stopping honest. The blocks
 /// after this one are declared with [`T::if_room`], so once this has claimed
 /// the room they quietly become nothing rather than reading a `kEnd` out of
 /// the middle of a CRC.
-fn unread() -> T {
+///
+/// Not `unread`, which the listing already spends on
+/// [`crate::eval::Value::Unread`]: bytes that have not been fetched yet. These
+/// bytes are here and have been looked at; what could not be done is make
+/// sense of them.
+fn unparsed() -> T {
     T::bytes(E::Remaining)
 }
 
@@ -153,8 +159,8 @@ fn digests(count: E) -> T {
                     // the one thing between here and the rest of the header
                     // that no expression can do, so the walk stops.
                     T::inline_structure(
-                        "SomeDigests",
-                        vec![("defined", T::bytes(bit_vector)), ("unread", unread())],
+                        "SparseDigests",
+                        vec![("defined", T::bytes(bit_vector)), ("unparsed", unparsed())],
                     ),
                 ),
             ),
@@ -176,7 +182,7 @@ fn pack_info() -> T {
             // without them, so a block that leaves them out is not a 7z
             // anything reads. Declared rather than peeked at for that reason:
             // a tag that is not `kSize` here should be visible as one.
-            ("size_id", property_id()),
+            ("pack_sizes_id", property_id()),
             ("pack_sizes", T::array(number(), E::field("num_pack_streams"))),
             ("crcs", tagged(0x0a, digests(E::field("num_pack_streams")))),
             ("end", T::if_room(property_id())),
@@ -196,13 +202,17 @@ fn coder() -> T {
             ("flags", T::u8()),
             ("codec_id", T::bytes(E::field("flags").and(E::lit(0x0f)))),
             (
-                "streams",
+                // Two counts, not streams: `streams` already means byte runs
+                // at the front of the file and a whole `StreamsInfo` in the
+                // header, and a third meaning on one row would be one too
+                // many.
+                "stream_counts",
                 T::switch(
                     E::field("flags").bit(4),
                     vec![(
                         1,
                         T::inline_structure(
-                            "CoderStreams",
+                            "CoderStreamCounts",
                             vec![("num_in_streams", number()), ("num_out_streams", number())],
                         ),
                     )],
@@ -211,7 +221,7 @@ fn coder() -> T {
                     // as fields all the same, so that the arithmetic below has
                     // the same two names to add up whichever kind it is.
                     T::inline_structure(
-                        "CoderStreams",
+                        "CoderStreamCounts",
                         vec![
                             ("num_in_streams", T::computed(E::lit(1))),
                             ("num_out_streams", T::computed(E::lit(1))),
@@ -240,11 +250,11 @@ fn coder() -> T {
             // carries the running total instead.
             (
                 "in_streams_so_far",
-                T::computed(E::prev("in_streams_so_far").add(E::within(&["streams", "num_in_streams"]))),
+                T::computed(E::prev("in_streams_so_far").add(E::within(&["stream_counts", "num_in_streams"]))),
             ),
             (
                 "out_streams_so_far",
-                T::computed(E::prev("out_streams_so_far").add(E::within(&["streams", "num_out_streams"]))),
+                T::computed(E::prev("out_streams_so_far").add(E::within(&["stream_counts", "num_out_streams"]))),
             ),
         ],
     )
@@ -298,7 +308,7 @@ fn unpack_info() -> T {
         "UnPackInfo",
         vec![
             ("id", property_id()),
-            ("folder_id", property_id()),
+            ("folders_id", property_id()),
             ("num_folders", number()),
             ("external", T::u8()),
             (
@@ -312,11 +322,11 @@ fn unpack_info() -> T {
                     // the streams.
                     T::inline_structure(
                         "ExternalFolders",
-                        vec![("data_stream_index", number()), ("unread", unread())],
+                        vec![("data_stream_index", number()), ("unparsed", unparsed())],
                     ),
                 ),
             ),
-            ("unpack_size_id", property_id()),
+            ("unpack_sizes_id", property_id()),
             (
                 "unpack_sizes",
                 T::switch(
@@ -340,11 +350,14 @@ fn substreams_info() -> T {
         "SubStreamsInfo",
         vec![
             ("id", property_id()),
-            ("count_id", T::switch(E::peek(8, Big), vec![(0x0d, property_id())], nothing())),
+            ("substreams_per_folder_id", T::switch(E::peek(8, Big), vec![(0x0d, property_id())], nothing())),
             (
-                "num_unpack_streams",
+                // 7z calls this `kNumUnPackStream`, which reads as one number
+                // and is one per folder. Named for what the list holds, since
+                // the row above it keeps the format's own word in view.
+                "substreams_per_folder",
                 T::switch(
-                    E::size_of("count_id"),
+                    E::size_of("substreams_per_folder_id"),
                     // Written nowhere when every folder holds one file, which
                     // is what a non-solid archive is. Read as a one for each
                     // folder rather than left out, so that the sums below have
@@ -353,14 +366,18 @@ fn substreams_info() -> T {
                     T::array(number(), num_folders.clone()),
                 ),
             ),
-            ("size_id", T::switch(E::peek(8, Big), vec![(0x09, property_id())], nothing())),
+            ("substream_sizes_id", T::switch(E::peek(8, Big), vec![(0x09, property_id())], nothing())),
             // The last file in a folder has no size written for it: it is
             // whatever is left of the folder. So a folder of `n` files spends
             // `n - 1` numbers here, and one of a single file spends none,
             // which is why an archive of one file per folder has no `kSize` at
             // all and this count comes to nought on its own.
-            ("unpack_sizes", T::array(number(), E::sum_of("num_unpack_streams").sub(num_folders))),
-            ("crcs", tagged(0x0a, digests(E::sum_of("num_unpack_streams")))),
+            //
+            // Not `unpack_sizes`, which the block above already uses for one
+            // size per folder. These are one per file, and 7z means a
+            // different thing by "unpack stream" in each of the two blocks.
+            ("substream_sizes", T::array(number(), E::sum_of("substreams_per_folder").sub(num_folders))),
+            ("crcs", tagged(0x0a, digests(E::sum_of("substreams_per_folder")))),
             ("end", T::if_room(property_id())),
         ],
     )
@@ -391,7 +408,7 @@ fn streams_info(name: &str, tagged_itself: bool) -> T {
 /// A value written once per file, for the files that have one.
 fn per_file(elem: T) -> T {
     T::structure(
-        "PerFile",
+        "PerFileValues",
         vec![
             ("all_defined", T::u8()),
             (
@@ -529,7 +546,7 @@ fn header() -> T {
             // Nought for a header this read all of. Anything else is a header
             // that stopped making sense partway, and saying so beats letting
             // the bytes go uncounted.
-            ("unread", T::if_room(unread())),
+            ("unparsed", T::if_room(unparsed())),
         ],
     )
 }
@@ -584,8 +601,8 @@ fn next_header() -> T {
                     "EncodedHeader",
                     vec![
                         ("id", property_id()),
-                        ("streams", streams_info("EncodedHeaderStreams", false)),
-                        ("unread", T::if_room(unread())),
+                        ("streams", streams_info("StreamsInfo", false)),
+                        ("unparsed", T::if_room(unparsed())),
                     ],
                 ),
             ),
@@ -593,7 +610,7 @@ fn next_header() -> T {
         // A tag that is neither is a file this cannot read past its first
         // byte. Read as a tag and a run all the same: which byte it is, is
         // the thing worth seeing.
-        T::structure("UnknownHeader", vec![("id", property_id()), ("unread", T::if_room(unread()))]),
+        T::structure("UnknownHeader", vec![("id", property_id()), ("unparsed", T::if_room(unparsed()))]),
     )
 }
 
@@ -617,15 +634,19 @@ fn packed_streams(pack_info: &[&str]) -> T {
             // Nought for an archive whose header is not compressed. For one
             // whose header is, this is every file in the archive: the header
             // out here describes only the stream it was itself compressed
-            // into, and puts that stream after everything else.
-            ("described_in_the_compressed_header", T::bytes(within("pack_pos"))),
+            // into, and puts that stream after everything else. Named for the
+            // field that sizes it, so a reader can check the two against each
+            // other.
+            ("before_pack_pos", T::bytes(within("pack_pos"))),
             (
                 "streams",
                 T::array(T::bytes(E::elem_within(&sizes, E::idx(), &[])), within("num_pack_streams")),
             ),
             // Room between the last stream and the header that no stream
-            // claims. Nought in anything 7-Zip writes.
-            ("unclaimed", T::bytes(E::Remaining)),
+            // claims. Nought in anything 7-Zip writes. Not `unclaimed`: the
+            // run above is equally unclaimed, and a reader has to be able to
+            // tell the two rows apart at a glance.
+            ("after_streams", T::bytes(E::Remaining)),
         ],
     )
 }
