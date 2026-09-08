@@ -22,10 +22,19 @@
 //! bytes. Which is a guess in general and not a guess here, since the file
 //! said its machine was BPF before this template was chosen at all.
 //!
-//! What the template cannot do is name anything. A section's name is an offset
-//! into another section, a symbol's name an offset into a third, and the IR's
-//! expressions reach siblings and ancestors, not across the file by index.
-//! Names are a pass over the parsed tree: see [`super::elf_disasm`].
+//! Sections name themselves. A section's name is an offset into another
+//! section, which for a long time was taken to be past what a template could
+//! say, so a section read as `[2]` everywhere and only the disassembler's own
+//! pass knew it was `.text`. It is not past what a template can say: the name
+//! table's offset is read once into `section_name_base`, straight out of the
+//! header table rather than through it, and each header then reads its own name
+//! from there with `at`. `SectionHeader` is `named_by` that field, and the
+//! bytes a header places borrow their header's name, so the megabyte of code in
+//! the middle of a program is `.text` in the listing, the treemap and the
+//! inspector alike.
+//!
+//! Symbol names are still a pass over the parsed tree, along with everything
+//! that needs two tables at once: see [`super::elf_disasm`].
 
 use super::bpf_opcodes::{OPCODES, REGS};
 use crate::code::Isa;
@@ -285,9 +294,31 @@ fn body(bits: u32, e: Endian) -> T {
             ("program_header_count", T::u16(e)),
             ("section_header_entry_size", T::u16(e)),
             ("section_header_count", T::u16(e)),
-            // Which section holds the section names. A pass over the tree
-            // needs this to name anything; the template only records it.
+            // Which section holds the section names.
             ("section_name_table", T::u16(e)),
+            // Where that section's bytes start.
+            //
+            // Every section in the file is named by a string in one section,
+            // and the header of that section is the only place its offset is
+            // written. Reading it through `section_headers` would mean an
+            // element of that array reaching back into the array it is in, so
+            // it is read straight out of the file instead: the table starts at
+            // `section_header_offset`, its entries are `section_header_entry_
+            // size` apart, and the `offset` field sits a fixed distance into
+            // one, because the ELF spec fixes that layout and `section_header`
+            // below is only writing it down again.
+            //
+            // It occupies no bytes: `at` places a field somewhere else and
+            // leaves the cursor where it was.
+            (
+                "section_name_base",
+                T::at(
+                    E::field("section_header_offset")
+                        .add(E::field("section_name_table").mul(E::field("section_header_entry_size")))
+                        .add(E::lit(if bits == 64 { 24 } else { 16 })),
+                    addr(bits, e),
+                ),
+            ),
             // Both tables are read where they sit without moving the cursor,
             // so what they say is in hand before the sections are placed.
             (
@@ -320,6 +351,9 @@ fn body(bits: u32, e: Endian) -> T {
             ),
         ],
     )
+    // Those eight bytes are one field of one section header, read a second
+    // time from a fixed place in the table. The header owns them.
+    .field_aside("section_name_base")
 }
 
 fn program_header(bits: u32, e: Endian) -> T {
@@ -344,11 +378,36 @@ fn program_header(bits: u32, e: Endian) -> T {
 }
 
 fn section_header(bits: u32, e: Endian) -> T {
-    T::structure(
+    // Named by the string it points at, which is the whole reason for the
+    // `name` field below: a header called `[2]` says nothing, and the section
+    // its offset places borrows its label, so naming the record here is what
+    // puts `.text` on the megabyte of code as well as on the header.
+    T::structure_named(
         "SectionHeader",
+        "name",
+        "",
         vec![
             // An offset into the section name table, not a name.
             ("name_offset", T::u32(e)),
+            // The name itself, read where the section name table keeps it, the
+            // way a device tree reads every property name out of its strings
+            // block. `section_name_base` is a field of the header above, which
+            // an expression reaches by looking out through the structures this
+            // one is nested in.
+            //
+            // A base of nought means there is no name table. The spec spells
+            // that `SHN_UNDEF` and writes it as section 0, whose header is all
+            // zeros, so the base comes out nought either way. Reading a name
+            // from offset nought would hand back the file's own magic bytes
+            // and call the section `\x7fELF`, which is worse than `[1]`.
+            (
+                "name",
+                T::switch(
+                    E::field("section_name_base"),
+                    vec![(0, T::bytes(E::lit(0)))],
+                    T::at(E::field("section_name_base").add(E::field("name_offset")), T::cstr()),
+                ),
+            ),
             ("type", T::enumeration("SectionType", T::u32(e), SECTION_TYPE)),
             ("flags", T::flags("SectionFlags", addr(bits, e), SECTION_FLAGS)),
             ("address", addr(bits, e)),
@@ -360,6 +419,9 @@ fn section_header(bits: u32, e: Endian) -> T {
             ("entry_size", addr(bits, e)),
         ],
     )
+    // The name is read out of the section name table, so those bytes belong to
+    // that section and are counted there. See `Field::aside`.
+    .field_aside("name")
     .counted_as("section")
 }
 
@@ -553,14 +615,14 @@ mod tests {
         let mut ev = Evaluator::new(bpf());
         assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Enum { raw: 2, name: Some("64-bit".into()), hex: false });
         // The code is at the offset its own section header gives.
-        let code = ev.node(&d, &[7, 15, 1]).unwrap();
+        let code = ev.node(&d, &[7, 16, 1]).unwrap();
         assert_eq!(code.type_name, "BpfInsn[]");
         assert_eq!(code.offset_bits, 64 * 8);
         assert_eq!(code.child_count, 2);
         // `r1 = 2`: the destination is in the low nibble of the second byte,
         // which is what a little-endian object writes.
-        assert_eq!(ev.node(&d, &[7, 15, 1, 0, 2]).unwrap().value, Value::Enum { raw: 1, name: Some("r1".into()), hex: false });
-        assert_eq!(ev.node(&d, &[7, 15, 1, 0, 4]).unwrap().value, Value::Int(2));
+        assert_eq!(ev.node(&d, &[7, 16, 1, 0, 2]).unwrap().value, Value::Enum { raw: 1, name: Some("r1".into()), hex: false });
+        assert_eq!(ev.node(&d, &[7, 16, 1, 0, 4]).unwrap().value, Value::Int(2));
     }
 
     /// The same object with the machine changed to x86-64, whose code the
@@ -575,11 +637,11 @@ mod tests {
         ]);
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(elf());
-        let code = ev.node(&d, &[7, 15, 1]).unwrap();
+        let code = ev.node(&d, &[7, 16, 1]).unwrap();
         assert_eq!(code.type_name, "x86-64[]");
-        assert_eq!(ev.node(&d, &[7, 15, 1, 0]).unwrap().value, Value::Str("mov eax, 0x1".into()));
-        assert_eq!(ev.node(&d, &[7, 15, 1, 0]).unwrap().size_bits, 5 * 8);
-        assert_eq!(ev.node(&d, &[7, 15, 1, 1]).unwrap().value, Value::Str("ret".into()));
+        assert_eq!(ev.node(&d, &[7, 16, 1, 0]).unwrap().value, Value::Str("mov eax, 0x1".into()));
+        assert_eq!(ev.node(&d, &[7, 16, 1, 0]).unwrap().size_bits, 5 * 8);
+        assert_eq!(ev.node(&d, &[7, 16, 1, 1]).unwrap().value, Value::Str("ret".into()));
     }
 
     /// A long run of anything else is one row saying how many there are. A
@@ -604,7 +666,77 @@ mod tests {
         bytes[18] = 22; // S/390
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(elf());
-        assert_eq!(ev.node(&d, &[7, 15, 1]).unwrap().type_name, "bytes[]");
+        assert_eq!(ev.node(&d, &[7, 16, 1]).unwrap().type_name, "bytes[]");
+    }
+
+    /// A file with no section name table keeps its indexes. Section 0 is all
+    /// zeros, so the base reads nought, and a name read from offset nought
+    /// would be the file's own magic: `[1] \x7fELF` is worse than `[1]`.
+    #[test]
+    fn a_section_with_no_name_table_keeps_its_index() {
+        let d = Document::new(MemSource(object()));
+        let mut ev = Evaluator::new(elf());
+        assert_eq!(ev.node(&d, &[7, 16, 1]).unwrap().name, "[1]");
+    }
+
+    /// A section is called what the section name table calls it, and so are the
+    /// bytes its header places. `[1]` said nothing; `.text` says what the
+    /// biggest box on the treemap is.
+    #[test]
+    fn a_section_is_named_by_the_section_name_table() {
+        let d = Document::new(MemSource(named_sections()));
+        let mut ev = Evaluator::new(elf());
+        // The header carries the name, read from the far end of the file.
+        assert_eq!(ev.node(&d, &[7, 15, 0, 1]).unwrap().name, "[1] .text");
+        // And the bytes that header places borrow it, which is the whole point:
+        // a megabyte of code called `[2]` is a box nobody can place.
+        assert_eq!(ev.node(&d, &[7, 16, 1]).unwrap().name, "[1] .text");
+        assert_eq!(ev.node(&d, &[7, 16, 2]).unwrap().name, "[2] .shstrtab");
+    }
+
+    /// A 64-bit little-endian object with three section headers: the null one,
+    /// a `.text` of four bytes, and the name table that names them.
+    fn named_sections() -> Vec<u8> {
+        let names = b"\0.text\0.shstrtab\0";
+        let text = [0x90u8, 0x90, 0x90, 0xc3];
+        let headers_at = 64 + text.len() + names.len();
+        let mut v = b"\x7fELF\x02\x01\x01\x00".to_vec();
+        v.extend_from_slice(&[0; 8]);
+        v.extend_from_slice(&1u16.to_le_bytes()); // relocatable
+        v.extend_from_slice(&62u16.to_le_bytes()); // x86-64
+        v.extend_from_slice(&1u32.to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes()); // entry
+        v.extend_from_slice(&0u64.to_le_bytes()); // program header offset
+        v.extend_from_slice(&(headers_at as u64).to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes()); // flags
+        v.extend_from_slice(&64u16.to_le_bytes()); // header size
+        v.extend_from_slice(&0u16.to_le_bytes()); // program header entry size
+        v.extend_from_slice(&0u16.to_le_bytes()); // program header count
+        v.extend_from_slice(&64u16.to_le_bytes()); // section header entry size
+        v.extend_from_slice(&3u16.to_le_bytes()); // section header count
+        v.extend_from_slice(&2u16.to_le_bytes()); // the name table is section 2
+        v.extend_from_slice(&text);
+        v.extend_from_slice(names);
+        // name offset, type, flags, address, offset, size, link, info, align,
+        // entry size: the ten words of a 64-bit section header.
+        let shdr = |name: u32, kind: u32, flags: u64, at: u64, size: u64| {
+            let mut h = Vec::new();
+            h.extend_from_slice(&name.to_le_bytes());
+            h.extend_from_slice(&kind.to_le_bytes());
+            h.extend_from_slice(&flags.to_le_bytes());
+            h.extend_from_slice(&0u64.to_le_bytes());
+            h.extend_from_slice(&at.to_le_bytes());
+            h.extend_from_slice(&size.to_le_bytes());
+            h.extend_from_slice(&0u32.to_le_bytes());
+            h.extend_from_slice(&0u32.to_le_bytes());
+            h.extend_from_slice(&1u64.to_le_bytes());
+            h.extend_from_slice(&0u64.to_le_bytes());
+            h
+        };
+        v.extend(shdr(0, 0, 0, 0, 0));
+        v.extend(shdr(1, 1, 6, 64, text.len() as u64));
+        v.extend(shdr(7, 3, 0, 64 + text.len() as u64, names.len() as u64));
+        v
     }
 
     /// A big-endian 32-bit header, which is the other end of what the switches

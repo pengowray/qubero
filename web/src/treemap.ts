@@ -296,18 +296,30 @@ function labelLayer(nodes: readonly HierarchyRectangularNode<TreeNode>[], boxes:
     // slack a name whose box was two pixels short of holding it was drawn and
     // then cut off, which for `0x8d` means showing a different byte value.
     const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X + 3;
-    if (h < lineH || w < need) continue;
     const wanted = text.length * size * CHAR_RATIO + 2 * LABEL_PAD_X;
-    const width = Math.min(wanted, w - 2);
-    const rect = free({ x0: node.x0 + 1, y0: node.y0 + 1, x1: node.x0 + 1 + width, y1: node.y0 + 1 + lineH }, placed, node.y1 - 1);
+    // A tall narrow box has the room, only the other way up. Turning the name
+    // on its side is what fills the column down the side of a treemap that
+    // would otherwise be a stack of unlabelled slivers, and a reader tilting
+    // their head is still a reader who can tell which box is which.
+    const upright = h >= lineH && w >= need;
+    const sideways = !upright && w >= lineH && h >= need;
+    if (!upright && !sideways) continue;
+    const along = sideways ? h : w;
+    const width = Math.min(wanted, along - 2);
+    // The rectangle the name will cover, in the layer's own axes, so two names
+    // are compared the same way whichever direction each of them runs.
+    const want = sideways
+      ? { x0: node.x0 + 1, y0: node.y0 + 1, x1: node.x0 + 1 + lineH, y1: node.y0 + 1 + width }
+      : { x0: node.x0 + 1, y0: node.y0 + 1, x1: node.x0 + 1 + width, y1: node.y0 + 1 + lineH };
+    const rect = free(want, placed, node.y1 - 1, sideways);
     if (rect === null) continue;
     placed.push(rect);
     const label = document.createElement("span");
-    label.className = "tm-name";
+    label.className = sideways ? "tm-name tm-name-down" : "tm-name";
     label.textContent = text;
-    label.style.left = `${node.x0 + 1}px`;
-    label.style.top = `${rect.y0}px`;
-    label.style.maxWidth = `${w - 2}px`;
+    label.style.left = `${sideways ? rect.x0 : node.x0 + 1}px`;
+    label.style.top = `${sideways ? node.y0 + 1 : rect.y0}px`;
+    label.style.maxWidth = `${along - 2}px`;
     label.style.fontSize = `${size}px`;
     label.style.lineHeight = `${size + 2}px`;
     // The name of a frame is drawn over its children, so a press on it has to
@@ -334,13 +346,18 @@ type Rect = { x0: number; y0: number; x1: number; y1: number };
  * dropped a line and tried again. A few lines in it has run out of box, and
  * then it is genuinely not drawn.
  */
-function free(want: Rect, placed: readonly Rect[], bottom: number): Rect | null {
+function free(want: Rect, placed: readonly Rect[], bottom: number, sideways = false): Rect | null {
   const height = want.y1 - want.y0;
+  const width = want.x1 - want.x0;
   let rect = want;
   for (let tries = 0; tries < STACKED_NAMES; tries++) {
     const hit = placed.find((p) => p.x0 < rect.x1 && rect.x0 < p.x1 && p.y0 < rect.y1 && rect.y0 < p.y1);
-    if (hit === undefined) return rect.y1 <= bottom ? rect : null;
-    rect = { ...rect, y0: hit.y1, y1: hit.y1 + height };
+    // A name running down the side steps sideways out of the way rather than
+    // down, since down is the direction it is already using.
+    if (hit === undefined) return sideways || rect.y1 <= bottom ? rect : null;
+    rect = sideways
+      ? { ...rect, x0: hit.x1, x1: hit.x1 + width }
+      : { ...rect, y0: hit.y1, y1: hit.y1 + height };
   }
   return null;
 }

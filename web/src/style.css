@@ -4192,10 +4192,23 @@ table.rec tr.is-on td {
   /* A plate rather than a shadow. The boxes are whatever colour the caller
      chose, and white with a shadow is unreadable on the pale ones: an amber
      structure box had its name on it and nobody could read it. Dark glass
-     works over every fill, and it is the same treatment at every size. */
-  background: rgb(0 0 0 / 0.55);
+     works over every fill, and it is the same treatment at every size.
+
+     Nearly opaque, not half. At 55% the amber still came through enough to
+     drag the contrast under what small text needs; at 82% white on it clears
+     4.5:1 over every fill in the palette, and enough of the colour still shows
+     through the edge to say which box the name belongs to. */
+  background: rgb(0 0 0 / 0.82);
   pointer-events: auto;
   cursor: pointer;
+}
+/* A name running down the left edge of a tall narrow box. Turned about its own
+   top-left corner, so the caller positions it exactly as it does an upright
+   one and the corner it grows from is the same corner. */
+.tm-name-down {
+  transform: rotate(90deg);
+  transform-origin: 0 0;
+  translate: 100% 0;
 }
 /* The boxes there was no room to draw as themselves. They are the same things
    as their neighbours, so they keep the colour and lose the weight: faded, not

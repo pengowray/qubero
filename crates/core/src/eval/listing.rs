@@ -234,14 +234,30 @@ impl Evaluator {
         child.push(i);
         // A field that cannot be read yet leaves the node with the name it had.
         let Ok(mut info) = self.node(doc, &child) else { return Ok(r.name.text()) };
-        // A name a format wraps in a structure of its own, as GGUF wraps every
-        // string in a length and then its bytes, is still the name. Follow the
-        // field that is only the structure's contents until a value turns up.
+        // A name a format wraps in something of its own is still the name.
+        // Two wrappers to step through, and a name may be behind both:
+        //
+        //   - a structure whose `contents` field is the whole of it, which is
+        //     how GGUF writes every string as a length and then its bytes;
+        //   - a placement, which is how a format that keeps its names in one
+        //     table writes them. An ELF section header holds an offset into
+        //     the section name table and no name at all, so the name is read
+        //     with `at`, and `at` is a node with the string inside it. Without
+        //     this step `named_by` reached the wrapper, found a composite, and
+        //     labelled the record with the number of things in it.
         while info.composite {
-            let Ty::Struct(inner) = self.memo[&child].ty.base().clone() else { break };
-            let Some(c) = inner.contents.clone() else { break };
-            let Some(j) = inner.fields.iter().position(|f| *f.name == *c) else { break };
-            child.push(j);
+            let inner = self.memo[&child].ty.base().clone();
+            match inner {
+                Ty::Struct(s) => {
+                    let Some(c) = s.contents.clone() else { break };
+                    let Some(j) = s.fields.iter().position(|f| *f.name == *c) else { break };
+                    child.push(j);
+                }
+                // One child and nothing of its own: the placement is where the
+                // value is, not what it is.
+                Ty::At { .. } | Ty::Origin { .. } => child.push(0),
+                _ => break,
+            }
             let Ok(next) = self.node(doc, &child) else { break };
             info = next;
         }
@@ -257,6 +273,16 @@ impl Evaluator {
         let (&idx, parent) = path.split_last()?;
         let Ty::Struct(s) = self.memo.get(parent)?.ty.base() else { return None };
         s.fields.get(idx)?.name_from.clone()
+    }
+
+    /// Whether the field at `path` is a second reading of bytes something else
+    /// describes, and so belongs in no total. A property of the parent's
+    /// declaration, the same as `name_from` is. See [`crate::template::Field::aside`].
+    pub(super) fn aside(&self, path: &[usize]) -> bool {
+        let Some((&idx, parent)) = path.split_last() else { return false };
+        let Some(r) = self.memo.get(parent) else { return false };
+        let Ty::Struct(s) = r.ty.base() else { return false };
+        s.fields.get(idx).is_some_and(|f| f.aside)
     }
 
     /// The name of the record whose offset placed this pointer-list child, when

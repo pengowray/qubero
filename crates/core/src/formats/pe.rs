@@ -81,8 +81,14 @@ pub fn pe() -> Template {
     ]);
     let dos = T::structure("DOSHeader", dos_fields);
 
-    let section = T::structure(
+    // Named by its own `name`, which is what carries `.text` and `.rdata` out
+    // to every view: a section header labelled `[2]` says nothing, and the
+    // bytes placed by that header borrow its label, so naming the record here
+    // is what names the megabyte of code it points at.
+    let section = T::structure_named(
         "Section",
+        "name",
+        "",
         vec![
             // Eight bytes, NUL-padded rather than NUL-terminated: a name of
             // exactly eight characters has no terminator at all.

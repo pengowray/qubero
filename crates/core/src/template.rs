@@ -997,6 +997,23 @@ pub struct Field {
     /// Nothing when the text cannot be read or comes to nothing, which leaves
     /// the field with the name it had.
     pub name_from: Option<Expr>,
+    /// True when this field is a second reading of bytes another field already
+    /// describes, rather than bytes of its own.
+    ///
+    /// An ELF section header holds no name, only an offset into the section
+    /// that holds every section's name, and it reads its own name from there
+    /// with `at`. Those bytes belong to that section: they are counted there,
+    /// they are drawn there, and a reader looking at them is looking at the
+    /// name table. Counted here as well, one stretch of the file would be two
+    /// stretches as far as any total is concerned, and "how much of this file
+    /// is text" would answer more than the file is long.
+    ///
+    /// So a field marked this way is drawn and read like any other and
+    /// accounted for nowhere: it is a view of somewhere else, and the somewhere
+    /// else is where its bytes are counted. Use it only where the bytes are
+    /// genuinely described twice; a field that reaches bytes nothing else
+    /// covers is the only thing describing them and has to be counted.
+    pub aside: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1569,7 +1586,7 @@ impl Ty {
     pub fn structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
         Ty::Struct(Arc::new(StructDef {
             name: name.to_string(),
-            fields: fields.into_iter().map(|(n, ty)| Field { name: n.into(), ty, name_from: None }).collect(),
+            fields: fields.into_iter().map(|(n, ty)| Field { name: n.into(), ty, name_from: None, aside: false }).collect(),
             named_by: None,
             contents: None,
             unit: None,
@@ -1601,6 +1618,21 @@ impl Ty {
                 let mut s = (*s).clone();
                 if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
                     f.name_from = Some(from);
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say that `field` is a second reading of bytes something else describes,
+    /// so that nothing counts them twice. See [`Field::aside`].
+    pub fn field_aside(self, field: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.aside = true;
                 }
                 Ty::Struct(Arc::new(s))
             }

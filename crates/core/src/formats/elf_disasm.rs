@@ -675,7 +675,7 @@ mod tests {
         let d = Document::new(MemSource(x86_object()));
         let mut ev = Evaluator::new(crate::formats::elf());
         let p = Program::read(&mut ev, &d).unwrap();
-        p.machine_line(&mut ev, &d, &[7, 15, 1, index]).unwrap()
+        p.machine_line(&mut ev, &d, &[7, 16, 1, index]).unwrap()
     }
 
     #[test]
@@ -705,7 +705,7 @@ mod tests {
         assert_eq!(names, ["", "xdp", ".relxdp", ".maps", ".symtab", ".strtab", ".shstrtab"]);
         let symbols: Vec<&str> = p.symbols.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(symbols, ["", "counter_map", "xdp_prog", ""]);
-        assert_eq!(p.symbols[1].path, [7, 15, 4, 1]);
+        assert_eq!(p.symbols[1].path, [7, 16, 4, 1]);
         assert!(p.symbols[1].source_bits > 0);
     }
 

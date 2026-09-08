@@ -408,6 +408,16 @@ impl Evaluator {
             f.next += 1;
             return Ok(());
         }
+        // A field the template says is a second reading of bytes something
+        // else describes: an ELF section header reads its own name out of the
+        // section that holds every name. Counting it would count those bytes
+        // twice, and a total that counts one stretch twice can say more of the
+        // file is text than the file is long. See `Field::aside`.
+        if self.aside(&path) {
+            self.note_born(walk, top, &path);
+            self.step_past(walk, top, in_order);
+            return Ok(());
+        }
         // A second view of bytes the run that placed this has already
         // described. See `already`.
         let already = walk.stack[top].already;
