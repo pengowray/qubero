@@ -114,10 +114,14 @@ export type TreemapOptions = {
  * a reader sees texture rather than parts.
  */
 const NEST_AREA = 700;
-/** The border a frame keeps around its children, so its own colour shows as
- *  an edge. Even on all four sides, so nesting costs a box the same share of
- *  its width as of its height and no direction is quietly squeezed. */
-const FRAME_PAD = 2;
+/** The border a frame keeps around its children.
+ *
+ *  Even on all four sides, so nesting costs a box the same share of its width
+ *  as of its height and no direction is quietly squeezed. Wide enough to press:
+ *  a frame's children tile the whole of it, so this rim and the frame's own
+ *  name are the only parts of it a pointer can reach, and at two pixels it was
+ *  a frame nobody could select. */
+const FRAME_PAD = 5;
 /** A long name is written over its box once this much of it fits, and cut off
  *  with an ellipsis. A short one has to fit whole or not be drawn at all:
  *  `program_header_off…` is still worth reading and `0x8…` is not, because a
@@ -139,6 +143,12 @@ const CHAR_RATIO = 0.6;
 /** Room around a name inside its plate. */
 const LABEL_PAD_X = 4;
 const LABEL_PAD_Y = 1;
+
+/** How much of a frame is its own rim: enough to press, and nothing for a box
+ *  with no children to keep anything away from. */
+function rim(d: HierarchyRectangularNode<TreeNode>): number {
+  return d.children === undefined || d.children.length === 0 ? 1 : FRAME_PAD;
+}
 
 /** The same node with nothing inside it. Not `children: undefined`, which
  *  under `exactOptionalPropertyTypes` is a different type from a node that
@@ -247,11 +257,18 @@ export function drawTreemap(root: TreeNode, opts: TreemapOptions): Treemap {
     .tile(opts.ordered === true ? treemapBinary : treemapSquarify)
     .paddingOuter(1)
     .paddingInner(1)
-    // Even on every side. A frame keeps a border of its own colour and takes
-    // nothing else: the strip a treemap usually reserves along the top for its
-    // name is area stolen from the children, who then draw smaller than they
-    // are with nothing on the picture to say so. The names go over the top.
-    .paddingTop((d) => (d.children === undefined || d.children.length === 0 ? 1 : FRAME_PAD))
+    // The same on every side, which takes four accessors: `paddingTop` alone
+    // pads the top alone, so a frame meant to have a rim a pointer could reach
+    // had one along its top edge and a hairline everywhere else.
+    //
+    // A frame keeps a border of its own colour and takes nothing else: the
+    // strip a treemap usually reserves along the top for its name is area
+    // stolen from the children, who then draw smaller than they are with
+    // nothing on the picture to say so. The names go over the top instead.
+    .paddingTop(rim)
+    .paddingRight(rim)
+    .paddingBottom(rim)
+    .paddingLeft(rim)
     .round(true)(tree);
 
   // The root itself is the widget's own box, so it is not drawn; everything
@@ -289,21 +306,14 @@ function labelLayer(nodes: readonly HierarchyRectangularNode<TreeNode>[], boxes:
   for (const node of nodes) {
     const w = node.x1 - node.x0;
     const h = node.y1 - node.y0;
-    const size = LABEL_SIZES[Math.min(node.depth - 1, LABEL_SIZES.length - 1)] ?? 10;
-    const lineH = size + 2 * LABEL_PAD_Y + 2;
     const text = node.data.name;
-    // Room for the plate and the pixel of box either side of it. Without the
-    // slack a name whose box was two pixels short of holding it was drawn and
-    // then cut off, which for `0x8d` means showing a different byte value.
-    const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X + 3;
-    const wanted = text.length * size * CHAR_RATIO + 2 * LABEL_PAD_X;
-    // A tall narrow box has the room, only the other way up. Turning the name
-    // on its side is what fills the column down the side of a treemap that
-    // would otherwise be a stack of unlabelled slivers, and a reader tilting
-    // their head is still a reader who can tell which box is which.
-    const upright = h >= lineH && w >= need;
-    const sideways = !upright && w >= lineH && h >= need;
-    if (!upright && !sideways) continue;
+    // The size the depth asks for, and then smaller until it fits. Asking once
+    // and giving up left a hundred-pixel box unlabelled because its name did
+    // not fit at seventeen point, and an unlabelled box is a box a reader
+    // cannot name, cannot look up and does not know they can press.
+    const fit = fits(text, node.depth, w, h);
+    if (fit === null) continue;
+    const { size, sideways, wanted, lineH } = fit;
     const along = sideways ? h : w;
     const width = Math.min(wanted, along - 2);
     // The rectangle the name will cover, in the layer's own axes, so two names
@@ -334,6 +344,40 @@ function labelLayer(nodes: readonly HierarchyRectangularNode<TreeNode>[], boxes:
 }
 
 type Rect = { x0: number; y0: number; x1: number; y1: number };
+
+/** A name that fits: how big, which way up, and the two widths the caller
+ *  places it by. */
+type Fit = { size: number; sideways: boolean; wanted: number; lineH: number };
+
+/**
+ * The biggest size a name fits at, upright if it can be and turned on its side
+ * if it cannot.
+ *
+ * The depth picks where to start, because a box a reader is orienting by wants
+ * a name they can read across the room. It does not pick where to stop: a box
+ * a hundred pixels wide holding `field-number` does not fit at seventeen point
+ * and fits perfectly at eleven, and refusing to shrink left the outermost
+ * boxes, the ones most worth naming, as the only unlabelled ones on the map.
+ */
+function fits(text: string, depth: number, w: number, h: number): Fit | null {
+  const start = Math.min(depth - 1, LABEL_SIZES.length - 1);
+  for (let i = start; i < LABEL_SIZES.length; i++) {
+    const size = LABEL_SIZES[i] ?? 10;
+    const lineH = size + 2 * LABEL_PAD_Y + 2;
+    // Room for the plate and the pixel of box either side of it. Without the
+    // slack a name whose box was two pixels short of holding it was drawn and
+    // then cut off, which for `0x8d` means showing a different byte value.
+    const need = Math.min(text.length, MIN_CHARS) * size * CHAR_RATIO + 2 * LABEL_PAD_X + 3;
+    const wanted = text.length * size * CHAR_RATIO + 2 * LABEL_PAD_X;
+    if (h >= lineH && w >= need) return { size, sideways: false, wanted, lineH };
+    // A tall narrow box has the room, only the other way up. Turning the name
+    // on its side is what fills the column down the side of a treemap that
+    // would otherwise be a stack of unlabelled slivers, and a reader tilting
+    // their head is still a reader who can tell which box is which.
+    if (w >= lineH && h >= need) return { size, sideways: true, wanted, lineH };
+  }
+  return null;
+}
 
 /**
  * Somewhere in the box for a name, given the names already down.
@@ -386,7 +430,10 @@ function drawBox(node: HierarchyRectangularNode<TreeNode>, key: string, title: s
   const frame = node.children !== undefined && node.children.length > 0;
   const box = document.createElement("div");
   const paint = node.data.colorClass;
-  const open = node.data.openable === true;
+  // Openable when the caller says there is more inside than it handed over, and
+  // whenever there are children drawn: both open, so both say so with the
+  // pointer rather than one of them looking inert.
+  const open = node.data.openable === true || frame;
   box.className = `tm-box${frame ? " tm-frame" : ""}${open ? " tm-open" : ""}${paint === undefined ? "" : ` ${paint}`}`;
   box.style.left = `${node.x0}px`;
   box.style.top = `${node.y0}px`;

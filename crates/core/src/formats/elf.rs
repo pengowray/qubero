@@ -647,9 +647,11 @@ mod tests {
         let shape = ev.shape(&d, &[7, 15, 0]).unwrap();
         assert_eq!((shape.placed, shape.sized), (Placed::Address, Sizing::Count));
         // A field of the header, for contrast: after the one before it, and as
-        // wide as its own type.
+        // wide as its own type. `Type` rather than `Fixed`: a `u16` is two
+        // bytes because it is a `u16`, and the panel says nothing about that
+        // because the type is written beside the length already.
         let plain = ev.shape(&d, &[7, 5]).unwrap();
-        assert_eq!((plain.placed, plain.sized), (Placed::Follows, Sizing::Fixed));
+        assert_eq!((plain.placed, plain.sized), (Placed::Follows, Sizing::Type));
         // A section's bytes are wherever its own header said.
         let code = ev.shape(&d, &[7, 16, 1]).unwrap();
         assert_eq!(code.placed, Placed::Pointer);

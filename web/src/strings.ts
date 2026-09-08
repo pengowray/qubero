@@ -265,6 +265,11 @@ export const TREEMAP = {
    *  since nothing about a drawn box says whether opening it would add
    *  anything. */
   openHint: "Double-click to open",
+  /** Out of the box the reader opened, one level. A button of its own before
+   *  the trail: the trail says where they are, and a row of names does not
+   *  look like a way out until someone has worked out that it is one. */
+  back: "Back to the box outside this one",
+  backIcon: "\u2191",
   /** The map over the whole window and back in the rail. A glance and a read
    *  are different jobs and the same map does both, so the control that
    *  switches between them is a corner button rather than a mode. Escape
@@ -1073,6 +1078,10 @@ export const PROPERTIES = {
    * a clause that opens with a verb reads as an instruction.
    */
   sized: {
+    /** Nothing. The length row already reads `8 bytes` and the type row above
+     *  it already reads `u64 le`, so a clause saying the second explains the
+     *  first is a line the reader has to read to find out it says nothing. */
+    type: (): string => "",
     fixed: (): string => "fixed by the type",
     expression: fromFields,
     terminated: (): string => "ends at a terminator",

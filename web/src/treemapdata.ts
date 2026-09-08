@@ -473,11 +473,11 @@ export function kindsTree(totals: KindTotals, fileBits: number): TreemapTree {
   if (short > 0) kids.push({ key: "unclassified", name: NO_KIND, value: short, color: UNMAPPED_COLOR, colorClass: "tm-nokind", detail: NO_KIND_DETAIL });
   const left = Math.max(0, fileBits - totals.reached_bits);
   if (left > 0) kids.push({ key: "unwalked", name: TREEMAP.unwalked, value: left, color: UNMAPPED_COLOR, colorClass: "tm-unwalked" });
-  // How far along the walk is, counted by what it has said something about
-  // rather than by how far it claims to have reached. A file whose walk has
-  // saturated `reached_bits` and is still going reported "100%" and sat there,
-  // which reads as a scan that has hung rather than one that is working.
-  const along = Math.min(totals.reached_bits, counted + short);
+  // How far along the walk is, counted by what it has put a name to rather
+  // than by how far it claims to have reached. `reached_bits` saturates long
+  // before the walk finishes, so a progress line drawn from it read "100%" and
+  // sat there, which is what a hung scan looks like.
+  const along = counted;
   return {
     root: { key: "file", name: TREEMAP.root, value: fileBits, color: UNMAPPED_COLOR, children: kids },
     unit: "bits",

@@ -84,9 +84,15 @@ impl Placed {
 /// How a field's length was settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sizing {
-    /// The type says so and nothing in the file can change it: a `u32` is four
-    /// bytes, a magic is as long as the bytes it matches, a window declared as
-    /// a number of bytes is that many.
+    /// The type says so, and the type is written beside the length already: a
+    /// `u32` is four bytes because it is a `u32`. Kept apart from `Fixed`
+    /// because there is nothing to tell a reader here. They can see it.
+    Type,
+    /// A number the format fixes, which the type does not carry: a MAT-file's
+    /// description is 116 bytes of text, and `ascii[]` says nothing about 116.
+    /// Nothing in the file can change it, and that is worth saying, because a
+    /// reader looking at 116 bytes of text has no way of knowing whether the
+    /// file chose that or the format did.
     Fixed,
     /// Worked out, from an expression that reads the file. Which fields it
     /// reads are the `Length` origins, and the arithmetic is the `Length`
@@ -124,6 +130,7 @@ pub enum Sizing {
 impl Sizing {
     pub fn as_str(self) -> &'static str {
         match self {
+            Sizing::Type => "type",
             Sizing::Fixed => "fixed",
             Sizing::Expression => "expression",
             Sizing::Terminated => "terminated",
@@ -235,7 +242,7 @@ impl Evaluator {
             return r.sized_how.unwrap_or(Sizing::Unknown);
         }
         if fixed_bits(&r.ty).is_some() {
-            return Sizing::Fixed;
+            return if width_in_name(&r.ty) { Sizing::Type } else { Sizing::Fixed };
         }
         // A wrapper that names values or marks one as unset is as long as what
         // it wraps, which is how `read_size` measures it too.
@@ -282,6 +289,37 @@ pub(super) fn expr_sizing(e: &Expr) -> Sizing {
         Sizing::Expression
     } else {
         Sizing::Fixed
+    }
+}
+
+/// Whether the width is already written in the name of the type.
+///
+/// Two fields can both be fixed and want different things said about them. A
+/// `u64 le` is eight bytes, and the panel prints `u64 le` a line above the
+/// eight, so a clause explaining that the 64 means 64 is a line the reader has
+/// to read to learn nothing. A MAT-file's description is 116 bytes of `ascii[]`
+/// and nothing on screen says where 116 came from, so a reader has no way to
+/// tell whether the file chose it or the format did.
+///
+/// The split is exactly that: a number, a float or a magic carries its width in
+/// its own name, and anything whose length is a constant written beside it does
+/// not. An enum or a flags field is as wide as the number under it, so it
+/// follows the number.
+fn width_in_name(ty: &Ty) -> bool {
+    match ty {
+        Ty::UInt { .. }
+        | Ty::Int { .. }
+        | Ty::SignMagnitude { .. }
+        | Ty::F16(_)
+        | Ty::BF16(_)
+        | Ty::F8 { .. }
+        | Ty::F32(_)
+        | Ty::F64(_)
+        | Ty::F80(_)
+        | Ty::Fixed { .. }
+        | Ty::Magic(_) => true,
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => width_in_name(inner),
+        _ => false,
     }
 }
 

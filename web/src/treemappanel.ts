@@ -178,7 +178,16 @@ export class TreemapPanel {
    *  back out of a box, which is what it means everywhere else a reader has
    *  gone into something. */
   private key(e: KeyboardEvent): void {
-    if (e.key === "Escape" && this.big) {
+    if (e.key === "Escape") {
+      // The mark first, then the window. Escape means "undo the last thing I
+      // turned on", and a reader who has selected a box inside a full-screen
+      // map means the box.
+      if (this.selected !== null) {
+        e.preventDefault();
+        this.light(null);
+        return;
+      }
+      if (!this.big) return;
       e.preventDefault();
       this.setBig(false);
       return;
@@ -430,6 +439,17 @@ export class TreemapPanel {
   /** The way back out. The file is always the first crumb, so a reader who has
    *  gone in three levels can get all the way out in one press. */
   private drawTrail(): void {
+    // A button that leaves, before the trail rather than at the end of it. The
+    // trail alone said where a reader was and left them to work out that its
+    // crumbs were the way out; the map fills its box whatever it is a picture
+    // of, so nothing else on screen says they went anywhere at all.
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "tmp-back";
+    back.dataset["crumb"] = String(this.crumbs.length - 1);
+    back.textContent = TREEMAP.backIcon;
+    back.title = TREEMAP.back;
+    back.setAttribute("aria-label", TREEMAP.back);
     const names = [TREEMAP.root, ...this.crumbs.map((c) => c.name)];
     const items = names.map((name, i) => {
       const b = document.createElement("button");
@@ -439,7 +459,7 @@ export class TreemapPanel {
       b.textContent = name;
       return b;
     });
-    this.trail.replaceChildren(...items);
+    this.trail.replaceChildren(back, ...items);
   }
 
   /** A press goes to the bytes and marks the box; a second press makes it the
@@ -468,15 +488,27 @@ export class TreemapPanel {
       this.draw();
       return;
     }
-    // Lit here rather than by a redraw. Going to the bytes moves the cursor,
-    // and nothing a cursor move sets off comes back to this panel, so a box
-    // that waited for a redraw to be marked was a box that never got marked.
-    this.selected = key;
-    for (const on of this.plot.querySelectorAll(".tm-box.is-on")) on.classList.remove("is-on");
-    const box = this.plot.querySelector(`[data-key="${CSS.escape(key)}"]`);
-    box?.classList.add("is-on");
+    // Pressing the box that is already lit puts it out. Something a reader has
+    // turned on has to be something they can turn off, and there was nothing
+    // on screen that took the mark away again.
+    this.light(key === this.selected ? null : key);
+    if (this.selected === null) return;
     const range = node.range;
     if (range !== undefined) this.onJump(range.offsetBits, range.offsetBits + range.sizeBits);
+  }
+
+  /**
+   * Mark one box, and its name with it.
+   *
+   * Done to the elements rather than by redrawing. Going to the bytes moves the
+   * cursor, and nothing a cursor move sets off comes back to this panel, so a
+   * box that waited for a redraw to be marked was a box that never got marked.
+   */
+  private light(key: string | null): void {
+    this.selected = key;
+    for (const on of this.plot.querySelectorAll(".is-on")) on.classList.remove("is-on");
+    if (key === null) return;
+    for (const el of this.plot.querySelectorAll(`[data-key="${CSS.escape(key)}"]`)) el.classList.add("is-on");
   }
 }
 

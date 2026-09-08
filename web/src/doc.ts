@@ -554,6 +554,7 @@ export type Shape = {
    *  as a count says; `encoded` its own bytes say where it ends; `trace` as
    *  much as the decoder read; `nothing` no bytes of its own. */
   readonly sized:
+    | "type"
     | "fixed"
     | "expression"
     | "terminated"
