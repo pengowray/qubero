@@ -49,9 +49,9 @@
 //!   see it went wrong.
 
 use crate::template::{
-    Encoding,
+    Check, Checksum, Covers, Encoding,
     Endian::{Big, Little},
-    Expr as E, Packing, StrLen, Template, Ty as T, Until,
+    Expr as E, Named, Packing, StrLen, Template, Ty as T, Until,
 };
 
 /// What one of these starts with.
@@ -939,7 +939,19 @@ pub fn sevenzip() -> Template {
                 ("next_header", T::sized(E::field("next_header_size"), T::if_room(next_header()))),
             ],
         )
-        .field_aside("header_ahead"),
+        .field_aside("header_ahead")
+        // The twenty bytes after it: the three numbers that say where the
+        // header is, and nothing else. This is what tells a truncated archive
+        // from a corrupt one, since a reader that cannot trust these cannot
+        // trust anything it reaches through them.
+        .field_check(
+            "start_header_crc",
+            Check::of(Checksum::Crc32, Covers::Run { at: E::lit(12), len: E::lit(20) }),
+        )
+        // The header as it sits at the end of the file, packed or not. Not
+        // what it unpacks to: 7z sums the bytes it wrote, and the digest for
+        // the unpacked header is the folder's own `kCRC` inside it.
+        .field_check("next_header_crc", Check::of(Checksum::Crc32, Covers::Field { name: Named::here("next_header") })),
     )
 }
 
