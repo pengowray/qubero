@@ -32,6 +32,20 @@ pub const CAP_BYTES: usize = 64 * 1024 * 1024;
 /// What a run is compressed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
+    /// Not compressed at all: the bytes come out as they went in.
+    ///
+    /// An archive that stores a file rather than packing it has written that
+    /// file into itself verbatim, so the bytes are already a document. Saying
+    /// so with a codec rather than a flag of its own is what makes them a
+    /// document everywhere at once: `Decoded` is what carries `space_root`,
+    /// which is what the listing hangs Open unpacked off, what the hex view's
+    /// chips mark, and what opens the tab. A ZIP entry written with `-0`, a
+    /// RAR file stored with method 0x30 and a 7z entry packed with `copy` are
+    /// all this.
+    ///
+    /// The trace is one step over the whole run, which is the truth: every
+    /// byte out came from the byte in front of it.
+    Stored,
     /// RFC 1950: two header bytes, deflate, an Adler-32.
     Zlib,
     /// RFC 1951 on its own, with nothing wrapped round it.
@@ -75,6 +89,7 @@ pub enum Codec {
 impl Codec {
     pub fn as_str(self) -> &'static str {
         match self {
+            Codec::Stored => "stored",
             Codec::Zlib => "zlib",
             Codec::Deflate => "deflate",
             Codec::Zstd => "zstd",
@@ -654,6 +669,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         return Err(Refusal::TooLarge);
     }
     let (out, trace) = match codec {
+        Codec::Stored => (data.to_vec(), frames::whole(data.len(), data.len())),
         Codec::Deflate => inflate::inflate(data)?,
         Codec::Zlib => inflate::zlib(data)?,
         Codec::Lz4Block => lz4::block(data)?,
@@ -680,7 +696,16 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     let out = match codec {
         // One decoder, not two: the bytes a reader sees have to be the bytes
         // the trace describes, so the traced path is the only path.
-        Codec::Zlib | Codec::Deflate | Codec::Lz4Block | Codec::PngUnfilter { .. } | Codec::LowBitsArgb | Codec::LowBitsRgba11 | Codec::Pico8Pxa | Codec::Pico8Old | Codec::PicotronPxu => {
+        Codec::Stored
+        | Codec::Zlib
+        | Codec::Deflate
+        | Codec::Lz4Block
+        | Codec::PngUnfilter { .. }
+        | Codec::LowBitsArgb
+        | Codec::LowBitsRgba11
+        | Codec::Pico8Pxa
+        | Codec::Pico8Old
+        | Codec::PicotronPxu => {
             decode_traced(codec, data)?.0
         }
         Codec::Zstd => zstd(data)?,

@@ -37,6 +37,7 @@
 //! authenticity, signature and recovery-record blocks. Each of those is
 //! reached, sized and placed; what it holds is left as the bytes it is.
 
+use crate::codec::Codec;
 use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// What one of these starts with. RAR 5 has the same first six bytes and one
@@ -119,6 +120,9 @@ const DICTIONARY: &[(i128, &str)] =
     &[(0, "64k"), (1, "128k"), (2, "256k"), (3, "512k"), (4, "1024k"), (5, "2048k"), (6, "4096k"), (7, "directory")];
 
 /// How hard the compressor tried, which is also which of RAR's compressors ran.
+/// The method that writes the file in verbatim, so its bytes are the file.
+const STORE: i128 = 0x30;
+
 const METHOD: &[(i128, &str)] =
     &[(0x30, "store"), (0x31, "fastest"), (0x32, "fast"), (0x33, "normal"), (0x34, "good"), (0x35, "best")];
 
@@ -248,7 +252,22 @@ fn file_block() -> T {
         // The file itself, which is why the archive is the size it is. An
         // absent high half reads as zero, so this is the whole number whether
         // the format wrote it in one field or two.
-        ("data", T::bytes(bounded(E::field("pack_size").add(E::field("high_pack_size").shl(E::lit(32)))))),
+        //
+        // Stored means the file was written in verbatim, so those bytes are
+        // already a document and can be opened as one: that is what the codec
+        // that copies is for. Anything packed stays bytes, since nothing here
+        // unpacks RAR.
+        (
+            "data",
+            {
+                let size = bounded(E::field("pack_size").add(E::field("high_pack_size").shl(E::lit(32))));
+                T::switch(
+                    E::field("method"),
+                    vec![(STORE, T::decoded(size.clone(), Codec::Stored, super::decoded_text()))],
+                    T::bytes(size),
+                )
+            },
+        ),
     ]);
     T::structure_named("Rar4File", "name", "data", fields).counted_as("block")
 }
