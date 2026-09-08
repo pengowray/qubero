@@ -11,7 +11,7 @@
 //! everything between the header and the last eight bytes.
 
 use crate::codec::Codec;
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
 
 /// The bits of `flg`, and what each one puts after the header.
 const FLAGS: &[(u32, &str)] = &[
@@ -80,7 +80,13 @@ pub fn gzip() -> Template {
                 ("extra", T::switch(bit(2), vec![(1, extra_field())], T::bytes(E::lit(0)))),
                 ("name", T::switch(bit(3), vec![(1, optional_string())], T::bytes(E::lit(0)))),
                 ("comment", T::switch(bit(4), vec![(1, optional_string())], T::bytes(E::lit(0)))),
-                ("header_crc", T::bytes(bit(1).mul(E::lit(2)))),
+                // Two bytes when the bit says so and nothing at all when it
+                // does not, like the three fields above. A number rather than
+                // the run of bytes it used to be: it is a sixteen-bit check
+                // written little-endian, and reading it as bytes left the one
+                // thing about it that matters, which way round it goes, written
+                // down nowhere.
+                ("header_crc", T::switch(bit(1), vec![(1, T::u16(Little))], T::bytes(E::lit(0)))),
                 // Deflate. The last eight bytes are the trailer, so the stream
                 // is everything before them. The run keeps its own length and
                 // stays where it is; what comes out of it is read as fields of
@@ -92,7 +98,25 @@ pub fn gzip() -> Template {
                 // which is why a large file's number looks wrong.
                 ("original_size", T::u32(Little)),
             ],
-        ),
+        )
+        // Everything written before it, which for a header is everything there
+        // is: the check is the last thing in it. Only when the flag put it
+        // there at all, since a field of no bytes reads as zero and zero is a
+        // number a sixteen-bit sum can honestly come to.
+        .field_check("header_crc", Check {
+            algorithm: Checksum::Crc32Low16,
+            over: Covers::UpToHere,
+            when: Some(bit(1)),
+        })
+        // The file that went in, not the deflate stream it came out as. What
+        // the trailer says that comes to is only for deciding whether to unpack
+        // it unasked; it is written modulo four gigabytes and a large file's
+        // number is smaller than the file.
+        .field_check("crc32", Check {
+            algorithm: Checksum::Crc32,
+            over: Covers::Unpacked { name: "compressed".into(), len: Some(E::field("original_size")) },
+            when: None,
+        }),
     )
 }
 

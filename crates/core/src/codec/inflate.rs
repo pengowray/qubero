@@ -200,7 +200,7 @@ pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut out = Vec::new();
     run(data, 16, end, CAP_BYTES, &mut out, &mut b)?;
     let adler = u32::from_be_bytes([data[data.len() - 4], data[data.len() - 3], data[data.len() - 2], data[data.len() - 1]]);
-    if adler != adler32(&out) {
+    if adler != crate::checksum::adler32(&out) {
         return Err(Refusal::Failed);
     }
     b.push(end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
@@ -237,19 +237,6 @@ pub fn inflate_prefix(data: &[u8], cap: usize) -> Vec<u8> {
     let mut out = Vec::new();
     let _ = run(data, 16, data.len() as u64 * 8, cap, &mut out, &mut b);
     out
-}
-
-fn adler32(data: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u32, 0u32);
-    for chunk in data.chunks(5552) {
-        for &byte in chunk {
-            a += byte as u32;
-            b += a;
-        }
-        a %= 65521;
-        b %= 65521;
-    }
-    (b << 16) | a
 }
 
 /// The blocks between `start` and `end`, bits of `data`, written into `out`.

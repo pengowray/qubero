@@ -17,6 +17,7 @@ use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, 
 use crate::text::{self, Settled};
 
 mod cells;
+mod check;
 mod deduced;
 mod explain;
 mod go;
@@ -42,6 +43,7 @@ pub use explain::{Explain, FlagBit};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
 pub use cells::Cell;
+pub use check::{CheckInfo, Verdict};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;

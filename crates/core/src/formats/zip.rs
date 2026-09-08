@@ -1,7 +1,7 @@
 //! ZIP archives as local entries, directory entries, descriptors, and the end record.
 
 use crate::codec::Codec;
-use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
 
 const SIGS: &[(i128, &str)] = &[
     (0x0403_4b50, "local file"),
@@ -318,6 +318,21 @@ fn local() -> T {
             ),
         ],
     )
+    // The sum is of the file, so it is of what the run unpacks to, which for a
+    // stored entry is the run itself. A method nothing here unpacks leaves
+    // `data` as plain bytes, and that is the template saying the check cannot
+    // be made rather than an omission.
+    //
+    // Two entries are skipped. An encrypted one has twelve bytes of header in
+    // front of the data and the sum is of the plaintext, which is not in the
+    // file. One whose sizes were written after the fact carries zeroes here and
+    // in both size fields, and a sum of no bytes against a stored zero would
+    // read as a pass: the honest answer for those is nothing at all.
+    .field_check("crc32", Check {
+        algorithm: Checksum::Crc32,
+        over: Covers::Unpacked { name: "data".into(), len: Some(E::field("unpacked_size")) },
+        when: Some(E::lit(1).sub(flag_bit(0)).mul(E::lit(1).sub(flag_bit(3)))),
+    })
 }
 
 fn central() -> T {
