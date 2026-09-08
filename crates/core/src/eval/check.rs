@@ -264,7 +264,7 @@ impl Evaluator {
                 if !matches!(self.memo[&p].ty, Ty::Decoded { .. }) {
                     return Ok(None);
                 }
-                let stored = matches!(self.memo[&p].ty, Ty::Decoded { codec: crate::codec::Codec::Stored, .. });
+                let stored = matches!(&self.memo[&p].ty, Ty::Decoded { codec, .. } if codec.is_stored());
                 let Some(run) = self.field_run(doc, &p)? else { return Ok(None) };
                 if stored {
                     return of(Some(run), None, run.1);

@@ -13,7 +13,7 @@ use crate::encode;
 use crate::json;
 use crate::machinery;
 use crate::source::{Missing, Source};
-use crate::template::{Anchor, Encoding, Expr, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
+use crate::template::{Anchor, Encoding, Expr, Packing, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
 use crate::text::{self, Settled};
 
 mod cells;
@@ -1557,8 +1557,18 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
         let r = self.memo[path].clone();
-        let Ty::Decoded { codec, .. } = &r.ty else { return fail("not a decoded stream") };
-        let codec = *codec;
+        if !matches!(r.ty, Ty::Decoded { .. }) {
+            return fail("not a decoded stream");
+        }
+        // What the file says it was packed with, which for one codec is three
+        // numbers written in its header rather than a fact about the format.
+        // A template that named a field holding none of them has said
+        // something it cannot mean, and the run stays bytes with the reason on
+        // it, the way a stream that will not unpack does.
+        let Some(codec) = self.codec_at(doc, path)? else {
+            self.spaces.refuse(path, Refusal::Failed);
+            return Ok(space::Opened::Refused(Refusal::Failed));
+        };
         // No decoder reads half a byte, and a compressed run that does not
         // start on one is a template saying something it cannot mean.
         if r.offset % 8 != 0 || size % 8 != 0 {
@@ -1581,6 +1591,45 @@ impl Evaluator {
             Err(why) => {
                 self.spaces.refuse(path, why);
                 space::Opened::Refused(why)
+            }
+        })
+    }
+
+    /// Which codec the `Decoded` node at `path` was packed with, once the
+    /// numbers a template named have been read out of the file.
+    ///
+    /// [`Packing::Fixed`] is nearly all of them and costs nothing. `Lzma1`
+    /// reads three fields, which is the point of the whole arrangement: a 7z
+    /// coder writes how it packed a stream into the archive's header, so the
+    /// codec is a property of the file and not of the format.
+    ///
+    /// The expressions are worked out where the node stands, as a size or a
+    /// count would be, so they reach what was declared before it or what it
+    /// sits inside. Nothing when one of them will not resolve or holds a
+    /// number the codec cannot take: a run packed a way this cannot work out
+    /// is a run that stays bytes.
+    pub(super) fn codec_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<crate::codec::Codec>> {
+        let Some(Ty::Decoded { codec, .. }) = self.memo.get(path).map(|r| r.ty.clone()) else { return Ok(None) };
+        Ok(match codec {
+            Packing::Fixed(c) => Some(c),
+            Packing::Lzma1 { props, dict_size, unpacked } => {
+                let props = self.eval_expr(doc, path, &props)?;
+                let dict = self.eval_expr(doc, path, &dict_size)?;
+                let out = match unpacked {
+                    Some(e) => Some(self.eval_expr(doc, path, &e)?),
+                    None => None,
+                };
+                let (Ok(props), Ok(dict_size)) = (u8::try_from(props), u32::try_from(dict)) else {
+                    return Ok(None);
+                };
+                let unpacked = match out {
+                    Some(n) => match u64::try_from(n) {
+                        Ok(n) => Some(n),
+                        Err(_) => return Ok(None),
+                    },
+                    None => None,
+                };
+                Some(crate::codec::Codec::Lzma1 { props, dict_size, unpacked })
             }
         })
     }
@@ -1650,9 +1699,10 @@ impl Evaluator {
             space::Opened::Space(id) => id,
             space::Opened::Refused(_) => return Ok(None),
         };
-        let Ty::Decoded { codec, inner } = self.memo[path].ty.clone() else {
+        let Ty::Decoded { inner, .. } = self.memo[path].ty.clone() else {
             return fail("not a decoded stream");
         };
+        let Some(codec) = self.codec_at(doc, path)? else { return Ok(None) };
         let (Some(bytes), Some(trace)) = (self.spaces.buf(id), self.spaces.trace(id)) else {
             return fail("this stream is no longer open");
         };

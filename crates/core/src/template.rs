@@ -1524,7 +1524,7 @@ pub enum Ty {
     /// Nothing inside is editable, there is no mapping from a decoded byte
     /// back to the file, and a stream too large or too broken to open reads as
     /// the bytes it is with a note saying why. See [`crate::codec`].
-    Decoded { codec: crate::codec::Codec, inner: Box<Ty> },
+    Decoded { codec: Packing, inner: Box<Ty> },
     /// Fields laid out from what the decoder read, rather than from what a
     /// template says.
     ///
@@ -1543,6 +1543,53 @@ pub enum Ty {
     /// Nothing here is editable and nothing is read from the file twice: every
     /// value shown is the value the decoder used.
     Traced { part: TracedPart },
+}
+
+/// How a run was packed: the codec, and where the numbers it needs are.
+///
+/// Nearly every codec is the same arithmetic wherever it appears, so naming it
+/// is the whole of what a template has to say, and [`Packing::Fixed`] is what
+/// thirty of the thirty-one declarations in here are. LZMA1 is the exception
+/// that made this an enum: a 7z coder writes the literal-context bits, the
+/// dictionary size and the unpacked size *into the header*, so the numbers are
+/// fields of the file and two archives from the same archiver can differ. A
+/// codec fixed when the template was built cannot carry them, which is why 7z
+/// stopped at the description of its own compressed header and never reached
+/// the names inside it.
+///
+/// The expressions are worked out where the `Decoded` node stands, the way a
+/// size or a count is, so they may name a field declared before it or one it
+/// sits inside. That is not [`Check`]'s rule, which looks one past the last
+/// field of the structure: a check is nearly always written in front of what
+/// it seals, and a packed run is placed by what came before it.
+#[derive(Debug, Clone)]
+pub enum Packing {
+    /// A codec whose settings are a property of the format rather than of the
+    /// file: deflate is deflate, and a template naming it has said everything.
+    Fixed(crate::codec::Codec),
+    /// Raw LZMA1, with the three numbers it does not carry named as fields.
+    ///
+    /// `unpacked` is how much comes out where the container states it. Leave
+    /// it out only for a stream that ends at a marker; a 7z one does not, and
+    /// a decoder told the size is unknown reads on into whatever follows.
+    Lzma1 { props: Expr, dict_size: Expr, unpacked: Option<Expr> },
+}
+
+impl Packing {
+    /// What to call it, without reading a byte. The name is a fact about the
+    /// packing and not about the numbers, so this answers for a run whose
+    /// settings have not been worked out and for one that will not open.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Packing::Fixed(c) => c.as_str(),
+            Packing::Lzma1 { .. } => "lzma",
+        }
+    }
+    /// Whether the bytes come out as they went in, so a reader can be sent to
+    /// them where they sit rather than to a stream standing in for them.
+    pub fn is_stored(&self) -> bool {
+        matches!(self, Packing::Fixed(crate::codec::Codec::Stored))
+    }
 }
 
 /// Which level of a trace a [`Ty::Traced`] node stands for.
@@ -2025,6 +2072,11 @@ impl Ty {
     /// `size` bytes of compressed run, holding `inner` once opened. See
     /// [`Ty::Decoded`].
     pub fn decoded(size: Expr, codec: crate::codec::Codec, inner: Ty) -> Ty {
+        Ty::decoded_as(size, Packing::Fixed(codec), inner)
+    }
+    /// The same, for a codec whose settings are read out of the file. See
+    /// [`Packing`].
+    pub fn decoded_as(size: Expr, codec: Packing, inner: Ty) -> Ty {
         Ty::Sized { size, inner: Box::new(Ty::Decoded { codec, inner: Box::new(inner) }) }
     }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {

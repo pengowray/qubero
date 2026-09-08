@@ -67,6 +67,20 @@ pub enum Codec {
     /// are things the container says. The template lays its fields over the
     /// same bytes, which is what `xz` does for the same reason.
     Lzip,
+    /// A raw LZMA1 stream, given the three things it does not carry: how it
+    /// was packed, how large a dictionary it wants, and how much comes out.
+    ///
+    /// The first codec here whose settings differ from file to file rather
+    /// than from format to format. Every other one is the same arithmetic
+    /// wherever it appears, so a template naming it says everything there is
+    /// to say; a 7z coder writes its properties into the header, and two
+    /// archives made by the same archiver on the same day can differ. See
+    /// [`Packing`](crate::template::Packing), which is how a template says
+    /// where the numbers are rather than what they are.
+    ///
+    /// `unpacked` is what the container says comes out. `None` reads to the
+    /// end-of-stream marker, which lzip writes and 7z does not.
+    Lzma1 { props: u8, dict_size: u32, unpacked: Option<u64> },
     /// A whole bzip2 stream, from its `BZh` onwards.
     ///
     /// The run is the stream and not a block: bzip2 packs its blocks to the
@@ -129,6 +143,7 @@ impl Codec {
             Codec::Lz4Block => "lz4",
             Codec::Xz => "xz",
             Codec::Lzip => "lzip",
+            Codec::Lzma1 { .. } => "lzma",
             Codec::Bzip2 => "bzip2",
             Codec::Compress => "compress",
             Codec::Gzip => "gzip",
@@ -716,6 +731,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Zstd => frames::zstd(data)?,
         Codec::Xz => frames::xz(data)?,
         Codec::Lzip => lzma::lzip(data)?,
+        Codec::Lzma1 { props, dict_size, unpacked } => lzma::lzma1(data, props, dict_size, unpacked)?,
         Codec::Bzip2 => bzip2::stream(data)?,
         Codec::Compress => compress::lzw(data)?,
         Codec::Gzip => inflate::gzip(data)?,
@@ -752,6 +768,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Pico8Old
         | Codec::PicotronPxu
         | Codec::Lzip
+        | Codec::Lzma1 { .. }
         | Codec::Bzip2
         | Codec::Compress
         | Codec::Gzip

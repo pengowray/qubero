@@ -199,6 +199,72 @@ mod tests {
     use crate::formats;
     use crate::source::MemSource;
 
+    /// A run whose codec is three numbers the file wrote down, which is what
+    /// [`Packing::Lzma1`](crate::template::Packing::Lzma1) exists for.
+    ///
+    /// A made-up container: the five bytes an LZMA header spends on its
+    /// settings, the size that comes out, and then the stream. No format is
+    /// laid out quite like this; what is being tested is that the numbers
+    /// reach the decoder from *fields*, which is the whole of the change, and
+    /// a real archive's are in another part of the file entirely.
+    #[test]
+    fn a_codec_takes_its_settings_from_fields_of_the_file() {
+        use crate::template::{Expr as E, Packing, Template, Ty as T};
+
+        let text = b"what a 7z coder writes down in its header and nowhere else";
+        // The stream alone, taken from the `alone` file lzma writes: thirteen
+        // bytes of header and then the range-coded bits.
+        let alone = {
+            let mut out = Vec::new();
+            lzma_rs::lzma_compress(&mut &text[..], &mut out).expect("packs");
+            out
+        };
+        let (props, dict) = (alone[0], u32::from_le_bytes(alone[1..5].try_into().unwrap()));
+        let mut bytes = vec![props];
+        bytes.extend_from_slice(&dict.to_le_bytes());
+        bytes.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&alone[13..]);
+
+        let make = || Template::new(
+            "made-up",
+            T::structure(
+                "Packed",
+                vec![
+                    ("props", T::u8()),
+                    ("dict_size", T::u32(crate::template::Endian::Little)),
+                    ("unpacked_size", T::u32(crate::template::Endian::Little)),
+                    (
+                        "stream",
+                        T::decoded_as(
+                            E::Remaining,
+                            Packing::Lzma1 {
+                                props: E::field("props"),
+                                dict_size: E::field("dict_size"),
+                                unpacked: Some(E::field("unpacked_size")),
+                            },
+                            T::bytes(E::Remaining),
+                        ),
+                    ),
+                ],
+            ),
+        );
+        let (t, t2) = (make(), make());
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(t);
+        let id = e.open_space(&d, 0, &[3]).unwrap().expect("the stream opens");
+        assert_eq!(e.space(id).expect("it is there").bytes(), text);
+
+        // The same run with the properties byte changed stays bytes. A codec
+        // worked out from the file can be worked out wrongly, and the answer
+        // for that is the answer for any stream that will not unpack: the run
+        // is what it is and the node says why, rather than other bytes.
+        let mut wrong = d.source().0.clone();
+        wrong[0] = 0xff;
+        let d = Document::new(MemSource(wrong));
+        let mut e = Evaluator::new(t2);
+        assert_eq!(e.open_space(&d, 0, &[3]).unwrap(), None, "a stream packed a way this cannot read stays bytes");
+    }
+
     /// A file that is one zlib stream, over whatever is handed in.
     fn zlib_over(content: &[u8]) -> Document<MemSource> {
         Document::new(MemSource(miniz_oxide::deflate::compress_to_vec_zlib(content, 6)))

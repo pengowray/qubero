@@ -303,7 +303,7 @@ impl Evaluator {
         // field's offset counts in.
         let found = (0..path.len()).rev().find_map(|k| match self.memo.get(&path[..k]) {
             Some(r) => match &r.ty {
-                Ty::Decoded { codec, .. } => Some((path[..k].to_vec(), *codec, r.name.text())),
+                Ty::Decoded { codec, .. } => Some((path[..k].to_vec(), codec.as_str(), r.name.text())),
                 _ => None,
             },
             None => None,
@@ -313,7 +313,7 @@ impl Evaluator {
         // What the run says, as a field, is a preview of compressed bytes and
         // tells the reader nothing. What is worth saying is which codec opened
         // it.
-        o.value = if out.values { codec.as_str().to_string() } else { String::new() };
+        o.value = if out.values { codec.to_string() } else { String::new() };
         out.push(o);
         Ok(())
     }

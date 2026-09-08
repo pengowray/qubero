@@ -60,24 +60,54 @@ pub fn lzip(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     // on it, so this is the only way to say where it stops.
     let stream = &data[HEADER..data.len() - TRAILER];
 
+    let out = raw(stream, PROPS, dict, None)?;
+    // One step over the whole run. lzma-rs hands back the bytes and says
+    // nothing about which bits of the stream made which of them, and a map
+    // drawn from a guess would be worse than no map: this is the honest shape
+    // until an LZMA decoder of our own reads the symbols.
+    let n = out.len();
+    Ok((out, frames::whole(data.len(), n)))
+}
+
+/// A raw LZMA1 stream, given the three things it does not carry.
+///
+/// `props` packs the literal context bits, the literal position bits and the
+/// position bits into one byte, exactly as every LZMA header spends them.
+/// `unpacked` is how much comes out where the container says: `None` reads to
+/// the end-of-stream marker instead, which is right for lzip and wrong for 7z,
+/// whose streams do not reliably carry one and whose decoder would then read
+/// on into the header bytes behind them.
+///
+/// Shared by the two callers rather than written twice: an lzip member and a
+/// 7z coder differ in where the three numbers are written down and in nothing
+/// after that.
+pub(crate) fn raw(stream: &[u8], props: u8, dict: u32, unpacked: Option<u64>) -> Result<Vec<u8>, Refusal> {
     // The thirteen bytes an LZMA1 stream never carries: how it was packed,
     // how large a dictionary it wants, and how much comes out. All ones in the
-    // last eight is how the header says the size is unknown and the stream
-    // ends at a marker, which is what lzip writes.
+    // last eight is how the header says the size is unknown.
     let mut header = [0xffu8; 13];
-    header[0] = PROPS;
+    header[0] = props;
     header[1..5].copy_from_slice(&dict.to_le_bytes());
-
+    if let Some(n) = unpacked {
+        if n > CAP_BYTES as u64 {
+            return Err(Refusal::TooLarge);
+        }
+        header[5..13].copy_from_slice(&n.to_le_bytes());
+    }
     let mut input = (&header[..]).chain(stream);
     let mut out = Vec::new();
     lzma_rs::lzma_decompress(&mut input, &mut out).map_err(|_| Refusal::Failed)?;
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
     }
-    // One step over the whole run. lzma-rs hands back the bytes and says
-    // nothing about which bits of the stream made which of them, and a map
-    // drawn from a guess would be worse than no map: this is the honest shape
-    // until an LZMA decoder of our own reads the symbols.
+    Ok(out)
+}
+
+/// One coder's worth of raw LZMA1, the way 7z writes it: five property bytes
+/// and a size the header states separately. The run is the packed stream and
+/// nothing else, since 7z says where it starts and how long it is.
+pub fn lzma1(data: &[u8], props: u8, dict: u32, unpacked: Option<u64>) -> Result<(Vec<u8>, Trace), Refusal> {
+    let out = raw(data, props, dict, unpacked)?;
     let n = out.len();
     Ok((out, frames::whole(data.len(), n)))
 }
