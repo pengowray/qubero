@@ -796,6 +796,13 @@ mod tests {
     /// A header describing one stream per size, one folder each, with the
     /// names given. The shape 7-Zip writes for `-mhc=off -ms=off`.
     fn header(sizes: &[u64], names: &[&str]) -> Vec<u8> {
+        header_with(sizes, names, &[])
+    }
+
+    /// The same, with `extra` file properties written before the names. Each is
+    /// a tag and its body; the length in between is worked out here, the way
+    /// every block of the file table carries its own.
+    fn header_with(sizes: &[u64], names: &[&str], extra: &[(u8, Vec<u8>)]) -> Vec<u8> {
         let mut h = vec![0x01, 0x04, 0x06];
         h.extend(num(0));
         h.extend(num(sizes.len() as u64));
@@ -820,6 +827,11 @@ mod tests {
         h.extend([0x00, 0x00]);
         h.push(0x05);
         h.extend(num(names.len() as u64));
+        for (tag, body) in extra {
+            h.push(*tag);
+            h.extend(num(body.len() as u64));
+            h.extend(body);
+        }
         h.push(0x11);
         let mut body = vec![0x00];
         for n in names {
@@ -977,6 +989,35 @@ mod tests {
         let (d, mut e) = read(archive(b"packed bytes", &[0x42, 0x99, 0x99]));
         assert_eq!(e.node(&d, &[8, 0]).unwrap().value, Value::Enum { raw: 0x42, name: None, hex: true });
         assert_eq!(e.node(&d, &[8, 1]).unwrap().size_bits, 2 * 8);
+        // The packed region is as long as the front said either way, so the
+        // field standing for it proves nothing on its own. What proves the
+        // fallback ran is that its runs are there and tile it: no room in
+        // front of the streams, no streams, and one run holding the lot.
         assert_eq!(e.node(&d, &[7]).unwrap().size_bits, 12 * 8);
+        assert_eq!(e.node(&d, &[7, 1]).unwrap().size_bits, 0);
+        assert_eq!(e.node(&d, &[7, 2]).unwrap().child_count, 0);
+        assert_eq!(e.node(&d, &[7, 3]).unwrap().size_bits, 12 * 8);
+    }
+
+    /// `kEmptyStream` is a bit per file, and a count of files that is not a
+    /// whole number of bytes leaves a tail of bits belonging to nothing. The
+    /// bits that are there are read; the rest of the byte is a gap, not a
+    /// fourth entry.
+    #[test]
+    fn a_bit_per_file_stops_at_the_number_of_files() {
+        // Three files, of which the first and the third have no stream.
+        let empty = (0x0e, vec![0b1010_0000]);
+        let (d, mut e) = read(archive(b"abc", &header_with(&[3], &["dir", "f.txt", "also"], &[empty])));
+        let bits = e.node(&d, &[8, 3, 2, 0, 1, 1]).unwrap();
+        assert_eq!(bits.child_count, 3, "one bit a file, and no more");
+        // The block is a byte long, which is what the file said, so the five
+        // bits after the three are room the format spends and nothing claims.
+        assert_eq!(bits.size_bits, 8);
+        let bit = |e: &mut Evaluator, i: usize| e.node(&d, &[8, 3, 2, 0, 1, 1, i]).unwrap().value;
+        assert_eq!(bit(&mut e, 0), Value::UInt(1));
+        assert_eq!(bit(&mut e, 1), Value::UInt(0));
+        assert_eq!(bit(&mut e, 2), Value::UInt(1));
+        // The names still read, so the walk stepped over the block correctly.
+        assert_eq!(e.node(&d, &[8, 3, 2, 1, 1, 1, 1, 1]).unwrap().value, Value::Str("f.txt".into()));
     }
 }
