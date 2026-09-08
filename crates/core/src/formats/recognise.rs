@@ -71,6 +71,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     (zstd::MAGIC, "zstd"),
     (lz4::MAGIC, "lz4"),
     (sevenzip::MAGIC, "7z"),
+    // The two RAR formats, which share their first six bytes and differ at the
+    // seventh: a zero ends RAR 4's seven, and RAR 5 writes a 1 and a 0. Neither
+    // is a prefix of the other, so which comes first here decides nothing.
+    (rar4::MAGIC, "rar4"),
     (rar5::MAGIC, "rar5"),
     (uf2::MAGIC, "uf2"),
     // A Godot resource with its body compressed. The plain one shares its
@@ -1744,6 +1748,19 @@ mod tests {
         // An IFF file holding something with no template here is left alone
         // rather than read as one of the two that do.
         assert_eq!(sniffed(b"FORM\0\0\0\x108SVX"), None);
+    }
+
+    /// Both RAR formats are `Rar!` and three more bytes, and the seventh is
+    /// the whole difference: RAR 4 ends there with a zero, RAR 5 carries on
+    /// with a 1 and a 0. Neither signature is a prefix of the other, so this is
+    /// asking that the seventh byte is looked at rather than that the table is
+    /// in the right order.
+    #[test]
+    fn the_two_rar_formats_are_told_apart_by_the_seventh_byte() {
+        assert_eq!(sniffed(b"Rar!\x1a\x07\x00\xc5\x1a\x33\x32"), Some("rar4"));
+        assert_eq!(sniffed(b"Rar!\x1a\x07\x01\x00\xc5\x1a\x33\x32"), Some("rar5"));
+        // Six bytes and something else is neither of them.
+        assert_eq!(sniffed(b"Rar!\x1a\x07\x02\x00"), None);
     }
 
     /// Three unrelated formats have made themselves at home in `.db`, and the

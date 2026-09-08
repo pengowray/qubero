@@ -19,7 +19,7 @@ use crate::codec::{Refusal, StepField, StepKind, Trace, TraceBuilder};
 
 /// A trace of one step over the whole run, for a decoder that gave the bytes
 /// but not the shape.
-fn whole(input: usize, output: usize) -> Trace {
+pub(super) fn whole(input: usize, output: usize) -> Trace {
     let mut b = TraceBuilder::default();
     if input > 0 || output > 0 {
         b.push(0, 0, StepKind::Block);

@@ -40,6 +40,7 @@ function span(o: Partial<Span> & { offset_bits: number; size_bits: number }): Sp
     sample: [],
     parts: [],
     bits: null,
+    opens: false,
     ...o,
   };
 }

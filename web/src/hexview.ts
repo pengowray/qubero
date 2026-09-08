@@ -404,6 +404,10 @@ export class HexView {
   onCursorChange: (c: CursorState) => void = () => {};
   /** A field picked in the annotation column. */
   onPickField: (path: readonly number[]) => void = () => {};
+  /** A chip marked as holding a file was pressed twice: open those bytes as a
+   *  document of their own. The same thing the listing's Open unpacked does,
+   *  reached from the bytes rather than from the list of parts. */
+  onOpenUnpacked: (path: readonly number[]) => void = () => {};
   /** The selection after it changed, or null when there is none. */
   onSelectionChange: (r: BitRange | null) => void = () => {};
   /** The stretch of the file on screen, after every draw. The rail marks the
@@ -462,6 +466,18 @@ export class HexView {
     // refresh, which throws the file away mid-scan.
     this.el.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
     this.el.addEventListener("keydown", (e) => this.onKey(e));
+    // Delegated rather than a handler per chip: six hundred chips are on
+    // screen at once and they are reused across redraws, so a listener each
+    // would be six hundred to attach and none of them would survive a chip
+    // being filled with a different field.
+    this.el.addEventListener("dblclick", (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      const at = t.closest<HTMLElement>("[data-opens]")?.dataset["opens"];
+      if (at === undefined) return;
+      e.preventDefault();
+      this.onOpenUnpacked(at === "" ? [] : at.split(".").map(Number));
+    });
     this.el.addEventListener("relayout", () => this.relayout());
     this.rowsEl.addEventListener("pointerdown", (e) => this.onPointerDown(e));
     this.rowsEl.addEventListener("pointermove", (e) => this.onPointerMove(e));

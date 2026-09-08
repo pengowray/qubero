@@ -9,7 +9,7 @@ import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, FieldGraph, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
+import { bitSizeText, CHECKED, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.js";
 import { fieldClass } from "./fieldstyle.js";
 import { withPictures } from "./textview.js";
@@ -37,8 +37,45 @@ const AUTO_CHECK_BYTES = 1024 * 1024;
 type IntegrityPlan = {
   readonly label: string;
   readonly bytes: number;
+  /** What the number is a checksum of. See [`Covered`]. */
+  readonly covers: Covered;
   check(): Promise<{ actual: string; expected: string }>;
 };
+
+/**
+ * Which bytes a checksum is over.
+ *
+ * The panel used to say a check passed and never say what had passed. "Valid"
+ * over an archive entry could mean the compressed bytes, the file they unpack
+ * to, or the header in front of them, and those are three different claims: a
+ * reader checking whether a file is intact is asking about one of them and had
+ * no way to tell which they had been told.
+ *
+ * `at` is the run of the file the sum was taken over, when it was taken over
+ * the file at all, so it can be shown as an address and gone to. When the sum
+ * is over bytes that are not in the file, `from` is the run they came out of,
+ * which is what a reader can actually look at.
+ */
+type Covered = {
+  /** What was summed, in words: the bytes themselves, or what they unpack to. */
+  readonly what: string;
+  /** The run of the file summed, in bytes, or null when what was summed is
+   *  not a run of the file. */
+  readonly at: { readonly at: number; readonly bytes: number } | null;
+  /** The run of the file those bytes were produced from, for a sum over
+   *  something unpacked. Null when the sum is over the file itself. */
+  readonly from: { readonly at: number; readonly bytes: number } | null;
+};
+
+/** A checksum over a run of the file, which most of them are. */
+function overFile(what: string, at: number, bytes: number): Covered {
+  return { what, at: { at, bytes }, from: null };
+}
+
+/** A checksum over what a run of the file unpacks to. */
+function overUnpacked(what: string, at: number, bytes: number): Covered {
+  return { what, at: null, from: { at, bytes } };
+}
 
 /** Structure reads the template's field; the other two read raw bytes. */
 type Mode = "structure" | "le" | "be";
@@ -997,6 +1034,7 @@ export class Inspector {
       return {
         label: "PNG CRC-32",
         bytes,
+        covers: overFile(CHECKED.chunk, at, bytes),
         check: async () => ({ actual: hex32(crc32(await this.loadBytes(at, bytes))), expected: hex32(expected) }),
       };
     }
@@ -1013,9 +1051,14 @@ export class Inspector {
       const packedBytes = data.size_bits / 8;
       const coveredBytes = uncompressedSize === undefined ? packedBytes : Number(uncompressedSize.edit_text);
       if (method !== 0 && method !== 8) return null;
+      const dataAt = data.offset_bits / 8;
       return {
-        label: method === 0 ? "ZIP CRC-32 (stored data)" : "ZIP CRC-32 (deflated data)",
+        label: "ZIP CRC-32",
         bytes: Number.isFinite(coveredBytes) ? coveredBytes : packedBytes,
+        // Stored, the sum is over bytes of the file; deflated, it is over
+        // bytes that are nowhere in the file, and the run they come out of is
+        // what a reader can be sent to instead.
+        covers: method === 0 ? overFile(CHECKED.file, dataAt, packedBytes) : overUnpacked(CHECKED.unpacked, dataAt, packedBytes),
         check: async () => {
           const packed = await this.loadBytes(data.offset_bits / 8, packedBytes);
           const unpacked = method === 0 ? packed : await decompress(packed, "deflate-raw");
@@ -1028,6 +1071,7 @@ export class Inspector {
       return {
         label: "gzip header CRC-16",
         bytes,
+        covers: overFile(CHECKED.header, 0, bytes),
         check: async () => {
           const stored = await this.loadBytes(n.offset_bits / 8, 2);
           const expected = stored[0]! | (stored[1]! << 8);
@@ -1048,8 +1092,9 @@ export class Inspector {
       // expand to 4 GiB, so never start that case merely because it says zero.
       const expandedBytes = declaredBytes === 0 && packedBytes > 2 ? 0x1_0000_0000 : declaredBytes;
       return {
-        label: "gzip CRC-32 (uncompressed data)",
+        label: "gzip CRC-32",
         bytes: Number.isFinite(expandedBytes) ? expandedBytes : packedBytes,
+        covers: overUnpacked(CHECKED.unpacked, compressed.offset_bits / 8, packedBytes),
         check: async () => {
           const packed = await this.loadBytes(compressed.offset_bits / 8, packedBytes);
           const unpacked = await decompress(packed, "deflate-raw");
@@ -1062,6 +1107,7 @@ export class Inspector {
       return {
         label: "Git file SHA-1",
         bytes,
+        covers: overFile(CHECKED.upTo, 0, bytes),
         check: async () => ({
           actual: await sha1(await this.loadBytes(0, bytes)),
           expected: hexBytes(await this.loadBytes(n.offset_bits / 8, 20)),
@@ -1079,6 +1125,7 @@ export class Inspector {
       return {
         label: "LHA header checksum",
         bytes,
+        covers: overFile(CHECKED.header, at, bytes),
         check: async () => ({ actual: hex8(sum8(await this.loadBytes(at, bytes))), expected: hex8(expected) }),
       };
     }
@@ -1092,8 +1139,9 @@ export class Inspector {
       if (data.offset_bits % 8 !== 0 || data.size_bits % 8 !== 0) return null;
       const bytes = data.size_bits / 8;
       return {
-        label: "LHA CRC-16 (stored data)",
+        label: "LHA CRC-16",
         bytes,
+        covers: overFile(CHECKED.file, data.offset_bits / 8, bytes),
         check: async () => ({ actual: hex16(lhaCrc16(await this.loadBytes(data.offset_bits / 8, bytes))), expected: hex16(expected) }),
       };
     }
@@ -1118,19 +1166,60 @@ export class Inspector {
         result.textContent = cause instanceof Error ? cause.message : "Could not check this data.";
       }
     };
-    box.append(subhead("Integrity"));
+    box.append(subhead("Integrity"), this.coveredRows(plan));
     if (plan.bytes <= AUTO_CHECK_BYTES) {
-      box.append(`${plan.label} · ${formatBytes(plan.bytes)}`, result);
+      box.append(result);
       void run();
     } else {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "insp-check-button";
-      button.textContent = `Check ${plan.label} over ${formatBytes(plan.bytes)}`;
+      button.textContent = CHECKED.run(plan.label);
       button.addEventListener("click", () => void run());
       box.append(button, result);
     }
     return box;
+  }
+
+  /**
+   * What the check is of, and where those bytes are.
+   *
+   * The section said a check passed and never said what had passed. Over an
+   * archive entry "Valid" could mean the stored bytes, the file they unpack to
+   * or the header in front of them, and a reader asking whether their file is
+   * intact was being answered about one of the three without being told which.
+   *
+   * The ranges are buttons: a checksum a reader cannot go and look at is a
+   * verdict they have to take on trust, and going there is one press
+   * everywhere else in this panel.
+   */
+  private coveredRows(plan: IntegrityPlan): HTMLElement {
+    const rows = document.createElement("dl");
+    rows.className = "insp-facts insp-covers";
+    const add = (label: string, value: Node | string): void => {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.append(value);
+      rows.append(dt, dd);
+    };
+    add(CHECKED.sumLabel, `${plan.label} · ${CHECKED.of(plan.covers.what, formatBytes(plan.bytes))}`);
+    const run = plan.covers.at ?? plan.covers.from;
+    if (run !== null) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "insp-goto";
+      // The last byte's address, not the bit before the end: `formatOffset` of
+      // one bit short of the boundary reads `0x39+7b`, which is a bit position
+      // and not an address a reader can go to.
+      b.textContent = CHECKED.range(formatOffset(run.at * 8), formatOffset((run.at + run.bytes - 1) * 8), formatBytes(run.bytes));
+      b.addEventListener("click", () => this.onGoTo(run.at * 8, [{ startBit: run.at * 8, endBit: (run.at + run.bytes) * 8 }]));
+      // The bytes summed, or the bytes those were made from: two different
+      // claims, so two different words rather than one row that is sometimes
+      // one and sometimes the other.
+      add(plan.covers.at === null ? CHECKED.fromLabel : CHECKED.overLabel, b);
+    }
+    return rows;
   }
 
   private async loadBytes(at: number, len: number): Promise<Uint8Array> {

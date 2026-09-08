@@ -87,6 +87,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   compress: "compress .Z stream",
   tar: "tar archive",
   "7z": "7-Zip archive",
+  rar4: "RAR 4 archive",
   rar5: "RAR 5 archive",
   root: "CERN ROOT",
   gwf: "LIGO/Virgo GWF frame",

@@ -39,6 +39,16 @@ pub struct Span {
     /// varint whose bytes have not been read yet: the split is worth drawing
     /// when it is known and worth nothing guessed.
     pub bits: Option<crate::varintbits::BitRoles>,
+    /// True when these bytes are a document of their own and can be opened as
+    /// one: a compressed run that unpacked, or the contents of one.
+    ///
+    /// The listing has always been able to work this out, because it holds the
+    /// node and the node carries `decoded` and `space_root`. A span does not
+    /// carry the node, so the hex view's annotation column could not, and a
+    /// reader running down the bytes had no way of knowing there was a file in
+    /// front of them. It is the same question either surface asks, so it is
+    /// answered once, here.
+    pub opens: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -736,6 +746,11 @@ impl Evaluator {
             sample: Vec::new(),
             parts: Vec::new(),
             bits: self.bit_roles(doc, path, info),
+            // A stream that would not open is not an offer. `space_root` is
+            // the node the stream holds, which is what the listing hangs Open
+            // unpacked off; a template may fold the stream itself away and
+            // show only its contents, so both spellings have to be caught.
+            opens: (info.decoded && info.refused.is_none()) || info.space_root,
         })
     }
 

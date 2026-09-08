@@ -565,6 +565,10 @@ function build(tab: Tab): Page {
   };
   structure.onOpenUnpacked = openUnpacked;
   inspector.onOpenUnpacked = openUnpacked;
+  // And from the bytes themselves: a chip marked as holding a file opens it on
+  // a second press, which is what a second press means on every other picture
+  // in this app.
+  view.onOpenUnpacked = openUnpacked;
   view.onPickField = (path) => {
     goToField(path);
     overview.reveal(path);
