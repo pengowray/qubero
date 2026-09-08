@@ -211,13 +211,79 @@ pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
 /// A whole gzip member, RFC 1952: the header and its optional name and
 /// comment, deflate, and a CRC-32 with the length after it.
 ///
-/// Not written yet. The variant is in [`Codec`](crate::codec::Codec) so a
-/// template can name it; `gzip.rs` reads the wrapper's fields today and leaves
-/// the deflate run to `Codec::Deflate`, which is right for a `.gz` file and no
-/// use to a format that embeds a whole member, as Godot's third compression
-/// mode does.
-pub fn gzip(_data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    Err(Refusal::Failed)
+/// The same shape as [`zlib`] with a longer front and a different sum, and it
+/// exists for the same reason [`Codec::Gzip`](crate::codec::Codec::Gzip) does:
+/// `gzip.rs` reads a `.gz` file's wrapper as fields and hands the middle of it
+/// to `Codec::Deflate`, which is right when the member is the file and no use
+/// to a format that embeds a whole one, as Godot's third compression mode
+/// does.
+///
+/// One member, not a file. A `.gz` may hold several written end to end, and a
+/// run holding two is refused rather than half-read: the trailer this looks at
+/// is the last eight bytes, which belong to the member this did not decode.
+pub fn gzip(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    // The two magic bytes, the method, the flags, four of time, one of how
+    // hard the packer tried and one of what wrote it.
+    const FIXED: usize = 10;
+    // The CRC-32 of what came out and how long it was, both little-endian,
+    // unlike zlib's big-endian Adler.
+    const TRAILER: usize = 8;
+    if data.len() < FIXED + TRAILER || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8 {
+        return Err(Refusal::Failed);
+    }
+    let flags = data[3];
+    // The top three flag bits are reserved and a decoder is told to refuse a
+    // member that sets one.
+    if flags & 0xe0 != 0 {
+        return Err(Refusal::Failed);
+    }
+    let mut at = FIXED;
+    if flags & 0x04 != 0 {
+        // Extra fields, as a length and then that many bytes.
+        let len = u16::from_le_bytes([byte(data, at)?, byte(data, at + 1)?]) as usize;
+        at = at.checked_add(2 + len).ok_or(Refusal::Failed)?;
+    }
+    if flags & 0x08 != 0 {
+        at = past_nul(data, at)?; // the name the file had before it was packed
+    }
+    if flags & 0x10 != 0 {
+        at = past_nul(data, at)?; // a comment, which almost nothing writes
+    }
+    if flags & 0x02 != 0 {
+        // Two bytes of CRC over the header. Not checked: nothing writes one,
+        // and refusing a member for a sum this does not compute would be
+        // refusing it for the wrong reason.
+        at = at.checked_add(2).ok_or(Refusal::Failed)?;
+    }
+    if at + TRAILER > data.len() {
+        return Err(Refusal::Failed);
+    }
+    let mut b = TraceBuilder::default();
+    b.push(0, 0, StepKind::Header(StepField::Wrapper, 0));
+    let end = (data.len() - TRAILER) as u64 * 8;
+    let mut out = Vec::new();
+    run(data, at as u64 * 8, end, CAP_BYTES, &mut out, &mut b)?;
+    let tail = &data[data.len() - TRAILER..];
+    let crc = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
+    let size = u32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]);
+    if crc != crate::checksum::crc32(&out) || size != out.len() as u32 {
+        return Err(Refusal::Failed);
+    }
+    b.push(end, out.len() as u64, StepKind::Header(StepField::Wrapper, 0));
+    b.finish_at(data.len() as u64 * 8, out.len() as u64);
+    Ok((out, b.done()))
+}
+
+fn byte(data: &[u8], at: usize) -> Result<u8, Refusal> {
+    data.get(at).copied().ok_or(Refusal::Failed)
+}
+
+/// Past a NUL-terminated string in the header, or a refusal when the member
+/// ends before the terminator does.
+fn past_nul(data: &[u8], at: usize) -> Result<usize, Refusal> {
+    let rest = data.get(at..).ok_or(Refusal::Failed)?;
+    let n = rest.iter().position(|&b| b == 0).ok_or(Refusal::Failed)?;
+    Ok(at + n + 1)
 }
 
 /// As much of a zlib stream as the bytes on hand come to, with no complaint
@@ -748,5 +814,93 @@ mod tests {
             assert!(step.in_bits.contains(&bit), "bit {bit} mapped to {step:?}");
         }
         assert!(trace.map_in(trace.in_bits()).is_none());
+    }
+
+    /// A gzip member built by hand: the fixed ten bytes, whatever the flags
+    /// say follows them, the deflate stream, and the sum and the length.
+    fn member(flags: u8, front: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut m = vec![0x1f, 0x8b, 8, flags, 0, 0, 0, 0, 0, 3];
+        m.extend_from_slice(front);
+        m.extend_from_slice(&miniz_oxide::deflate::compress_to_vec(data, 6));
+        m.extend(crate::checksum::crc32(data).to_le_bytes());
+        m.extend((data.len() as u32).to_le_bytes());
+        m
+    }
+
+    /// The plain case, and the trace tiling the whole member rather than only
+    /// the deflate in the middle of it.
+    #[test]
+    fn a_gzip_member_reads_as_what_went_in() {
+        let text = b"a gzip member is a header, a deflate stream, and a sum.".repeat(40);
+        let packed = member(0, &[], &text);
+        let (out, trace) = gzip(&packed).expect("reads");
+        assert_eq!(out, text);
+        trace.check_tiles().expect("the trace tiles");
+        assert_eq!(trace.in_bits(), packed.len() as u64 * 8);
+        assert_eq!(trace.out_bytes(), text.len() as u64);
+        // The header and the trailer are steps of their own, so nothing in the
+        // run belongs to nobody.
+        let wrappers: Vec<_> =
+            trace.steps().filter(|s| matches!(s.kind, StepKind::Header(StepField::Wrapper, _))).collect();
+        assert_eq!(wrappers.len(), 2);
+        assert_eq!(wrappers[0].in_bits, 0..10 * 8);
+        assert_eq!(wrappers[1].in_bits.end, packed.len() as u64 * 8);
+    }
+
+    /// Everything the flags can put between the header and the stream, which
+    /// is what makes a gzip header a thing to parse rather than to skip.
+    #[test]
+    fn the_optional_parts_of_the_header_move_the_stream_along() {
+        let text = b"named and commented".to_vec();
+        // FEXTRA, FNAME, FCOMMENT and FHCRC together.
+        let mut front = vec![4u8, 0, b'e', b'x', b't', b'r']; // two of length, four of it
+        front.extend_from_slice(b"probe.res\0");
+        front.extend_from_slice(b"written by hand\0");
+        front.extend_from_slice(&[0, 0]); // the header sum, which nothing checks
+        let packed = member(0x02 | 0x04 | 0x08 | 0x10, &front, &text);
+        let (out, trace) = gzip(&packed).expect("reads");
+        assert_eq!(out, text);
+        trace.check_tiles().expect("tiles");
+        // The first step covers all of it, however long the flags made it.
+        assert_eq!(trace.step(0).unwrap().in_bits, 0..(10 + front.len() as u64) * 8);
+        // And each flag on its own, since a header read four bytes short reads
+        // the stream at the wrong bit and fails in a way that says nothing.
+        for (flag, front) in
+            [(0x08u8, &b"only-a-name\0"[..]), (0x10, b"only a comment\0"), (0x04, &[2, 0, b'h', b'i'])]
+        {
+            assert_eq!(gzip(&member(flag, front, &text)).expect("reads").0, text);
+        }
+    }
+
+    #[test]
+    fn a_member_that_does_not_add_up_is_refused_rather_than_returned() {
+        let text = b"check me".to_vec();
+        let good = member(0, &[], &text);
+        assert!(gzip(&good).is_ok());
+        // A sum that is not the sum of what came out.
+        let mut bad = good.clone();
+        bad[good.len() - 8] ^= 1;
+        assert_eq!(gzip(&bad).err(), Some(Refusal::Failed));
+        // A length that is not the length.
+        let mut bad = good.clone();
+        bad[good.len() - 4] ^= 1;
+        assert_eq!(gzip(&bad).err(), Some(Refusal::Failed));
+        // Not a member at all, and a zlib stream read as one.
+        assert_eq!(gzip(b"not a gzip member at all").err(), Some(Refusal::Failed));
+        assert_eq!(gzip(&miniz_oxide::deflate::compress_to_vec_zlib(&text, 6)).err(), Some(Refusal::Failed));
+        // A reserved flag bit, which the format says to refuse.
+        let mut bad = good.clone();
+        bad[3] = 0x20;
+        assert_eq!(gzip(&bad).err(), Some(Refusal::Failed));
+        // A name with no terminator, and every prefix of a whole member.
+        assert!(gzip(&member(0x08, b"no terminator here", &text)).is_err());
+        for n in 0..good.len() {
+            let _ = gzip(&good[..n]);
+        }
+        // Two members end to end, which a `.gz` file may be and this codec is
+        // not: what it decodes is the first and what it checks is the last
+        // one's trailer, so it refuses rather than handing back half a file.
+        let second = member(0, &[], b"and me as well");
+        assert_eq!(gzip(&[good, second].concat()).err(), Some(Refusal::Failed));
     }
 }

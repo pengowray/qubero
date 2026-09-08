@@ -195,11 +195,12 @@ pub enum StepField {
     /// Bytes before or after the deflate stream a wrapper put there: zlib's
     /// two header bytes and its Adler-32.
     Wrapper,
-    /// LZ4: the byte holding the literal run's length and the match's.
+    /// LZ4 and FastLZ: the byte that says whether literals or a match follow,
+    /// and how much of each.
     Token,
-    /// LZ4: the bytes extending a length past what the token could hold.
+    /// The bytes extending a length past what the token could hold.
     LengthExtra,
-    /// LZ4: how far back the match reads.
+    /// How far back the match reads.
     Offset,
     /// zstd, xz: a frame header.
     FrameHeader,
