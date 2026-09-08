@@ -531,7 +531,7 @@ export type Origin = {
 export type FieldCheck = {
   /** What to call it. `crc16` covers two different sixteen-bit sums; which
    *  polynomial a format chose is not something an interface can act on. */
-  readonly algorithm: "crc32" | "crc16" | "sum8" | "sha1" | "adler32";
+  readonly algorithm: "crc32" | "crc16" | "sum8" | "sum" | "sha1" | "adler32";
   /** `[offset, length]` in bytes, when the summed bytes are in the file. */
   readonly over: readonly [number, number] | null;
   /** `[offset, length]` in bytes of the compressed run, when they are not. */
@@ -540,6 +540,13 @@ export type FieldCheck = {
    *  one down, so a view can decide whether to run the check unasked. What the
    *  file claims, not what a decoder produced. */
   readonly covered_bytes: number;
+  /** `[offset, length, byte]`: the check field's own bytes, and what they are
+   *  read as while the sum runs, for a format that seals a record the checksum
+   *  sits inside. A tar header is summed with its checksum read as spaces, so
+   *  a reader adding up those 512 bytes as they stand would get another
+   *  number; the panel has to say so or the arithmetic looks wrong. Null for
+   *  every check that sums the bytes as they are. */
+  readonly blanked: readonly [number, number, number] | null;
 };
 
 /**

@@ -494,6 +494,44 @@ impl Evaluator {
         Ok(0)
     }
 
+    /// Where the field [`Expr::Sibling`] would read is, rather than what it
+    /// says. The same backwards walk, over the same lists, stopping at the
+    /// first element the path goes all the way down in.
+    ///
+    /// A check needs the place and not the number: what it covers is a run of
+    /// bytes, and a ZIP data descriptor's `crc32` is over the data of the
+    /// local entry written before it. Kept beside `sibling_field` and sharing
+    /// `enclosing_lists` with it, so the two cannot come to disagree about
+    /// which elements count as earlier.
+    ///
+    /// One difference, and it is deliberate. `sibling_field` walks past an
+    /// element that has the field but holds no number in it, because a value
+    /// is what it was asked for; this stops there, because the field is there
+    /// and its bytes are what was asked for.
+    pub(super) fn sibling_field_path<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        field: &[String],
+    ) -> R<Option<Vec<usize>>> {
+        for (cur, idx) in self.enclosing_lists(at) {
+            for earlier in (0..idx).rev() {
+                let mut elem = cur.clone();
+                elem.push(earlier);
+                match self.descend(doc, &mut elem, field) {
+                    Ok(true) => return Ok(Some(elem)),
+                    Ok(false) => {}
+                    Err(e) if e.interrupted() => return Err(e),
+                    // An element that will not read is not an element that
+                    // answers no: it is one this search cannot see into, and
+                    // the one before it may still be the right answer.
+                    Err(_) => {}
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// The lists this node sits in, innermost first, each with the index this
     /// node has in it.
     ///

@@ -24,7 +24,7 @@
 //! headers, which turns everything after it into bytes nothing can read
 //! without a password.
 
-use crate::template::{Check, Checksum, Covers, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// What one of these starts with. RAR 4 has the same first six bytes and one
 /// less at the end, so the eighth byte is what tells the two apart.
@@ -133,14 +133,16 @@ fn block() -> T {
     // starts where the sum ends and takes in the size field itself, so a
     // header whose length was tampered with fails here rather than reading on
     // into the next block.
-    .field_check("header_crc32", Check {
-        algorithm: Checksum::Crc32,
-        over: Covers::Run {
-            at: E::size_of("header_crc32"),
-            len: E::size_of("header_size").add(E::field("header_size")),
-        },
-        when: None,
-    })
+    .field_check(
+        "header_crc32",
+        Check::of(
+            Checksum::Crc32,
+            Covers::Run {
+                at: E::size_of("header_crc32"),
+                len: E::size_of("header_size").add(E::field("header_size")),
+            },
+        ),
+    )
 }
 
 fn header() -> T {
@@ -226,17 +228,16 @@ fn file_fields() -> T {
     // The flag is asked as well as the method: without it the field is not
     // there at all, and a sum of no bytes against a zero read out of nothing
     // would come back as a file that checks out.
-    .field_check("data_crc32", Check {
-        algorithm: Checksum::Crc32,
-        over: Covers::Field { name: "data".into() },
-        when: Some(
+    .field_check(
+        "data_crc32",
+        Check::of(Checksum::Crc32, Covers::Field { name: Named::here("data") }).only_when(
             E::field("file_flags")
                 .bit(2)
                 .mul(E::field("method").equals(E::lit(0)))
                 .mul(E::lit(1).sub(E::field("header_flags").bit(3)))
                 .mul(E::lit(1).sub(E::field("header_flags").bit(4))),
         ),
-    })
+    )
 }
 
 /// The block that ends the archive, and says whether another volume follows.

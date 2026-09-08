@@ -17,7 +17,7 @@
 //! the template rewriting what it had already said. They are measured and
 //! named like any other entry.
 
-use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Until, Ty as T};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::Big, Expr as E, StrLen, Template, Until, Ty as T};
 
 /// Where a ustar archive writes its signature, which is the only thing in one
 /// that marks the format.
@@ -92,6 +92,22 @@ fn header() -> T {
         ],
     )
     .counted_as("entry")
+    .field_check("checksum", header_sum())
+}
+
+/// The one check a tar has: every byte of the five-hundred-and-twelve-byte
+/// header added up, with the eight bytes of `checksum` itself read as spaces.
+///
+/// The spaces are not a convention someone chose to be tidy. A writer filling
+/// in the header cannot know the number until it has added up the field that
+/// is going to hold it, so the format says what to put there while counting,
+/// and every reader has to do the same or agree with no archive ever written.
+///
+/// The run starts at the front of the entry, which is the front of the header:
+/// offsets in a check are counted from the structure it sits in, and `data`
+/// and its padding are declared after the header inside that same structure.
+fn header_sum() -> Check {
+    Check::of(Checksum::ByteSum, Covers::Run { at: E::lit(0), len: E::lit(512) }).blanking(b' ')
 }
 
 /// One of the blocks of zeros at the end. Two of them are the end of the
@@ -134,6 +150,7 @@ pub fn is_tar(head: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::{
+        checksum::byte_sum,
         document::Document,
         eval::{Evaluator, Value},
         source::MemSource,
@@ -145,9 +162,15 @@ mod tests {
         v[100..108].copy_from_slice(b"0000644\0");
         v[124..136].copy_from_slice(format!("{:011o}{}", data.len(), terminator as char).as_bytes());
         v[136..148].copy_from_slice(b"15245725034\0");
-        v[148..156].copy_from_slice(b"010755\0 ");
         v[156] = b'0';
         v[257..265].copy_from_slice(b"ustar\x0000");
+        // The header's own sum, taken the way the format says: the eight bytes
+        // that will hold it read as spaces. Written in GNU tar's shape, six
+        // octal digits then a zero and a space, so the fixture is an archive a
+        // real reader would accept rather than one with a made-up number in it.
+        v[148..156].copy_from_slice(b"        ");
+        let sum = byte_sum(&v[..512]);
+        v[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
         v.extend_from_slice(data);
         v.resize(512 + data.len().div_ceil(512) * 512, 0);
         v
@@ -195,11 +218,47 @@ mod tests {
     /// digits end before the window does and the zero is not part of them.
     #[test]
     fn a_checksum_ending_in_a_zero_then_a_space_is_a_number() {
-        let d = Document::new(MemSource(archive()));
+        let bytes = archive();
+        let d = Document::new(MemSource(bytes.clone()));
         let mut e = Evaluator::new(tar());
         let n = e.node(&d, &[0, 0, 6]).unwrap();
         assert_eq!(n.name, "checksum");
-        assert_eq!(n.value.as_int(), Some(0o10755));
+        let mut header = bytes[..512].to_vec();
+        header[148..156].copy_from_slice(b"        ");
+        assert_eq!(n.value.as_int(), Some(byte_sum(&header) as i128));
+    }
+
+    /// The header sums to what it says it does, with its own eight bytes read
+    /// as spaces. Every tar ever written depends on that substitution, and a
+    /// check that took the bytes as they sit there would call all of them
+    /// broken.
+    #[test]
+    fn a_header_sums_to_what_it_wrote_down_with_its_checksum_read_as_spaces() {
+        let d = Document::new(MemSource(archive()));
+        let mut e = Evaluator::new(tar());
+        for entry in 0..2 {
+            let path = [0, entry, 6];
+            let info = e.check_of(&d, &path).unwrap().expect("the checksum field checks the header");
+            assert_eq!(info.algorithm, "sum");
+            assert_eq!(info.over, Some((entry as u64 * 1024, 512)));
+            let blanked = info.blanked.expect("its own bytes are read as something else");
+            assert_eq!((blanked.at, blanked.len, blanked.byte), (entry as u64 * 1024 + 148, 8, b' '));
+            let v = e.run_check(&d, &path).unwrap().expect("and the sum can be taken");
+            assert!(v.ok, "entry {entry}: computed {}, stored {}", v.computed, v.stored);
+        }
+    }
+
+    /// One byte of the name changed, and the header no longer sums to what it
+    /// says. The other half of the test above: a check that passed whatever
+    /// the bytes were would pass that one too.
+    #[test]
+    fn a_header_somebody_edited_no_longer_sums() {
+        let mut bytes = archive();
+        bytes[0] = b'H';
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(tar());
+        let v = e.run_check(&d, &[0, 0, 6]).unwrap().expect("the check still applies");
+        assert!(!v.ok, "computed {}, stored {}", v.computed, v.stored);
     }
 
     /// the size in it still places the header after this one.

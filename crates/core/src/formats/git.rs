@@ -83,7 +83,7 @@ pub fn git_index() -> Template {
 /// a write that stopped halfway, and it is the one checksum here that a reader
 /// can take without knowing anything about the format above it.
 fn seal() -> Check {
-    Check { algorithm: Checksum::Sha1, over: Covers::UpToHere, when: None }
+    Check::of(Checksum::Sha1, Covers::UpToHere)
 }
 
 /// One staged path. Everything above the object name is there so that git can

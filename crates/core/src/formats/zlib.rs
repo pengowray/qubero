@@ -13,7 +13,7 @@
 //! gzip member's body is.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Endian::Big, Expr as E, Part, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Named, Endian::Big, Expr as E, Part, Template, Ty as T};
 
 /// The compression level the header names, which says how hard the encoder
 /// tried rather than anything a decoder needs.
@@ -59,11 +59,10 @@ pub fn part(inner: T) -> Part {
         // this on its way past and refuses the run if it is wrong, so a
         // stream that opened at all has already passed; what this adds is
         // saying so, and saying it of a run the decoder never looked at.
-        .field_check("adler32", Check {
-            algorithm: Checksum::Adler32,
-            over: Covers::Unpacked { name: "compressed".into(), len: None },
-            when: None,
-        }),
+        .field_check(
+            "adler32",
+            Check::of(Checksum::Adler32, Covers::Unpacked { name: Named::here("compressed"), len: None }),
+        ),
     )
 }
 

@@ -32,6 +32,14 @@ pub enum Checksum {
     Crc16Arc,
     /// Every byte added up, kept to eight bits. LHA's header check.
     Sum8,
+    /// Every byte added up and not truncated: what a tar header writes as six
+    /// octal digits. Kept to twenty-four bits, which is the width it is
+    /// printed to and four times what the largest 512-byte header can reach.
+    ///
+    /// Not [`Checksum::Sum8`] with a wider field. A tar header of five hundred
+    /// and twelve bytes reaches 0x1fe00, and the bottom eight bits of that are
+    /// a different number that no tar wrote down.
+    ByteSum,
     /// Adler-32, the zlib trailer: two running sums modulo 65521.
     Adler32,
     /// SHA-1, which git writes at the end of a file to seal it.
@@ -52,6 +60,7 @@ impl Checksum {
             Checksum::Crc32 => "crc32",
             Checksum::Crc32Low16 | Checksum::Crc16Arc => "crc16",
             Checksum::Sum8 => "sum8",
+            Checksum::ByteSum => "sum",
             Checksum::Adler32 => "adler32",
             Checksum::Sha1 => "sha1",
         }
@@ -64,6 +73,7 @@ impl Checksum {
             Checksum::Crc32 | Checksum::Adler32 => 8,
             Checksum::Crc32Low16 | Checksum::Crc16Arc => 4,
             Checksum::Sum8 => 2,
+            Checksum::ByteSum => 6,
             Checksum::Sha1 => 40,
         }
     }
@@ -83,6 +93,7 @@ impl Checksum {
             Checksum::Crc32Low16 => hex((crc32(bytes) & 0xffff) as u128, self),
             Checksum::Crc16Arc => hex(crc16_arc(bytes) as u128, self),
             Checksum::Sum8 => hex(sum8(bytes) as u128, self),
+            Checksum::ByteSum => hex(byte_sum(bytes) as u128, self),
             Checksum::Adler32 => hex(adler32(bytes) as u128, self),
         }
     }
@@ -156,6 +167,16 @@ pub fn crc16_arc(bytes: &[u8]) -> u16 {
 /// Every byte added up, kept to eight bits.
 pub fn sum8(bytes: &[u8]) -> u8 {
     bytes.iter().fold(0u8, |a, &b| a.wrapping_add(b))
+}
+
+/// Every byte added up, kept to twenty-four bits. What a tar header seals
+/// itself with, once its own checksum field has been read as spaces.
+///
+/// The mask is the width the verdict is printed to and nothing more: no tar
+/// header can reach it, and a template pointing this at a run long enough to
+/// wrap has a bug the arithmetic should not hide by widening under it.
+pub fn byte_sum(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0u32, |a, &b| a.wrapping_add(b as u32)) & 0xff_ffff
 }
 
 /// Adler-32, the zlib trailer. Two running sums modulo 65521, the second of

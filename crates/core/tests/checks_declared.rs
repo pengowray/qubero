@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 use qubero_core::formats;
-use qubero_core::template::{Check, Covers, Expr, Ty};
+use qubero_core::template::{Check, Checksum, Covers, Expr, Named, Ty, Ty as T};
 
 #[test]
 fn every_check_names_fields_that_exist() {
@@ -30,7 +30,9 @@ fn every_check_names_fields_that_exist() {
         if !any_check(&t.root, &t.types, &mut HashSet::new()) {
             continue;
         }
-        let mut w = Walk { name, seen: HashSet::new(), scope: Vec::new(), found: 0 };
+        let mut names = HashSet::new();
+        every_name(&t.root, &t.types, &mut HashSet::new(), &mut names);
+        let mut w = Walk { name, declared: names, seen: HashSet::new(), scope: Vec::new(), found: 0 };
         w.ty(&t.root, &t.types);
         declared += w.found;
     }
@@ -44,6 +46,49 @@ fn every_check_names_fields_that_exist() {
     // `field_check` calls in the templates.
     assert!(declared >= 7, "only {declared} check sites found across every template");
     eprintln!("{declared} check sites validated");
+}
+
+/// Every field name a type tree declares, scope disregarded. Each named type
+/// is stepped into once, as in [`any_check`]: a name is a name wherever the
+/// walk reached it from.
+fn every_name<'a>(
+    ty: &'a Ty,
+    types: &'a HashMap<String, Ty>,
+    seen: &mut HashSet<&'a str>,
+    out: &mut HashSet<&'a str>,
+) {
+    match ty {
+        Ty::Struct(s) => {
+            for f in &s.fields {
+                out.insert(&f.name);
+                every_name(&f.ty, types, seen, out);
+            }
+        }
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => every_name(elem, types, seen, out),
+        Ty::PointerList { elem, .. } => every_name(elem, types, seen, out),
+        Ty::Nullable { inner, .. }
+        | Ty::At { inner, .. }
+        | Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::Decoded { inner, .. }
+        | Ty::Enum { inner, .. }
+        | Ty::Flags { inner, .. } => every_name(inner, types, seen, out),
+        Ty::Switch { cases, default, .. } => {
+            for (_, t) in cases.iter() {
+                every_name(t, types, seen, out);
+            }
+            every_name(default, types, seen, out);
+        }
+        Ty::Named(n) => {
+            if let Some((key, t)) = types.get_key_value(&**n)
+                && seen.insert(key)
+            {
+                every_name(t, types, seen, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Whether a type tree holds a check anywhere in it, scope disregarded. Each
@@ -78,6 +123,9 @@ fn any_check<'a>(ty: &'a Ty, types: &'a HashMap<String, Ty>, seen: &mut HashSet<
 
 struct Walk<'a> {
     name: &'a str,
+    /// Every field name the template declares, anywhere. Only a backwards
+    /// reach uses it: see [`Walk::named`].
+    declared: HashSet<&'a str>,
     /// Named types already stepped into, so a format that nests inside itself
     /// is walked once rather than for ever.
     seen: HashSet<&'a str>,
@@ -146,17 +194,51 @@ impl<'a> Walk<'a> {
         if let Some(when) = &check.when {
             self.expr(when, &format!("{at}, in its guard"));
         }
+        // A blank is the check field's own bytes read as something else while
+        // the sum runs, so it means nothing unless those bytes are among the
+        // summed ones. Only a run of the enclosing structure can hold them:
+        // `UpToHere` stops where the field starts, and `Field` and `Unpacked`
+        // are over some other field entirely. The evaluator refuses those, and
+        // refusing is how a check disappears with nothing said anywhere.
+        assert!(
+            check.blank.is_none() || matches!(check.over, Covers::Run { .. }),
+            "{at} reads its own bytes as a blank, over something that cannot hold them"
+        );
         match &check.over {
             Covers::UpToHere => {}
             Covers::Run { at: start, len } => {
                 self.expr(start, &format!("{at}, in where the run starts"));
                 self.expr(len, &format!("{at}, in how long the run is"));
             }
-            Covers::Field { name } => self.names(name, &at),
+            Covers::Field { name } => self.named(name, &at),
             Covers::Unpacked { name, len } => {
-                self.names(name, &at);
+                self.named(name, &at);
                 if let Some(len) = len {
                     self.expr(len, &format!("{at}, in the unpacked length"));
+                }
+            }
+        }
+    }
+
+    /// A name a check covers, checked as far as where it looks allows.
+    ///
+    /// A name resolved outwards is checked against the scope this walk is
+    /// carrying, which is exactly what the evaluator will search. One resolved
+    /// *backwards* cannot be: the field is in another element of the enclosing
+    /// list, and which element that is depends on the file. So each segment is
+    /// checked against every field name the template declares anywhere, which
+    /// still catches the mistake this file exists to catch, a typo, and does
+    /// not pretend to catch more.
+    fn named(&self, name: &Named, at: &str) {
+        match name {
+            Named::Here(name) => self.names(name, at),
+            Named::Earlier(path) => {
+                assert!(!path.is_empty(), "{at} reaches back to a field with no name");
+                for seg in path.iter() {
+                    assert!(
+                        self.declared.contains(seg.as_str()),
+                        "{at} reaches back through `{seg}`, and no structure in this template declares one"
+                    );
                 }
             }
         }
@@ -219,7 +301,7 @@ impl<'a> Walk<'a> {
 #[test]
 #[should_panic(expected = "no structure it sits in has one")]
 fn a_name_nothing_declares_is_caught() {
-    walk_one(Covers::Field { name: "nowhere".into() }, None);
+    walk_one(Covers::Field { name: Named::here("nowhere") }, None);
 }
 
 /// And so does a guard reading a field that is not there, which is the same
@@ -227,17 +309,41 @@ fn a_name_nothing_declares_is_caught() {
 #[test]
 #[should_panic(expected = "in its guard")]
 fn a_guard_reading_a_field_that_is_not_there_is_caught() {
-    walk_one(Covers::Field { name: "a".into() }, Some(Expr::field("method").equals(Expr::lit(1))));
+    walk_one(Covers::Field { name: Named::here("a") }, Some(Expr::field("method").equals(Expr::lit(1))));
+}
+
+/// And so does a blank over coverage that cannot hold the check field. That
+/// one the evaluator refuses in silence, which is exactly the shape of mistake
+/// this file exists to make loud.
+#[test]
+#[should_panic(expected = "over something that cannot hold them")]
+fn a_blank_over_coverage_that_cannot_hold_the_field_is_caught() {
+    walk(Check::of(Checksum::Sum8, Covers::Field { name: Named::here("a") }).blanking(0));
+}
+
+/// And a backwards reach through a name nothing in the template declares.
+#[test]
+#[should_panic(expected = "and no structure in this template declares one")]
+fn a_backwards_reach_through_a_name_nothing_declares_is_caught() {
+    walk(Check::of(Checksum::Sum8, Covers::Field { name: Named::earlier(&["nowhere"]) }));
+}
+
+fn walk_one(over: Covers, when: Option<Expr>) {
+    let check = Check::of(Checksum::Sum8, over);
+    walk(match when {
+        Some(when) => check.only_when(when),
+        None => check,
+    });
 }
 
 /// A structure of two fields with one check on it, walked the way a real
 /// template is.
-fn walk_one(over: Covers, when: Option<Expr>) {
-    use qubero_core::template::{Checksum, Ty as T};
-    let root = T::structure("Made", vec![("a", T::u8()), ("sum", T::u8())])
-        .field_check("sum", Check { algorithm: Checksum::Sum8, over, when });
+fn walk(check: Check) {
+    let root = T::structure("Made", vec![("a", T::u8()), ("sum", T::u8())]).field_check("sum", check);
     let types = HashMap::new();
-    let mut w = Walk { name: "made-up", seen: HashSet::new(), scope: Vec::new(), found: 0 };
+    let mut names = HashSet::new();
+    every_name(&root, &types, &mut HashSet::new(), &mut names);
+    let mut w = Walk { name: "made-up", declared: names, seen: HashSet::new(), scope: Vec::new(), found: 0 };
     w.ty(&root, &types);
     assert_eq!(w.found, 1);
 }

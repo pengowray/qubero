@@ -26,7 +26,7 @@
 //! 256 or 512 bytes ends early. That is what the format leaves ambiguous, and
 //! every tool that reads these files has the same problem.
 
-use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// The method five characters name, which is also the window size: `-lh5-`
 /// compresses against the last 8K, `-lh7-` against the last 64K.
@@ -126,11 +126,8 @@ const STORED: i128 = 0x2d_6c_68_30_2d;
 /// valid archive broken; the guard is the difference between a check and a
 /// lie. Both header layouts write the same field and both use this.
 fn file_crc() -> Check {
-    Check {
-        algorithm: Checksum::Crc16Arc,
-        over: Covers::Field { name: "data".into() },
-        when: Some(E::field("method").equals(E::lit(STORED))),
-    }
+    Check::of(Checksum::Crc16Arc, Covers::Field { name: Named::here("data") })
+        .only_when(E::field("method").equals(E::lit(STORED)))
 }
 
 /// Levels 0 and 1.
@@ -178,11 +175,10 @@ fn header() -> T {
     // is the entry's own size byte, which is what that byte means in levels 0
     // and 1: how much header there is once the two bytes in front of it are
     // off.
-    .field_check("header_checksum", Check {
-        algorithm: Checksum::Sum8,
-        over: Covers::Run { at: E::lit(1), len: E::field("header_size") },
-        when: None,
-    })
+    .field_check(
+        "header_checksum",
+        Check::of(Checksum::Sum8, Covers::Run { at: E::lit(1), len: E::field("header_size") }),
+    )
     .field_check("crc", file_crc())
 }
 

@@ -16,15 +16,14 @@ const COLOR_TYPE: &[(i128, &str)] = &[
 /// in front of them nor the sum itself. Written once and used by both chunk
 /// definitions below, which differ only in what they read a chunk's payload as.
 fn chunk_crc() -> Check {
-    Check {
-        algorithm: Checksum::Crc32,
-        // From the end of the length to the start of the CRC. The declared
-        // length is used rather than the measured size of `data`, because
-        // measuring `data` in a cartridge would unpack the image to answer a
-        // question that is written down four bytes earlier.
-        over: Covers::Run { at: E::size_of("length"), len: E::size_of("type").add(E::field("length")) },
-        when: None,
-    }
+    // From the end of the length to the start of the CRC. The declared length
+    // is used rather than the measured size of `data`, because measuring `data`
+    // in a cartridge would unpack the image to answer a question that is
+    // written down four bytes earlier.
+    Check::of(
+        Checksum::Crc32,
+        Covers::Run { at: E::size_of("length"), len: E::size_of("type").add(E::field("length")) },
+    )
 }
 
 /// The header chunk, which every PNG opens with and which says what shape the

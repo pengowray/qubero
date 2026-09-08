@@ -42,7 +42,7 @@ fn index_size() -> E {
 /// The data's own check is a different thing and is not one of these: it is
 /// over what a block unpacks to, and nothing here unpacks a block on its own.
 fn crc32_over(at: E, len: E) -> Check {
-    Check { algorithm: Checksum::Crc32, over: Covers::Run { at, len }, when: None }
+    Check::of(Checksum::Crc32, Covers::Run { at, len })
 }
 
 pub fn xz() -> Template {

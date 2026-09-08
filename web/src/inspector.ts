@@ -64,16 +64,21 @@ type Covered = {
   /** The run of the file those bytes were produced from, for a sum over
    *  something unpacked. Null when the sum is over the file itself. */
   readonly from: { readonly at: number; readonly bytes: number } | null;
+  /** The check field's own bytes inside the covered run, and the byte they
+   *  were summed as, for a format that seals a record the checksum is part
+   *  of. Null for every check that sums the bytes as they are, which is all
+   *  but tar's here. */
+  readonly own: { readonly at: number; readonly bytes: number; readonly byte: number } | null;
 };
 
 /** A checksum over a run of the file, which most of them are. */
-function overFile(what: string, at: number, bytes: number): Covered {
-  return { what, at: { at, bytes }, from: null };
+function overFile(what: string, at: number, bytes: number, own: Covered["own"] = null): Covered {
+  return { what, at: { at, bytes }, from: null, own };
 }
 
 /** A checksum over what a run of the file unpacks to. */
 function overUnpacked(what: string, at: number, bytes: number): Covered {
-  return { what, at: null, from: { at, bytes } };
+  return { what, at: null, from: { at, bytes }, own: null };
 }
 
 /** What each algorithm is called on screen. The core answers in the short form
@@ -82,7 +87,20 @@ function overUnpacked(what: string, at: number, bytes: number): Covered {
 const ALGORITHM: Readonly<Record<string, string>> = {
   crc32: "CRC-32",
   crc16: "CRC-16",
+  /** LHA's header check: every byte added up, kept to eight bits. Shares its
+   *  name with `sum` below; see there. */
   sum8: "Checksum",
+  /** Every byte added up and not truncated, which is what a tar header holds
+   *  in six octal digits. The same word as `sum8`, on purpose: tar's own
+   *  documentation calls the field a checksum and so does LHA's, and a file
+   *  has one template, so the two never appear together. On screen they do not
+   *  collide either: LHA's field is `header_checksum`, so `checkLabel` prints
+   *  `Checksum header_checksum` there and a bare `Checksum` for tar. What
+   *  tells the arithmetic apart is the verdict's width, `0x1f` against
+   *  `0x0014e5`, which the core prints to each algorithm's own digits. `Sum`
+   *  and `Byte sum` lost: neither contains `checksum`, so beside tar's field
+   *  name they came out as `Sum checksum`, a longer label saying less. */
+  sum: "Checksum",
   sha1: "SHA-1",
   adler32: "Adler-32",
 };
@@ -111,8 +129,17 @@ function checkLabel(algorithm: string, field: string): string {
  * that record. Both are true of every format that has them, which is why this
  * is read off the shape of the path rather than off the format's name.
  */
-function coveredWhat(path: readonly number[], n: TemplateNode): string {
+function coveredWhat(path: readonly number[], n: TemplateNode, sealsItself: boolean): string {
   if (path.length <= 1) return CHECKED.upTo;
+  // A sum whose own bytes are among the ones it covers is sealing the record
+  // it is part of, not that record's contents. Tar is the one format here that
+  // does it, and 512 bytes described as `this entry's stored data` would be
+  // false twice over: none of the data is in them, and all of the header is.
+  //
+  // `this header` holds for tar and would not hold for an Ogg page or a PE
+  // image, neither of which has a check declared yet. When one does, the noun
+  // is the template's to say rather than this function's to guess.
+  if (sealsItself) return CHECKED.header;
   return n.name.includes("head") ? CHECKED.header : CHECKED.file;
 }
 
@@ -1084,7 +1111,14 @@ export class Inspector {
       covers:
         check.over === null
           ? overUnpacked(CHECKED.unpacked, over[0], over[1])
-          : overFile(coveredWhat(path, n), over[0], over[1]),
+          : overFile(
+              coveredWhat(path, n, check.blanked !== null),
+              over[0],
+              over[1],
+              check.blanked === null
+                ? null
+                : { at: check.blanked[0], bytes: check.blanked[1], byte: check.blanked[2] },
+            ),
       check: async () => {
         // Loaded here rather than in the core: the core refuses a run whose
         // bytes have not arrived, and what a reader wants is for them to
@@ -1174,6 +1208,22 @@ export class Inspector {
       // claims, so two different words rather than one row that is sometimes
       // one and sometimes the other.
       add(plan.covers.at === null ? CHECKED.fromLabel : CHECKED.overLabel, b);
+    }
+    // Plain text, not a button like the row above. The bytes it names are the
+    // field the cursor is already on, so there is nowhere to go; worse, going
+    // there is what the `Covers` button does, and pressing it moves the cursor
+    // off this field and takes the whole block away with it.
+    const own = plan.covers.own;
+    if (own !== null) {
+      add(
+        CHECKED.ownLabel,
+        CHECKED.own(
+          formatOffset(own.at * 8),
+          formatOffset((own.at + own.bytes - 1) * 8),
+          formatBytes(own.bytes),
+          own.byte,
+        ),
+      );
     }
     return rows;
   }

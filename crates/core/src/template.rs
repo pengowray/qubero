@@ -1082,6 +1082,40 @@ pub struct Check {
     ///
     /// Evaluated where the rest of a check's expressions are: see [`Covers`].
     pub when: Option<Expr>,
+    /// The byte the check field's own bytes are read as while the sum is
+    /// taken, for a format that seals a record the checksum sits inside.
+    ///
+    /// A tar header is five hundred and twelve bytes summed with its own
+    /// `checksum` read as eight spaces, because the writer could not know the
+    /// number until it had finished adding up the field that was going to
+    /// hold it. Ogg and a PE header do the same with zeros.
+    ///
+    /// Only for a sum over bytes of the file, and only when the check field
+    /// lies wholly inside the run: a blank that cannot be placed is a check
+    /// that is not made, rather than one made over the bytes as they are.
+    pub blank: Option<u8>,
+}
+
+impl Check {
+    /// A sum with nothing unusual about it: taken on every file that has the
+    /// field, over the bytes as they sit there.
+    ///
+    /// The two things that are unusual are added on top, so that a check reads
+    /// as what it is plus what is odd about it, and so that the next oddity
+    /// some format needs costs nothing at the twenty sites that do not have it.
+    pub fn of(algorithm: Checksum, over: Covers) -> Check {
+        Check { algorithm, over, when: None, blank: None }
+    }
+    /// Only take the sum when this comes to something other than zero. See
+    /// [`Check::when`].
+    pub fn only_when(self, when: Expr) -> Check {
+        Check { when: Some(when), ..self }
+    }
+    /// Read the check field's own bytes as `byte` while summing. See
+    /// [`Check::blank`].
+    pub fn blanking(self, byte: u8) -> Check {
+        Check { blank: Some(byte), ..self }
+    }
 }
 
 /// Which bytes a check is over.
@@ -1099,10 +1133,8 @@ pub struct Check {
 /// thousandth chunk as for the first.
 #[derive(Debug, Clone)]
 pub enum Covers {
-    /// The bytes of a field named here: a sibling, or a field of a structure
-    /// this one sits inside, which is how a RAR 5 file header's `data_crc32`
-    /// reaches the data area declared one level out.
-    Field { name: Arc<str> },
+    /// The bytes of a field, wherever [`Named`] says to look for it.
+    Field { name: Named },
     /// What that field's compressed run unpacks to, rather than its own bytes:
     /// a ZIP entry's CRC-32 is of the file, not of the deflate stream. The
     /// field has to be a [`Ty::Decoded`], and a template whose switch leaves it
@@ -1117,12 +1149,47 @@ pub enum Covers {
     /// A run stored rather than compressed is answered as [`Covers::Field`]
     /// would answer it, since those bytes are in the file and a reader can be
     /// sent to them.
-    Unpacked { name: Arc<str>, len: Option<Expr> },
+    Unpacked { name: Named, len: Option<Expr> },
     /// A run of the enclosing structure: where it starts, and how long it is.
     Run { at: Expr, len: Expr },
     /// From the start of the file to the first byte of the check field itself.
     /// Git's index hash and gzip's header CRC are this.
     UpToHere,
+}
+
+/// Where a check goes looking for the field it covers.
+///
+/// Two directions, and a format needs one or the other. Nearly every checksum
+/// is written in front of, or inside, the thing it seals, so the field is here
+/// or one level out. ZIP's data descriptor is the exception that made this an
+/// enum: the record holding the sum is written *after* the record holding the
+/// bytes, because the writer was streaming and did not know the number until
+/// the data had gone past.
+#[derive(Debug, Clone)]
+pub enum Named {
+    /// A field of the structure the check sits in, or of a structure that one
+    /// sits inside. Resolved outwards, which is how a RAR 5 file header's
+    /// `data_crc32` reaches the data area declared one level out.
+    Here(Arc<str>),
+    /// A path into the nearest *earlier* element of the enclosing list that
+    /// has one, searched exactly the way [`Expr::Sibling`] searches: backwards
+    /// through the list this record is in, then outwards through the lists
+    /// that one sits in.
+    ///
+    /// A path rather than a name, because the field is a level or two inside
+    /// the element: a ZIP data descriptor covers `body.data` of the local
+    /// entry before it, and the elements of that list are records whose `body`
+    /// is whichever kind of record the signature said.
+    Earlier(Arc<[String]>),
+}
+
+impl Named {
+    pub fn here(name: &str) -> Named {
+        Named::Here(name.into())
+    }
+    pub fn earlier(path: &[&str]) -> Named {
+        Named::Earlier(path.iter().map(|s| s.to_string()).collect())
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -571,7 +571,7 @@ struct ShapeDto {
 /// to answer it, which is what lets a panel ask on every move of the cursor.
 #[derive(Serialize)]
 struct CheckDto {
-    /// "crc32" | "crc16" | "sum8" | "sha1" | "adler32"
+    /// "crc32" | "crc16" | "sum8" | "sum" | "sha1" | "adler32"
     algorithm: &'static str,
     /// The bytes summed, as [offset, length], when they are a run of the file.
     over: Option<[f64; 2]>,
@@ -579,6 +579,10 @@ struct CheckDto {
     /// the summed bytes are nowhere in the file.
     unpacked_from: Option<[f64; 2]>,
     covered_bytes: f64,
+    /// The check field's own bytes, as [offset, length, byte], when the sum is
+    /// over a record the field sits inside and they are read as something else
+    /// while it runs. A tar header is summed with its checksum read as spaces.
+    blanked: Option<[f64; 3]>,
 }
 
 /// What came of taking a checksum: the two forms, printed to the algorithm's
@@ -1924,6 +1928,7 @@ impl Editor {
                         over: c.over.map(|(at, len)| [at as f64, len as f64]),
                         unpacked_from: c.unpacked_from.map(|(at, len)| [at as f64, len as f64]),
                         covered_bytes: c.covered_bytes as f64,
+                        blanked: c.blanked.map(|b| [b.at as f64, b.len as f64, b.byte as f64]),
                     })
                 }))
             }

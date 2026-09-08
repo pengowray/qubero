@@ -26,12 +26,12 @@
 
 use super::*;
 use crate::checksum::Checksum;
-use crate::template::{Check, Covers};
+use crate::template::{Check, Covers, Named};
 
 /// What the field at a path checks. No bytes are read to answer this.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckInfo {
-    /// "crc32", "crc16", "sum8", "sha1", "adler32" — what the interface names
+    /// "crc32", "crc16", "sum8", "sum", "sha1", "adler32" — what the interface names
     /// it. See [`Checksum::as_str`].
     pub algorithm: &'static str,
     /// The bytes summed, when they are a run of the file: offset and length, in
@@ -48,6 +48,28 @@ pub struct CheckInfo {
     /// produced: nothing is checked against it, and `run_check` sums whatever
     /// actually came out.
     pub covered_bytes: u64,
+    /// The run of the check field's own bytes, and the byte they are read as,
+    /// when the sum is over a record the field sits inside. `None` for every
+    /// check that sums the bytes as they are.
+    ///
+    /// A reader looking at the covered run has to be told this or the
+    /// arithmetic does not add up in front of them: a tar header sums to a
+    /// number that summing those five hundred and twelve bytes by hand will
+    /// not give. See [`Check::blank`](crate::template::Check::blank).
+    pub blanked: Option<Blanked>,
+}
+
+/// The check field's own bytes, and what they are read as while the sum runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Blanked {
+    /// Offset and length, in bytes, of the check field itself. Inside the
+    /// covered run, always: a blank that does not land there is a check that
+    /// is not made at all.
+    pub at: u64,
+    pub len: u64,
+    /// What each of those bytes is summed as. A space for tar, a zero for the
+    /// formats that zero the field.
+    pub byte: u8,
 }
 
 /// What came of taking the sum. The two forms are printed to the algorithm's
@@ -70,6 +92,7 @@ struct Coverage {
     /// it, which is what opens the stream.
     unpacked: Option<((u64, u64), Vec<usize>)>,
     covered_bytes: u64,
+    blanked: Option<Blanked>,
 }
 
 impl Evaluator {
@@ -92,6 +115,7 @@ impl Evaluator {
             over: c.over,
             unpacked_from: c.unpacked.as_ref().map(|(run, _)| *run),
             covered_bytes: c.covered_bytes,
+            blanked: c.blanked,
         }))
     }
 
@@ -114,7 +138,16 @@ impl Evaluator {
                 if *len > crate::codec::CAP_BYTES as u64 {
                     return fail(too_large(*len));
                 }
-                self.read_in(doc, 0, at * 8, len * 8)?
+                let mut bytes = self.read_in(doc, 0, at * 8, len * 8)?;
+                // The field reads as something else than what is written
+                // there, for the formats that seal a record the checksum is
+                // part of. `coverage` has already made sure the run lands
+                // inside what was read, so the slice cannot be out of bounds.
+                if let Some(b) = c.blanked {
+                    let from = (b.at - at) as usize;
+                    bytes[from..from + b.len as usize].fill(b.byte);
+                }
+                bytes
             }
             (None, Some((_, at))) => {
                 let at = at.clone();
@@ -176,8 +209,27 @@ impl Evaluator {
         end: &[usize],
         check: &Check,
     ) -> R<Option<Coverage>> {
-        let of = |over, unpacked, covered_bytes| {
-            Ok(Some(Coverage { algorithm: check.algorithm, over, unpacked, covered_bytes }))
+        // Where the check field's own bytes are, for a format that reads them
+        // as something else while summing. Worked out here, before the match,
+        // so that the closure below borrows nothing.
+        let own = match check.blank {
+            Some(_) => self.field_run(doc, path)?,
+            None => None,
+        };
+        let of = |over: Option<(u64, u64)>, unpacked, covered_bytes| {
+            let blanked = match (check.blank, over, own) {
+                (None, ..) => None,
+                (Some(byte), Some((at, len)), Some((f, n))) if f >= at && f + n <= at + len => {
+                    Some(Blanked { at: f, len: n, byte })
+                }
+                // A blank with nowhere to go: the field is not inside the run,
+                // or the sum is over something unpacked, where the field's own
+                // bytes are not among the summed ones at all. Either way the
+                // template has said something it cannot mean, and summing the
+                // bytes as they sit there would report every file as broken.
+                (Some(_), ..) => return Ok(None),
+            };
+            Ok(Some(Coverage { algorithm: check.algorithm, over, unpacked, covered_bytes, blanked }))
         };
         match &check.over {
             Covers::UpToHere => {
@@ -248,15 +300,36 @@ impl Evaluator {
         Ok(self.run_in_file(doc, r.offset / 8, size / 8))
     }
 
-    /// The field a check names: one of the structure the check sits in, or of a
-    /// structure that one sits inside.
+    /// The field a check names, wherever [`Named`] says to look for it.
+    fn named_field<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &Named) -> R<Option<Vec<usize>>> {
+        match name {
+            Named::Here(name) => self.field_out_from(doc, path, name),
+            // Backwards through the records, and never forwards. A ZIP data
+            // descriptor is the only thing here that reaches this way, and it
+            // has to: it is a record written after the data it seals, because
+            // the writer was streaming and did not know the number until the
+            // data had gone by. Everything else a template can say looks
+            // backwards or inwards, and so does this: the elements after this
+            // one have not been placed, and would not be the answer if they
+            // had.
+            Named::Earlier(field) => {
+                let field = field.clone();
+                let Some(p) = self.sibling_field_path(doc, path, &field)? else { return Ok(None) };
+                self.resolve(doc, &p)?;
+                Ok(Some(p))
+            }
+        }
+    }
+
+    /// A field of the structure the check sits in, or of a structure that one
+    /// sits inside.
     ///
     /// Unlike everything else that looks a field up by name, this looks at the
     /// whole of each structure rather than only at what was written before.
     /// Reaching outwards is what a RAR 5 file header needs: its `data_crc32` is
     /// three levels inside the block, and the data it sums is the block's last
     /// field.
-    fn named_field<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<Vec<usize>>> {
+    fn field_out_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<Vec<usize>>> {
         let mut cur = path.to_vec();
         while cur.pop().is_some() {
             let found = match self.memo.get(&cur).map(|r| &r.ty) {
@@ -328,7 +401,7 @@ mod tests {
     use crate::eval::{EvalError, Evaluator};
     use crate::formats;
     use crate::source::MemSource;
-    use crate::template::{Check, Checksum, Covers, Endian::Big, Expr as E, Template, Ty as T};
+    use crate::template::{Check, Checksum, Covers, Endian::Big, Expr as E, Named, Template, Ty as T};
 
     /// A reading of `bytes` as the named format, and the path of the first
     /// field called `name` under `at`, so a test can say which field it means
@@ -661,7 +734,7 @@ mod tests {
         Template::new(
             "made-up",
             T::structure("Made", vec![("a", T::u8()), ("b", T::u8()), ("sum", T::u8())])
-                .field_check("sum", Check { algorithm: Checksum::Sum8, over, when: None }),
+                .field_check("sum", Check::of(Checksum::Sum8, over)),
         )
     }
 
@@ -671,7 +744,7 @@ mod tests {
         // `every_check_resolves` in `formats` fails on it before a file is
         // ever loaded.
         let bytes = vec![1, 2, 3];
-        let mut r = Read::with(made_up(Covers::Field { name: "nowhere".into() }), bytes.clone());
+        let mut r = Read::with(made_up(Covers::Field { name: Named::here("nowhere") }), bytes.clone());
         assert_eq!(r.info(&[2]), None);
         assert_eq!(r.verdict(&[2]), None);
 
@@ -743,11 +816,7 @@ mod tests {
         // What RAR 5 needs: the sum is written three levels inside a block and
         // covers a field of the block itself.
         let inner = T::structure("Inner", vec![("sum", T::u8())])
-            .field_check("sum", Check {
-                algorithm: Checksum::Sum8,
-                over: Covers::Field { name: "body".into() },
-                when: None,
-            });
+            .field_check("sum", Check::of(Checksum::Sum8, Covers::Field { name: Named::here("body") }));
         let t = Template::new(
             "nested",
             T::structure("Outer", vec![("inner", inner), ("body", T::bytes(E::lit(3)))]),
@@ -766,11 +835,10 @@ mod tests {
         let t = Template::new(
             "forward",
             T::structure("Sealed", vec![("sum", T::u8()), ("len", T::u8()), ("body", T::bytes(E::field("len")))])
-                .field_check("sum", Check {
-                    algorithm: Checksum::Sum8,
-                    over: Covers::Run { at: E::lit(2), len: E::field("len") },
-                    when: None,
-                }),
+                .field_check(
+                    "sum",
+                    Check::of(Checksum::Sum8, Covers::Run { at: E::lit(2), len: E::field("len") }),
+                ),
         );
         let mut r = Read::with(t, vec![15, 3, 4, 5, 6]);
         let info = r.info(&[0]).expect("the run is named by a later field");
@@ -785,11 +853,8 @@ mod tests {
                 "guarded",
                 T::structure("Guarded", vec![("kind", T::u8()), ("sum", T::u8()), ("body", T::u8())]).field_check(
                     "sum",
-                    Check {
-                        algorithm: Checksum::Sum8,
-                        over: Covers::Field { name: "body".into() },
-                        when: Some(E::field("kind").equals(E::lit(7))),
-                    },
+                    Check::of(Checksum::Sum8, Covers::Field { name: Named::here("body") })
+                        .only_when(E::field("kind").equals(E::lit(7))),
                 ),
             )
         };
@@ -811,7 +876,7 @@ mod tests {
             "short",
             T::structure("Short", vec![("body", T::u8()), ("hash", T::bytes(E::lit(4)))]).field_check(
                 "hash",
-                Check { algorithm: Checksum::Sha1, over: Covers::Field { name: "body".into() }, when: None },
+                Check::of(Checksum::Sha1, Covers::Field { name: Named::here("body") }),
             ),
         );
         let mut r = Read::with(t, vec![1, 2, 3, 4, 5]);
@@ -827,11 +892,74 @@ mod tests {
             "plain",
             T::structure("Plain", vec![("sum", T::u8()), ("body", T::bytes(E::lit(2)))]).field_check(
                 "sum",
-                Check {
-                    algorithm: Checksum::Sum8,
-                    over: Covers::Unpacked { name: "body".into(), len: None },
-                    when: None,
-                },
+                Check::of(Checksum::Sum8, Covers::Unpacked { name: Named::here("body"), len: None }),
+            ),
+        );
+        let mut r = Read::with(t, vec![3, 1, 2]);
+        assert_eq!(r.info(&[0]), None);
+    }
+
+    /// A template of a sealed record: a byte, the sum, a byte, and the sum is
+    /// over all three with its own read as `blank`.
+    fn sealed(blank: Option<u8>) -> Template {
+        let mut check = Check::of(Checksum::Sum8, Covers::Run { at: E::lit(0), len: E::lit(3) });
+        if let Some(b) = blank {
+            check = check.blanking(b);
+        }
+        Template::new(
+            "sealed",
+            T::structure("Sealed", vec![("a", T::u8()), ("sum", T::u8()), ("b", T::u8())])
+                .field_check("sum", check),
+        )
+    }
+
+    /// What tar, Ogg and a PE header all do: the checksum is inside the run it
+    /// covers, and the writer summed a placeholder where it now sits.
+    #[test]
+    fn a_check_inside_the_run_it_covers_sums_its_own_bytes_as_the_blank() {
+        // 1 + 0x20 + 3 is 0x24, which is what a writer that read its own field
+        // as a space would have arrived at.
+        let mut r = Read::with(sealed(Some(b' ')), vec![1, 0x24, 3]);
+        let info = r.info(&[1]).expect("the sum covers the record");
+        assert_eq!(info.over, Some((0, 3)));
+        assert_eq!(info.blanked.map(|b| (b.at, b.len, b.byte)), Some((1, 1, b' ')));
+        assert!(r.must(&[1]).ok, "the field reads as a space while the sum runs");
+
+        // The same bytes with nothing blanked come to something else, so the
+        // substitution is doing the work rather than the arithmetic happening
+        // to agree.
+        let mut r = Read::with(sealed(None), vec![1, 0x24, 3]);
+        assert_eq!(r.info(&[1]).and_then(|i| i.blanked), None);
+        assert!(!r.must(&[1]).ok);
+    }
+
+    #[test]
+    fn a_blank_that_does_not_land_in_the_covered_run_checks_nothing() {
+        // The sum covers the two bytes after the field, so there is nothing of
+        // the field's own in it to blank. A template saying otherwise has said
+        // something it cannot mean, and summing the run as it is would report
+        // a mismatch on a file nobody touched.
+        let t = Template::new(
+            "outside",
+            T::structure("Outside", vec![("sum", T::u8()), ("a", T::u8()), ("b", T::u8())]).field_check(
+                "sum",
+                Check::of(Checksum::Sum8, Covers::Run { at: E::lit(1), len: E::lit(2) }).blanking(0),
+            ),
+        );
+        let mut r = Read::with(t, vec![5, 2, 3]);
+        assert_eq!(r.info(&[0]), None);
+        assert_eq!(r.verdict(&[0]), None);
+    }
+
+    #[test]
+    fn a_blank_over_an_unpacked_stream_checks_nothing() {
+        // The summed bytes are not bytes of the file, so the field is nowhere
+        // among them and there is nothing to substitute.
+        let t = Template::new(
+            "unpacked-blank",
+            T::structure("Blanked", vec![("sum", T::u8()), ("body", T::bytes(E::lit(2)))]).field_check(
+                "sum",
+                Check::of(Checksum::Sum8, Covers::Unpacked { name: Named::here("body"), len: None }).blanking(0),
             ),
         );
         let mut r = Read::with(t, vec![3, 1, 2]);
@@ -858,11 +986,7 @@ mod tests {
         let t = Template::new(
             "endian",
             T::structure("Endian", vec![("body", T::u8()), ("sum", T::UInt { bits: 32, endian: Big })])
-                .field_check("sum", Check {
-                    algorithm: Checksum::Crc32,
-                    over: Covers::Field { name: "body".into() },
-                    when: None,
-                }),
+                .field_check("sum", Check::of(Checksum::Crc32, Covers::Field { name: Named::here("body") })),
         );
         let mut v = vec![0x42];
         v.extend_from_slice(&crc32(&[0x42]).to_be_bytes());

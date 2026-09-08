@@ -38,7 +38,7 @@
 //! reached, sized and placed; what it holds is left as the bytes it is.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// What one of these starts with. RAR 5 has the same first six bytes and one
 /// more at the end, so the seventh byte is what tells the two apart: a zero
@@ -174,10 +174,13 @@ fn block() -> T {
 /// two rather than at nothing. `head_size` counts from the front of the block,
 /// so what is left once the sum is off the front is the size less two.
 fn head_crc(when: Option<E>) -> Check {
-    Check {
-        algorithm: Checksum::Crc32Low16,
-        over: Covers::Run { at: E::lit(2), len: E::field("head_size").sub(E::lit(2)) },
-        when,
+    let c = Check::of(
+        Checksum::Crc32Low16,
+        Covers::Run { at: E::lit(2), len: E::field("head_size").sub(E::lit(2)) },
+    );
+    match when {
+        Some(w) => c.only_when(w),
+        None => c,
     }
 }
 
@@ -305,23 +308,26 @@ fn file_block() -> T {
         // area stops being the file: one has the plaintext nowhere in the
         // archive, and the other has only part of the file here while the sum
         // is over the whole of it.
-        .field_check("file_crc", Check {
-            algorithm: Checksum::Crc32,
-            over: Covers::Unpacked {
-                name: "data".into(),
-                len: Some(E::field("unp_size").add(E::field("high_unp_size").shl(E::lit(32)))),
-            },
-            // A directory is a file block with no file: RAR writes a zero
-            // sum and no bytes, and a check that passed over nothing would be
-            // a green tick meaning nothing. Three bits of the flags say so,
-            // and seven of them is the mark.
-            when: Some(
+        .field_check(
+            "file_crc",
+            Check::of(
+                Checksum::Crc32,
+                Covers::Unpacked {
+                    name: Named::here("data"),
+                    len: Some(E::field("unp_size").add(E::field("high_unp_size").shl(E::lit(32)))),
+                },
+            )
+            // A directory is a file block with no file: RAR writes a zero sum
+            // and no bytes, and a check that passed over nothing would be a
+            // green tick meaning nothing. Three bits of the flags say so, and
+            // seven of them is the mark.
+            .only_when(
                 without(0)
                     .mul(without(1))
                     .mul(without(2))
                     .mul(E::lit(1).sub(E::field("dictionary").equals(E::lit(7)))),
             ),
-        })
+        )
 }
 
 /// The archive header, which is the first block of every RAR 4 and says what

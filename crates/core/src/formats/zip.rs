@@ -1,7 +1,7 @@
 //! ZIP archives as local entries, directory entries, descriptors, and the end record.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
 
 const SIGS: &[(i128, &str)] = &[
     (0x0403_4b50, "local file"),
@@ -328,11 +328,11 @@ fn local() -> T {
     // file. One whose sizes were written after the fact carries zeroes here and
     // in both size fields, and a sum of no bytes against a stored zero would
     // read as a pass: the honest answer for those is nothing at all.
-    .field_check("crc32", Check {
-        algorithm: Checksum::Crc32,
-        over: Covers::Unpacked { name: "data".into(), len: Some(E::field("unpacked_size")) },
-        when: Some(E::lit(1).sub(flag_bit(0)).mul(E::lit(1).sub(flag_bit(3)))),
-    })
+    .field_check(
+        "crc32",
+        Check::of(Checksum::Crc32, Covers::Unpacked { name: Named::here("data"), len: Some(E::field("unpacked_size")) })
+            .only_when(E::lit(1).sub(flag_bit(0)).mul(E::lit(1).sub(flag_bit(3)))),
+    )
 }
 
 fn central() -> T {
@@ -381,28 +381,48 @@ fn central() -> T {
 /// `PK`. Wrong shape, right place: the entries after it still line up.
 fn descriptor() -> T {
     let wide = E::lit(MASKED32 - 1).less_than(E::sibling(&["body", "compressed_size"]));
+    // Both sides are the same record at two widths, and the check is of the
+    // entry rather than of the width, so both carry it.
+    let sizes = |name: &str, w: T| {
+        T::structure(
+            name,
+            vec![("crc32", T::u32(Little)), ("compressed_size", w.clone()), ("uncompressed_size", w)],
+        )
+        .field_check("crc32", streamed_crc())
+    };
     T::switch(
         wide,
-        vec![(
-            1,
-            T::structure(
-                "Zip64DataDescriptor",
-                vec![
-                    ("crc32", T::u32(Little)),
-                    ("compressed_size", T::u64(Little)),
-                    ("uncompressed_size", T::u64(Little)),
-                ],
-            ),
-        )],
-        T::structure(
-            "DataDescriptor",
-            vec![
-                ("crc32", T::u32(Little)),
-                ("compressed_size", T::u32(Little)),
-                ("uncompressed_size", T::u32(Little)),
-            ],
-        ),
+        vec![(1, sizes("Zip64DataDescriptor", T::u64(Little)))],
+        sizes("DataDescriptor", T::u32(Little)),
     )
+}
+
+/// The sum a streamed entry could not write in its header, taken over the file
+/// the entry before this record holds.
+///
+/// The one check here that reaches backwards. Everything else a template can
+/// say looks at what it sits in or at what that sits in, and a descriptor sits
+/// in neither: it is a record of its own, written after the data, because the
+/// writer was piping bytes and did not know the number until they had gone
+/// past. `Named::earlier` searches back through the records the way
+/// [`Expr::Sibling`] does, and the local entry is the nearest one with a
+/// `body.data` in it.
+///
+/// This is what the local header's own `crc32` gives up when bit 3 is set: it
+/// holds a zero there, and a sum of an entry against a stored zero would have
+/// shown a reader a green tick over nothing.
+fn streamed_crc() -> Check {
+    Check::of(
+        Checksum::Crc32,
+        Covers::Unpacked {
+            name: Named::earlier(&["body", "data"]),
+            len: Some(E::field("uncompressed_size")),
+        },
+    )
+    // An encrypted entry's plaintext is not in the archive, so the sum is over
+    // bytes nothing here can produce. The flag is the entry's, not this
+    // record's, which is why it is read the same way the data is.
+    .only_when(E::lit(1).sub(E::sibling(&["body", "flags"]).bit(0)))
 }
 fn end() -> T {
     T::structure(
@@ -537,6 +557,57 @@ mod tests {
         assert_eq!(e.node(&d, &[0, 0, 1, 14]).unwrap().size_bits, 8 * 8);
         let sig = e.node(&d, &[0, 1, 0]).unwrap().value;
         assert!(matches!(sig, Value::Enum { raw: 0x0807_4b50, .. }), "descriptor not recognised: {sig:?}");
+    }
+
+    /// The check that reaches backwards: a streamed entry's sum is in the
+    /// record *after* the data, and it is over the entry before it.
+    ///
+    /// The local header of such an entry writes a zero where its sum would go,
+    /// and the panel used to show a green "Valid" over nothing for it, because
+    /// a sum of no bytes against a stored zero agrees. The descriptor is where
+    /// the number actually is.
+    #[test]
+    fn a_streamed_entry_is_checked_by_the_descriptor_after_it() {
+        let data = b"seven by";
+        let mut v = entry(b"a.txt", 8, 0, 0, &[], data);
+        v.extend_from_slice(b"PK\x07\x08");
+        v.extend_from_slice(&crate::checksum::crc32(data).to_le_bytes());
+        v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        v.extend_from_slice(&end_record());
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(zip());
+
+        // The local header's own crc32 still checks nothing: the file did not
+        // know the number when it wrote that field.
+        assert_eq!(e.check_of(&d, &[0, 0, 1, 6]).unwrap(), None);
+
+        // The descriptor's does, and it covers the entry's data, which is a
+        // record back and two levels in.
+        let at = [0, 1, 1, 0];
+        let info = e.check_of(&d, &at).unwrap().expect("the descriptor checks the entry before it");
+        assert_eq!(info.algorithm, "crc32");
+        assert_eq!(info.covered_bytes, data.len() as u64);
+        assert!(e.run_check(&d, &at).unwrap().expect("and the sum can be taken").ok);
+    }
+
+    /// The same archive with one byte of the data changed. Without this the
+    /// test above would pass just as well over a check that resolved to
+    /// nothing and answered about no bytes at all.
+    #[test]
+    fn a_streamed_entry_whose_data_changed_fails_its_descriptor() {
+        let mut v = entry(b"a.txt", 8, 0, 0, &[], b"seven by");
+        let at = v.len() - 1;
+        v[at] = b'e';
+        v.extend_from_slice(b"PK\x07\x08");
+        v.extend_from_slice(&crate::checksum::crc32(b"seven by").to_le_bytes());
+        v.extend_from_slice(&8u32.to_le_bytes());
+        v.extend_from_slice(&8u32.to_le_bytes());
+        v.extend_from_slice(&end_record());
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(zip());
+        let v = e.run_check(&d, &[0, 1, 1, 0]).unwrap().expect("the check applies");
+        assert!(!v.ok, "computed {}, stored {}", v.computed, v.stored);
     }
 
     /// A writer told to use ZIP64 whatever the sizes writes 0xFFFFFFFF in the

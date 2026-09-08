@@ -105,6 +105,49 @@ export const CHECKED = {
    */
   fromLabel: "Compressed bytes",
   range: (from: string, to: string, size: string): string => `${from} to ${to} · ${size}`,
+  /**
+   * Label on the row for the check field's own bytes, for a sum that runs over
+   * a record the field sits inside. `Its` is the checksum, the subject of
+   * `Covers` above it, so the column reads as one sentence: the checksum
+   * covers this run, and its own bytes inside it are summed as spaces. That
+   * relation is the one thing the address cannot say, and it is the whole
+   * reason the bytes are read as something else: a writer cannot know the
+   * number until it has added up the field that is going to hold it.
+   *
+   * `This field` lost: the panel is already about this field, so the label
+   * said nothing the reader did not have. `Except` lost on arithmetic:
+   * leaving eight bytes out and counting them as spaces give different
+   * totals, and a reader who took the word at face value would get the wrong
+   * one.
+   */
+  ownLabel: "Its own bytes",
+  /**
+   * That row's fact: `0x94 to 0x9b · 8 B, summed as spaces (0x20)`. The
+   * address first, in the same form as the `Covers` row, so the two sit in one
+   * column and a reader can see that this run lies inside that one without
+   * being told. The clause after the comma is the deviation, and the row only
+   * exists when there is one.
+   *
+   * `summed as`, not `read as`: `Read by` is a label a few rows up in
+   * Properties, in another sense of the word, and `summed` ties this row to
+   * the Checksum row it belongs to. "Rather than as written" is left to `as`:
+   * summing bytes as something is not summing them as themselves, and the
+   * sentence that said so was longer than the row. A comma rather than a dot
+   * before the clause, as in `calculated X, stored Y`: the dots separate
+   * facts, and this is a clause about the fact in front of it.
+   */
+  own: (from: string, to: string, size: string, byte: number): string =>
+    `${CHECKED.range(from, to, size)}, summed as ${CHECKED.summedAs(byte)}`,
+  /**
+   * The byte those bytes are read as, named. A space printed as hex with its
+   * character after it shows a reader nothing they can see, so the two bytes
+   * any format uses get a word: `spaces (0x20)`, `zeros (0x00)`. Plural, since
+   * it is eight bytes and not one. The word first and the number after it: the
+   * word is what a reader takes in, the number is what they add. Any other
+   * byte prints as its hex, which no format writes today.
+   */
+  summedAs: (byte: number): string =>
+    byte === 0x20 ? "spaces (0x20)" : byte === 0x00 ? "zeros (0x00)" : `0x${byte.toString(16).padStart(2, "0")}`,
   /** What is being summed, in words, after `of`. This and the four below name
    *  the thing; the exact bytes are the address row's to say. Here, PNG: the
    *  chunk's type and data, and not the length in front of them. */
