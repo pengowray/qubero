@@ -51,7 +51,7 @@
 use crate::template::{
     Encoding,
     Endian::{Big, Little},
-    Expr as E, StrLen, Template, Ty as T, Until,
+    Expr as E, Packing, StrLen, Template, Ty as T, Until,
 };
 
 /// What one of these starts with.
@@ -826,6 +826,44 @@ fn pack_info_or_none() -> T {
     )
 }
 
+/// One packed stream, as long as `kSize` said and no further divided. What
+/// every stream of an ordinary archive is: the bytes of a file, or a solid
+/// block holding several, and which is which the header out here does not say.
+fn packed_run() -> T {
+    T::bytes(E::elem_within(&["placed_by", "pack_info", "pack_sizes"], E::idx(), &[]))
+}
+
+/// The stream a `kEncodedHeader` describes, opened as the header it is.
+///
+/// This is the one packed stream a 7z archive describes well enough to unpack
+/// from out here. Raw LZMA1 carries no header of its own, so a decoder has to
+/// be told the properties byte, the dictionary size and how much comes out;
+/// the coder read by [`pack_info_ahead`] wrote the first two down and
+/// `kCodersUnPackSize` the third. `unpacked` is given rather than left open on
+/// purpose: 7z writes no end-of-stream marker, and a decoder told the size is
+/// unknown reads on into the header bytes sitting behind the stream.
+///
+/// What comes out is a `kHeader`, so the space it opens reads as one, names
+/// and all. An expression here that will not resolve leaves the run as the
+/// bytes it is with the reason on it, which is what a header packed some way
+/// this cannot work out should say.
+fn encoded_header_stream() -> T {
+    let coder = |field: &str| {
+        E::within(&["placed_by", "unpack_info", "folders", "0", "coders", "0", "properties", "settings", field])
+    };
+    T::decoded_as(
+        E::elem_within(&["placed_by", "pack_info", "pack_sizes"], E::idx(), &[]),
+        Packing::Lzma1 {
+            props: coder("props"),
+            dict_size: coder("dict_size"),
+            // The first output size of the first folder, which for the single
+            // coder a header is packed with is the header itself.
+            unpacked: Some(E::within(&["placed_by", "unpack_info", "unpack_sizes", "0"])),
+        },
+        header(),
+    )
+}
+
 /// The compressed bytes at the front of the file, divided into the streams
 /// `kPackInfo` says they are.
 fn packed_streams() -> T {
@@ -846,10 +884,20 @@ fn packed_streams() -> T {
             // field that sizes it, so a reader can check the two against each
             // other.
             ("before_pack_pos", T::bytes(E::within(&["placed_by", "pack_info", "pack_pos"]))),
+            // The first of them is the header itself when the header was
+            // compressed, and it is opened as one. Every other stream, and
+            // every stream of an archive whose header is plain, is a run of
+            // bytes: what a folder's files are is written in the header, in
+            // offsets counted from a place out here, and nothing can yet lay a
+            // template over one space in the numbering of another.
             (
                 "streams",
                 T::array(
-                    T::bytes(E::elem_within(&["placed_by", "pack_info", "pack_sizes"], E::idx(), &[])),
+                    T::switch(
+                        E::idx(),
+                        vec![(0, T::switch(E::within(&["placed_by", "id"]), vec![(0x17, encoded_header_stream())], packed_run()))],
+                        packed_run(),
+                    ),
                     E::within(&["placed_by", "pack_info", "num_pack_streams"]),
                 ),
             ),
