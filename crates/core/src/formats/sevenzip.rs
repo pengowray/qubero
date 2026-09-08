@@ -668,12 +668,19 @@ pub fn sevenzip() -> Template {
                 ("next_header_offset", T::u64(Little)),
                 ("next_header_size", T::u64(Little)),
                 ("next_header_crc", T::u32(Little)),
-                // Read where it is, which is the end of the file, in a field
-                // that takes up no room here. It has to be read before the
-                // packed streams because it is what says where they are, and
-                // an expression only ever reaches backwards.
+                // The header, read where it is at no cost in room here. It has
+                // to be read before the packed streams because it is what says
+                // where they are, and an expression only ever reaches
+                // backwards.
+                //
+                // Put aside, because the header is also the archive's last
+                // field and that is where its bytes are counted. Without that
+                // the file would be 32 bytes of front, the packed streams, and
+                // a header belonging to nothing: the root would end before it,
+                // and the overview would call the part it reads best unmapped.
+                // See `Field::aside`.
                 (
-                    "next_header",
+                    "header_ahead",
                     T::at(
                         E::lit(START_HEADER).add(E::field("next_header_offset")),
                         T::sized(E::field("next_header_size"), T::if_room(next_header())),
@@ -691,18 +698,24 @@ pub fn sevenzip() -> Template {
                             E::field("next_header_size"),
                             vec![(0, T::bytes(E::Remaining))],
                             T::switch(
-                                E::within(&["next_header", "id"]),
+                                E::within(&["header_ahead", "id"]),
                                 vec![
-                                    (0x01, packed_streams(&["next_header", "main_streams", "pack_info"])),
-                                    (0x17, packed_streams(&["next_header", "streams", "pack_info"])),
+                                    (0x01, packed_streams(&["header_ahead", "main_streams", "pack_info"])),
+                                    (0x17, packed_streams(&["header_ahead", "streams", "pack_info"])),
                                 ],
                                 T::bytes(E::Remaining),
                             ),
                         )),
                     ),
                 ),
+                // The header itself, in its own place at the end of the file,
+                // where its bytes are counted. Everything in it was already
+                // read above; this is the same walk, and the one a reader
+                // scrolling down the file arrives at.
+                ("next_header", T::sized(E::field("next_header_size"), T::if_room(next_header()))),
             ],
-        ),
+        )
+        .field_aside("header_ahead"),
     )
 }
 
@@ -796,10 +809,24 @@ mod tests {
         let (d, mut e) = read(archive(b"packed bytes", &header(&[12], &["one"])));
         assert_eq!(e.node(&d, &[8]).unwrap().offset_bits, 32 * 8);
         assert_eq!(e.node(&d, &[8]).unwrap().size_bits, 12 * 8);
-        // The header takes no room where it is declared and all of its room
-        // where it turned out to be, which is after the packed streams.
-        assert_eq!(e.node(&d, &[7]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[7, 0]).unwrap().offset_bits, 44 * 8);
+        // The header is the last field and starts where the packed streams
+        // stop, so the three parts tile the whole file between them.
+        let header = e.node(&d, &[9]).unwrap();
+        assert_eq!(header.offset_bits, 44 * 8);
+        assert_eq!(e.node(&d, &[]).unwrap().size_bits, (44 + header.size_bits / 8) * 8);
+    }
+
+    /// The header is read twice: once from the front, where the packed streams
+    /// need it before they can be placed, and once in its own place at the end.
+    /// Only the second is counted, or the archive would be longer than it is.
+    #[test]
+    fn the_header_is_read_from_the_front_and_counted_at_the_back() {
+        let (d, mut e) = read(archive(b"packed bytes", &header(&[12], &["one"])));
+        let ahead = e.node(&d, &[7]).unwrap();
+        assert_eq!(ahead.size_bits, 0, "the reading-ahead field takes no room where it is declared");
+        // Both readings land on the same bytes and say the same thing.
+        assert_eq!(e.node(&d, &[7, 0]).unwrap().offset_bits, e.node(&d, &[9]).unwrap().offset_bits);
+        assert_eq!(e.node(&d, &[7, 0, 0]).unwrap().value, e.node(&d, &[9, 0]).unwrap().value);
     }
 
     /// An archive with nothing in it: the header sits straight after the
@@ -808,7 +835,7 @@ mod tests {
     fn an_empty_archive_has_no_packed_streams_at_all() {
         let (d, mut e) = read(archive(b"", b""));
         assert_eq!(e.node(&d, &[8]).unwrap().size_bits, 0);
-        assert_eq!(e.node(&d, &[7]).unwrap().offset_bits, 32 * 8);
+        assert_eq!(e.node(&d, &[9]).unwrap().offset_bits, 32 * 8);
     }
 
     /// The one number format in here that nothing else reads. `81 9f` is 415:
@@ -822,7 +849,7 @@ mod tests {
             let written = num(value);
             let (d, mut e) = read(archive(b"", &header(&[value], &["x"])));
             // The first pack size, which is where the number under test went.
-            let node = e.node(&d, &[7, 0, 2, 1, 4, 0]).unwrap();
+            let node = e.node(&d, &[9, 2, 1, 4, 0]).unwrap();
             assert_eq!(node.value, Value::UInt(value as u128), "{value} written as {written:02x?}");
             assert_eq!(node.size_bits, written.len() as u64 * 8, "{value} is {} bytes", written.len());
         }
@@ -855,9 +882,9 @@ mod tests {
         let (d, mut e) = read(archive(b"abc", &header(&[3], &names)));
         // files_info, its properties, the first of them, its body, its value,
         // and the names inside that.
-        assert_eq!(e.node(&d, &[7, 0, 3, 2, 0, 1, 1, 1]).unwrap().child_count, 3);
+        assert_eq!(e.node(&d, &[9, 3, 2, 0, 1, 1, 1]).unwrap().child_count, 3);
         for (i, want) in names.iter().enumerate() {
-            let node = e.node(&d, &[7, 0, 3, 2, 0, 1, 1, 1, i]).unwrap();
+            let node = e.node(&d, &[9, 3, 2, 0, 1, 1, 1, i]).unwrap();
             assert_eq!(node.value, Value::Str((*want).into()));
             // Two bytes a character, and the NUL that ends it.
             assert_eq!(node.size_bits / 8, want.encode_utf16().count() as u64 * 2 + 2);
@@ -870,7 +897,7 @@ mod tests {
     #[test]
     fn a_plain_coder_takes_one_stream_in_and_gives_one_out() {
         let (d, mut e) = read(archive(b"abc", &header(&[3], &["a"])));
-        let folder = [7usize, 0, 2, 2, 4, 0];
+        let folder = [9usize, 2, 2, 4, 0];
         let streams = [folder.as_slice(), &[1, 0, 2]].concat();
         assert_eq!(e.node(&d, &[streams.as_slice(), &[0]].concat()).unwrap().value, Value::Int(1));
         assert_eq!(e.node(&d, &[streams.as_slice(), &[1]].concat()).unwrap().value, Value::Int(1));
@@ -902,7 +929,7 @@ mod tests {
         h.extend(num(300));
         h.extend([0x00, 0x00]);
         let (d, mut e) = read(archive(&vec![0u8; 120], &h));
-        let id = e.node(&d, &[7, 0, 0]).unwrap();
+        let id = e.node(&d, &[9, 0]).unwrap();
         assert_eq!(id.value, Value::Enum { raw: 0x17, name: Some("kEncodedHeader".into()), hex: true });
         // The hundred bytes before the header's own stream are named as bytes
         // this cannot divide, rather than divided wrongly.
@@ -917,8 +944,8 @@ mod tests {
     #[test]
     fn a_header_of_an_unknown_kind_leaves_the_packed_bytes_whole() {
         let (d, mut e) = read(archive(b"packed bytes", &[0x42, 0x99, 0x99]));
-        assert_eq!(e.node(&d, &[7, 0, 0]).unwrap().value, Value::Enum { raw: 0x42, name: None, hex: true });
-        assert_eq!(e.node(&d, &[7, 0, 1]).unwrap().size_bits, 2 * 8);
+        assert_eq!(e.node(&d, &[9, 0]).unwrap().value, Value::Enum { raw: 0x42, name: None, hex: true });
+        assert_eq!(e.node(&d, &[9, 1]).unwrap().size_bits, 2 * 8);
         assert_eq!(e.node(&d, &[8]).unwrap().size_bits, 12 * 8);
     }
 }
