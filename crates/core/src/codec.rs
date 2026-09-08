@@ -14,8 +14,12 @@
 //! Every decoder here is pure Rust and builds for wasm32. Nothing streams: a
 //! stream is opened whole or not at all, which is why there is a cap.
 
+pub mod bzip2;
+pub mod compress;
+pub mod fastlz;
 pub mod frames;
 pub mod inflate;
+pub mod lzma;
 pub mod lz4;
 pub mod pico8;
 pub mod pixels;
@@ -55,6 +59,30 @@ pub enum Codec {
     /// ROOT hands to LZ4 and what an LZ4 frame's blocks hold.
     Lz4Block,
     Xz,
+    /// A whole lzip member, header and all.
+    ///
+    /// The run is the member rather than the LZMA stream inside it, because
+    /// the stream cannot be read without the byte in front of it: LZMA1 has no
+    /// header of its own, and the dictionary size and the packing of literals
+    /// are things the container says. The template lays its fields over the
+    /// same bytes, which is what `xz` does for the same reason.
+    Lzip,
+    /// A whole bzip2 stream, from its `BZh` onwards.
+    ///
+    /// The run is the stream and not a block: bzip2 packs its blocks to the
+    /// bit, so only the first one starts on a byte and only the whole stream
+    /// can be handed to a decoder.
+    Bzip2,
+    /// A whole `.Z` file: the two magic bytes, the flags, and LZW codes packed
+    /// from the low bit up at a width that grows as the table fills.
+    Compress,
+    /// A whole gzip member, header and all. What Godot writes for its third
+    /// compression mode, and the wrapper `gzip.rs` reads as fields.
+    Gzip,
+    /// One FastLZ block, with no header and no length in front of it. Godot's
+    /// default compression, and level 1 and level 2 of the same format told
+    /// apart by the top bits of the first byte.
+    FastLz,
     /// Not compression: PNG's per-row filtering, undone. What comes out of an
     /// IDAT's zlib stream is rows of `1 + stride` bytes, a filter byte and a
     /// row predicted from its neighbours; what comes out of this is the
@@ -95,6 +123,11 @@ impl Codec {
             Codec::Zstd => "zstd",
             Codec::Lz4Block => "lz4",
             Codec::Xz => "xz",
+            Codec::Lzip => "lzip",
+            Codec::Bzip2 => "bzip2",
+            Codec::Compress => "compress",
+            Codec::Gzip => "gzip",
+            Codec::FastLz => "fastlz",
             Codec::PngUnfilter { .. } => "png unfilter",
             Codec::LowBitsArgb => "low bits argb",
             Codec::LowBitsRgba11 => "low bits rgba 11",
@@ -675,6 +708,11 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Lz4Block => lz4::block(data)?,
         Codec::Zstd => frames::zstd(data)?,
         Codec::Xz => frames::xz(data)?,
+        Codec::Lzip => lzma::lzip(data)?,
+        Codec::Bzip2 => bzip2::stream(data)?,
+        Codec::Compress => compress::lzw(data)?,
+        Codec::Gzip => inflate::gzip(data)?,
+        Codec::FastLz => fastlz::block(data)?,
         Codec::PngUnfilter { stride, bpp } => pixels::unfilter(data, stride, bpp)?,
         Codec::LowBitsArgb => pixels::low_bits_argb(data)?,
         Codec::LowBitsRgba11 => pixels::low_bits_rgba11(data)?,
@@ -705,7 +743,12 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::LowBitsRgba11
         | Codec::Pico8Pxa
         | Codec::Pico8Old
-        | Codec::PicotronPxu => {
+        | Codec::PicotronPxu
+        | Codec::Lzip
+        | Codec::Bzip2
+        | Codec::Compress
+        | Codec::Gzip
+        | Codec::FastLz => {
             decode_traced(codec, data)?.0
         }
         Codec::Zstd => zstd(data)?,

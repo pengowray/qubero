@@ -208,6 +208,18 @@ pub fn zlib(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     Ok((out, b.done()))
 }
 
+/// A whole gzip member, RFC 1952: the header and its optional name and
+/// comment, deflate, and a CRC-32 with the length after it.
+///
+/// Not written yet. The variant is in [`Codec`](crate::codec::Codec) so a
+/// template can name it; `gzip.rs` reads the wrapper's fields today and leaves
+/// the deflate run to `Codec::Deflate`, which is right for a `.gz` file and no
+/// use to a format that embeds a whole member, as Godot's third compression
+/// mode does.
+pub fn gzip(_data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    Err(Refusal::Failed)
+}
+
 /// As much of a zlib stream as the bytes on hand come to, with no complaint
 /// about the bytes that are not there.
 ///
