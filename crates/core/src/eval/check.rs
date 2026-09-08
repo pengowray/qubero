@@ -257,7 +257,17 @@ impl Evaluator {
                 of(Some(run), None, run.1)
             }
             Covers::Unpacked { name, len } => {
-                let Some(p) = self.named_field(doc, path, name)? else { return Ok(None) };
+                let Some(mut p) = self.named_field(doc, path, name)? else { return Ok(None) };
+                // A field that put its stream somewhere other than where it
+                // stands keeps it one level down: [`Ty::At`] costs no bytes
+                // where it is declared, so the field's own run is empty and
+                // the stream is its first child. What a format needs when the
+                // run is the whole of itself and the header is fields laid
+                // over the front of it, which is xz and lzip.
+                if matches!(self.memo[&p].ty, Ty::At { .. }) {
+                    p.push(0);
+                    self.resolve(doc, &p)?;
+                }
                 // A run the format wrote in verbatim is the file: the bytes are
                 // there to be pointed at, and a reader sent to a stream instead
                 // would be sent to the same bytes with a worse name for them.
