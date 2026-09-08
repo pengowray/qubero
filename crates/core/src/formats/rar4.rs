@@ -166,6 +166,12 @@ fn block() -> T {
 /// The four fields every block opens with. The checksum covers the header from
 /// the kind byte to the end of what the size measures, so it is the one field
 /// of a block not under its own checksum.
+///
+/// Two kinds of block are not summed that way, and both are from before RAR 3.
+/// A file block that keeps its comment in its own header is summed only as far
+/// as the comment starts, and the authenticity and signature blocks were
+/// written with checksums so unreliable that readers skip the check on them
+/// rather than call every one of them broken.
 fn base(flags: T) -> Vec<(&'static str, T)> {
     vec![
         ("head_crc", T::u16(Little)),
