@@ -2612,10 +2612,6 @@ function modeLabel(mode: Mode): string {
   return mode === "structure" ? "Field" : mode === "le" ? "Little-endian" : "Big-endian";
 }
 
-function pad(value: number): string {
-  return value.toString().padStart(2, "0");
-}
-
 /**
  * An instant as `YYYY-MM-DD HH:MM:SS`, with as many decimal places of a second
  * as the field can actually hold.
