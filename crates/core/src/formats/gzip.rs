@@ -11,7 +11,7 @@
 //! everything between the header and the last eight bytes.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Time, Ty as T};
 
 /// The bits of `flg`, and what each one puts after the header.
 const FLAGS: &[(u32, &str)] = &[
@@ -104,6 +104,10 @@ pub fn gzip() -> Template {
         // there at all, since a field of no bytes reads as zero and zero is a
         // number a sixteen-bit sum can honestly come to.
         .field_check("header_crc", Check::of(Checksum::Crc32Low16, Covers::UpToHere).only_when(bit(1)))
+        // Zero is not the first instant of 1970 here: it is what the compressor
+        // wrote because it had none, which the comment on the field says and
+        // the reader is owed as well.
+        .field_time("mtime", Time::unix().unset(0))
         // The file that went in, not the deflate stream it came out as. What
         // the trailer says that comes to is only for deciding whether to unpack
         // it unasked; it is written modulo four gigabytes and a large file's

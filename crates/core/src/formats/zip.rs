@@ -1,7 +1,7 @@
 //! ZIP archives as local entries, directory entries, descriptors, and the end record.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 const SIGS: &[(i128, &str)] = &[
     (0x0403_4b50, "local file"),
@@ -346,6 +346,12 @@ fn local() -> T {
         Check::of(Checksum::Crc32, Covers::Unpacked { name: Named::here("data"), len: Some(E::field("unpacked_size")) })
             .only_when(E::lit(1).sub(flag_bit(0)).mul(E::lit(1).sub(flag_bit(3)))),
     )
+    // The MS-DOS pair, and both fields carry both names so that either one
+    // answers the whole moment: a packed date is a day with no time of day in
+    // it. Local, since MS-DOS had no zone to record and a ZIP does not add one.
+    // An archiver may also write a real timestamp in an extra field, tag 0x5455
+    // or 0x000a, which nothing here reads yet.
+    .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"))
 }
 
 fn central() -> T {
@@ -376,6 +382,9 @@ fn central() -> T {
             ("comment", text("comment_length")),
         ],
     )
+    // The central directory keeps its own copy of the entry's stamp, in the
+    // same packed pair. See the local header above.
+    .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"))
 }
 
 /// The record a streamed entry writes after its data, holding the numbers its

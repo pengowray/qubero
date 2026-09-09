@@ -17,7 +17,7 @@
 //! written, and reading them costs two more cases.
 
 use crate::code::Isa;
-use crate::template::{Anchor, Encoding, Endian, Endian::*, Expr as E, Part, StrLen, Template, Ty as T, Until};
+use crate::template::{Anchor, Encoding, Endian, Endian::*, Expr as E, Part, StrLen, Template, Time, Ty as T, Until};
 
 /// What a slice of a universal binary, and a whole file, is for. The top byte
 /// says whether the addresses are 64-bit, so the same machine appears twice.
@@ -267,7 +267,11 @@ fn command(e: Endian) -> T {
             // whatever the linker rounded the command's length to.
             ("name", T::text(StrLen::Padded { size: E::field("size").sub(E::lit(24)), pad: 0 }, Encoding::Utf8)),
         ],
-    );
+    )
+    // Seconds from 1970, when the library was built. Most linkers write 1 or 2
+    // rather than a real time, and a reader shown the second after the epoch
+    // has been told the truth about what is in the field.
+    .field_time("timestamp", Time::unix());
     let path = T::structure(
         "Path",
         vec![

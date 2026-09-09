@@ -53,7 +53,7 @@
 //! would be reading a different format under the same name.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, Packing, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, Packing, StrLen, Template, Time, Ty as T, Until};
 
 /// What one of these starts with. RAR 4 has the same first six bytes and one
 /// less at the end, so the eighth byte is what tells the two apart.
@@ -314,6 +314,10 @@ fn file_fields() -> T {
         ],
     )
     .counted_as("file")
+    // Seconds from 1970, and only there at all when the flag says so. RAR 5
+    // can also write this as a FILETIME in an extra-area record, which nothing
+    // here reads: see the note at the top of the file.
+    .field_time("mtime", Time::unix())
     // The file, which is what the run unpacks to rather than the packed bytes
     // themselves. For a stored entry the two are the same run and a reader can
     // be sent to it; for a packed one the summed bytes are nowhere in the file,

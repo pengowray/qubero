@@ -1052,6 +1052,15 @@ pub struct Field {
     /// What this field checks, when it is a checksum rather than a number the
     /// format uses for something. See [`Check`].
     pub check: Option<Check>,
+    /// The moment this field holds, when the number in it is a time rather than
+    /// a number the format counts with. See [`Time`].
+    ///
+    /// Declared on a list, it is the *elements* that hold moments, not the
+    /// list: a region file's `timestamps` is an array of a thousand and
+    /// twenty-four of them, and an array has no `Field` of its own to hang
+    /// this on. So a declaration on a field whose type is a list applies to
+    /// each element, and the list itself denotes nothing.
+    pub time: Option<Time>,
     /// What each *element* of this field checks, when the field is a list of
     /// sums rather than one.
     ///
@@ -1062,6 +1071,177 @@ pub struct Field {
     /// make either. A 7z `kCRC` is the second: a sum per stream, and the one
     /// at index *i* is about the stream at index *i*.
     pub elem_check: Option<Check>,
+}
+
+/// A field holds a moment in time, and this says how to read the number in it.
+///
+/// Declared where the field is, for the reason [`Check`] is: the template
+/// already knows that a gzip header's `mtime` counts seconds from 1970 and that
+/// a cabinet's `date` is packed the way MS-DOS packed one, and nothing but the
+/// template can say so. Written out here, every reader gets the same answer.
+/// Left to the interface, only whichever view has the hand-written case for
+/// that format gets it, which is what this replaces: the panel used to hold
+/// about eight of them, keyed on the template's name and the field's, and every
+/// other timestamp in every other format showed as a bare integer.
+///
+/// Nothing here formats anything. [`Evaluator::time_of`](crate::eval::Evaluator::time_of)
+/// resolves the number to an instant; the words a reader sees are the
+/// interface's, as [`Verdict`](crate::eval::Verdict)'s two strings are.
+#[derive(Debug, Clone)]
+pub struct Time {
+    pub epoch: Epoch,
+    pub zone: Zone,
+    /// The value the format writes when it has no time to record, if it has
+    /// one.
+    ///
+    /// A gzip `mtime` of zero means the compressor had no time to put there,
+    /// not the first instant of 1970, and a reader shown `1970-01-01 00:00:00`
+    /// has been told something the file does not say. Per field rather than per
+    /// epoch: a Unix `mtime` of zero is a sentinel in gzip and a real answer in
+    /// a `tar` written by a build that sets it, so only the formats that mean
+    /// it declare it.
+    pub unset: Option<i128>,
+}
+
+/// Where a count of time starts, and what it counts in.
+///
+/// One general form and two packed ones. The general form carries where zero is
+/// and how long a step is, rather than a variant per format, because that is
+/// all the difference between Unix seconds, a systemd journal's microseconds
+/// and a Windows FILETIME amounts to: three pairs of numbers. The named
+/// constructors on [`Time`] are how a template writes one, so a template still
+/// reads as `Time::filetime()` rather than as two magic numbers.
+#[derive(Debug, Clone)]
+pub enum Epoch {
+    /// A count of fixed steps from a fixed instant.
+    Counted(Counted),
+    /// MS-DOS's packed date and time, both halves in one thirty-two bit field:
+    /// the date in the top sixteen bits, the time in the bottom sixteen. A RAR
+    /// 4 file block and an LHA level 0 or 1 header write one this way.
+    Dos,
+    /// The same pair written as two sixteen-bit fields, which is what a ZIP
+    /// entry and a cabinet's file entry do, and the awkward case this IR was
+    /// worth designing for.
+    ///
+    /// Neither half means much alone: a packed date is a day with no time of
+    /// day in it, and a packed time is a time of day belonging to no day. So
+    /// the pairing is in the IR rather than in the interface, and both names
+    /// are written on *both* fields, so that either one answers the whole
+    /// moment and neither has to know which half it is. The alternative was to
+    /// leave it a special case in the panel, which is exactly the arrangement
+    /// this work exists to remove: the panel's `dosDateText` knew that a ZIP
+    /// calls them `modified_date` and `modified_time` and a cabinet calls them
+    /// `date` and `time`, so a third format that packed a date this way would
+    /// have needed a ninth case written in the interface. Named rather than
+    /// positional because the two formats disagree about the order: a ZIP
+    /// writes the time first and a cabinet the date.
+    ///
+    /// Resolved outwards, the way [`Named::Here`] is, and validated by
+    /// `times_declared` in the tests, so a name no structure has fails when the
+    /// tests run rather than by a panel quietly showing nothing.
+    DosHalves { date: Arc<str>, time: Arc<str> },
+}
+
+/// A count of fixed steps from a fixed instant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Counted {
+    /// Where the count's zero is, as seconds from 1970-01-01T00:00:00Z.
+    /// Negative for every epoch older than Unix's, which is most of them.
+    pub zero: i64,
+    /// How long one step of the count is, in nanoseconds. A second is a
+    /// thousand million; a FILETIME tick is a hundred.
+    ///
+    /// It is also exactly the precision the field can express, which is what an
+    /// interface needs in order to print `12:30:45` for a field counting
+    /// seconds and `12:30:45.123456` for one counting microseconds, without
+    /// either inventing digits the file does not have or dropping ones it does.
+    pub step_nanos: u64,
+}
+
+/// What a format says about the zone its times are in.
+///
+/// Three answers, and the difference between the last two is worth keeping. A
+/// format that counts seconds from a fixed instant has named a moment and the
+/// zone question does not arise; that is [`Zone::Utc`]. A format that writes
+/// wall-clock digits has not: a ZIP's MS-DOS time is whatever the clock on the
+/// machine that wrote it said, and which zone that machine was in is recorded
+/// nowhere in the file. Saying `UTC` there would be a lie, and converting it
+/// into the reader's own zone would be a lie built on a guess.
+///
+/// So for [`Zone::Local`] and [`Zone::Unknown`] the instant
+/// [`Evaluator::time_of`](crate::eval::Evaluator::time_of) answers with is the
+/// reading laid on the UTC line, which is to say: the digits, unchanged. An
+/// interface prints them and says which of these three it was. It must not
+/// shift them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zone {
+    /// The format fixes the moment: a count from an instant everybody agrees
+    /// on.
+    Utc,
+    /// Wall-clock digits in the zone of whoever wrote the file, which the file
+    /// does not record. MS-DOS packed times, and the dates a classic Mac wrote,
+    /// which came off an HFS volume that kept local time.
+    Local,
+    /// The format does not say, and neither will this.
+    Unknown,
+}
+
+impl Time {
+    /// Seconds from 1970-01-01T00:00:00Z, which is what most of these are.
+    pub fn unix() -> Time {
+        Time::counted(0, 1_000_000_000)
+    }
+    /// The same count in milliseconds.
+    pub fn unix_millis() -> Time {
+        Time::counted(0, 1_000_000)
+    }
+    /// The same count in microseconds, which is what a systemd journal writes
+    /// its wall-clock times in.
+    pub fn unix_micros() -> Time {
+        Time::counted(0, 1_000)
+    }
+    /// The same count in nanoseconds.
+    pub fn unix_nanos() -> Time {
+        Time::counted(0, 1)
+    }
+    /// Seconds from 1904-01-01T00:00:00Z: QuickTime, ISO base media, and every
+    /// date a classic Mac wrote.
+    pub fn mac() -> Time {
+        Time::counted(-2_082_844_800, 1_000_000_000)
+    }
+    /// Hundred-nanosecond ticks from 1601-01-01T00:00:00Z: a Windows FILETIME.
+    pub fn filetime() -> Time {
+        Time::counted(-11_644_473_600, 100)
+    }
+    /// MS-DOS's packed date and time in one thirty-two bit field. Local, since
+    /// that is what MS-DOS had. See [`Epoch::Dos`].
+    pub fn dos() -> Time {
+        Time { epoch: Epoch::Dos, zone: Zone::Local, unset: None }
+    }
+    /// The same pair split across the two named fields. See
+    /// [`Epoch::DosHalves`].
+    pub fn dos_halves(date: &str, time: &str) -> Time {
+        Time { epoch: Epoch::DosHalves { date: date.into(), time: time.into() }, zone: Zone::Local, unset: None }
+    }
+    /// A count of `step_nanos`-long steps from `zero` seconds after the Unix
+    /// epoch. For an epoch none of the constructors above names.
+    pub fn counted(zero: i64, step_nanos: u64) -> Time {
+        Time { epoch: Epoch::Counted(Counted { zero, step_nanos }), zone: Zone::Utc, unset: None }
+    }
+    /// Wall-clock digits whose zone the file does not record. See
+    /// [`Zone::Local`].
+    pub fn local(self) -> Time {
+        Time { zone: Zone::Local, ..self }
+    }
+    /// The format does not say which zone this is in. See [`Zone::Unknown`].
+    pub fn zone_unknown(self) -> Time {
+        Time { zone: Zone::Unknown, ..self }
+    }
+    /// The value this format writes when it has no time to record. See
+    /// [`Time::unset`].
+    pub fn unset(self, value: i128) -> Time {
+        Time { unset: Some(value), ..self }
+    }
 }
 
 /// A field is a sum over some other bytes, and this says which sum and which
@@ -1867,7 +2047,15 @@ impl Ty {
             name: name.to_string(),
             fields: fields
                 .into_iter()
-                .map(|(n, ty)| Field { name: n.into(), ty, name_from: None, aside: false, check: None, elem_check: None })
+                .map(|(n, ty)| Field {
+                    name: n.into(),
+                    ty,
+                    name_from: None,
+                    aside: false,
+                    check: None,
+                    elem_check: None,
+                    time: None,
+                })
                 .collect(),
             named_by: None,
             contents: None,
@@ -1959,6 +2147,32 @@ impl Ty {
             }
             other => other,
         }
+    }
+
+    /// Say that `field` holds a moment in time, and how to read it. See
+    /// [`Time`].
+    ///
+    /// Silently does nothing to anything but a structure, and to a name no
+    /// field of it has, the way the builders above do. `times_declared` in the
+    /// tests walks every template and fails on either.
+    pub fn field_time(self, field: &str, time: Time) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.time = Some(time);
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// The same moment declared on several fields of one structure, which is
+    /// the usual shape: a header with a created, an accessed and a modified
+    /// time in it writes all three the same way.
+    pub fn field_times(self, fields: &[&str], time: Time) -> Ty {
+        fields.iter().fold(self, |ty, f| ty.field_time(f, time.clone()))
     }
 
     /// What one of these is called when a list of them is counted, e.g.

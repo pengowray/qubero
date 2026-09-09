@@ -15,7 +15,7 @@
 //! list that holds it, which is an error, and one ungenerated chunk would
 //! make the region unreadable.
 
-use crate::template::{Anchor, Endian::*, Expr as E, Template, Ty as T};
+use crate::template::{Anchor, Endian::*, Expr as E, Template, Time, Ty as T};
 
 /// How a chunk was compressed. 3 means it was not, which the game writes only
 /// when a chunk is too large for a compressor to help.
@@ -32,7 +32,12 @@ pub fn mca() -> Template {
                 ("timestamps", T::array(T::u32(Big), E::lit(1024))),
                 ("chunks", T::pointer_list_sized("locations", &["at"], Anchor::File, E::lit(0), chunk()).skipping_zero()),
             ],
-        ),
+        )
+        // Declared on the array and meant for its elements, since an array has
+        // no field of its own between it and them. A chunk the region never
+        // held has a timestamp of zero beside its empty location, and zero here
+        // is not a save in 1970.
+        .field_time("timestamps", Time::unix().unset(0)),
     )
 }
 

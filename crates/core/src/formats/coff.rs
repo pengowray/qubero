@@ -1,7 +1,7 @@
 //! Microsoft COFF relocatable objects: headers, sections, relocations, and
 //! symbols before a linker turns them into a PE image.
 
-use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Time, Ty as T};
 
 const MACHINES: &[(i128, &str)] = &[
     (0x014c, "i386"),
@@ -74,7 +74,10 @@ pub fn coff() -> Template {
                     .skipping_zero(),
                 ),
             ],
-        ),
+        )
+        // The same `TimeDateStamp` a PE header carries, and the same caveat: a
+        // reproducible build writes a hash here instead of a time.
+        .field_time("timestamp", Time::unix()),
     )
 }
 

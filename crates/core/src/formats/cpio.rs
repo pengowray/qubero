@@ -13,7 +13,7 @@
 //! Reading inside a compressed one means decompressing it, which is a thing
 //! this editor does not yet do anywhere.
 
-use crate::template::{Encoding, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 /// The name of the entry that ends an archive. It is a file like any other,
 /// with no data and a name nothing would use.
@@ -70,6 +70,9 @@ fn entry() -> T {
         ],
     )
     .counted_as("entry")
+    // Eight ASCII hex digits, and a count of seconds from 1970 once read as
+    // the number they spell.
+    .field_time("c_mtime", Time::unix())
 }
 
 /// How long the fixed part of a header is: six characters of magic and

@@ -550,6 +550,43 @@ export type FieldCheck = {
 };
 
 /**
+ * The moment a field means, once the epoch the template declares has been
+ * applied to the number in it.
+ *
+ * The core answers this, so a view never has to recognise a format to know that
+ * four bytes are a date or which epoch they count from. It used to be about
+ * eight cases written out in the inspector, keyed on the template's name and
+ * the field's; every other timestamp in every other format showed as an
+ * integer.
+ *
+ * The stored number is not in here. It stays on the value row above, which is
+ * the point: this is what the number means, not a replacement for it.
+ */
+export type FieldTime = {
+  /** `at` is a moment. `unset` is the value this format writes when it has no
+   *  time to record, which gzip's `mtime` of 0 is: not the first second of
+   *  1970. `impossible` is a number that names no moment at all, either a year
+   *  outside 1 to 9999 or a packed date that is not a date. */
+  readonly state: "at" | "unset" | "impossible";
+  /** Seconds from 1970-01-01T00:00:00Z, negative before it. Only for `at`. */
+  readonly unix_seconds: number | null;
+  /** The sub-second part in nanoseconds, 0 to 999,999,999 and never negative,
+   *  so the pair reads as one number whichever side of 1970 it falls. Only for
+   *  `at`. */
+  readonly nanos: number | null;
+  /** For `local` and `unknown` the seconds above are the digits the file wrote
+   *  laid on the UTC line. Print them as they are and say which this was: a
+   *  ZIP's MS-DOS time records no zone, and shifting it into the reader's own
+   *  would be inventing one. */
+  readonly zone: "utc" | "local" | "unknown";
+  /** The smallest step the field can express, in nanoseconds, which is how many
+   *  decimal places of a second are worth printing: 1e9 for a field counting
+   *  seconds, 1e3 for a journal's microseconds, 100 for a FILETIME. Showing
+   *  `.000000` on a field that counts seconds invents precision. */
+  readonly step_nanos: number;
+};
+
+/**
  * What came of taking a checksum. Both forms are printed to the algorithm's own
  * width, so they compare as strings and line up on screen: `0x2cab616f` for a
  * CRC-32, `0x1f` for a sum-8, forty characters for a SHA-1.
@@ -1639,6 +1676,18 @@ export class Doc {
    */
   checkOf(path: readonly number[]): TemplateReply<FieldCheck | null> {
     return this.handleReply<FieldCheck | null>(this.editor.check_of(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * The moment the field at `path` means, or null when it means none.
+   *
+   * Cheap enough to ask of every field the cursor lands on: the field's own
+   * bytes are read, which the value row has already paid for, and nothing else
+   * is. The stored number is not in the answer, because it is on the value row
+   * already and this is an addition to it.
+   */
+  timeOf(path: readonly number[]): TemplateReply<FieldTime | null> {
+    return this.handleReply<FieldTime | null>(this.editor.time_of(this.space, Uint32Array.from(path)));
   }
 
   /**

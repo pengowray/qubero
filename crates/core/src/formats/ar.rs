@@ -23,7 +23,7 @@
 //! of another field. A GNU archive has no such problem: its long names are all
 //! in one member and the header holds an offset into it.
 
-use crate::template::{Encoding, Endian, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 /// The line every one of these starts with.
 pub const MAGIC: &[u8] = b"!<arch>\n";
@@ -71,6 +71,7 @@ fn member() -> T {
         ],
     )
     .counted_as("member")
+    .field_time("mtime", Time::unix())
 }
 
 /// A number written as decimal digits, or the spaces of a field nobody wrote.

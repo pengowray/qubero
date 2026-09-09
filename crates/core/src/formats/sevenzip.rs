@@ -78,7 +78,7 @@ use crate::codec::Codec;
 use crate::template::{
     Check, Checksum, Covers, Encoding,
     Endian::{Big, Little},
-    Expr as E, Named, Packing, StrLen, Template, Ty as T, Until,
+    Expr as E, Named, Packing, StrLen, Template, Time, Ty as T, Until,
 };
 
 /// What one of these starts with.
@@ -664,6 +664,17 @@ fn per_file(elem: T) -> T {
     )
 }
 
+/// The same, for `kCTime`, `kATime` and `kMTime`, which hold a Windows
+/// FILETIME per file.
+///
+/// Declared on `values`, which is the array rather than one of its elements: a
+/// declaration on a list is about what is in it. The property's own field is
+/// unnamed here, since which of the three this is comes from the `id` byte and
+/// its entry in the property table, so the array is the only place to say it.
+fn per_file_filetime() -> T {
+    per_file(T::u64(Little)).field_time("values", Time::filetime())
+}
+
 /// The names, one after another, as UTF-16 with a NUL between them. A
 /// directory is written as a name with slashes in it and nothing else marks
 /// it: what says an entry is a directory is that it has no stream.
@@ -700,9 +711,9 @@ fn property_value() -> T {
             // stream of their own: the directories, and the files of no bytes.
             (0x0e, T::array(T::UInt { bits: 1, endian: Big }, E::field("num_files"))),
             (0x11, names()),
-            (0x12, per_file(T::u64(Little))),
-            (0x13, per_file(T::u64(Little))),
-            (0x14, per_file(T::u64(Little))),
+            (0x12, per_file_filetime()),
+            (0x13, per_file_filetime()),
+            (0x14, per_file_filetime()),
             (0x15, per_file(T::u32(Little))),
         ],
         // `kEmptyFile` and `kAnti` hold a bit per empty stream rather than per

@@ -4,7 +4,8 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{Step as MapStep, StepKind};
-use qubero_core::eval::{Explain, Graph, KindWalk, Origin, SpaceId, NO_PARENT};
+use qubero_core::eval::{Explain, Graph, KindWalk, Moment, Origin, SpaceId, NO_PARENT};
+use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
 use qubero_core::source::Source;
@@ -583,6 +584,34 @@ struct CheckDto {
     /// over a record the field sits inside and they are read as something else
     /// while it runs. A tar header is summed with its checksum read as spaces.
     blanked: Option<[f64; 3]>,
+}
+
+/// The moment a field means, once the template's epoch has been applied to the
+/// number in it. The number itself is untouched and stays on the value row.
+#[derive(Serialize)]
+struct TimeDto {
+    /// "at" | "unset" | "impossible". `unset` is the value a format writes when
+    /// it has no time to record, and `impossible` is a number that names no
+    /// moment: a year outside 1 to 9999, or a packed date that is not a date.
+    state: &'static str,
+    /// Seconds from 1970-01-01T00:00:00Z, negative before it. Only for "at".
+    ///
+    /// Well inside what an f64 holds exactly: the core refuses anything outside
+    /// year 1 to year 9999, which is at most 2.5e11.
+    unix_seconds: Option<f64>,
+    /// The sub-second part, in nanoseconds, always 0 to 999,999,999 and never
+    /// negative. Only for "at".
+    nanos: Option<f64>,
+    /// "utc" | "local" | "unknown". For the last two the seconds above are the
+    /// digits the file wrote laid on the UTC line, so an interface prints them
+    /// unchanged and says which this was. Shifting them into the reader's own
+    /// zone would be inventing one the file never recorded.
+    zone: &'static str,
+    /// The smallest step the field can express, in nanoseconds, so an interface
+    /// prints the decimal places the file actually has and no more: 1e9 for a
+    /// field counting seconds, 1e3 for a journal's microseconds, 100 for a
+    /// FILETIME, 2e9 for an MS-DOS time, which counts seconds in twos.
+    step_nanos: f64,
 }
 
 /// What came of taking a checksum: the two forms, printed to the algorithm's
@@ -1929,6 +1958,45 @@ impl Editor {
                         unpacked_from: c.unpacked_from.map(|(at, len)| [at as f64, len as f64]),
                         covered_bytes: c.covered_bytes as f64,
                         blanked: c.blanked.map(|b| [b.at as f64, b.len as f64, b.byte as f64]),
+                    })
+                }))
+            }
+        }
+    }
+
+    /// The moment the field at `path` means, or null when it means none. JSON,
+    /// in the same reply shape as the rest.
+    ///
+    /// Cheap, and asked of any field: the field's own bytes are read, which a
+    /// panel showing its value has already paid for, and nothing else is. The
+    /// stored number is not in here, because it is already on the value row and
+    /// this is an addition to it rather than a replacement for it.
+    pub fn time_of(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut sh.eval {
+            None => reply::<Option<TimeDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.time_of(&sh.doc, &p).map(|t| {
+                    t.map(|t| {
+                        let (state, unix_seconds, nanos) = match t.moment {
+                            Moment::At { unix_seconds, nanos } => ("at", Some(unix_seconds as f64), Some(nanos as f64)),
+                            Moment::Unset => ("unset", None, None),
+                            Moment::Impossible => ("impossible", None, None),
+                        };
+                        TimeDto {
+                            state,
+                            unix_seconds,
+                            nanos,
+                            zone: match t.zone {
+                                Zone::Utc => "utc",
+                                Zone::Local => "local",
+                                Zone::Unknown => "unknown",
+                            },
+                            step_nanos: t.step_nanos as f64,
+                        }
                     })
                 }))
             }
