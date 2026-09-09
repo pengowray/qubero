@@ -1753,6 +1753,33 @@ pub enum Ty {
     /// Nothing here is editable and nothing is read from the file twice: every
     /// value shown is the value the decoder used.
     Traced { part: TracedPart },
+    /// One entropy-coded symbol, read as the bits it is written in: a string
+    /// of noughts and ones, as wide as the [`Ty::SizedBits`] around it.
+    ///
+    /// What a deflate literal *is*, in the file, is a Huffman code and nothing
+    /// else. The byte it stands for is not written anywhere near it; it is
+    /// what the block's code table says those bits mean. So the byte belongs
+    /// in the node's name, where a reading belongs, and the value column holds
+    /// the one thing that is actually in the file at that offset. Before this
+    /// the node was a record with a `kind` and a `value` in it, both no bits
+    /// wide, which put two inferences in the column a reader checks against
+    /// the bytes.
+    ///
+    /// `name` because the node is not always one code. A deflate match spans a
+    /// length code, that code's extra bits, a distance code and *its* extra
+    /// bits, with no boundary between them that a template could name, and
+    /// calling that one Huffman code would be false. See
+    /// [`crate::eval::traced`].
+    ///
+    /// `width` is where the number of bits came from, which the wrapper cannot
+    /// work out: a literal is nine bits either because RFC 1951 fixed the
+    /// widths of a fixed block or because this block's own code-length table
+    /// chose nine, and those are different answers to the reader's question.
+    ///
+    /// Not editable. One code cannot be rewritten on its own: the bits mean
+    /// what the block's table says, and a different code is a different width,
+    /// which moves every code after it.
+    CodeBits { name: Arc<str>, width: crate::eval::Sizing },
 }
 
 /// How a run was packed: the codec, and where the numbers it needs are.
@@ -2319,6 +2346,12 @@ impl Ty {
     pub fn sevenzip_number() -> Ty {
         Ty::SevenZipNumber
     }
+    /// One entropy-coded symbol, shown as its own bits. `name` is what the
+    /// type column calls it and `width` is where its length came from. See
+    /// [`Ty::CodeBits`].
+    pub fn code_bits(name: &str, width: crate::eval::Sizing) -> Ty {
+        Ty::CodeBits { name: name.into(), width }
+    }
     /// `inner`, read at `at` bytes from the start of the file, in a field that
     /// takes up no room where it is declared. See [`Ty::At`].
     pub fn at(at: Expr, inner: Ty) -> Ty {
@@ -2547,8 +2580,15 @@ impl Ty {
             Ty::Traced { part } => match part {
                 TracedPart::Blocks => "blocks".into(),
                 TracedPart::Block(_) => "block".into(),
-                TracedPart::Symbols(_) => "symbols".into(),
+                // RFC 1951's word for what a block's payload is a run of. The
+                // symbol is what a code stands for, and one row of the run is
+                // a code, so calling the run "symbols" named the meaning where
+                // the column is for the thing.
+                TracedPart::Symbols(_) => "codes".into(),
             },
+            // Written where the node is made, because what one of these covers
+            // is not always one code. See [`Ty::CodeBits`].
+            Ty::CodeBits { name, .. } => name.to_string(),
         }
     }
 }

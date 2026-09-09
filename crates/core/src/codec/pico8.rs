@@ -131,6 +131,9 @@ impl<'a> Bits<'a> {
 pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut bits = Bits::new(data);
     let mut b = TraceBuilder::default();
+    // `Bits` takes the bottom bit of a byte first. `old` below reads whole
+    // bytes and says nothing, which leaves its steps counted Qubero's way.
+    b.counts_low_bit_first();
     let mut out: Vec<u8> = Vec::new();
     // The table, most lately used first. It starts as every byte in order.
     let mut table: Vec<u8> = (0..=255u8).collect();

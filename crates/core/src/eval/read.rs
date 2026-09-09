@@ -49,6 +49,25 @@ pub(super) fn unzigzag(v: u128) -> i128 {
     if v & 1 == 1 { -half - 1 } else { half }
 }
 
+/// `size` bits of `buf` from bit `start`, written out as noughts and ones in
+/// the order they were read.
+///
+/// Apart from the reading so that the one thing that can silently be wrong can
+/// be checked against a buffer written by hand. `lsb_first` is the decoder's
+/// convention: with it, bit `i` is `buf[i / 8] >> (i % 8)`, the bottom of a
+/// byte first, which is deflate's; without it, the top of a byte first, which
+/// is Qubero's own and LHA's. The two give different strings over the same
+/// bits, and both look like Huffman codes.
+fn code_string(buf: &[u8], start: usize, size: usize, lsb_first: bool) -> String {
+    let mut out = String::with_capacity(size);
+    for k in 0..size {
+        let i = start + k;
+        let bit = if lsb_first { buf[i / 8] >> (i % 8) } else { buf[i / 8] >> (7 - i % 8) };
+        out.push(if bit & 1 == 1 { '1' } else { '0' });
+    }
+    out
+}
+
 /// Index of `term` in `hay`, aligned to whole units of its length.
 pub(super) fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
     let unit = term.len();
@@ -392,6 +411,47 @@ impl Evaluator {
         Ok((value as i128, 9))
     }
 
+    /// The bits of one entropy-coded symbol, written out as noughts and ones
+    /// in the order the decoder read them. See [`Ty::CodeBits`].
+    ///
+    /// The order is the whole point, and it is not the order a Qubero integer
+    /// would come out in. Deflate takes the low bit of a byte first, so bit
+    /// `i` of the run is `byte[i / 8] >> (i % 8) & 1`, and the first bit read
+    /// is the *top* bit of the Huffman code. Emitted in reading order, the
+    /// string is therefore the code exactly as RFC 1951's tables write it:
+    /// symbol 256 in a fixed block is `0000000`, and a reader can put the
+    /// string next to the RFC and see the same characters. Read as an integer
+    /// from the same bits it would be a different number, because Qubero
+    /// addresses bits from the top of a byte down, and a nine-bit code is
+    /// spread over two bytes.
+    ///
+    /// Which way round to count is the trace's to say: LHA's codes are
+    /// Huffman codes too and its reader takes the high bit of a byte first.
+    /// See [`crate::codec::Trace::lsb_first`].
+    ///
+    /// The bytes are fetched whole and byte-aligned rather than through the
+    /// usual shifted read, because a shifted read has already put the bits in
+    /// Qubero's order and the reordering cannot be undone afterwards. That
+    /// means going round [`Evaluator::read`]'s bound: a `SizedBits` node's
+    /// limit is its own last bit, and the byte holding that bit runs past it.
+    ///
+    /// `r.offset % 8` doubles as the decoder's own index into the first byte.
+    /// That holds because a packed run starts on a byte boundary, which is
+    /// what makes a step's byte extent the same in both conventions; if it
+    /// ever stopped holding, every highlight over a trace would already be
+    /// wrong.
+    fn read_code_bits<S: Source>(&self, doc: &Document<S>, r: &Resolved, size: u64, lsb_first: bool) -> R<String> {
+        // A step that read no input of its own: a match whose length code
+        // said everything. No bits, and no byte to fetch for them.
+        if size == 0 {
+            return Ok(String::new());
+        }
+        let start = (r.offset % 8) as usize;
+        let bytes = bytes_for(start as u64 + size) as u64;
+        let buf = self.read_in(doc, r.space, r.offset - start as u64, bytes * 8)?;
+        Ok(code_string(&buf, start, size as usize, lsb_first))
+    }
+
     pub(super) fn primitive_value<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             // A value inside JSON was read when its text was parsed.
@@ -449,6 +509,14 @@ impl Evaluator {
             // every child of every list, and nothing carries these in bulk.
             Ty::ComputedText(e) => {
                 Value::Str(self.text_at(doc, at, &e.clone(), Some((r.offset, r.limit)))?)
+            }
+            // The bits themselves, in the order the decoder read them. Which
+            // order that is belongs to the trace, so it is asked here rather
+            // than written into the type: a node is placed once and a template
+            // never declares one of these.
+            Ty::CodeBits { .. } => {
+                let lsb_first = self.trace_for(at).is_some_and(|(_, t)| t.lsb_first());
+                Value::Str(self.read_code_bits(doc, r, size, lsb_first)?)
             }
             Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
             // Unsigned: every number 7z writes is a count, a size or an
@@ -525,5 +593,29 @@ impl Evaluator {
             }
             _ => unreachable!("composite handled by caller"),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::code_string;
+
+    /// The one thing about a code's value that can be wrong without looking
+    /// wrong: read the other way round, the same bits are still a plausible
+    /// Huffman code.
+    ///
+    /// Nine bits from bit 3 of `1011_0100 0000_1101`. Deflate takes the bottom
+    /// of a byte first, so it reads bits 3, 4, 5, 6, 7 of the first byte and
+    /// then bits 0 to 3 of the second. Qubero's own order walks each byte from
+    /// the top down and gets a different string over exactly the same bits.
+    #[test]
+    fn a_code_reads_in_the_order_the_decoder_read_it() {
+        let buf = [0b1011_0100u8, 0b0000_1101];
+        assert_eq!(code_string(&buf, 3, 9, true), "011011011");
+        assert_eq!(code_string(&buf, 3, 9, false), "101000000");
+        // One whole byte, both ways: read from the bottom it is the byte
+        // written backwards, which is the whole of the difference.
+        assert_eq!(code_string(&buf, 0, 8, true), "00101101");
+        assert_eq!(code_string(&buf, 0, 8, false), "10110100");
     }
 }

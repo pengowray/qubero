@@ -37,6 +37,17 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
     }
 }
 
+/// Why one Huffman code is not written back on its own. Said in one place
+/// because two of them ask: [`editable`] refuses the field before an editor
+/// opens, and `encode` refuses it again where the refusal cannot be skipped.
+///
+/// It does not offer the hex view, which every other refusal does. There is
+/// nothing to offer: the bits are in the file, but a reader who typed a
+/// different code into them would move every code after it in the block, and
+/// the stream would stop decoding at that point. See
+/// [`crate::template::Ty::CodeBits`].
+pub const CODE_BITS_MSG: &str = "This code stands for one symbol in the block's compressed data, and its width came from the block's Huffman table. Changing it on its own would shift every code after it, so it can't be edited.";
+
 /// What the editor says when text will not fit a JSON scalar's shape. The
 /// shape is the file's: a member that holds a number goes on holding one, and
 /// these are the three ways of missing that.
@@ -292,6 +303,7 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
             Ok(bytes)
         }
         Ty::Magic(_) => Err("Magic bytes are fixed by the format.".into()),
+        Ty::CodeBits { .. } => Err(CODE_BITS_MSG.into()),
         _ => Err("This field can't be edited here. Use the hex view.".into()),
     }
 }

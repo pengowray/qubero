@@ -106,6 +106,9 @@ fn read(data: &[u8], mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refusal> {
     if data.len() < 3 || data[..2] != MAGIC {
         return Err(Refusal::Failed);
     }
+    // A code is packed from the bottom of its byte upwards, the way deflate
+    // packs one; see `code_at`.
+    b.counts_low_bit_first();
     let flags = data[2];
     // Bits nobody has ever written. gzip warns about these and reads on; this
     // stops, because the evidence that a file is one of these is two bytes

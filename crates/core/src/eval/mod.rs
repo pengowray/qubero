@@ -800,6 +800,7 @@ impl Evaluator {
         if !encode::editable(&r.ty, size) {
             return fail(match &r.ty {
                 Ty::Magic(_) => "Magic bytes are fixed by the format.".to_string(),
+                Ty::CodeBits { .. } => encode::CODE_BITS_MSG.to_string(),
                 Ty::Bytes(_) | Ty::Str { .. } => format!(
                     "Too long to edit: {} bytes; the limit is {}. Use the hex view.",
                     encode::commas(size / 8),
@@ -912,14 +913,14 @@ impl Evaluator {
                 _ => None,
             };
         }
-        // What a trace holds at each level: blocks, and then symbols. An LZ4
+        // What a trace holds at each level: blocks, and then codes. An LZ4
         // block has one run of sequences rather than blocks, and counting
         // those as blocks would say something the format does not.
         if let Ty::Traced { part } = ty {
             return match part {
                 TracedPart::Blocks => Some(traced::blocks_unit(self.trace_for(path).and_then(|(_, t)| t.blocks().first().map(|b| b.kind)))),
                 TracedPart::Block(_) => None,
-                TracedPart::Symbols(_) => Some("symbol"),
+                TracedPart::Symbols(_) => Some("code"),
             };
         }
         let mut elem = match ty {
@@ -1471,7 +1472,14 @@ impl Evaluator {
                     if n < 0 {
                         return fail("negative size");
                     }
-                    sized_how = Some(shape::expr_sizing(&bits));
+                    // A code's width is a literal here because the trace
+                    // measured it, not because anything in the template chose
+                    // it, so the expression cannot say where it came from and
+                    // the type inside does. See [`Ty::CodeBits`].
+                    sized_how = Some(match &*inner {
+                        Ty::CodeBits { width, .. } => *width,
+                        _ => shape::expr_sizing(&bits),
+                    });
                     let bits = n as u64;
                     if offset + bits > limit {
                         return fail(format!("{bits} bits run past the end of the container"));
@@ -1835,7 +1843,11 @@ impl Evaluator {
                     place(name, ty, step.in_bits.start)
                 } else if idx == head && !view.symbols.is_empty() {
                     let at = view.symbols_at(trace);
-                    place("symbols".into(), Ty::Traced { part: TracedPart::Symbols(i) }, at)
+                    // RFC 1951's own word: the block is a sequence of codes,
+                    // each of which stands for a symbol. Calling the run
+                    // "symbols" meant the tooltip over a nine-bit code said
+                    // `symbol 0` about a thing that is alphabet symbol 77.
+                    place("codes".into(), Ty::Traced { part: TracedPart::Symbols(i) }, at)
                 } else {
                     fail("no such field")
                 }
@@ -1847,7 +1859,7 @@ impl Evaluator {
                     return fail("no such symbol");
                 }
                 let step = trace.step(k).expect("in range");
-                let (name, ty) = traced::symbol_ty(&step);
+                let (name, ty) = traced::symbol_ty(&step, view.block.kind);
                 place(name, ty, step.in_bits.start)
             }
         }

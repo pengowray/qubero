@@ -119,6 +119,18 @@ pub enum Sizing {
     Encoded,
     /// As much as the decoder read to produce it.
     Trace,
+    /// A code-length table written in this file settled it.
+    ///
+    /// Told apart from `Fixed` because they are opposite answers to the same
+    /// question and both come out as a literal number of bits. A literal in a
+    /// deflate fixed-Huffman block is eight or nine bits because RFC 1951 says
+    /// so, and nothing in the file could have made it otherwise: that is
+    /// `Fixed`. A literal in a dynamic block is nine bits because the block's
+    /// own table gave symbol 77 a nine-bit code, and the same byte in the next
+    /// block is very likely a different width: that is this. Saying "fixed by
+    /// the format" about the second would be false about the one thing the
+    /// reader is looking at.
+    Table,
     /// No bytes of its own. A field worked out rather than read, and a field
     /// that is a place rather than a thing: what covers bytes is what it points
     /// at.
@@ -140,6 +152,7 @@ impl Sizing {
             Sizing::Count => "count",
             Sizing::Encoded => "encoded",
             Sizing::Trace => "trace",
+            Sizing::Table => "table",
             Sizing::Nothing => "nothing",
             Sizing::Unknown => "unknown",
         }
@@ -187,6 +200,26 @@ impl Evaluator {
             // carries the field's own name: this is the node the cursor lands
             // on, since the `At` itself covers no bytes.
             Ty::At { .. } => Placed::Address,
+            // The steps of a trace tile, which `Trace::check_tiles` asserts
+            // rather than assumes: step `i` ends where step `i + 1` begins.
+            // So a code in a block's payload genuinely is where the code
+            // before it ended, and that is worth saying. "Where the decoder
+            // read it" is the honest answer only where there is nothing
+            // better, and here there is: the reader wants to know that the
+            // codes follow one another with nothing in between, which is the
+            // whole shape of an entropy-coded run.
+            //
+            // The blocks and a block's own header keep the trace answer. A
+            // block starts where the last one ended too, but what the reader
+            // is asking about a block is which bits the decoder claimed, and
+            // a header field is at an offset the block laid out.
+            Ty::Traced { part: TracedPart::Symbols(_) } => {
+                if idx == 0 {
+                    Placed::First
+                } else {
+                    Placed::Follows
+                }
+            }
             Ty::Traced { .. } => Placed::Trace,
             // What a stream holds starts at the front of the unpacked bytes.
             // Anything else under it is the trace of the decoding, which is

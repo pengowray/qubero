@@ -598,14 +598,14 @@ impl Evaluator {
     }
 
     /// One block of a decoded stream, as the one entry it is: what coded it,
-    /// and how many symbols it holds.
+    /// and how many codes it holds.
     ///
     /// The whole block rather than its parts. A dynamic block's header is five
     /// fields and then three hundred code lengths, and its payload is tens of
-    /// thousands of symbols; every one of those is worth a row to a reader who
+    /// thousands of codes; every one of those is worth a row to a reader who
     /// opens the block, and none of them is worth a chip beside the bytes.
     fn traced_block_span<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo) -> R<Span> {
-        // A stored block codes nothing: its one "symbol" is the bytes copied
+        // A stored block codes nothing: its one step is the bytes copied
         // through, and counting it says less than the block's size does. So
         // no count for those, and the chip falls back to the size.
         let symbols = match (self.trace_for(path), &self.memo[path].ty) {
@@ -616,7 +616,7 @@ impl Evaluator {
         };
         let mut span = self.span_of(doc, path, info)?;
         span.count = symbols;
-        span.unit = (symbols > 0).then(|| "symbol".to_string());
+        span.unit = (symbols > 0).then(|| "code".to_string());
         // The block's own value is its number in the stream, which beside the
         // bytes reads as a count of something. The size says more.
         if symbols == 0 {
