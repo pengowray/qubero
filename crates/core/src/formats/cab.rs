@@ -22,7 +22,7 @@
 //! bytes in front, LZX and Quantum are neither, and all three would have to be
 //! decompressed before a file in them is anything but an offset.
 
-use crate::template::{Endian::Little, Expr as E, Template, Ty as T};
+use crate::template::{Endian::Little, Expr as E, Template, Time, Ty as T};
 
 /// What a cabinet starts with.
 pub const MAGIC: &[u8] = b"MSCF";
@@ -152,6 +152,10 @@ fn file() -> T {
         ],
     )
     .counted_as("file")
+    // The same packed pair a ZIP writes, in the other order: a cabinet puts the
+    // date first. Naming both halves rather than taking them by position is
+    // what lets the two formats share this.
+    .field_times(&["date", "time"], Time::dos_halves("date", "time"))
 }
 
 /// One block of a folder's stream: at most 32 KiB once unpacked, so that a

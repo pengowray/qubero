@@ -18,7 +18,7 @@
 use crate::formats::pe_tables::{
     CHARACTERISTICS, DIRECTORY, DLL_CHARACTERISTICS, MACHINE, OPTIONAL_MAGIC, SECTION_FLAGS, SUBSYSTEM,
 };
-use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian::*, Expr as E, StrLen, Template, Time, Ty as T};
 
 /// Bytes of the optional header before `Switch` reaches the part that differs:
 /// the magic, the two linker version bytes, and five longs.
@@ -173,7 +173,13 @@ pub fn pe() -> Template {
                 .skipping_zero(),
             ),
         ],
-    );
+    )
+    // `TimeDateStamp`: seconds from 1970, and the one date in a PE header. A
+    // reproducible build puts a hash of its inputs here instead, which reads as
+    // a date somewhere in the far past or future and is meant to; nothing here
+    // can tell the two apart, and inventing a rule that a number over some
+    // threshold is "not really a date" would hide the ordinary case as well.
+    .field_time("timestamp", Time::unix());
 
     Template::new("pe", T::structure("PE", vec![("dos", dos), ("pe", header)]))
 }

@@ -17,7 +17,7 @@
 //! the template rewriting what it had already said. They are measured and
 //! named like any other entry.
 
-use crate::template::{Check, Checksum, Covers, Encoding, Endian::Big, Expr as E, StrLen, Template, Until, Ty as T};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::Big, Expr as E, StrLen, Template, Time, Until, Ty as T};
 
 /// Where a ustar archive writes its signature, which is the only thing in one
 /// that marks the format.
@@ -93,6 +93,9 @@ fn header() -> T {
     )
     .counted_as("entry")
     .field_check("checksum", header_sum())
+    // Octal digits, and still a count of seconds from 1970 once they are read
+    // as the number they are.
+    .field_time("mtime", Time::unix())
 }
 
 /// The one check a tar has: every byte of the five-hundred-and-twelve-byte

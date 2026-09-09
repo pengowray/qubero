@@ -9,7 +9,7 @@ import { formatAddress, formatBytes, formatOffset } from "./doc.js";
 import type { BitRange } from "./hexview.js";
 import type { Doc, FieldGraph, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.js";
 import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, CHECKED, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, UNPACKED, unpackedOriginRow } from "./strings.js";
+import { bitSizeText, CHECKED, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.js";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.js";
 import { fieldClass } from "./fieldstyle.js";
 import { withPictures } from "./textview.js";
@@ -1015,7 +1015,7 @@ export class Inspector {
    * ranges wait for an explicit click instead of making field selection read
    * the whole file. */
   private fillSemantics(path: readonly number[], n: TemplateNode): void {
-    const date = this.dateText(path, n);
+    const date = this.dateText(path);
     const plan = this.integrityPlan(path, n);
     if (date === null && plan === null) {
       this.semantics.hidden = true;
@@ -1034,57 +1034,28 @@ export class Inspector {
     this.semantics.hidden = false;
   }
 
-  private dateText(path: readonly number[], n: TemplateNode): string | null {
-    const raw = Number(n.edit_text);
-    if (!Number.isFinite(raw)) return null;
-    if (this.doc.template === "gzip" && n.name === "mtime") return unixDate(raw, raw === 0 ? "not specified" : "UTC");
-    if ((this.doc.template === "mp4" || this.doc.template === "braw") && (n.name === "creation_time" || n.name === "modification_time")) {
-      return quickTimeDate(raw);
-    }
-    if (this.doc.template === "utmp" && n.name === "tv_sec") return unixDate(raw, "UTC");
-    if (this.doc.template === "cpio" && n.name === "c_mtime") return unixDate(raw, "UTC");
-    if ((this.doc.template === "ar" || this.doc.template === "deb") && n.name === "mtime") return unixDate(raw, "UTC");
-    // A journal keeps its wall-clock times in microseconds.
-    if (this.doc.template === "journal" && n.name.endsWith("realtime")) return unixDate(raw / 1e6, "UTC");
-    if (this.doc.template === "mca" && path.length === 2) {
-      const parent = this.doc.templateNode(path.slice(0, -1));
-      if (parent.status === "ok" && parent.node.name === "timestamps") return unixDate(raw, "UTC");
-    }
-    if (this.doc.isZip && (n.name === "modified_time" || n.name === "modified_date")) {
-      return this.dosDateText(path, "modified_date", "modified_time");
-    }
-    if (this.doc.template === "cab" && (n.name === "date" || n.name === "time")) {
-      return this.dosDateText(path, "date", "time");
-    }
-    return null;
-  }
-
-  /** The two halves of an MS-DOS timestamp, which a ZIP and a cabinet both
-   * keep as a packed date beside a packed time. Either field shows the whole
-   * moment, since neither says much alone. */
-  private dosDateText(path: readonly number[], dateField: string, timeField: string): string | null {
-    const siblings = this.siblings(path);
-    const time = siblings.find((x) => x.name === timeField);
-    const date = siblings.find((x) => x.name === dateField);
-    if (time === undefined || date === undefined) return null;
-    const t = Number(time.edit_text);
-    const d = Number(date.edit_text);
-    const year = 1980 + ((d >>> 9) & 0x7f);
-    const month = (d >>> 5) & 0x0f;
-    const day = d & 0x1f;
-    const hour = (t >>> 11) & 0x1f;
-    const minute = (t >>> 5) & 0x3f;
-    const second = (t & 0x1f) * 2;
-    if (month === 0 || day === 0 || month > 12 || day > 31 || hour > 23 || minute > 59 || second > 59) {
-      return "Invalid MS-DOS date/time";
-    }
-    return `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}:${pad(second)} (MS-DOS local time)`;
-  }
-
-  private siblings(path: readonly number[]): TemplateNode[] {
-    if (path.length === 0) return [];
-    const reply = this.doc.templateChildren(path.slice(0, -1), 0, 128);
-    return reply.status === "ok" ? reply.node : [];
+  /**
+   * What moment the field at `path` means, if it means one.
+   *
+   * Asked of the core, which reads the epoch off the template. It used to be
+   * eight cases written out here, keyed on the template's name and the field's:
+   * `template === "gzip" && name === "mtime"`. That meant the core knew a
+   * file's structure and not which of its numbers were times, every new format
+   * needed a case added to a panel, and every timestamp in every other format
+   * showed as a bare integer. Three hundred and fifty time sites across the
+   * templates are declared now, and this asks one question.
+   *
+   * The stored number is untouched and stays on the value row above. This is an
+   * addition to it, never a replacement: a reader who wanted the seconds since
+   * the epoch still has them.
+   */
+  private dateText(path: readonly number[]): string | null {
+    const reply = this.doc.timeOf(path);
+    if (reply.status !== "ok" || reply.node === null) return null;
+    const time = reply.node;
+    if (time.state === "unset") return TIME.unset;
+    if (time.state === "impossible" || time.unix_seconds === null) return TIME.impossible;
+    return TIME.at(instantDigits(time.unix_seconds, time.nanos ?? 0, time.step_nanos), time.zone);
   }
 
   /**
@@ -2645,18 +2616,43 @@ function pad(value: number): string {
   return value.toString().padStart(2, "0");
 }
 
-function unixDate(seconds: number, suffix: string): string {
-  if (seconds === 0 && suffix === "not specified") return "Not specified (stored as 0)";
-  const date = new Date(seconds * 1000);
-  if (!Number.isFinite(date.getTime())) return "Invalid Unix timestamp";
-  return `${date.toISOString().replace("T", " ").replace(".000Z", "")} (${suffix})`;
+/**
+ * An instant as `YYYY-MM-DD HH:MM:SS`, with as many decimal places of a second
+ * as the field can actually hold.
+ *
+ * Read out in UTC throughout, and that is not a choice about zones: the core
+ * has already put the answer on the UTC line, so for a field the file records
+ * no zone for these are the digits the file wrote, unshifted. `TIME.zone` says
+ * which of the three it was. Nothing here may reach for `toLocale*` or
+ * `getTimezoneOffset`: a ZIP written in Berlin does not become a different time
+ * because it is being read in Auckland.
+ *
+ * `toISOString` gives a four-digit year over the whole band the core answers
+ * for, years 1 to 9999, so slicing is safe; the fraction is built from `nanos`
+ * rather than taken from that string, since a hundred-nanosecond FILETIME tick
+ * is finer than the milliseconds a `Date` holds.
+ */
+function instantDigits(unixSeconds: number, nanos: number, stepNanos: number): string {
+  const whole = new Date(unixSeconds * 1000).toISOString().slice(0, 19).replace("T", " ");
+  const places = decimalPlaces(stepNanos);
+  if (places === 0) return whole;
+  return `${whole}.${nanos.toString().padStart(9, "0").slice(0, places)}`;
 }
 
-/** ISO base media and QuickTime count seconds from 1904-01-01 UTC. */
-function quickTimeDate(seconds: number): string {
-  const unixSeconds = seconds - 2_082_844_800;
-  const date = new Date(unixSeconds * 1000);
-  if (!Number.isFinite(date.getTime())) return "Invalid QuickTime timestamp";
-  return `${date.toISOString().replace("T", " ").replace(".000Z", "")} (QuickTime epoch, UTC)`;
+/**
+ * How many decimal places of a second a field of this precision is worth
+ * printing to: nine, less one for every power of ten in the step.
+ *
+ * A field counting whole seconds gets none, since `.000` after it would be
+ * three digits the file never held, and an MS-DOS time, coarser than a second,
+ * gets none either. A FILETIME's hundred-nanosecond tick gets seven and not
+ * nine: the last two digits of a nine-place fraction are zero in every FILETIME
+ * ever written, and printing them says the file is more precise than it is,
+ * which is the same lie in miniature as showing a wrong date.
+ */
+function decimalPlaces(stepNanos: number): number {
+  let places = 9;
+  for (let step = stepNanos; step >= 10 && places > 0; step /= 10) places--;
+  return places;
 }
 

@@ -6,7 +6,7 @@
 //! left to a future container walker: a template must not pretend sectors are
 //! contiguous when the FAT says otherwise.
 
-use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Time, Ty as T};
 
 const OBJECT_TYPE: &[(i128, &str)] = &[
     (0, "unknown"),
@@ -104,6 +104,10 @@ fn directory_entry() -> T {
         ],
     )
     .counted_as("directory entry")
+    // FILETIMEs, and a compound file leaves them zero for most entries: the
+    // specification says an unset one is written as zero, and the storage
+    // objects in one of these usually are.
+    .field_times(&["creation_time", "modified_time"], Time::filetime().unset(0))
 }
 
 #[cfg(test)]

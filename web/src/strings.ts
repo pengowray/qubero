@@ -4,7 +4,7 @@
 import { formatBytes, formatOffset } from "./format.js";
 // Type only, and erased: `doc.ts` imports this file at run time, and the
 // clause tables below are keyed by the words the core sends in `Shape`.
-import type { Shape } from "./doc.js";
+import type { FieldTime, Shape } from "./doc.js";
 
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no
@@ -183,6 +183,101 @@ export const CHECKED = {
   /** The button for a sum too big to take without being asked. The size it
    *  would read is on the row above it. */
   run: (label: string): string => `Check the ${label}`,
+} as const;
+
+/**
+ * The Date & time row: what a timestamp field's number comes to, printed under
+ * the number itself, which stays where it is.
+ *
+ * The row used to be eight cases written out in the panel, one per format, and
+ * the words were whichever each case reached for: `(UTC)`, `(QuickTime epoch,
+ * UTC)`, `(MS-DOS local time)`. The core now answers one question for any field
+ * a template declares as a time, and the answer is one of three things: an
+ * instant with a zone, the value this format writes when it has no time to
+ * record, or a number that is not a date. The digits are built in code, to the
+ * precision the field has; everything round them is here.
+ */
+export const TIME = {
+  /**
+   * The instant: `2023-08-05 11:22:47 UTC`. The zone follows the digits with a
+   * space and nothing else, as `date -u` and every log line print one. The
+   * parentheses it used to sit in made the zone an aside, and it is the
+   * opposite of one: the same digits name a different moment in every zone the
+   * reader might be in, and which is meant is the one thing the digits cannot
+   * say. Each of the three phrases below is read in the same slot after the
+   * same shape of digits, so a reader who has seen `UTC` there once reads the
+   * other two as the same kind of fact.
+   */
+  at: (digits: string, zone: FieldTime["zone"]): string => `${digits} ${TIME.zone[zone]}`,
+  zone: {
+    /**
+     * The format counts from a fixed instant, so the digits name one moment
+     * everywhere: gzip, tar, PE, MP4 and a FILETIME. Bare, as every tool prints
+     * it. The old QuickTime row said `(QuickTime epoch, UTC)`, and the epoch is
+     * gone on purpose: once the count is turned into a date, where the count
+     * started is how the number was read rather than what it says, and the type
+     * row is where that belongs.
+     */
+    utc: "UTC",
+    /**
+     * Wall-clock digits from the machine that wrote the file, in whatever zone
+     * that machine was in, which the file does not record: a ZIP's or a
+     * cabinet's MS-DOS time, and the dates a classic Mac wrote. The digits are
+     * shown as written and are never shifted, so what follows them has to say
+     * two things without running long: whose clock, and that the zone is not
+     * there to be had.
+     *
+     * `local time` is the term the ZIP specification and zipinfo use, and the
+     * one a reader would look up. On its own it can also be read as the
+     * reader's local time, converted for them, which is the one reading this
+     * row must never allow. `zone not recorded` closes it: a zone the file does
+     * not hold cannot have been converted from. It is also the fact a reader
+     * who wants the real instant needs, since the zone is theirs to supply.
+     *
+     * `MS-DOS local time`, which this replaces, named one format's encoding on
+     * a row that now covers two, and said nothing about the zone at all.
+     */
+    local: "local time, zone not recorded",
+    /**
+     * The format does not say whether the number is UTC or the writer's clock,
+     * so this cannot either. Both possibilities named, and the reason in the
+     * words `DECODED_REFUSED` uses for a file that does not say how a run was
+     * packed. Not `zone unknown`, which reads as this app failing to work it
+     * out; and not `zone not recorded`, which is the phrase above and would
+     * make this case look like that one, where the reader at least knows a wall
+     * clock was read. No built-in template gives this answer yet.
+     */
+    unknown: "UTC or local, the format doesn't say",
+  } satisfies Record<FieldTime["zone"], string>,
+  /**
+   * The value stored is the one this format writes when it has no time to
+   * record: gzip's `mtime` of 0, which means the compressor had none to put
+   * there and not the first second of 1970. Only a format that declares its
+   * none-value gets this row, since the same 0 in a tar is a real time, so the
+   * row can say it outright. A fact about what the writer put in the file,
+   * under a heading that already names what was not recorded, so it does not
+   * repeat its subject.
+   *
+   * `Not specified (stored as 0)`, which this replaces, repeated the number
+   * from the value row directly above it, which no clause in this panel does,
+   * and left "specified" open by whom.
+   */
+  unset: "Not recorded",
+  /**
+   * The number does not name a moment. Two ways to get here, one line for both:
+   * the instant falls outside years 1 to 9999, which is what a garbage 64-bit
+   * tick count in a corrupt file comes to, or a packed MS-DOS field is not a
+   * date at all: month 0, a thirteenth month, the thirtieth of February. Said
+   * as a fact about the value and not as a check that failed. `Invalid Unix
+   * timestamp` and `Invalid MS-DOS date/time`, which this replaces, led with
+   * the encoding's name, read as the app refusing to decode one, and were two
+   * strings for one fact. No format name, since the heading already says the
+   * field is a date and the type row says how it is stored. "Valid" is left out
+   * for the same reason: it is a validator's word, and the reader's takeaway
+   * should be that these bytes do not hold a date, not that something rejected
+   * them. The raw number stays in the value row above.
+   */
+  impossible: "Not a date",
 } as const;
 
 export const UNPACKED = {

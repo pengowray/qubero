@@ -27,7 +27,7 @@
 //! every tool that reads these files has the same problem.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 /// The method five characters name, which is also the window size: `-lh5-`
 /// compresses against the last 8K, `-lh7-` against the last 64K.
@@ -245,6 +245,11 @@ fn header() -> T {
         Check::of(Checksum::Sum8, Covers::Run { at: E::lit(1), len: E::field("header_size") }),
     )
     .field_check("crc", file_crc())
+    // Both halves of an MS-DOS stamp in one word. The level 2 header a few
+    // functions down has a field of the same name that is seconds from 1970,
+    // and the two are told apart by which structure they are in rather than by
+    // their name, which is the whole reason this is declared on the field.
+    .field_time("timestamp", Time::dos())
 }
 
 /// Level 2, which threw out the checksum, gave the header a sixteen-bit size,
@@ -279,6 +284,9 @@ fn level2() -> T {
         ],
     )
     .field_check("crc", file_crc())
+    // Seconds from 1970 here, unlike the identically named field in the level 0
+    // and 1 header, which is a packed MS-DOS date. See the note above.
+    .field_time("timestamp", Time::unix())
 }
 
 /// The fields a level 0 header always has, from the method through the CRC,

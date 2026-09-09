@@ -13,7 +13,7 @@
 //! What is not: the contents of an SPS or PPS, which are exp-golomb coded bit
 //! fields the IR cannot describe yet, nor proprietary compressed BRAW essence.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
+use crate::template::{Endian::*, Expr as E, Template, Time, Ty as T, Until};
 
 /// A four-character box type as the big-endian number the IR compares against.
 fn cc(s: &str) -> i128 {
@@ -150,8 +150,19 @@ fn full_box() -> Vec<(&'static str, T)> {
     vec![("version", T::u8()), ("flags", T::bytes(E::lit(3)))]
 }
 
+/// The two dates a movie, track or media header begins with, said once for all
+/// six of the structures that carry them.
+///
+/// Seconds from 1904-01-01, which is what ISO 14496-12 says and what QuickTime
+/// said before it, and in UTC by the same word. Zero is what a muxer writes
+/// when it will not say when the file was made, which is ffmpeg's default and
+/// therefore most of the MP4s anyone has; it is not the first instant of 1904.
+fn mac_times(ty: T) -> T {
+    ty.field_times(&["creation_time", "modification_time"], Time::mac().unset(0))
+}
+
 fn mvhd() -> T {
-    let v0 = T::structure(
+    let v0 = mac_times(T::structure(
         "MovieTimes32",
         vec![
             ("creation_time", u32be()),
@@ -159,8 +170,8 @@ fn mvhd() -> T {
             ("timescale", u32be()),
             ("duration", u32be()),
         ],
-    );
-    let v1 = T::structure(
+    ));
+    let v1 = mac_times(T::structure(
         "MovieTimes64",
         vec![
             ("creation_time", T::u64(Big)),
@@ -168,7 +179,7 @@ fn mvhd() -> T {
             ("timescale", u32be()),
             ("duration", T::u64(Big)),
         ],
-    );
+    ));
     let mut fields = full_box();
     fields.extend(vec![
         ("times", T::switch(E::field("version"), vec![(1, v1)], v0)),
@@ -183,7 +194,7 @@ fn mvhd() -> T {
 }
 
 fn tkhd() -> T {
-    let v0 = T::structure(
+    let v0 = mac_times(T::structure(
         "TrackTimes32",
         vec![
             ("creation_time", u32be()),
@@ -192,8 +203,8 @@ fn tkhd() -> T {
             ("reserved", u32be()),
             ("duration", u32be()),
         ],
-    );
-    let v1 = T::structure(
+    ));
+    let v1 = mac_times(T::structure(
         "TrackTimes64",
         vec![
             ("creation_time", T::u64(Big)),
@@ -202,7 +213,7 @@ fn tkhd() -> T {
             ("reserved", u32be()),
             ("duration", T::u64(Big)),
         ],
-    );
+    ));
     let mut fields = full_box();
     fields.extend(vec![
         ("times", T::switch(E::field("version"), vec![(1, v1)], v0)),
@@ -219,7 +230,7 @@ fn tkhd() -> T {
 }
 
 fn mdhd() -> T {
-    let v0 = T::structure(
+    let v0 = mac_times(T::structure(
         "MediaTimes32",
         vec![
             ("creation_time", u32be()),
@@ -227,8 +238,8 @@ fn mdhd() -> T {
             ("timescale", u32be()),
             ("duration", u32be()),
         ],
-    );
-    let v1 = T::structure(
+    ));
+    let v1 = mac_times(T::structure(
         "MediaTimes64",
         vec![
             ("creation_time", T::u64(Big)),
@@ -236,7 +247,7 @@ fn mdhd() -> T {
             ("timescale", u32be()),
             ("duration", T::u64(Big)),
         ],
-    );
+    ));
     let mut fields = full_box();
     // The language is three five-bit letters, each offset from 0x60.
     fields.extend(vec![

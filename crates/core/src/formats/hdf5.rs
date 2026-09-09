@@ -119,7 +119,7 @@
 use crate::template::{
     Encoding,
     Endian::{Big, Little},
-    Expr as E, Part, StrLen, Template, Ty as T, Until,
+    Expr as E, Part, StrLen, Template, Time, Ty as T, Until,
 };
 
 /// The address a file writes for "there is nothing here": all ones, in
@@ -439,6 +439,10 @@ fn object_header_v2() -> T {
                             ("change_time", T::u32(Little)),
                             ("birth_time", T::u32(Little)),
                         ],
+                    )
+                    .field_times(
+                        &["access_time", "modification_time", "change_time", "birth_time"],
+                        Time::unix(),
                     ),
                 ),
             ),
@@ -1711,6 +1715,7 @@ fn modification_time() -> T {
             ("seconds", T::u32(Little).counted_as("seconds since 1970")),
         ],
     )
+    .field_time("seconds", Time::unix())
 }
 
 /// The heap a group's link names are written into, and, placed under it, the

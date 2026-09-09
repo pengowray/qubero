@@ -3,7 +3,7 @@
 //! binary records, so this template keeps their contents whole while exposing
 //! the lengths that delimit them.
 
-use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Time, Ty as T};
 
 const LINK_FLAGS: &[(u32, &str)] = &[
     (0, "has link target id list"),
@@ -75,7 +75,11 @@ pub fn lnk() -> Template {
                 // shell extension's private block has a universal layout.
                 ("extra_data", T::bytes(E::Remaining)),
             ],
-        ),
+        )
+        // Hundred-nanosecond ticks from 1601. A shell link writes zero for a
+        // time it does not have, which the specification says outright, so zero
+        // here is not the first instant of 1601.
+        .field_times(&["creation_time", "access_time", "write_time"], Time::filetime().unset(0)),
     )
 }
 

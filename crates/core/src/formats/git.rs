@@ -16,7 +16,7 @@
 //! IR can say all of that, and the count comes out of the fanout by asking
 //! for element 255.
 
-use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Time, Ty as T};
 
 /// The file modes git records, which are four of the many a filesystem has.
 const MODE: &[(i128, &str)] = &[
@@ -120,6 +120,11 @@ fn entry() -> T {
         ],
     )
     .counted_as("entry")
+    // The seconds only. The two `nanoseconds` fields beside them are the
+    // fraction of these instants and are not instants themselves, and there is
+    // no way in this IR for one field to say that another carries its
+    // fraction; showing them as dates of their own would be a nonsense.
+    .field_times(&["ctime_seconds", "mtime_seconds"], Time::unix())
 }
 
 /// An object name, which is twenty raw bytes rather than the forty characters

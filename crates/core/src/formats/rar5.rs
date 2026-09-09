@@ -25,7 +25,7 @@
 //! without a password.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 /// What one of these starts with. RAR 4 has the same first six bytes and one
 /// less at the end, so the eighth byte is what tells the two apart.
@@ -239,6 +239,10 @@ fn file_fields() -> T {
         ],
     )
     .counted_as("file")
+    // Seconds from 1970, and only there at all when the flag says so. RAR 5
+    // can also write this as a FILETIME in an extra-area record, which nothing
+    // here reads: see the note at the top of the file.
+    .field_time("mtime", Time::unix())
     // The unpacked file, which the data area is only when the method is store.
     // Nothing here unpacks RAR, so every other method leaves a sum with
     // nothing to compare against; and a file split across volumes has only

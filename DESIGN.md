@@ -257,6 +257,34 @@ Later additions to the IR, each paying for itself in a format:
   protocol writes every integer wider than a byte this way, and protobuf calls
   it `sint32`. Neither LEB128 spelling can stand in: the three read 0x03 as 3,
   3 and -2. See "A structure whose fields are numbered rather than placed".
+* `Time` says that the number in a field is a moment, and which epoch it counts
+  from. It sits beside `Check` on a field and for the same reason: the template
+  is the only thing that knows a gzip `mtime` counts seconds from 1970 while an
+  LHA header three functions away counts them from 1980 in a packed pair, and
+  `Evaluator::time_of` answers one question for every format instead of the
+  eight cases the inspector used to hand-write. The epoch is a pair of numbers,
+  where zero is and how long a step is, so Unix seconds, a journal's
+  microseconds and a Windows FILETIME are one type with three constructors
+  rather than three variants. What is not a count is MS-DOS's packed pair, and
+  it is the case worth having designed for: a ZIP and a cabinet each write a
+  date in one field and a time in another, in opposite orders, and neither half
+  means anything alone, so the pairing is in the IR, both halves naming each
+  other, and either one answers the whole moment.
+
+  The rule the query is built on is the checksum file's: a fact the core cannot
+  establish is nothing rather than a guess. A number whose instant falls outside
+  years 1 to 9999 is refused rather than rendered, since a 64-bit tick count
+  reaches the year sixty thousand and a date library would print that as
+  confidently as any other; a packed field holding a thirteenth month or a
+  thirtieth of February is refused too, which is why the day is checked against
+  the length of its own month and not against 31. A format that writes a
+  particular value to mean "no time here" declares it, so gzip's zero says so
+  instead of reading as the first instant of 1970. And a zone is only claimed
+  where the format fixes one: a ZIP's MS-DOS time and the dates a classic Mac
+  wrote are wall-clock digits from a machine whose zone is recorded nowhere, so
+  they are shown unshifted and said to be local, because converting them would
+  be inventing the zone. The stored integer never goes away; the date is an
+  addition under it.
 
 A wasm function body reads as a list of instructions: the opcode is an `Enum`
 over the byte and its immediate is a `Switch` on that byte. The 0xFD (SIMD) and

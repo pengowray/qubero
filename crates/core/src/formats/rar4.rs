@@ -38,7 +38,7 @@
 //! reached, sized and placed; what it holds is left as the bytes it is.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::*, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 /// What one of these starts with. RAR 5 has the same first six bytes and one
 /// more at the end, so the seventh byte is what tells the two apart: a zero
@@ -328,6 +328,10 @@ fn file_block() -> T {
                     .mul(E::lit(1).sub(E::field("dictionary").equals(E::lit(7)))),
             ),
         )
+        // Both halves of the MS-DOS stamp in one word, the date in the top
+        // sixteen bits. A RAR may carry finer times in its extended-time area,
+        // which stays bytes here.
+        .field_time("ftime", Time::dos())
 }
 
 /// The archive header, which is the first block of every RAR 4 and says what

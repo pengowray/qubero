@@ -13,7 +13,7 @@
 //! records. The two timestamps stay 32-bit even on a 64-bit machine, which is
 //! a Y2038 problem the format has decided to keep.
 
-use crate::template::{Encoding, Endian::Big, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian::Big, Endian::Little, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 /// How long one record is. Everything about recognising the file is this
 /// number: a login record file is a whole number of them and nothing else.
@@ -66,7 +66,11 @@ fn record() -> T {
             ("ut_session", T::i32(Little)),
             (
                 "ut_tv",
-                T::inline_structure("UtmpTime", vec![("tv_sec", T::i32(Little)), ("tv_usec", T::i32(Little))]),
+                // The seconds only. `tv_usec` is the fraction of this instant
+                // rather than an instant of its own, and no field can say that
+                // about another one here.
+                T::inline_structure("UtmpTime", vec![("tv_sec", T::i32(Little)), ("tv_usec", T::i32(Little))])
+                    .field_time("tv_sec", Time::unix()),
             ),
             // The address the session came from, in network order, as IPv6
             // reads it. An IPv4 login fills the first word and leaves the

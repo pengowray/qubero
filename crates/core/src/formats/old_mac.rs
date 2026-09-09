@@ -6,7 +6,7 @@
 //! like gzip elsewhere in the template set, their on-disk structure is the
 //! format shown by the editor.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 const FINDER_FLAGS: &[(u32, &str)] = &[
     (0, "is on desk"),
@@ -81,8 +81,19 @@ pub fn macbinary() -> Template {
                 ("finder_comment", text(E::field("comment_length"))),
                 ("comment_padding", padding(E::field("comment_length"), 128)),
             ],
-        ),
+        )
+        .field_times(&["created", "modified"], mac_local()),
     )
+}
+
+/// The dates a classic Mac wrote, which every format in this file carries.
+///
+/// Seconds from 1904, the same epoch QuickTime counts from, and local rather
+/// than UTC: these came off an HFS volume, and HFS stored the local time of the
+/// machine with no note of which zone that was. Reading them as UTC would put
+/// every file in this archive a few hours out, confidently.
+fn mac_local() -> Time {
+    Time::mac().local()
 }
 
 const SIT_METHOD: &[(i128, &str)] = &[
@@ -150,6 +161,7 @@ fn sit_entry() -> T {
         ],
     )
     .counted_as("entry")
+    .field_times(&["created", "modified"], mac_local())
 }
 
 /// StuffIt 5's linked entry layout. Archives normally serialize the linked
@@ -202,6 +214,7 @@ fn sit5_entry() -> T {
         ],
     )
     .counted_as("entry")
+    .field_times(&["created", "modified"], mac_local())
 }
 
 fn sit5_second_header() -> T {
@@ -328,6 +341,7 @@ fn compact_file() -> T {
             ),
         ],
     )
+    .field_times(&["created", "modified"], mac_local())
 }
 
 /// BinHex 4.0's text envelope. The payload is six-bit encoded and RLE90

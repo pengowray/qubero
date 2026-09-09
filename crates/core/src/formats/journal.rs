@@ -15,7 +15,7 @@
 //! may be compressed on its own, which the object's flags say and which is as
 //! far as this goes: naming the compressor is not decompressing it.
 
-use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian::Little, Expr as E, StrLen, Template, Time, Ty as T, Until};
 
 /// What one object in the arena is.
 const OBJECTS: &[(i128, &str)] = &[
@@ -117,6 +117,11 @@ fn header() -> T {
             ("unread", T::bytes(E::Remaining)),
         ],
     )
+    // The two realtime stamps only. A journal counts wall-clock time in
+    // microseconds from 1970; `tail_entry_monotonic` beside them counts from
+    // the machine's last boot, which is not an instant on any calendar and is
+    // left as the number it is.
+    .field_times(&["head_entry_realtime", "tail_entry_realtime"], Time::unix_micros())
 }
 
 /// The 128-bit identifiers systemd stamps on a machine, a boot and a file.
@@ -239,6 +244,9 @@ fn entry() -> T {
             ("items", T::repeat(entry_item(), Until::End)),
         ],
     )
+    // When the entry was logged, in microseconds. `monotonic` beside it counts
+    // from the last boot and is not a wall-clock time.
+    .field_time("realtime", Time::unix_micros())
 }
 
 /// A pointer to one data object. In the compact layout that is all it is; in

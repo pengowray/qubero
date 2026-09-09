@@ -348,7 +348,15 @@ impl Evaluator {
     /// Reaching outwards is what a RAR 5 file header needs: its `data_crc32` is
     /// three levels inside the block, and the data it sums is the block's last
     /// field.
-    fn field_out_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<Vec<usize>>> {
+    ///
+    /// Shared with `time`, where the other half of an MS-DOS packed pair is
+    /// looked up the same way and for the same reason.
+    pub(super) fn field_out_from<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        name: &str,
+    ) -> R<Option<Vec<usize>>> {
         let mut cur = path.to_vec();
         while cur.pop().is_some() {
             let found = match self.memo.get(&cur).map(|r| &r.ty) {
