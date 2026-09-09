@@ -49,16 +49,22 @@
 //!
 //! ## What the window is worth
 //!
-//! Less than the brief for this file assumed, and this is worth saying plainly.
-//! The four methods are named for their windows, 4K, 8K, 32K and 64K, but the
-//! window never enters the arithmetic here. The one number the decoder takes
-//! from it is how wide the offset table's count is written: four bits for a
-//! window of 8K or less, five above it. So `-lh4-` and `-lh5-` decode by the
-//! same code exactly, and so do `-lh6-` and `-lh7-`; lhasa says as much by
-//! building `-lh4-` from the `-lh5-` decoder with one field changed. The window
-//! bounds how far back an *encoder* may look, and a distance past it is caught
-//! here only by the stronger test that it must not reach back past the start of
-//! the output.
+//! Less than the four names suggest. The methods are named for their windows,
+//! 4K, 8K, 32K and 64K, but no window is ever allocated here and no distance is
+//! ever masked by one: the output is the history, and a match reads back into
+//! it. The window reaches the arithmetic in exactly two places, both of them
+//! about the offset table: how wide its count is written, four bits for a
+//! window of 8K or less and five above it, and how many symbols it may hold.
+//!
+//! So `-lh4-` and `-lh5-` are the same decoder to the bit, which is why lhasa
+//! builds one from the other with a single field changed, and `-lh6-` and
+//! `-lh7-` differ only in that `-lh7-`'s offset table may hold one symbol more,
+//! being the one that names a distance in the top half of a 64K window.
+//!
+//! What actually holds a match inside the output is not the window but the
+//! stronger test that it may not reach back past the start of what has been
+//! written. An encoder is what the window binds, and a file whose distances
+//! overrun it is one the check over this run would catch.
 //!
 //! ## Where the stream stops
 //!
@@ -563,6 +569,19 @@ mod tests {
             self.single(sym, CBIT);
             self.single(offset_sym, count_bits);
         }
+
+        /// One byte, in a block of its own, written for a window of 8K.
+        fn literal(&mut self, byte: u8) {
+            self.single_block(1, byte as u32, 0, 4);
+        }
+
+        /// A block of `count` matches, each the shortest there is, three bytes,
+        /// from two back. Symbol 256 is that length, and offset symbol 1 names
+        /// a distance of one with no further bits, which is two once the
+        /// plus-one every distance carries is on it.
+        fn matches(&mut self, count: u32) {
+            self.single_block(count, 256, 1, 4);
+        }
     }
 
     /// A whole archive-less run of one block whose literal table names one
@@ -702,30 +721,61 @@ mod tests {
         assert!(Code::new(&[1]).is_ok());
     }
 
-    /// The window settles how wide the offset table's count is written, and
-    /// nothing else, so the four methods are two decoders and not four:
-    /// `-lh4-` reads exactly as `-lh5-` does, and `-lh6-` exactly as `-lh7-`.
-    /// lhasa says the same thing by building its `-lh4-` decoder out of the
-    /// `-lh5-` one with only the dictionary size changed.
+    /// `-lh4-` and `-lh5-` are the same decoder to the bit: both write the
+    /// offset count four bits wide and allow the same fourteen symbols, so no
+    /// stream can tell them apart. lhasa says the same by building its `-lh4-`
+    /// decoder out of the `-lh5-` one with only the dictionary size changed.
     #[test]
-    fn the_four_methods_are_two_decoders() {
-        // A four-bit count, which is what a window of 8K or less writes.
-        let mut narrow = Writer::default();
-        narrow.single_block(3, b'q' as u32, 0, 4);
-        let four = entry(&narrow.data, 12).expect("reads as -lh4-");
-        let five = entry(&narrow.data, 13).expect("reads as -lh5-");
-        assert_eq!(four.0, b"qqq");
+    fn lh4_and_lh5_are_the_same_decoder() {
+        let mut w = Writer::default();
+        w.literal(b'a');
+        w.literal(b'b');
+        w.matches(2);
+        let four = entry(&w.data, 12).expect("reads as -lh4-");
+        let five = entry(&w.data, 13).expect("reads as -lh5-");
+        // Two literals, then two overlapping matches of three from two back.
+        assert_eq!(four.0, b"abababab");
         assert_eq!(five.0, four.0);
         assert_eq!(five.1.len(), four.1.len());
+    }
 
-        // A five-bit count, which is what a larger window writes.
-        let mut wide = Writer::default();
-        wide.single_block(3, b'q' as u32, 0, 5);
-        let six = entry(&wide.data, 15).expect("reads as -lh6-");
-        let seven = entry(&wide.data, 16).expect("reads as -lh7-");
-        assert_eq!(six.0, b"qqq");
-        assert_eq!(seven.0, six.0);
-        assert_eq!(seven.1.len(), six.1.len());
+    /// `-lh6-` and `-lh7-` differ in one thing only: `-lh7-`'s offset table may
+    /// hold a seventeenth symbol, the one naming a distance in the top half of
+    /// a 64K window. A table that declares it is a `-lh7-` stream, and reading
+    /// it as `-lh6-` says so rather than taking sixteen of the seventeen
+    /// lengths and running every later field one out of step.
+    #[test]
+    fn only_lh7_may_name_the_farthest_distance() {
+        let mut w = Writer::default();
+        w.val(1, 16); // one symbol in the block
+        w.val(0, 5); // the code-length table: one symbol, never read
+        w.val(0, 5);
+        w.val(0, CBIT); // the literal/length table: one symbol, a byte
+        w.val(b'z' as u32, CBIT);
+        // The offset table, written out flat with seventeen entries. Only the
+        // first is used; the rest are there to make the count seventeen.
+        w.val(17, 5);
+        w.length(1);
+        for _ in 0..16 {
+            w.length(0);
+        }
+        assert_eq!(entry(&w.data, 16).expect("reads as -lh7-").0, b"z");
+        assert_eq!(entry(&w.data, 15).err(), Some(Refusal::Failed), "-lh6- has no seventeenth offset symbol");
+
+        // Sixteen entries is a table both of them have.
+        let mut w = Writer::default();
+        w.val(1, 16);
+        w.val(0, 5);
+        w.val(0, 5);
+        w.val(0, CBIT);
+        w.val(b'z' as u32, CBIT);
+        w.val(16, 5);
+        w.length(1);
+        for _ in 0..15 {
+            w.length(0);
+        }
+        assert_eq!(entry(&w.data, 15).expect("reads as -lh6-").0, b"z");
+        assert_eq!(entry(&w.data, 16).expect("reads as -lh7-").0, b"z");
     }
 
     /// A distance reaching back past the start of the output is refused: there

@@ -216,9 +216,11 @@ fn header() -> T {
             ("name_length", T::u8()),
             ("name", T::text(StrLen::Fixed(E::field("name_length")), Encoding::Cp437)),
             ("crc", T::u16(Little)),
-            // Level 0 stops after the CRC; level 1 adds the operating system
-            // and a chain of extended headers.
-            ("rest", T::switch(E::field("level"), vec![(1, level1_tail())], T::bytes(E::lit(0)))),
+            // Level 1 adds the operating system and a chain of extended
+            // headers. Level 0 may add an area of its own, which is what the
+            // size byte is counting when it comes to more than the fields
+            // above; see [`level0_extension`].
+            ("rest", T::switch(E::field("level"), vec![(1, level1_tail())], level0_extension())),
             // What the number above meant, now that the headers it counted
             // have been read: the tail is the operating system byte, the size
             // of the first extended header, and then the chain itself, so
@@ -277,6 +279,46 @@ fn level2() -> T {
         ],
     )
     .field_check("crc", file_crc())
+}
+
+/// The fields a level 0 header always has, from the method through the CRC,
+/// not counting the name. What the size byte counts past this is an area the
+/// writer added.
+const LEVEL0_FIXED: i128 = 5 + 4 + 4 + 4 + 1 + 1 + 1 + 2;
+
+/// What a level 0 header carries after its CRC, which is usually nothing and
+/// is not always.
+///
+/// Level 0 is documented as ending at the CRC, and reading it that way places
+/// the data wherever the fields happened to stop. The size byte says
+/// otherwise: LHa for UNIX writes twelve more bytes on every archive it makes,
+/// and a reader that ignores them starts the file twelve bytes early, which
+/// hands the decoder a stream beginning in the middle of a header. So the
+/// header is as long as it says it is, and what the named fields do not
+/// account for is this.
+///
+/// The first byte is the system, the same one level 1 writes in a field of its
+/// own. The rest is that system's business: for `'U'` it is a minor version, a
+/// unix modified time, a mode, a uid and a gid, which is where those twelve
+/// bytes go. Those are left as the bytes they are for now, since the area is
+/// only shaped that way for one of the systems and reading it wrongly for the
+/// others would be worse than not reading it.
+fn level0_extension() -> T {
+    let len = E::field("header_size").sub(E::lit(LEVEL0_FIXED)).sub(E::field("name_length"));
+    T::switch(
+        // Nothing to read when the fields already came to the whole header,
+        // and nothing to read when they came to more than it, which is a
+        // header that does not add up rather than an area.
+        E::lit(0).less_than(len.clone()),
+        vec![(
+            1,
+            T::sized(
+                len,
+                T::structure("Level0Extension", vec![("os", T::enumeration("Os", T::u8(), OS)), ("data", T::bytes(E::Remaining))]),
+            ),
+        )],
+        T::bytes(E::lit(0)),
+    )
 }
 
 /// What level 1 puts after the CRC: the system it was written on, and then a
@@ -459,6 +501,12 @@ mod tests {
     /// A level 0 entry saying what it holds, so a test can set the method and
     /// the CRC rather than take the ones `level0` hardcodes.
     fn packed(method: &[u8; 5], name: &str, original: u32, crc: u16, data: &[u8]) -> Vec<u8> {
+        packed_with(method, name, original, crc, &[], data)
+    }
+
+    /// The same, with an area after the CRC that the size byte counts, which
+    /// is what LHa for UNIX writes on every level 0 archive it makes.
+    fn packed_with(method: &[u8; 5], name: &str, original: u32, crc: u16, extension: &[u8], data: &[u8]) -> Vec<u8> {
         let mut h = Vec::new();
         h.extend_from_slice(method);
         h.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -469,12 +517,54 @@ mod tests {
         h.push(name.len() as u8);
         h.extend_from_slice(name.as_bytes());
         h.extend_from_slice(&crc.to_le_bytes());
+        h.extend_from_slice(extension);
 
         let mut v = vec![h.len() as u8, 0];
         v.extend_from_slice(&h);
         v.extend_from_slice(data);
         v.push(0); // the header size that ends the archive
         v
+    }
+
+    /// A level 0 header is as long as its size byte says, and the fields it is
+    /// documented as having do not always come to that.
+    ///
+    /// LHa for UNIX writes twelve bytes after the CRC on every archive it
+    /// makes: the system, a minor version, a unix modified time, a mode, a uid
+    /// and a gid. A reader that stops at the CRC starts the file twelve bytes
+    /// early and hands the decoder a stream beginning in the middle of a
+    /// header, so nothing after it is right either.
+    #[test]
+    fn a_level_0_header_is_as_long_as_its_size_byte_says() {
+        // 'U', a minor version, an mtime, mode 0100644, uid and gid 1000:
+        // exactly what LHa for UNIX 1.14i writes.
+        let extension: &[u8] = &[b'U', 0, 0x00, 0x3b, 0x3d, 0x4b, 0x24, 0x81, 0xe8, 0x03, 0xe8, 0x03];
+        let mut p = Packer::default();
+        p.literal(b'a');
+        p.literal(b'b');
+        p.literal(b'c');
+        p.matches(2);
+        let text = b"abcabcabc";
+        let v = packed_with(b"-lh5-", "gpl-2", text.len() as u32, crate::checksum::crc16_arc(text), extension, &p.data);
+
+        let d = Document::new(MemSource(v));
+        let mut e = Evaluator::new(lha());
+        // The area is read as itself, and the system byte in front of it is
+        // named the same way level 1 names its own.
+        let rest = e.node(&d, &[0, 0, 1, 10]).unwrap();
+        assert_eq!(rest.size_bits, 12 * 8, "the header runs to the size it declares");
+        assert_eq!(
+            e.node(&d, &[0, 0, 1, 10, 0]).unwrap().value,
+            Value::Enum { raw: b'U' as i128, name: Some("unix".into()), hex: false }
+        );
+        // And the data starts after it, so it opens and its CRC checks.
+        let data = e.node(&d, &[0, 0, 1, 12]).unwrap();
+        assert!(data.decoded && data.refused.is_none(), "the stream opened: {data:?}");
+        let crc = e.child_named(&d, &[0, 0, 1], "crc").unwrap().expect("a crc field");
+        let got = e.run_check(&d, &crc).unwrap().expect("a check");
+        assert!(got.ok, "computed {}, stored {}", got.computed, got.stored);
+        // The entry after it starts where the data ends.
+        assert_eq!(e.node(&d, &[0]).unwrap().child_count, 2);
     }
 
     /// The whole point of the exercise: a packed entry opens, and the CRC-16
