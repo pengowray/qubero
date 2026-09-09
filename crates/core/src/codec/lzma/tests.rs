@@ -116,6 +116,21 @@ fn check(trace: &Trace, data: &[u8], out: &[u8]) {
             other => panic!("step {i} is a {other:?}, which no LZMA run should hold"),
         }
     }
+    // A block's steps cover the block. The two are recorded separately, so a
+    // block opened after its own header was written down holds those bytes
+    // without naming them, and the listing calls bytes it holds and does not
+    // name unmapped. That is invisible to the tiling check, because the steps
+    // still tile the run: it is the block that is wrong, not the run.
+    for (i, bl) in trace.blocks().iter().enumerate() {
+        assert!(bl.steps.end > bl.steps.start, "block {i} holds no steps");
+        let first = trace.step(bl.steps.start as usize).expect("a first step");
+        assert_eq!(first.in_bits.start, bl.in_bits.start, "block {i} reads before its first step");
+        assert_eq!(first.out_bytes.start, bl.out_bytes.start, "block {i} writes before its first step");
+        let last = trace.step(bl.steps.end as usize - 1).expect("a last step");
+        assert_eq!(last.in_bits.end, bl.in_bits.end, "block {i} reads past its last step");
+        assert_eq!(last.out_bytes.end, bl.out_bytes.end, "block {i} writes past its last step");
+    }
+
     // Every byte of the output came from exactly one step, and every byte of
     // the run was read by one.
     for byte in (0..out.len() as u64).step_by(7) {

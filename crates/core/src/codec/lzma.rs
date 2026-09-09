@@ -129,17 +129,18 @@ fn stream(
     let mut st = State::new(props);
     let mut rc = Range::start(data, from, to)?;
 
+    // The block is opened before its own machinery is written down, so the
+    // five bytes priming the coder belong to it. A block whose steps started
+    // after them would still cover their bytes, and a listing would call bytes
+    // it holds and does not name unmapped.
+    let at_out = out.len() as u64;
+    b.open_block(from as u64 * 8, at_out);
     // The settings, which the run does not hold: a step of no width saying
     // what the decoder was told. Then the five bytes it did hold.
-    let at_out = out.len() as u64;
     b.push(from as u64 * 8, at_out, StepKind::Header(StepField::LzmaProps, props_byte(props)));
     b.push(from as u64 * 8, at_out, StepKind::Header(StepField::RangeInit, RANGE_INIT as u32));
 
     let mut coarse = Coarsening { on: false, step: b.steps(), in_bits: rc.bit_pos(), out_bytes: at_out };
-    // The block starts where the stream does, not where its symbols do, so the
-    // five bytes priming the coder fold into it the way an LZMA2 chunk's header
-    // folds into its own.
-    b.open_block(from as u64 * 8, at_out);
     let stop = decoder::run(
         &mut st,
         &mut rc,
@@ -236,20 +237,22 @@ fn lzma2_over(data: &[u8], mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refu
                 st.reset(st.props());
             }
 
-            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, unpacked as u32));
-            b.push((at + 5) as u64 * 8, out.len() as u64, StepKind::Header(StepField::LzmaProps, props_byte(st.props())));
-
             let end = props_at.checked_add(packed).filter(|&e| e <= data.len()).ok_or(Refusal::Failed)?;
             if out.len() + unpacked > CAP_BYTES {
                 return Err(Refusal::TooLarge);
             }
             let mut rc = Range::start(data, props_at, end)?;
+
+            // Opened first, so the chunk's own header is one of its steps
+            // rather than bytes it covers and never names.
+            b.open_block(at as u64 * 8, out.len() as u64);
+            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, unpacked as u32));
+            b.push((at + 5) as u64 * 8, out.len() as u64, StepKind::Header(StepField::LzmaProps, props_byte(st.props())));
             b.push(props_at as u64 * 8, out.len() as u64, StepKind::Header(StepField::RangeInit, RANGE_INIT as u32));
 
             coarse.step = b.steps();
             coarse.in_bits = rc.bit_pos();
             coarse.out_bytes = out.len() as u64;
-            b.open_block(at as u64 * 8, out.len() as u64);
             let want = out.len() + unpacked;
             let stop = decoder::run(
                 &mut st,
@@ -287,8 +290,8 @@ fn lzma2_over(data: &[u8], mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refu
             if out.len() + unpacked > CAP_BYTES {
                 return Err(Refusal::TooLarge);
             }
-            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, unpacked as u32));
             b.open_block(at as u64 * 8, out.len() as u64);
+            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockHeader, unpacked as u32));
             b.push(from as u64 * 8, out.len() as u64, StepKind::Stored);
             out.extend_from_slice(&data[from..end]);
             b.close_block(end as u64 * 8, out.len() as u64, BlockKind::Stored, false);
