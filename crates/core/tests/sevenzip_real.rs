@@ -213,3 +213,44 @@ fn collect(dir: &Path, depth: u32, name: &str, found: &mut Option<PathBuf>) {
         }
     }
 }
+
+/// The `kCRC` a `kSubStreamsInfo` writes is one sum per file, and where every
+/// folder holds one file it is a sum of that folder's whole output. So the
+/// non-solid archive declares one per stream and they pass; the solid one,
+/// whose four files share a folder, declares none at all.
+///
+/// The guard is the point. A solid folder's substream *i* is a slice of one
+/// output taken at an offset, and summing the whole folder against one file's
+/// number would call every solid archive broken.
+#[test]
+fn substream_sums_are_declared_where_a_folder_holds_one_file_and_not_otherwise() {
+    for (name, want) in [("nested-dirs-nonsolid.7z", 4usize), ("nested-dirs-solid.7z", 0)] {
+        let Some(path) = find(name) else {
+            eprintln!("skipped: no {name} (set QUBERO_SAMPLES)");
+            return;
+        };
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let doc = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(formats::builtin("7z").expect("the 7z template"));
+        let mut found = 0;
+        let mut walk = vec![Vec::new()];
+        while let Some(at) = walk.pop() {
+            if at.len() > 10 {
+                continue;
+            }
+            let Ok(n) = e.node(&doc, &at) else { continue };
+            // An element of a list, which is what a substream sum is. The two
+            // sums at the front of the file are named fields and are counted
+            // by the sweep, not here.
+            if n.name.starts_with('[') && matches!(e.check_of(&doc, &at), Ok(Some(_))) {
+                found += 1;
+                let v = e.run_check(&doc, &at).unwrap().expect("a declared sum has a verdict");
+                assert!(v.ok, "{name} at {at:?}: computed {} stored {}", v.computed, v.stored);
+            }
+            for i in 0..n.child_count as usize {
+                walk.push([at.clone(), vec![i]].concat());
+            }
+        }
+        assert_eq!(found, want, "{name}: substream sums declared");
+    }
+}

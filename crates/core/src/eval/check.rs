@@ -185,9 +185,28 @@ impl Evaluator {
         if self.memo.get(path).is_none_or(|r| r.space != 0) {
             return Ok(None);
         }
-        let Some(Ty::Struct(s)) = self.memo.get(parent).map(|r| &r.ty) else { return Ok(None) };
-        let Some(check) = s.fields.get(idx).and_then(|f| f.check.clone()) else { return Ok(None) };
-        let fields = s.fields.len();
+        // Either a field of a structure, or an element of a list of sums one
+        // level further out. The two are told apart by what the parent is,
+        // and a template says which it means: see `Field::elem_check`.
+        let (check, parent, fields) = match self.memo.get(parent).map(|r| r.ty.clone()) {
+            Some(Ty::Struct(s)) => {
+                let Some(check) = s.fields.get(idx).and_then(|f| f.check.clone()) else { return Ok(None) };
+                (check, parent.to_vec(), s.fields.len())
+            }
+            // The list itself is a field of the structure holding it, and the
+            // check is declared there. Every expression in it is then worked
+            // out at the end of *that* structure, as it is for a plain field:
+            // what a sum in a list can name is what its record can name, and
+            // the index it sits at, which `Expr::Idx` answers.
+            Some(Ty::Array { .. } | Ty::Repeat { .. }) => {
+                let Some((&list, grandparent)) = parent.split_last() else { return Ok(None) };
+                let Some(Ty::Struct(s)) = self.memo.get(grandparent).map(|r| r.ty.clone()) else { return Ok(None) };
+                let Some(check) = s.fields.get(list).and_then(|f| f.elem_check.clone()) else { return Ok(None) };
+                (check, grandparent.to_vec(), s.fields.len())
+            }
+            _ => return Ok(None),
+        };
+        let parent = &parent[..];
         // Where every expression in the check is worked out from: one past the
         // last field of the structure, so that `find_field`'s "only what is
         // written before you" takes in the whole structure. No node is ever
@@ -336,6 +355,36 @@ impl Evaluator {
                 let Some(p) = self.sibling_field_path(doc, path, &field)? else { return Ok(None) };
                 self.resolve(doc, &p)?;
                 Ok(Some(p))
+            }
+            // One of a list, at an index worked out where the check field
+            // stands. A list shorter than the one the sums are in, or a path
+            // that names nothing here, is a check that cannot be made rather
+            // than an error: a format writes its digests for some of its
+            // streams and not others, and the ones it left out have to answer
+            // nothing at all.
+            Named::Elem { array, index } => {
+                let (array, index) = (array.clone(), index.clone());
+                let here = self.memo.get(path).map(|r| (r.offset, r.limit));
+                // How long the list is, before asking it for anything. A list
+                // of sums may be longer than the list of things they are
+                // about, and an index past the end would otherwise resolve to
+                // whatever sits after the last element: a run of the file with
+                // a length, which is exactly the shape of a wrong answer this
+                // file exists to refuse.
+                let Ok(at) = self.within_path(doc, path, &array) else { return Ok(None) };
+                let n = self.node(doc, &at)?.child_count;
+                let i = self.eval_expr_at(doc, path, &index, here)?;
+                if i < 0 || u128::try_from(i).is_ok_and(|i| i >= u128::from(n)) {
+                    return Ok(None);
+                }
+                match self.elem_within_path(doc, path, &array, &index, &[], here) {
+                    Ok(p) => {
+                        self.resolve(doc, &p)?;
+                        Ok(Some(p))
+                    }
+                    Err(e) if e.interrupted() => Err(e),
+                    Err(_) => Ok(None),
+                }
             }
         }
     }
@@ -1043,6 +1092,66 @@ mod tests {
         let info = r.info(&[0]).expect("the sum reaches the placed run");
         assert_eq!(info.over, Some((3, 3)), "the bytes it points at, not the slot it stands in");
         assert!(r.must(&[0]).ok, "four and five and six come to fifteen");
+    }
+
+    /// A list of sums beside the list of things they are about, which is how
+    /// 7z writes its digests and how any format with a table of checksums has
+    /// to write them.
+    #[test]
+    fn a_sum_in_a_parallel_list_covers_the_element_at_its_own_index() {
+        // Three runs of two bytes, then a sum for each, in the same order.
+        let t = Template::new(
+            "parallel",
+            T::structure(
+                "Parallel",
+                vec![
+                    ("runs", T::array(T::bytes(E::lit(2)), E::lit(3))),
+                    (
+                        "sums",
+                        T::array(T::u8(), E::lit(3)),
+                    ),
+                ],
+            )
+            .field_elem_check(
+                "sums",
+                Check::of(Checksum::Sum8, Covers::Field { name: Named::elem(&["runs"], E::Idx) }),
+            ),
+        );
+        let bytes = vec![1, 2, 10, 20, 100, 101, 3, 30, 201];
+        let mut r = Read::with(t, bytes);
+        for (i, want) in [(0usize, (0u64, 2u64)), (1, (2, 2)), (2, (4, 2))] {
+            let at = [1, i];
+            let info = r.info(&at).unwrap_or_else(|| panic!("sum {i} checks something"));
+            assert_eq!(info.over, Some(want), "sum {i} covers the run at its own index");
+            assert!(r.must(&at).ok, "sum {i}");
+        }
+    }
+
+    /// And an index with nothing at it answers nothing, rather than failing or
+    /// reaching for whatever is nearest. A format writes digests for some of
+    /// its streams and not others.
+    #[test]
+    fn a_sum_whose_index_is_past_the_list_checks_nothing() {
+        let t = Template::new(
+            "past-the-end",
+            T::structure(
+                "Short",
+                vec![
+                    ("runs", T::array(T::bytes(E::lit(2)), E::lit(1))),
+                    (
+                        "sums",
+                        T::array(T::u8(), E::lit(2)),
+                    ),
+                ],
+            )
+            .field_elem_check(
+                "sums",
+                Check::of(Checksum::Sum8, Covers::Field { name: Named::elem(&["runs"], E::Idx) }),
+            ),
+        );
+        let mut r = Read::with(t, vec![1, 2, 3, 3]);
+        assert!(r.info(&[1, 0]).is_some(), "the first has a run to cover");
+        assert_eq!(r.info(&[1, 1]), None, "the second has none");
     }
 
     #[test]
