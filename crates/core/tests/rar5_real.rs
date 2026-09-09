@@ -146,6 +146,11 @@ fn an_encrypted_entry_is_left_alone_and_an_unencrypted_one_beside_it_is_not() {
 
 /// A file packed with the ARM filter, which rewrites branch targets on the way
 /// out and is the one part of the decoder no other sample here exercises.
+///
+/// It is also the only entry in the collection packed into more than one
+/// block, which is a second thing nothing else here reaches: the block chain,
+/// the cursor handed from one block to the next, and the bits each block was
+/// padded out with in between.
 #[test]
 fn a_filtered_entry_checks_out_once_the_filter_has_run() {
     let Some((d, mut e)) = open("rar5-arm-filter.rar") else {
@@ -153,6 +158,10 @@ fn a_filtered_entry_checks_out_once_the_filter_has_run() {
         return;
     };
     checks_out(&mut e, &d, 1);
+    let id = e.open_space(&d, 0, &[1, 1, 4]).expect("resolves").expect("the entry opens");
+    let trace = e.space(id).expect("just opened").trace();
+    trace.check_tiles().expect("the steps tile the run");
+    assert_eq!(trace.blocks().len(), 2, "this entry is packed into two blocks");
 }
 
 /// That the trace tiles the run: every bit of every block accounted for once,

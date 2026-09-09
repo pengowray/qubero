@@ -487,8 +487,20 @@ mod tests {
     /// header's, and the file's. `info` is the packed word saying how it was
     /// compressed, so a test can set the solid bit as easily as the method.
     fn file_block_with(name: &str, data: &[u8], info: u64, header_flags: u64) -> Vec<u8> {
+        file_block_extra(name, data, info, header_flags, &[])
+    }
+
+    /// The same, with `extra` written as the block's extra area. A record is
+    /// its size, its kind, and a body; `\x01\x01` is the shortest encryption
+    /// record there is, being a size of one and a kind of one with nothing
+    /// after it.
+    fn file_block_extra(name: &str, data: &[u8], info: u64, header_flags: u64, extra: &[u8]) -> Vec<u8> {
         let mut h = vec![2u8];
-        h.extend(vint(0x02 | header_flags)); // header flags: data area follows
+        let has_extra = if extra.is_empty() { 0 } else { 0x01 };
+        h.extend(vint(0x02 | has_extra | header_flags)); // header flags
+        if has_extra != 0 {
+            h.extend(vint(extra.len() as u64));
+        }
         h.extend(vint(data.len() as u64));
         h.extend(vint(0x04)); // file flags: checksum present
         h.extend(vint(data.len() as u64));
@@ -498,6 +510,7 @@ mod tests {
         h.extend(vint(0)); // host os
         h.extend(vint(name.len() as u64));
         h.extend_from_slice(name.as_bytes());
+        h.extend_from_slice(extra);
         sealed(&h)
     }
 
@@ -600,6 +613,33 @@ mod tests {
             assert_eq!(e.check_of(&d, &crc).unwrap(), None, "{what}: this must offer no check");
             let data = e.node(&d, &[1, 1, 4]).unwrap();
             assert!(!data.decoded, "{what}: this must not open");
+        }
+    }
+
+    /// An entry behind a password, whichever way it was packed.
+    ///
+    /// The stored half is the one worth having: those bytes used to be handed
+    /// to a reader as the file and summed as the file, and since they are
+    /// ciphertext the sum disagreed and the archive was reported damaged. A
+    /// real archive of exactly this shape is in the collection, with two
+    /// plaintext stored entries beside two encrypted packed ones; this is the
+    /// same thing small enough to read.
+    #[test]
+    fn an_encrypted_entry_offers_no_check_however_it_was_packed() {
+        for (what, info) in [("stored", 0u64), ("packed", 3 << 7)] {
+            let mut v = MAGIC.to_vec();
+            v.extend_from_slice(&sealed(b"\x01\x00"));
+            v.extend_from_slice(&file_block_extra("secret.txt", b"file data", info, 0, b"\x01\x01"));
+            v.extend_from_slice(b"file data");
+            v.extend_from_slice(&sealed(b"\x05\x00"));
+            let d = Document::new(MemSource(v));
+            let mut e = Evaluator::new(rar5());
+            // The record really was read as an encryption record.
+            let enc = e.child_named(&d, &[1, 1, 2], "encrypted").unwrap().expect("encrypted");
+            assert_eq!(e.node(&d, &enc).unwrap().value.as_int(), Some(1), "{what}: the crypt record was not seen");
+            let crc = crc_of(&d, &mut e);
+            assert_eq!(e.check_of(&d, &crc).unwrap(), None, "{what}: ciphertext must not be summed");
+            assert!(!e.node(&d, &[1, 1, 4]).unwrap().decoded, "{what}: this must not open");
         }
     }
 
