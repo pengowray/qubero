@@ -1650,6 +1650,20 @@ impl Evaluator {
                 };
                 Some(crate::codec::Codec::Lzma1 { props, dict_size, unpacked })
             }
+            Packing::Rar5 { dictionary, unpacked } => {
+                let dict = number!(&dictionary);
+                let out = number!(&unpacked);
+                // The header spends four bits on the dictionary and counts
+                // powers of two up from 128K, so this is 17 to 32 and a number
+                // outside it did not come from that field.
+                let (Ok(dict), Ok(unpacked)) = (u8::try_from(dict), u64::try_from(out)) else {
+                    return Ok(None);
+                };
+                if dict > 15 {
+                    return Ok(None);
+                }
+                Some(crate::codec::Codec::Rar5 { window_bits: 17 + dict, unpacked })
+            }
         })
     }
 

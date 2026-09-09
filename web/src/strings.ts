@@ -267,6 +267,7 @@ export const UNPACKED = {
     frame_header: "frame header",
     block_header: "block header",
     filter: "row filter",
+    filter_def: "filter definition",
     footer: "footer",
     pxu_flags: "element type and compression",
     pxu_width: "elements per row",

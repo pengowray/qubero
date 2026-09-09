@@ -18,14 +18,42 @@
 //! the same run of bytes after the common header means something different in
 //! each kind and there is no length to step over them by.
 //!
-//! What is not read here: the extra area's records, which are a chain of their
-//! own carrying encryption parameters, hard links, high-precision times and
-//! the rest; the compression itself; and the encryption that may cover the
-//! headers, which turns everything after it into bytes nothing can read
-//! without a password.
+//! The extra area is read as the chain of records it is, far enough to say
+//! what each one is and how long: one of them says the entry is encrypted, and
+//! an entry nothing can read without a password must not be handed to a
+//! decompressor that would make noise of it and then blame the file.
+//!
+//! What is not read here: the insides of those records, which carry encryption
+//! parameters, hard links, high-precision times and the rest; and the
+//! encryption that may cover the headers themselves, which turns everything
+//! after it into bytes nothing can read without a password.
+//!
+//! ## What opens, and what does not
+//!
+//! A stored entry is the file written in verbatim and has always opened. A
+//! packed one now opens too, by [`Codec::Rar5`], but only when the entry stands
+//! on its own. Four things mean it does not, and each of them leaves the run as
+//! bytes rather than decoding it wrongly:
+//!
+//! - **Solid.** The entry's first match may reach back into the entry before
+//!   it. Nothing in `Ty::Decoded` can say "this run's decode continues the
+//!   previous run's window", so a solid entry has nowhere to get its history
+//!   from. Note this is the *entry's* solid bit and not the archive's: the
+//!   first entry of a solid archive starts from an empty window and opens.
+//! - **Encrypted.** The data area is ciphertext, and a decoder handed it would
+//!   either refuse or, with luck against it, produce the declared number of
+//!   bytes and fail a checksum on a file that is perfectly sound.
+//! - **Split across volumes.** Half the entry is in another file.
+//! - **An unpacked size the archiver did not know**, which is written as a
+//!   number that means nothing. The decoder is told where the file stops by
+//!   that number and by nothing else, RAR having no end-of-stream marker.
+//!
+//! A compression version other than 0 is turned away for the same kind of
+//! reason: RAR 7 packs its dictionary differently, and a reader of version 0
+//! would be reading a different format under the same name.
 
 use crate::codec::Codec;
-use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, Packing, StrLen, Template, Ty as T, Until};
 
 /// What one of these starts with. RAR 4 has the same first six bytes and one
 /// less at the end, so the eighth byte is what tells the two apart.
@@ -82,6 +110,15 @@ const DICTIONARY: &[(i128, &str)] = &[
 
 /// Which system wrote the file, which is what its attribute word means.
 const HOST_OS: &[(i128, &str)] = &[(0, "windows"), (1, "unix")];
+
+/// The extra area record that says an entry is encrypted, and the only one of
+/// them this asks about.
+///
+/// The numbers are not one namespace: in a file or service header 1 is the
+/// encryption parameters, and in the main archive header the same 1 is the
+/// quick-open locator. So the question below is asked only of the kinds of
+/// block where it means encryption.
+const EX_CRYPT: i128 = 1;
 
 const FLAGS: &[(u32, &str)] = &[
     (0, "extra area"),
@@ -185,10 +222,48 @@ fn header() -> T {
                 ),
             ),
             // The records a newer version of the format added without moving
-            // anything. A chain of its own, left unread: see the module doc.
-            ("extra_area", T::bytes(E::field("extra_area_size").or(E::lit(0)))),
+            // anything: a chain of size, kind, and a body this does not go
+            // into. See the module doc for why the kinds are not named here.
+            (
+                "extra_area",
+                T::sized(E::field("extra_area_size").or(E::lit(0)), T::repeat(extra_record(), Until::End)),
+            ),
+            // Whether a password stands between this block's data area and
+            // anybody reading it. Asked of the extra area, which is the only
+            // place RAR 5 says so, and asked only where record 1 means
+            // encryption rather than the quick-open locator.
+            (
+                "encrypted",
+                T::computed(
+                    E::field("header_type")
+                        .equals(E::lit(FILE))
+                        .or(E::field("header_type").equals(E::lit(SERVICE)))
+                        .mul(E::tagged("extra_area", &["record_type"], EX_CRYPT, &["record_type"])),
+                ),
+            ),
         ],
     )
+}
+
+/// One record of an extra area: how long it is, what kind it is, and a body
+/// left as bytes.
+///
+/// The size counts from after itself, so what is left for the body is that
+/// less the width of the kind. A record claiming less than its own kind field
+/// leaves nothing, rather than a negative length that would read backwards.
+fn extra_record() -> T {
+    T::structure(
+        "Rar5Extra",
+        vec![
+            ("record_size", T::leb_u()),
+            ("record_type", T::leb_u()),
+            (
+                "record_data",
+                T::bytes(E::field("record_size").sub(E::size_of("record_type")).at_least(E::lit(0))),
+            ),
+        ],
+    )
+    .counted_as("record")
 }
 
 /// What a main archive header says about the archive as a whole.
@@ -239,33 +314,94 @@ fn file_fields() -> T {
         ],
     )
     .counted_as("file")
-    // The unpacked file, which the data area is only when the method is store.
-    // Nothing here unpacks RAR, so every other method leaves a sum with
-    // nothing to compare against; and a file split across volumes has only
-    // part of itself in this one.
+    // The file, which is what the run unpacks to rather than the packed bytes
+    // themselves. For a stored entry the two are the same run and a reader can
+    // be sent to it; for a packed one the summed bytes are nowhere in the file,
+    // which is what [`Covers::Unpacked`] is for.
     //
-    // The flag is asked as well as the method: without it the field is not
-    // there at all, and a sum of no bytes against a zero read out of nothing
-    // would come back as a file that checks out.
+    // What keeps this honest is not the guard but `Unpacked` itself: it answers
+    // nothing at all when the run it names is not a stream, and `file_data`
+    // above leaves the run as plain bytes for every entry this cannot open. So
+    // the list of reasons an entry does not open is written once, where the
+    // decision is made, rather than twice and drifting apart. An entry that
+    // opens but will not decode is a refusal with a reason, never a mismatch.
+    //
+    // The flag is still asked: without it the field is not there at all, and a
+    // sum of no bytes against a zero read out of nothing would come back as a
+    // file that checks out.
+    //
+    // `unpacked_size` is only so an interface can decide whether the work is
+    // worth doing; the sum is over whatever the decoder actually produced.
     .field_check(
         "data_crc32",
-        Check::of(Checksum::Crc32, Covers::Field { name: Named::here("data") }).only_when(
-            E::field("file_flags")
-                .bit(2)
-                .mul(E::field("method").equals(E::lit(0)))
-                .mul(E::lit(1).sub(E::field("header_flags").bit(3)))
-                .mul(E::lit(1).sub(E::field("header_flags").bit(4))),
-        ),
+        Check::of(
+            Checksum::Crc32,
+            Covers::Unpacked { name: Named::here("data"), len: Some(E::field("unpacked_size")) },
+        )
+        .only_when(E::field("file_flags").bit(2)),
     )
 }
 
-/// A file block's data area: the file itself when nothing packed it, and the
-/// packed bytes when something did.
+/// A field of the file header, reached from the data area outside it.
+fn f(name: &str) -> E {
+    E::within(&["header", "fields", name])
+}
+
+/// Whether the bytes in the data area are this entry's bytes at all.
+///
+/// Encryption and a volume split are the two things that make them something
+/// else, and neither has anything to do with how the entry was packed: a
+/// stored entry that is encrypted is ciphertext sitting where a reader would
+/// otherwise be told the file is, and summing it would call a sound archive
+/// broken.
+fn readable() -> E {
+    let flag = |bit: u32| E::lit(1).sub(E::within(&["header", "header_flags"]).bit(bit));
+    E::lit(1)
+        .sub(E::within(&["header", "encrypted"]))
+        .mul(flag(3))
+        .mul(flag(4))
+}
+
+/// Whether a packed entry is one this can unpack on its own: a method there is
+/// a decoder for, the compression format that decoder reads, a window that
+/// starts empty, and a length to stop at.
+///
+/// See the module doc for what each of these turns away and why. The window is
+/// the sharpest of them: a solid entry's history is the entry before it, and
+/// there is nowhere here to have kept it.
+fn packable() -> E {
+    E::lit(0)
+        .less_than(f("method"))
+        .mul(f("method").less_than(E::lit(6)))
+        .mul(f("compression_version").equals(E::lit(0)))
+        .mul(E::lit(1).sub(f("solid")))
+        .mul(E::lit(1).sub(f("file_flags").bit(3)))
+}
+
+/// How the data area opens: not at all, as the file written in verbatim, or by
+/// the RAR 5 decompressor. `Or` answers the first of its sides that is not
+/// zero, so the two cases cannot both be taken.
+fn how_it_opens() -> E {
+    let stored = f("method").equals(E::lit(0));
+    readable().mul(stored.or(packable().mul(E::lit(2))))
+}
+
+/// The two numbers RAR 5's stream does not carry and its header does.
+fn packing() -> Packing {
+    Packing::Rar5 { dictionary: f("dictionary"), unpacked: f("unpacked_size") }
+}
+
+/// A file block's data area: the file itself when nothing packed it, the file
+/// unpacked when something did, and the bytes as they are when this cannot say
+/// they are the file.
 fn file_data() -> T {
     let size = || E::within(&["header", "data_size"]);
     T::switch(
-        E::within(&["header", "fields", "method"]),
-        vec![(0, T::decoded(size(), Codec::Stored, super::decoded_text()))],
+        how_it_opens(),
+        vec![
+            (1, T::decoded(size(), Codec::Stored, super::decoded_text())),
+            (2, T::decoded_as(size(), packing(), super::decoded_text())),
+        ],
         T::bytes(size()),
     )
 }
@@ -297,12 +433,7 @@ mod tests {
     /// chain stops at the end block, and the file's bytes are outside the
     /// header the flags placed them after.
     fn archive() -> Vec<u8> {
-        let mut v = MAGIC.to_vec();
-        v.extend_from_slice(&block_bytes(1, 0, b"\x00"));
-        v.extend_from_slice(&block_bytes(2, 0x02, b"\x09rest of it"));
-        v.extend_from_slice(b"file data");
-        v.extend_from_slice(&block_bytes(5, 0, b"\x00"));
-        v
+        stored_archive(0)
     }
 
     /// A variable-length integer, seven bits to a byte, least significant
@@ -352,21 +483,27 @@ mod tests {
         v
     }
 
-    /// A file block for `name` holding `data`, written in verbatim, with both
-    /// sums correct: the header's, and the file's.
-    fn stored_file(name: &str, data: &[u8], method: u64) -> Vec<u8> {
+    /// A file block for `name` holding `data`, with both sums correct: the
+    /// header's, and the file's. `info` is the packed word saying how it was
+    /// compressed, so a test can set the solid bit as easily as the method.
+    fn file_block_with(name: &str, data: &[u8], info: u64, header_flags: u64) -> Vec<u8> {
         let mut h = vec![2u8];
-        h.extend(vint(0x02)); // header flags: data area follows
+        h.extend(vint(0x02 | header_flags)); // header flags: data area follows
         h.extend(vint(data.len() as u64));
         h.extend(vint(0x04)); // file flags: checksum present
         h.extend(vint(data.len() as u64));
         h.extend(vint(0x20)); // attributes
         h.extend_from_slice(&crate::checksum::crc32(data).to_le_bytes());
-        h.extend(vint(method << 7));
+        h.extend(vint(info));
         h.extend(vint(0)); // host os
         h.extend(vint(name.len() as u64));
         h.extend_from_slice(name.as_bytes());
         sealed(&h)
+    }
+
+    /// The same, written in verbatim by `method`.
+    fn stored_file(name: &str, data: &[u8], method: u64) -> Vec<u8> {
+        file_block_with(name, data, method << 7, 0)
     }
 
     /// An archive of one stored file, with every sum in it correct.
@@ -408,18 +545,74 @@ mod tests {
         assert!(data.decoded && data.refused.is_none(), "a stored file opens: {data:?}");
     }
 
+    /// An archive of one file block with `info` as its compression word and
+    /// `header_flags` set on top of the data-area bit.
+    fn archive_of(info: u64, header_flags: u64) -> Vec<u8> {
+        let mut v = MAGIC.to_vec();
+        v.extend_from_slice(&sealed(b"\x01\x00"));
+        v.extend_from_slice(&file_block_with("notes.txt", b"file data", info, header_flags));
+        v.extend_from_slice(b"file data");
+        v.extend_from_slice(&sealed(b"\x05\x00"));
+        v
+    }
+
+    /// The data area of that archive, and whether its checksum is offered.
+    fn crc_of(d: &Document<MemSource>, e: &mut Evaluator) -> Vec<usize> {
+        e.child_named(d, &[1, 1, 2, 4], "data_crc32").unwrap().expect("data_crc32")
+    }
+
     #[test]
-    fn a_packed_file_offers_no_check_of_its_contents() {
-        // The same archive with the method set to normal. The data area is no
-        // longer the file, and nothing here unpacks it, so the sum has nothing
-        // to be taken over: it has to disappear rather than run over the
-        // packed bytes and call the archive broken.
+    fn a_packed_entry_that_will_not_decode_refuses_rather_than_reporting_a_mismatch() {
+        // Nine bytes of "file data" declared as packed by method 3. There is a
+        // decoder for that method now, so the check is offered; the bytes are
+        // not a RAR stream and it will not open them. What must not come back
+        // is a sum that disagrees, which would put a damaged-file verdict in
+        // front of a reader whose archive is only unreadable by this.
         let d = Document::new(MemSource(stored_archive(3)));
         let mut e = Evaluator::new(rar5());
-        let crc = e.child_named(&d, &[1, 1, 2, 4], "data_crc32").unwrap().expect("data_crc32");
-        assert_eq!(e.check_of(&d, &crc).unwrap(), None);
+        let crc = crc_of(&d, &mut e);
+        assert!(e.check_of(&d, &crc).unwrap().is_some(), "a packed method has a decoder");
+        assert!(e.run_check(&d, &crc).is_err(), "a stream that will not open is a refusal, not a mismatch");
         // The header sum is not conditional and is still made.
         assert!(e.run_check(&d, &[1, 1, 0]).unwrap().unwrap().ok);
+    }
+
+    /// The four things that leave a packed entry as bytes, each on its own.
+    ///
+    /// Every one of them has a data area a decompressor would take, and every
+    /// one of them would then be a checksum failing over an archive that is
+    /// perfectly sound. See the module doc.
+    #[test]
+    fn an_entry_this_cannot_read_on_its_own_offers_no_check_at_all() {
+        // Method 3, and then one thing wrong with it each time: the solid bit,
+        // a compression version this does not read, an unpacked size the
+        // archiver never knew, and a data area continued in the next volume.
+        let packed = 3u64 << 7;
+        for (what, info, flags) in [
+            ("solid", packed | 1 << 6, 0),
+            ("version 1", packed | 1, 0),
+            ("continued in the next volume", packed, 1 << 4),
+            ("continued from the previous volume", packed, 1 << 3),
+        ] {
+            let d = Document::new(MemSource(archive_of(info, flags)));
+            let mut e = Evaluator::new(rar5());
+            let crc = crc_of(&d, &mut e);
+            assert_eq!(e.check_of(&d, &crc).unwrap(), None, "{what}: this must offer no check");
+            let data = e.node(&d, &[1, 1, 4]).unwrap();
+            assert!(!data.decoded, "{what}: this must not open");
+        }
+    }
+
+    /// A method with no decoder behind it, which is every one this does not
+    /// list. The format has six and there is a decoder for all six, so the
+    /// case is reached only by a number no archiver writes.
+    #[test]
+    fn a_method_nothing_reads_stays_bytes() {
+        let d = Document::new(MemSource(archive_of(6 << 7, 0)));
+        let mut e = Evaluator::new(rar5());
+        let crc = crc_of(&d, &mut e);
+        assert_eq!(e.check_of(&d, &crc).unwrap(), None);
+        assert!(!e.node(&d, &[1, 1, 4]).unwrap().decoded);
     }
 
     #[test]

@@ -1573,6 +1573,14 @@ pub enum Packing {
     /// it out only for a stream that ends at a marker; a 7z one does not, and
     /// a decoder told the size is unknown reads on into whatever follows.
     Lzma1 { props: Expr, dict_size: Expr, unpacked: Option<Expr> },
+    /// One RAR 5 entry, with the two numbers its stream does not carry.
+    ///
+    /// `dictionary` is the four-bit code the file header writes, counting
+    /// powers of two up from 128K, and is how far back a match may reach.
+    /// `unpacked` is what the entry comes to, and RAR needs telling: there is
+    /// no end-of-stream marker anywhere in the format, so a decoder not given
+    /// this cannot tell a file that finished from one that was cut off.
+    Rar5 { dictionary: Expr, unpacked: Expr },
 }
 
 impl Packing {
@@ -1583,6 +1591,7 @@ impl Packing {
         match self {
             Packing::Fixed(c) => c.as_str(),
             Packing::Lzma1 { .. } => "lzma",
+            Packing::Rar5 { .. } => "rar5",
         }
     }
     /// Whether the bytes come out as they went in, so a reader can be sent to

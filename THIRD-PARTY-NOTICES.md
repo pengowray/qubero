@@ -140,6 +140,47 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## The RAR 5 decompressor
+
+Qubero's RAR 5 unpacker (`crates/core/src/codec/rar5.rs`) is a Rust port of
+libarchive's `archive_read_support_format_rar5.c`, by Grzegorz Antoniak. Not a
+dependency: the code was read and rewritten, so the BSD 2-clause notice travels
+here rather than in the crate table.
+
+Which source it came from is not incidental. unRAR's licence forbids using its
+sources to re-create the RAR compression algorithm, and 7-Zip carves its RAR
+handler out of its own LGPL for that reason; neither could be read here without
+putting that restriction on this project. libarchive's is an independent
+implementation carrying no unRAR lineage, under terms that ask only for the
+notice below.
+
+Upstream: https://github.com/libarchive/libarchive/blob/master/libarchive/archive_read_support_format_rar5.c
+
+```
+Copyright (c) 2018 Grzegorz Antoniak (http://antoniak.org)
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
 ## The PE name tables
 
 The names Qubero shows for the numbers in a Windows executable, machine types,

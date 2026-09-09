@@ -25,6 +25,7 @@ pub mod lz4;
 pub mod pico8;
 pub mod pixels;
 pub mod pxu;
+pub mod rar5;
 
 use std::ops::Range;
 
@@ -98,6 +99,22 @@ pub enum Codec {
     /// Huffman tree that changes with every symbol, which is a different
     /// decoder, and it stays bytes.
     Lha { window_bits: u8 },
+    /// One RAR 5 entry's data, unpacked.
+    ///
+    /// LZSS against a window under five Huffman tables, with three
+    /// byte-transforming filters over the result. The second codec here whose
+    /// settings are fields rather than facts about the format, and for a
+    /// sharper reason than [`Codec::Lzma1`]'s: RAR writes no end-of-stream
+    /// marker at all, so `unpacked` is not a convenience but the only thing
+    /// that says where the file stops. `window_bits` is the dictionary the
+    /// header declared, as a power of two from 17, and bounds how far back a
+    /// match may reach.
+    ///
+    /// Only a self-contained entry: not solid, not encrypted, not split across
+    /// volumes. Those need what came before this run, and this is handed a run.
+    /// The template turns them away rather than decoding them wrongly. See
+    /// [`crate::codec::rar5`].
+    Rar5 { window_bits: u8, unpacked: u64 },
     /// A whole bzip2 stream, from its `BZh` onwards.
     ///
     /// The run is the stream and not a block: bzip2 packs its blocks to the
@@ -163,6 +180,7 @@ impl Codec {
             Codec::Lzma1 { .. } => "lzma",
             Codec::Lzma2 => "lzma2",
             Codec::Lha { .. } => "lzhuf",
+            Codec::Rar5 { .. } => "rar5",
             Codec::Bzip2 => "bzip2",
             Codec::Compress => "compress",
             Codec::Gzip => "gzip",
@@ -261,6 +279,10 @@ pub enum StepField {
     Filter,
     /// xz: the index and the stream footer.
     Footer,
+    /// RAR 5: a symbol that produces no byte and instead names a run of the
+    /// output and one of three transforms to run over it once that run has been
+    /// unpacked. Its value is which transform.
+    FilterDef,
     /// pxu: the two bytes saying the element type, whether a height follows
     /// the width, how wide the sizes are, and which compression was used.
     PxuFlags,
@@ -292,6 +314,7 @@ impl StepField {
             StepField::BlockHeader => "block_header",
             StepField::Filter => "filter",
             StepField::Footer => "footer",
+            StepField::FilterDef => "filter_def",
             StepField::PxuFlags => "pxu_flags",
             StepField::PxuWidth => "pxu_width",
             StepField::PxuHeight => "pxu_height",
@@ -719,7 +742,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 20] = [
+const FIELDS: [StepField; 21] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -736,6 +759,7 @@ const FIELDS: [StepField; 20] = [
     StepField::BlockHeader,
     StepField::Filter,
     StepField::Footer,
+    StepField::FilterDef,
     StepField::PxuFlags,
     StepField::PxuWidth,
     StepField::PxuHeight,
@@ -765,6 +789,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Lzma1 { props, dict_size, unpacked } => lzma::lzma1(data, props, dict_size, unpacked)?,
         Codec::Lzma2 => lzma::lzma2(data)?,
         Codec::Lha { window_bits } => lha::entry(data, window_bits)?,
+        Codec::Rar5 { window_bits, unpacked } => rar5::entry(data, window_bits, unpacked)?,
         Codec::Bzip2 => bzip2::stream(data)?,
         Codec::Compress => compress::lzw(data)?,
         Codec::Gzip => inflate::gzip(data)?,
@@ -804,6 +829,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Lzma1 { .. }
         | Codec::Lzma2
         | Codec::Lha { .. }
+        | Codec::Rar5 { .. }
         | Codec::Bzip2
         | Codec::Compress
         | Codec::Gzip
