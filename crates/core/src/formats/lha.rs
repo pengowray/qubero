@@ -297,12 +297,14 @@ const LEVEL0_FIXED: i128 = 5 + 4 + 4 + 4 + 1 + 1 + 1 + 2;
 /// header is as long as it says it is, and what the named fields do not
 /// account for is this.
 ///
-/// The first byte is the system, the same one level 1 writes in a field of its
-/// own. The rest is that system's business: for `'U'` it is a minor version, a
-/// unix modified time, a mode, a uid and a gid, which is where those twelve
-/// bytes go. Those are left as the bytes they are for now, since the area is
-/// only shaped that way for one of the systems and reading it wrongly for the
-/// others would be worse than not reading it.
+/// LHa for UNIX writes the system in the first byte, the same letter level 1
+/// gives a field of its own, and then a minor version, a unix modified time, a
+/// mode, a uid and a gid, which is where its twelve bytes go. That is a
+/// convention rather than the format: nothing says a level 0 writer must put
+/// an OS letter here, and the enumeration falls back to the raw byte when it
+/// is not one. The eleven bytes past it are left as the bytes they are, since
+/// only one system shapes them that way and reading them wrongly for the
+/// others would be worse than not reading them at all.
 fn level0_extension() -> T {
     let len = E::field("header_size").sub(E::lit(LEVEL0_FIXED)).sub(E::field("name_length"));
     T::switch(
@@ -634,9 +636,15 @@ mod tests {
         let data = e.node(&d, &[0, 0, 1, 12]).unwrap();
         assert_eq!(data.size_bits, 24 * 8, "the run is as long as it was said to be");
         assert!(data.refused.is_some(), "the decoder would not take it: {data:?}");
-        // And the check says it could not be made, with a reason, rather than
-        // reporting a mismatch on bytes it never summed.
         let crc = e.child_named(&d, &[0, 0, 1], "crc").unwrap().expect("a crc field");
+        // The check is still declared. A run that will not unpack is a check
+        // that cannot be made, which is not the same as no check at all: the
+        // interface asks this on every move of the cursor, and answering
+        // nothing would leave the reader with no row and no way to learn the
+        // stream is broken.
+        assert!(e.check_of(&d, &crc).unwrap().is_some(), "the check exists even when it cannot be made");
+        // And making it says so, with a reason, rather than reporting a
+        // mismatch on bytes it never summed.
         assert!(e.run_check(&d, &crc).is_err(), "a run that will not unpack must refuse, not fail");
     }
 
