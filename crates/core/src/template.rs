@@ -1052,6 +1052,16 @@ pub struct Field {
     /// What this field checks, when it is a checksum rather than a number the
     /// format uses for something. See [`Check`].
     pub check: Option<Check>,
+    /// What each *element* of this field checks, when the field is a list of
+    /// sums rather than one.
+    ///
+    /// Kept apart from [`Field::check`] rather than folded into it: a field
+    /// holding a digest is itself a run of bytes, so "the check on this field"
+    /// and "the check on each of this field's elements" are two different
+    /// claims about the same declaration, and a template has to be able to
+    /// make either. A 7z `kCRC` is the second: a sum per stream, and the one
+    /// at index *i* is about the stream at index *i*.
+    pub elem_check: Option<Check>,
 }
 
 /// A field is a sum over some other bytes, and this says which sum and which
@@ -1181,6 +1191,21 @@ pub enum Named {
     /// entry before it, and the elements of that list are records whose `body`
     /// is whichever kind of record the signature said.
     Earlier(Arc<[String]>),
+    /// One element of an array reached by a path, chosen by an index.
+    ///
+    /// What a format that writes its sums as a list parallel to the things
+    /// they are about needs. A 7z `kCRC` block is one sum per stream in the
+    /// order the streams come, so the sum at index *i* is about the stream at
+    /// index *i*, and the two lists are in different parts of the header
+    /// entirely. [`Named::Here`] and [`Named::Earlier`] name a field and stop
+    /// there; neither can say "the one at my own index".
+    ///
+    /// The path starts at a field declared before the check's own structure,
+    /// or in one it sits inside, and then goes down into it, the way
+    /// [`Expr::Within`] does. The index is worked out where the check field
+    /// stands, so [`Expr::Idx`] means the position that field has in the list
+    /// it sits in, which is the whole point.
+    Elem { array: Arc<[String]>, index: Expr },
 }
 
 impl Named {
@@ -1189,6 +1214,11 @@ impl Named {
     }
     pub fn earlier(path: &[&str]) -> Named {
         Named::Earlier(path.iter().map(|s| s.to_string()).collect())
+    }
+    /// The element of `array` at `index`. Pass [`Expr::Idx`] for "the one at
+    /// my own index", which is what a parallel list of sums means.
+    pub fn elem(array: &[&str], index: Expr) -> Named {
+        Named::Elem { array: array.iter().map(|s| s.to_string()).collect(), index }
     }
 }
 
@@ -1828,7 +1858,7 @@ impl Ty {
             name: name.to_string(),
             fields: fields
                 .into_iter()
-                .map(|(n, ty)| Field { name: n.into(), ty, name_from: None, aside: false, check: None })
+                .map(|(n, ty)| Field { name: n.into(), ty, name_from: None, aside: false, check: None, elem_check: None })
                 .collect(),
             named_by: None,
             contents: None,
@@ -1895,6 +1925,26 @@ impl Ty {
                 let mut s = (*s).clone();
                 if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
                     f.check = Some(check);
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say that each element of `field` is a checksum, and over what. See
+    /// [`Field::elem_check`].
+    ///
+    /// For a list of sums beside the list of things they are about, which is
+    /// what [`Named::Elem`] exists to name. Silently does nothing to anything
+    /// but a structure, as the two builders above do; `checks_declared` in
+    /// `tests` walks every template and fails on a name no field has.
+    pub fn field_elem_check(self, field: &str, check: Check) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.elem_check = Some(check);
                 }
                 Ty::Struct(Arc::new(s))
             }
