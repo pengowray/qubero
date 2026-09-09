@@ -156,13 +156,6 @@ impl<'a> Range<'a> {
         self.at
     }
 
-    /// Whether the coder has narrowed to the one interval a finished stream
-    /// leaves it in. What "the stream ended here and not by running out" looks
-    /// like from the inside.
-    pub(super) fn finished(&self) -> bool {
-        self.code == 0
-    }
-
     fn pull(&mut self) -> Result<u32, Refusal> {
         if self.at >= self.end {
             return Err(Refusal::Failed);

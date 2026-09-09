@@ -368,6 +368,8 @@ export const UNPACKED = {
     pxu_width: "elements per row",
     pxu_height: "rows",
     pxu_bits: "index bits per token",
+    lzma_props: "LZMA properties (lc, lp, pb)",
+    range_init: "range decoder init",
     code_len: "code-length code",
     lit_len: "literal code length",
     dist_len: "distance code length",
