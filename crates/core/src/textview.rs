@@ -236,7 +236,7 @@ pub struct Index {
 pub fn text_index<S: Source>(src: &S, reading: Reading, from: u64, to: u64) -> Index {
     let len = src.len_bytes();
     let unit = reading.unit();
-    let mut at = reading.align(from).min(len);
+    let at = reading.align(from).min(len);
     let stop = to.min(len).min(at.saturating_add(INDEX_SCAN));
     let mut out = Index { next: at, ..Default::default() };
     if at >= len {
