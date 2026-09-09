@@ -568,9 +568,46 @@ fn substreams_info() -> T {
             // size per folder. These are one per file, and 7z means a
             // different thing by "unpack stream" in each of the two blocks.
             ("substream_sizes", T::array(number(), E::sum_of("substreams_per_folder").sub(num_folders))),
-            ("crcs", tagged(0x0a, digests(E::sum_of("substreams_per_folder")))),
+            ("crcs", tagged(0x0a, substream_digests())),
             ("end", T::if_room(property_id())),
         ],
+    )
+}
+
+/// The `kCRC` a `kSubStreamsInfo` writes: one sum per file, over the bytes
+/// that file unpacks to.
+///
+/// Declared only where the two lists line up, which is a folder per file and
+/// a packed stream per folder. Then substream *i* is the whole of folder
+/// *i*'s output, and the sum at index *i* is about the stream at index *i*:
+/// see [`Named::Elem`], which exists for this.
+///
+/// A solid archive breaks the correspondence and the guard turns the check
+/// off. Its folder holds several files end to end, so substream *i* is a
+/// slice of one folder's output taken at an offset, and nothing can yet say
+/// "part of what this run unpacks to". Summing the whole folder against one
+/// file's number would call every solid archive broken.
+///
+/// A sparse block turns it off by itself, without a guard: there the sums sit
+/// one level further in, beside the bit vector saying which streams have one,
+/// and index *i* of that list is the *i*th stream that has a sum rather than
+/// the *i*th stream. The declaration below simply does not reach them.
+fn substream_digests() -> T {
+    let per_folder = || E::sum_of("substreams_per_folder");
+    let folders = || E::within(&["unpack_info", "num_folders"]);
+    digests(per_folder()).field_elem_check(
+        "crcs",
+        Check::of(
+            Checksum::Crc32,
+            Covers::Unpacked { name: Named::elem(&["packed_streams", "streams"], E::Idx), len: None },
+        )
+        // One file per folder, and one packed stream per folder. There is no
+        // equality in `Expr`, so both are written with `equals`.
+        .only_when(
+            per_folder()
+                .equals(folders())
+                .mul(E::within(&["pack_info", "num_pack_streams"]).equals(folders())),
+        ),
     )
 }
 
