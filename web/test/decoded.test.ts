@@ -140,6 +140,6 @@ test("a match's length is settled by its codes, not by bytes of its own", () => 
   // `decoded from its own bytes` is the varint's clause and a match has no
   // bytes of its own: it is four runs of bits spread across whichever bytes
   // they fall in.
-  assert.equal(PROPERTIES.sizedMatch(), "each code says how many extra bits follow it");
+  assert.equal(PROPERTIES.sizedMatch(), "total length of its two codes and their extra bits");
   assert.equal(PROPERTIES.sized.encoded(), "decoded from its own bytes");
 });

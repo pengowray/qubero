@@ -1620,12 +1620,20 @@ export const PROPERTIES = {
    * this is a case of its own and the table above keeps its one entry per
    * word the core sends.
    *
-   * What it says is the mechanism, since that is what accounts for the widths
-   * in the section above: the length code names how many extra bits follow it,
-   * and the distance code names how many follow that. "Each code" rather than
-   * naming the two, which the two rows above have already named.
+   * What it says is what the number is a total of, in the words of the two
+   * rows above it: `11-bit code, no extra bits` and `1-bit code, no extra
+   * bits` are the parts, and this row is their sum. `each code says how many
+   * extra bits follow it`, which this replaces, described the mechanism and
+   * left the reader to work out that the mechanism was the answer to "why
+   * 12". "Total length" rather than "total", for the reason `total length of
+   * its fields` gives: a total of two codes reads as adding their values, and
+   * the `width` clause two rows up already does arithmetic on values. Not
+   * "width", which `Bit width` has taken for the packing width of a run's
+   * values. "Its two codes" rather than "each code": it counts the rows to
+   * add without renaming them, and pins both, so "total length" cannot be
+   * read as the total of the length code alone.
    */
-  sizedMatch: (): string => "each code says how many extra bits follow it",
+  sizedMatch: (): string => "total length of its two codes and their extra bits",
 
   /** A switch picked the type. The value is the case that matched, and it is
    *  the half the reader checks: `from chunk_type` alone would send them to
