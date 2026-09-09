@@ -6,7 +6,7 @@
 //! nothing else in common use writes. The IR reads one now, so the field says
 //! 44100 rather than sitting there as ten bytes nobody can spend.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T};
+use crate::template::{Endian::*, Expr as E, Template, Time, Ty as T};
 
 use super::iff::{cc, chunk_text, iff};
 
@@ -61,13 +61,20 @@ fn ssnd() -> T {
     )
 }
 
-/// AIFC's version, written as a date: 0xA2805140 is 22 May 1991, and it is the
+/// AIFC's version, written as a date: 0xA2805140 is 23 May 1990, and it is the
 /// only value the format has ever had.
+///
+/// The date is seconds from 1904 like every other time a Mac format writes,
+/// so it reads as one rather than only as a number a table names. It was
+/// wrong here in two places and in two different ways, saying 1991 in the
+/// enumeration and 22 May 1991 in this comment; the arithmetic says
+/// 1990-05-23 14:40:00 and the AIFF-C specification says May 23, 1990.
 fn fver() -> T {
     T::structure(
         "Version",
-        vec![("timestamp", T::enumeration("AifcVersion", T::u32(Big), &[(0xa280_5140, "1991-05-23")]))],
+        vec![("timestamp", T::enumeration("AifcVersion", T::u32(Big), &[(0xa280_5140, "AIFC version 1")]))],
     )
+    .field_time("timestamp", Time::mac().local())
 }
 
 /// Named points in the sound, which is what a sampler loops between.

@@ -870,9 +870,12 @@ folds the edits into one undo step. A batch that changes nothing leaves no step
 behind, since the snapshot is taken at the first edit rather than when the
 batch opens.
 
-regex-automata is the core's only dependency, and it costs 537 KB of the
+regex-automata is what the search is built on, and it costs 537 KB of the
 module. The Unicode tables are left out, which is most of a regex engine's
-weight and no loss over bytes. The signature database is already a module of
+weight and no loss over bytes. It was the core's only dependency when this was
+written and is not any more: the decoders brought miniz_oxide, ruzstd,
+lzma-rs, bzip2-rs and lz4_flex with them, and `THIRD-PARTY-NOTICES.md`, which
+is generated, is the list that stays right. The signature database is already a module of
 its own fetched on first use, and doing the same for the regex engine is the
 obvious next move: the main module would hand it windows rather than owning the
 search.

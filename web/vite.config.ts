@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createReadStream, statSync } from "node:fs";
 import { join, normalize, resolve, sep } from "node:path";
 import { defineConfig } from "vite";
@@ -61,9 +62,42 @@ function localFiles(): Plugin {
   };
 }
 
+/**
+ * Say which checkout is being served, once, at startup.
+ *
+ * `.claude/launch.json` gives `"cwd": "web"` as a relative path, and it
+ * resolves against the main checkout rather than against a git worktree. So
+ * starting the dev server from a worktree serves the *main* repository's
+ * source and its wasm, and everything looks fine while none of the work being
+ * tested is in it. That has cost more than one afternoon. The server cannot
+ * fix where it was started, but it can say where that was.
+ */
+function whereAmI(): Plugin {
+  return {
+    name: "qubero-where-am-i",
+    apply: "serve",
+    configureServer(server) {
+      const root = resolve(server.config.root);
+      let branch = "";
+      try {
+        branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+          cwd: root,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+      } catch {
+        // Not a git checkout. The path alone still answers the question.
+      }
+      server.httpServer?.once("listening", () => {
+        server.config.logger.info(`  serving ${root}${branch === "" ? "" : ` on ${branch}`}`);
+      });
+    },
+  };
+}
+
 export default defineConfig({
   // PORT lets a second dev server (another session, another branch) get its own port.
   server: { port: Number(process.env["PORT"]) || 17272 },
   build: { target: "es2022" },
-  plugins: [localFiles()],
+  plugins: [whereAmI(), localFiles()],
 });
