@@ -24,6 +24,7 @@
 //! headers, which turns everything after it into bytes nothing can read
 //! without a password.
 
+use crate::codec::Codec;
 use crate::template::{Check, Checksum, Covers, Named, Encoding, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// What one of these starts with. RAR 4 has the same first six bytes and one
@@ -124,7 +125,25 @@ fn block() -> T {
             // chain can stop at the block that ends the archive.
             ("block_type", T::computed(E::within(&["header", "header_type"]))),
             // The file, or whatever else the block put outside its header.
-            ("data", T::bytes(E::within(&["header", "data_size"]))),
+            //
+            // Stored is the file written in verbatim, so those bytes are
+            // already a document and open as one: a RAR of stored files used
+            // to offer nothing to open anywhere, not in the listing and not as
+            // a tab, the way an archive of stored ZIP entries once did. Every
+            // other method needs a RAR decompressor, which there is not one of
+            // here, so the run stays bytes and says so.
+            (
+                "data",
+                T::switch(
+                    E::field("block_type"),
+                    vec![(FILE, file_data()), (SERVICE, file_data())],
+                    // Every other kind's data area is not a file and has no
+                    // method to ask about: an end-of-archive block has no
+                    // `method` field at all, and asking for one would fail the
+                    // block rather than answer about it.
+                    T::bytes(E::within(&["header", "data_size"])),
+                ),
+            ),
         ],
     )
     .counted_as("block")
@@ -237,6 +256,17 @@ fn file_fields() -> T {
                 .mul(E::lit(1).sub(E::field("header_flags").bit(3)))
                 .mul(E::lit(1).sub(E::field("header_flags").bit(4))),
         ),
+    )
+}
+
+/// A file block's data area: the file itself when nothing packed it, and the
+/// packed bytes when something did.
+fn file_data() -> T {
+    let size = || E::within(&["header", "data_size"]);
+    T::switch(
+        E::within(&["header", "fields", "method"]),
+        vec![(0, T::decoded(size(), Codec::Stored, super::decoded_text()))],
+        T::bytes(size()),
     )
 }
 
@@ -368,6 +398,14 @@ mod tests {
         assert_eq!(info.algorithm, "crc32");
         assert_eq!(info.over, Some((42, 9)), "the data area, which is the file");
         assert!(e.run_check(&d, &crc).unwrap().unwrap().ok);
+
+        // And those bytes are a document of their own, so a stored file in a
+        // RAR has somewhere to be opened: in the listing, on a chip, as a tab.
+        // A packed one has nothing to open, since there is no RAR
+        // decompressor here, and the test below says so.
+        let data = e.node(&d, &[1, 1, 4]).unwrap();
+        assert_eq!(data.name, "data");
+        assert!(data.decoded && data.refused.is_none(), "a stored file opens: {data:?}");
     }
 
     #[test]
