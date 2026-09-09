@@ -647,7 +647,8 @@ export type Shape = {
    *  container; `children` as long as the fields inside it; `scattered` a list
    *  whose elements are wherever its offsets point; `count` as many elements
    *  as a count says; `encoded` its own bytes say where it ends; `trace` as
-   *  much as the decoder read; `nothing` no bytes of its own. */
+   *  much as the decoder read; `table` a code-length table in this file gave
+   *  the width; `nothing` no bytes of its own. */
   readonly sized:
     | "type"
     | "fixed"
@@ -659,6 +660,7 @@ export type Shape = {
     | "count"
     | "encoded"
     | "trace"
+    | "table"
     | "nothing"
     | "unknown";
 };
@@ -1081,6 +1083,55 @@ export type MapStep = {
   readonly dist?: number;
 };
 
+/**
+ * One Huffman-coded number of a deflate step: which symbol the code stood for,
+ * how wide the code was, the bits that followed it outright, and what the two
+ * came to.
+ *
+ * None of this is in the trace, which keeps a decoded length and distance and
+ * throws the rest away. It is worked out again from the block's tables, one
+ * step at a time and only when asked. See `Editor.decode_step`.
+ */
+export type DecodedCode = {
+  /** Which symbol of the alphabet the code decoded to: 77 for a literal `M`,
+   *  256 for the end of a block, 257 and up for a length. */
+  readonly symbol: number;
+  readonly code_bits: number;
+  /** How many bits followed the code outright, and what they said. Both zero
+   *  for a literal, for the end mark, and for the many lengths and distances
+   *  a symbol names on its own. */
+  readonly extra_bits: number;
+  readonly extra: number;
+  /** What the symbol and its extra bits came to: the byte, the length, or the
+   *  distance. Zero for the end mark, which stands for no number. */
+  readonly value: number;
+  /** Which step of the block's head set this code's width, as an index into
+   *  the trace. Absent for a fixed-Huffman block, whose two tables are in RFC
+   *  1951 rather than in the file, so there is nowhere honest to point. */
+  readonly entry?: number;
+  /** The same step counted from the front of its block, which is where the row
+   *  sits among the block's children and so what a path needs. */
+  readonly entry_child?: number;
+};
+
+/** One step of a deflate stream taken apart: the one or two codes that carried
+ *  it, and every bit they cost. */
+export type DecodedStep = {
+  readonly kind: "literal" | "end-of-block" | "match";
+  /** Which block of the stream, as an index among the stream's blocks. */
+  readonly block: number;
+  readonly block_kind: "fixed" | "dynamic";
+  /** The literal/length code, which every step begins with. */
+  readonly symbol: DecodedCode;
+  /** The distance code that followed the length. Absent for a literal and for
+   *  the end mark, which read no second code. */
+  readonly distance?: DecodedCode;
+  /** The four widths added up, which is the step's own width. Given rather
+   *  than left to be summed, so a panel can show the arithmetic and its answer
+   *  without doing the arithmetic itself. */
+  readonly bits: number;
+};
+
 export type ExtentEstimate = {
   readonly path: readonly number[];
   readonly measured_items: number;
@@ -1281,6 +1332,36 @@ export class Doc {
     // is set here and never through `setTemplate`.
     opened.template = r.node.template === "" ? null : r.node.template;
     return opened;
+  }
+
+  /**
+   * One step of a compressed run taken apart, for the code at `bit` of the run
+   * the stream at `path` was unpacked from.
+   *
+   * Three questions of the editor, because they are three halves of one
+   * answer and no caller wants to ask them separately. The stream is opened as
+   * a space, which is what carries the trace and the number to ask by and
+   * which is idempotent for one already open; the step is taken apart; and the
+   * same bit is asked which bytes of the unpacked stream the step wrote, since
+   * the taking-apart says what the codes were and not where their output
+   * landed.
+   *
+   * Null for every step that is not a deflate symbol, and null while the
+   * compressed bytes are still on their way: the reply says so, the chunks are
+   * asked for, and the panel is drawn again when they land. Never called on a
+   * scroll or a listing draw; rebuilding the block's tables is worth doing for
+   * the one step under the cursor and not for the millions behind it.
+   */
+  decodedCode(path: readonly number[], bit: number): { readonly step: DecodedStep; readonly out: MapStep | null } | null {
+    const opened = this.handleReply<{ space: number; template: string; refused?: string }>(
+      this.editor.open_space(Uint32Array.from(path)),
+    );
+    if (opened.status !== "ok" || opened.node.space === 0) return null;
+    const space = opened.node.space;
+    const r = this.handleReply<DecodedStep | null>(this.editor.decode_step(space, bit));
+    if (r.status !== "ok" || r.node === null) return null;
+    const out = this.handleReply<MapStep | null>(this.editor.map_in(space, bit));
+    return { step: r.node, out: out.status === "ok" ? out.node : null };
   }
 
   /** Where the byte at `byte` of this space came from, or null. */

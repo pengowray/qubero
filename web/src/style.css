@@ -4242,19 +4242,55 @@ table.rec tr.is-on td {
    no rule of its own anywhere, so these were falling to the browser's default
    list layout: the label on one line and the fact indented under it, which is
    twice the height and reads as four rows rather than two. */
-.insp-covers {
+.insp-covers,
+.insp-decoded-rows {
   margin: 2px 0 4px;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 1px 8px;
 }
-.insp-covers dt {
+.insp-covers dt,
+.insp-decoded-rows dt {
   color: var(--muted);
 }
-.insp-covers dd {
+.insp-covers dd,
+.insp-decoded-rows dd {
   margin: 0;
   font-family: var(--mono);
   overflow-wrap: anywhere;
+}
+/* The second line under a Decoded row: how wide the code was, or what an
+   unusual copy is doing. Quieter than the fact above it and in the panel's own
+   face rather than the monospace of the facts, because it is a sentence and
+   not a number. Same treatment as `.insp-prop-how`, which is the same kind of
+   line under the same kind of fact; it is not that class because it sits in a
+   grid cell rather than under a property row and takes none of that row's
+   indent. */
+.insp-decoded-how {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+  min-height: 0;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+/* A clause naming the table row that set the width leads to it, and is a
+   button so the keyboard can reach it. In a fixed-Huffman block the same words
+   have nowhere to go: RFC 1951 set those widths and there is nothing in the
+   file to point at. */
+.insp-decoded-how[data-path] {
+  cursor: pointer;
+}
+.insp-decoded-how[data-path]:hover {
+  text-decoration: underline;
+}
+.insp-decoded-how.is-hover {
+  background: var(--accent-soft);
 }
 /* The range, as a button: a checksum a reader cannot go and look at is a
    verdict they have to take on trust. */

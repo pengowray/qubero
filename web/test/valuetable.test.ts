@@ -236,7 +236,7 @@ function symbols(): RunCells[] {
     });
     at += match ? 17 : 9;
   }
-  return [{ path: [6, 1, 0], name: "symbols", type: "symbol", symbol: true, unit: "symbol", widest: "", cells }];
+  return [{ path: [6, 1, 0], name: "codes", type: "symbol", symbol: true, unit: "code", widest: "", cells }];
 }
 
 test("symbols flow, each cell as wide as the byte it decodes to", () => {
@@ -291,7 +291,7 @@ test("a label wider than the column takes a line rather than none", () => {
   const wide = [
     {
       path: [6, 1, 0],
-      name: "symbols",
+      name: "codes",
       type: "symbol",
       symbol: true,
       unit: null,

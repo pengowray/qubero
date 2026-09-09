@@ -265,14 +265,14 @@ export class ValueFetch {
       const cells = this.runCells(s, Math.max(fromBit, s.offset_bits), Math.min(toBit, end), limit);
       if (cells === null || cells.length === 0) continue;
       // `unit` is the format's own word for what a run holds: a deflate block
-      // codes symbols, and a symbol's cell reads as one. The type a cell says
-      // is the element's, not the run's: a cell of `body` holds an `i16 le`,
-      // and the run is the `i16 le[]`.
+      // holds codes, and a code's cell reads as one. The type a cell says is
+      // the element's, not the run's: a cell of `body` holds an `i16 le`, and
+      // the run is the `i16 le[]`.
       out.push({
         path: s.path,
         name: s.name,
         type: elementType(s.type),
-        symbol: s.unit === "symbol",
+        symbol: s.unit === "code",
         unit: s.unit,
         widest: this.widestOf(s.path.join(","), cells),
         cells,

@@ -80,7 +80,7 @@ function fillCell(el: HTMLElement, c: PlacedCell, layout: RowValues["layout"]): 
       : c.carried === "below"
         ? VALUES.continues(c.run, c.index)
         : c.symbol
-          ? VALUES.symbol(c.index, c.tip, c.sizeBits)
+          ? VALUES.code(c.unit ?? "code", c.index, c.tip, c.sizeBits)
           : VALUES.cell(c.run, c.index, c.type, c.tip);
   if (el.title !== title) el.title = title;
   // The tint says a cell is a piece of one whose value is on another row; a

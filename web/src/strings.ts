@@ -448,6 +448,135 @@ export function unpackedOriginRow(
   return UNPACKED.originRow(UNPACKED.bits(inStart, inEnd), file, UNPACKED.step(kind, len, dist, field));
 }
 
+/**
+ * The Decoded section: what one code of a compressed block stands for.
+ *
+ * A code and the thing it encodes are two levels, and the panel used to show
+ * them as one. The bits at the cursor are a Huffman prefix code, nine of them;
+ * `literal 'M'` is what this block's table says those nine bits mean. Showing
+ * the second as fields of the first put two inferences in the column a reader
+ * checks the file against, with `0 bytes` beside each, and neither is written
+ * in the file at all.
+ *
+ * So the box above holds the bits and this section holds the reading, under a
+ * heading that says which it is. Nothing here is stored anywhere: it is worked
+ * out again from the block's tables on the click that lands the cursor on the
+ * code, which is why the rows say what they say rather than being one number
+ * apiece. The widths are the point of the section. A reader told `8 + 0 + 5 +
+ * 0` who can see the Length row say 13 bits has checked the arithmetic; one
+ * told `match 3 back 4` has taken it on trust.
+ */
+export const DECODED = {
+  /** The heading. The reading of the bits, in the word this app already uses
+   *  for what a decoder made of a compressed run: a stream opens as `Decoded`,
+   *  and a byte of it is `unpacked from` a step. */
+  title: "Decoded",
+  /**
+   * The rows' labels. A literal and the end mark are one code, so their row is
+   * `Symbol`: the number is which symbol of the alphabet the code stood for,
+   * which is the fact the old `symbol 0` tooltip was colliding with. A match
+   * is two codes and has to name each, and `Length code` and `Distance code`
+   * are RFC 1951's own words for them.
+   *
+   * `Copies` leads, because what a reader wants first from a match is what
+   * came out of it, and the two code rows are the working behind that. It is
+   * the row `Symbol` would be, in the slot `Symbol` sits in, so the two kinds
+   * of step read down the same way.
+   */
+  symbolLabel: "Symbol",
+  lengthLabel: "Length code",
+  distanceLabel: "Distance code",
+  copiesLabel: "Copies",
+  /** Where the step's output went, in the unpacked stream's own addresses. The
+   *  end mark has no such row: it wrote nothing, and `+0x1c · 0 bytes` would
+   *  put it somewhere. */
+  unpacksLabel: "Unpacks to",
+  /**
+   * A literal: which symbol, and the byte it stands for. The character and the
+   * number both, because a reader checking these bits against the hex view
+   * wants the number and a reader reading the stream wants the character. A
+   * byte with no glyph to show is its number alone, since empty quotes say
+   * nothing.
+   *
+   * `77 = literal 'M'`, not `symbol 77`: the label beside it already says
+   * Symbol, and the equals sign is what makes the row one fact rather than
+   * two. The two match rows do carry the word, because their labels name the
+   * code rather than the symbol.
+   */
+  literal: (symbol: number, byte: number): string => {
+    const hex = `0x${byte.toString(16).padStart(2, "0")}`;
+    return `${symbol} = literal ${byte >= 0x20 && byte <= 0x7e ? `'${String.fromCharCode(byte)}' (${hex})` : hex}`;
+  },
+  /** Symbol 256, which ends the block and produces nothing. Written out rather
+   *  than left as the number, because 256 is the one symbol of the alphabet
+   *  that is not a byte and not a length. */
+  endOfBlock: (symbol: number): string => `${symbol} = end of block`,
+  /** The two halves of a match, each in the same shape: which symbol the code
+   *  carried, and what that symbol and its extra bits came to. */
+  length: (symbol: number, len: number): string => `symbol ${symbol} = length ${len.toLocaleString()}`,
+  distance: (symbol: number, dist: number): string => `symbol ${symbol} = distance ${dist.toLocaleString()}`,
+  /** What the match copies, in the words the status bar already uses for the
+   *  same step: `match, 5 bytes back 12` there, and here the same phrase under
+   *  a label that supplies the verb. */
+  copies: (len: number, dist: number): string =>
+    `${len === 1 ? "1 byte" : `${len.toLocaleString()} bytes`} back ${dist.toLocaleString()}`,
+  /**
+   * A distance of one, which is not really a copy: it is deflate's way of
+   * writing a run of one byte, the byte before repeated. Said outright under
+   * the Copies row, because `34 bytes back 1` reads as a mistake to anybody
+   * who has not met the idiom, and it is the format working exactly as
+   * intended.
+   */
+  repeated: (len: number): string => `one byte, repeated ${len.toLocaleString()} times`,
+  /**
+   * The same for a copy that reads bytes it is in the middle of writing: the
+   * distance is shorter than the length, so the last part of the copy is bytes
+   * this step itself produced. Legal, common, and the other thing that reads
+   * as a bug when a reader checks the arithmetic and finds the source run
+   * shorter than the length.
+   */
+  overlap: (dist: number): string => `overlapping copy: the last ${dist.toLocaleString()} bytes, repeated`,
+  /**
+   * How wide one code was, under the row it belongs to, and what followed it.
+   *
+   * The four widths across a match have to add up to the Length row, so each
+   * says its own two and the reader can add them. `no extra bits` is written
+   * out rather than left off: an absent clause would read as a row that had
+   * nothing more to say, and what a reader is checking is that nothing else
+   * was read there.
+   *
+   * Where there are extra bits the clause carries the arithmetic, since the
+   * row above says only the answer. `base` is what the symbol names on its
+   * own and `extra` is what the bits after it added, so `11 + 1` under
+   * `= length 12` is the whole of how 12 was arrived at.
+   */
+  width: (codeBits: number, extraBits: number, base: number, extra: number): string => {
+    const code = `${codeBits}-bit code`;
+    if (extraBits === 0) return `${code}, no extra bits`;
+    return `${code}, then ${countText(extraBits, "extra bit")}: ${base.toLocaleString()} + ${extra.toLocaleString()}`;
+  },
+  /** Where the step's output landed, in the unpacked stream: one address for a
+   *  single byte, and the first and last for a run. The same shape as the
+   *  Integrity section's `Covers` row, since it is the same kind of fact, and
+   *  the leading `+` on both addresses is what says these count from the front
+   *  of the stream rather than from the front of the file. */
+  wrote: (from: string, to: string | null, size: string): string =>
+    to === null ? `${from} · ${size}` : `${from} to ${to} · ${size}`,
+  /**
+   * The line under the box of noughts and ones, saying which way round they
+   * are. Without it a reader compares the box against the binary column, finds
+   * the bits of each byte reversed, and concludes that one of the two views is
+   * broken.
+   *
+   * Short on the line and the whole of it on the tooltip: the fact a reader
+   * needs at a glance is that there is a convention here, and the convention
+   * takes three sentences to state.
+   */
+  bitsNote: "Bits in reading order, low bit of each byte first",
+  bitsNoteTitle:
+    "DEFLATE reads each byte from its low bit upwards, and packs a Huffman code most significant bit first. So these are the code's bits exactly as RFC 1951 writes it, and can be compared with the tables there. The binary view draws every byte from its high bit down, so within a byte it shows the same bits in the other order.",
+} as const;
+
 /** Shown where fields would be when nothing has said what the file's are. */
 export const NO_TEMPLATE = "No template selected";
 
@@ -645,7 +774,42 @@ export function childWord(n: { readonly unit?: string; readonly type: string }):
  *  structure, `Tensors` over a list the format names. One fixed word would be
  *  a third name for what the count beside it already calls tensors. */
 export function childrenHead(n: { readonly unit?: string; readonly type: string }): string {
-  const word = plural(childWord(n));
+  return heading(plural(childWord(n)));
+}
+
+/**
+ * The word over the column of chips beside the hex grid, which is the same
+ * question the sidebar's `childrenHead` answers: what is in this list.
+ *
+ * `Fields` was written into the view as a literal. Inside a deflate stream the
+ * column holds Huffman codes, and a heading that calls them fields is the same
+ * two-levels-in-one mistake the code panel exists to undo: a code is not a
+ * field of the file's structure, it is a symbol of a block's alphabet.
+ *
+ * One word only where the column has one thing in it. A screen holding a run
+ * of codes heads `Codes`; a screen holding a header, a chunk and a run of
+ * codes has no one word for its contents, and `Fields` is the honest general
+ * one to fall back to. An entry the format has no word for is a field, the
+ * same fallback the sidebar takes.
+ *
+ * Entries covering bytes nothing describes are passed over rather than counted
+ * as fields. An unmapped stretch is not a field either, and letting one break
+ * the agreement would flip the heading back and forth as the reader scrolled
+ * past a gap in the middle of a run.
+ */
+export function chipsHead(entries: Iterable<{ readonly gap: boolean; readonly unit: string | null }>): string {
+  let word: string | null = null;
+  for (const entry of entries) {
+    if (entry.gap) continue;
+    const unit = entry.unit ?? "field";
+    if (word === null) word = unit;
+    else if (word !== unit) return "Fields";
+  }
+  return word === null ? "Fields" : heading(plural(word));
+}
+
+/** A noun as a heading over the things it counts. */
+function heading(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
@@ -992,9 +1156,24 @@ export const JPEG = {
  *  tooltip, since a table of a hundred cells has no room to repeat itself. */
 export const VALUES = {
   cell: (run: string, index: number, type: string, text: string): string => `${run}[${index}] · ${type} · ${text}`,
-  /** A step of a traced block: named rather than numbered, and worth its
-   *  width in bits, which is the whole point of a coded symbol. */
-  symbol: (index: number, text: string, bits: number): string => `symbol ${index} · ${text} · ${bits} bits`,
+  /**
+   * A code of a traced block: where it sits in the run, what it decodes to,
+   * and how wide it is, which is the whole point of an entropy-coded symbol.
+   *
+   * The same `run[index]` form as `cell` above, so the number cannot be read
+   * as anything but a position. `symbol 0 · literal 'M' · 9 bits`, which this
+   * replaces, said "symbol 0" about a thing that is alphabet symbol 77: the
+   * index in the run and the symbol the code stands for are two different
+   * numbers, and the word for the second was being spent on the first.
+   *
+   * The run is named from what it holds rather than from the entry the column
+   * folded. Beside the bytes a whole block is one entry, and the cells under
+   * it are the block's codes, which sit in its `codes` run: `dynamic block,
+   * last[46]` would name a different node altogether, since index 46 of the
+   * block is a row of its code table.
+   */
+  code: (unit: string, index: number, text: string, bits: number): string =>
+    `${plural(unit)}[${index}] · ${text} · ${bits === 1 ? "1 bit" : `${bits.toLocaleString()} bits`}`,
   /** A value the row above began: the same tint over the bits it ends in,
    *  with its text where it started. */
   continued: (run: string, index: number): string => `${run}[${index}] · continued from the row above`,
@@ -1316,14 +1495,34 @@ export const PROPERTIES = {
    */
   placed: {
     root: (): string => "the whole file",
-    first: (c: HowContext): string => `first field of ${c.parent ?? "its parent"}`,
+    /** `first field of header`, and `first code of dynamic block` for the
+     *  codes of a compressed block, where the reader's word for one of them is
+     *  not "field" and the thing they are first of is the block rather than
+     *  the run that holds them. The child word comes from what the parent
+     *  calls its children, as it does on the Length row's `total length of its
+     *  fields`, so one vocabulary answers both. */
+    first: (c: HowContext): string => `first ${c.child ?? "field"} of ${c.parent ?? "its parent"}`,
     follows: (c: HowContext): string => (c.field === undefined ? "after the previous field" : `after ${c.field}`),
     element: (c: HowContext): string =>
       c.index === undefined ? `an element of ${c.parent ?? "its parent"}` : `index ${c.index.toLocaleString()} in ${c.parent ?? "its parent"}`,
     pointer: (c: HowContext): string => (c.field === undefined ? "where an offset table points" : `where ${c.field} points`),
     chain: (c: HowContext): string => (c.field === undefined ? "an element of a linked list" : `linked from ${c.field}`),
     address: fromFields,
-    trace: (): string => "where the decoder read it",
+    /**
+     * A step of a decoder's trace, which is now the fallback rather than the
+     * answer: a block's own header field, a row of its code tables, and the
+     * run of codes itself. The steps of a trace tile, so each of these
+     * genuinely begins where the step before it ended, and that is worth
+     * saying.
+     *
+     * `where the decoder read it`, which this replaces, answered by appealing
+     * to the decoder rather than to the file. It was true and it was the end
+     * of the reader's line of enquiry: there is nothing to go and look at in
+     * an answer whose subject is a program. What the codes themselves say now
+     * is `after literal 'Z'`, naming the step in front, and this says the same
+     * thing where there is no name to give.
+     */
+    trace: (): string => "after the previous step",
     stream: (c: HowContext): string => (c.parent === undefined ? "start of the unpacked stream" : `start of unpacked ${c.parent}`),
     unknown: (): string => "",
   } satisfies Record<Shape["placed"], (c: HowContext) => string>,
@@ -1390,9 +1589,43 @@ export const PROPERTIES = {
      *  took, it did not choose. Nothing with "read" in it, because the row two
      *  lines down is labelled `Read by`. */
     trace: (): string => "measured by the decoder",
+    /**
+     * A code-length table written in this file settled the width: a literal is
+     * nine bits because this block's own table gave symbol 77 a nine-bit code,
+     * and the same byte in the next block is very likely a different width.
+     *
+     * The opposite answer to `fixed` above, and the reason the two are told
+     * apart: both come out as a literal number of bits, and "fixed by the
+     * format" over a dynamic block's code would be false about the one thing
+     * the reader is looking at. The row it names is a row of the block's own
+     * table, with the name the listing gives it, so the clause leads to the
+     * bits that decided the width. Without a name to give, the table is still
+     * the answer and the block still holds it.
+     */
+    table: (c: HowContext): string => (c.field === undefined ? "from this block's code lengths" : `from ${c.field}`),
     nothing: (): string => "no bytes of its own",
     unknown: (): string => "",
   } satisfies Record<Shape["sized"], (c: HowContext) => string>,
+
+  /**
+   * The Length clause for a match, which is the one place `sized.encoded` had
+   * to be overruled rather than reworded.
+   *
+   * The core reports `Encoded` for a match, and correctly: how far it runs is
+   * settled by decoding it, exactly as it is for a varint. But `decoded from
+   * its own bytes` is written for a varint, and a match has no bytes of its
+   * own: it is four runs of bits with no boundary between them, spread across
+   * whichever bytes they fall in. Rewording that clause to cover both would
+   * have made it vaguer for the varints, which are nearly all of its uses, so
+   * this is a case of its own and the table above keeps its one entry per
+   * word the core sends.
+   *
+   * What it says is the mechanism, since that is what accounts for the widths
+   * in the section above: the length code names how many extra bits follow it,
+   * and the distance code names how many follow that. "Each code" rather than
+   * naming the two, which the two rows above have already named.
+   */
+  sizedMatch: (): string => "each code says how many extra bits follow it",
 
   /** A switch picked the type. The value is the case that matched, and it is
    *  the half the reader checks: `from chunk_type` alone would send them to

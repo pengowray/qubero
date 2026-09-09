@@ -7,9 +7,9 @@
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
 import type { BitRange } from "./hexview.ts";
-import type { Doc, FieldGraph, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
+import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
-import { bitSizeText, CHECKED, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { withPictures } from "./textview.ts";
@@ -143,6 +143,23 @@ function coveredWhat(path: readonly number[], n: TemplateNode, sealsItself: bool
   return n.name.includes("head") ? CHECKED.header : CHECKED.file;
 }
 
+/**
+ * One code of a compressed block, taken apart: the step it was, where the
+ * bytes it wrote landed, and which stream it belongs to.
+ *
+ * The stream's path is kept with it because the answers point back into the
+ * file through it: the table row that set a code's width is a child of the
+ * stream's block, and `[...stream, 1, block, entry_child]` is the way there.
+ * Child 1 of a stream is always its blocks; child 0 is what came out.
+ */
+type CodeAt = {
+  readonly step: DecodedStep;
+  /** Which bytes of the unpacked stream the step wrote, or null where the map
+   *  could not say. The end mark wrote none. */
+  readonly out: MapStep | null;
+  readonly stream: readonly number[];
+};
+
 /** Structure reads the template's field; the other two read raw bytes. */
 type Mode = "structure" | "le" | "be";
 
@@ -166,6 +183,16 @@ export class Inspector {
   private readonly shape: HTMLElement;
   /** What a structure holds, listed under it. */
   private readonly kids: HTMLElement;
+  /** What one code of a compressed block stands for, under the bits it is. */
+  private readonly decoded: HTMLElement;
+  /** The last answer to that, and the field it was asked about. Asked once per
+   *  field rather than once per draw: the panel is drawn again every time a
+   *  chunk of the file lands, which during a scroll is continually, and taking
+   *  a step apart means rebuilding its block's Huffman tables. A null answer
+   *  is asked again, because that is also what a step whose compressed bytes
+   *  have not arrived yet answers, and the arrival is what redraws the panel. */
+  private code: CodeAt | null = null;
+  private codeFor = "";
   private readonly detail: HTMLElement;
   /** Shift-and-mask for a value that does not start on a byte boundary. */
   private readonly formula: HTMLElement;
@@ -429,7 +456,25 @@ export class Inspector {
       this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
     });
     this.kids.addEventListener("mouseleave", () => this.markHover(null));
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.shape, this.note, this.kids, this.semantics, this.openAs, this.origins, this.types);
+    // The reading of a code, whose clauses lead to the table rows that set the
+    // two widths. The rows behave as the origin rows do: a click goes to the
+    // row, and pointing at one lights it in the views while the pointer rests
+    // here.
+    this.decoded = document.createElement("div");
+    this.decoded.className = "insp-decoded";
+    this.decoded.hidden = true;
+    this.decoded.addEventListener("click", (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      const p = t.closest<HTMLElement>("[data-path]")?.dataset["path"];
+      if (p !== undefined) this.onPick(pathOf(p));
+    });
+    this.decoded.addEventListener("mouseover", (e) => {
+      const t = e.target;
+      this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
+    });
+    this.decoded.addEventListener("mouseleave", () => this.markHover(null));
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.shape, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -942,11 +987,72 @@ export class Inspector {
       const why = DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER;
       this.detail.append(` · ${why}`);
     }
-    this.fillValue(path, n);
-    this.fillProperties(path, n);
+    // Whether this field is one of a compressed block's codes decides three
+    // things below, so it is settled once here: what the box holds, whether
+    // there is a reading to show under it, and how the Length row is worded.
+    const isCode = this.isCode(path, n);
+    const code = isCode ? this.codeAt(path, n) : null;
+    this.fillValue(path, n, isCode);
+    this.fillDecoded(code);
+    this.fillProperties(path, n, code);
     this.fillTypes(path, n);
     this.fillSemantics(path, n);
     this.fillOpenAs(path, n);
+  }
+
+  /**
+   * Whether the field is one code of a compressed block's payload.
+   *
+   * Read off what the run holding it calls its children rather than off the
+   * field's type name: the run is `codes` and one of them is a `code`, which
+   * is the same word the listing counts them in and the same word the heading
+   * over them uses. A step that is not one code is a structure with fields in
+   * it, which is why the composite ones are refused here: a stored block's
+   * payload and an LZW token are steps of a run of codes and are not codes.
+   */
+  private isCode(path: readonly number[], n: TemplateNode): boolean {
+    if (n.composite || path.length === 0) return false;
+    const up = this.doc.templateNode(path.slice(0, -1));
+    return up.status === "ok" && up.node.unit === "code";
+  }
+
+  /**
+   * That code taken apart, with the answer kept until the cursor moves.
+   *
+   * Nothing of this is in the trace, which keeps a decoded literal or a length
+   * and a distance and throws away which symbols carried them, how wide their
+   * codes were and how many extra bits followed each. So the block's tables
+   * are rebuilt and the step's bits read again, which is worth doing for the
+   * one step under the cursor and is why it is asked here, on the field the
+   * cursor landed on, and nowhere in a draw of the listing or the rows.
+   *
+   * The bit to ask by is the step's own place in the run, which is where the
+   * node was put: a code sits at the stream's offset plus the bit its step
+   * began at, so the subtraction gives back the number the trace counts in.
+   */
+  private codeAt(path: readonly number[], n: TemplateNode): CodeAt | null {
+    const key = path.join("/");
+    if (key === this.codeFor && this.code !== null) return this.code;
+    if (key !== this.codeFor) {
+      this.codeFor = key;
+      this.code = null;
+    }
+    const stream = this.streamAbove(path);
+    if (stream === null) return null;
+    const found = this.doc.decodedCode(stream.path, n.offset_bits - stream.offset_bits);
+    this.code = found === null ? null : { step: found.step, out: found.out, stream: stream.path };
+    return this.code;
+  }
+
+  /** The compressed run the field was read out of, and where it starts, for a
+   *  field the decoder laid down. Null for a field of the file itself. */
+  private streamAbove(path: readonly number[]): { readonly path: readonly number[]; readonly offset_bits: number } | null {
+    for (let i = path.length - 1; i >= 1; i--) {
+      const at = path.slice(0, i);
+      const node = this.doc.templateNode(at);
+      if (node.status === "ok" && node.node.decoded) return { path: at, offset_bits: node.node.offset_bits };
+    }
+    return null;
   }
 
   /**
@@ -1009,6 +1115,102 @@ export class Inspector {
         });
     });
     return button;
+  }
+
+  /**
+   * What the code at the cursor stands for: the section between the bits it is
+   * and the properties of the field it is.
+   *
+   * The two levels are kept apart on purpose. Above this the value is the
+   * code's own bits, which are in the file; here is what this block's tables
+   * say those bits mean, which is not. The widths are the working: a match is
+   * a length code, its extra bits, a distance code and its extra bits, and the
+   * four of them add up to the Length row below. A reader who adds them has
+   * checked the whole account of the step.
+   */
+  private fillDecoded(code: CodeAt | null): void {
+    if (code === null) {
+      this.decoded.hidden = true;
+      this.decoded.replaceChildren();
+      return;
+    }
+    const rows = document.createElement("dl");
+    rows.className = "insp-facts insp-decoded-rows";
+    const add = (label: string, value: string, ...under: Node[]): void => {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.append(value, ...under);
+      rows.append(dt, dd);
+    };
+    const step = code.step;
+    const dist = step.distance;
+    if (step.kind === "match" && dist !== undefined) {
+      const len = step.symbol.value;
+      // The idiom, and the overlap, said outright: both are the format working
+      // as intended and both read as a mistake to anybody meeting them for the
+      // first time. A copy that starts one byte back is a run of one byte
+      // repeated; one whose source is shorter than its length is reading bytes
+      // the same step is still writing.
+      const note =
+        dist.value === 1 ? DECODED.repeated(len) : dist.value < len ? DECODED.overlap(dist.value) : null;
+      add(DECODED.copiesLabel, DECODED.copies(len, dist.value), ...(note === null ? [] : [this.codeClause(note, null)]));
+      add(DECODED.lengthLabel, DECODED.length(step.symbol.symbol, len), this.widthClause(code, step.symbol));
+      add(DECODED.distanceLabel, DECODED.distance(dist.symbol, dist.value), this.widthClause(code, dist));
+    } else if (step.kind === "end-of-block") {
+      add(DECODED.symbolLabel, DECODED.endOfBlock(step.symbol.symbol));
+    } else {
+      add(DECODED.symbolLabel, DECODED.literal(step.symbol.symbol, step.symbol.value));
+    }
+    // Where the bytes went, in the unpacked stream's own addresses. Left off
+    // where the step wrote nothing, which is the end mark: an address and a
+    // count of no bytes would put it somewhere it never was.
+    const out = code.out;
+    if (out !== null && out.out_end > out.out_start) {
+      const bytes = out.out_end - out.out_start;
+      add(
+        DECODED.unpacksLabel,
+        DECODED.wrote(
+          formatAddress(out.out_start * 8, 1),
+          bytes === 1 ? null : formatAddress((out.out_end - 1) * 8, 1),
+          bitSizeText(bytes * 8),
+        ),
+      );
+    }
+    this.decoded.replaceChildren(subhead(DECODED.title), rows);
+    this.decoded.hidden = false;
+  }
+
+  /** How wide one of a match's two codes was, under the row it belongs to, as
+   *  a way to the table row that set it. In a fixed block the same words with
+   *  nowhere to go: RFC 1951 set those widths and there is nothing in the file
+   *  to point at. */
+  private widthClause(code: CodeAt, part: DecodedCode): HTMLElement {
+    return this.codeClause(
+      DECODED.width(part.code_bits, part.extra_bits, part.value - part.extra, part.extra),
+      this.entryPath(code, part),
+    );
+  }
+
+  /** The second line under a Decoded row: quieter than the fact above it, and
+   *  a button where it leads somewhere, so the keyboard can reach the row it
+   *  names as well as the pointer. */
+  private codeClause(text: string, to: readonly number[] | null): HTMLElement {
+    const line = document.createElement(to === null ? "div" : "button");
+    line.className = "insp-decoded-how";
+    if (line instanceof HTMLButtonElement) line.type = "button";
+    if (to !== null) line.dataset["path"] = to.join("/");
+    line.textContent = text;
+    return line;
+  }
+
+  /** Which row of the block's tables set a code's width, as a path. Child 1 of
+   *  a stream is its blocks, and the row sits among the block's own children
+   *  at the index the query gives. Null for a fixed block, whose two tables
+   *  are in RFC 1951 rather than in the file. */
+  private entryPath(code: CodeAt, part: DecodedCode): readonly number[] | null {
+    if (part.entry_child === undefined) return null;
+    return [...code.stream, 1, code.step.block, part.entry_child];
   }
 
   /** Date lenses keep the stored integer visible above. Large integrity
@@ -1277,7 +1479,7 @@ export class Inspector {
    * that record is worth reaching and is still not the field the reader is
    * standing on.
    */
-  private fillProperties(path: readonly number[], n: TemplateNode): void {
+  private fillProperties(path: readonly number[], n: TemplateNode, code: CodeAt | null): void {
     // The rows are about to be thrown away, so whatever the pointer was
     // resting on is no longer there to point at. Say so before it goes.
     this.markHover(null);
@@ -1288,7 +1490,7 @@ export class Inspector {
       this.openPropsFor = key;
       this.openProps.clear();
     }
-    const rows = this.properties(path, n, "", false);
+    const rows = this.properties(path, n, "", false, code);
     const above = this.aboveBlocks(path);
     if (rows.length === 0 && above.length === 0) {
       this.origins.hidden = true;
@@ -1322,8 +1524,13 @@ export class Inspector {
    * printing only if another field settled it: that a record's own length is
    * fixed by its type is a fact about the record, and the reader is looking at
    * something inside it.
+   *
+   * `code` is the step behind the field when the field is one of a compressed
+   * block's codes, and only ever for the field at the cursor: the structures
+   * above it are the run, the block and the stream, and none of those is a
+   * code.
    */
-  private properties(path: readonly number[], n: TemplateNode, prefix: string, terse: boolean): Property[] {
+  private properties(path: readonly number[], n: TemplateNode, prefix: string, terse: boolean, code: CodeAt | null): Property[] {
     const from = new Map<OriginRole, Origin[]>();
     const jumps: Origin[] = [];
     // The stream these bytes were unpacked out of, which the core reports as an
@@ -1373,7 +1580,7 @@ export class Inspector {
     }
     if (!terse || said_(["length", "width"])) {
       const value = bitSizeText(n.size_bits);
-      const clause = this.sizedHow(path, n, shape, from);
+      const clause = this.sizedHow(path, n, shape, from, code);
       out.push({
         key: `${prefix}length`,
         label: PROPERTIES.row.length,
@@ -1531,7 +1738,23 @@ export class Inspector {
     const named = from.get("position") ?? [];
     const one = only(named);
     const up = path.slice(0, -1);
-    const parent = this.nameOf(up);
+    const upNode = this.doc.templateNode(up);
+    const upInfo = upNode.status === "ok" ? upNode.node : null;
+    // What the thing above calls the things in it, which is the word the
+    // reader uses for this field: `field` in a header, `code` in a run of
+    // them. The same word the Length row's `total length of its fields` and
+    // the heading over the children are built from.
+    const child = upInfo === null ? null : childWord(upInfo);
+    // A run named for what it holds says nothing the child word has not
+    // already said: a block's codes sit in `codes`, and `first code of codes`
+    // is the same word twice. What a first code is first of is the block
+    // round that run, so the clause names the thing above it instead. The test
+    // is whether the run's name is what a heading over its children would say.
+    const holder =
+      placed === "first" && upInfo !== null && up.length > 0 && childrenHead(upInfo).toLowerCase() === upInfo.name.toLowerCase()
+        ? up.slice(0, -1)
+        : up;
+    const parent = this.nameOf(holder);
     const idx = path[path.length - 1] ?? 0;
     // The field before it, by name: "after the previous field" is a fact the
     // reader can already see in the listing, and the name is what lets them
@@ -1542,6 +1765,7 @@ export class Inspector {
     const text = PROPERTIES.placed[placed]({
       ...(field !== null ? { field } : named.length > 1 ? { fields: named.length } : {}),
       ...(parent !== null ? { parent } : {}),
+      ...(child !== null ? { child } : {}),
       ...(placed === "element" ? { index: idx } : {}),
     });
     if (text === "") return null;
@@ -1551,16 +1775,41 @@ export class Inspector {
       placed === "follows"
         ? (before === null ? null : prev)
         : placed === "first" || placed === "element" || placed === "stream"
-          ? (parent === null ? null : up)
+          ? (parent === null ? null : holder)
           : (one?.path ?? null);
     return { text, path: to };
   }
 
-  /** How the field's length was settled, in one clause. Read off the core's
-   *  word for it, for the reason `placedHow` is. */
-  private sizedHow(path: readonly number[], n: TemplateNode, shape: TemplateReply<Shape>, from: Map<OriginRole, Origin[]>): How | null {
+  /**
+   * How the field's length was settled, in one clause. Read off the core's
+   * word for it, for the reason `placedHow` is.
+   *
+   * Two of those words need what the step behind a code says, and neither can
+   * be answered from the shape alone. `table` names the row of this block's
+   * own table that gave the code its width, which is a fact about one symbol
+   * and is only known once the step has been taken apart. `encoded` is the
+   * word a match shares with a varint, and a match is the one field where that
+   * clause cannot be used: see `PROPERTIES.sizedMatch`.
+   */
+  private sizedHow(
+    path: readonly number[],
+    n: TemplateNode,
+    shape: TemplateReply<Shape>,
+    from: Map<OriginRole, Origin[]>,
+    code: CodeAt | null,
+  ): How | null {
     if (shape.status !== "ok") return null;
     const sized = shape.node.sized;
+    if (code !== null && code.step.kind === "match") return { text: PROPERTIES.sizedMatch(), path: null };
+    if (sized === "table" && code !== null) {
+      // The row's own name, as the listing writes it: `code length for symbol
+      // 77`. Read off the row rather than spelled out here, so the clause and
+      // the row it leads to cannot come to say different things about the same
+      // table entry.
+      const at = this.entryPath(code, code.step.symbol);
+      const field = at === null ? null : this.nameOf(at);
+      if (field !== null && at !== null) return { text: PROPERTIES.sized.table({ field }), path: at };
+    }
     // A count is settled by the counting field; every other length by the
     // fields the size expression reads. Named only where there is one of
     // them: two fields and an expression over them is a formula, and half a
@@ -1649,7 +1898,7 @@ export class Inspector {
       const at = path.slice(0, i);
       const node = this.doc.templateNode(at);
       if (node.status !== "ok") continue;
-      const rows = this.properties(at, node.node, `${at.join("/")}:`, true);
+      const rows = this.properties(at, node.node, `${at.join("/")}:`, true, null);
       if (rows.length === 0) continue;
       out.push([this.stepHead(at), ...rows.map((p) => this.propertyEl(p))]);
     }
@@ -1900,7 +2149,7 @@ export class Inspector {
    * null unmarks whatever was marked and says nothing is being pointed at.
    */
   private markHover(row: HTMLElement | null): void {
-    const on = row !== null && (this.origins.contains(row) || this.kids.contains(row)) ? row : null;
+    const on = row !== null && (this.origins.contains(row) || this.kids.contains(row) || this.decoded.contains(row)) ? row : null;
     if (on === this.hoverRow) return;
     this.hoverRow?.classList.remove("is-hover");
     this.hoverRow = on;
@@ -1950,7 +2199,7 @@ export class Inspector {
    * shows that value instead, read-only: what it is showing belongs to a child
    * with an editor of its own, which is a row in the list underneath.
    */
-  private fillValue(path: readonly number[], n: TemplateNode): void {
+  private fillValue(path: readonly number[], n: TemplateNode, isCode: boolean): void {
     const key = path.join("/");
     if (key !== this.childCapFor) {
       this.childCapFor = key;
@@ -1961,11 +2210,16 @@ export class Inspector {
     const kids = reply?.status === "ok" ? reply.node : null;
     const inside = kids === null ? null : insideValue(n, kids);
     const shown = inside?.kind === "payload" ? inside.node : n;
-    const long = !shown.composite && (shown.kind === "bytes" || shown.kind === "str");
+    // A code reads as a string and is not one: its value is the noughts and
+    // ones the decoder read, worked out from the bits rather than decoded out
+    // of them as text, and the wide box asks the core for text the field does
+    // not have. It is a dozen characters at most in any case, so it goes in
+    // the line the node's own value already fills.
+    const long = !shown.composite && (shown.kind === "bytes" || shown.kind === "str") && !isCode;
     this.area.hidden = !long;
     this.field.hidden = long;
     if (long) this.fillArea(shown, n, inside);
-    else this.fillField(n, inside);
+    else this.fillField(n, inside, isCode);
     this.fillKids(n, kids, reply?.status === "pending" || reply?.status === "working");
   }
 
@@ -2019,10 +2273,14 @@ export class Inspector {
     return { text: countText(kid.child_count, childWord(kid)), count: true };
   }
 
-  private fillField(n: TemplateNode, inside: Inside | null): void {
+  private fillField(n: TemplateNode, inside: Inside | null, isCode: boolean): void {
     const row = inside?.kind === "row" ? inside.text : null;
-    this.note.textContent = "";
-    this.note.hidden = true;
+    // Which way round the noughts and ones are. Without it a reader compares
+    // the box against the binary column, finds the bits of each byte the other
+    // way about, and takes one of the two views for broken.
+    this.note.textContent = isCode ? DECODED.bitsNote : "";
+    this.note.title = isCode ? DECODED.bitsNoteTitle : "";
+    this.note.hidden = !isCode;
     if (this.field.dataset["dirty"] === "1" && document.activeElement === this.field) return;
     // Read-only rather than disabled: a value shown here is still a value to
     // select and copy, which a disabled input in most browsers is not.
@@ -2042,6 +2300,10 @@ export class Inspector {
     // `n` is the field at the cursor, except where the cursor is on a length
     // and its string together, when it is the string and `owner` is the pair.
     const borrowed = inside?.kind === "payload";
+    // The tooltip belongs to whatever last wrote the note, so it is dropped
+    // here with the note itself: a note about this field carrying the last
+    // field's explanation is worse than no note.
+    this.note.title = "";
     if (this.area.dataset["dirty"] === "1" && document.activeElement === this.area) return;
     this.area.classList.remove("invalid");
     this.area.setAttribute("aria-label", `${owner.name}, ${n.type}`);

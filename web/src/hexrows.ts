@@ -17,10 +17,11 @@
 // class here is what that file imports, so at run time the two go one way.
 
 import type { OutlineHeading } from "./outline.ts";
+import type { Span } from "./doc.ts";
 import type { Frame } from "./hexview.ts";
-import { NO_TEMPLATE } from "./strings.ts";
+import { chipsHead, NO_TEMPLATE } from "./strings.ts";
 import type { ChipMeasure } from "./chipfit.ts";
-import { pinnedNoteKey, planRowChips, rowNoteKey, type ChipBlock, type Reading } from "./chipplan.ts";
+import { pinnedNoteKey, planRowChips, rowNoteKey, type Chip, type ChipBlock, type Reading } from "./chipplan.ts";
 import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.ts";
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.ts";
 import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.ts";
@@ -412,7 +413,22 @@ export class HexRows {
   /** The row of column numbers over the bytes, and the word over the column
    *  beside them. */
   private drawHeader(f: Frame): void {
-    const shape = `${f.addrWidth}|${f.bpr}|${f.binary}|${f.showText}|${f.fields}|${f.below}`;
+    // What the column is holding, which is part of the header's shape: the
+    // heading follows the entries, so a screen of one thing and a screen of
+    // several head differently and the row has to be written again between
+    // them.
+    //
+    // Read off the chips the rows were given rather than off `f.spans`, which
+    // is whatever the last answer covered: spans describe whole fields, so an
+    // answer taken for one window is kept while it reaches, and a screen deep
+    // inside a compressed run still carries the header fields it was first
+    // asked about.
+    //
+    // Only where there is a heading to write. The rows are walked once per
+    // draw and a draw is once per frame of a scroll, so the walk is skipped
+    // outright where the column is not headed rather than thrown away after.
+    const head = f.fields && !f.below ? chipsHead(chipSpans(f.byRow)) : "";
+    const shape = `${f.addrWidth}|${f.bpr}|${f.binary}|${f.showText}|${f.fields}|${f.below}|${head}`;
     if (shape === this.headerShape) return;
     this.headerShape = shape;
     const columns = document.createElement("span");
@@ -434,7 +450,7 @@ export class HexRows {
     if (f.fields && !f.below) {
       const title = document.createElement("span");
       title.className = "hv-note hv-head-note";
-      title.textContent = "Fields";
+      title.textContent = head;
       this.header.append(title);
     }
   }
@@ -673,4 +689,11 @@ export class HexRows {
       fillNote(this.pinned, this.carried, true, false, this.picks.field);
     }
   }
+}
+
+/** The entries on the rows, in order, without building a list of them first:
+ *  the heading over the column is worked out from these on every draw, and a
+ *  draw is once a frame while the view is scrolling. */
+function* chipSpans(byRow: readonly Chip[][]): Generator<Span> {
+  for (const row of byRow) for (const chip of row) yield chip.span;
 }
