@@ -37,10 +37,11 @@
 //! is showing all three an inch above.
 //!
 //! The refusals are [`MAGIC_MSG`], [`NOT_EDITABLE_MSG`], [`UNPACKED_MSG`] and
-//! [`CODE_BITS_MSG`]; the two built below, for an EBML field of an impossible
-//! width and for a terminated field with no room for a terminator; and the three
-//! built in [`crate::eval::Evaluator::prepare_write`], for a field too long to
-//! retype and for text whose stored bytes are not what the Value box shows.
+//! [`CODE_BITS_MSG`]; the three built below, for text whose extent was found by
+//! scanning, for an EBML field of an impossible width, and for a terminated
+//! field with no room for a terminator; and the three built in
+//! [`crate::eval::Evaluator::prepare_write`], for a field too long to retype and
+//! for text whose stored bytes are not what the Value box shows.
 
 use crate::bits::bytes_for;
 use crate::template::{Endian, StrLen, Ty};
@@ -90,7 +91,8 @@ pub const CODE_BITS_MSG: &str =
     "Can't edit here or in the hex view: changing one Huffman code means re-encoding the whole block.";
 
 /// Why a signature the format requires is not retyped here. Said in one place
-/// because [`editable`] and `encode` both refuse it.
+/// because two refuse it: [`encode`] below, and
+/// [`crate::eval::Evaluator::prepare_write`] before an editor opens.
 ///
 /// `are fixed by the format` is kept from the message this replaces: it reads
 /// as "set", where `the format fixes these bytes` could be read as repair.
@@ -114,10 +116,10 @@ pub const MAGIC_MSG: &str = "Can't edit here: these bytes are fixed by the forma
 pub const NOT_EDITABLE_MSG: &str = "Can't edit here. Use the hex view.";
 
 /// Why a byte read inside a decompressed stream is not written anywhere. Said
-/// in one place because three ask: [`crate::eval::Evaluator::prepare_write`]
-/// refuses it where the offset would otherwise be taken for a file address,
-/// and the wasm layer refuses a write into a decoded document before it gets
-/// that far.
+/// in one place because two refuse it:
+/// [`crate::eval::Evaluator::prepare_write`], where the offset would otherwise
+/// be taken for a file address, and the wasm layer, which turns a write into a
+/// decoded document away before it gets that far.
 ///
 /// Parallel to [`CODE_BITS_MSG`], and for the same reason: the hex view is
 /// ruled out in the opener, before the colon, because a reader who skims no
