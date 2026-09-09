@@ -17,6 +17,16 @@ lz4_flex = { version = "0.14", default-features = false, features = ["safe-decod
 # library, so this needs no C toolchain either. A second implementation of the
 # format as well as an encoder: what it writes is what `bzip2-rs` has to read.
 bzip2 = "0.6.1"
+# An LZMA *encoder*, which is the thing the tests could not otherwise have.
+# `lzma-rs` ships one, but it writes literals and an end-of-stream marker and
+# nothing else, at lc=3 lp=0 pb=2 and one dictionary size: a stream from it
+# never exercises a match, a repeated distance, a short rep, or a literal coded
+# against the byte a match just copied, which between them are most of the
+# format. This one is the tukaani encoder ported to Rust and takes lc, lp, pb,
+# the dictionary size and the LZMA2 chunk size as arguments, so the property
+# tests can walk all of them. It is also a second reading of the format, which
+# is worth having beside `lzma-rs` when the two are asked the same question.
+lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "encoder"] }
 
 [dependencies]
 # Hashing a path of child indices happens several times per field; the default
