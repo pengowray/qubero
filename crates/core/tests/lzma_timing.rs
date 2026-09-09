@@ -28,16 +28,29 @@ fn how_long_the_lzma_samples_take() {
     }
 
     // Something long enough to say what the rate is rather than what starting
-    // costs. The only encoder that ships here writes literals and no matches,
-    // so this times the literal path; the samples above and below carry the
-    // matches.
+    // costs, packed two ways. `lzma-rs`'s own encoder writes literals and no
+    // matches at all, which is the case with the most symbols per byte and so
+    // the worst this decoder can be asked to do; `lzma-rust2` packs the same
+    // bytes properly, which is what a real file looks like. Both are timed
+    // against `lzma-rs` reading the same stream, since that is the decoder this
+    // replaced and the only honest thing to hold the rate against.
     let text: Vec<u8> = "the quick brown fox jumps over the lazy dog. ".repeat(20_000).into_bytes();
     let mut alone = Vec::new();
     lzma_rs::lzma_compress(&mut &text[..], &mut alone).expect("packs");
     let props = alone[0];
     let dict = u32::from_le_bytes(alone[1..5].try_into().expect("four bytes"));
-    let codec = Codec::Lzma1 { props, dict_size: dict, unpacked: None };
-    time("880 KB of literals", codec, &alone[13..], 50);
+    both("880 KB, literals only", &alone[13..], props, dict, 50);
+
+    let (packed, props) = {
+        use lzma_rust2::{LzmaOptions, LzmaWriter};
+        let mut opts = LzmaOptions::with_preset(6);
+        opts.dict_size = 1 << 23;
+        let mut w = LzmaWriter::new_no_header(Vec::new(), &opts, true).expect("options");
+        let props = w.props();
+        std::io::Write::write_all(&mut w, &text).expect("packs");
+        (w.finish().expect("finishes"), props)
+    };
+    both("880 KB, packed properly", &packed, props, 1 << 23, 500);
 
     // The 7z archives: one whose header is packed with LZMA1, and two whose
     // file streams are packed with LZMA2.
@@ -46,6 +59,31 @@ fn how_long_the_lzma_samples_take() {
     }
     time_space("nested-dirs-solid.7z", &[7, 2, 0], 200);
     time_space("nested-dirs-nonsolid.7z", &[7, 2, 0], 200);
+}
+
+/// One LZMA1 stream through both decoders, so the cost of keeping a map is a
+/// number rather than a memory of what the last run said.
+fn both(name: &str, stream: &[u8], props: u8, dict: u32, rounds: u32) {
+    time(name, Codec::Lzma1 { props, dict_size: dict, unpacked: None }, stream, rounds);
+
+    let read = || {
+        use std::io::Read;
+        let mut header = [0xffu8; 13];
+        header[0] = props;
+        header[1..5].copy_from_slice(&dict.to_le_bytes());
+        let mut input = (&header[..]).chain(stream);
+        let mut out = Vec::new();
+        lzma_rs::lzma_decompress(&mut input, &mut out).expect("reads");
+        out
+    };
+    let out = read();
+    let start = Instant::now();
+    for _ in 0..rounds {
+        std::hint::black_box(read());
+    }
+    let each = start.elapsed() / rounds;
+    let rate = out.len() as f64 / (1 << 20) as f64 / each.as_secs_f64();
+    println!("{name}, through lzma-rs and no map: {each:?}, {rate:.1} MiB/s");
 }
 
 /// Open a run enough times to time it, and say how long one open took.

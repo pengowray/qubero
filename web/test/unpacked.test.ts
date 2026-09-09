@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { UNPACKED, unpackedOrigin } from "../src/strings.ts";
+import { UNPACKED, unpackedOrigin, unpackedOriginRow } from "../src/strings.ts";
 import { markFromRange, markFromStep, type Step } from "../src/unpackedlink.ts";
 
 /** Bit 5 of byte 0x1a3 to bit 2 of byte 0x1a4: the handover's own example. */
@@ -39,6 +39,33 @@ const line = (s: Step, file = "hello.txt.zst"): string =>
 
 test("a match says how long it is and how far back it reaches", () => {
   assert.equal(line(MATCH), "from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: match, 5 bytes back 12");
+});
+
+test("a step that read nothing says so, and still says where", () => {
+  // LZMA's range coder pulls a byte only when it needs one, so most of its
+  // literals pull none. The range is empty and its one bit is where the decoder
+  // stood; `bits 0x6.0 to 0x6.0` would put the step on a bit it never read. The
+  // panel row is the same line without `from`, under a heading that says it.
+  const literal: Step = { in_start: 0x6 * 8, in_end: 0x6 * 8, out_start: 0x40, out_end: 0x41, kind: "literal" };
+  assert.equal(line(literal, "hello.txt.lz"), "from no bits at 0x6.0 of hello.txt.lz: literal");
+  assert.equal(
+    unpackedOriginRow("hello.txt.lz", literal.in_start, literal.in_end, literal.kind),
+    "no bits at 0x6.0 of hello.txt.lz: literal",
+  );
+});
+
+test("properties the container supplied have no bits of the run to point at", () => {
+  // lzip fixes the LZMA properties by convention and 7z keeps them in the
+  // archive header, so the run holds no bytes for them: a step of no width at
+  // the front of the stream, ahead of the five bytes that prime the coder.
+  assert.equal(
+    unpackedOrigin("hello.txt.lz", 0, 0, "header", undefined, undefined, "lzma_props"),
+    "from no bits at 0x0.0 of hello.txt.lz: LZMA properties (lc, lp, pb)",
+  );
+  assert.equal(
+    unpackedOriginRow("hello.txt.lz", 0, 0, "header", undefined, undefined, "lzma_props"),
+    "no bits at 0x0.0 of hello.txt.lz: LZMA properties (lc, lp, pb)",
+  );
 });
 
 test("a bit offset is the byte in hex and the bit after a dot", () => {

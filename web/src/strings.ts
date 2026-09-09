@@ -294,8 +294,9 @@ export const UNPACKED = {
    *  is worked out from every compressed byte before it, so there is nowhere to
    *  put a change to one. */
   readOnly: "Unpacked data cannot be edited yet",
-  /** Where the byte under the cursor came from. `bits` is one range of the
-   *  compressed run, `step` says what the decoder did there. */
+  /** Where the byte under the cursor came from. `bits` is the stretch of the
+   *  compressed run the decoder read, worded by `bits` below, and `step` says
+   *  what the decoder did there. */
   origin: (bits: string, file: string, step: string): string => `from ${UNPACKED.originRow(bits, file, step)}`,
   /**
    * The same fact without the leading `from`, for the panel, where the heading
@@ -305,12 +306,41 @@ export const UNPACKED = {
    * panel is read without a glance at the tab strip, so a bit address with no
    * file in front of it names nothing. The step stays because it is the half
    * that says whether anything new was stored there.
+   *
+   * The noun comes in with `bits`, since it is not always "bits": a step that
+   * read nothing is worded differently from one that read a range, and this
+   * sentence should not have to know which it was handed.
    */
-  originRow: (bits: string, file: string, step: string): string => `bits ${bits} of ${file}: ${step}`,
+  originRow: (bits: string, file: string, step: string): string => `${bits} of ${file}: ${step}`,
   /** One end of that range: `0x1a3.5` is bit 5 of byte 0x1a3. */
   bit: (bit: number): string => `0x${Math.floor(bit / 8).toString(16)}.${bit % 8}`,
-  /** Both ends together. */
-  bits: (from: number, to: number): string => `${UNPACKED.bit(from)} to ${UNPACKED.bit(to)}`,
+  /**
+   * The stretch of the compressed run a step read, noun and all: `bits 0x1a3.5
+   * to 0x1a4.2` is half-open, from the first bit up to but not including the
+   * second.
+   *
+   * A step that read nothing is `no bits at 0x6.0`. Its two ends are the same
+   * bit, and `bits 0x6.0 to 0x6.0` would put the step on a bit it never
+   * touched. This is the usual case for LZMA, not a corner of it: the range
+   * coder pulls a byte only when its arithmetic runs short, so most symbols
+   * pull none and one later symbol pulls the byte that paid for several. Two
+   * other steps are empty for other reasons: LZMA properties a container
+   * supplied instead of the run holding them (lzip fixes them by convention,
+   * 7z writes them in the archive header), and a deflate match that read no
+   * extra bits past the code that named it.
+   *
+   * The position is kept because it is real and it is what the reader asked.
+   * The trace tiles the run, so an empty step's one bit is where the decoder
+   * stood: the bit the next read would have started at. It is also the only
+   * thing there is to look by, since a mark of no width cannot be drawn in the
+   * other tab.
+   *
+   * `===` rather than `<=`: the trace asserts that steps tile, so an end before
+   * its start is a bug, and a range that reads backwards shows it where "no
+   * bits" would hide it.
+   */
+  bits: (from: number, to: number): string =>
+    from === to ? `no bits at ${UNPACKED.bit(from)}` : `bits ${UNPACKED.bit(from)} to ${UNPACKED.bit(to)}`,
   /**
    * What the decoder did, in the format's own words rather than the decoder's.
    *
@@ -386,7 +416,9 @@ export const UNPACKED = {
 /**
  * One line saying where a byte of an unpacked stream came from, as the status
  * bar and the inspector both say it:
- * `from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: match, 5 bytes back 12`.
+ * `from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: match, 5 bytes back 12`,
+ * or, for a step that read nothing, `from no bits at 0x6.0 of hello.txt.lz:
+ * literal`.
  *
  * Takes the step's parts rather than the step, so that the wording lives here
  * and nothing here has to know the shape the core sends it in.

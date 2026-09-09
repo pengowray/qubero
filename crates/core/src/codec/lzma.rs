@@ -136,7 +136,10 @@ fn stream(
     b.push(from as u64 * 8, at_out, StepKind::Header(StepField::RangeInit, RANGE_INIT as u32));
 
     let mut coarse = Coarsening { on: false, step: b.steps(), in_bits: rc.bit_pos(), out_bytes: at_out };
-    b.open_block(rc.bit_pos(), at_out);
+    // The block starts where the stream does, not where its symbols do, so the
+    // five bytes priming the coder fold into it the way an LZMA2 chunk's header
+    // folds into its own.
+    b.open_block(from as u64 * 8, at_out);
     let stop = decoder::run(
         &mut st,
         &mut rc,
@@ -175,7 +178,17 @@ fn stream(
 /// be nothing to read it with. A stream breaking either is refused rather than
 /// read against whatever happened to be left in the decoder.
 pub fn lzma2(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    let mut b = TraceBuilder::default();
+    lzma2_over(data, TraceBuilder::default())
+}
+
+/// The same against a trace builder the caller made. Only the test that has to
+/// reach the coarsening path across a chunk boundary passes anything else.
+#[cfg(test)]
+fn lzma2_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {
+    lzma2_over(data, TraceBuilder::with_budget(budget))
+}
+
+fn lzma2_over(data: &[u8], mut b: TraceBuilder) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut out: Vec<u8> = Vec::new();
     let mut st = State::new(Props { lc: 0, lp: 0, pb: 0 });
     let mut coarse = Coarsening { on: false, step: 0, in_bits: 0, out_bytes: 0 };

@@ -412,6 +412,33 @@ fn too_many_symbols_coarsens_rather_than_filling_memory() {
     }
 }
 
+/// The same across chunk boundaries, which is the case a single stream cannot
+/// reach: once the budget is spent, every later chunk starts already coarse and
+/// records one step for all of its symbols. That is the path where the trace
+/// could stop tiling, because the giving-up happens in the middle of one chunk
+/// and the chunks after it never begin naming anything.
+#[test]
+fn coarsening_holds_across_a_chunk_boundary() {
+    let data = mixed(2_200_000);
+    let stream = pack2(&data, 3, 0, 2, 1 << 16, None);
+    let (out, trace) = lzma2(&stream).expect("reads");
+    assert!(chunks(&trace) > 1, "one chunk, so no boundary is being crossed");
+
+    for budget in [1, 4, 40, 5000] {
+        let (coarse_out, coarse) = lzma2_within(&stream, budget).expect("reads");
+        assert_eq!(coarse_out, out, "a budget of {budget} changed the bytes");
+        coarse.check_tiles().unwrap_or_else(|e| panic!("a budget of {budget} stopped tiling: {e}"));
+        assert!(coarse.coarse(), "a budget of {budget} was not reached");
+        assert!(coarse.len() < trace.len(), "a budget of {budget} named as much as naming it all");
+        assert!(!coarse.steps().any(|s| matches!(s.kind, StepKind::Literal(_))));
+        // The chunk headers survive: what is lost is the symbols inside them.
+        assert_eq!(chunks(&coarse), chunks(&trace), "a budget of {budget} lost a chunk");
+        for byte in (0..out.len() as u64).step_by(9973) {
+            assert!(coarse.map_out(byte).is_some(), "byte {byte} came from nowhere");
+        }
+    }
+}
+
 /// Bytes that are not a stream are refused, and nothing panics. This reads
 /// files nobody vouched for: a broken member must not take the listing down.
 #[test]
