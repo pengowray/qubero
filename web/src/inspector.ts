@@ -1806,16 +1806,23 @@ export class Inspector {
     const found = this.reverseGraph(path);
     // A search that did not happen is not a search that found nothing, and the
     // two must not read alike: the reader is about to edit a length field on
-    // the strength of this row.
+    // the strength of this row. But `not searched` on its own is a row that
+    // says only that the panel declined to answer, and it prints on field
+    // after field. It is left off unless there is a reason to give, and the
+    // reason is the one case worth a row: a structure too big to walk, named
+    // with the count that broke the limit. So an absent row now means either
+    // the search found none or it never ran, and nothing here claims to tell
+    // them apart; a row that is present says why.
     if (found === null) {
       const node = this.doc.templateNode(up);
       const big = node.status === "ok" && node.node.child_count > USED_BY_LIMIT;
+      if (!big || parent === null) return null;
       return {
         key: `${prefix}readby`,
         label: PROPERTIES.row.readBy,
         value: PROPERTIES.readBy.notSearched,
         bit: null,
-        how: big && parent !== null ? { text: PROPERTIES.readBy.tooMany(parent, node.node.child_count, USED_BY_LIMIT), path: up } : null,
+        how: { text: PROPERTIES.readBy.tooMany(parent, node.node.child_count, USED_BY_LIMIT), path: up },
         detail: [],
       };
     }

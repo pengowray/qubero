@@ -1426,8 +1426,13 @@ export const PROPERTIES = {
    * template calls machinery, where a length that settles no length is worth
    * knowing about. Everywhere else the row is left off, because nearly every
    * field is read by nothing and a row that always says the same thing is a
-   * row nobody reads. What keeps that honest is that `not searched` is never
-   * left off, so an absent row means the search finished and found none. The partial case is the file too big to walk and only the
+   * row nobody reads. `not searched` is held to the same rule: on its own it
+   * says only that the panel declined to answer, and it printed on field
+   * after field, so it is left off unless there is a reason to give. The one
+   * reason worth a row is the structure too big to walk, and the clause names
+   * it with the count that broke the limit. An absent row therefore does not
+   * distinguish "found none" from "never ran", and nothing here claims it
+   * does. The partial case is the file too big to walk and only the
    * enclosing structure walked: a bare count there is a count of some of the
    * answer, so the clause says where the search stopped. `searched only in
    * header`, not "only header searched": read cold, "only header" parses as
