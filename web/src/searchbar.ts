@@ -5,7 +5,7 @@
 // while there are milliseconds left in the frame, then yields and carries on,
 // so a scan over gigabytes still repaints and still takes a click to stop.
 
-import type { Doc, NeedleKind, Query } from "./doc.js";
+import type { Doc, NeedleKind, Query } from "./doc.ts";
 import {
   BAD_REPLACEMENT,
   COUNTED,
@@ -17,8 +17,8 @@ import {
   SEARCH_PLACEHOLDER,
   WRAPPED_BACK,
   WRAPPED_ON,
-} from "./strings.js";
-import { el } from "./dom.js";
+} from "./strings.ts";
+import { el } from "./dom.ts";
 
 /** Milliseconds of one frame a search may take before yielding. */
 const SLICE = 8;

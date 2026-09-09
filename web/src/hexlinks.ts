@@ -13,7 +13,7 @@
 // after the rows have been laid out and measured. It cannot change a row's
 // height, which is the one thing the hex view will not tolerate.
 
-import { roleLabel } from "./strings.js";
+import { roleLabel } from "./strings.ts";
 
 /** Where a byte is drawn, in the overlay's own coordinates. Null when that
  *  byte is not on screen. */

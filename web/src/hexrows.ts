@@ -16,16 +16,16 @@
 // The frame's type is imported back from `hexview.ts`. Only the type: the
 // class here is what that file imports, so at run time the two go one way.
 
-import type { OutlineHeading } from "./outline.js";
-import type { Frame } from "./hexview.js";
-import { NO_TEMPLATE } from "./strings.js";
-import type { ChipMeasure } from "./chipfit.js";
-import { pinnedNoteKey, planRowChips, rowNoteKey, type ChipBlock, type Reading } from "./chipplan.js";
-import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.js";
-import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.js";
-import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.js";
-import { fillVals, markVals, newVals, readValFont } from "./valuecells.js";
-import { NO_VALUES, type RowValues } from "./valuetable.js";
+import type { OutlineHeading } from "./outline.ts";
+import type { Frame } from "./hexview.ts";
+import { NO_TEMPLATE } from "./strings.ts";
+import type { ChipMeasure } from "./chipfit.ts";
+import { pinnedNoteKey, planRowChips, rowNoteKey, type ChipBlock, type Reading } from "./chipplan.ts";
+import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.ts";
+import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.ts";
+import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.ts";
+import { fillVals, markVals, newVals, readValFont } from "./valuecells.ts";
+import { NO_VALUES, type RowValues } from "./valuetable.ts";
 
 /** What pressing something in a row does. Held as one object for the life of
  *  the view: every chip and every heading keeps the function it was built

@@ -13,7 +13,7 @@
 // `.ts` on the strings import for the same reason `chipplan.ts` does it: the
 // tests run this file under `node --test`, which strips types but does not
 // rewrite a `.js` specifier back to the file it came from.
-import type { Span } from "./doc.js";
+import type { Span } from "./doc.ts";
 import { bitSizeText, countText } from "./strings.ts";
 
 /** Longest value shown on a chip before it is cut short. */

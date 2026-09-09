@@ -2,9 +2,9 @@
 // signature database's answer about what made it, and the dialog behind both.
 // The toolbar shows one line; everything the rules said is a click away.
 
-import { el } from "./dom.js";
-import type { Doc, Identification, TemplateNode, ToolMatch } from "./doc.js";
-import { OWN_SOURCE } from "./doc.js";
+import { el } from "./dom.ts";
+import type { Doc, Identification, TemplateNode, ToolMatch } from "./doc.ts";
+import { OWN_SOURCE } from "./doc.ts";
 
 const IDENTIFYING_MSG = "Identifying file type...";
 const IDENTIFY_FAILED_MSG = "Couldn't check the file type";

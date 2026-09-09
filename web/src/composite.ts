@@ -15,7 +15,7 @@
  * structure with one value in it and machinery around it.
  */
 
-import type { TemplateNode } from "./doc.js";
+import type { TemplateNode } from "./doc.ts";
 
 /** How many children the inspector reads at a time. Enough that a header
  *  arrives whole rather than as a teaser, and few enough that a list of a

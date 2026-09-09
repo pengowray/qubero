@@ -13,8 +13,8 @@
 // than inside itself has to check whether it is the one showing, which is what
 // `showing` is for.
 
-import { el } from "./dom.js";
-import type { Doc } from "./doc.js";
+import { el } from "./dom.ts";
+import type { Doc } from "./doc.ts";
 
 export type Tab = {
   readonly doc: Doc;

@@ -11,13 +11,13 @@
 // including the stretches nothing covers. That is the same question the hex
 // view's annotation column asks.
 
-import { formatOffset } from "./doc.js";
-import type { Doc, Span } from "./doc.js";
-import { byteDump } from "./bytedump.js";
-import { fieldHue } from "./fieldstyle.js";
-import { markMap } from "./filemap.js";
-import type { MapMark } from "./filemap.js";
-import { REPORT } from "./strings.js";
+import { formatOffset } from "./doc.ts";
+import type { Doc, Span } from "./doc.ts";
+import { byteDump } from "./bytedump.ts";
+import { fieldHue } from "./fieldstyle.ts";
+import { markMap } from "./filemap.ts";
+import type { MapMark } from "./filemap.ts";
+import { REPORT } from "./strings.ts";
 
 /** Fields asked for in one strip. Past this the strip is not the thing to be
  *  reading, and the item's own rows are. */

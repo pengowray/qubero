@@ -19,14 +19,14 @@
  * again on its own, at its own resolution, and reported for what it is.
  */
 
-import { byteText, formatBytes, formatOffset, percentText } from "./doc.js";
-import type { Doc, FocusState, OverviewState, Span } from "./doc.js";
-import { TREEMAP } from "./strings.js";
-import { byteClassColors } from "./fieldstyle.js";
-import { fileMap, markMap, segmentWidths } from "./filemap.js";
-import type { MapMark, MapSegment } from "./filemap.js";
-import type { Viewport } from "./outline.js";
-import { factRow, noneLine } from "./dom.js";
+import { byteText, formatBytes, formatOffset, percentText } from "./doc.ts";
+import type { Doc, FocusState, OverviewState, Span } from "./doc.ts";
+import { TREEMAP } from "./strings.ts";
+import { byteClassColors } from "./fieldstyle.ts";
+import { fileMap, markMap, segmentWidths } from "./filemap.ts";
+import type { MapMark, MapSegment } from "./filemap.ts";
+import type { Viewport } from "./outline.ts";
+import { factRow, noneLine } from "./dom.ts";
 
 /** How the map is drawn: a square this wide plus a one-pixel gap. */
 const CELL = 5;

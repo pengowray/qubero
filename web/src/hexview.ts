@@ -19,17 +19,17 @@
 // `valuetable.ts` say where the values go, and `hexchips.ts`, `valuecells.ts`
 // and `hexheadings.ts` write them into the document.
 
-import type { Doc, Span } from "./doc.js";
-import type { OutlineHeading, Viewport } from "./outline.js";
-import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.js";
-import { placeChips, type Chip, type ChipBlock } from "./chipplan.js";
-import { asciiGlyph, HEX } from "./hexcell.js";
-import { HexRows } from "./hexrows.js";
-import { HexLinks } from "./hexlinks.js";
-import { headingHeight, headingsByRow, type HeadingSizes } from "./hexheadings.js";
-import { RowHeights, type StructuralExtra } from "./rowheights.js";
-import type { Cell } from "./doc.js";
-import { ValueFetch } from "./valuefetch.js";
+import type { Doc, Span } from "./doc.ts";
+import type { OutlineHeading, Viewport } from "./outline.ts";
+import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.ts";
+import { placeChips, type Chip, type ChipBlock } from "./chipplan.ts";
+import { asciiGlyph, HEX } from "./hexcell.ts";
+import { HexRows } from "./hexrows.ts";
+import { HexLinks } from "./hexlinks.ts";
+import { headingHeight, headingsByRow, type HeadingSizes } from "./hexheadings.ts";
+import { RowHeights, type StructuralExtra } from "./rowheights.ts";
+import type { Cell } from "./doc.ts";
+import { ValueFetch } from "./valuefetch.ts";
 import {
   alignedWidth,
   chooseLayout,
@@ -40,7 +40,7 @@ import {
   type Layout,
   type RowValues,
   type RunCells,
-} from "./valuetable.js";
+} from "./valuetable.ts";
 
 export type Pane = "hex" | "ascii";
 /**

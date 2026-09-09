@@ -4,13 +4,13 @@
 // together. Nothing here holds state; writing a value chosen here goes back
 // through the callback the inspector passes in.
 
-import type { TemplateNode, TypeInfo } from "./doc.js";
-import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.js";
-import { quantBody, type GoTo } from "./quantpanel.js";
-import { xrefBody, xrefNote } from "./xrefpanel.js";
-import { chunkBody, chunkNote } from "./chunkpanel.js";
-import { objstmBody, objstmNote } from "./objstmpanel.js";
-import { rowBody, rowNote } from "./rowpanel.js";
+import type { TemplateNode, TypeInfo } from "./doc.ts";
+import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.ts";
+import { quantBody, type GoTo } from "./quantpanel.ts";
+import { xrefBody, xrefNote } from "./xrefpanel.ts";
+import { chunkBody, chunkNote } from "./chunkpanel.ts";
+import { objstmBody, objstmNote } from "./objstmpanel.ts";
+import { rowBody, rowNote } from "./rowpanel.ts";
 
 /** Write a value the reader picked here rather than typed. */
 export type Apply = (path: readonly number[], text: string) => void;

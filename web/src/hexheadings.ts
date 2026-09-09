@@ -1,11 +1,11 @@
 // The lines that name the parts of the file, drawn between the bytes of the
 // grid: which rows they fall on, where along a row each one cuts it, and how a
 // block of them is written.
-import { formatBytes } from "./doc.js";
-import type { OutlineHeading } from "./outline.js";
-import { REPORT } from "./strings.js";
-import { rangeText, shareText } from "./listingdraw.js";
-import { setText } from "./hexcell.js";
+import { formatBytes } from "./doc.ts";
+import type { OutlineHeading } from "./outline.ts";
+import { REPORT } from "./strings.ts";
+import { rangeText, shareText } from "./listingdraw.ts";
+import { setText } from "./hexcell.ts";
 
 /** A heading line, with the part it names kept on it. */
 export type HeadEl = HTMLButtonElement & { _head?: OutlineHeading | undefined };

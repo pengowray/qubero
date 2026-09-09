@@ -22,10 +22,10 @@
  * about nothing would be four pictures nobody could hold together.
  */
 
-import { byteText, formatBytes, formatOffset, percentText, type Doc, type KindTotal, type KindTotals, type TemplateNode } from "./doc.js";
-import { byteClassColor, fieldClass, UNMAPPED_COLOR } from "./fieldstyle.js";
-import { childWord, countText, GAP_LABEL, KIND_LABEL, NO_TEMPLATE_HINT, REPORT, TREEMAP } from "./strings.js";
-import type { TreeNode } from "./treemap.js";
+import { byteText, formatBytes, formatOffset, percentText, type Doc, type KindTotal, type KindTotals, type TemplateNode } from "./doc.ts";
+import { byteClassColor, fieldClass, UNMAPPED_COLOR } from "./fieldstyle.ts";
+import { childWord, countText, GAP_LABEL, KIND_LABEL, NO_TEMPLATE_HINT, REPORT, TREEMAP } from "./strings.ts";
+import type { TreeNode } from "./treemap.ts";
 
 /** Which key the file's bytes are divided by. */
 export type TreemapMode = "structure" | "classes" | "kinds" | "bytes" | "bits";

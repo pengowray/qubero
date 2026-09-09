@@ -11,11 +11,11 @@
 // its rows down and builds them again on every scroll, so the state of the
 // decode lives here, once per document, and the element is drawn from it.
 
-import { formatBytes } from "./doc.js";
-import type { Doc } from "./doc.js";
-import type { CardKind, Item } from "./flatten.js";
-import { el } from "./listingdraw.js";
-import { REPORT } from "./strings.js";
+import { formatBytes } from "./doc.ts";
+import type { Doc } from "./doc.ts";
+import type { CardKind, Item } from "./flatten.ts";
+import { el } from "./listingdraw.ts";
+import { REPORT } from "./strings.ts";
 
 /** The most the card will hand the browser to decode. Past this the picture
  *  is not worth the memory it costs while the reader is looking at bytes. */

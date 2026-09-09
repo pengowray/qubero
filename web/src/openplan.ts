@@ -7,8 +7,8 @@
 // by template name and field name on the JS side; the core stays a describer of
 // the bytes that are literally in the file.
 
-import { formatBytes } from "./doc.js";
-import type { Doc, TemplateNode } from "./doc.js";
+import { formatBytes } from "./doc.ts";
+import type { Doc, TemplateNode } from "./doc.ts";
 
 /** The most this will open into a tab, packed or unpacked. Everything opened
  *  this way is held in memory whole, unlike a file on disk, which is streamed. */

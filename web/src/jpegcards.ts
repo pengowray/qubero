@@ -21,14 +21,14 @@
 // set each carry the path of the field they were read from, so clicking one
 // selects that field exactly as clicking a cell of a record table does.
 
-import { formatBytes, formatOffset } from "./doc.js";
-import type { Doc, TemplateNode } from "./doc.js";
-import type { Item } from "./flatten.js";
-import { pathKey } from "./flatten.js";
-import type { DrawContext } from "./listingdraw.js";
-import { el } from "./listingdraw.js";
-import { countRestarts, dezigzag, huffmanCodes, subsampling } from "./jpegtables.js";
-import { bitSizeText, countText, JPEG, REPORT } from "./strings.js";
+import { formatBytes, formatOffset } from "./doc.ts";
+import type { Doc, TemplateNode } from "./doc.ts";
+import type { Item } from "./flatten.ts";
+import { pathKey } from "./flatten.ts";
+import type { DrawContext } from "./listingdraw.ts";
+import { el } from "./listingdraw.ts";
+import { countRestarts, dezigzag, huffmanCodes, subsampling } from "./jpegtables.ts";
+import { bitSizeText, countText, JPEG, REPORT } from "./strings.ts";
 
 /** The four segments a JPEG has a card for, named by what they hold. */
 export type JpegCardKind = "quant" | "huffman" | "frame" | "scan";

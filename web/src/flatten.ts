@@ -12,7 +12,7 @@
 // are left, so the item count follows what the reader has opened rather than
 // how big the file is.
 
-import type { TemplateNode, TemplateReply } from "./doc.js";
+import type { TemplateNode, TemplateReply } from "./doc.ts";
 import { densityOf, type Density } from "./headingdensity.ts";
 
 /** Children of one list drawn before the reader asks for more. */

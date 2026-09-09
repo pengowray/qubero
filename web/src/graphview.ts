@@ -19,8 +19,8 @@
 
 import cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
-import { fieldClass } from "./fieldstyle.js";
-import { GRAPH } from "./strings.js";
+import { fieldClass } from "./fieldstyle.ts";
+import { GRAPH } from "./strings.ts";
 
 cytoscape.use(fcose);
 

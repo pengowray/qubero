@@ -4,8 +4,8 @@
 // where the objects are. Nothing here can be clicked through to, because none
 // of these bytes are in the file.
 
-import type { ObjStmObject, TypeInfo } from "./doc.js";
-import { countText } from "./strings.js";
+import type { ObjStmObject, TypeInfo } from "./doc.ts";
+import { countText } from "./strings.ts";
 
 function span(cls: string, text: string): HTMLElement {
   const e = document.createElement("span");

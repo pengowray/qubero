@@ -11,23 +11,23 @@
 // because `spans` is windowed by bit range and cannot say how many rows a file
 // has; a flattened tree is a list with a length, and a list scrolls by index.
 
-import type { Doc } from "./doc.js";
-import type { FieldPick } from "./doc.js";
-import { emptyState, flatten, PAGE, pathKey, refold } from "./flatten.js";
-import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.js";
-import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.js";
-import { markStrip } from "./bytestrip.js";
-import { cardKind, watchCard } from "./contentcard.js";
-import { markMap } from "./filemap.js";
-import { checkGap } from "./gapcheck.js";
-import { isRecordList } from "./records.js";
-import { jpegCardKind } from "./jpegcards.js";
-import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens, spaceOf } from "./listingdraw.js";
-import type { DrawContext, Selected } from "./listingdraw.js";
-import type { GapVerdict } from "./gapcheck.js";
-import type { MapSegment } from "./filemap.js";
-import type { OutlineHeading, Viewport } from "./outline.js";
-import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.js";
+import type { Doc } from "./doc.ts";
+import type { FieldPick } from "./doc.ts";
+import { emptyState, flatten, PAGE, pathKey, refold } from "./flatten.ts";
+import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.ts";
+import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.ts";
+import { markStrip } from "./bytestrip.ts";
+import { cardKind, watchCard } from "./contentcard.ts";
+import { markMap } from "./filemap.ts";
+import { checkGap } from "./gapcheck.ts";
+import { isRecordList } from "./records.ts";
+import { jpegCardKind } from "./jpegcards.ts";
+import { drawItem, el, headingTitle, holdsSelection, isSelected, itemOpens, spaceOf } from "./listingdraw.ts";
+import type { DrawContext, Selected } from "./listingdraw.ts";
+import type { GapVerdict } from "./gapcheck.ts";
+import type { MapSegment } from "./filemap.ts";
+import type { OutlineHeading, Viewport } from "./outline.ts";
+import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./strings.ts";
 
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was

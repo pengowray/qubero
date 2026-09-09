@@ -5,17 +5,17 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { formatAddress, formatBytes, formatOffset } from "./doc.js";
-import type { BitRange } from "./hexview.js";
-import type { Doc, FieldGraph, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.js";
-import { LENSES, type Lens } from "./lenses.js";
-import { bitSizeText, CHECKED, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.js";
-import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.js";
-import { fieldClass } from "./fieldstyle.js";
-import { withPictures } from "./textview.js";
-import { typePanel } from "./typepanel.js";
-import { fieldNumber, openPlan, type OpenPlan } from "./openplan.js";
-import { extraction } from "./bitextract.js";
+import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import type { BitRange } from "./hexview.ts";
+import type { Doc, FieldGraph, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
+import { LENSES, type Lens } from "./lenses.ts";
+import { bitSizeText, CHECKED, childWord, childrenHead, countText, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
+import { fieldClass } from "./fieldstyle.ts";
+import { withPictures } from "./textview.ts";
+import { typePanel } from "./typepanel.ts";
+import { fieldNumber, openPlan, type OpenPlan } from "./openplan.ts";
+import { extraction } from "./bitextract.ts";
 import {
   CODEPAGE_A_DEFAULT,
   CODEPAGE_A_KEY,
@@ -29,7 +29,7 @@ import {
   LITERAL_LANGS,
   rememberChoice,
   storedChoice,
-} from "./encodings.js";
+} from "./encodings.ts";
 
 const AUTO_CHECK_BYTES = 1024 * 1024;
 

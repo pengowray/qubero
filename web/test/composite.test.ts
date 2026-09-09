@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { insideValue } from "../src/composite.ts";
-import type { TemplateNode } from "../src/doc.js";
+import type { TemplateNode } from "../src/doc.ts";
 
 /** Enough of a node for the rules under test. The rest of `TemplateNode` is
  *  not read here, and writing it out per kid would bury what each case says. */

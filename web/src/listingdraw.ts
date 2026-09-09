@@ -8,22 +8,22 @@
 // map is drawn from, what is selected, what is open — arrives as a
 // `DrawContext`, read fresh for each paint.
 
-import { formatAddress, formatBytes, formatOffset } from "./doc.js";
-import type { Doc, TemplateNode } from "./doc.js";
-import { DUMP_MIN_BYTES, pathKey, PAGE } from "./flatten.js";
-import type { Item } from "./flatten.js";
-import { fieldClass, sectionColor } from "./fieldstyle.js";
-import { COLOUR_TYPE, swatch } from "./colour.js";
-import { byteStrip } from "./bytestrip.js";
-import { byteDump } from "./bytedump.js";
-import { drawCard } from "./contentcard.js";
-import { drawJpegCard } from "./jpegcards.js";
-import { fileMap } from "./filemap.js";
-import { recordTable } from "./records.js";
-import type { RecordCell } from "./records.js";
-import type { GapVerdict } from "./gapcheck.js";
-import type { MapSegment } from "./filemap.js";
-import { bitSizeText, childWord, countText, DECODED_NO_HEX, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT, UNPACKED } from "./strings.js";
+import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import type { Doc, TemplateNode } from "./doc.ts";
+import { DUMP_MIN_BYTES, pathKey, PAGE } from "./flatten.ts";
+import type { Item } from "./flatten.ts";
+import { fieldClass, sectionColor } from "./fieldstyle.ts";
+import { COLOUR_TYPE, swatch } from "./colour.ts";
+import { byteStrip } from "./bytestrip.ts";
+import { byteDump } from "./bytedump.ts";
+import { drawCard } from "./contentcard.ts";
+import { drawJpegCard } from "./jpegcards.ts";
+import { fileMap } from "./filemap.ts";
+import { recordTable } from "./records.ts";
+import type { RecordCell } from "./records.ts";
+import type { GapVerdict } from "./gapcheck.ts";
+import type { MapSegment } from "./filemap.ts";
+import { bitSizeText, childWord, countText, DECODED_NO_HEX, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT, UNPACKED } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };

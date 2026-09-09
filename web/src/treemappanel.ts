@@ -16,12 +16,12 @@
  * because the way out of a zoom has to be visible from inside it.
  */
 
-import type { Doc, FieldPick } from "./doc.js";
-import type { OutlineHeading } from "./outline.js";
-import { formatBytes, formatOffset, percentText } from "./doc.js";
-import { TREEMAP } from "./strings.js";
-import { boxAt, drawTreemap, nodeAt, type TreeNode } from "./treemap.js";
-import { bitsLine, bitsTree, boxTitle, bytesTree, classesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type StructureAt, type TreemapMode, type TreemapTree } from "./treemapdata.js";
+import type { Doc, FieldPick } from "./doc.ts";
+import type { OutlineHeading } from "./outline.ts";
+import { formatBytes, formatOffset, percentText } from "./doc.ts";
+import { TREEMAP } from "./strings.ts";
+import { boxAt, drawTreemap, nodeAt, type TreeNode } from "./treemap.ts";
+import { bitsLine, bitsTree, boxTitle, bytesTree, classesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type StructureAt, type TreemapMode, type TreemapTree } from "./treemapdata.ts";
 
 /** The whole-file scan's resolution. The same number the rail's byte-class map
  *  asks for, so both are answered by one scan: the core keeps one per sheet
@@ -535,7 +535,7 @@ function rememberMode(mode: TreemapMode): void {
   }
 }
 
-function nodeOf(doc: Doc, path: readonly number[]): import("./doc.js").TemplateNode | null {
+function nodeOf(doc: Doc, path: readonly number[]): import("./doc.ts").TemplateNode | null {
   const r = doc.templateNode(path);
   return r.status === "ok" ? r.node : null;
 }

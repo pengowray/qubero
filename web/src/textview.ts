@@ -23,7 +23,7 @@
 // where the escape sequences are. A capture of a coloured terminal is not
 // noise to be hidden; it is what is in the file.
 
-import { formatOffset } from "./doc.js";
+import { formatOffset } from "./doc.ts";
 import {
   CODEPAGE_A_DEFAULT,
   CODEPAGE_A_KEY,
@@ -32,14 +32,14 @@ import {
   CODEPAGES_A,
   CODEPAGES_B,
   storedChoice,
-} from "./encodings.js";
-import type { Doc, TextLine, TextReading } from "./doc.js";
-import { el } from "./dom.js";
-import { RowHeights } from "./rowheights.js";
-import { LineIndex } from "./lineindex.js";
-import type { Endings } from "./lineindex.js";
-import { moveRows, needsPaint, paintWindow } from "./paintwindow.js";
-import { TEXTVIEW } from "./strings.js";
+} from "./encodings.ts";
+import type { Doc, TextLine, TextReading } from "./doc.ts";
+import { el } from "./dom.ts";
+import { RowHeights } from "./rowheights.ts";
+import { LineIndex } from "./lineindex.ts";
+import type { Endings } from "./lineindex.ts";
+import { moveRows, needsPaint, paintWindow } from "./paintwindow.ts";
+import { TEXTVIEW } from "./strings.ts";
 
 /** Height of one row, which must match `--tv-row` in the stylesheet: rows are
  *  placed by arithmetic on it. */

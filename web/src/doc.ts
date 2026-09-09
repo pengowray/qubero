@@ -2,9 +2,9 @@
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
 import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
-import { formatBytes, formatOffset } from "./format.js";
-export { byteText, formatBytes, formatOffset, percentText } from "./format.js";
-import { UNPACKED } from "./strings.js";
+import { formatBytes, formatOffset } from "./format.ts";
+export { byteText, formatBytes, formatOffset, percentText } from "./format.ts";
+import { UNPACKED } from "./strings.ts";
 
 const CHUNK_SIZE = 64 * 1024;
 /** How many rounds of fetch-and-ask-again a read of text is given. Each round

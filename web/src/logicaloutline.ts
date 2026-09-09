@@ -1,6 +1,6 @@
-import { formatBytes, formatOffset } from "./doc.js";
-import type { ContentObject, Doc, TemplateReply } from "./doc.js";
-import { countText } from "./strings.js";
+import { formatBytes, formatOffset } from "./doc.ts";
+import type { ContentObject, Doc, TemplateReply } from "./doc.ts";
+import { countText } from "./strings.ts";
 
 /** One format-independent entry in a file's semantic outline. `sourcePath`
  * connects it back to the storage template without making that template's

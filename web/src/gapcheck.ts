@@ -11,7 +11,7 @@
 // would restart each other's work. Reading the bytes is cheaper than either
 // for the sizes worth reading, and honest about the sizes that are not.
 
-import type { Doc } from "./doc.js";
+import type { Doc } from "./doc.ts";
 
 /** The most that is read to answer the question. Past this the answer is that
  *  nobody looked: a gap can be the greater part of a file, and pulling it

@@ -1,7 +1,7 @@
 // Dev-only: a fake file of any size with deterministic content, so large-file
 // behaviour can be exercised without a real multi-gigabyte file on disk.
 
-import type { ByteSource } from "./doc.js";
+import type { ByteSource } from "./doc.ts";
 
 export function syntheticFile(size: number): ByteSource {
   return {

@@ -5,9 +5,9 @@
 // one goes there, which is the nearest thing to the object list a template
 // cannot build from bytes that are not in the file.
 
-import type { GoTo } from "./quantpanel.js";
-import type { TypeInfo, XrefRow } from "./doc.js";
-import { countText } from "./strings.js";
+import type { GoTo } from "./quantpanel.ts";
+import type { TypeInfo, XrefRow } from "./doc.ts";
+import { countText } from "./strings.ts";
 
 function span(cls: string, text: string): HTMLElement {
   const e = document.createElement("span");

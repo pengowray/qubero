@@ -15,9 +15,9 @@
 // table cell — so the cell says how many of what, and the row's "stored at"
 // is the way into them.
 
-import type { Doc, TemplateNode } from "./doc.js";
-import type { RecordCell, RecordPlan, RecordRow, RecordTable } from "./records.js";
-import { countText } from "./strings.js";
+import type { Doc, TemplateNode } from "./doc.ts";
+import type { RecordCell, RecordPlan, RecordRow, RecordTable } from "./records.ts";
+import { countText } from "./strings.ts";
 
 /** GGUF's own field names, which is why they are not in `strings.ts`. */
 const COLUMNS = ["key", "value_type", "value"] as const;

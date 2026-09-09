@@ -22,7 +22,7 @@
 // format is drawn should not mean changing what its template says the bytes
 // are.
 
-import type { TemplateNode } from "./doc.js";
+import type { TemplateNode } from "./doc.ts";
 
 /** How a run of a structure's children is drawn. */
 export type Density =

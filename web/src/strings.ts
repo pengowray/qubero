@@ -1,10 +1,10 @@
 // Text that more than one view shows. Two views naming the same thing two ways
 // is the reader's problem, not a detail of whichever file happens to draw it.
 
-import { formatBytes, formatOffset } from "./format.js";
+import { formatBytes, formatOffset } from "./format.ts";
 // Type only, and erased: `doc.ts` imports this file at run time, and the
 // clause tables below are keyed by the words the core sends in `Shape`.
-import type { FieldTime, Shape } from "./doc.js";
+import type { FieldTime, Shape } from "./doc.ts";
 
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no

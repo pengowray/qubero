@@ -4,10 +4,10 @@
 // is not the order they are read in. The hex view can only show the bytes, so
 // this is where the numbers are.
 
-import { extraction } from "./bitextract.js";
-import type { BitRange } from "./hexview.js";
-import type { QuantPart, QuantWeight, TypeInfo } from "./doc.js";
-import { countText } from "./strings.js";
+import { extraction } from "./bitextract.ts";
+import type { BitRange } from "./hexview.ts";
+import type { QuantPart, QuantWeight, TypeInfo } from "./doc.ts";
+import { countText } from "./strings.ts";
 
 /** Asked for when a weight is clicked, so the views go to its bits and mark
  *  them. A weight the layout keeps in two places gives two runs. */

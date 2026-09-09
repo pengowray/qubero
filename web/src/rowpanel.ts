@@ -5,8 +5,8 @@
 // stayed, so this is where the row's columns are. A column may begin on one
 // page and end on another, so there is nowhere single in the file to go to.
 
-import type { SqliteColumn, TypeInfo } from "./doc.js";
-import { countText } from "./strings.js";
+import type { SqliteColumn, TypeInfo } from "./doc.ts";
+import { countText } from "./strings.ts";
 
 /** How many pages of numbers are worth printing instead of counting. */
 const PAGES_LISTED = 12;

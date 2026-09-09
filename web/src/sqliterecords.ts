@@ -26,10 +26,10 @@
 // root of each b-tree is named in the schema; every other page is reached by
 // following child pointers, so `owners` walks the trees once and remembers.
 
-import type { Doc, TemplateNode } from "./doc.js";
-import type { RecordCell, RecordPlan, RecordRow, RecordTable } from "./records.js";
-import { REPORT } from "./strings.js";
-import { columnNames, isRowidAlias, splitDefinitions } from "./sqlitesql.js";
+import type { Doc, TemplateNode } from "./doc.ts";
+import type { RecordCell, RecordPlan, RecordRow, RecordTable } from "./records.ts";
+import { REPORT } from "./strings.ts";
+import { columnNames, isRowidAlias, splitDefinitions } from "./sqlitesql.ts";
 
 /** SQLite's page type byte, as the enum's raw value. */
 const TABLE_INTERIOR = 5;

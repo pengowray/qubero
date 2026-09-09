@@ -1,25 +1,25 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.js";
-import * as nav from "./navhistory.js";
-import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.js";
-import type { LinkEnd, LinkPlan } from "./hexlinks.js";
-import type { GraphView } from "./graphview.js";
-import { Inspector } from "./inspector.js";
-import { saveDoc } from "./save.js";
-import { parseSize, syntheticFile } from "./synthetic.js";
-import { ListingReport } from "./listingreport.js";
-import { ListPane } from "./listpane.js";
-import { TextView } from "./textview.js";
-import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY } from "./stringsview.js";
-import { Crystal } from "./crystal.js";
-import { OverviewPanel } from "./overviewpanel.js";
-import { Tabs, type Page, type Tab } from "./tabs.js";
-import { markFromRange, markFromStep } from "./unpackedlink.js";
-import { SearchBar } from "./searchbar.js";
-import { el } from "./dom.js";
-import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence, templateTypeName } from "./filetype.js";
-import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.js";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.ts";
+import * as nav from "./navhistory.ts";
+import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
+import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
+import type { GraphView } from "./graphview.ts";
+import { Inspector } from "./inspector.ts";
+import { saveDoc } from "./save.ts";
+import { parseSize, syntheticFile } from "./synthetic.ts";
+import { ListingReport } from "./listingreport.ts";
+import { ListPane } from "./listpane.ts";
+import { TextView } from "./textview.ts";
+import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY } from "./stringsview.ts";
+import { Crystal } from "./crystal.ts";
+import { OverviewPanel } from "./overviewpanel.ts";
+import { Tabs, type Page, type Tab } from "./tabs.ts";
+import { markFromRange, markFromStep } from "./unpackedlink.ts";
+import { SearchBar } from "./searchbar.ts";
+import { el } from "./dom.ts";
+import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence, templateTypeName } from "./filetype.ts";
+import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
-import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.js";
+import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.ts";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -1052,7 +1052,7 @@ function build(tab: Tab): Page {
    */
   const showGraph = async (): Promise<void> => {
     if (graph === null) {
-      const { GraphView, NODE_CAP } = await import("./graphview.js");
+      const { GraphView, NODE_CAP } = await import("./graphview.ts");
       graph = new GraphView();
       graphCap = NODE_CAP;
       graph.onPick = (path) => {

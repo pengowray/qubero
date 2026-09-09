@@ -10,9 +10,9 @@
 // are a division rather than a search and only those are read: four kilobytes
 // of free space and four hundred megabytes of payload both open at once.
 
-import { formatOffset } from "./doc.js";
-import type { Doc } from "./doc.js";
-import { REPORT } from "./strings.js";
+import { formatOffset } from "./doc.ts";
+import type { Doc } from "./doc.ts";
+import { REPORT } from "./strings.ts";
 
 /** Bytes on one line. Sixteen is what every hex dump does, and the reason is
  *  still good: the low digit of the address is the column. */

@@ -37,9 +37,9 @@
 // no lookups. If two of those turn up, the declarative half belongs in the IR
 // and this file keeps the awkward cases.
 
-import type { Doc, TemplateNode } from "./doc.js";
-import { sqlitePlan } from "./sqliterecords.js";
-import { ggufPlan } from "./ggufrecords.js";
+import type { Doc, TemplateNode } from "./doc.ts";
+import { sqlitePlan } from "./sqliterecords.ts";
+import { ggufPlan } from "./ggufrecords.ts";
 
 /** Somewhere else in the same file that this cell names. Drawn as a link with
  *  a direction arrow, which is rule 7's cross-reference. */

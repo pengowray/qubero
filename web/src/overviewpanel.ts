@@ -16,17 +16,17 @@
 // what it needs: where the main view is looking, and which parts the listing
 // last named.
 
-import { formatBytes, formatOffset, percentText } from "./doc.js";
-import { NO_TEMPLATE, REPORT } from "./strings.js";
-import type { Doc } from "./doc.js";
-import type { FieldPick } from "./doc.js";
-import { factRow, noneLine, noteLine } from "./dom.js";
-import { MinimapPanel } from "./minimappanel.js";
-import { TreemapPanel } from "./treemappanel.js";
-import type { MapSegment } from "./filemap.js";
-import type { OutlineHeading, Viewport } from "./outline.js";
-import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.js";
-import type { LogicalNode, LogicalOutline } from "./logicaloutline.js";
+import { formatBytes, formatOffset, percentText } from "./doc.ts";
+import { NO_TEMPLATE, REPORT } from "./strings.ts";
+import type { Doc } from "./doc.ts";
+import type { FieldPick } from "./doc.ts";
+import { factRow, noneLine, noteLine } from "./dom.ts";
+import { MinimapPanel } from "./minimappanel.ts";
+import { TreemapPanel } from "./treemappanel.ts";
+import type { MapSegment } from "./filemap.ts";
+import type { OutlineHeading, Viewport } from "./outline.ts";
+import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.ts";
+import type { LogicalNode, LogicalOutline } from "./logicaloutline.ts";
 
 /** Top-level parts listed before the list says how many more there are. A
  *  SQLite file of a hundred thousand pages is not a hundred thousand buttons;

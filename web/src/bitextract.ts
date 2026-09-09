@@ -2,8 +2,8 @@
 // the shift-and-mask that lifts them out. Both the value panel's own section
 // and a weight inside a quantised block show this, so it is written once here.
 
-import { bitFormula, formatLength, formatOffset } from "./doc.js";
-import { BYTE_NOTE } from "./strings.js";
+import { bitFormula, formatLength, formatOffset } from "./doc.ts";
+import { BYTE_NOTE } from "./strings.ts";
 
 /** Where a run of bits starts and how far it runs, both in the editor's own
  *  notation: `0x27ba64d3, len: 0+4b`. */

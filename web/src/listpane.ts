@@ -13,10 +13,10 @@
 // window are asked for, which is what makes a list nobody could draw scroll
 // like one anybody can.
 
-import { formatOffset } from "./doc.js";
-import type { Doc, FieldPick, TemplateNode } from "./doc.js";
-import { fieldClass } from "./fieldstyle.js";
-import { bitSizeText, childWord, countText, REPORT } from "./strings.js";
+import { formatOffset } from "./doc.ts";
+import type { Doc, FieldPick, TemplateNode } from "./doc.ts";
+import { fieldClass } from "./fieldstyle.ts";
+import { bitSizeText, childWord, countText, REPORT } from "./strings.ts";
 
 /** Height of one row, which must match `--lp-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that draws taller would slide out

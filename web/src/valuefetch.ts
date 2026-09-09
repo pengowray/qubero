@@ -14,9 +14,9 @@
 // is `valuelayout.ts`. Keeping the waiting here is what lets the view's draw
 // path be a function of what it was handed.
 
-import type { Cell, Doc, Span } from "./doc.js";
-import { SPAN_LIMIT } from "./hexchips.js";
-import type { RunCells } from "./valuetable.js";
+import type { Cell, Doc, Span } from "./doc.ts";
+import { SPAN_LIMIT } from "./hexchips.ts";
+import type { RunCells } from "./valuetable.ts";
 
 /** The most cells one byte on screen can be worth. A `q2_k` block packs four
  *  weights into every byte, which is the densest type the core takes apart;

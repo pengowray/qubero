@@ -1,6 +1,6 @@
 // Save the composed output to a new file. Never writes the original in place.
 
-import type { Doc } from "./doc.js";
+import type { Doc } from "./doc.ts";
 
 type SavePicker = (opts: { suggestedName: string }) => Promise<{
   createWritable(): Promise<{ write(data: Blob): Promise<void>; close(): Promise<void> }>;

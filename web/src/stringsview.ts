@@ -17,9 +17,9 @@
 // arithmetic, and it is what makes a list of two hundred thousand strings
 // scroll like a list of twenty.
 
-import type { Doc, StringEncoding, StringHit, StringScanOpts } from "./doc.js";
-import { formatOffset } from "./format.js";
-import { STRINGSVIEW as SV } from "./strings.js";
+import type { Doc, StringEncoding, StringHit, StringScanOpts } from "./doc.ts";
+import { formatOffset } from "./format.ts";
+import { STRINGSVIEW as SV } from "./strings.ts";
 
 /** Height of one row, which must match `--sv-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that drew taller would slide out
