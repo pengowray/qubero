@@ -12,6 +12,12 @@
 // Licence texts come from the crate sources in ~/.cargo/registry. A crate that
 // ships none is listed with its SPDX expression alone and needs checking by
 // hand; the summary at the top of the generated file counts those.
+//
+// It reads two trees and needs both. `node_modules` is not tracked, so a git
+// worktree usually has none; this looks in the main checkout before giving up,
+// and refuses to write at all rather than emit a file with one half missing.
+// A notices file that quietly loses its npm half still looks like a notices
+// file, which is why that is an error and not a warning.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
@@ -133,9 +139,38 @@ const buildOnly = crates.filter((c) => c.buildOnly);
  * the licence texts are.
  */
 const WEB = join(ROOT, "web");
-const NODE_MODULES = join(WEB, "node_modules");
+
+/**
+ * Where the installed npm tree is.
+ *
+ * Beside `web/package.json`, normally. In a git worktree it is usually not:
+ * `node_modules` is not tracked, so a fresh worktree has none, and this used
+ * to quietly find nothing and write a file with every npm notice missing. So
+ * the main checkout is asked as well, which is where an agent working in a
+ * worktree will have one.
+ */
+function nodeModules() {
+  const here = join(WEB, "node_modules");
+  if (existsSync(here)) return here;
+  try {
+    const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    }).trim();
+    const main = join(dirname(common), "web", "node_modules");
+    if (main !== here && existsSync(main)) {
+      console.error(`notices: no web/node_modules here, reading the main checkout's at ${main}`);
+      return main;
+    }
+  } catch {
+    // Not a git checkout, or no git. Nothing to fall back to.
+  }
+  return null;
+}
+const NODE_MODULES = nodeModules();
 
 function npmManifest(name) {
+  if (NODE_MODULES === null) return null;
   const file = join(NODE_MODULES, name, "package.json");
   return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
 }
@@ -155,6 +190,31 @@ for (const name of Object.keys(webPkg.dependencies ?? {})) {
   if (!name.startsWith("@types/")) walkNpm(name);
 }
 const npmPkgs = [...npmSeen.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+// Stop rather than write a file that is missing what it exists to carry. A
+// licence notice that silently loses two hundred lines is worse than no run at
+// all: the file still looks like a notices file, and nothing says the npm half
+// is gone. This is the check that was not here, and it cost two agents an
+// afternoon between them.
+const declared = Object.keys(webPkg.dependencies ?? {}).filter((n) => !n.startsWith("@types/"));
+if (declared.length > 0 && npmPkgs.length === 0) {
+  console.error(
+    `notices: web/package.json declares ${declared.length} dependencies and none of them resolved.\n` +
+      (NODE_MODULES === null
+        ? "  No node_modules was found here or in the main checkout.\n"
+        : `  Looked in ${NODE_MODULES}.\n`) +
+      "  Run `npm install` in web/, or run this from a checkout that has one.\n" +
+      "  THIRD-PARTY-NOTICES.md has NOT been written.",
+  );
+  process.exit(1);
+}
+
+// The same rule for the other half. `cargo metadata` failing to reach the wasm
+// crates would leave a file with the npm notices and no crate ones.
+if (shipped.length === 0) {
+  console.error("notices: no crates resolved for the wasm target. THIRD-PARTY-NOTICES.md has NOT been written.");
+  process.exit(1);
+}
 
 /** A package's own licence text, by the file names npm packages use. */
 function npmTexts(pkg) {
