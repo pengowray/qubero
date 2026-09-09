@@ -151,6 +151,13 @@ impl<'a> Walk<'a> {
                         self.found += 1;
                         self.check(&f.name, check);
                     }
+                    // A list of sums declares one check for all its elements,
+                    // and it is validated in the same scope: what an element
+                    // can name is what the record holding the list can name.
+                    if let Some(check) = &f.elem_check {
+                        self.found += 1;
+                        self.check(&f.name, check);
+                    }
                     self.ty(&f.ty, types);
                 }
                 self.scope.pop();
@@ -241,6 +248,23 @@ impl<'a> Walk<'a> {
                     );
                 }
             }
+            // The first name is reached the way `Within` reaches one, so it
+            // has to be in view here; the rest go down inside it, where this
+            // walk cannot follow, and are checked against every name the
+            // template declares as a backwards reach is.
+            Named::Elem { array, index } => {
+                let Some((first, rest)) = array.split_first() else {
+                    panic!("{at} covers an element of a list with no name");
+                };
+                self.names(first, at);
+                for seg in rest {
+                    assert!(
+                        self.declared.contains(seg.as_str()),
+                        "{at} covers an element reached through `{seg}`, and no structure in this template declares one"
+                    );
+                }
+                self.expr(index, &format!("{at}, in which element it covers"));
+            }
         }
     }
 
@@ -326,6 +350,13 @@ fn a_blank_over_coverage_that_cannot_hold_the_field_is_caught() {
 #[should_panic(expected = "and no structure in this template declares one")]
 fn a_backwards_reach_through_a_name_nothing_declares_is_caught() {
     walk(Check::of(Checksum::Sum8, Covers::Field { name: Named::earlier(&["nowhere"]) }));
+}
+
+/// And an element check reaching a list nothing declares.
+#[test]
+#[should_panic(expected = "no structure it sits in has one")]
+fn an_element_check_over_a_list_nothing_declares_is_caught() {
+    walk(Check::of(Checksum::Sum8, Covers::Field { name: Named::elem(&["nowhere"], Expr::Idx) }));
 }
 
 fn walk_one(over: Covers, when: Option<Expr>) {
