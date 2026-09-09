@@ -1801,32 +1801,15 @@ export class Inspector {
     // Nothing reads the whole file, and the row would be a heading over an
     // answer that cannot be anything else.
     if (path.length === 0) return null;
-    const up = path.slice(0, -1);
-    const parent = this.nameOf(up);
     const found = this.reverseGraph(path);
-    // A search that did not happen is not a search that found nothing, and the
-    // two must not read alike: the reader is about to edit a length field on
-    // the strength of this row. But `not searched` on its own is a row that
-    // says only that the panel declined to answer, and it prints on field
-    // after field. It is left off unless there is a reason to give, and the
-    // reason is the one case worth a row: a structure too big to walk, named
-    // with the count that broke the limit. So an absent row now means either
-    // the search found none or it never ran, and nothing here claims to tell
-    // them apart; a row that is present says why.
-    if (found === null) {
-      const node = this.doc.templateNode(up);
-      const big = node.status === "ok" && node.node.child_count > USED_BY_LIMIT;
-      if (!big || parent === null) return null;
-      return {
-        key: `${prefix}readby`,
-        label: PROPERTIES.row.readBy,
-        value: PROPERTIES.readBy.notSearched,
-        bit: null,
-        how: { text: PROPERTIES.readBy.tooMany(parent, node.node.child_count, USED_BY_LIMIT), path: up },
-        detail: [],
-      };
-    }
-    const { graph, self, whole } = found;
+    // The file did not come back whole, so there is no answer to give and the
+    // row is left off. Nothing here says the search was declined, and nothing
+    // offers what one enclosing structure knew instead: a list of dependents
+    // that is some of them costs the same walk to read and cannot be told
+    // apart from all of them once it is on screen, so it is worth less than
+    // no row.
+    if (found === null) return null;
+    const { graph, self } = found;
     const rows: Node[] = [];
     const seen = new Set<string>();
     for (const e of graph.edges) {
@@ -1844,29 +1827,21 @@ export class Inspector {
     // Most fields are read by nothing, so the row was on nearly every field
     // saying so, and a row that is almost always the same answer is a row a
     // reader stops seeing. It is left off once the search has finished and
-    // found none, which makes its absence mean exactly that: nothing reads
-    // this field. The two cases that keep it are the ones where absence would
-    // be a lie or a waste.
+    // found none.
     //
-    // A search that did not finish is the lie: the rows above already say so
-    // and the row stays, so nothing is ever left off because it was not
-    // looked for.
-    //
-    // Machinery is the waste. The template marks a field as machinery when it
-    // is there to describe other fields, and machinery nothing reads is worth
-    // knowing about: a length that settles no length is either something this
-    // reader has not found yet or something the template has wrong. That is
-    // the one place where "none" is a finding rather than the norm.
-    if (rows.length === 0 && whole && !this.isMachinery(path)) return null;
+    // Machinery is the one field it stays on. The template marks a field as
+    // machinery when it is there to describe other fields, and machinery
+    // nothing reads is worth knowing about: a length that settles no length
+    // is either something this reader has not found yet or something the
+    // template has wrong. That is the one place where "none" is a finding
+    // rather than the norm.
+    if (rows.length === 0 && !this.isMachinery(path)) return null;
     return {
       key: `${prefix}readby`,
       label: PROPERTIES.row.readBy,
       value: PROPERTIES.readBy.found(rows.length),
       bit: null,
-      // A count of what one structure holds is a count of part of the answer,
-      // so the row says where the search stopped rather than letting the
-      // number stand for the file.
-      how: whole || parent === null ? null : { text: PROPERTIES.readBy.partial(parent), path: up },
+      how: null,
       detail: rows,
     };
   }
@@ -1879,37 +1854,32 @@ export class Inspector {
   }
 
   /**
-   * A graph holding the field at `path` that was walked to the end, where the
-   * field is in it, and whether that was the whole file. Null when neither the
-   * file nor the enclosing structure could be walked whole.
+   * A graph of the whole file that was walked to the end, and where the field
+   * is in it. Null when the file could not be walked whole.
    *
-   * Which subtree is the whole question. Only the file gives a complete
-   * answer: an expression can reach a field by a path from anywhere
-   * (`header.record[2].format`), so a field inside one structure can be read by
-   * a field in another. The file is tried first for that reason, with the
-   * enclosing structure as the fallback where the file is too big to walk. In
-   * the fallback the list is what that structure knows, which is most of the
-   * answer and not all of it, and `whole` is how the row says so.
+   * Only the file gives a complete answer: an expression can reach a field by
+   * a path from anywhere (`header.record[2].format`), so a field inside one
+   * structure can be read by a field in another. Walking the enclosing
+   * structure instead was tried and dropped. It costs the same walk, and what
+   * comes back is most of the answer with no way to tell it from all of it
+   * once it is a list of names on screen. A reader about to edit a length
+   * field is worse off believing a short list than seeing no list.
    *
-   * A walk that hit the cap is thrown away rather than used. What it holds is
-   * whichever fields it reached first, and a list of dependents that is
-   * silently a sample of them is worse than no list, because nothing on screen
-   * says which it is.
+   * A walk that hit the cap is thrown away for the same reason: what it holds
+   * is whichever fields it reached first, and a sample nothing on screen
+   * labels as a sample reads as the answer.
    */
-  private reverseGraph(path: readonly number[]): { graph: FieldGraph; self: number; whole: boolean } | null {
+  private reverseGraph(path: readonly number[]): { graph: FieldGraph; self: number } | null {
     const key = path.join("/");
-    for (const root of [[] as readonly number[], path.slice(0, -1)]) {
-      // A structure of more fields than the cap cannot come back whole, so it
-      // is not asked at all: the walk would be paid for and thrown away, on
-      // every move of the cursor.
-      const node = this.doc.templateNode(root);
-      if (node.status === "ok" && node.node.child_count > USED_BY_LIMIT) continue;
-      const reply = this.doc.graph(root, USED_BY_LIMIT);
-      if (reply.status !== "ok" || reply.node.omitted > 0) continue;
-      const self = reply.node.nodes.findIndex((n) => n.path.join("/") === key);
-      if (self >= 0) return { graph: reply.node, self, whole: root.length === 0 };
-    }
-    return null;
+    // A file of more fields than the cap cannot come back whole, so it is not
+    // asked at all: the walk would be paid for and thrown away, on every move
+    // of the cursor.
+    const node = this.doc.templateNode([]);
+    if (node.status === "ok" && node.node.child_count > USED_BY_LIMIT) return null;
+    const reply = this.doc.graph([], USED_BY_LIMIT);
+    if (reply.status !== "ok" || reply.node.omitted > 0) return null;
+    const self = reply.node.nodes.findIndex((n) => n.path.join("/") === key);
+    return self >= 0 ? { graph: reply.node, self } : null;
   }
 
   /** The field a block of properties is about, when it is not the field at the

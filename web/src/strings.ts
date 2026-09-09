@@ -1421,32 +1421,24 @@ export const PROPERTIES = {
    * The Read by row: fields elsewhere whose length, count, position, type,
    * bit width or name reads this field's value.
    *
-   * Three answers that must not look alike: none found, not searched, and
-   * found in part. `none` is shown only where it is a finding: on a field the
-   * template calls machinery, where a length that settles no length is worth
-   * knowing about. Everywhere else the row is left off, because nearly every
-   * field is read by nothing and a row that always says the same thing is a
-   * row nobody reads. `not searched` is held to the same rule: on its own it
-   * says only that the panel declined to answer, and it printed on field
-   * after field, so it is left off unless there is a reason to give. The one
-   * reason worth a row is the structure too big to walk, and the clause names
-   * it with the count that broke the limit. An absent row therefore does not
-   * distinguish "found none" from "never ran", and nothing here claims it
-   * does. The partial case is the file too big to walk and only the
-   * enclosing structure walked: a bare count there is a count of some of the
-   * answer, so the clause says where the search stopped. `searched only in
-   * header`, not "only header searched": read cold, "only header" parses as
-   * a noun first, and the verb-first order is the one the reader would say.
-   * The limit is printed with the size that broke it, because "too many"
-   * with no number is a verdict and not a fact, and it is called the search
-   * limit because a bare "limit" leaves the reader asking a limit on what.
+   * One answer, and only where it is worth a row. `none` is shown only where
+   * it is a finding: on a field the template calls machinery, where a length
+   * that settles no length is worth knowing about. Everywhere else a row
+   * saying nothing reads this field is left off, because nearly every field
+   * is read by nothing and a row that always says the same thing is a row
+   * nobody reads.
+   *
+   * Three strings stood here and are gone. `not searched` said only that the
+   * panel had declined to answer, on field after field. `searched only in
+   * {parent}` and `{parent} has 12,000 fields, search limit 400` explained a
+   * half-finished search, which is the thing not worth doing: the partial
+   * walk costs what the whole one costs, and what it finds cannot be told
+   * from the whole answer once it is a list of names on screen. So the search
+   * is over the file or it does not run, and a search that does not run
+   * leaves no row.
    */
   readBy: {
     found: (n: number): string => (n === 0 ? "none" : countText(n, "field")),
-    partial: (parent: string): string => `searched only in ${parent}`,
-    notSearched: "not searched",
-    tooMany: (parent: string, n: number, limit: number): string =>
-      `${parent} has ${n.toLocaleString()} fields, search limit ${limit.toLocaleString()}`,
     /** One row of the expansion, before the field's name, which is a link:
      *  `length of` data. A phrase rather than a column of role words, because
      *  under this heading a bare `Length` reads as this field's length, and
