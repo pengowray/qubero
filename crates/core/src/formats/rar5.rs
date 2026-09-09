@@ -68,7 +68,13 @@ const TYPES: &[(i128, &str)] =
 const MAIN_ARCHIVE: i128 = 1;
 const FILE: i128 = 2;
 const SERVICE: i128 = 3;
+const ARCHIVE_ENCRYPTION: i128 = 4;
 const END_OF_ARCHIVE: i128 = 5;
+
+/// What an archive encryption block's flags say. The one bit says whether the
+/// twelve bytes that let a reader tell a wrong password from a damaged file
+/// are there.
+const CRYPT_FLAGS: &[(u32, &str)] = &[(0, "password check present")];
 
 /// What a main archive header's flags say about the archive.
 const ARCHIVE_FLAGS: &[(u32, &str)] =
@@ -140,8 +146,15 @@ pub fn rar5() -> Template {
                 ("magic", T::magic(MAGIC)),
                 (
                     "blocks",
-                    T::repeat(block(), Until::FieldValue { field: "block_type".into(), value: END_OF_ARCHIVE }),
+                    T::repeat(block(), Until::FieldValue { field: "chain_ends".into(), value: 1 }),
                 ),
+                // Everything after a block that says the rest is encrypted.
+                //
+                // Without this the reading simply stopped: the ciphertext does
+                // not read as a block, the chain ran out, and six hundred of a
+                // seven hundred byte file were in no row at all. A run that
+                // says what it is beats a file that quietly ends early.
+                ("encrypted_headers", T::bytes(E::Remaining)),
             ],
         ),
     )
@@ -161,6 +174,19 @@ fn block() -> T {
             // Which kind this was, taken back out of the header so that the
             // chain can stop at the block that ends the archive.
             ("block_type", T::computed(E::within(&["header", "header_type"]))),
+            // And whether it is the last one anything can read. Two blocks
+            // end the chain and they end it for different reasons: after the
+            // end-of-archive block there is nothing, and after the archive
+            // encryption block there is ciphertext. A repeat can watch one
+            // field, so the two are added up into one.
+            (
+                "chain_ends",
+                T::computed(
+                    E::field("block_type")
+                        .equals(E::lit(END_OF_ARCHIVE))
+                        .or(E::field("block_type").equals(E::lit(ARCHIVE_ENCRYPTION))),
+                ),
+            ),
             // The file, or whatever else the block put outside its header.
             //
             // Stored is the file written in verbatim, so those bytes are
@@ -217,7 +243,13 @@ fn header() -> T {
                 "fields",
                 T::switch(
                     E::field("header_type"),
-                    vec![(MAIN_ARCHIVE, main_fields()), (FILE, file_fields()), (SERVICE, file_fields()), (END_OF_ARCHIVE, end_fields())],
+                    vec![
+                        (MAIN_ARCHIVE, main_fields()),
+                        (FILE, file_fields()),
+                        (SERVICE, file_fields()),
+                        (ARCHIVE_ENCRYPTION, crypt_fields()),
+                        (END_OF_ARCHIVE, end_fields()),
+                    ],
                     T::bytes(E::Remaining),
                 ),
             ),
@@ -415,6 +447,40 @@ fn end_fields() -> T {
     T::structure("Rar5End", vec![("end_flags", T::flags("Rar5EndFlags", T::leb_u(), END_FLAGS))])
 }
 
+/// The block that says every header after it is encrypted.
+///
+/// A RAR made with `-hp` puts one of these first, and from the end of it the
+/// file is ciphertext: not the file data alone, which `-p` encrypts, but the
+/// names, the sizes and the block structure itself. So this is the last block
+/// anything can read, and the chain stops on it.
+///
+/// Nothing here decrypts. What it does is say so, which is the difference
+/// between a reader seeing an archive whose contents are locked and a reader
+/// seeing a file that stopped making sense. The salt and the password check
+/// are shown because they are the only part of the scheme that is in the
+/// clear, and because a reader comparing two archives can see from them
+/// whether the same password was used.
+fn crypt_fields() -> T {
+    T::structure(
+        "Rar5ArchiveEncryption",
+        vec![
+            ("encryption_version", T::leb_u()),
+            ("crypt_flags", T::flags("Rar5CryptFlags", T::leb_u(), CRYPT_FLAGS)),
+            // How many rounds the key derivation ran, as a power of two: 15
+            // here means 32,768. Written as the exponent because the count is
+            // always a power of two and one byte then says it. Not an
+            // algorithm number, which is what it looks like sitting next to
+            // `encryption_version` and is not.
+            ("kdf_count", T::u8()),
+            ("kdf_rounds", T::computed(E::lit(1).shl(E::field("kdf_count")))),
+            ("salt", T::bytes(E::lit(16))),
+            // Twelve bytes that tell a wrong password from a damaged archive.
+            // Without them a reader has no way to know which it is looking at.
+            ("password_check", T::present_if(E::field("crypt_flags").bit(0), T::bytes(E::lit(12)))),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,7 +623,8 @@ mod tests {
         // RAR has somewhere to be opened: in the listing, on a chip, as a tab.
         // A packed one has nothing to open, since there is no RAR
         // decompressor here, and the test below says so.
-        let data = e.node(&d, &[1, 1, 4]).unwrap();
+        let at = e.child_named(&d, &[1, 1], "data").unwrap().expect("data");
+        let data = e.node(&d, &at).unwrap();
         assert_eq!(data.name, "data");
         assert!(data.decoded && data.refused.is_none(), "a stored file opens: {data:?}");
     }
@@ -615,7 +682,8 @@ mod tests {
             let mut e = Evaluator::new(rar5());
             let crc = crc_of(&d, &mut e);
             assert_eq!(e.check_of(&d, &crc).unwrap(), None, "{what}: this must offer no check");
-            let data = e.node(&d, &[1, 1, 4]).unwrap();
+            let at = e.child_named(&d, &[1, 1], "data").unwrap().expect("data");
+        let data = e.node(&d, &at).unwrap();
             assert!(!data.decoded, "{what}: this must not open");
         }
     }
@@ -625,6 +693,48 @@ mod tests {
     /// The stored half is the one worth having: those bytes used to be handed
     /// to a reader as the file and summed as the file, and since they are
     /// ciphertext the sum disagreed and the archive was reported damaged. A
+    /// An archive made with `-hp` encrypts the block structure itself, so the
+    /// archive encryption block is the last thing anything can read.
+    ///
+    /// The chain stops there and the rest is one run that says what it is.
+    /// Before this the reading just ran out: the ciphertext does not parse as
+    /// a block, the repeat ended, and most of the file was in no row at all,
+    /// which looks exactly like a file that stopped making sense.
+    #[test]
+    fn an_archive_whose_headers_are_encrypted_stops_and_says_so() {
+        // The block: a crc, a size, type 4, no flags, then the encryption
+        // fields. The ciphertext after it is whatever bytes; nothing reads it.
+        let mut header = vec![4u8, 0];
+        header.extend_from_slice(&[0, 1, 15]);
+        header.extend_from_slice(&[0xab; 16]);
+        header.extend_from_slice(&[0xcd; 12]);
+        let mut v = MAGIC.to_vec();
+        v.extend_from_slice(&crate::checksum::crc32(&[&[header.len() as u8][..], &header].concat()).to_le_bytes());
+        v.push(header.len() as u8);
+        v.extend_from_slice(&header);
+        v.extend_from_slice(&[0x99; 40]);
+        let d = Document::new(MemSource(v.clone()));
+        let mut e = Evaluator::new(rar5());
+
+        // One block, and it is the crypt block.
+        assert_eq!(e.node(&d, &[1]).unwrap().child_count, 1);
+        let kind = e.child_named(&d, &[1, 0], "block_type").unwrap().expect("block_type");
+        assert_eq!(e.node(&d, &kind).unwrap().value.as_int(), Some(ARCHIVE_ENCRYPTION));
+        // Its own header still checks out: the block that says the rest is
+        // locked is itself in the clear.
+        let crc = e.child_named(&d, &[1, 0], "header_crc32").unwrap().expect("header_crc32");
+        assert!(e.run_check(&d, &crc).unwrap().expect("a verdict").ok);
+        // The rounds are read from the exponent, not taken for an algorithm.
+        let fields = e.child_named(&d, &[1, 0, 2], "fields").unwrap().expect("fields");
+        let rounds = e.child_named(&d, &fields, "kdf_rounds").unwrap().expect("kdf_rounds");
+        assert_eq!(e.node(&d, &rounds).unwrap().value.as_int(), Some(1 << 15));
+        // And every byte after the block is in a row of its own.
+        let rest = e.node(&d, &[2]).unwrap();
+        assert_eq!(rest.name, "encrypted_headers");
+        assert_eq!(rest.size_bits, 40 * 8);
+        assert_eq!(rest.offset_bits + rest.size_bits, v.len() as u64 * 8, "the file is accounted for");
+    }
+
     /// real archive of exactly this shape is in the collection, with two
     /// plaintext stored entries beside two encrypted packed ones; this is the
     /// same thing small enough to read.
@@ -643,7 +753,8 @@ mod tests {
             assert_eq!(e.node(&d, &enc).unwrap().value.as_int(), Some(1), "{what}: the crypt record was not seen");
             let crc = crc_of(&d, &mut e);
             assert_eq!(e.check_of(&d, &crc).unwrap(), None, "{what}: ciphertext must not be summed");
-            assert!(!e.node(&d, &[1, 1, 4]).unwrap().decoded, "{what}: this must not open");
+            let at = e.child_named(&d, &[1, 1], "data").unwrap().expect("data");
+            assert!(!e.node(&d, &at).unwrap().decoded, "{what}: this must not open");
         }
     }
 
@@ -656,7 +767,8 @@ mod tests {
         let mut e = Evaluator::new(rar5());
         let crc = crc_of(&d, &mut e);
         assert_eq!(e.check_of(&d, &crc).unwrap(), None);
-        assert!(!e.node(&d, &[1, 1, 4]).unwrap().decoded);
+        let at = e.child_named(&d, &[1, 1], "data").unwrap().expect("data");
+        assert!(!e.node(&d, &at).unwrap().decoded);
     }
 
     #[test]
@@ -696,7 +808,8 @@ mod tests {
         let dict = e.child_named(&d, &[1, 1, 2, 4], "dictionary").unwrap().expect("dictionary");
         assert_eq!(e.node(&d, &dict).unwrap().value, Value::Enum { raw: 0, name: Some("128k".into()), hex: false });
         // And the file itself is still outside the header, where its size said.
-        assert_eq!(e.node(&d, &[1, 1, 4]).unwrap().size_bits, 9 * 8);
+        let data = e.child_named(&d, &[1, 1], "data").unwrap().expect("data");
+        assert_eq!(e.node(&d, &data).unwrap().size_bits, 9 * 8);
     }
 
     #[test]
@@ -710,9 +823,15 @@ mod tests {
         );
         // The file block: a data area of nine bytes, after its header.
         assert_eq!(e.node(&d, &[1, 1, 2, 3]).unwrap().value.as_int(), Some(9));
-        assert_eq!(e.node(&d, &[1, 1, 4]).unwrap().size_bits, 9 * 8);
-        assert_eq!(e.node(&d, &[1, 2, 3]).unwrap().value.as_int(), Some(5));
+        let data = e.child_named(&d, &[1, 1], "data").unwrap().expect("data");
+        assert_eq!(e.node(&d, &data).unwrap().size_bits, 9 * 8);
+        let kind = e.child_named(&d, &[1, 2], "block_type").unwrap().expect("block_type");
+        assert_eq!(e.node(&d, &kind).unwrap().value.as_int(), Some(5));
         // A block with no data area has none, rather than reading to the end.
-        assert_eq!(e.node(&d, &[1, 0, 4]).unwrap().size_bits, 0);
+        let none = e.child_named(&d, &[1, 0], "data").unwrap().expect("data");
+        assert_eq!(e.node(&d, &none).unwrap().size_bits, 0);
+        // Nothing is left over: an archive that ends properly has no run of
+        // encrypted headers after it.
+        assert_eq!(e.node(&d, &[2]).unwrap().size_bits, 0);
     }
 }

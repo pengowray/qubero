@@ -45,9 +45,17 @@ fn name_of(e: &mut Evaluator, d: &Document<MemSource>, block: usize) -> String {
 /// The one assertion this file exists for. `run_check` unpacks the run and
 /// sums whatever the decoder produced; the number it is compared against was
 /// written by WinRAR before any of this existed.
+/// A block's data area, found by name. The blocks gained a field when the
+/// chain learned to stop at an archive encryption block, and counting to the
+/// data area is what broke.
+fn data_of(e: &mut Evaluator, d: &Document<MemSource>, block: usize) -> qubero_core::eval::NodeInfo {
+    let at = e.child_named(d, &[1, block], "data").expect("resolves").expect("a data area");
+    e.node(d, &at).expect("a data area")
+}
+
 fn checks_out(e: &mut Evaluator, d: &Document<MemSource>, block: usize) {
     let name = name_of(e, d, block);
-    let data = e.node(d, &[1, block, 4]).expect("a data area");
+    let data = data_of(e, d, block);
     assert!(data.decoded, "{name}: the data area did not open: {data:?}");
     assert_eq!(data.refused, None, "{name}: the data area was refused");
 
@@ -65,7 +73,7 @@ fn checks_out(e: &mut Evaluator, d: &Document<MemSource>, block: usize) {
 /// encrypted bytes against a number that describes neither.
 fn stays_bytes(e: &mut Evaluator, d: &Document<MemSource>, block: usize) {
     let name = name_of(e, d, block);
-    let data = e.node(d, &[1, block, 4]).expect("a data area");
+    let data = data_of(e, d, block);
     assert!(!data.decoded, "{name}: this entry must not open");
     let crc = e.child_named(d, &[1, block, 2, 4], "data_crc32").expect("resolves").expect("a crc field");
     assert_eq!(e.check_of(d, &crc).expect("resolves"), None, "{name}: a check that cannot be made must say nothing");
@@ -84,7 +92,8 @@ fn a_packed_entry_unpacks_to_what_its_checksum_says() {
     // And the bytes are the 1200 the header said, which is the other half of
     // the claim: a decoder can agree with a checksum over the wrong length only
     // by accident, but a reader is owed the length as well.
-    let id = e.open_space(&d, 0, &[1, 1, 4]).expect("resolves").expect("the entry opens");
+    let at = data_of(&mut e, &d, 1).path.clone();
+    let id = e.open_space(&d, 0, &at).expect("resolves").expect("the entry opens");
     assert_eq!(e.space(id).expect("just opened").len_bytes(), 1200);
 }
 
@@ -158,7 +167,8 @@ fn a_filtered_entry_checks_out_once_the_filter_has_run() {
         return;
     };
     checks_out(&mut e, &d, 1);
-    let id = e.open_space(&d, 0, &[1, 1, 4]).expect("resolves").expect("the entry opens");
+    let at = data_of(&mut e, &d, 1).path.clone();
+    let id = e.open_space(&d, 0, &at).expect("resolves").expect("the entry opens");
     let trace = e.space(id).expect("just opened").trace();
     trace.check_tiles().expect("the steps tile the run");
     assert_eq!(trace.blocks().len(), 2, "this entry is packed into two blocks");
@@ -172,7 +182,8 @@ fn the_trace_covers_every_bit_of_the_packed_run() {
         eprintln!("skipped: no rar5-one-file.rar in hand. Set QUBERO_SAMPLES to the collection.");
         return;
     };
-    let id = e.open_space(&d, 0, &[1, 1, 4]).expect("resolves").expect("the entry opens");
+    let at = data_of(&mut e, &d, 1).path.clone();
+    let id = e.open_space(&d, 0, &at).expect("resolves").expect("the entry opens");
     let trace = e.space(id).expect("just opened").trace();
     trace.check_tiles().expect("the steps tile the run");
     assert!(!trace.coarse(), "1200 bytes is nowhere near the step budget");
