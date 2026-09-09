@@ -564,6 +564,300 @@ fn symbols(
     }
 }
 
+/// One Huffman-coded number as the block wrote it down.
+///
+/// Deflate never writes a number: it writes a symbol, and the symbol names a
+/// base and how many bits follow it. A length of 11 is symbol 265 and one
+/// extra bit; a length of 3 is symbol 257 and no extra bits at all. A reader
+/// looking at thirteen bits of a file and told only "match 3 back 4" has been
+/// given the answer and none of the working, and cannot check that thirteen is
+/// the right number of bits for it. This is the working.
+///
+/// `code_bits + extra_bits` is what this number cost, and the widths of a
+/// step's codes add up to the step's own `in_bits` exactly. See
+/// [`DecodedStep::bits`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodedCode {
+    /// Which symbol of the alphabet the Huffman code decoded to.
+    pub symbol: u16,
+    /// How wide that code was. Not stored anywhere: it is a fact about the
+    /// table the block declared, so it comes back only by rebuilding the table
+    /// and walking the bits again.
+    pub code_bits: u8,
+    /// How many bits followed the code outright, and what they read as. Both
+    /// zero for a literal, for the end mark, and for the many lengths and
+    /// distances a symbol names on its own.
+    pub extra_bits: u8,
+    pub extra: u32,
+    /// What the symbol and its extra bits came to: the byte, for a literal;
+    /// the length or the distance, for the two halves of a match; and 0 for
+    /// the end mark, which stands for no number.
+    pub value: u32,
+    /// Which step of the block's head set this symbol's code length, as an
+    /// index into the trace's steps, so a panel can send a reader to the bits
+    /// that decided how wide this code would be.
+    ///
+    /// `None` when there is nowhere to send them: a fixed block's two tables
+    /// are written in RFC 1951 section 3.2.6 rather than in the file, so no
+    /// step of the run declared them and no link would be honest. Also `None`
+    /// for a symbol whose length the head never mentioned, which cannot happen
+    /// in a table that built.
+    pub entry: Option<u32>,
+    /// The same step counted from the front of its block, which is where it
+    /// sits among the block node's children. The trace's steps and the
+    /// listing's rows are two different numberings of the same head, and a
+    /// link needs the second.
+    pub entry_child: Option<u32>,
+}
+
+/// What one deflate symbol step was made of, worked out again from the
+/// block's tables. See [`decode_step`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodedStep {
+    /// Which block of the trace the step belongs to, as an index into
+    /// [`Trace::blocks`].
+    pub block: u32,
+    /// How that block said its symbols were coded, which is the same thing as
+    /// where the two tables came from: `Dynamic` wrote them into the run and
+    /// `Fixed` did not.
+    pub block_kind: BlockKind,
+    /// The literal/length code, which every symbol step begins with. Its
+    /// `symbol` says which of the three kinds of step this is: under 256 a
+    /// literal, 256 the end of the block, over 256 the length of a match.
+    pub symbol: DecodedCode,
+    /// The distance code that followed the length. Nothing for a literal and
+    /// nothing for the end mark, which read no second code.
+    pub distance: Option<DecodedCode>,
+}
+
+/// What a literal/length symbol stands for. Derived from the symbol number
+/// rather than stored beside it: there is one right answer and no room for the
+/// two to disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolMeaning {
+    /// Symbols 0 to 255, each one byte given as itself.
+    Literal(u8),
+    /// Symbol 256, which ends the block and produces nothing.
+    EndOfBlock,
+    /// Symbols 257 to 285, each a length or the front of one.
+    Length,
+}
+
+impl DecodedStep {
+    /// What the first code stood for.
+    pub fn meaning(&self) -> SymbolMeaning {
+        match self.symbol.symbol {
+            0..=255 => SymbolMeaning::Literal(self.symbol.symbol as u8),
+            256 => SymbolMeaning::EndOfBlock,
+            _ => SymbolMeaning::Length,
+        }
+    }
+
+    /// Every bit this step read, added up: the two codes and the two runs of
+    /// extra bits. The same number as the step's own `in_bits` length, and the
+    /// reason the four widths are worth showing at all. A reader who is told
+    /// 8 + 0 + 5 + 0 and sees the step is 13 bits wide has checked the
+    /// arithmetic; one who is told only "match 3 back 4" has not.
+    pub fn bits(&self) -> u32 {
+        let one = |c: &DecodedCode| c.code_bits as u32 + c.extra_bits as u32;
+        one(&self.symbol) + self.distance.as_ref().map_or(0, one)
+    }
+}
+
+/// Take one symbol step apart: which codes carried it, how wide they were, and
+/// which entry of the block's tables set each width.
+///
+/// None of this is in the trace. A step is a packed twenty bytes and a
+/// `StepKind::Match { len, dist }` is the decoded length and distance and
+/// nothing else; which symbol named that length, whether extra bits followed
+/// it and how many bits the whole thing cost are all thrown away, because
+/// keeping them would cost every step of every stream in memory to answer a
+/// question asked of one step at a time. So this asks it again, from the run
+/// and the trace, and only when somebody clicks.
+///
+/// The work is rebuilding the block's two Huffman tables and re-decoding the
+/// step's bits with them, which for a dynamic block means walking the head
+/// steps the decoder already wrote down. It reads no more of the run than the
+/// step it was asked about, so it is proportional to the block's head and not
+/// to the block.
+///
+/// `data` is the whole compressed run, from the front, because that is what
+/// the trace's bit positions count from: a zlib stream's first block starts at
+/// bit 16 of the run and the trace says so. A prefix long enough to hold the
+/// step is enough.
+///
+/// `None` rather than a panic for everything that does not answer: a step that
+/// is not a symbol, a block whose tables cannot be rebuilt, a stream cut off
+/// before the step it names, a symbol the format does not have.
+pub fn decode_step(data: &[u8], trace: &Trace, step: usize) -> Option<DecodedStep> {
+    let s = trace.step(step)?;
+    // Stored payload and the one opaque step a coarsened block leaves behind
+    // are steps of a block and are not symbols of one. Neither was read
+    // through a Huffman table, so neither has a width to give back.
+    if !matches!(s.kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::EndOfBlock) {
+        return None;
+    }
+    let (i, block) = trace.blocks().iter().enumerate().find(|(_, b)| b.steps.contains(&(step as u32)))?;
+    // Where the block's machinery stops and its symbols start. The same split
+    // the listing draws, found the same way: the first step that is neither a
+    // header field nor a table entry.
+    let head_end = (block.steps.start..block.steps.end)
+        .find(|&k| !trace.step(k as usize).is_some_and(|s| matches!(s.kind, StepKind::Header(..) | StepKind::Table(_))))
+        .unwrap_or(block.steps.end);
+    let head = block.steps.start..head_end;
+    let (lit, dist, owner, hlit) = match block.kind {
+        BlockKind::Fixed => {
+            let (lit, dist) = fixed_codes();
+            (lit, dist, Vec::new(), 0)
+        }
+        BlockKind::Dynamic => rebuild(trace, head.clone())?,
+        // A stored block holds no codes, and the rest of the kinds belong to
+        // other codecs entirely.
+        _ => return None,
+    };
+    // Where a symbol's code length was declared, in both numberings the caller
+    // may want. `owner` is empty for a fixed block, whose tables no step of the
+    // run wrote down.
+    let entry = |at: usize| match owner.get(at).copied().flatten() {
+        Some(k) => (Some(k), Some(k - block.steps.start)),
+        None => (None, None),
+    };
+
+    // Read the step's bits again, bounded by the step: a decode that would run
+    // past the bits the decoder said it read has gone wrong, and stopping is
+    // better than reading a neighbour's.
+    let end = s.in_bits.end.min(data.len() as u64 * 8);
+    let mut bits = Bits { data, pos: s.in_bits.start, end };
+    let start = bits.pos;
+    let sym = lit.decode(&mut bits).ok()?;
+    let code_bits = u8::try_from(bits.pos - start).ok()?;
+    let (lit_entry, lit_child) = entry(sym as usize);
+    let mut first = DecodedCode {
+        symbol: sym,
+        code_bits,
+        extra_bits: 0,
+        extra: 0,
+        value: sym as u32,
+        entry: lit_entry,
+        entry_child: lit_child,
+    };
+    match sym {
+        // A literal and the end mark are the symbol and nothing after it, so
+        // the code's width is the whole step and there is no second half.
+        0..=256 => {
+            if sym == 256 {
+                first.value = 0;
+            }
+            Some(DecodedStep { block: i as u32, block_kind: block.kind, symbol: first, distance: None })
+        }
+        257..=285 => {
+            let k = sym as usize - 257;
+            let extra_bits = LEN_EXTRA[k];
+            let extra = bits.bits(extra_bits as u32).ok()?;
+            first.extra_bits = extra_bits;
+            first.extra = extra;
+            first.value = LEN_BASE[k] as u32 + extra;
+
+            let at = bits.pos;
+            let dsym = dist.decode(&mut bits).ok()?;
+            let dcode_bits = u8::try_from(bits.pos - at).ok()?;
+            // Symbols 30 and 31 are decodable out of the fixed distance code
+            // and mean nothing; the decoder refuses them and so does this.
+            let d = dsym as usize;
+            if d >= DIST_BASE.len() {
+                return None;
+            }
+            let dextra_bits = DIST_EXTRA[d];
+            let dextra = bits.bits(dextra_bits as u32).ok()?;
+            let (dist_entry, dist_child) = entry(hlit + d);
+            let second = DecodedCode {
+                symbol: dsym,
+                code_bits: dcode_bits,
+                extra_bits: dextra_bits,
+                extra: dextra,
+                value: DIST_BASE[d] + dextra,
+                entry: dist_entry,
+                entry_child: dist_child,
+            };
+            Some(DecodedStep { block: i as u32, block_kind: block.kind, symbol: first, distance: Some(second) })
+        }
+        _ => None,
+    }
+}
+
+/// A dynamic block's two tables, rebuilt from the head steps that declared
+/// them, along with which step declared each code length and where the
+/// distance table starts.
+///
+/// One run of lengths rather than two, because that is how the format writes
+/// them and how [`dynamic_tables`] reads them: `hlit` literal/length lengths
+/// and `hdist` distance lengths, end to end, with the repeat codes running
+/// over the join. A repeat that starts on the literal side and reaches past
+/// `hlit` fills distance lengths, and a rebuild keeping a counter per table
+/// would put those in the wrong one. The `dist` flag on a
+/// [`TableField::Repeat`] says which side the repeat *started*, which is what
+/// the decoder recorded and not a second opinion about where the entries
+/// landed.
+///
+/// The entries given outright carry their own symbol, so the running counter
+/// is only ever trusted across a repeat, which is the one entry that does not
+/// say where it begins.
+#[allow(clippy::type_complexity)]
+fn rebuild(trace: &Trace, head: std::ops::Range<u32>) -> Option<(Code, Code, Vec<Option<u32>>, usize)> {
+    let mut hlit = None;
+    let mut hdist = None;
+    for k in head.clone() {
+        match trace.step(k as usize)?.kind {
+            StepKind::Header(StepField::Hlit, v) => hlit = Some(v as usize),
+            StepKind::Header(StepField::Hdist, v) => hdist = Some(v as usize),
+            _ => {}
+        }
+    }
+    // A dynamic block that did not say how long its tables are is not one this
+    // can rebuild. The decoder would not have got past the header.
+    let (hlit, hdist) = (hlit?, hdist?);
+    if hlit > 286 || hdist > 30 || hlit < 257 || hdist < 1 {
+        return None;
+    }
+    let mut lengths = vec![0u8; hlit + hdist];
+    let mut owner: Vec<Option<u32>> = vec![None; hlit + hdist];
+    let mut at = 0usize;
+    for k in head {
+        let StepKind::Table(field) = trace.step(k as usize)?.kind else { continue };
+        match field {
+            // The code-length alphabet's own lengths, which named the codes
+            // that wrote the two tables and are not entries of either.
+            TableField::CodeLen { .. } => {}
+            TableField::LitLen { sym, len } => {
+                at = sym as usize;
+                *lengths.get_mut(at)? = len;
+                owner[at] = Some(k);
+                at += 1;
+            }
+            TableField::Dist { sym, len } => {
+                at = hlit.checked_add(sym as usize)?;
+                *lengths.get_mut(at)? = len;
+                owner[at] = Some(k);
+                at += 1;
+            }
+            TableField::Repeat { count, len, .. } => {
+                let stop = at.checked_add(count as usize)?;
+                if stop > lengths.len() {
+                    return None;
+                }
+                for slot in at..stop {
+                    lengths[slot] = len;
+                    owner[slot] = Some(k);
+                }
+                at = stop;
+            }
+        }
+    }
+    let lit = Code::build(&lengths[..hlit], false).ok()?;
+    let dist = Code::build(&lengths[hlit..], true).ok()?;
+    Some((lit, dist, owner, hlit))
+}
+
 /// Which table a symbol step was decoded with, for a field's origin: the one
 /// the block it belongs to declared.
 pub fn table_of(trace: &Trace, step: usize) -> Option<BlockKind> {
@@ -814,6 +1108,246 @@ mod tests {
             assert!(step.in_bits.contains(&bit), "bit {bit} mapped to {step:?}");
         }
         assert!(trace.map_in(trace.in_bits()).is_none());
+    }
+
+    /// Every symbol step of a stream, taken apart and checked against itself.
+    ///
+    /// Four things have to hold at once, and each one catches a different way
+    /// of being wrong. The widths add up to the step's own, which is the
+    /// property that catches an off-by-one anywhere in the walk. The values
+    /// come to what the decoder already recorded, which catches a table
+    /// rebuilt out of the wrong lengths. Every entry link points at a step
+    /// that declared a length, and declared the width the code turned out to
+    /// have, which catches a running counter that drifted. And the link's two
+    /// numberings agree, which is what the listing needs to find the row.
+    fn every_symbol_adds_up(packed: &[u8], trace: &Trace) -> (usize, usize, usize) {
+        let (mut literals, mut matches, mut from_repeat) = (0, 0, 0);
+        for block in trace.blocks() {
+            if block.kind == BlockKind::Stored {
+                continue;
+            }
+            for k in block.steps.start..block.steps.end {
+                let step = trace.step(k as usize).expect("in range");
+                if !matches!(step.kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::EndOfBlock) {
+                    continue;
+                }
+                let d = decode_step(packed, trace, k as usize)
+                    .unwrap_or_else(|| panic!("step {k}, a {:?}, would not come apart", step.kind));
+                let width = step.in_bits.end - step.in_bits.start;
+                assert_eq!(d.bits() as u64, width, "step {k} is {width} bits and came apart as {d:?}");
+                assert_eq!(d.block_kind, block.kind);
+                match step.kind {
+                    StepKind::Literal(b) => {
+                        literals += 1;
+                        assert_eq!(d.meaning(), SymbolMeaning::Literal(b));
+                        assert_eq!(d.symbol.value, b as u32);
+                        assert!(d.distance.is_none(), "a literal read a distance code");
+                    }
+                    StepKind::Match { len, dist } => {
+                        matches += 1;
+                        assert_eq!(d.meaning(), SymbolMeaning::Length);
+                        assert_eq!(d.symbol.value, len, "step {k} says {len} and came apart as {d:?}");
+                        let second = d.distance.expect("a match reads a distance code");
+                        assert_eq!(second.value, dist, "step {k} reaches back {dist} and came apart as {d:?}");
+                    }
+                    StepKind::EndOfBlock => {
+                        assert_eq!(d.meaning(), SymbolMeaning::EndOfBlock);
+                        assert_eq!(d.symbol.symbol, 256);
+                        assert!(d.distance.is_none());
+                    }
+                    _ => unreachable!(),
+                }
+                for code in [Some(d.symbol), d.distance].into_iter().flatten() {
+                    let Some(entry) = code.entry else {
+                        assert_eq!(block.kind, BlockKind::Fixed, "a dynamic block left a code with no entry");
+                        assert!(code.entry_child.is_none());
+                        continue;
+                    };
+                    assert_eq!(block.kind, BlockKind::Dynamic, "a fixed block named an entry step");
+                    assert!(block.steps.contains(&entry), "step {k} points outside its own block");
+                    assert_eq!(code.entry_child, Some(entry - block.steps.start));
+                    let declared = match trace.step(entry as usize).expect("in range").kind {
+                        StepKind::Table(TableField::LitLen { len, .. } | TableField::Dist { len, .. }) => len,
+                        StepKind::Table(TableField::Repeat { len, .. }) => {
+                            from_repeat += 1;
+                            len
+                        }
+                        other => panic!("step {k}'s code length came from a {other:?}"),
+                    };
+                    assert_eq!(declared, code.code_bits, "step {k}'s entry declares {declared} for a {} bit code", code.code_bits);
+                }
+            }
+        }
+        (literals, matches, from_repeat)
+    }
+
+    /// The four widths of a step add up to the step, over every shape of
+    /// stream: dynamic blocks, a fixed one, and a zlib wrapper whose bits are
+    /// counted from the front of the run rather than from the first block.
+    #[test]
+    fn a_step_taken_apart_accounts_for_every_bit_it_read() {
+        let text: Vec<u8> = "the quick brown fox jumps over the lazy dog. ".repeat(2000).into_bytes();
+        for (data, level) in [(&text[..], 9u8), (&text[..], 6), (b"abcabcab".as_slice(), 6), (&[9u8; 3000][..], 6)] {
+            let packed = miniz_oxide::deflate::compress_to_vec(data, level);
+            let (_, trace) = inflate(&packed).expect("reads");
+            let (literals, matches, _) = every_symbol_adds_up(&packed, &trace);
+            assert!(literals > 0 && matches > 0, "nothing was checked for level {level}");
+        }
+        // The same through a wrapper: the trace counts bits from the front of
+        // the run, so a stream starting at bit 16 has to come apart there too.
+        let packed = miniz_oxide::deflate::compress_to_vec_zlib(&text, 9);
+        let (_, trace) = zlib(&packed).expect("reads");
+        assert!(trace.blocks()[0].in_bits.start >= 16);
+        every_symbol_adds_up(&packed, &trace);
+    }
+
+    /// A length symbol that does not say the whole length: symbol 281 covers
+    /// 195 to 226 and reads five bits to say which. The zero-extra case is
+    /// most of a stream, so a test that only saw those would pass with the
+    /// extra bits never read and the widths still adding up.
+    #[test]
+    fn a_length_with_extra_bits_says_how_many_and_what_they_said() {
+        let packed = miniz_oxide::deflate::compress_to_vec(&[9u8; 3000], 6);
+        let (_, trace) = inflate(&packed).expect("reads");
+        every_symbol_adds_up(&packed, &trace);
+        let mut found = 0;
+        for k in 0..trace.len() {
+            let Some(d) = decode_step(&packed, &trace, k) else { continue };
+            if d.symbol.extra_bits == 0 {
+                continue;
+            }
+            found += 1;
+            let base = LEN_BASE[d.symbol.symbol as usize - 257] as u32;
+            assert_eq!(d.symbol.value, base + d.symbol.extra);
+            assert!(d.symbol.extra < 1 << d.symbol.extra_bits, "{d:?} reads more than its bits hold");
+        }
+        assert!(found > 0, "a run of three thousand bytes held no length with extra bits");
+
+        // And the distance half of the same question, which needs data with
+        // matches reaching further back than four bytes.
+        let text: Vec<u8> = "the quick brown fox jumps over the lazy dog. ".repeat(2000).into_bytes();
+        let packed = miniz_oxide::deflate::compress_to_vec(&text, 9);
+        let (_, trace) = inflate(&packed).expect("reads");
+        let mut found = 0;
+        for k in 0..trace.len() {
+            let Some(second) = decode_step(&packed, &trace, k).and_then(|d| d.distance) else { continue };
+            if second.extra_bits == 0 {
+                continue;
+            }
+            found += 1;
+            assert_eq!(second.value, DIST_BASE[second.symbol as usize] + second.extra);
+        }
+        assert!(found > 0, "no match in that text reached back far enough to read extra bits");
+    }
+
+    /// A fixed block's tables are in RFC 1951 and not in the file, so there is
+    /// no step to send a reader to and the answer says so rather than pointing
+    /// at whatever step happens to sit at index zero.
+    #[test]
+    fn a_fixed_block_has_no_table_entry_to_link_to() {
+        let packed = miniz_oxide::deflate::compress_to_vec(b"abcabcab", 6);
+        let (_, trace) = inflate(&packed).expect("reads");
+        assert_eq!(trace.blocks()[0].kind, BlockKind::Fixed);
+        let (literals, matches, _) = every_symbol_adds_up(&packed, &trace);
+        assert!(literals > 0 && matches > 0, "the fixed block held no symbols to check");
+        for k in 0..trace.len() {
+            let Some(d) = decode_step(&packed, &trace, k) else { continue };
+            assert_eq!(d.block_kind, BlockKind::Fixed);
+            assert!(d.symbol.entry.is_none(), "{d:?} claims the file declared a fixed code");
+            assert!(d.distance.is_none_or(|second| second.entry.is_none()));
+            // The fixed literal code is eight bits up to 143 and nine after,
+            // and the end mark is seven, which is what RFC 1951 says.
+            let want = match d.symbol.symbol {
+                0..=143 => 8,
+                144..=255 => 9,
+                256..=279 => 7,
+                _ => 8,
+            };
+            assert_eq!(d.symbol.code_bits, want, "{d:?} is not the fixed code");
+            assert!(d.distance.is_none_or(|second| second.code_bits == 5));
+        }
+        // The hand-built empty fixed block from the test above, which holds
+        // nothing but the end mark.
+        let (_, trace) = inflate(&[0x03, 0x00]).expect("reads");
+        let end = (0..trace.len()).find(|&k| trace.step(k).unwrap().kind == StepKind::EndOfBlock).expect("an end mark");
+        let d = decode_step(&[0x03, 0x00], &trace, end).expect("comes apart");
+        assert_eq!(d.meaning(), SymbolMeaning::EndOfBlock);
+        assert_eq!(d.bits(), 7);
+    }
+
+    /// A code length that came from a repeat entry rather than from one
+    /// written out. Code 16 says "the length before this one, again", so the
+    /// only thing that says which symbols it covered is a counter run over the
+    /// head in the order the decoder read it, and a counter off by one puts
+    /// every later symbol in the wrong place.
+    #[test]
+    fn a_code_length_from_a_repeat_names_the_step_that_repeated_it() {
+        let text: Vec<u8> = "the quick brown fox jumps over the lazy dog. ".repeat(2000).into_bytes();
+        let packed = miniz_oxide::deflate::compress_to_vec(&text, 9);
+        let (_, trace) = inflate(&packed).expect("reads");
+        assert_eq!(trace.blocks()[0].kind, BlockKind::Dynamic);
+        // The head has repeats that give a length something uses: code 16
+        // repeats the length before it, where 17 and 18 write runs of zero and
+        // no symbol with a zero length is ever decoded.
+        assert!(trace.steps().any(|s| matches!(s.kind, StepKind::Table(TableField::Repeat { len, .. }) if len > 0)));
+        let (_, _, from_repeat) = every_symbol_adds_up(&packed, &trace);
+        assert!(from_repeat > 0, "no symbol in that stream took its code length from a repeat");
+    }
+
+    /// Everything that is not a symbol of a Huffman-coded block, and every way
+    /// a run can be broken. Nothing here answers, and nothing here panics: a
+    /// panel asking about the step under the cursor must never take the
+    /// listing down with it.
+    #[test]
+    fn a_step_that_is_not_a_symbol_is_refused_rather_than_guessed_at() {
+        let text: Vec<u8> = "and now for something not a symbol at all. ".repeat(200).into_bytes();
+        let packed = miniz_oxide::deflate::compress_to_vec(&text, 9);
+        let (_, trace) = inflate(&packed).expect("reads");
+        for k in 0..trace.len() {
+            let kind = trace.step(k).expect("in range").kind;
+            let got = decode_step(&packed, &trace, k);
+            let symbol = matches!(kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::EndOfBlock);
+            assert_eq!(got.is_some(), symbol, "step {k}, a {kind:?}, came apart as {got:?}");
+        }
+        // Past the end, and on a run that is not the run the trace describes.
+        assert!(decode_step(&packed, &trace, trace.len()).is_none());
+        assert!(decode_step(&packed, &trace, usize::MAX).is_none());
+        for n in 0..packed.len() {
+            for k in 0..trace.len() {
+                let _ = decode_step(&packed[..n], &trace, k);
+            }
+        }
+        let noise: Vec<u8> = packed.iter().map(|b| !b).collect();
+        for k in 0..trace.len() {
+            let _ = decode_step(&noise, &trace, k);
+        }
+        // A stored block's payload is bytes, not a symbol, and a coarsened
+        // block names its symbols with one opaque step that is not one either.
+        let mut stored = vec![0x01, 0x05, 0x00, 0xfa, 0xff];
+        stored.extend_from_slice(b"there");
+        let (_, trace) = inflate(&stored).expect("reads");
+        for k in 0..trace.len() {
+            assert!(decode_step(&stored, &trace, k).is_none());
+        }
+        let (_, coarse) = inflate_within(&packed, 50).expect("reads");
+        assert!(coarse.coarse());
+        for k in 0..coarse.len() {
+            assert!(decode_step(&packed, &coarse, k).is_none(), "a coarse trace named a symbol at step {k}");
+        }
+        // And every one-byte corruption of a real stream, which is where a
+        // rebuilt table meets lengths nobody meant to write.
+        let packed = miniz_oxide::deflate::compress_to_vec(&"corrupt me byte by byte. ".repeat(40).into_bytes(), 6);
+        for i in 0..packed.len() {
+            for xor in [0x01u8, 0x40, 0xff] {
+                let mut bad = packed.clone();
+                bad[i] ^= xor;
+                let Ok((_, trace)) = inflate(&bad) else { continue };
+                for k in 0..trace.len() {
+                    let _ = decode_step(&bad, &trace, k);
+                    let _ = decode_step(&packed, &trace, k);
+                }
+            }
+        }
     }
 
     /// A gzip member built by hand: the fixed ten bytes, whatever the flags

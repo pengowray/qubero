@@ -3,7 +3,7 @@
 //! Offsets cross the boundary as `f64` (exact up to 2^53, far past any file size)
 //! to avoid BigInt friction on the JS side.
 
-use qubero_core::codec::{Step as MapStep, StepKind};
+use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
 use qubero_core::eval::{Explain, Graph, KindWalk, Moment, Origin, SpaceId, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
@@ -675,6 +675,86 @@ struct GraphDto {
     /// How many nodes under the one asked about were left out, as far as is
     /// known.
     omitted: f64,
+}
+
+/// One Huffman-coded number of a deflate symbol: the symbol, how wide the code
+/// that carried it was, the bits that followed it outright, and what the two
+/// came to. See `qubero_core::codec::inflate::DecodedCode`.
+#[derive(Serialize)]
+struct DecodedCodeDto {
+    symbol: f64,
+    /// How wide the Huffman code was. Worked out again from the block's table
+    /// rather than read from the trace, which does not keep it.
+    code_bits: f64,
+    /// How many bits followed the code, and what they said. Both zero for a
+    /// literal, for the end mark, and for the lengths and distances a symbol
+    /// names on its own.
+    extra_bits: f64,
+    extra: f64,
+    /// The byte, the length, or the distance, depending which code this is.
+    value: f64,
+    /// Which step of the trace set this symbol's code length, so the panel can
+    /// send a reader to it. Absent for a fixed block, whose tables are in RFC
+    /// 1951 rather than in the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entry: Option<f64>,
+    /// The same step counted from the front of its block, which is where it
+    /// sits among the block node's children.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entry_child: Option<f64>,
+}
+
+/// What one deflate symbol was made of.
+#[derive(Serialize)]
+struct DecodedStepDto {
+    /// "literal", "end-of-block" or "match", the same words `StepKind::as_str`
+    /// gives the rest of the interface.
+    kind: &'static str,
+    /// Which block of the trace it belongs to, as an index.
+    block: f64,
+    /// "fixed" or "dynamic": where the two tables came from.
+    block_kind: &'static str,
+    /// The literal/length code, which every symbol begins with.
+    symbol: DecodedCodeDto,
+    /// The distance code, for a match and for nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    distance: Option<DecodedCodeDto>,
+    /// The four widths added up, which is the step's own width in bits. Given
+    /// rather than left to be summed so a view can show the arithmetic and its
+    /// answer without doing the arithmetic itself.
+    bits: f64,
+}
+
+fn decoded_code_dto(c: qubero_core::codec::inflate::DecodedCode) -> DecodedCodeDto {
+    DecodedCodeDto {
+        symbol: c.symbol as f64,
+        code_bits: c.code_bits as f64,
+        extra_bits: c.extra_bits as f64,
+        extra: c.extra as f64,
+        value: c.value as f64,
+        entry: c.entry.map(|k| k as f64),
+        entry_child: c.entry_child.map(|k| k as f64),
+    }
+}
+
+fn decoded_step_dto(d: qubero_core::codec::inflate::DecodedStep) -> DecodedStepDto {
+    use qubero_core::codec::inflate::SymbolMeaning;
+    DecodedStepDto {
+        // Through `StepKind::as_str` rather than three string literals, so a
+        // step named here is named the same as the step the cursor link
+        // already showed for the same bits. The values in the kinds are not
+        // used and are not read: what is wanted is the word.
+        kind: match d.meaning() {
+            SymbolMeaning::Literal(_) => StepKind::Literal(0).as_str(),
+            SymbolMeaning::EndOfBlock => StepKind::EndOfBlock.as_str(),
+            SymbolMeaning::Length => StepKind::Match { len: 0, dist: 0 }.as_str(),
+        },
+        block: d.block as f64,
+        block_kind: d.block_kind.as_str(),
+        symbol: decoded_code_dto(d.symbol),
+        distance: d.distance.map(decoded_code_dto),
+        bits: d.bits() as f64,
+    }
 }
 
 #[derive(Serialize)]
@@ -1620,6 +1700,68 @@ impl Editor {
         let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
         reply(Ok(e.map_in(core, bit as u64).map(step_dto)))
+    }
+
+    /// Take the deflate symbol at `bit` of the run `space` was unpacked from
+    /// apart, so the sidebar can show what it was made of:
+    /// {status:"ok",node:{kind,block,block_kind,symbol,distance,bits}}, or a
+    /// null node when there is nothing to take apart.
+    ///
+    /// `bit` is a bit of the compressed run, counted the way the trace counts
+    /// them, which is what `map_out` already hands back as `in_start`. The
+    /// step it lands in is found the same way `map_in` finds one.
+    ///
+    /// Asked for rather than done on the way past. Nothing here is in the
+    /// trace: a step is a packed twenty bytes that says a match copied three
+    /// bytes from four back, and which symbols carried those two numbers, how
+    /// wide their codes were and how many extra bits followed each is thrown
+    /// away, because keeping it would cost every step of every stream in
+    /// memory. So the block's two Huffman tables are rebuilt and the step's
+    /// bits read again, which is worth doing for the one step under the cursor
+    /// and not for the millions behind it. Nothing calls this while scrolling.
+    ///
+    /// Only for a stream this editor has opened as a document of its own,
+    /// since that is what carries the trace and the number to ask by. A null
+    /// node is the answer for every other case: a codec that is not deflate, a
+    /// bit nobody read, a step that is a header or a table entry rather than a
+    /// symbol, and a block whose symbols the trace stopped naming.
+    pub fn decode_step(&mut self, space: u32, bit: f64) -> String {
+        let none = || reply(Ok(None::<DecodedStepDto>));
+        let (Some(core), Some(sh)) = (self.core_space(space), self.sheets.get(space as usize)) else {
+            return none();
+        };
+        let origin = sh.origin.clone();
+        // Which step, and whether this is a codec with symbols at all. Both
+        // come off the trace, so a question with no answer is answered before
+        // any of the run is read.
+        let (index, want_bytes) = {
+            let Some(e) = &self.sheets[0].eval else { return none() };
+            let Some(sp) = e.space(core) else { return none() };
+            if !matches!(sp.codec, Codec::Deflate | Codec::Zlib | Codec::Gzip) {
+                return none();
+            }
+            let trace = sp.trace();
+            let Some(index) = trace.index_in(bit as u64) else { return none() };
+            let Some(step) = trace.step(index) else { return none() };
+            // As much of the run as the step reaches, and no more. Bit
+            // positions count from the front of the run, so a prefix ending
+            // after the step is all the walk can touch.
+            (index, step.in_bits.end.div_ceil(8))
+        };
+        // The compressed bytes, which the space does not hold: what it holds is
+        // what came out. They are a field of the file, read in the file's own
+        // reading, and a read can want chunks that are not here yet.
+        self.live = 0;
+        let file = &mut self.sheets[0];
+        let Some(e) = &mut file.eval else { return none() };
+        e.begin_slice();
+        let run = match e.field_bytes(&file.doc, &origin, want_bytes) {
+            Ok((bytes, _)) => bytes,
+            Err(err) => return reply::<Option<DecodedStepDto>>(Err(err)),
+        };
+        let Some(e) = &self.sheets[0].eval else { return none() };
+        let Some(sp) = e.space(core) else { return none() };
+        reply(Ok(inflate::decode_step(&run, sp.trace(), index).map(decoded_step_dto)))
     }
 
     /// The `Decoded` node a space was unpacked from, as a path in the file.
