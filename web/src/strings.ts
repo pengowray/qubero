@@ -472,17 +472,26 @@ export const DECODED = {
    *  and a byte of it is `unpacked from` a step. */
   title: "Decoded",
   /**
-   * The rows' labels. A literal and the end mark are one code, so their row is
-   * `Symbol`: the number is which symbol of the alphabet the code stood for,
-   * which is the fact the old `symbol 0` tooltip was colliding with. A match
-   * is two codes and has to name each, and `Length code` and `Distance code`
-   * are RFC 1951's own words for them.
+   * The rows' labels.
    *
-   * `Copies` leads, because what a reader wants first from a match is what
-   * came out of it, and the two code rows are the working behind that. It is
-   * the row `Symbol` would be, in the slot `Symbol` sits in, so the two kinds
-   * of step read down the same way.
+   * One rule holds the whole section together: the value beside a label is
+   * exactly the thing the label names and nothing else. `Symbol` gets `77`.
+   * `Length code` gets `symbol 259`. Every further fact is its own row or its
+   * own muted line underneath. What this replaced glued four of them together
+   * with an equals sign, so a row labelled `Symbol` read `77 = literal 'M'
+   * (0x4d)`, three of whose four parts are not a symbol.
+   *
+   * All three kinds read down in the same order, so a reader who has learned
+   * one can glance at the others: first what the code did, under a label
+   * naming its kind; then `Symbol`; then, last, where the bytes went. Before
+   * this a literal led with `Symbol` and a match led with `Copies`.
+   *
+   * `Length code` and `Distance code` are RFC 1951's own words. `Literal
+   * byte` and `End of block` carry the kind that used to sit inside the
+   * value, which is label work.
    */
+  literalLabel: "Literal byte",
+  endLabel: "End of block",
   symbolLabel: "Symbol",
   lengthLabel: "Length code",
   distanceLabel: "Distance code",
@@ -492,29 +501,36 @@ export const DECODED = {
    *  put it somewhere. */
   unpacksLabel: "Unpacks to",
   /**
-   * A literal: which symbol, and the byte it stands for. The character and the
-   * number both, because a reader checking these bits against the hex view
-   * wants the number and a reader reading the stream wants the character. A
-   * byte with no glyph to show is its number alone, since empty quotes say
-   * nothing.
+   * The byte a literal code stood for, hex first and the character after it.
    *
-   * `77 = literal 'M'`, not `symbol 77`: the label beside it already says
-   * Symbol, and the equals sign is what makes the row one fact rather than
-   * two. The two match rows do carry the word, because their labels name the
-   * code rather than the symbol.
+   * Hex first so the number sits in the same place whether or not there is a
+   * glyph to follow it: `0x0a` alone, `0x4d 'M'`. A reader checking these bits
+   * against the hex view wants the number and a reader reading the stream
+   * wants the character, and neither should have to hunt for their half in a
+   * column two hundred pixels wide.
+   *
+   * For a literal the symbol number and the byte are the same number in two
+   * bases, since symbols 0 to 255 of the literal/length alphabet are the bytes
+   * themselves. That is why they are two rows and not one phrase: `77 =
+   * literal 'M' (0x4d)` stated one fact twice and dressed it as an equation.
    */
-  literal: (symbol: number, byte: number): string => {
+  literalByte: (byte: number): string => {
     const hex = `0x${byte.toString(16).padStart(2, "0")}`;
-    return `${symbol} = literal ${byte >= 0x20 && byte <= 0x7e ? `'${String.fromCharCode(byte)}' (${hex})` : hex}`;
+    return byte >= 0x20 && byte <= 0x7e ? `${hex} '${String.fromCharCode(byte)}'` : hex;
   },
-  /** Symbol 256, which ends the block and produces nothing. Written out rather
-   *  than left as the number, because 256 is the one symbol of the alphabet
-   *  that is not a byte and not a length. */
-  endOfBlock: (symbol: number): string => `${symbol} = end of block`,
-  /** The two halves of a match, each in the same shape: which symbol the code
-   *  carried, and what that symbol and its extra bits came to. */
-  length: (symbol: number, len: number): string => `symbol ${symbol} = length ${len.toLocaleString()}`,
-  distance: (symbol: number, dist: number): string => `symbol ${symbol} = distance ${dist.toLocaleString()}`,
+  /** What the end mark produced, said outright so the missing `Unpacks to`
+   *  row reads as an answer rather than as a gap. The house says `no bits`
+   *  where a step read none; this is the other side of it. */
+  endWrites: "writes no bytes",
+  /** Which symbol of the alphabet a code stood for: the bare number, under a
+   *  label that already says Symbol. */
+  symbolNumber: (symbol: number): string => symbol.toLocaleString(),
+  /** The same, on a match's two rows, where the label names the code rather
+   *  than the symbol and so the word has to be carried. What the symbol came
+   *  to is not repeated here: the Copies row above already says `5 bytes back
+   *  1`, and saying each half again under its own code is what made these rows
+   *  read as `X = Y`. */
+  codeSymbol: (symbol: number): string => `symbol ${symbol.toLocaleString()}`,
   /** What the match copies, in the words the status bar already uses for the
    *  same step: `match, 5 bytes back 12` there, and here the same phrase under
    *  a label that supplies the verb. */
@@ -539,22 +555,32 @@ export const DECODED = {
   /**
    * How wide one code was, under the row it belongs to, and what followed it.
    *
-   * The four widths across a match have to add up to the Length row, so each
-   * says its own two and the reader can add them. `no extra bits` is written
-   * out rather than left off: an absent clause would read as a row that had
-   * nothing more to say, and what a reader is checking is that nothing else
-   * was read there.
-   *
-   * Where there are extra bits the clause carries the arithmetic, since the
-   * row above says only the answer. `base` is what the symbol names on its
-   * own and `extra` is what the bits after it added, so `11 + 1` under
-   * `= length 12` is the whole of how 12 was arrived at.
+   * The four widths across a match have to add up to the Length row two
+   * sections down, so each says its own two and the reader can add them. `no
+   * extra bits` is written out rather than left off: an absent clause would
+   * read as a row that had nothing more to say, and what a reader is checking
+   * is that nothing else was read there.
    */
-  width: (codeBits: number, extraBits: number, base: number, extra: number): string => {
+  codeBits: (codeBits: number, extraBits: number): string => {
     const code = `${codeBits}-bit code`;
-    if (extraBits === 0) return `${code}, no extra bits`;
-    return `${code}, then ${countText(extraBits, "extra bit")}: ${base.toLocaleString()} + ${extra.toLocaleString()}`;
+    return extraBits === 0 ? `${code}, no extra bits` : `${code}, then ${countText(extraBits, "extra bit")}`;
   },
+  /**
+   * What the symbol and its extra bits came to, on its own line under the
+   * width, and only where there were extra bits to add.
+   *
+   * Two sums meet on these rows and used to share a line: `7-bit code, then 1
+   * extra bit: 11 + 1` put bit widths and a decoded length either side of one
+   * colon, and read cold the `11 + 1` looks like more bit counts. Split, each
+   * line is checkable against exactly one row: the width against Length two
+   * sections down, this against Copies at the top. The leading word says
+   * which sum it is, and the `=` stays, because unlike the row it came from
+   * this really is an equation.
+   */
+  lengthSum: (base: number, extra: number, total: number): string =>
+    `length ${base.toLocaleString()} + ${extra.toLocaleString()} = ${total.toLocaleString()}`,
+  distanceSum: (base: number, extra: number, total: number): string =>
+    `distance ${base.toLocaleString()} + ${extra.toLocaleString()} = ${total.toLocaleString()}`,
   /** Where the step's output landed, in the unpacked stream: one address for a
    *  single byte, and the first and last for a run. The same shape as the
    *  Integrity section's `Covers` row, since it is the same kind of fact, and

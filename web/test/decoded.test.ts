@@ -13,28 +13,33 @@ import assert from "node:assert/strict";
 
 import { chipsHead, DECODED, PROPERTIES, VALUES } from "../src/strings.ts";
 
-test("a literal names the symbol, the character and the byte", () => {
-  // The character for reading the stream, the number for checking it against
-  // the hex view, and the symbol number in front of both, which is the one
-  // thing neither of the other two can be mistaken for.
-  assert.equal(DECODED.literal(77, 0x4d), "77 = literal 'M' (0x4d)");
+test("a literal's byte and its symbol are two rows, not one equation", () => {
+  // For a literal the symbol number and the byte are the same number in two
+  // bases, since symbols 0 to 255 are the bytes themselves. One row saying
+  // both stated one fact twice and put an equals sign between the halves.
+  assert.equal(DECODED.literalByte(0x4d), "0x4d 'M'");
+  assert.equal(DECODED.symbolNumber(77), "77");
 });
 
 test("a byte with no glyph is its number alone", () => {
-  // Empty quotes say nothing, and a newline between them says less.
-  assert.equal(DECODED.literal(10, 0x0a), "10 = literal 0x0a");
-  assert.equal(DECODED.literal(0, 0x00), "0 = literal 0x00");
+  // Empty quotes say nothing, and a newline between them says less. Hex leads
+  // either way, so the number sits in the same place whether a glyph follows.
+  assert.equal(DECODED.literalByte(0x0a), "0x0a");
+  assert.equal(DECODED.literalByte(0x00), "0x00");
 });
 
-test("the end mark is written out, since it is neither a byte nor a length", () => {
-  assert.equal(DECODED.endOfBlock(256), "256 = end of block");
+test("the end mark says what it produced, so the missing output row is an answer", () => {
+  assert.equal(DECODED.endWrites, "writes no bytes");
+  assert.equal(DECODED.symbolNumber(256), "256");
 });
 
 test("a match says what it copies before it says how it was written", () => {
   assert.equal(DECODED.copies(3, 4), "3 bytes back 4");
   assert.equal(DECODED.copies(1, 12), "1 byte back 12");
-  assert.equal(DECODED.length(257, 3), "symbol 257 = length 3");
-  assert.equal(DECODED.distance(3, 4), "symbol 3 = distance 4");
+  // The value beside a label is the thing the label names. `Length code` gets
+  // the symbol; what that symbol came to is the Copies row above.
+  assert.equal(DECODED.codeSymbol(257), "symbol 257");
+  assert.equal(DECODED.codeSymbol(3), "symbol 3");
 });
 
 test("the two copies that read as mistakes say what they are", () => {
@@ -49,13 +54,18 @@ test("the two copies that read as mistakes say what they are", () => {
 test("a code with nothing after it says so rather than saying nothing", () => {
   // An absent clause would read as a row with nothing more to say, and what
   // the reader is checking is that no other bits were read there.
-  assert.equal(DECODED.width(8, 0, 3, 0), "8-bit code, no extra bits");
-  assert.equal(DECODED.width(5, 0, 4, 0), "5-bit code, no extra bits");
+  assert.equal(DECODED.codeBits(8, 0), "8-bit code, no extra bits");
+  assert.equal(DECODED.codeBits(5, 0), "5-bit code, no extra bits");
 });
 
-test("a code with extra bits carries the arithmetic, since the row above has only the answer", () => {
-  assert.equal(DECODED.width(7, 1, 11, 1), "7-bit code, then 1 extra bit: 11 + 1");
-  assert.equal(DECODED.width(9, 3, 67, 5), "9-bit code, then 3 extra bits: 67 + 5");
+test("the widths and the arithmetic are separate lines, since they answer different rows", () => {
+  // One line ends at the bit counts, which add to the Length row two sections
+  // down. The other is the decoded value, which adds to the Copies row at the
+  // top. Sharing a line, `then 1 extra bit: 11 + 1` read as four bit counts.
+  assert.equal(DECODED.codeBits(7, 1), "7-bit code, then 1 extra bit");
+  assert.equal(DECODED.lengthSum(11, 1, 12), "length 11 + 1 = 12");
+  assert.equal(DECODED.codeBits(9, 3), "9-bit code, then 3 extra bits");
+  assert.equal(DECODED.distanceSum(67, 5, 72), "distance 67 + 5 = 72");
 });
 
 test("the four widths of a match account for the length row", () => {
@@ -66,7 +76,7 @@ test("the four widths of a match account for the length row", () => {
     { code: 8, extra: 0 },
     { code: 5, extra: 0 },
   ];
-  const clauses = parts.map((p) => DECODED.width(p.code, p.extra, 0, 0));
+  const clauses = parts.map((p) => DECODED.codeBits(p.code, p.extra));
   assert.deepEqual(clauses, ["8-bit code, no extra bits", "5-bit code, no extra bits"]);
   assert.equal(parts.reduce((n, p) => n + p.code + p.extra, 0), 13);
 });

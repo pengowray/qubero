@@ -1155,12 +1155,14 @@ export class Inspector {
       const note =
         dist.value === 1 ? DECODED.repeated(len) : dist.value < len ? DECODED.overlap(dist.value) : null;
       add(DECODED.copiesLabel, DECODED.copies(len, dist.value), ...(note === null ? [] : [this.codeClause(note, null)]));
-      add(DECODED.lengthLabel, DECODED.length(step.symbol.symbol, len), this.widthClause(code, step.symbol));
-      add(DECODED.distanceLabel, DECODED.distance(dist.symbol, dist.value), this.widthClause(code, dist));
+      add(DECODED.lengthLabel, DECODED.codeSymbol(step.symbol.symbol), ...this.widthLines(code, step.symbol, DECODED.lengthSum));
+      add(DECODED.distanceLabel, DECODED.codeSymbol(dist.symbol), ...this.widthLines(code, dist, DECODED.distanceSum));
     } else if (step.kind === "end-of-block") {
-      add(DECODED.symbolLabel, DECODED.endOfBlock(step.symbol.symbol));
+      add(DECODED.endLabel, DECODED.endWrites);
+      add(DECODED.symbolLabel, DECODED.symbolNumber(step.symbol.symbol));
     } else {
-      add(DECODED.symbolLabel, DECODED.literal(step.symbol.symbol, step.symbol.value));
+      add(DECODED.literalLabel, DECODED.literalByte(step.symbol.value));
+      add(DECODED.symbolLabel, DECODED.symbolNumber(step.symbol.symbol));
     }
     // Where the bytes went, in the unpacked stream's own addresses. Left off
     // where the step wrote nothing, which is the end mark: an address and a
@@ -1181,15 +1183,25 @@ export class Inspector {
     this.decoded.hidden = false;
   }
 
-  /** How wide one of a match's two codes was, under the row it belongs to, as
-   *  a way to the table row that set it. In a fixed block the same words with
-   *  nowhere to go: RFC 1951 set those widths and there is nothing in the file
-   *  to point at. */
-  private widthClause(code: CodeAt, part: DecodedCode): HTMLElement {
-    return this.codeClause(
-      DECODED.width(part.code_bits, part.extra_bits, part.value - part.extra, part.extra),
-      this.entryPath(code, part),
-    );
+  /**
+   * The lines under one of a match's two code rows: how wide the code was,
+   * and, where extra bits followed it, what they came to.
+   *
+   * The width is the way to the table row that set it. In a fixed block the
+   * same words with nowhere to go: RFC 1951 set those widths and there is
+   * nothing in the file to point at.
+   *
+   * The arithmetic is a second line rather than a tail on the first, and never
+   * a link. The two sums answer different rows, the widths adding to Length
+   * two sections down and this to Copies at the top, so a reader checking one
+   * of them should not have to pick it out of a sentence holding both. It is
+   * left off entirely where there were no extra bits: the width line has
+   * already said so, and `length 5 + 0 = 5` is a sum with nothing in it.
+   */
+  private widthLines(code: CodeAt, part: DecodedCode, sum: (base: number, extra: number, total: number) => string): HTMLElement[] {
+    const width = this.codeClause(DECODED.codeBits(part.code_bits, part.extra_bits), this.entryPath(code, part));
+    if (part.extra_bits === 0) return [width];
+    return [width, this.codeClause(sum(part.value - part.extra, part.extra, part.value), null)];
   }
 
   /** The second line under a Decoded row: quieter than the fact above it, and
