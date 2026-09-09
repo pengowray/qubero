@@ -41,19 +41,26 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
 /// because two of them ask: [`editable`] refuses the field before an editor
 /// opens, and `encode` refuses it again where the refusal cannot be skipped.
 ///
-/// It names the hex view only to rule it out, where every other refusal offers
-/// it as the way round. There is nothing to offer: the bits are in the file,
-/// but typing a different code into them moves every code after it and the
-/// stream stops decoding there. The siblings train a reader to expect that
-/// second sentence, so leaving it out sends them off to try it.
+/// It shows in the red line under the Value box after a commit, so it is an
+/// error, and it leads with the verdict the way the other post-commit errors
+/// do: `Too long to edit: ...`, `Not a JSON number. ...`, `Numbers only: ...`.
+/// The refusals that lead with their subject instead, `Magic bytes are fixed
+/// by the format.` among them, are closer to a standing notice that a field is
+/// read-only than to an answer to something just typed.
 ///
-/// What it does not say is what the panel is already showing an inch above:
-/// the node's name, that it is a `Huffman code`, its width, and the table row
-/// that width came from. Nor does it promise that every code after it shifts,
-/// which is the usual outcome rather than a law. See
+/// The hex view is named only to rule it out, and before the colon rather than
+/// after it. Every other refusal in this panel ends `Use the hex view`, so a
+/// reader will pattern-match and go there, and a reader who skims no further
+/// than the verdict is the one who most needs saving the trip. No way round is
+/// offered because there is none short of re-encoding the block.
+///
+/// What it leaves out is what the panel is already showing an inch above: the
+/// node's name, that it is a `Huffman code`, its width, and the table row that
+/// width came from. It also stops short of promising that every code after it
+/// shifts, which is the usual outcome rather than a law. See
 /// [`crate::template::Ty::CodeBits`].
 pub const CODE_BITS_MSG: &str =
-    "Huffman codes can't be edited here or in the hex view: changing one means re-encoding the whole block.";
+    "Can't edit here or in the hex view: changing one Huffman code means re-encoding the whole block.";
 
 /// What the editor says when text will not fit a JSON scalar's shape. The
 /// shape is the file's: a member that holds a number goes on holding one, and

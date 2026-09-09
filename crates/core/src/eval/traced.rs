@@ -572,12 +572,15 @@ mod tests {
         for path in [&[6usize, 1][..], &[6, 1, 0], &[6, 1, 0, 0], &[6, 1, 0, 1], &[6, 1, 0, 2, 0]] {
             assert!(!e.node(&d, path).unwrap().editable, "{path:?} is offered for editing");
         }
-        // And a reader who asks anyway is told why, rather than told to use
-        // the hex view: typing over these bits there breaks the stream too.
+        // And a reader who asks anyway gets the refusal written for a code,
+        // not the general one that sends them to the hex view: typing over
+        // these bits there breaks the stream too. Compared against the
+        // constant rather than against words in it, so that rewording the
+        // message stays a question for the message and not for this test.
         let crate::eval::EvalError::Failed(why) = e.prepare_write(&d, &[6, 1, 0, 2, 0], "0").unwrap_err() else {
             panic!("writing a code was not refused outright");
         };
-        assert!(why.contains("shift every code after it"), "the refusal reads {why:?}");
+        assert_eq!(why, crate::encode::CODE_BITS_MSG, "a code was refused with someone else's message");
     }
 
     /// The annotation column over a deflate run says which block the bytes are
