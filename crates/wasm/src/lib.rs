@@ -2800,9 +2800,11 @@ impl Editor {
     pub fn write_node(&mut self, space: u32, path: &[u32], text: &str) -> String {
         // A byte of an unpacked stream is a function of every compressed byte
         // before it, so there is nowhere to put a change to one. The interface
-        // says so in its own words; this is the door being locked behind it.
+        // says so in its own words before a write gets here; this is the same
+        // refusal one layer out, in the same words the evaluator would use if
+        // it were reached, rather than five lowercase ones of its own.
         if space != 0 {
-            return reply::<WriteDto>(Err(EvalError::Failed("unpacked data is read-only".into())));
+            return reply::<WriteDto>(Err(EvalError::Failed(qubero_core::encode::UNPACKED_MSG.into())));
         }
         self.go(space);
         let sh = self.sm();

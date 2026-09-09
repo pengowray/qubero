@@ -7,6 +7,40 @@
 //! natural encoding is variable length (LEB128, text, bytes) are padded or
 //! rejected rather than resized; growing a field is a structural edit and
 //! belongs with the redundant-editing work, not here.
+//!
+//! # How a rejection is worded
+//!
+//! Everything that comes back as an `Err` here reaches the reader as the red
+//! line under the inspector's Value box, straight after they typed into a field
+//! and pressed Enter. Two different answers land in that one line, and the
+//! opening words are what tell them apart.
+//!
+//! A *refusal* says the field cannot be edited here, so nothing retyped will
+//! help and the reader should stop. It opens `Can't edit here`, gives its reason
+//! after a colon, and ends `Use the hex view.` where there is a way round. Two
+//! of them rule the hex view out instead, inside the opener: `Can't edit here or
+//! in the hex view`.
+//!
+//! A *rejected value* says the field takes text but this text does not fit, so
+//! the next attempt can work. It opens with what is wanted (`Whole numbers
+//! only:`, `Needs exactly 4 bytes`, `u8 range is 0 to 255.`) and never says
+//! `edit`, because the reader should keep typing.
+//!
+//! Three fixed words in front of every refusal is the cheapest signal there is
+//! for "stop typing", and it costs nothing to skim past: among refusals the
+//! words after the opener never change what the reader does next, since all of
+//! them point at the hex view except the two that rule it out, and those differ
+//! inside the opener itself. Rejected values keep their varied openers because
+//! there the distinguishing words *are* the instruction.
+//!
+//! No message in either group names the field, its type or its width. The panel
+//! is showing all three an inch above.
+//!
+//! The refusals are [`MAGIC_MSG`], [`NOT_EDITABLE_MSG`], [`UNPACKED_MSG`] and
+//! [`CODE_BITS_MSG`]; the two built below, for an EBML field of an impossible
+//! width and for a terminated field with no room for a terminator; and the three
+//! built in [`crate::eval::Evaluator::prepare_write`], for a field too long to
+//! retype and for text whose stored bytes are not what the Value box shows.
 
 use crate::bits::bytes_for;
 use crate::template::{Endian, StrLen, Ty};
@@ -41,18 +75,11 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
 /// because two of them ask: [`editable`] refuses the field before an editor
 /// opens, and `encode` refuses it again where the refusal cannot be skipped.
 ///
-/// It shows in the red line under the Value box after a commit, so it is an
-/// error, and it leads with the verdict the way the other post-commit errors
-/// do: `Too long to edit: ...`, `Not a JSON number. ...`, `Numbers only: ...`.
-/// The refusals that lead with their subject instead, `Magic bytes are fixed
-/// by the format.` among them, are closer to a standing notice that a field is
-/// read-only than to an answer to something just typed.
-///
-/// The hex view is named only to rule it out, and before the colon rather than
-/// after it. Every other refusal in this panel ends `Use the hex view`, so a
-/// reader will pattern-match and go there, and a reader who skims no further
-/// than the verdict is the one who most needs saving the trip. No way round is
-/// offered because there is none short of re-encoding the block.
+/// The hex view is ruled out in the opener rather than after the colon. Every
+/// other refusal in this panel ends `Use the hex view`, so a reader will
+/// pattern-match and go there, and a reader who skims no further than the
+/// verdict is the one who most needs saving the trip. No way round is offered
+/// because there is none short of re-encoding the block.
 ///
 /// What it leaves out is what the panel is already showing an inch above: the
 /// node's name, that it is a `Huffman code`, its width, and the table row that
@@ -61,6 +88,49 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
 /// [`crate::template::Ty::CodeBits`].
 pub const CODE_BITS_MSG: &str =
     "Can't edit here or in the hex view: changing one Huffman code means re-encoding the whole block.";
+
+/// Why a signature the format requires is not retyped here. Said in one place
+/// because [`editable`] and `encode` both refuse it.
+///
+/// `are fixed by the format` is kept from the message this replaces: it reads
+/// as "set", where `the format fixes these bytes` could be read as repair.
+/// `Magic bytes` is dropped from the front because the panel names the type an
+/// inch above, and because the verdict is what the reader needs first.
+///
+/// The hex view offer is new here: the old string gave the rule but no way
+/// round, and since every sibling refusal either offers the hex view or rules
+/// it out, silence would read as "no way at all", which is false for magic
+/// bytes. They are in the file and the hex view can change them; what stops
+/// this box taking them is that a signature is not a value anyone retypes.
+pub const MAGIC_MSG: &str = "Can't edit here: these bytes are fixed by the format. Use the hex view.";
+
+/// The refusal for a field with no text encoder at all, which is four places'
+/// last resort: [`encode`] below, and the three in
+/// [`crate::eval::Evaluator::prepare_write`] that run out of specific reasons.
+///
+/// There is no reason to give, so none is manufactured, and the way round is
+/// the useful half. `This field` is dropped from the front for the same reason
+/// the others drop their subjects: the panel is already about this field.
+pub const NOT_EDITABLE_MSG: &str = "Can't edit here. Use the hex view.";
+
+/// Why a byte read inside a decompressed stream is not written anywhere. Said
+/// in one place because three ask: [`crate::eval::Evaluator::prepare_write`]
+/// refuses it where the offset would otherwise be taken for a file address,
+/// and the wasm layer refuses a write into a decoded document before it gets
+/// that far.
+///
+/// Parallel to [`CODE_BITS_MSG`], and for the same reason: the hex view is
+/// ruled out in the opener, before the colon, because a reader who skims no
+/// further than the verdict is the one who would otherwise go there and find
+/// nothing to edit. `unpacked from` rather than `read out of`, because
+/// `unpacked` is the word the web uses everywhere it names these bytes.
+/// `aren't in the file` is the fact that makes both halves true.
+///
+/// The web has its own gate in front of this one, worded for a whole document
+/// rather than for a field, and it shows in the hex view too, where `or in the
+/// hex view` would be odd. See `UNPACKED.readOnly` in `web/src/strings.ts`.
+pub const UNPACKED_MSG: &str =
+    "Can't edit here or in the hex view: these bytes were unpacked from a compressed stream and aren't in the file.";
 
 /// What the editor says when text will not fit a JSON scalar's shape. The
 /// shape is the file's: a member that holds a number goes on holding one, and
@@ -212,8 +282,18 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
         }
         Ty::EbmlVint { strip_marker } => {
             let room = (size_bits / 8) as usize;
+            // Not the typed value's fault: the field arrived at a width EBML
+            // has no encoding for, so nothing can be written into it and only
+            // the hex view can change a width. That makes it a refusal, and it
+            // takes the refusal's opener. The field's own byte count is
+            // repeated even though the panel shows it, because without it the
+            // sentence asks the reader to look up and compare, and the mismatch
+            // is the message. Digits rather than words, as the range messages
+            // print them.
             if !(1..=8).contains(&room) {
-                return Err("an EBML variable-size integer is one to eight bytes".into());
+                return Err(format!(
+                    "Can't edit here: this field is {room} bytes, and an EBML variable-size integer is 1 to 8 bytes. Use the hex view."
+                ));
             }
             let v = parse_uint(text).ok_or_else(|| whole_number_msg(false))?;
             if *strip_marker {
@@ -291,8 +371,13 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
                     Ok(out)
                 }
                 StrLen::Terminated { end, .. } => {
+                    // A refusal rather than a length check: no text of any
+                    // length fits, not even none of it, so there is nothing to
+                    // retype. The byte count stays because it is the reason,
+                    // and the way round is offered like every sibling's, since
+                    // the width came from bytes the hex view can reach.
                     if room < unit {
-                        return Err(format!("The field is {want} bytes; there's no room for text."));
+                        return Err(format!("Can't edit here: the field is {want} bytes, with no room for text. Use the hex view."));
                     }
                     if body.len() != room - unit {
                         return Err(str_length_msg(body.len(), room - unit, chars, settled));
@@ -304,8 +389,11 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
                     Ok([bom.as_slice(), &body, &term].concat())
                 }
                 // Writing one would have to decide how much of the whitespace
-                // around it to put back, and the field would change size.
-                StrLen::Scan { .. } => Err("This field is read-only. Edit it in the hex view.".into()),
+                // around it to put back, and the field would change size. That
+                // reason is now in the message: the old wording said only that
+                // the field was read-only, which a reader who had just typed
+                // into a box that accepted typing had every reason to doubt.
+                StrLen::Scan { .. } => Err("Can't edit here: this text ends at whitespace, not at a stored length, so a new value would change the field's size. Use the hex view.".into()),
             }
         }
         Ty::Bytes(_) => {
@@ -316,9 +404,9 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
             }
             Ok(bytes)
         }
-        Ty::Magic(_) => Err("Magic bytes are fixed by the format.".into()),
+        Ty::Magic(_) => Err(MAGIC_MSG.into()),
         Ty::CodeBits { .. } => Err(CODE_BITS_MSG.into()),
-        _ => Err("This field can't be edited here. Use the hex view.".into()),
+        _ => Err(NOT_EDITABLE_MSG.into()),
     }
 }
 

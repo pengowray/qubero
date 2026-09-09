@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn an_object_is_edited_by_its_members_rather_than_whole() {
         let err = write(&[2], "{}").unwrap_err();
-        assert!(err.contains("can't be edited here"), "{err}");
+        assert_eq!(err, crate::encode::NOT_EDITABLE_MSG, "an object was refused with someone else's message");
         assert!(write(&[], "{}").is_err());
     }
 

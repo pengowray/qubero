@@ -795,29 +795,44 @@ impl Evaluator {
         // since the offset below would otherwise be a bit of the stream used as
         // a bit of the file.
         if r.space != 0 {
-            return fail("Bytes read out of a compressed stream can't be edited: they aren't in the file.");
+            return fail(encode::UNPACKED_MSG);
         }
         if !encode::editable(&r.ty, size) {
             return fail(match &r.ty {
-                Ty::Magic(_) => "Magic bytes are fixed by the format.".to_string(),
+                Ty::Magic(_) => encode::MAGIC_MSG.to_string(),
                 Ty::CodeBits { .. } => encode::CODE_BITS_MSG.to_string(),
+                // Keeps its own verdict rather than taking the family's
+                // opener. `Too long to edit` is as short as `Can't edit here`
+                // and carries the reason inside it, so the general prefix would
+                // buy nothing and push the two counts a word further along. The
+                // web says the same thing over a truncated value box; see
+                // `SHOW_LIMIT` in `web/src/inspector.ts`.
                 Ty::Bytes(_) | Ty::Str { .. } => format!(
                     "Too long to edit: {} bytes; the limit is {}. Use the hex view.",
                     encode::commas(size / 8),
                     encode::commas(encode::EDIT_LIMIT_BYTES)
                 ),
-                _ => "This field can't be edited here. Use the hex view.".to_string(),
+                _ => encode::NOT_EDITABLE_MSG.to_string(),
             });
         }
+        // Two refusals of one shape, and they stay parallel: what the field
+        // holds, then what writing would do to it, then the way round. `so`
+        // rather than a semicolon, because the second clause follows from the
+        // first and a reader should not have to work that out. The terminated
+        // one names the byte the template declares as the end, since a reader
+        // looking for it in the hex view needs to know what to look for.
         if !self.padding_is_clean(doc, &r, size)? {
             return fail(match &r.ty {
                 Ty::Str { len: StrLen::Terminated { end, .. }, .. } => format!(
-                    "This text has no 0x{end:02x} to end it; writing would add one and make the field longer. Use the hex view."
+                    "Can't edit here: this text has no 0x{end:02x} to end it, so writing would add one and make the field longer. Use the hex view."
                 ),
+                // `aren't shown` without a second `here`: after `Can't edit
+                // here` it would point at the same box twice. The field holds
+                // the hidden bytes, and the box is precisely where they are not.
                 Ty::Str { len: StrLen::Padded { pad, .. }, .. } => format!(
-                    "Bytes after the first 0x{pad:02x} aren't shown here; writing would overwrite them. Use the hex view."
+                    "Can't edit here: this field has bytes after the first 0x{pad:02x} that aren't shown, so writing would overwrite them. Use the hex view."
                 ),
-                _ => "This field can't be edited here. Use the hex view.".to_string(),
+                _ => encode::NOT_EDITABLE_MSG.to_string(),
             });
         }
         // A text field is written back in the encoding it was read in, with the
@@ -839,7 +854,7 @@ impl Evaluator {
             let literal = match json::scalar_literal(*shape, text, &encode::JSON_SCALAR_MSGS) {
                 Some(Ok(s)) => s,
                 Some(Err(why)) => return fail(why),
-                None => return fail("This field can't be edited here. Use the hex view."),
+                None => return fail(encode::NOT_EDITABLE_MSG),
             };
             let data = literal.into_bytes();
             let new_bits = data.len() as u64 * 8;

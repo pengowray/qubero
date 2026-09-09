@@ -2797,9 +2797,11 @@ mod json_edits {
 
     #[test]
     fn an_array_and_an_object_are_not_scalars() {
+        // Compared against the constant rather than against words in it, so
+        // that rewording the refusal stays a question for the refusal.
         for path in [vec![4], vec![4, 2], vec![]] {
             let err = plain(&path, "[]").unwrap_err();
-            assert!(err.contains("can't be edited here"), "{path:?}: {err}");
+            assert_eq!(err, crate::encode::NOT_EDITABLE_MSG, "{path:?} was refused with someone else's message");
         }
     }
 
