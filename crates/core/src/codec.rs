@@ -292,6 +292,18 @@ pub enum StepField {
     /// pxu: how many of a token's low bits are an index into the table of
     /// elements written before.
     PxuBits,
+    /// LZMA: the byte packing the literal context bits, the literal position
+    /// bits and the position bits. Its value is that byte.
+    ///
+    /// Often a step of no width at all. LZMA1 carries nothing in front of its
+    /// stream, so lzip fixes these numbers by convention and 7z writes them
+    /// into the archive's header: the step says what the decoder was told
+    /// without claiming the run holds it. In LZMA2 a chunk that resets the
+    /// properties does carry the byte, and there the step has the width of it.
+    LzmaProps,
+    /// LZMA: the five bytes that prime the range coder. The first is ignored
+    /// and the other four are the interval the stream starts inside.
+    RangeInit,
 }
 
 impl StepField {
@@ -319,6 +331,8 @@ impl StepField {
             StepField::PxuWidth => "pxu_width",
             StepField::PxuHeight => "pxu_height",
             StepField::PxuBits => "pxu_bits",
+            StepField::LzmaProps => "lzma_props",
+            StepField::RangeInit => "range_init",
         }
     }
 }
@@ -742,7 +756,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 21] = [
+const FIELDS: [StepField; 23] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -764,6 +778,8 @@ const FIELDS: [StepField; 21] = [
     StepField::PxuWidth,
     StepField::PxuHeight,
     StepField::PxuBits,
+    StepField::LzmaProps,
+    StepField::RangeInit,
 ];
 
 /// Open a compressed run and say what the decoder did to it.
