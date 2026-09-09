@@ -173,7 +173,7 @@ impl Evaluator {
                 index: (k - view.symbols.start) as u64,
                 offset_bits: at,
                 size_bits: size,
-                text: super::traced::symbol_ty(&step).0,
+                text: super::traced::symbol_name(&step),
                 label: super::traced::symbol_label(&step),
                 kind: "symbol",
                 repeat: false,
@@ -886,11 +886,14 @@ mod tests {
         assert!(cells.iter().any(|c| c.text.starts_with("match ")), "no match among the symbols");
         // What the cell shows is shorter than what the tooltip says: a literal
         // is the byte itself, so a row of them reads as the text the block
-        // produces, and a match keeps its numbers without the word.
+        // produces, and a match is its two numbers with an arrow back to where
+        // the bytes come from.
         assert_eq!(cells[0].label, "a");
         assert_eq!(cells.last().unwrap().label, "end of block");
         let m = cells.iter().find(|c| c.text.starts_with("match ")).expect("a match");
-        assert_eq!(m.label, m.text.strip_prefix("match ").unwrap());
+        let numbers = m.text.strip_prefix("match ").unwrap().split(" back ").collect::<Vec<_>>();
+        let want = if numbers[1] == "1" { format!("\u{d7}{}", numbers[0]) } else { numbers.join("\u{2190}") };
+        assert_eq!(m.label, want);
         // The symbols follow one another with nothing in between, and the
         // first starts after the block's header rather than at the block.
         assert!(cells[0].offset_bits > block.offset_bits);

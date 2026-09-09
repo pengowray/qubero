@@ -334,6 +334,9 @@ fn run(
     if end > data.len() as u64 * 8 || start > end {
         return Err(Refusal::Failed);
     }
+    // Said here rather than at each of the four ways in, because this is where
+    // `Bits` is made and `Bits` is the thing it is a fact about.
+    b.counts_low_bit_first();
     let mut bits = Bits { data, pos: start, end };
     let mut coarse = false;
     loop {

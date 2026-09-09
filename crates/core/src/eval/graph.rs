@@ -352,10 +352,10 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         Ty::Chain { .. } => "chain".to_string(),
         Ty::At { .. } => "at".to_string(),
         Ty::Decoded { .. } => "stream".to_string(),
-        // The three parts of a decoder's trace are one kind here: what a
-        // reader wants to know is that these nodes came out of a decoding
-        // rather than out of the file.
-        Ty::Traced { .. } => "trace".to_string(),
+        // The parts of a decoder's trace are one kind here, the codes in a
+        // block included: what a reader wants to know is that these nodes came
+        // out of a decoding rather than out of the file.
+        Ty::Traced { .. } | Ty::CodeBits { .. } => "trace".to_string(),
         // A resolved node has taken a case already; this is only reachable
         // from a declared type.
         Ty::Switch { .. } | Ty::Match { .. } => "switch".to_string(),
@@ -420,7 +420,13 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         Ty::Json(shape, _) if shape.composite() => "composite",
         Ty::Json(crate::json::Shape::Number, _) => "int",
         Ty::Json(..) => "str",
-        Ty::Bytes(_) => "bytes",
+        // A Huffman code reads as a string of noughts and ones, and is not
+        // text, the same distinction an instruction is kept apart for: a
+        // picture of what a file is made of should count a compressed block's
+        // codes as the compressed bytes they are. No word of its own, because
+        // the answer to "what is this file made of" is already `stream` a
+        // level up and these are what is inside one.
+        Ty::Bytes(_) | Ty::CodeBits { .. } => "bytes",
         // Everything that holds other fields, including the two that hold
         // fields which are not bits of this file: a stream's contents are at
         // offsets of the bytes it unpacked to, and a trace's symbols are what

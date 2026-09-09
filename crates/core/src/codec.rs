@@ -402,13 +402,17 @@ impl StepKind {
 /// One step of a decoding: which bits of the input it read and which bytes of
 /// the output it produced.
 ///
-/// `in_bits` are bits of the compressed run counted from its front. For
-/// deflate they are counted the way deflate reads them, least significant bit
-/// of a byte first, which is not how the rest of Qubero addresses bits: bit 0
-/// is the *low* bit of byte 0. Within a byte that is the reverse of a field
-/// address, and across bytes the two agree, so the byte extent of a step is
-/// the same either way and only a sub-byte highlight differs. Byte-aligned
-/// codecs have no such question.
+/// `in_bits` are bits of the compressed run counted from its front, in the
+/// order the codec reads them, which is not always how Qubero addresses bits.
+/// Deflate takes the least significant bit of a byte first, so its bit 0 is
+/// the *low* bit of byte 0; Qubero's bit 0 is the high bit of byte 0. Within a
+/// byte that is the reverse of a field address, and across bytes the two
+/// agree, so the byte extent of a step is the same either way and only a
+/// sub-byte highlight differs. Byte-aligned codecs have no such question.
+///
+/// [`Trace::lsb_first`] says which way this trace counted, for the one caller
+/// that has to turn a step's bits back into the bits themselves rather than
+/// into a range.
 ///
 /// Either range may be empty: a header field produces no output, and a match
 /// of length 3 reads no input of its own past the code that named it.
@@ -486,6 +490,8 @@ pub struct Trace {
     end_out_bytes: u64,
     /// Whether the trace gave up naming every symbol; see [`MAX_STEPS`].
     coarse: bool,
+    /// Whether `in_bits` count the low bit of a byte first. See [`Step`].
+    lsb_first: bool,
 }
 
 impl Trace {
@@ -506,6 +512,20 @@ impl Trace {
     /// held no literals.
     pub fn coarse(&self) -> bool {
         self.coarse
+    }
+
+    /// Which way round the bits inside a byte are counted, for a caller that
+    /// wants the bits of a step and not only the range they cover.
+    ///
+    /// A range is the same either way, so nothing that highlights or measures
+    /// a step has to ask. Writing a code out as the noughts and ones the
+    /// decoder read does: deflate's first bit of a code is the low bit of a
+    /// byte and LHA's is the high bit, and printing one in the other's order
+    /// reverses every code within its byte. False is Qubero's own order, high
+    /// bit down, which is also the right answer for a codec that reads whole
+    /// bytes.
+    pub fn lsb_first(&self) -> bool {
+        self.lsb_first
     }
 
     pub fn in_bits(&self) -> u64 {
@@ -670,6 +690,15 @@ impl TraceBuilder {
 
     pub(crate) fn coarsen(&mut self) {
         self.trace.coarse = true;
+    }
+
+    /// Say that this decoder's bit reader takes the low bit of a byte first,
+    /// which the steps' `in_bits` are then counted in. Called once, before any
+    /// step is pushed, by the codecs whose readers do: deflate, LZW and
+    /// PICO-8's. A reader that takes the high bit first, and a codec that
+    /// reads whole bytes, leave it alone. See [`Trace::lsb_first`].
+    pub(crate) fn counts_low_bit_first(&mut self) {
+        self.trace.lsb_first = true;
     }
 
     /// Drop every step from `from` on, so a block's symbols can be replaced by
