@@ -6,6 +6,7 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { bitCells, byteRuns } from "./codebits.ts";
 import { address } from "./dom.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
@@ -178,6 +179,19 @@ export class Inspector {
   private readonly field: HTMLInputElement;
   /** Long values (bytes, text) are edited here instead, wrapped over lines. */
   private readonly area: HTMLTextAreaElement;
+  /** A code's bits are shown here instead of in the box, because they have a
+   *  structure the box cannot draw: which byte each bit was packed into, and
+   *  where a match's length code hands over to its distance code. Editing one
+   *  is refused anyway, so nothing is lost by not being an input. */
+  private readonly bits: HTMLElement;
+  /** The two rows inside it: the labels over the code's parts, and the digits.
+   *  Kept apart so the labels can be left out of a selection and out of the
+   *  copy that follows it. */
+  private readonly bitLabels: HTMLElement;
+  private readonly bitRow: HTMLElement;
+  /** The code the box was last built for: its offset, its digits and where its
+   *  two parts meet. See `fillBits`. */
+  private bitsFor = "";
   private readonly note: HTMLElement;
   /** The type and size of what the box is showing, under the box: the reader's
    *  first question about a value is what it is. */
@@ -391,6 +405,24 @@ export class Inspector {
       this.area.classList.remove("invalid");
     });
 
+    // A code's bits, in place of the box. Two rows in one bordered ground so
+    // that a label sits over the part of the string it names: the labels are
+    // marked as decoration for a screen reader and refuse the selection, so a
+    // drag across the digits copies the digits and nothing else.
+    this.bitLabels = document.createElement("div");
+    this.bitLabels.className = "insp-codebits-labels";
+    this.bitLabels.setAttribute("aria-hidden", "true");
+    this.bitRow = document.createElement("div");
+    this.bitRow.className = "insp-codebits-row";
+    this.bits = document.createElement("div");
+    this.bits.className = "insp-codebits";
+    // Named the way the box it stands in for is named, since it answers the
+    // same question. A group rather than nothing, so the name is announced on
+    // the way in: without a role an `aria-label` on a plain div says nothing.
+    this.bits.setAttribute("role", "group");
+    this.bits.hidden = true;
+    this.bits.append(this.bitLabels, this.bitRow);
+
     this.note = document.createElement("div");
     this.note.className = "insp-note";
     this.detail = document.createElement("div");
@@ -475,7 +507,7 @@ export class Inspector {
       this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
     });
     this.decoded.addEventListener("mouseleave", () => this.markHover(null));
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.shape, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.shape, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -993,7 +1025,7 @@ export class Inspector {
     // there is a reading to show under it, and how the Length row is worded.
     const isCode = this.isCode(path, n);
     const code = isCode ? this.codeAt(path, n) : null;
-    this.fillValue(path, n, isCode);
+    this.fillValue(path, n, isCode, code);
     this.fillDecoded(code);
     this.fillProperties(path, n, code);
     this.fillTypes(path, n);
@@ -1156,8 +1188,8 @@ export class Inspector {
       const note =
         dist.value === 1 ? DECODED.repeated(len) : dist.value < len ? DECODED.overlap(dist.value) : null;
       add(DECODED.copiesLabel, DECODED.copies(len, dist.value), ...(note === null ? [] : [this.codeClause(note, null)]));
-      add(DECODED.lengthLabel, DECODED.codeSymbol(step.symbol.symbol), ...this.widthLines(code, step.symbol, DECODED.lengthSum));
-      add(DECODED.distanceLabel, DECODED.codeSymbol(dist.symbol), ...this.widthLines(code, dist, DECODED.distanceSum));
+      add(DECODED.lengthLabel, DECODED.codeSymbol(step.symbol.symbol), ...this.widthLines(code, step.symbol, DECODED.lengthSum, false));
+      add(DECODED.distanceLabel, DECODED.codeSymbol(dist.symbol), ...this.widthLines(code, dist, DECODED.distanceSum, true));
     } else if (step.kind === "end-of-block") {
       add(DECODED.endLabel, DECODED.endWrites);
       add(DECODED.symbolLabel, DECODED.symbolNumber(step.symbol.symbol));
@@ -1187,19 +1219,34 @@ export class Inspector {
    *
    * The width is the way to the table row that set it. In a fixed block the
    * same words with nowhere to go: RFC 1951 set those widths and there is
-   * nothing in the file to point at.
+   * nothing in the file to point at. That is where the second line comes in.
+   * Everywhere else on this panel a clause a reader wants to check is a button
+   * to the bits that settled it, and a clause that is not one is a dead end
+   * they will click at anyway; so the fixed block answers the question in
+   * words instead, in italic and with no hover, which is how a reader can see
+   * it is not a link and not something read out of this file.
    *
-   * The arithmetic is a second line rather than a tail on the first, and never
+   * The arithmetic is a further line rather than a tail on the first, and never
    * a link. The two sums answer different rows, the widths adding to Length
    * two sections down and this to Copies at the top, so a reader checking one
    * of them should not have to pick it out of a sentence holding both. It is
    * left off entirely where there were no extra bits: the width line has
    * already said so, and `length 5 + 0 = 5` is a sum with nothing in it.
    */
-  private widthLines(code: CodeAt, part: DecodedCode, sum: (base: number, extra: number, total: number) => string): HTMLElement[] {
-    const width = this.codeClause(DECODED.codeBits(part.code_bits, part.extra_bits), this.entryPath(code, part));
-    if (part.extra_bits === 0) return [width];
-    return [width, this.codeClause(sum(part.value - part.extra, part.extra, part.value), null)];
+  private widthLines(
+    code: CodeAt,
+    part: DecodedCode,
+    sum: (base: number, extra: number, total: number) => string,
+    distance: boolean,
+  ): HTMLElement[] {
+    const lines = [this.codeClause(DECODED.codeBits(part.code_bits, part.extra_bits), this.entryPath(code, part))];
+    if (code.step.block_kind === "fixed") {
+      const rfc = this.codeClause(DECODED.rfcFixed(DECODED.fixedRange(part.symbol, distance)), null);
+      rfc.classList.add("insp-decoded-rfc");
+      lines.push(rfc);
+    }
+    if (part.extra_bits !== 0) lines.push(this.codeClause(sum(part.value - part.extra, part.extra, part.value), null));
+    return lines;
   }
 
   /** The second line under a Decoded row: quieter than the fact above it, and
@@ -1811,6 +1858,15 @@ export class Inspector {
     if (shape.status !== "ok") return null;
     const sized = shape.node.sized;
     if (code !== null && code.step.kind === "match") return { text: PROPERTIES.sizedMatch(), path: null };
+    // A literal or an end mark in a fixed block, where `fixed by the format`
+    // is true and is as far as it goes. The block has no code-length table to
+    // send the reader to, so this row says which run of RFC 1951's fixed code
+    // the symbol falls in, in the same words the Decoded section uses under
+    // the same fact for a match. `sized.fixed` stays for every other field
+    // that is a fixed width because of what it is.
+    if (code !== null && sized === "fixed" && code.step.block_kind === "fixed") {
+      return { text: DECODED.rfcFixed(DECODED.fixedRange(code.step.symbol.symbol, false)), path: null };
+    }
     if (sized === "table" && code !== null) {
       // The row's own name, as the listing writes it: `code length for symbol
       // 77`. Read off the row rather than spelled out here, so the clause and
@@ -2213,7 +2269,7 @@ export class Inspector {
    * shows that value instead, read-only: what it is showing belongs to a child
    * with an editor of its own, which is a row in the list underneath.
    */
-  private fillValue(path: readonly number[], n: TemplateNode, isCode: boolean): void {
+  private fillValue(path: readonly number[], n: TemplateNode, isCode: boolean, code: CodeAt | null): void {
     const key = path.join("/");
     if (key !== this.childCapFor) {
       this.childCapFor = key;
@@ -2230,10 +2286,17 @@ export class Inspector {
     // not have. It is a dozen characters at most in any case, so it goes in
     // the line the node's own value already fills.
     const long = !shown.composite && (shown.kind === "bytes" || shown.kind === "str") && !isCode;
+    // Three ways to show a value and one of them at a time: the wrapped box
+    // for a long one, the drawn bit string for a code, and the input for
+    // everything else. A code leaves the input because the string has a
+    // structure an input cannot draw, and it can afford to: editing a code is
+    // refused, so the input was never going to take typing for one.
     this.area.hidden = !long;
-    this.field.hidden = long;
+    this.bits.hidden = !isCode;
+    this.field.hidden = long || isCode;
     if (long) this.fillArea(shown, n, inside);
-    else this.fillField(n, inside, isCode);
+    else if (isCode) this.fillBits(n, code);
+    else this.fillField(n, inside);
     this.fillKids(n, kids, reply?.status === "pending" || reply?.status === "working");
   }
 
@@ -2287,14 +2350,122 @@ export class Inspector {
     return { text: countText(kid.child_count, childWord(kid)), count: true };
   }
 
-  private fillField(n: TemplateNode, inside: Inside | null, isCode: boolean): void {
+  /**
+   * A code's bits, drawn rather than typed into a box.
+   *
+   * Two boundaries run through the same string and they are told apart by
+   * being drawn in two different ways. Which stored byte a bit came out of is
+   * a change of fill, alternating on the byte's own address so that one byte
+   * keeps one tint in every code that touches it. Where a match's length code
+   * gives way to its distance code is a gap with a label over it, because that
+   * is the boundary the reader is being told about and because whitespace
+   * already means "byte boundary" everywhere else in this app: a gap between
+   * bytes here would read backwards.
+   *
+   * The gap is padding on the cell after it and not a space in the string, so
+   * that a drag across the digits copies the digits. It is padding on the cell
+   * rather than a margin between two groups for a second reason: a cell's fill
+   * runs under its own padding, so where the two codes meet inside one byte,
+   * which they do constantly, that byte reads as one band with a gap in it
+   * instead of as two bands.
+   *
+   * There is no third boundary between a code and its extra bits. Deflate
+   * packs a Huffman code most significant bit first and its extra bits least
+   * significant bit first, so in this string an extra-bit run is the value's
+   * binary backwards; a boundary there would invite a digit-by-digit check the
+   * layout could not honour. The `codeBits` subline in the Decoded section
+   * states that split as numbers, which is a form that can be honoured.
+   */
+  private fillBits(n: TemplateNode, code: CodeAt | null): void {
+    const text = n.edit_text;
+    const step = code?.step;
+    const dist = step?.distance;
+    // Where the length code and its extra bits end. Only drawn when the four
+    // widths account for every character of the string: a boundary in the
+    // wrong place is worse than no boundary, and the two answers come from
+    // separate readings of the same bits.
+    const head = step === undefined ? 0 : step.symbol.code_bits + step.symbol.extra_bits;
+    const whole = step === undefined || dist === undefined ? -1 : head + dist.code_bits + dist.extra_bits;
+    const split = whole === text.length ? head : null;
+    // Built again only when one of the three things it is built from has
+    // changed. The panel is drawn again every time a chunk of the file lands,
+    // which during a scroll is continually, and the label row asks the layout
+    // where the second track begins: a question that costs a reflow in the
+    // middle of a draw. These three settle the box completely, so an unchanged
+    // key means an unchanged box and there is nothing to do. The lines below
+    // the key are cheap and are written every time, since the box may have
+    // been hidden and another kind of value shown in the meantime.
+    const key = `${n.offset_bits}/${text}/${split ?? -1}`;
+    if (key !== this.bitsFor) {
+      this.bitsFor = key;
+      const cells = bitCells(n.offset_bits, text, split);
+      this.bitRow.replaceChildren(
+        ...cells.map((c) => el("span", `insp-codebit${c.byte % 2 === 0 ? "" : " is-odd"}${c.gap ? " is-gap" : ""}`, c.text)),
+      );
+      this.bitLabels.hidden = split === null;
+      if (split === null) {
+        this.bitLabels.classList.remove("is-stacked");
+        this.bitLabels.replaceChildren();
+      } else this.bitLabelRow(text, split);
+    }
+    this.bits.setAttribute("aria-label", `${n.name}, ${n.type}`);
+    // The bytes those bits came out of, named in order. The addresses are
+    // written in the space the field is in, the same as the address at the top
+    // of the panel, so a `+` here means what it means there.
+    this.note.textContent = DECODED.bitsFrom(
+      byteRuns(n.offset_bits, text.length).map((r) => ({ bits: r.bits, at: formatAddress(r.byte * 8, n.space) })),
+    );
+    this.note.title = DECODED.bitsFromTitle;
+    this.note.hidden = text.length === 0;
+  }
+
+  /**
+   * The two labels over a match's two codes, each starting where its own
+   * digits start.
+   *
+   * The tracks are held open by a copy of the digits themselves, hidden but
+   * still taking their width, so a label sits over its part exactly and goes
+   * on doing so at any font size without anything being measured. The label
+   * itself is taken out of the flow, so a label wider than the part it names
+   * spills over what is beside it instead of pushing the digits apart or
+   * breaking across two lines in the middle of a word.
+   *
+   * Spilling only works while there is something to spill over, so the one
+   * measurement left is whether the first label would reach the second. Where
+   * it would, the two go on lines of their own, both still above the string.
+   * `Length code` and `Distance code` are the Decoded section's own row labels
+   * word for word, so that the label over the bits and the row a few lines
+   * down are visibly the same fact and not two namings of it.
+   */
+  private bitLabelRow(text: string, split: number): void {
+    const parts: [string, string][] = [
+      [DECODED.lengthLabel, text.slice(0, split)],
+      [DECODED.distanceLabel, text.slice(split)],
+    ];
+    const tracks = parts.map(([label, digits], i) => {
+      const track = el("span", `insp-codebits-track${i === 0 ? "" : " is-gap"}`);
+      track.append(el("span", "insp-codebit-ghost", digits), el("span", "insp-codebits-label", label));
+      return track;
+    });
+    // Laid out flat first and asked afterwards whether that worked, because
+    // the answer is where the second track begins and only the layout knows
+    // that. The class is cleared before the question is asked, so a stacked
+    // answer left over from the last code cannot make the next one fit.
+    this.bitLabels.classList.remove("is-stacked");
+    this.bitLabels.replaceChildren(...tracks);
+    const [one, two] = tracks;
+    if (one === undefined || two === undefined) return;
+    const label = one.lastElementChild;
+    if (label instanceof HTMLElement && label.offsetWidth > two.offsetLeft - one.offsetLeft) {
+      this.bitLabels.classList.add("is-stacked");
+    }
+  }
+
+  private fillField(n: TemplateNode, inside: Inside | null): void {
     const row = inside?.kind === "row" ? inside.text : null;
-    // Which way round the noughts and ones are. Without it a reader compares
-    // the box against the binary column, finds the bits of each byte the other
-    // way about, and takes one of the two views for broken.
-    this.note.textContent = isCode ? DECODED.bitsNote : "";
-    this.note.title = isCode ? DECODED.bitsNoteTitle : "";
-    this.note.hidden = !isCode;
+    this.note.textContent = "";
+    this.note.title = "";
+    this.note.hidden = true;
     if (this.field.dataset["dirty"] === "1" && document.activeElement === this.field) return;
     // Read-only rather than disabled: a value shown here is still a value to
     // select and copy, which a disabled input in most browsers is not.

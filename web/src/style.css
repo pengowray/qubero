@@ -8,6 +8,12 @@
   --accent-soft: #dbe5fb;
   --warn: #b4361f;
   --addr: #737982;
+  /* The two tints a code's bits are banded with, one per stored byte, chosen
+     on the byte's own address so a byte keeps its tint across every code that
+     touches it. Two fills and not one fill against the panel, because a byte
+     drawn in no colour at all reads as one the banding left out. */
+  --bitbyte-even: #e7ebf2;
+  --bitbyte-odd: #d4dbe6;
   --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
@@ -23,6 +29,11 @@
     --accent-soft: #2a3a63;
     --warn: #ff8a6a;
     --addr: #858c95;
+    /* A wider step than the light pair takes. The same difference in lightness
+       reads as less of one against a dark ground, and these two bands have to
+       be told apart at a glance in a string of a dozen characters. */
+    --bitbyte-even: #272b33;
+    --bitbyte-odd: #3d4552;
   }
 }
 
@@ -1425,6 +1436,97 @@ button.insp-prop-head:hover {
 }
 .insp-area.invalid {
   border-color: var(--warn);
+}
+/* One code of a compressed block, drawn instead of typed into a box. Same
+   ground, border and padding as the read-only box it stands in for, because it
+   is the same slot answering the same question and a reader should not have to
+   learn a second shape for it. Not focusable: there is nothing here to type,
+   so there is no focus ring to keep clear of the fills. */
+.insp-codebits {
+  width: 100%;
+  font-family: var(--mono);
+  padding: 4px 6px;
+  min-height: 28px;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  /* How far the two codes of a match are held apart, and how far the label
+     over the second one is pushed to start where its digits do. One number in
+     one place, because the two have to agree exactly or the label lies. */
+  --codebit-gap: 10px;
+}
+/* Room above and below the bands so they read as bands, and a wrap that can
+   happen between any two digits: an inline wrap puts no newline in what a
+   selection copies, which a row of blocks would. */
+.insp-codebits-row {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+/* Which stored byte a bit was packed into, as a fill alternating on the byte's
+   address. Never a gap: whitespace means "byte boundary" everywhere else in
+   this app, and these bits are exactly the ones that do not respect it, so a
+   gap between bytes here would read backwards. */
+.insp-codebit {
+  background: var(--bitbyte-even);
+  padding: 2px 0;
+}
+.insp-codebit.is-odd {
+  background: var(--bitbyte-odd);
+}
+/* Where a match's length code hands over to its distance code. Padding on the
+   cell rather than a margin between two groups, because a cell's fill runs
+   under its own padding: a byte the two codes meet inside then reads as one
+   band with a gap in it instead of as two bands. And padding rather than a
+   space in the string, so that selecting the value copies the bare digits. */
+.insp-codebit.is-gap {
+  padding-left: var(--codebit-gap);
+}
+/* The labels over those two parts, in a grid whose tracks are the parts. */
+.insp-codebits-labels {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  /* A drag that starts a line too high must not pick these up. The value is
+     the digits, and a copy of them with `Length code` in the middle is not. */
+  user-select: none;
+}
+/* Where the first label would reach the second, each takes a line of its own,
+   both still above the string. */
+.insp-codebits-labels.is-stacked .insp-codebits-track {
+  grid-row: 1;
+}
+.insp-codebits-labels.is-stacked .insp-codebits-track.is-gap {
+  grid-row: 2;
+  grid-column: 2;
+}
+.insp-codebits-track {
+  position: relative;
+}
+.insp-codebits-track.is-gap {
+  padding-left: var(--codebit-gap);
+}
+/* A copy of the digits the label names, hidden but still taking up their
+   width. It holds the track open to exactly the part underneath, so the label
+   sits over its own bits without anything being measured, and goes on doing so
+   at any font size. */
+.insp-codebit-ghost {
+  visibility: hidden;
+}
+/* Out of the flow, so a label wider than the part it names spills over what is
+   beside it rather than pushing the digits apart or breaking mid-word. */
+.insp-codebits-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: nowrap;
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.insp-codebits-track.is-gap .insp-codebits-label {
+  left: var(--codebit-gap);
 }
 .insp-note {
   font-size: 12px;
@@ -4302,6 +4404,15 @@ table.rec tr.is-on td {
 }
 .insp-decoded-how.is-hover {
   background: var(--accent-soft);
+}
+/* The one clause in this section that is not about this file. A fixed block
+   has no code-length table to send a reader to, so the width line above has
+   nowhere to lead and this says what RFC 1951 settled instead. Italic and with
+   no hover, because every other clause here that looks like this is a button,
+   and a fact that cannot be clicked has to be told from a link that will not. */
+.insp-decoded-rfc {
+  font-style: italic;
+  cursor: default;
 }
 /* The range, as a button: a checksum a reader cannot go and look at is a
    verdict they have to take on trust. */

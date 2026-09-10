@@ -592,6 +592,46 @@ export const DECODED = {
     return extraBits === 0 ? `${code}, no extra bits` : `${code}, then ${countText(extraBits, "extra bit")}`;
   },
   /**
+   * Where a fixed block's code width came from, under the width line that
+   * states it.
+   *
+   * In a dynamic block that width line is a button to the row of the block's
+   * own code-length table that set it, so a reader who doubts the number can
+   * go and look at the bits that chose it. A fixed block has no such row: RFC
+   * 1951 chose the widths and nothing in the file could have chosen otherwise,
+   * so the same words are a dead end with nowhere to click. This is what the
+   * reader would have found there, said outright instead. It is drawn in
+   * italic and takes no hover, so that it reads as a fact rather than as a
+   * link that has stopped working.
+   *
+   * The range and not the section alone, because the range is the half a
+   * reader can check: told `symbols 256 to 279`, they can see their symbol 256
+   * inside it and that seven bits follows. `fixed by RFC 1951` on its own
+   * would be one more number to take on trust, which is the thing this whole
+   * section exists not to ask for.
+   */
+  rfcFixed: (range: string): string => `fixed by RFC 1951 for ${range}`,
+  /**
+   * Which run of the fixed code a symbol falls in. Straight out of RFC 1951
+   * section 3.2.6: literal/length symbols 0 to 143 are eight bits, 144 to 255
+   * are nine, 256 to 279 are seven and 280 to 287 are eight, and every
+   * distance symbol is five.
+   *
+   * The distance alphabet is named in the phrase rather than left to the row
+   * it sits under. Its symbols run 0 to 31 and the literal/length alphabet's
+   * first run is 0 to 143, so a bare `symbols 0 to 31` under a Distance code
+   * row could be read as a range of the alphabet the row above it is about.
+   * `distance symbol` is the panel's existing phrase for the same thing, as in
+   * `code length for distance symbol 3`.
+   */
+  fixedRange: (symbol: number, distance: boolean): string => {
+    if (distance) return "distance symbols 0 to 31";
+    if (symbol <= 143) return "symbols 0 to 143";
+    if (symbol <= 255) return "symbols 144 to 255";
+    if (symbol <= 279) return "symbols 256 to 279";
+    return "symbols 280 to 287";
+  },
+  /**
    * What the symbol and its extra bits came to, on its own line under the
    * width, and only where there were extra bits to add.
    *
@@ -623,18 +663,37 @@ export const DECODED = {
    */
   wrote: (from: string, to: string | null): string => (to === null ? from : `${from} to ${to}`),
   /**
-   * The line under the box of noughts and ones, saying which way round they
-   * are. Without it a reader compares the box against the binary column, finds
-   * the bits of each byte reversed, and concludes that one of the two views is
-   * broken.
+   * The line under the box of noughts and ones, naming the bytes those bits
+   * were packed into, in the order the decoder read them.
    *
-   * Short on the line and the whole of it on the tooltip: the fact a reader
-   * needs at a glance is that there is a convention here, and the convention
-   * takes three sentences to state.
+   * What this replaced was an assertion and nothing else: `Bits in reading
+   * order, low bit of each byte first` told the reader there were byte
+   * boundaries in the box and drew none of them, so checking it meant working
+   * the boundaries out by hand from an offset three lines up. The fill in the
+   * box now draws them and this line names them. That is the same fact twice
+   * on purpose. The fill is a colour, and a colour cannot be read out, cannot
+   * be searched for, and is the half of the pair a reader who cannot tell the
+   * two tints apart does not get; the addresses are the half they can take to
+   * the hex view.
+   *
+   * `then` between the clauses rather than a comma or an `and`, because the
+   * order is the whole of what the line is for: it is the order the binary
+   * column disagrees with. A code that fits inside one byte has one clause and
+   * no `then`, and reads `9 bits from 0x69`.
    */
-  bitsNote: "Bits in reading order, low bit of each byte first",
-  bitsNoteTitle:
-    "DEFLATE reads each byte from its low bit upwards, and packs a Huffman code most significant bit first. So these are the code's bits exactly as RFC 1951 writes it, and can be compared with the tables there. The binary view draws every byte from its high bit down, so within a byte it shows the same bits in the other order.",
+  bitsFrom: (parts: readonly { readonly bits: number; readonly at: string }[]): string =>
+    parts.map((p) => `${countText(p.bits, "bit")} from ${p.at}`).join(", then "),
+  /**
+   * The convention itself, on the caption's own line, for the reader who wants
+   * to know why these bits are the other way round from the Binary view.
+   *
+   * Two sentences where there were three. The one dropped said that the bits
+   * could be compared against the tables in RFC 1951, which the Decoded
+   * section's own sublines now say for each width and say more usefully, by
+   * naming the table row or the RFC range the width came from.
+   */
+  bitsFromTitle:
+    "DEFLATE reads each byte low bit first, so this shows the code exactly as RFC 1951 writes it. The Binary view reads every byte high bit first, which is why the same bits look reversed there.",
 } as const;
 
 /** Shown where fields would be when nothing has said what the file's are. */
@@ -1617,6 +1676,12 @@ export const PROPERTIES = {
      *  it already reads `u64 le`, so a clause saying the second explains the
      *  first is a line the reader has to read to find out it says nothing. */
     type: (): string => "",
+    /** A width the format chose and nothing in the file could have chosen
+     *  otherwise. Not a code of a deflate fixed-Huffman block, which is that
+     *  answer too and has a better one: `DECODED.rfcFixed` names the run of
+     *  RFC 1951's own table the symbol falls in, which a reader can check.
+     *  This stands for everything else, where the format has one width and
+     *  there is no range to give. */
     fixed: (): string => "fixed by the format",
     expression: fromFields,
     terminated: (): string => "ends at a terminator",

@@ -12,6 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { chipsHead, DECODED, PROPERTIES, VALUES } from "../src/strings.ts";
+import { bitCells, byteRuns } from "../src/codebits.ts";
 import { addressParts } from "../src/dom.ts";
 
 test("a literal's byte and its symbol are two rows, not one equation", () => {
@@ -151,9 +152,13 @@ test("a width a table in this file gave names the row that gave it", () => {
   );
   // With no row to name, the table is still the answer.
   assert.equal(PROPERTIES.sized.table({}), "from this block's code lengths");
-  // And a fixed-Huffman block's codes are the opposite answer: RFC 1951 chose
-  // the widths and nothing in the file could have chosen otherwise.
+  // The opposite answer, for a width the format chose and the file could not
+  // have. A fixed-Huffman block's codes are that case and no longer say this:
+  // they say which run of RFC 1951's own table the symbol falls in, which is
+  // checkable where `fixed by the format` is not. This is what is left, which
+  // is every field that is a fixed width because of what it is.
   assert.equal(PROPERTIES.sized.fixed(), "fixed by the format");
+  assert.equal(DECODED.rfcFixed(DECODED.fixedRange(97, false)), "fixed by RFC 1951 for symbols 0 to 143");
 });
 
 test("a match's length is settled by its codes, not by bytes of its own", () => {
@@ -162,6 +167,121 @@ test("a match's length is settled by its codes, not by bytes of its own", () => 
   // they fall in.
   assert.equal(PROPERTIES.sizedMatch(), "total length of its two codes and their extra bits");
   assert.equal(PROPERTIES.sized.encoded(), "decoded from its own bytes");
+});
+
+test("the caption names the bytes the bits came out of, in the order they were read", () => {
+  // What this replaced asserted the byte order and drew none of it. The fill
+  // in the box draws the boundaries and this names them, and the names are the
+  // half a reader can take to the hex view.
+  const say = DECODED.bitsFrom;
+  assert.equal(
+    say([{ bits: 4, at: "0x50" }, { bits: 8, at: "0x51" }, { bits: 3, at: "0x52" }]),
+    "4 bits from 0x50, then 8 bits from 0x51, then 3 bits from 0x52",
+  );
+  // A code inside one byte has one clause and no `then` to hang an order on.
+  assert.equal(say([{ bits: 9, at: "0x69" }]), "9 bits from 0x69");
+  // The house's singular rule, on a run of one bit as on a count of one byte.
+  assert.equal(say([{ bits: 1, at: "0x7" }, { bits: 6, at: "0x8" }]), "1 bit from 0x7, then 6 bits from 0x8");
+  // A stream address keeps the `+` it was formatted with, so the caption and
+  // the address at the top of the panel count from the same place.
+  assert.equal(say([{ bits: 5, at: "+0x1c" }]), "5 bits from +0x1c");
+});
+
+test("the convention is on the caption's line, and says which view disagrees", () => {
+  // The dropped third sentence said these could be checked against the tables
+  // in RFC 1951, which the sublines under each width now say by naming the row
+  // or the RFC range the width came from.
+  assert.equal(
+    DECODED.bitsFromTitle,
+    "DEFLATE reads each byte low bit first, so this shows the code exactly as RFC 1951 writes it. " +
+      "The Binary view reads every byte high bit first, which is why the same bits look reversed there.",
+  );
+});
+
+test("a fixed block's width says which run of RFC 1951's code it comes from", () => {
+  // The four literal/length runs of section 3.2.6, and the one distance rule.
+  assert.equal(DECODED.fixedRange(0, false), "symbols 0 to 143");
+  assert.equal(DECODED.fixedRange(143, false), "symbols 0 to 143");
+  assert.equal(DECODED.fixedRange(144, false), "symbols 144 to 255");
+  assert.equal(DECODED.fixedRange(255, false), "symbols 144 to 255");
+  assert.equal(DECODED.fixedRange(256, false), "symbols 256 to 279");
+  assert.equal(DECODED.fixedRange(279, false), "symbols 256 to 279");
+  assert.equal(DECODED.fixedRange(280, false), "symbols 280 to 287");
+  assert.equal(DECODED.fixedRange(287, false), "symbols 280 to 287");
+  // The distance alphabet is named, because its symbols run 0 to 31 and the
+  // literal/length alphabet's first run is 0 to 143: a bare `symbols 0 to 31`
+  // under a Distance code row reads as a range of the wrong alphabet.
+  assert.equal(DECODED.fixedRange(0, true), "distance symbols 0 to 31");
+  assert.equal(DECODED.fixedRange(29, true), "distance symbols 0 to 31");
+  assert.equal(DECODED.rfcFixed(DECODED.fixedRange(256, false)), "fixed by RFC 1951 for symbols 256 to 279");
+  assert.equal(DECODED.rfcFixed(DECODED.fixedRange(5, true)), "fixed by RFC 1951 for distance symbols 0 to 31");
+});
+
+test("the caption counts bytes, so a byte the two codes meet inside is named once", () => {
+  // Nine bits from four bits into byte 0x50: what is left of that byte, then
+  // the five that spill into the next.
+  assert.deepEqual(byteRuns(0x50 * 8 + 4, 9), [{ byte: 0x50, bits: 4 }, { byte: 0x51, bits: 5 }]);
+  // A code inside one byte is one run whether or not it fills it.
+  assert.deepEqual(byteRuns(0x69 * 8, 8), [{ byte: 0x69, bits: 8 }]);
+  assert.deepEqual(byteRuns(0x69 * 8 + 2, 3), [{ byte: 0x69, bits: 3 }]);
+  // And a long one crosses as many boundaries as it has to.
+  assert.deepEqual(byteRuns(0x50 * 8 + 4, 15), [
+    { byte: 0x50, bits: 4 },
+    { byte: 0x51, bits: 8 },
+    { byte: 0x52, bits: 3 },
+  ]);
+  // Every bit is accounted for exactly once.
+  for (const off of [0, 1, 7, 8, 0x50 * 8 + 3]) {
+    for (const n of [1, 8, 9, 31]) {
+      assert.equal(byteRuns(off, n).reduce((t, r) => t + r.bits, 0), n);
+    }
+  }
+});
+
+test("the drawn cells break at every byte, and once more where the two codes meet", () => {
+  // A literal: cut at the byte boundary and nowhere else, and no gap, because
+  // there is only one code here to have a boundary with.
+  assert.deepEqual(bitCells(4, "011010111", null), [
+    { byte: 0, text: "0110", gap: false },
+    { byte: 1, text: "10111", gap: false },
+  ]);
+  // A match whose two codes meet inside byte 1: that byte is cut in two, both
+  // halves keep the byte they came from, and so both take the same fill. That
+  // is the rule the whole layout turns on, since a split byte has to read as
+  // one band with a gap in it rather than as two bands.
+  assert.deepEqual(bitCells(4, "0110101" + "11101", 7), [
+    { byte: 0, text: "0110", gap: false },
+    { byte: 1, text: "101", gap: false },
+    { byte: 1, text: "11101", gap: true },
+  ]);
+  // A split that lands on a byte boundary needs no cut of its own: the byte's
+  // own cut is already there and the gap goes on the cell that follows it.
+  assert.deepEqual(bitCells(4, "0110" + "10111", 4), [
+    { byte: 0, text: "0110", gap: false },
+    { byte: 1, text: "10111", gap: true },
+  ]);
+});
+
+test("a boundary the widths cannot account for is not drawn at all", () => {
+  // The caller passes null where the four widths did not add up to the string,
+  // because a gap in the wrong place is worse than no gap. A split at the very
+  // front is the same case: it would mark a boundary with nothing on one side.
+  const bare = bitCells(0, "01011010", null);
+  assert.deepEqual(bitCells(0, "01011010", 0), bare);
+  assert.deepEqual(bitCells(0, "01011010", 8), bare);
+  assert.deepEqual(bitCells(0, "01011010", 99), bare);
+  assert.equal(bare.filter((c) => c.gap).length, 0);
+});
+
+test("the cells still join back into the string they came from", () => {
+  // Nothing is inserted between them and nothing is dropped: the gap is drawn
+  // by the layout, so a selection across the box copies the bare digits.
+  const bits = "1101001110101";
+  for (const off of [0, 3, 7, 8, 0x50 * 8 + 5]) {
+    for (const split of [null, 1, 4, 7, 12]) {
+      assert.equal(bitCells(off, bits, split).map((c) => c.text).join(""), bits);
+    }
+  }
 });
 
 test("only the plus that begins an address says what it counts from", () => {
