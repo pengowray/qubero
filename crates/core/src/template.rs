@@ -2471,6 +2471,52 @@ impl Ty {
         }
     }
 
+    /// What a switch is, when every branch that covers bytes says the same
+    /// thing; `None` when they disagree. Disagreeing is the ordinary case: a
+    /// switch over a chunk's tag stands for a dozen unrelated shapes and no
+    /// one name is true of all of them, so the type column keeps saying
+    /// `switch` there.
+    ///
+    /// A branch that covers no bytes gets no vote. That is what
+    /// [`Ty::present_if`] writes for the case where the field is not there,
+    /// and "not there" is not a name the field could go by: an array of
+    /// optional filters is an array of filters, some of which happen to be
+    /// missing. Nothing here singles the default out, because the two ways of
+    /// writing an optional field disagree about which side it goes on:
+    /// `present_if` puts the empty branch in the default and bencode puts it
+    /// in a case. Looking at every branch reads both the same way.
+    ///
+    /// Branches are compared by the name they display rather than by shape,
+    /// since a `Ty` has no equality and the name is the whole question here:
+    /// two branches that print alike are alike as far as the column is
+    /// concerned.
+    pub fn agreed_case(&self) -> Option<&Ty> {
+        fn agree<'a>(arms: impl Iterator<Item = &'a Ty>) -> Option<&'a Ty> {
+            let mut agreed: Option<(&Ty, String)> = None;
+            for arm in arms {
+                // The zero-length filler, and only that: a branch reading
+                // `bytes(Remaining)` covers the rest of the container and is a
+                // real reading of it, so it argues for its own name like any
+                // other.
+                if matches!(arm, Ty::Bytes(Expr::Lit(0))) {
+                    continue;
+                }
+                let name = arm.display_name();
+                match &agreed {
+                    Some((_, seen)) if *seen != name => return None,
+                    Some(_) => {}
+                    None => agreed = Some((arm, name)),
+                }
+            }
+            agreed.map(|(ty, _)| ty)
+        }
+        match self {
+            Ty::Switch { cases, default, .. } => agree(cases.iter().map(|(_, t)| t).chain(std::iter::once(&**default))),
+            Ty::Match { cases, default, .. } => agree(cases.iter().map(|(_, t)| t).chain(std::iter::once(&**default))),
+            _ => None,
+        }
+    }
+
     /// Short human-readable type name for the type table.
     pub fn display_name(&self) -> String {
         fn e(en: Endian) -> &'static str {
@@ -2565,8 +2611,15 @@ impl Ty {
             Ty::Chain { elem, .. } => format!("chain \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
-            Ty::Switch { .. } => "switch".into(),
-            Ty::Match { .. } => "switch".into(),
+            // A resolved field never reaches here: `eval` picks the branch the
+            // file took and remembers that, so the column already shows the
+            // real type. What is left is the type of a list's element, which
+            // nothing resolves because no one element is it. See
+            // [`Ty::agreed_case`].
+            Ty::Switch { .. } | Ty::Match { .. } => match self.agreed_case() {
+                Some(ty) => ty.display_name(),
+                None => "switch".into(),
+            },
             Ty::Json(shape, schema) => match schema.as_ref().and_then(|s| s.type_name.clone()) {
                 Some(name) => name,
                 None => shape.name().to_string(),

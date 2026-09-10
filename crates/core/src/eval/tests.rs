@@ -1027,6 +1027,56 @@ fn a_field_takes_its_type_from_a_list_read_earlier() {
     assert_eq!(ev.node(&d, &[2, 1]).unwrap().value, Value::UInt(7));
 }
 
+/// A run of fields that are each there or not is a run of the type they are
+/// instances of, and the type column and the listing both have to say so. The
+/// switch a `present_if` is written as never gets resolved here: one is picked
+/// per element, and the list itself has to be named before any of them is
+/// read. See `Ty::agreed_case`.
+#[test]
+fn a_list_of_optional_fields_keeps_its_element_type_and_unit() {
+    let filter = T::structure("Filter", vec![("id", T::u8()), ("size", T::u8())]).counted_as("filter");
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![("count", T::u8()), ("filters", T::array(T::present_if(E::lit(1), filter), E::field("count")))],
+        ),
+    );
+    let d = doc(&[2, 0x21, 1, 0x03, 1]);
+    let mut ev = Evaluator::new(t);
+    let list = ev.node(&d, &[1]).unwrap();
+    assert_eq!(list.type_name, "Filter[]");
+    assert_eq!(list.unit.as_deref(), Some("filter"));
+}
+
+/// And the other way: a switch standing for shapes that have nothing to do
+/// with one another has no name of its own, and inventing one out of whichever
+/// case is written first would name the list after a shape most of its
+/// elements are not.
+#[test]
+fn a_list_of_unlike_shapes_is_still_a_switch() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("n", T::u8()),
+                ("types", T::array(T::u8(), E::field("n"))),
+                (
+                    "vals",
+                    T::array(
+                        T::switch(E::elem("types", E::idx()), vec![(1, T::u8()), (2, T::u16(Big))], T::bytes(E::lit(0))),
+                        E::field("n"),
+                    ),
+                ),
+            ],
+        ),
+    );
+    let d = doc(&[2, 2, 1, 0, 5, 7]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[2]).unwrap().type_name, "switch[]");
+}
+
 #[test]
 fn sqlite_varints_read_and_write_at_their_own_size() {
     let t = Template::new(
