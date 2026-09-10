@@ -82,6 +82,50 @@ fn no_valid_sample_reports_a_mismatch() {
     eprintln!("{took} checks passed across {} formats", tally.len());
 }
 
+/// One file, named, checked all the way through the panel's own two calls.
+///
+/// The sweep above says no sample reports a mismatch, which a format whose
+/// checks all quietly resolve to nothing passes as easily as a format whose
+/// checks all work. This says one particular check on one particular file was
+/// taken and passed, and it is here rather than beside the template because
+/// only a file somebody else's encoder wrote can say that.
+///
+/// `hello.txt.xz` is the default case and nothing else: `xz` with no arguments
+/// writes one block, one LZMA2 filter, and a CRC-64 over what the block
+/// unpacks to. That check had no arithmetic behind it at all until recently,
+/// so the file opened with nothing on screen able to say whether its data was
+/// intact.
+#[test]
+fn the_block_check_of_a_default_xz_is_taken_and_passes() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let path = root.join("compressed").join("hello.txt.xz");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("skipped: no {}", path.display());
+        return;
+    };
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("xz").expect("the xz template"));
+    let at = |ev: &mut Evaluator, path: &[usize], name: &str| {
+        ev.child_named(&doc, path, name).unwrap().unwrap_or_else(|| panic!("no {name} under {path:?}"))
+    };
+    let blocks = at(&mut ev, &[], "blocks");
+    let block = [&blocks[..], &[0]].concat();
+    let check = at(&mut ev, &block, "check");
+
+    let info = ev.check_of(&doc, &check).unwrap().expect("a block's check checks something");
+    assert_eq!(info.algorithm, "crc64", "xz writes a CRC-64 unless it is told otherwise");
+    // Over bytes that are nowhere in the file, so what a reader is sent to is
+    // the packed run those bytes came out of.
+    assert_eq!(info.over, None);
+    assert!(info.unpacked_from.is_some());
+    let v = ev.run_check(&doc, &check).unwrap().expect("the check is taken");
+    assert!(v.ok, "computed {}, stored {}", v.computed, v.stored);
+    eprintln!("{}: block check {} passed", path.display(), v.stored);
+}
+
 struct Walk {
     /// Nodes looked at, which is what the budget is spent on: a file with no
     /// checks in it must not walk to the end of a million-element table to

@@ -31,8 +31,8 @@ use crate::template::{Check, Covers, Named};
 /// What the field at a path checks. No bytes are read to answer this.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckInfo {
-    /// "crc32", "crc16", "sum8", "sum", "sha1", "adler32" — what the interface names
-    /// it. See [`Checksum::as_str`].
+    /// "crc32", "crc16", "crc64", "sum8", "sum", "sha1", "sha256", "adler32" —
+    /// what the interface names it. See [`Checksum::as_str`].
     pub algorithm: &'static str,
     /// The bytes summed, when they are a run of the file: offset and length, in
     /// bytes. A reader can be sent to these.
@@ -90,9 +90,27 @@ struct Coverage {
     over: Option<(u64, u64)>,
     /// The compressed run to unpack and sum, and the path of the field holding
     /// it, which is what opens the stream.
-    unpacked: Option<((u64, u64), Vec<usize>)>,
+    unpacked: Option<Unpacked>,
     covered_bytes: u64,
     blanked: Option<Blanked>,
+}
+
+/// A sum over bytes that are nowhere in the file: which run to unpack, and how
+/// much of what comes out is summed.
+struct Unpacked {
+    /// The compressed run a reader is sent to, since the summed bytes are not
+    /// anywhere they can be sent to.
+    run: (u64, u64),
+    /// The field holding the stream, which is what opens it. Not always the
+    /// field `run` describes: an xz block's check covers what that block
+    /// produced, and the run that has to be opened to find those bytes is the
+    /// whole stream around it.
+    at: Vec<usize>,
+    /// Which member of the unpacked run is summed, when it is one of them
+    /// rather than all of them: the member's packed bytes, as bits counted
+    /// from the front of the run, which is how the decoder wrote them down.
+    /// See [`Covers::UnpackedMember`](crate::template::Covers::UnpackedMember).
+    member: Option<std::ops::Range<u64>>,
 }
 
 impl Evaluator {
@@ -113,7 +131,7 @@ impl Evaluator {
         Ok(Some(CheckInfo {
             algorithm: c.algorithm.as_str(),
             over: c.over,
-            unpacked_from: c.unpacked.as_ref().map(|(run, _)| *run),
+            unpacked_from: c.unpacked.as_ref().map(|u| u.run),
             covered_bytes: c.covered_bytes,
             blanked: c.blanked,
         }))
@@ -149,13 +167,38 @@ impl Evaluator {
                 }
                 bytes
             }
-            (None, Some((_, at))) => {
-                let at = at.clone();
+            (None, Some(u)) => {
+                let (at, member) = (u.at.clone(), u.member.clone());
                 match self.open_space_at(doc, &at)? {
-                    space::Opened::Space(id) => match self.spaces.buf(id) {
-                        Some(bytes) => bytes.as_ref().clone(),
-                        None => return fail("this stream is no longer open"),
-                    },
+                    space::Opened::Space(id) => {
+                        let Some(bytes) = self.spaces.buf(id) else { return fail("this stream is no longer open") };
+                        match member {
+                            None => bytes.as_ref().clone(),
+                            // One member's share of what came out. Where that
+                            // share begins is the decoder's to say and nobody
+                            // else's, and a decoder that did not say is a
+                            // check that cannot be made: summing all of the
+                            // output, or the front of it, would be a verdict
+                            // about bytes the file never claimed anything
+                            // about.
+                            Some(packed) => {
+                                let bytes = bytes.clone();
+                                let Some(t) = self.spaces.trace(id) else { return fail(UNMAPPED_MEMBER.to_string()) };
+                                let Some(out) = member_out(t.members(), &packed) else {
+                                    return fail(UNMAPPED_MEMBER.to_string());
+                                };
+                                match bytes.get(out.start as usize..out.end as usize) {
+                                    Some(slice) => slice.to_vec(),
+                                    // A member past the end of what the
+                                    // decoder produced. `Trace::check_tiles`
+                                    // is what stops one being recorded, so
+                                    // this is a decoder disagreeing with
+                                    // itself rather than a file being wrong.
+                                    None => return fail(UNMAPPED_MEMBER.to_string()),
+                                }
+                            }
+                        }
+                    }
                     space::Opened::Refused(why) => return fail(refused(why)),
                 }
             }
@@ -188,10 +231,10 @@ impl Evaluator {
         // Either a field of a structure, or an element of a list of sums one
         // level further out. The two are told apart by what the parent is,
         // and a template says which it means: see `Field::elem_check`.
-        let (check, parent, fields) = match self.memo.get(parent).map(|r| r.ty.clone()) {
+        let (checks, parent, fields) = match self.memo.get(parent).map(|r| r.ty.clone()) {
             Some(Ty::Struct(s)) => {
-                let Some(check) = s.fields.get(idx).and_then(|f| f.check.clone()) else { return Ok(None) };
-                (check, parent.to_vec(), s.fields.len())
+                let Some(f) = s.fields.get(idx).filter(|f| !f.checks.is_empty()) else { return Ok(None) };
+                (f.checks.clone(), parent.to_vec(), s.fields.len())
             }
             // The list itself is a field of the structure holding it, and the
             // check is declared there. Every expression in it is then worked
@@ -202,7 +245,7 @@ impl Evaluator {
                 let Some((&list, grandparent)) = parent.split_last() else { return Ok(None) };
                 let Some(Ty::Struct(s)) = self.memo.get(grandparent).map(|r| r.ty.clone()) else { return Ok(None) };
                 let Some(check) = s.fields.get(list).and_then(|f| f.elem_check.clone()) else { return Ok(None) };
-                (check, grandparent.to_vec(), s.fields.len())
+                (vec![check], grandparent.to_vec(), s.fields.len())
             }
             _ => return Ok(None),
         };
@@ -212,12 +255,19 @@ impl Evaluator {
         // written before you" takes in the whole structure. No node is ever
         // resolved there; it is a place to ask questions from.
         let end = [parent, &[fields]].concat();
-        if let Some(when) = &check.when {
-            if self.eval_expr(doc, &end, when)? == 0 {
-                return Ok(None);
+        // The first of them whose guard holds, which for a field with one
+        // check is that one check. They are alternatives: a field holding
+        // whichever sum the header named is still one number. See
+        // [`Field::checks`](crate::template::Field::checks).
+        for check in &checks {
+            if let Some(when) = &check.when {
+                if self.eval_expr(doc, &end, when)? == 0 {
+                    continue;
+                }
             }
+            return self.covered(doc, path, parent, &end, check);
         }
-        self.covered(doc, path, parent, &end, &check)
+        Ok(None)
     }
 
     fn covered<S: Source>(
@@ -295,7 +345,37 @@ impl Evaluator {
                     Some(e) => u64::try_from(self.eval_expr(doc, end, e)?).unwrap_or(run.1),
                     None => run.1,
                 };
-                of(None, Some((run, p)), claimed)
+                of(None, Some(Unpacked { run, at: p, member: None }), claimed)
+            }
+            Covers::UnpackedMember { name, packed } => {
+                let Some(p) = self.named_field(doc, path, name)? else { return Ok(None) };
+                // The same two refusals [`Covers::Unpacked`] makes, for the
+                // same reasons: a run the template left as bytes is a check
+                // that cannot be made, and a run written in verbatim is bytes
+                // of the file that a reader can be sent to. A stored member of
+                // a stream nothing unpacked is not a shape any format here
+                // has, so it is refused rather than guessed at: the offset
+                // would still be the running sum of the members before it, and
+                // nothing has counted them.
+                if !matches!(self.memo[&p].ty, Ty::Decoded { .. }) {
+                    return Ok(None);
+                }
+                if matches!(&self.memo[&p].ty, Ty::Decoded { codec, .. } if codec.is_stored()) {
+                    return Ok(None);
+                }
+                // This member's own packed bytes: where a reader is sent, how
+                // much work the sum is said to be, and which member it is. See
+                // `Covers::UnpackedMember`; nothing is summed from these bytes.
+                let Some(q) = self.named_field(doc, path, packed)? else { return Ok(None) };
+                let Some(run) = self.field_run(doc, &q)? else { return Ok(None) };
+                // As the decoder counts it: bits from the front of the run it
+                // was handed, rather than from the front of the file. The two
+                // differ by wherever the stream sits, which for an xz inside a
+                // ROOT record is a long way in.
+                let Some(stream) = self.field_run(doc, &p)? else { return Ok(None) };
+                let Some(from) = run.0.checked_sub(stream.0) else { return Ok(None) };
+                let member = from * 8..(from + run.1) * 8;
+                of(None, Some(Unpacked { run, at: p, member: Some(member) }), run.1)
             }
         }
     }
@@ -451,6 +531,47 @@ impl Evaluator {
 /// than any sum here is written, so a field holding a narrow sum in a wide slot
 /// is still read whole and still reports what has not arrived.
 const WIDEST_SUM: u64 = 32;
+
+/// Which bytes of the output the member read from `packed` produced, or
+/// nothing when the template and the decoder do not agree about what a member
+/// is.
+///
+/// `packed` is the run the template calls this member's compressed data, in
+/// bits from the front of the run. Three things have to hold, and each of them
+/// is a way the two can disagree:
+///
+/// - a member begins exactly there, which is what says it is this member and
+///   not the one before it;
+/// - the run holds the whole of that member, since a template that read a
+///   short block would otherwise seal a long one with it. Longer is allowed:
+///   an xz block whose header did not write its data length reads to the check
+///   and takes the block's padding in with the data, and those padding bytes
+///   produced nothing;
+/// - the run stops before the member after it. That is the clause that catches
+///   a template reading three blocks as one, which xz does when no block
+///   header carries a size. Without it, the first member's bytes would be
+///   summed against the last block's stored number and a good file would
+///   report itself broken.
+fn member_out(members: &[crate::codec::Member], packed: &std::ops::Range<u64>) -> Option<std::ops::Range<u64>> {
+    let i = members.iter().position(|m| m.in_bits.start == packed.start)?;
+    if members[i].in_bits.end > packed.end {
+        return None;
+    }
+    if members.get(i + 1).is_some_and(|next| next.in_bits.start < packed.end) {
+        return None;
+    }
+    Some(members[i].out_bytes.clone())
+}
+
+/// Why a check over one member of an unpacked run was not made: the stream
+/// opened, the bytes are there, and nothing says which of them this member is.
+///
+/// A refusal and not a mismatch, which is the whole point. What produces it is
+/// a stream read by a crate that reports no shape, or one this cannot lay out
+/// at all, and either way the bytes on screen are fine and the file is not
+/// being accused of anything. See
+/// [`Covers::UnpackedMember`](crate::template::Covers::UnpackedMember).
+const UNMAPPED_MEMBER: &str = "Can't check this: nothing says which of the unpacked bytes this block produced.";
 
 fn too_large(len: u64) -> String {
     format!(

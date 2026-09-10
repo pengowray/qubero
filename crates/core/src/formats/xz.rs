@@ -75,9 +75,46 @@ fn index_size() -> E {
 
 /// A CRC-32 of bytes of the file, which is what all four of xz's own sums are.
 /// The data's own check is a different thing and is not one of these: it is
-/// over what a block unpacks to, and nothing here unpacks a block on its own.
+/// over what a block unpacks to. See [`block_check`].
 fn crc32_over(at: E, len: E) -> Check {
     Check::of(Checksum::Crc32, Covers::Run { at, len })
+}
+
+/// A block's own integrity check: `algorithm` over the bytes *this* block
+/// unpacked to, taken when the stream header's check type is `id`.
+///
+/// Every part of that sentence is doing something. The bytes are nowhere in
+/// the file, so the sum is over what the stream comes to rather than over a
+/// run of it; and it is over one block's share of that, which is why it is
+/// [`Covers::UnpackedMember`] and not [`Covers::Unpacked`]. The share cannot
+/// be written as an expression: a block's bytes begin at the sum of every
+/// earlier block's uncompressed size, and those sizes are variable-length
+/// integers in the index at the far end of the file. So the decoder is asked,
+/// which is the one thing that walked the blocks.
+///
+/// Which block is asked about is said by pointing at its packed bytes rather
+/// than by counting: `compressed` is this block's own data, and the member
+/// the decoder read from exactly there is this block's. That matters here
+/// more than anywhere. A block header carries the size of its data only if
+/// the encoder wrote it, and `xz -T1` does not, so a multi-block stream reads
+/// as one block whose data runs to the last check in the region (see the
+/// module doc). Counted, that block would be sealed with the last block's
+/// number over the first block's bytes and a good file would report itself
+/// broken; matched on where the bytes are, it says the check cannot be made.
+///
+/// The stream is what gets opened, not the block. A block is a run of its own
+/// and could in principle be unpacked alone, but nothing here does: the codec
+/// reads a stream, and the field that holds the answer is the stream's
+/// `decoded`.
+fn block_check(id: i128, algorithm: Checksum) -> Check {
+    Check::of(
+        algorithm,
+        Covers::UnpackedMember {
+            name: crate::template::Named::here("decoded"),
+            packed: crate::template::Named::here("compressed"),
+        },
+    )
+    .only_when(E::field("check_type").equals(E::lit(id)))
 }
 
 pub fn xz() -> Template {
@@ -242,6 +279,22 @@ fn block() -> T {
         "header_crc32",
         crc32_over(E::lit(0), E::field("header_size").add(E::lit(1)).mul(E::lit(4)).sub(E::lit(4))),
     )
+    // And the check over the data, which is the only sum in an xz file that is
+    // about the file's own contents rather than about the container around
+    // them. Three of them, one per check type the format has assigned, and the
+    // guards are what pick: the field holds one number and is compared against
+    // one algorithm's answer.
+    //
+    // Two IDs are left out and neither is a failure. Check type 0 is no check,
+    // so there is nothing written down to compare against and nothing to say.
+    // The eleven reserved IDs have a size, which is why the bytes are still
+    // stepped over correctly (see `check_size`), and no algorithm: a stream
+    // using one was written by something that knows a sum this does not, and
+    // the honest answer is that the check is not made rather than that it
+    // failed.
+    .field_check("check", block_check(1, Checksum::Crc32))
+    .field_check("check", block_check(4, Checksum::Crc64Xz))
+    .field_check("check", block_check(10, Checksum::Sha256))
 }
 
 /// How much of the block header the filter chain and its padding have to fill:
@@ -457,7 +510,8 @@ fn footer() -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{checksum::crc32, document::Document, eval::{Evaluator, Value}, source::MemSource};
+    use crate::codec::xz::tests as xz_codec;
+    use crate::{checksum::crc32, document::Document, eval::{EvalError, Evaluator, Value}, source::MemSource};
 
     /// A block header of twelve bytes: one LZMA2 filter with the smallest
     /// dictionary there is, three bytes of padding, and four zero bytes where
@@ -800,6 +854,233 @@ mod tests {
         let crc = field(&mut e, &d, &block, "header_crc32");
         let got = e.run_check(&d, &crc).unwrap().expect("a block header has a CRC32");
         assert!(got.ok, "computed {}, stored {}", got.computed, got.stored);
+    }
+
+    /// A stream that really is one: every block packed as LZMA2 by the crate
+    /// the codec's own tests pack with, and sealed with whichever check the
+    /// stream flags name. Built there rather than here because a check is only
+    /// worth testing over data that really came out of a decoder.
+    /// `sized` writes both of the sizes a block header may carry, which is
+    /// what the threaded encoder does and what `xz -T1` leaves out. It is the
+    /// difference between a multi-block stream the template can split and one
+    /// it reads as a single block; see `block_check`.
+    fn real(parts: &[&[u8]], check_type: u8, sized: bool) -> Vec<u8> {
+        let blocks: Vec<(Vec<u8>, Vec<u8>)> =
+            parts.iter().map(|p| (xz_codec::pack(p, 3, 0, 2, 1 << 20, None), p.to_vec())).collect();
+        xz_codec::wrap_checked(&blocks, sized, check_type)
+    }
+
+    /// Something with enough shape in it to pack: a few hundred bytes that are
+    /// neither all the same nor all different.
+    fn text(seed: u8) -> Vec<u8> {
+        let mut v = Vec::new();
+        while v.len() < 400 {
+            v.extend_from_slice(b"the quick brown fox jumps over the lazy dog. ");
+            v.push(seed);
+        }
+        v
+    }
+
+    /// The check field of block `i`.
+    fn block_check(e: &mut Evaluator, d: &Document<MemSource>, i: usize) -> Vec<usize> {
+        let blocks = field(e, d, &[], "blocks");
+        field(e, d, &elem(&blocks, i), "check")
+    }
+
+    /// The bytes the stream unpacks to, opened the way a tab opens one.
+    ///
+    /// The `decoded` field costs no bytes where it stands and holds the run as
+    /// its one child, so the stream is one step in from the field's own path.
+    fn unpacked(e: &mut Evaluator, d: &Document<MemSource>) -> Vec<u8> {
+        let p = elem(&field(e, d, &[], "decoded"), 0);
+        let id = e.open_space(d, 0, &p).unwrap().expect("the stream opens");
+        e.space(id).expect("the space is there").bytes().to_vec()
+    }
+
+    /// A block's check is taken, and it is taken over what that block unpacked
+    /// to rather than over anything in the file.
+    ///
+    /// One case per check the format has assigned. `xz` writes the second of
+    /// them unless it is told otherwise, and it is the one that had no
+    /// arithmetic here at all until this: a default `.xz` was opened with
+    /// nothing on screen able to say whether its data was intact.
+    #[test]
+    fn a_block_check_is_taken_over_the_bytes_that_block_unpacked_to() {
+        for (check_type, algorithm) in [(1u8, "crc32"), (4, "crc64"), (10, "sha256")] {
+            let data = text(1);
+            let d = Document::new(MemSource(real(&[&data], check_type, false)));
+            let mut e = Evaluator::new(xz());
+            let p = block_check(&mut e, &d, 0);
+            let info = e.check_of(&d, &p).unwrap().unwrap_or_else(|| panic!("check {check_type} checks nothing"));
+            assert_eq!(info.algorithm, algorithm);
+            // Not a run of the file: the summed bytes are not in the file at
+            // all, and what a reader is sent to instead is this block's own
+            // packed data.
+            assert_eq!(info.over, None, "check {check_type}");
+            let (at, len) = info.unpacked_from.unwrap_or_else(|| panic!("check {check_type} points nowhere"));
+            let blocks = field(&mut e, &d, &[], "blocks");
+            let packed = field(&mut e, &d, &elem(&blocks, 0), "compressed");
+            let node = e.node(&d, &packed).unwrap();
+            assert_eq!((at, len), (node.offset_bits / 8, node.size_bits / 8), "check {check_type}");
+
+            let v = e.run_check(&d, &p).unwrap().unwrap_or_else(|| panic!("check {check_type} was not taken"));
+            assert!(v.ok, "check {check_type}: computed {}, stored {}", v.computed, v.stored);
+        }
+    }
+
+    /// Three blocks, each sealed over its own share of the output.
+    ///
+    /// The second half is what says the shares are really separate. Give each
+    /// block the sum of the block before it and every one of them has to fail:
+    /// a check that quietly summed the whole stream, or always the front of
+    /// it, would pass one of these and fail the rest, and a check that summed
+    /// nothing would pass all three.
+    #[test]
+    fn each_block_is_checked_against_its_own_share_of_the_output() {
+        let parts = [text(1), text(2), text(3)];
+        let stream = real(&[&parts[0], &parts[1], &parts[2]], 4, true);
+        let d = Document::new(MemSource(stream.clone()));
+        let mut e = Evaluator::new(xz());
+        let mut runs = Vec::new();
+        for i in 0..3 {
+            let p = block_check(&mut e, &d, i);
+            let node = e.node(&d, &p).unwrap();
+            runs.push((node.offset_bits as usize / 8, node.size_bits as usize / 8));
+            let v = e.run_check(&d, &p).unwrap().expect("a block has a check");
+            assert!(v.ok, "block {i}: computed {}, stored {}", v.computed, v.stored);
+        }
+
+        let mut shuffled = stream.clone();
+        for (i, &(at, len)) in runs.iter().enumerate() {
+            let (from, _) = runs[(i + runs.len() - 1) % runs.len()];
+            shuffled[at..at + len].copy_from_slice(&stream[from..from + len]);
+        }
+        let d = Document::new(MemSource(shuffled));
+        let mut e = Evaluator::new(xz());
+        for i in 0..3 {
+            let p = block_check(&mut e, &d, i);
+            let v = e.run_check(&d, &p).unwrap().expect("a block has a check");
+            assert!(!v.ok, "block {i} passed with another block's sum: {}", v.computed);
+        }
+    }
+
+    /// The same three blocks with no sizes in their headers, which is what
+    /// `xz` writes. The template cannot split them: a block whose header does
+    /// not say how long its data is runs to the end of the block region, so
+    /// what comes back is one block holding all three and the last block's
+    /// check.
+    ///
+    /// The check has to refuse there, and refuse is the whole assertion. The
+    /// numbers do not match and never could, and a reading that took them as a
+    /// mismatch would put a red verdict on a file that is perfectly good.
+    #[test]
+    fn blocks_the_template_cannot_split_report_no_verdict_rather_than_a_wrong_one() {
+        let parts = [text(1), text(2), text(3)];
+        let d = Document::new(MemSource(real(&[&parts[0], &parts[1], &parts[2]], 4, false)));
+        let mut e = Evaluator::new(xz());
+        let blocks = field(&mut e, &d, &[], "blocks");
+        assert_eq!(e.node(&d, &blocks).unwrap().child_count, 1, "this is the reading the test is about");
+        // The stream is fine and opens to all three blocks' bytes.
+        assert_eq!(unpacked(&mut e, &d), parts.concat());
+
+        let p = block_check(&mut e, &d, 0);
+        assert!(e.check_of(&d, &p).unwrap().is_some(), "the field is still a checksum");
+        let e2 = e.run_check(&d, &p).expect_err("no verdict may be reached here");
+        assert!(matches!(e2, EvalError::Failed(_)), "{e2:?}");
+    }
+
+    /// A block whose data was changed opens, shows its bytes, and says the
+    /// check failed. All three, and the first two are the point: a tool for
+    /// looking at damaged files that refuses to show one is no use on the day
+    /// it is needed.
+    ///
+    /// The data is packed as an uncompressed LZMA2 chunk so that changing a
+    /// byte changes a byte. A byte changed inside a range-coded chunk does not
+    /// give the file with one byte wrong; it gives a block that decodes to the
+    /// wrong length or not at all, which the index catches and which is a
+    /// different failure from the one this is about.
+    #[test]
+    fn a_block_whose_bytes_were_changed_opens_and_says_the_check_failed() {
+        let data = text(1);
+        let stream = xz_codec::wrap_checked(&[(xz_codec::stored_lzma2(&data), data.clone())], false, 4);
+        // Into the middle of the stored chunk: past the stream header, the
+        // block header, and the chunk's own control byte and size.
+        let mut broken = stream.clone();
+        let at = 12 + 12 + 3 + data.len() / 2;
+        broken[at] ^= 0xff;
+        assert_ne!(broken, stream, "the test changed nothing");
+
+        let d = Document::new(MemSource(broken));
+        let mut e = Evaluator::new(xz());
+        // The file reads: the blocks are there, the index is there.
+        let blocks = field(&mut e, &d, &[], "blocks");
+        assert_eq!(e.node(&d, &blocks).unwrap().child_count, 1);
+        // And the bytes are there to look at, changed byte and all.
+        let out = unpacked(&mut e, &d);
+        assert_eq!(out.len(), data.len(), "the block still unpacks to what the index says");
+        assert_ne!(out, data, "the changed byte is in what comes back");
+        assert_eq!(out[data.len() / 2], data[data.len() / 2] ^ 0xff);
+
+        let p = block_check(&mut e, &d, 0);
+        let v = e.run_check(&d, &p).unwrap().expect("the check is still taken");
+        assert!(!v.ok, "a changed byte passed the block check");
+        assert_ne!(v.computed, v.stored);
+    }
+
+    /// A stream with no check, and a stream whose check nobody has defined.
+    /// Neither is a failure and neither is a pass: the field says nothing at
+    /// all, which is the only true thing to say about a sum that was never
+    /// written or whose arithmetic has never been published.
+    ///
+    /// The rest of the stream still has to read, which is the reason the size
+    /// of a reserved check is worked out from its ID rather than left unknown:
+    /// those bytes are in the file whether or not anybody can sum them.
+    #[test]
+    fn a_check_that_is_none_or_reserved_reports_neither_pass_nor_failure() {
+        for check_type in [0u8, 2, 5, 15] {
+            let data = text(1);
+            let d = Document::new(MemSource(real(&[&data], check_type, false)));
+            let mut e = Evaluator::new(xz());
+            let p = block_check(&mut e, &d, 0);
+            assert!(e.check_of(&d, &p).unwrap().is_none(), "check type {check_type} claims to check something");
+            assert!(e.run_check(&d, &p).unwrap().is_none(), "check type {check_type} returned a verdict");
+            // The bytes after it still line up: the index reads, and it says
+            // what the block held.
+            let index = field(&mut e, &d, &[], "index");
+            assert_eq!(int(&mut e, &d, &index, "record_count"), Some(1), "check type {check_type}");
+            let records = field(&mut e, &d, &index, "records");
+            assert_eq!(
+                int(&mut e, &d, &elem(&records, 0), "uncompressed_size"),
+                Some(data.len() as i128),
+                "check type {check_type}"
+            );
+            assert_eq!(unpacked(&mut e, &d), data, "check type {check_type}: the stream still opens");
+        }
+    }
+
+    /// A stream the crate read, rather than one read here, still gets its
+    /// block check taken.
+    ///
+    /// The dictionary size code is what forces that, as in the codec's own
+    /// tests: it is a properties byte no encoder would write, so the chain is
+    /// left alone and `lzma-rs` is handed the stream whole. What comes back
+    /// then is a map of the blocks and nothing inside them, and the block's
+    /// check still covers that block's bytes, so the map has to be enough to
+    /// say where they are.
+    #[test]
+    fn a_stream_read_by_the_crate_is_still_checked() {
+        let data = text(1);
+        let mut stream = real(&[&data], 4, false);
+        stream[16] = 63;
+        let sum = crc32(&stream[12..20]);
+        stream[20..24].copy_from_slice(&sum.to_le_bytes());
+
+        let d = Document::new(MemSource(stream));
+        let mut e = Evaluator::new(xz());
+        assert_eq!(unpacked(&mut e, &d), data, "the crate reads it even though we would not");
+        let p = block_check(&mut e, &d, 0);
+        let v = e.run_check(&d, &p).unwrap().expect("a block read by the crate still has a check");
+        assert!(v.ok, "computed {}, stored {}", v.computed, v.stored);
     }
 
     /// A header claiming a thousand bytes in a block region of twenty. The

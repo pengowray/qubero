@@ -106,6 +106,13 @@ const ALGORITHM: Readonly<Record<string, string>> = {
   sum: "Checksum",
   sha1: "SHA-1",
   adler32: "Adler-32",
+  /** What an xz block is sealed with unless the encoder was told otherwise,
+   *  and what an encoder told otherwise uses instead. Both are here because
+   *  the core now answers with them and an algorithm this map has never heard
+   *  of falls through as its own short form: `crc64 check` where the format's
+   *  own documentation says CRC-64. */
+  crc64: "CRC-64",
+  sha256: "SHA-256",
 };
 
 /**

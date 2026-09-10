@@ -479,6 +479,35 @@ pub struct Block {
     pub out_bytes: Range<u64>,
 }
 
+/// One member of a run: a piece the *container* produced as a unit, rather
+/// than a piece the coder made while producing it.
+///
+/// The two are different divisions of the same bytes and both are real. An xz
+/// stream is a list of blocks, each compressed on its own and each sealed with
+/// its own integrity check over what it came to; inside one of those blocks
+/// the LZMA2 coder has chunks of its own, and those are what [`Block`] holds.
+/// One xz block is many LZMA2 chunks, and a stream that fell back to a crate
+/// has no chunks at all and still has its blocks. So a member cannot be read
+/// off the blocks, off the steps, or off anything else in the trace: the
+/// container writes it down while it walks its own headers, or nobody knows
+/// it. gzip's word for the same thing is a member, which is where the name
+/// comes from.
+///
+/// What it is for is the checks. An xz block's check covers that block's
+/// slice of the output and no other, and the offset of that slice is the
+/// running sum of every earlier block's size, which is not a number any field
+/// of the file holds. See [`Covers::UnpackedMember`](crate::template::Covers).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    /// Which bits of the run produced those bytes: the member's packed data,
+    /// without the header in front of it or the check behind it. What a reader
+    /// is sent to when the thing being talked about is nowhere in the file,
+    /// the way the summed bytes of a check over unpacked data are.
+    pub in_bits: Range<u64>,
+    /// Which bytes of the output it produced.
+    pub out_bytes: Range<u64>,
+}
+
 /// Everything a decoder recorded about one run.
 ///
 /// The steps tile the input bits and the output bytes exactly: step `i`'s
@@ -489,6 +518,7 @@ pub struct Block {
 pub struct Trace {
     steps: Vec<RawStep>,
     blocks: Vec<Block>,
+    members: Vec<Member>,
     end_in_bits: u64,
     end_out_bytes: u64,
     /// Whether the trace gave up naming every symbol; see [`MAX_STEPS`].
@@ -508,6 +538,13 @@ impl Trace {
 
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
+    }
+
+    /// The container's own pieces of this run, in the order it wrote them.
+    /// Empty for every codec that has none to declare, which is all of them
+    /// but xz. See [`Member`].
+    pub fn members(&self) -> &[Member] {
+        &self.members
     }
 
     /// Whether the trace stopped naming every symbol because there were too
@@ -645,6 +682,21 @@ impl Trace {
         if at_out != self.end_out_bytes {
             return Err(format!("the steps wrote {at_out} bytes of {}", self.end_out_bytes));
         }
+        // The members, which are a coarser division of the same output and are
+        // held to less: they have to come in order and stay inside the run,
+        // and they need not tile it. A check is taken over one of these, so a
+        // member reaching past what the decoder produced, or overlapping the
+        // one before it, is a slice of somebody else's bytes.
+        let mut after = 0u64;
+        for (i, m) in self.members.iter().enumerate() {
+            if m.out_bytes.start < after || m.out_bytes.end < m.out_bytes.start {
+                return Err(format!("member {i} writes {:?} after byte {after}", m.out_bytes));
+            }
+            if m.out_bytes.end > self.end_out_bytes || m.in_bits.end > self.end_in_bits {
+                return Err(format!("member {i} runs past the end of the run: {m:?}"));
+            }
+            after = m.out_bytes.end;
+        }
         Ok(())
     }
 }
@@ -729,7 +781,25 @@ impl TraceBuilder {
             in_bits: in_bits + bl.in_bits.start..in_bits + bl.in_bits.end,
             out_bytes: out_bytes + bl.out_bytes.start..out_bytes + bl.out_bytes.end,
         }));
+        // Shifted the same way, for the same reason. Nothing stitched so far
+        // has any: an LZMA2 stream is not a container and declares none, and
+        // the members of an xz stream are written by the stitcher itself.
+        self.trace.members.extend(t.members.iter().map(|m| Member {
+            in_bits: in_bits + m.in_bits.start..in_bits + m.in_bits.end,
+            out_bytes: out_bytes + m.out_bytes.start..out_bytes + m.out_bytes.end,
+        }));
         self.trace.coarse |= t.coarse;
+    }
+
+    /// Say that one of the container's own pieces of this run reads from
+    /// `in_bits` and comes to `out_bytes`. See [`Member`].
+    ///
+    /// Written down at the end of the piece rather than opened and closed the
+    /// way a block is, because the container knows both ends before it starts:
+    /// an xz block's two sizes are in the index, and the decoding is what is
+    /// held against them rather than what discovers them.
+    pub(crate) fn member(&mut self, in_bits: Range<u64>, out_bytes: Range<u64>) {
+        self.trace.members.push(Member { in_bits, out_bytes });
     }
 
     pub(crate) fn coarsen(&mut self) {
