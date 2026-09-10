@@ -105,8 +105,18 @@ export const CHECKED = {
    * rows' sizes sit in the same place and can be compared at a glance, which
    * for a compressed entry is the whole point: 252 B was summed, 178 B is
    * what is in the file.
+   *
+   * `size` is null when the core has no true count to give without decoding a
+   * stream it must not decode just to answer this: an xz block whose stream
+   * has not been opened yet, or a 7z stream whose own header carries no
+   * length. What it has instead is the packed length, which is a different
+   * run of bytes wearing the same units, and printing it here would be
+   * printing that run's size under a claim about this one. Once the check
+   * itself opens the stream the true count comes free, and the row is
+   * updated rather than left wrong in the meantime.
    */
-  of: (label: string, what: string, size: string): string => `${label} of ${what} · ${size}`,
+  of: (label: string, what: string, size: string | null): string =>
+    size === null ? `${label} of ${what}` : `${label} of ${what} · ${size}`,
   /**
    * Label on the address row when the summed bytes are bytes of the file.
    * The checksum is its subject, as it is for `Points to` and `Read by`, and
@@ -185,6 +195,14 @@ export const CHECKED = {
    *  those bytes are nowhere in the file. `the file these bytes unpack to`
    *  lost: `these bytes` pointed at a row the reader had not reached. */
   unpacked: "the unpacked file",
+  /** An xz block's own check, over what that one block unpacks to rather
+   *  than the whole stream around it. `unpacked` above would say the wrong
+   *  thing here: a stream holding several blocks unpacks to all of them
+   *  together, and this sum is over one block's share of that, not the
+   *  whole. `this block's`, not `the block's`: the check field the row
+   *  belongs to sits inside exactly one, so there is no other block to
+   *  confuse it with. */
+  unpackedMember: "this block's unpacked bytes",
   /** Git index and pack index: the trailing SHA-1 over the whole file before
    *  it, in the words git's own format doc uses. */
   upTo: "everything before this checksum",

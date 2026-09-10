@@ -579,7 +579,22 @@ struct CheckDto {
     /// The compressed run whose contents are summed, as [offset, length], when
     /// the summed bytes are nowhere in the file.
     unpacked_from: Option<[f64; 2]>,
+    /// How many bytes the sum is over. Real when `covered_exact` is true;
+    /// otherwise a stand-in reached for because the true count would take
+    /// decoding, which this call must not do. See
+    /// [`covered_exact`](CheckDto::covered_exact).
     covered_bytes: f64,
+    /// Whether `covered_bytes` really is the number of bytes summed. False
+    /// only for an unpacked run whose length nothing here has said yet: no
+    /// declared length ([`Covers::Unpacked`](qubero_core::template::Covers::Unpacked)
+    /// with none written down) or one member of a run
+    /// ([`Covers::UnpackedMember`](qubero_core::template::Covers::UnpackedMember))
+    /// whose stream nothing has opened. A view must not print `covered_bytes`
+    /// as the covered count while this is false.
+    covered_exact: bool,
+    /// Whether the sum is over one member's share of an unpacked run — an xz
+    /// block's own check — rather than the whole of what the run unpacks to.
+    unpacked_member: bool,
     /// The check field's own bytes, as [offset, length, byte], when the sum is
     /// over a record the field sits inside and they are read as something else
     /// while it runs. A tar header is summed with its checksum read as spaces.
@@ -2099,6 +2114,8 @@ impl Editor {
                         over: c.over.map(|(at, len)| [at as f64, len as f64]),
                         unpacked_from: c.unpacked_from.map(|(at, len)| [at as f64, len as f64]),
                         covered_bytes: c.covered_bytes as f64,
+                        covered_exact: c.covered_exact,
+                        unpacked_member: c.unpacked_member,
                         blanked: c.blanked.map(|b| [b.at as f64, b.len as f64, b.byte as f64]),
                     })
                 }))

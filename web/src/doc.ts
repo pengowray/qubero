@@ -536,10 +536,21 @@ export type FieldCheck = {
   readonly over: readonly [number, number] | null;
   /** `[offset, length]` in bytes of the compressed run, when they are not. */
   readonly unpacked_from: readonly [number, number] | null;
-  /** How many bytes the sum is over: the unpacked length where the file writes
-   *  one down, so a view can decide whether to run the check unasked. What the
-   *  file claims, not what a decoder produced. */
+  /** How many bytes the sum is over, so a view can decide whether to run the
+   *  check unasked. Real when `covered_exact` is true; otherwise a stand-in,
+   *  which a view must not print as the covered count. See `covered_exact`. */
   readonly covered_bytes: number;
+  /** Whether `covered_bytes` is really how many bytes the sum covers. False
+   *  only where nothing but a decoder knows the true count and none has run
+   *  yet: an unpacked run with no declared length, such as a 7z stream whose
+   *  own header carries none, or one member of a run (`unpacked_member`)
+   *  before its stream has been opened for some other reason. Once it has,
+   *  asking again finds the true count waiting and this turns true. */
+  readonly covered_exact: boolean;
+  /** Whether the sum is over one member's share of an unpacked run — an xz
+   *  block's own check — rather than the whole of what the run unpacks to.
+   *  False for every other check, including a whole ZIP entry's CRC-32. */
+  readonly unpacked_member: boolean;
   /** `[offset, length, byte]`: the check field's own bytes, and what they are
    *  read as while the sum runs, for a format that seals a record the checksum
    *  sits inside. A tar header is summed with its checksum read as spaces, so

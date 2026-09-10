@@ -121,9 +121,25 @@ fn the_block_check_of_a_default_xz_is_taken_and_passes() {
     // the packed run those bytes came out of.
     assert_eq!(info.over, None);
     assert!(info.unpacked_from.is_some());
+    assert!(info.unpacked_member, "one block's share, not the whole stream's");
+    // Before anything has opened the stream, `covered_bytes` is only the
+    // packed length: this file's one block's own compressed data is 76 bytes
+    // of the 140-byte file. `covered_exact` says so, and a panel must not
+    // print this number as what the sum covers.
+    assert_eq!(info.covered_bytes, 76, "the block's packed length, not what it unpacks to");
+    assert!(!info.covered_exact, "nothing has opened the stream yet to say the true count");
+
     let v = ev.run_check(&doc, &check).unwrap().expect("the check is taken");
     assert!(v.ok, "computed {}, stored {}", v.computed, v.stored);
     eprintln!("{}: block check {} passed", path.display(), v.stored);
+
+    // Taking the sum opened the stream, and the true count the decoder wrote
+    // down is sitting in the cache now: the block the CRC-64 passed for
+    // unpacked to all 210 bytes of `hello.txt.xz`, not the 76 bytes of its
+    // own compressed data.
+    let after = ev.check_of(&doc, &check).unwrap().expect("still a check");
+    assert!(after.covered_exact, "the stream is open now, so the true count is free");
+    assert_eq!(after.covered_bytes, 210, "what the block actually unpacked to");
 }
 
 struct Walk {

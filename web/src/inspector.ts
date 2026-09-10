@@ -41,7 +41,15 @@ type IntegrityPlan = {
   readonly bytes: number;
   /** What the number is a checksum of. See [`Covered`]. */
   readonly covers: Covered;
-  check(): Promise<{ actual: string; expected: string }>;
+  /**
+   * Take the sum. `size` is the Checksum row's size after taking it, which
+   * can differ from `covers.size` above: taking the sum over one member of an
+   * xz stream opens that stream, and the true count that was missing before
+   * is sitting in the core's cache the moment this returns. Re-read rather
+   * than carried over, so a check that could not say the count before it ran
+   * says it once it has.
+   */
+  check(): Promise<{ actual: string; expected: string; size: string | null }>;
 };
 
 /**
@@ -61,6 +69,13 @@ type IntegrityPlan = {
 type Covered = {
   /** What was summed, in words: the bytes themselves, or what they unpack to. */
   readonly what: string;
+  /** The bytes summed, formatted, for the Checksum row: `252 B`. Null when the
+   *  core cannot say the true count without decoding a stream this asked
+   *  without running one, which is what `covered_exact` being false means. A
+   *  view must not fall back to `bytes` there: that number is the packed
+   *  length, not what the sum runs over, and printing it under this label
+   *  would be printing the wrong bytes' count. */
+  readonly size: string | null;
   /** The run of the file summed, in bytes, or null when what was summed is
    *  not a run of the file. */
   readonly at: { readonly at: number; readonly bytes: number } | null;
@@ -74,14 +89,17 @@ type Covered = {
   readonly own: { readonly at: number; readonly bytes: number; readonly byte: number } | null;
 };
 
-/** A checksum over a run of the file, which most of them are. */
+/** A checksum over a run of the file, which most of them are. Always a real
+ *  count: a run of the file is never a stand-in. */
 function overFile(what: string, at: number, bytes: number, own: Covered["own"] = null): Covered {
-  return { what, at: { at, bytes }, from: null, own };
+  return { what, size: formatBytes(bytes), at: { at, bytes }, from: null, own };
 }
 
-/** A checksum over what a run of the file unpacks to. */
-function overUnpacked(what: string, at: number, bytes: number): Covered {
-  return { what, at: null, from: { at, bytes }, own: null };
+/** A checksum over what a run of the file unpacks to. `size` is null unless
+ *  `exact` says the core knows the true count without having had to decode
+ *  anything to answer. */
+function overUnpacked(what: string, at: number, bytes: number, exact: boolean): Covered {
+  return { what, size: exact ? formatBytes(bytes) : null, at: null, from: { at, bytes }, own: null };
 }
 
 /** What each algorithm is called on screen. The core answers in the short form
@@ -1348,7 +1366,12 @@ export class Inspector {
       bytes: check.covered_bytes,
       covers:
         check.over === null
-          ? overUnpacked(CHECKED.unpacked, over[0], over[1])
+          ? overUnpacked(
+              check.unpacked_member ? CHECKED.unpackedMember : CHECKED.unpacked,
+              over[0],
+              over[1],
+              check.covered_exact,
+            )
           : overFile(
               coveredWhat(path, n, check.blanked !== null),
               over[0],
@@ -1365,7 +1388,15 @@ export class Inspector {
         const verdict = this.doc.runCheck(path);
         if (verdict.status === "error") throw new Error(verdict.message);
         if (verdict.status !== "ok" || verdict.node === null) throw new Error(CHECKED.missingBytes);
-        return { actual: verdict.node.computed, expected: verdict.node.stored };
+        // Taking the sum over one member of an xz stream just opened that
+        // stream, and the count this asked for before could not give is
+        // sitting in the core's cache now. Ask once more so the row can show
+        // it instead of nothing.
+        const after = this.doc.checkOf(path);
+        const size = after.status === "ok" && after.node !== null && after.node.covered_exact
+          ? formatBytes(after.node.covered_bytes)
+          : null;
+        return { actual: verdict.node.computed, expected: verdict.node.stored, size };
       },
     };
   }
@@ -1376,14 +1407,19 @@ export class Inspector {
     box.className = "insp-integrity";
     const result = document.createElement("div");
     result.className = "insp-check-result";
+    const { element: covered, setSize } = this.coveredRows(plan);
     const run = async (): Promise<void> => {
       result.className = "insp-check-result";
       result.textContent = "Checking…";
       try {
-        const { actual, expected } = await plan.check();
+        const { actual, expected, size } = await plan.check();
         const ok = actual === expected;
         result.classList.add(ok ? "ok" : "bad");
         result.textContent = ok ? `Valid · ${actual}` : `Mismatch · calculated ${actual}, stored ${expected}`;
+        // The stand-in was true only until the sum was taken: taking it just
+        // opened the stream this check draws from, and the true count `size`
+        // carries is what the Checksum row above should have shown all along.
+        setSize(size);
       } catch (cause) {
         result.classList.add("bad");
         // Prefixed, whatever went wrong. What lands here is any thrown
@@ -1394,7 +1430,7 @@ export class Inspector {
         result.textContent = CHECKED.notChecked(cause instanceof Error ? cause.message : CHECKED.unknownFailure);
       }
     };
-    box.append(subhead("Integrity"), this.coveredRows(plan));
+    box.append(subhead("Integrity"), covered);
     if (plan.bytes <= AUTO_CHECK_BYTES) {
       box.append(result);
       void run();
@@ -1420,8 +1456,12 @@ export class Inspector {
    * The ranges are buttons: a checksum a reader cannot go and look at is a
    * verdict they have to take on trust, and going there is one press
    * everywhere else in this panel.
+   *
+   * `setSize` on the return value replaces the Checksum row's own size after
+   * the check has run, for the one case where running it learns a count that
+   * asking beforehand could not: see [`IntegrityPlan.check`].
    */
-  private coveredRows(plan: IntegrityPlan): HTMLElement {
+  private coveredRows(plan: IntegrityPlan): { element: HTMLElement; setSize: (size: string | null) => void } {
     const rows = document.createElement("dl");
     rows.className = "insp-facts insp-covers";
     const add = (label: string, value: Node | string): void => {
@@ -1431,7 +1471,14 @@ export class Inspector {
       dd.append(value);
       rows.append(dt, dd);
     };
-    add(CHECKED.sumLabel, CHECKED.of(plan.label, plan.covers.what, formatBytes(plan.bytes)));
+    const sum = document.createElement("dd");
+    const setSize = (size: string | null): void => {
+      sum.textContent = CHECKED.of(plan.label, plan.covers.what, size);
+    };
+    setSize(plan.covers.size);
+    const sumLabel = document.createElement("dt");
+    sumLabel.textContent = CHECKED.sumLabel;
+    rows.append(sumLabel, sum);
     const run = plan.covers.at ?? plan.covers.from;
     if (run !== null) {
       const b = document.createElement("button");
@@ -1463,7 +1510,7 @@ export class Inspector {
         ),
       );
     }
-    return rows;
+    return { element: rows, setSize };
   }
 
   private async loadBytes(at: number, len: number): Promise<Uint8Array> {

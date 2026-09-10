@@ -42,12 +42,30 @@ pub struct CheckInfo {
     /// that a reader has somewhere to be sent even though the summed bytes are
     /// nowhere in the file.
     pub unpacked_from: Option<(u64, u64)>,
-    /// How many bytes the sum is over. The unpacked length where the file
-    /// writes one down, so an interface can decide whether to run the check
-    /// without being asked. It is what the file claims, not what a decoder
-    /// produced: nothing is checked against it, and `run_check` sums whatever
-    /// actually came out.
+    /// How many bytes the sum is over: a run of the file, the unpacked length
+    /// where the file writes one down, or, failing both, a stand-in used only
+    /// to decide whether to take the sum unasked. See `covered_exact` for
+    /// which of those this is. Nothing is checked against it either way:
+    /// `run_check` sums whatever actually came out.
     pub covered_bytes: u64,
+    /// Whether `covered_bytes` is really how many bytes the sum covers,
+    /// rather than a stand-in reached for because the true count is known
+    /// only to a decoder and answering this must not run one.
+    ///
+    /// True for a run of the file and for an unpacked run whose length the
+    /// file writes down. False where nothing but decoding would say: an
+    /// unpacked run with no declared length ([`Covers::Unpacked`] with `len:
+    /// None`, which is what a 7z coder with no size in its own header comes
+    /// to), or one member of a run ([`Covers::UnpackedMember`]) before its
+    /// stream has been opened for some other reason. Once that stream is
+    /// open, the decoder's own record of the member answers this for free and
+    /// this turns true without decoding anything a second time.
+    pub covered_exact: bool,
+    /// Whether the checksum is over one member's share of an unpacked run
+    /// rather than the whole of what the run comes to: an xz block's own
+    /// check, sharing a stream with however many other blocks. False for
+    /// every other check, including [`Covers::Unpacked`]'s whole-run one.
+    pub unpacked_member: bool,
     /// The run of the check field's own bytes, and the byte they are read as,
     /// when the sum is over a record the field sits inside. `None` for every
     /// check that sums the bytes as they are.
@@ -92,6 +110,8 @@ struct Coverage {
     /// it, which is what opens the stream.
     unpacked: Option<Unpacked>,
     covered_bytes: u64,
+    /// See [`CheckInfo::covered_exact`].
+    covered_exact: bool,
     blanked: Option<Blanked>,
 }
 
@@ -133,6 +153,8 @@ impl Evaluator {
             over: c.over,
             unpacked_from: c.unpacked.as_ref().map(|u| u.run),
             covered_bytes: c.covered_bytes,
+            covered_exact: c.covered_exact,
+            unpacked_member: c.unpacked.as_ref().is_some_and(|u| u.member.is_some()),
             blanked: c.blanked,
         }))
     }
@@ -285,7 +307,7 @@ impl Evaluator {
             Some(_) => self.field_run(doc, path)?,
             None => None,
         };
-        let of = |over: Option<(u64, u64)>, unpacked, covered_bytes| {
+        let of = |over: Option<(u64, u64)>, unpacked, covered_bytes, covered_exact| {
             let blanked = match (check.blank, over, own) {
                 (None, ..) => None,
                 (Some(byte), Some((at, len)), Some((f, n))) if f >= at && f + n <= at + len => {
@@ -298,7 +320,7 @@ impl Evaluator {
                 // bytes as they sit there would report every file as broken.
                 (Some(_), ..) => return Ok(None),
             };
-            Ok(Some(Coverage { algorithm: check.algorithm, over, unpacked, covered_bytes, blanked }))
+            Ok(Some(Coverage { algorithm: check.algorithm, over, unpacked, covered_bytes, covered_exact, blanked }))
         };
         match &check.over {
             Covers::UpToHere => {
@@ -306,7 +328,7 @@ impl Evaluator {
                 if at % 8 != 0 {
                     return Ok(None);
                 }
-                self.run_in_file(doc, 0, at / 8).map_or(Ok(None), |run| of(Some(run), None, run.1))
+                self.run_in_file(doc, 0, at / 8).map_or(Ok(None), |run| of(Some(run), None, run.1, true))
             }
             Covers::Run { at, len } => {
                 let start = self.memo[parent].offset;
@@ -316,14 +338,14 @@ impl Evaluator {
                 let (at, len) = (self.eval_expr(doc, end, at)?, self.eval_expr(doc, end, len)?);
                 let (Ok(at), Ok(len)) = (u64::try_from(at), u64::try_from(len)) else { return Ok(None) };
                 match self.run_in_file(doc, start / 8 + at, len) {
-                    Some(run) => of(Some(run), None, run.1),
+                    Some(run) => of(Some(run), None, run.1, true),
                     None => Ok(None),
                 }
             }
             Covers::Field { name } => {
                 let Some(p) = self.named_field(doc, path, name)? else { return Ok(None) };
                 let Some(run) = self.field_run(doc, &p)? else { return Ok(None) };
-                of(Some(run), None, run.1)
+                of(Some(run), None, run.1, true)
             }
             Covers::Unpacked { name, len } => {
                 let Some(p) = self.named_field(doc, path, name)? else { return Ok(None) };
@@ -336,16 +358,19 @@ impl Evaluator {
                 let stored = matches!(&self.memo[&p].ty, Ty::Decoded { codec, .. } if codec.is_stored());
                 let Some(run) = self.field_run(doc, &p)? else { return Ok(None) };
                 if stored {
-                    return of(Some(run), None, run.1);
+                    return of(Some(run), None, run.1, true);
                 }
-                // What the file says it comes to, for an interface deciding
-                // whether to unpack it unasked. Only that: the sum is over what
-                // the decoder produces, however far off this turns out to be.
-                let claimed = match len {
-                    Some(e) => u64::try_from(self.eval_expr(doc, end, e)?).unwrap_or(run.1),
-                    None => run.1,
+                // What the file says it comes to, when it says anything: a
+                // real count, and `covered_exact` says so. Without one there
+                // is nothing here but the packed length, kept only so an
+                // interface can decide whether to unpack the run unasked; it
+                // is not the count of what was summed and must not be shown
+                // as one.
+                let (claimed, exact) = match len {
+                    Some(e) => (u64::try_from(self.eval_expr(doc, end, e)?).unwrap_or(run.1), true),
+                    None => (run.1, false),
                 };
-                of(None, Some(Unpacked { run, at: p, member: None }), claimed)
+                of(None, Some(Unpacked { run, at: p, member: None }), claimed, exact)
             }
             Covers::UnpackedMember { name, packed } => {
                 let Some(p) = self.named_field(doc, path, name)? else { return Ok(None) };
@@ -375,7 +400,23 @@ impl Evaluator {
                 let Some(stream) = self.field_run(doc, &p)? else { return Ok(None) };
                 let Some(from) = run.0.checked_sub(stream.0) else { return Ok(None) };
                 let member = from * 8..(from + run.1) * 8;
-                of(None, Some(Unpacked { run, at: p, member: Some(member) }), run.1)
+                // The true count is the decoder's to say, and it costs nothing
+                // to ask for when the stream is already open: `Spaces::get` is
+                // a lookup, never a decode, so reaching for it here does not
+                // break the promise this whole function makes. Nothing open
+                // yet, or a trace that disagrees with where the template says
+                // this member starts, and the packed length stands in as it
+                // always has, marked as the estimate it is.
+                let (covered_bytes, covered_exact) = match self.spaces.get(&p) {
+                    Some(space::Opened::Space(id)) => {
+                        match self.spaces.trace(id).and_then(|t| member_out(t.members(), &member)) {
+                            Some(out) => (out.end - out.start, true),
+                            None => (run.1, false),
+                        }
+                    }
+                    _ => (run.1, false),
+                };
+                of(None, Some(Unpacked { run, at: p, member: Some(member) }), covered_bytes, covered_exact)
             }
         }
     }
@@ -571,7 +612,7 @@ fn member_out(members: &[crate::codec::Member], packed: &std::ops::Range<u64>) -
 /// at all, and either way the bytes on screen are fine and the file is not
 /// being accused of anything. See
 /// [`Covers::UnpackedMember`](crate::template::Covers::UnpackedMember).
-const UNMAPPED_MEMBER: &str = "Can't check this: nothing says which of the unpacked bytes this block produced.";
+const UNMAPPED_MEMBER: &str = "Can't check this: nothing says which unpacked bytes belong to this block.";
 
 fn too_large(len: u64) -> String {
     format!(
