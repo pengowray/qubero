@@ -51,8 +51,8 @@ const CHECKS: &[(i128, &str)] = &[(0, "none"), (1, "crc32"), (4, "crc64"), (10, 
 /// executable's branch and call instructions into absolute ones, so that the
 /// same call written in twenty places becomes the same bytes twenty times.
 /// Each is one instruction set: 0x0a and 0x0b arrived long after the format
-/// did, with xz 5.4 and 5.6, which is why a stream using either reads as
-/// nothing to an older decoder.
+/// did, with xz 5.4 and 5.6, so an older decoder handed a stream using either
+/// refuses it as a filter it does not know.
 const FILTERS: &[(i128, &str)] = &[
     (0x03, "delta"),
     (0x04, "x86"),
@@ -193,22 +193,15 @@ fn block() -> T {
                     T::structure(
                         "XzFilterFlags",
                         vec![
-                            // One more filter than the count says, and each of
-                            // them only while there is room. A filter is two
-                            // bytes at the very least, an ID and a length, and
-                            // a header can always claim four of them: the
-                            // count is two bits wide and nothing has checked
-                            // it against the header it sits in. Claimed and
-                            // not there, a filter is a row with nothing in it,
-                            // which leaves the ones that are there readable
-                            // and still says one is missing.
-                            (
-                                "filters",
-                                T::array(
-                                    T::present_if(E::lit(1).less_than(E::Remaining), filter()),
-                                    E::field("filter_count").add(E::lit(1)),
-                                ),
-                            ),
+                            // One more filter than the count says. A header
+                            // can always claim four of them, since the count
+                            // is two bits wide and nothing has checked it
+                            // against the header it sits in, so a claimed
+                            // filter with no room left is a row with nothing
+                            // in it rather than a failure that would take the
+                            // filters that are there down with it. See
+                            // `filter`, where the room is asked about.
+                            ("filters", T::array(filter(), E::field("filter_count").add(E::lit(1)))),
                             // Zero bytes out to the length the header gave.
                             ("header_padding", T::bytes(E::Remaining)),
                         ],
@@ -280,12 +273,19 @@ fn chain_size() -> E {
 /// filter is the one that produced the bytes in the block and the first is the
 /// one that saw the file. A chain is at most four long and in practice is one
 /// or two: LZMA2 on its own, or a transform and then LZMA2.
+///
+/// Every one of the three asks whether there is room for it, because the count
+/// that says how many of these there are is two bits wide and the header it is
+/// written in may be twelve bytes long. A filter the header has no room for is
+/// three empty rows, which is a truthful reading of a header that claimed one
+/// and did not write it; the alternative is a list that will not be read, and
+/// that would hide the filters the header did write.
 fn filter() -> T {
     T::structure(
         "XzFilter",
         vec![
-            ("filter_id", T::enumeration_hex("XzFilterId", T::leb_u(), FILTERS)),
-            ("properties_size", T::leb_u()),
+            ("filter_id", T::if_room(T::enumeration_hex("XzFilterId", T::leb_u(), FILTERS))),
+            ("properties_size", T::if_room(T::leb_u())),
             // Kept inside what is left of the header, so that a length longer
             // than the header it sits in reads as far as the header goes
             // rather than into whatever is written after it.
@@ -774,11 +774,11 @@ mod tests {
     /// is two bits wide, so any header can claim four, and a file nobody
     /// vouched for does.
     ///
-    /// What comes back is what is written: the filter that is there, then the
-    /// two padding bytes read as the empty filter the count asked for, and
-    /// then two rows with nothing in them at all. The alternative was a list
-    /// that refuses to be read, which would take the good filter down with the
-    /// claimed ones.
+    /// What comes back is a row per filter the header claimed: the one that is
+    /// really there, and then the header's own zero bytes read as the filters
+    /// it said were written, down to a row with nothing in it once there is no
+    /// room left. The alternative was a list that refuses to be read, which
+    /// would take the good filter down with the claimed ones.
     #[test]
     fn a_header_claiming_more_filters_than_it_holds_reads_what_is_there() {
         let header = &[0x02, 0x03, 0x21, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0];
@@ -786,12 +786,17 @@ mod tests {
         let mut e = Evaluator::new(xz());
         let (block, filters) = chain(&mut e, &d);
         assert_eq!(e.node(&d, &filters).unwrap().child_count, 4);
-        assert_eq!(int(&mut e, &d, &elem(&filters, 0), "filter_id"), Some(0x21));
-        for i in 2..4 {
-            assert_eq!(e.node(&d, &elem(&filters, i)).unwrap().size_bits, 0, "filter {i}");
-        }
+        let first = elem(&filters, 0);
+        assert_eq!(int(&mut e, &d, &first, "filter_id"), Some(0x21));
+        let props = field(&mut e, &d, &first, "properties");
+        assert_eq!(int(&mut e, &d, &props, "dictionary_bytes"), Some(4096));
+        // The last of the four had nothing left to read at all.
+        assert_eq!(e.node(&d, &elem(&filters, 3)).unwrap().size_bits, 0);
+        // None of which left the window: six bytes claimed, six bytes read.
         let flags = field(&mut e, &d, &block, "filter_flags");
         assert_eq!(e.node(&d, &flags).unwrap().size_bits, 6 * 8);
+        let total: u64 = (0..4).map(|i| e.node(&d, &elem(&filters, i)).unwrap().size_bits).sum();
+        assert_eq!(total + bytes(&mut e, &d, &flags, "header_padding") * 8, 6 * 8);
         let crc = field(&mut e, &d, &block, "header_crc32");
         let got = e.run_check(&d, &crc).unwrap().expect("a block header has a CRC32");
         assert!(got.ok, "computed {}, stored {}", got.computed, got.stored);
