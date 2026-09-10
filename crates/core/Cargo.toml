@@ -48,9 +48,13 @@ ruzstd = { version = "0.8", default-features = false, features = ["std"] }
 # lz4 template already reads itself, and keeps the checked decoder rather than
 # the one that trusts its input: this reads files nobody vouched for.
 lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode", "std"] }
-# xz, pure Rust. It reads a whole stream rather than a block: the LZMA2 inside
-# one xz block is a step of a decoder's state and does not stand on its own,
-# which is why the template opens the stream and not the block.
+# xz, pure Rust, and now a fallback rather than the path. `codec::xz` reads a
+# stream itself when every block is plain LZMA2, which is what lets a reader
+# open one symbol of one block; this takes the streams it will not, which are
+# the ones whose filter chain holds a delta or a branch filter. The filters
+# compose, so the choice is made for the whole stream and not per block, and
+# that is the one call site left. A dependency rather than a dev-dependency
+# for that reason: those files still have to open.
 lzma-rs = { version = "0.3", default-features = false }
 # bzip2, pure Rust. It takes a whole stream and gives bytes: bzip2 packs its
 # blocks to the bit, so a block is not a run anything else can address and the
