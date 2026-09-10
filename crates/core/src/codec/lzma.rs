@@ -182,10 +182,19 @@ pub fn lzma2(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     lzma2_over(data, TraceBuilder::default())
 }
 
-/// The same against a trace builder the caller made. Only the test that has to
-/// reach the coarsening path across a chunk boundary passes anything else.
-#[cfg(test)]
-fn lzma2_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {
+/// The same with a ceiling on how many steps the trace may hold.
+///
+/// What a container made of several LZMA2 streams needs, which is what an xz
+/// stream of several blocks is: the budget is the whole file's, so each block
+/// is handed what the blocks before it left rather than a fresh cap of its
+/// own, and a hundred blocks cannot record a hundred times the limit. A budget
+/// of nothing is the other end of the same lever: the decoder gives up naming
+/// symbols before it names one, which is how [`crate::codec::xz::bytes`] asks
+/// for bytes without paying for a map nobody wanted.
+///
+/// The bytes do not change with the budget. Giving up naming symbols is
+/// something the trace does; see [`decoder::run`].
+pub(super) fn lzma2_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {
     lzma2_over(data, TraceBuilder::with_budget(budget))
 }
 

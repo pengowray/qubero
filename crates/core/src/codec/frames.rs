@@ -1,15 +1,17 @@
-//! zstd and xz, traced at the block rather than at the symbol.
+//! zstd, traced at the block rather than at the symbol, and the one-step trace
+//! every codec falls back on.
 //!
-//! Both keep the crate that reads them. What is written here is only the map:
-//! how the run divides into blocks, which bytes of it each block is, and how
-//! much of the output each one produced. Inside a block there is nothing but
-//! bytes this round, which is an honest stop rather than a missing feature:
-//! a zstd block is FSE and Huffman over three interleaved streams, and an xz
-//! block is a range coder whose state is the whole of the block before it.
+//! zstd keeps the crate that reads it. What is written here is only the map:
+//! how the run divides into frames and blocks, which bytes of it each block
+//! is, and how much of the output each one produced. Inside a block there is
+//! nothing but bytes this round, which is an honest stop rather than a missing
+//! feature: a zstd block is FSE and Huffman over three interleaved streams,
+//! and unpicking that is a decoder of its own.
 //!
-//! xz needs no decoding at all for its map: the index at the end of a stream
-//! lists every block's compressed and uncompressed size, which is what an xz
-//! reader seeking into a file uses and what a reader looking at one wants.
+//! xz used to be read here on the same terms and is not any more. Its blocks
+//! usually hold LZMA2, which we have a decoder for, so it moved to
+//! [`crate::codec::xz`] and is traced to its symbols; what it kept from here
+//! is [`whole`], for the streams whose filter chains it cannot run.
 //!
 //! When the headers do not read the way this expects, the run still opens: the
 //! trace becomes one step over all of it. A map nobody can draw is better than
@@ -120,99 +122,6 @@ fn frame_has_checksum(data: &[u8]) -> Option<bool> {
     Some(data.get(4)? & 0x04 != 0)
 }
 
-/// An xz stream: the bytes, and a step per block, taken from the index.
-///
-/// Nothing is decoded twice. The index at the end of the stream says, for
-/// every block in it, how many bytes it takes and how many it comes to, which
-/// is all a map at this granularity needs.
-pub fn xz(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    let out = super::xz(data)?;
-    let trace = xz_trace(data, out.len()).filter(|t| t.check_tiles().is_ok());
-    Ok(match trace {
-        Some(t) => (out, t),
-        None => {
-            let n = out.len();
-            (out, whole(data.len(), n))
-        }
-    })
-}
-
-/// The blocks of an xz stream, read out of its index.
-fn xz_trace(data: &[u8], total_out: usize) -> Option<Trace> {
-    // Header: six bytes of magic, two of flags, four of CRC32.
-    if data.len() < 12 + 12 || data.get(..6)? != b"\xfd7zXZ\x00" {
-        return None;
-    }
-    // Footer: a CRC32, the size of the index in units of four bytes less one,
-    // the flags again, and `YZ`.
-    let footer = data.len() - 12;
-    if data.get(data.len() - 2..)? != b"YZ" {
-        return None;
-    }
-    let backward = u32::from_le_bytes(data.get(footer + 4..footer + 8)?.try_into().ok()?);
-    let index_len = (backward as usize).checked_add(1)?.checked_mul(4)?;
-    let index_at = footer.checked_sub(index_len)?;
-    if index_at < 12 {
-        return None;
-    }
-
-    let index = &data[index_at..footer];
-    let mut i = 0usize;
-    if *index.first()? != 0x00 {
-        return None;
-    }
-    i += 1;
-    let count = vli(index, &mut i)?;
-    if count > u32::MAX as u64 {
-        return None;
-    }
-
-    let mut b = TraceBuilder::default();
-    b.push(0, 0, StepKind::Header(StepField::FrameHeader, 0));
-    let mut at = 12usize;
-    let mut produced = 0u64;
-    for _ in 0..count {
-        let unpadded = vli(index, &mut i)? as usize;
-        let uncompressed = vli(index, &mut i)?;
-        if unpadded == 0 || at + unpadded > index_at {
-            return None;
-        }
-        b.push(at as u64 * 8, produced, StepKind::Header(StepField::BlockHeader, 0));
-        // A block header is one byte of size in units of four, and that many
-        // bytes; what is left of the block is the compressed data.
-        let head = (data[at] as usize + 1) * 4;
-        if head >= unpadded {
-            return None;
-        }
-        b.push((at + head) as u64 * 8, produced, StepKind::Block);
-        produced += uncompressed;
-        // Every block is padded out to a multiple of four bytes.
-        at += unpadded.next_multiple_of(4);
-    }
-    if at != index_at || produced != total_out as u64 {
-        return None;
-    }
-    // The index and the footer, which say the same thing the blocks did.
-    b.push(index_at as u64 * 8, produced, StepKind::Header(StepField::Footer, 0));
-    b.finish_at(data.len() as u64 * 8, produced);
-    Some(b.done())
-}
-
-/// xz's variable-length integer: seven bits a byte, least significant first,
-/// the high bit set on every byte but the last. Nine bytes at most.
-fn vli(data: &[u8], at: &mut usize) -> Option<u64> {
-    let mut v = 0u64;
-    for shift in 0..9u32 {
-        let byte = *data.get(*at)?;
-        *at += 1;
-        v |= ((byte & 0x7f) as u64) << (shift * 7);
-        if byte & 0x80 == 0 {
-            return (shift == 0 || byte != 0).then_some(v);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,24 +140,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_variable_length_integer_reads_seven_bits_a_byte() {
-        let mut at = 0;
-        assert_eq!(vli(&[0x00], &mut at), Some(0));
-        let mut at = 0;
-        assert_eq!(vli(&[0x7f], &mut at), Some(127));
-        let mut at = 0;
-        assert_eq!(vli(&[0x80, 0x01], &mut at), Some(128));
-        // Nine bytes that never end is not a number.
-        let mut at = 0;
-        assert_eq!(vli(&[0x80; 9], &mut at), None);
-    }
-
     /// Bytes that are not a stream give nothing rather than a wrong shape.
     #[test]
     fn nonsense_has_no_shape() {
-        assert!(xz_trace(b"not an xz stream at all, not even close", 10).is_none());
         assert!(zstd_trace(b"not a zstd frame", 10).is_none());
-        assert_eq!(crate::codec::decode_traced(Codec::Xz, b"nope").err(), Some(Refusal::Failed));
+        assert_eq!(crate::codec::decode_traced(Codec::Zstd, b"nope").err(), Some(Refusal::Failed));
     }
 }

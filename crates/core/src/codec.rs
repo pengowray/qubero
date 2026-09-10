@@ -26,6 +26,7 @@ pub mod pico8;
 pub mod pixels;
 pub mod pxu;
 pub mod rar5;
+pub mod xz;
 
 use std::ops::Range;
 
@@ -277,7 +278,9 @@ pub enum StepField {
     BlockHeader,
     /// PNG: the byte in front of a scanline saying how the row was predicted.
     Filter,
-    /// xz: the index and the stream footer.
+    /// xz: a block's integrity check, and the index and stream footer
+    /// together. Its value is how many bytes the check takes; the index and
+    /// the footer say nothing, being measured by the step after them.
     Footer,
     /// RAR 5: a symbol that produces no byte and instead names a run of the
     /// output and one of three transforms to run over it once that run has been
@@ -653,10 +656,15 @@ pub(crate) struct TraceBuilder {
     trace: Trace,
     /// Where the block being recorded started, and its first step.
     block_start: Option<(u64, u64, u32)>,
-    /// How many steps this trace may hold before it coarsens. Only the tests
-    /// set it: reaching [`MAX_STEPS`] takes a hundred megabytes of input, and
+    /// How many steps this trace may hold before it coarsens. Unset is
+    /// [`MAX_STEPS`], which is what a decoder handed a whole run uses.
+    ///
+    /// Two callers set it. `codec::xz` decodes a stream one block at a time
+    /// and gives each block what the ones before it left, so the ceiling is
+    /// the stream's rather than the block's; and the tests set it low, since
+    /// reaching [`MAX_STEPS`] honestly takes a hundred megabytes of input and
     /// the path that gives up naming symbols is the one path that can leave a
-    /// trace not tiling, so it has to be reachable.
+    /// trace not tiling.
     budget: Option<usize>,
 }
 
@@ -683,9 +691,45 @@ impl TraceBuilder {
         self.trace.steps.len() >= self.budget.unwrap_or(MAX_STEPS)
     }
 
-    #[cfg(test)]
     pub(crate) fn with_budget(budget: usize) -> TraceBuilder {
         TraceBuilder { budget: Some(budget), ..TraceBuilder::default() }
+    }
+
+    /// Take a trace of part of this run into this one, shifted to where that
+    /// part sits: `in_bits` is the bit its first byte is at, and `out_bytes`
+    /// is how much output everything before it produced.
+    ///
+    /// What stitching one trace out of several decodings needs, which is what
+    /// an xz stream of several blocks is. A step keeps its start and takes its
+    /// end from the step after it, so the tiling holds only if the caller
+    /// pushes whatever follows at exactly `in_bits + t.in_bits()` and
+    /// `out_bytes + t.out_bytes()`. That is the one thing this cannot check
+    /// for itself, and [`Trace::check_tiles`] is what catches getting it
+    /// wrong.
+    ///
+    /// The blocks come across renumbered onto the steps they now are, and so
+    /// does having given up naming symbols: a trace that is coarse in one of
+    /// its parts is coarse.
+    pub(crate) fn absorb(&mut self, t: &Trace, in_bits: u64, out_bytes: u64) {
+        // Two traces counting the bits inside a byte differently cannot be one
+        // trace: every step of one would name the wrong bits. Nothing stitched
+        // so far reads bits at all, so this is a guard against a future caller
+        // rather than a case that arises.
+        debug_assert_eq!(t.lsb_first, self.trace.lsb_first, "traces that count bits differently cannot be stitched");
+        let base = self.trace.steps.len() as u32;
+        self.trace.steps.extend(t.steps.iter().map(|raw| RawStep {
+            in_start: (in_bits + u64::from(raw.in_start)) as u32,
+            out_start: (out_bytes + u64::from(raw.out_start)) as u32,
+            ..*raw
+        }));
+        self.trace.blocks.extend(t.blocks.iter().map(|bl| Block {
+            steps: bl.steps.start + base..bl.steps.end + base,
+            kind: bl.kind,
+            last: bl.last,
+            in_bits: in_bits + bl.in_bits.start..in_bits + bl.in_bits.end,
+            out_bytes: out_bytes + bl.out_bytes.start..out_bytes + bl.out_bytes.end,
+        }));
+        self.trace.coarse |= t.coarse;
     }
 
     pub(crate) fn coarsen(&mut self) {
@@ -815,10 +859,11 @@ const FIELDS: [StepField; 23] = [
 ///
 /// The bytes are the same bytes [`decode`] gives; the trace is what tells the
 /// reader which bits of the run made which bytes of what came out. How fine
-/// the trace is depends on the codec: deflate and LZ4 are read by our own
-/// decoders and traced per symbol, zstd and xz keep their crates and are
-/// traced per block, and bzip2 keeps a crate that will not say where a block
-/// ended, so it is one step over the whole stream.
+/// the trace is depends on the codec: deflate, LZ4 and LZMA are read by our
+/// own decoders and traced per symbol, and so is xz wherever the filter chain
+/// in its blocks is one this can run; zstd keeps its crate and is traced per
+/// block; and bzip2 keeps a crate that will not say where a block ended, so
+/// it is one step over the whole stream.
 pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     if data.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -829,7 +874,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Zlib => inflate::zlib(data)?,
         Codec::Lz4Block => lz4::block(data)?,
         Codec::Zstd => frames::zstd(data)?,
-        Codec::Xz => frames::xz(data)?,
+        Codec::Xz => xz::stream(data)?,
         Codec::Lzip => lzma::lzip(data)?,
         Codec::Lzma1 { props, dict_size, unpacked } => lzma::lzma1(data, props, dict_size, unpacked)?,
         Codec::Lzma2 => lzma::lzma2(data)?,
@@ -882,7 +927,10 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
             decode_traced(codec, data)?.0
         }
         Codec::Zstd => zstd(data)?,
-        Codec::Xz => xz(data)?,
+        // Not the traced path, but the same decisions and the same decoder:
+        // see `xz::bytes`, which is the traced path with the recording left
+        // out rather than a second reading of the format.
+        Codec::Xz => xz::bytes(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -902,19 +950,6 @@ fn zstd(data: &[u8]) -> Result<Vec<u8>, Refusal> {
     match decoder.by_ref().take(CAP_BYTES as u64 + 1).read_to_end(&mut out) {
         Ok(_) if out.len() > CAP_BYTES => Err(Refusal::TooLarge),
         Ok(_) => Ok(out),
-        Err(_) => Err(Refusal::Failed),
-    }
-}
-
-/// A whole xz stream, header through footer. The LZMA2 inside one block is a
-/// step of a decoder's state and does not stand on its own, which is why the
-/// template opens the stream and not the block.
-fn xz(data: &[u8]) -> Result<Vec<u8>, Refusal> {
-    let mut input = std::io::BufReader::new(data);
-    let mut out = Vec::new();
-    match lzma_rs::xz_decompress(&mut input, &mut out) {
-        Ok(()) if out.len() > CAP_BYTES => Err(Refusal::TooLarge),
-        Ok(()) => Ok(out),
         Err(_) => Err(Refusal::Failed),
     }
 }

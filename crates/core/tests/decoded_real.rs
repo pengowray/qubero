@@ -85,8 +85,16 @@ fn every_deflate_stream_in_the_collection_reads_the_same_as_miniz_oxide() {
     report("deflate", &tally);
 }
 
+/// zstd is traced at the block, and xz as deep as its filter chain allows.
+///
+/// The two used to be the same test, because the two used to be the same
+/// answer: both kept a crate for the bytes and both got a map drawn from the
+/// headers. xz does not any more. A block whose chain is one LZMA2 filter is
+/// read here, so the trace over it names literals and matches, and what this
+/// asserts about such a file is that it did: a sample that quietly fell back
+/// to the crate would still pass a check that only counted block headers.
 #[test]
-fn every_zstd_and_xz_sample_is_traced_at_the_block() {
+fn every_zstd_and_xz_sample_is_traced_as_deep_as_its_shape_allows() {
     let files = samples();
     if files.is_empty() {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
@@ -107,15 +115,29 @@ fn every_zstd_and_xz_sample_is_traced_at_the_block() {
         trace.check_tiles().unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(trace.out_bytes(), out.len() as u64);
         assert_eq!(trace.in_bits(), bytes.len() as u64 * 8);
-        // The point of stage three: the frame was parsed far enough to say
-        // where its blocks are, rather than falling back to one step over the
-        // whole run.
-        let blocks = trace.steps().filter(|s| s.kind == StepKind::Header(StepField::BlockHeader, 0)).count();
+        // The frame was parsed far enough to say where its blocks are, rather
+        // than falling back to one step over the whole run.
+        let blocks =
+            trace.steps().filter(|s| matches!(s.kind, StepKind::Header(StepField::BlockHeader, _))).count();
         assert!(blocks > 0, "{name}: read as {} with no block headers found", codec.as_str());
-        eprintln!("--- {name}: {} blocks, {} steps, {} bytes out", blocks, trace.len(), out.len());
+        let symbols = trace.steps().filter(|s| matches!(s.kind, StepKind::Literal(_) | StepKind::Match { .. })).count();
+        eprintln!(
+            "--- {name}: {} blocks, {} steps, {symbols} symbols, {} bytes out",
+            blocks,
+            trace.len(),
+            out.len()
+        );
         match codec {
             Codec::Zstd => seen_zstd += 1,
-            _ => seen_xz += 1,
+            _ => {
+                seen_xz += 1;
+                // A `.xz` written by the tool is one LZMA2 filter and nothing
+                // else, so every one of these has to have been read here and
+                // not by the crate. A file that fell back has a block map and
+                // no symbols at all.
+                assert!(symbols > 0, "{name}: an xz stream read as blocks and never opened");
+                assert!(!trace.steps().any(|s| s.kind == StepKind::Block), "{name}: a block was left unopened");
+            }
         }
     }
     eprintln!("--- {seen_zstd} zstd and {seen_xz} xz samples");
