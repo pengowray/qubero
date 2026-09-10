@@ -23,7 +23,7 @@ const DICT_CODE: u8 = 22;
 
 /// One of xz's variable-length integers, written the one way it may be:
 /// seven bits a byte, least significant first, no trailing zero byte.
-fn vli_of(mut v: u64) -> Vec<u8> {
+pub(crate) fn vli_of(mut v: u64) -> Vec<u8> {
     let mut out = Vec::new();
     while v >= 0x80 {
         out.push((v & 0x7f) as u8 | 0x80);
@@ -35,7 +35,7 @@ fn vli_of(mut v: u64) -> Vec<u8> {
 
 /// One block's header: a length in units of four, the flags, whichever sizes
 /// `sized` asked for, one LZMA2 filter, zeroes out to the length, and a CRC32.
-fn block_header(packed: usize, unpacked: usize, sized: bool) -> Vec<u8> {
+pub(crate) fn block_header(packed: usize, unpacked: usize, sized: bool) -> Vec<u8> {
     let mut body = vec![0x00, if sized { 0xc0 } else { 0x00 }];
     if sized {
         body.extend_from_slice(&vli_of(packed as u64));
@@ -54,14 +54,34 @@ fn block_header(packed: usize, unpacked: usize, sized: bool) -> Vec<u8> {
 }
 
 /// An xz stream around LZMA2 streams somebody else packed: one block each,
-/// with CRC32 as the check, which is the one sum this crate can compute.
+/// with CRC32 as the check.
 ///
 /// `sized` writes both of the sizes a block header may carry, which is what
 /// the threaded encoder does and what `xz -T1` leaves out. Both are read, so
 /// both are built.
-fn wrap(blocks: &[(Vec<u8>, Vec<u8>)], sized: bool) -> Vec<u8> {
-    const CHECK: usize = 4;
-    let flags = [0x00u8, 0x01];
+pub(crate) fn wrap(blocks: &[(Vec<u8>, Vec<u8>)], sized: bool) -> Vec<u8> {
+    wrap_checked(blocks, sized, 1)
+}
+
+/// The check bytes a block of `plain` ends with, for the stream flags' check
+/// type. Zeros for an ID the format has reserved: it has a length and no
+/// algorithm, so there is a run to write and nothing that belongs in it.
+pub(crate) fn check_bytes(check_type: u8, plain: &[u8]) -> Vec<u8> {
+    match check_type {
+        0 => Vec::new(),
+        1 => crc32(plain).to_le_bytes().to_vec(),
+        4 => crate::checksum::crc64_xz(plain).to_le_bytes().to_vec(),
+        10 => crate::checksum::sha256(plain).to_vec(),
+        other => vec![0u8; check_size(other)],
+    }
+}
+
+/// The same stream with the check named, so a test can build the default
+/// settings `xz` writes (CRC64), the SHA-256 an encoder can be asked for, a
+/// stream with no check at all, and one whose check nobody has defined.
+pub(crate) fn wrap_checked(blocks: &[(Vec<u8>, Vec<u8>)], sized: bool, check_type: u8) -> Vec<u8> {
+    let check_len = check_size(check_type);
+    let flags = [0x00u8, check_type];
     let mut v = MAGIC.to_vec();
     v.extend_from_slice(&flags);
     v.extend_from_slice(&crc32(&flags).to_le_bytes());
@@ -74,8 +94,8 @@ fn wrap(blocks: &[(Vec<u8>, Vec<u8>)], sized: bool) -> Vec<u8> {
         while v.len() % 4 != 0 {
             v.push(0);
         }
-        v.extend_from_slice(&crc32(plain).to_le_bytes());
-        records.extend_from_slice(&vli_of((header.len() + packed.len() + CHECK) as u64));
+        v.extend_from_slice(&check_bytes(check_type, plain));
+        records.extend_from_slice(&vli_of((header.len() + packed.len() + check_len) as u64));
         records.extend_from_slice(&vli_of(plain.len() as u64));
     }
 
@@ -98,7 +118,7 @@ fn wrap(blocks: &[(Vec<u8>, Vec<u8>)], sized: bool) -> Vec<u8> {
 }
 
 /// The same data as LZMA2, the way [`crate::codec::lzma`]'s own tests pack it.
-fn pack(data: &[u8], lc: u32, lp: u32, pb: u32, dict: u32, chunk: Option<u64>) -> Vec<u8> {
+pub(crate) fn pack(data: &[u8], lc: u32, lp: u32, pb: u32, dict: u32, chunk: Option<u64>) -> Vec<u8> {
     use std::num::NonZeroU64;
     use lzma_rust2::{Lzma2Options, Lzma2Writer};
     let mut opts = Lzma2Options::with_preset(6);
@@ -110,6 +130,36 @@ fn pack(data: &[u8], lc: u32, lp: u32, pb: u32, dict: u32, chunk: Option<u64>) -
     let mut w = Lzma2Writer::new(Vec::new(), opts);
     std::io::Write::write_all(&mut w, data).expect("packs");
     w.finish().expect("finishes")
+}
+
+/// The same bytes as an LZMA2 stream that compresses none of them: one
+/// uncompressed chunk per 64 KiB, and the end marker.
+///
+/// What this is for is corrupting. A byte changed inside a range-coded chunk
+/// does not give the same bytes wrongly, it gives a decoder that walks off
+/// into nothing and a block that comes to the wrong length, which the index
+/// catches and the stream is refused over: a test wanting a file that reads
+/// and fails its integrity check would never get one. An uncompressed chunk
+/// has no such coupling. Change a byte of it and the block still decodes, to
+/// exactly as many bytes as the index says, one of which is now wrong, which
+/// is precisely the file a block check exists to catch.
+///
+/// The control byte is 0x01: an uncompressed chunk that resets the
+/// dictionary, which is what one has to be at the start of a stream. The two
+/// bytes after it are the length less one, big-endian, and the format's own
+/// order for that number is the other way round from every other number in an
+/// xz file.
+pub(crate) fn stored_lzma2(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (i, chunk) in data.chunks(1 << 16).enumerate() {
+        // Only the first resets the dictionary; the ones after it carry on
+        // from where it left off, which is what 0x02 says.
+        out.push(if i == 0 { 0x01 } else { 0x02 });
+        out.extend_from_slice(&((chunk.len() - 1) as u16).to_be_bytes());
+        out.extend_from_slice(chunk);
+    }
+    out.push(0x00);
+    out
 }
 
 /// What `lzma-rs` makes of a whole stream, which is what the bytes have to be.
@@ -508,6 +558,58 @@ fn a_dictionary_the_format_cannot_spell_is_left_to_the_crate() {
             "code {code}: the fallback named symbols it never read"
         );
     }
+}
+
+/// Where each block's bytes ended up in the output, which is the one question
+/// a block's integrity check needs answered and no field of the file answers.
+///
+/// Both ways of reading a stream have to answer it the same, and the two
+/// arrive at it differently: reading the blocks ourselves counts what came
+/// out of each one, and falling back to the crate takes the sizes from the
+/// index and adds them up. The dictionary code is what forces the second, as
+/// in the test above.
+#[test]
+fn every_block_says_which_of_the_bytes_it_produced() {
+    let parts: Vec<Vec<u8>> = (0..3).map(|i| mixed(700 + i * 300)).collect();
+    let blocks: Vec<(Vec<u8>, Vec<u8>)> =
+        parts.iter().map(|p| (pack(p, 3, 0, 2, 1 << 20, None), p.clone())).collect();
+    let stream = wrap_checked(&blocks, false, 4);
+
+    let (out, trace) = decode_traced(Codec::Xz, &stream).expect("reads");
+    let members = trace.members().to_vec();
+    assert_eq!(members.len(), parts.len(), "one member per block");
+    let mut at = 0u64;
+    for (i, part) in parts.iter().enumerate() {
+        let m = &members[i];
+        assert_eq!(m.out_bytes.start, at, "block {i} starts where block {} ended", i.wrapping_sub(1));
+        assert_eq!(m.out_bytes.end - m.out_bytes.start, part.len() as u64, "block {i} is as long as it packed");
+        assert_eq!(&out[m.out_bytes.start as usize..m.out_bytes.end as usize], &part[..], "block {i}");
+        // And the sum over that slice is the number the file wrote after the
+        // block, which is the whole of what the check comes to.
+        assert_eq!(
+            crate::checksum::crc64_xz(part).to_le_bytes().to_vec(),
+            check_bytes(4, part),
+            "block {i}: the builder and the sum disagree"
+        );
+        // The packed bytes a member names are inside the stream and hold the
+        // block's data rather than its header.
+        assert!(m.in_bits.end <= stream.len() as u64 * 8, "block {i} reads past the stream");
+        assert!(m.in_bits.start >= HEADER as u64 * 8, "block {i} reads the stream header");
+        at = m.out_bytes.end;
+    }
+    assert_eq!(at, out.len() as u64, "the blocks account for every byte of the output");
+
+    // The same stream with a dictionary code no encoder would write, which
+    // sends it to the crate whole. The blocks are the same blocks and the
+    // members say so.
+    let mut bad = stream.clone();
+    bad[HEADER + 4] = MAX_DICT_CODE + 1;
+    let sum = crc32(&bad[HEADER..HEADER + 8]);
+    bad[HEADER + 8..HEADER + 12].copy_from_slice(&sum.to_le_bytes());
+    let (fell_back, t2) = decode_traced(Codec::Xz, &bad).expect("the crate reads it");
+    assert_eq!(fell_back, out, "the two readings are of the same bytes");
+    assert!(t2.steps().any(|s| s.kind == StepKind::Block), "this stream was meant to fall back");
+    assert_eq!(t2.members(), &members[..], "the fallback places the blocks where the reading did");
 }
 
 /// A stream that stops in the middle, at every length there is. Nothing may

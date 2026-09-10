@@ -96,7 +96,7 @@ fn every_name<'a>(
 /// cheap and is why it cannot answer the question the walk below answers.
 fn any_check<'a>(ty: &'a Ty, types: &'a HashMap<String, Ty>, seen: &mut HashSet<&'a str>) -> bool {
     match ty {
-        Ty::Struct(s) => s.fields.iter().any(|f| f.check.is_some() || any_check(&f.ty, types, seen)),
+        Ty::Struct(s) => s.fields.iter().any(|f| !f.checks.is_empty() || any_check(&f.ty, types, seen)),
         Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => any_check(elem, types, seen),
         Ty::PointerList { elem, .. } => any_check(elem, types, seen),
         Ty::Nullable { inner, .. }
@@ -147,7 +147,11 @@ impl<'a> Walk<'a> {
                 // where an arena belongs.
                 self.scope.push(Box::leak(names.into_boxed_slice()));
                 for f in &s.fields {
-                    if let Some(check) = &f.check {
+                    // Every way the field can be checked, not just the first:
+                    // a field that holds whichever sum the header named
+                    // declares one per algorithm, and a typo in the third is
+                    // as invisible as a typo in the first.
+                    for check in &f.checks {
                         self.found += 1;
                         self.check(&f.name, check);
                     }
@@ -223,6 +227,12 @@ impl<'a> Walk<'a> {
                 if let Some(len) = len {
                     self.expr(len, &format!("{at}, in the unpacked length"));
                 }
+            }
+            // Two names, and both have to be there: the run that gets opened,
+            // and the member's own packed bytes that a reader is sent to.
+            Covers::UnpackedMember { name, packed } => {
+                self.named(name, &at);
+                self.named(packed, &format!("{at}, in the member's own run"));
             }
         }
     }

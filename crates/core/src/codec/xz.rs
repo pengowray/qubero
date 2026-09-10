@@ -34,6 +34,14 @@
 //! Nothing here verifies a block's integrity check. That is the template's
 //! job and `formats::xz` does it: this reads a chain to decide what decoder to
 //! use, and does not re-check what has already been checked elsewhere.
+//!
+//! What this does owe that check is where to look. A block's check covers what
+//! that block unpacked to, and where one block's bytes stop and the next
+//! block's begin is not written anywhere in the file: it is the running sum of
+//! the index's uncompressed sizes. So both paths below write a
+//! [`Member`](crate::codec::Member) per block, which is the one thing that can
+//! answer it, and the fallback writes them too: a stream read by the crate has
+//! blocks whether or not anybody read inside them.
 
 use crate::codec::{frames, lzma, Refusal, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES, MAX_STEPS};
 
@@ -198,6 +206,11 @@ fn unpack(data: &[u8], l: &Layout, budget: usize) -> Result<(Vec<u8>, Trace), Re
             return Err(Refusal::Failed);
         }
         b.absorb(&t, from as u64 * 8, out.len() as u64);
+        // Which bytes of the stream's output this block is, which is what its
+        // own integrity check covers and what nothing else can say: the offset
+        // is the running sum of every earlier block, and no field of the file
+        // holds it. See `formats::xz`, where the check is declared over this.
+        b.member(from as u64 * 8..end as u64 * 8, out.len() as u64..out.len() as u64 + got.len() as u64);
         out.append(&mut got);
 
         // A block is padded out to a multiple of four bytes. The header is
@@ -237,6 +250,17 @@ fn block_trace(l: &Layout, len: usize, total_out: usize) -> Option<Trace> {
         // The data, its padding and its check as one step: nothing here read
         // them, so nothing here may tell them apart.
         b.push((blk.at + blk.header) as u64 * 8, produced, StepKind::Block);
+        // The same member the symbol-by-symbol path writes, and it says the
+        // same thing here: this block's share of the output, from the index
+        // rather than from a decoding of it. The crate produced the bytes and
+        // the index says how they divide, and the two are held together by the
+        // total being checked above. A block's check is over its own share
+        // whichever decoder read the stream, so the declaration in
+        // `formats::xz` has to be answerable on this path too.
+        b.member(
+            (blk.at + blk.header) as u64 * 8..(blk.at + blk.header + blk.packed) as u64 * 8,
+            produced..produced + blk.unpacked,
+        );
         produced += blk.unpacked;
     }
     b.push(l.index_at as u64 * 8, produced, StepKind::Header(StepField::Footer, 0));
@@ -407,5 +431,8 @@ fn vli(data: &[u8], at: &mut usize) -> Option<u64> {
     None
 }
 
+// Reachable from `formats::xz`'s own tests, which need a stream that really is
+// one: a template's tests can build a header, and only something that packs
+// LZMA2 can build a block whose check has anything to be right about.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

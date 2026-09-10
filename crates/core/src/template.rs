@@ -1051,7 +1051,20 @@ pub struct Field {
     pub aside: bool,
     /// What this field checks, when it is a checksum rather than a number the
     /// format uses for something. See [`Check`].
-    pub check: Option<Check>,
+    ///
+    /// A list because one field can hold whichever sum the file said it would.
+    /// An xz block ends with a CRC-32, a CRC-64, a SHA-256 or nothing at all,
+    /// and which of them is four bits in the stream header twelve bytes from
+    /// the front of the file. The alternative was to say it in the type, by
+    /// switching the field onto a structure per algorithm and hanging a check
+    /// off each; that puts an algorithm nobody asked about into the field's
+    /// name and a row in the listing where the file has a number.
+    ///
+    /// The first whose [`Check::when`] holds is the one taken, and one with no
+    /// guard always holds, so a field with several writes a guard on each.
+    /// They are alternatives, not a list of sums to take together: a field is
+    /// one number, and it is compared against one algorithm's answer.
+    pub checks: Vec<Check>,
     /// The moment this field holds, when the number in it is a time rather than
     /// a number the format counts with. See [`Time`].
     ///
@@ -1340,6 +1353,53 @@ pub enum Covers {
     /// would answer it, since those bytes are in the file and a reader can be
     /// sent to them.
     Unpacked { name: Named, len: Option<Expr> },
+    /// One member's share of what that field's compressed run unpacks to,
+    /// rather than the whole of it: the bytes *this* block produced, which is
+    /// what an xz block's integrity check covers.
+    ///
+    /// [`Covers::Unpacked`] cannot say this and no arithmetic over fields can
+    /// either. Where the member's bytes begin is the running sum of every
+    /// earlier member's uncompressed size, and a format writes those sizes in
+    /// an index at the far end of the file, one variable-length integer each;
+    /// there is no field holding the offset and no expression that could add
+    /// up a list of them. So the offset is asked of the decoder, which walked
+    /// the members to produce the bytes and wrote down where each one landed.
+    /// See [`Member`](crate::codec::Member).
+    ///
+    /// `packed` names this member's own compressed bytes, and it is what says
+    /// *which* member: the one the decoder read from exactly there. Not an
+    /// index, on purpose. Counting would mean trusting that the template's
+    /// list of blocks and the decoder's list of members are the same list, and
+    /// an xz template cannot promise that. A block header carries the size of
+    /// its data only when the encoder wrote it, and without it a block reads
+    /// to the end of the block region, so a multi-block stream from `xz -T1`
+    /// is one block as far as the template is concerned and three as far as
+    /// the decoder is. The third block's stored sum against the first block's
+    /// bytes is a mismatch reported on a file that is fine, which is the one
+    /// answer this must never give. Matched on where the bytes are, the same
+    /// stream says the check cannot be made, and says it without anybody
+    /// having to notice the problem first.
+    ///
+    /// So the member is the one whose packed bytes begin where `packed`
+    /// begins, and it counts only if `packed` holds the whole of it and does
+    /// not reach into the member after it. A template that read the blocks
+    /// wrongly fails that test rather than passing it with the wrong bytes.
+    ///
+    /// `packed` also answers the cheap question cheaply. What
+    /// [`check_of`](crate::eval::Evaluator::check_of) has to say is where to
+    /// send a reader and roughly how much work the sum is, and it must say it
+    /// without decoding anything: the panel asks on every move of the cursor.
+    /// The member's own extent is not known until the stream has been
+    /// unpacked, and a template with nothing to point at would have to answer
+    /// with the whole stream's, which for a file of twenty blocks is nineteen
+    /// blocks too many.
+    ///
+    /// A member the decoder did not record is a check that cannot be made, and
+    /// that is the ordinary answer rather than a failure. A stream whose
+    /// filter chain nothing here can run is decoded by a crate that says
+    /// nothing about where its blocks were; a stream that would not lay out at
+    /// all has no members either. Neither is a file reporting itself broken.
+    UnpackedMember { name: Named, packed: Named },
     /// A run of the enclosing structure: where it starts, and how long it is.
     Run { at: Expr, len: Expr },
     /// From the start of the file to the first byte of the check field itself.
@@ -2079,7 +2139,7 @@ impl Ty {
                     ty,
                     name_from: None,
                     aside: false,
-                    check: None,
+                    checks: Vec::new(),
                     elem_check: None,
                     time: None,
                 })
@@ -2139,6 +2199,12 @@ impl Ty {
 
     /// Say that `field` is a checksum, and over what. See [`Check`].
     ///
+    /// Called again for the same field it adds another way that field can be
+    /// checked rather than replacing the first, which is what a format that
+    /// picks its algorithm out of a header needs. The guards are what choose
+    /// between them, so every call after the first should carry one. See
+    /// [`Field::checks`].
+    ///
     /// Silently does nothing to anything but a structure, and to a name no
     /// field of it has, the way the two builders above do. `checks_resolve` in
     /// `formats` walks every template and fails on either, so a typo is caught
@@ -2148,7 +2214,7 @@ impl Ty {
             Ty::Struct(s) => {
                 let mut s = (*s).clone();
                 if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
-                    f.check = Some(check);
+                    f.checks.push(check);
                 }
                 Ty::Struct(Arc::new(s))
             }
