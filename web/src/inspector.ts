@@ -2453,12 +2453,42 @@ const SEL_TEXT_LITERAL_EXPAND = "Show the whole string literal";
 const SEL_TEXT_LITERAL_COLLAPSE = "Show the string literal on one line";
 const SEL_LENGTH = "Length";
 const LOADING = "Loading…";
-const COPY = "Copy";
-const EDIT = "Edit";
+/**
+ * The faces of the row buttons, as glyphs rather than as words.
+ *
+ * Four small buttons sat at the end of every reading spelling out `Copy`,
+ * `Edit`, `Expand`, `Collapse`, which is four words of chrome beside the one
+ * thing the row exists to show. What each one does is still written out in
+ * full: `actionButton` puts the whole sentence on both `title` and
+ * `aria-label`, so the hover and the screen reader are unchanged and only the
+ * face is shorter.
+ *
+ * `\uFE0E` on each is the text presentation selector. None of these four is
+ * emoji by default, so it changes nothing today; it is here so that a font
+ * update cannot quietly turn one of them into a colour glyph sitting among
+ * sans-serif text. Two candidates were rejected for that risk outright:
+ * `U+1F5D0 PAGE` is emoji by default, and `U+2FFB` is not a symbol at all but
+ * a CJK ideographic description operator that happens to look like two
+ * squares in the fonts it was measured in.
+ *
+ * `U+29C9 TWO JOINED SQUARES` for copy, the overlapping-documents shape both
+ * macOS and Windows use. `U+270F PENCIL` for edit, the one readers have met
+ * everywhere else, rather than its mirrored twin `U+270E`.
+ *
+ * The expand pair is the one worth explaining. Expand does not open a section:
+ * it takes a reading clipped to one line and lets it wrap to as many as it
+ * needs, and Collapse puts it back. So the axis is clipped against wrapped,
+ * not shut against open, and a `\u25BE` and `\u25B4` pair would have said the
+ * wrong thing however natural it looks. `U+2922` and `U+2921` are mirror
+ * images of one another at the same width, so the two faces of the one button
+ * read as a toggle rather than as two unrelated marks.
+ */
+const COPY = "\u29C9\uFE0E";
+const EDIT = "\u270F\uFE0E";
 const COPIED = "Copied.";
 const COPY_FAILED = "Couldn't copy to the clipboard.";
-const EXPAND = "Expand";
-const COLLAPSE = "Collapse";
+const EXPAND = "\u2922\uFE0E";
+const COLLAPSE = "\u2921\uFE0E";
 const copyLabel = (row: string): string => `Copy the ${row.toLowerCase()} value`;
 const expandLabel = (row: string): string => `Show the whole ${row} reading`;
 const collapseLabel = (row: string): string => `Show the ${row} reading on one line`;

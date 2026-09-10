@@ -1126,11 +1126,21 @@ button.welcome-crystal {
 .insp-acts:focus-within {
   opacity: 1;
 }
+/* The row buttons, whose faces are glyphs rather than words. The font is set
+   rather than inherited: these sit inside rows that are monospace, and the
+   glyphs were chosen and measured against the sans stack. A fixed width
+   rather than padding, because the four are not the same width and a button
+   column that shifts with the glyph in it is a column that never looks
+   straight. Larger than the words were: a glyph has to carry at a glance
+   what a word carried by being read. */
 .insp-act {
-  font: inherit;
-  font-size: 11px;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1;
   min-height: 0;
-  padding: 1px 5px;
+  width: 22px;
+  padding: 2px 0;
+  text-align: center;
   border-radius: 4px;
   cursor: pointer;
 }
@@ -4042,7 +4052,12 @@ table.rec tr.is-on td {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
-  align-items: center;
+  /* Top, not centre. A reading that wraps to a dozen lines left its own name
+     floating in the middle of them, so the label for the tall row and the
+     label for the short row below it sat at different heights and neither
+     lined up with the text it names. The first line of a reading is where a
+     reader starts, so that is where its name belongs. */
+  align-items: start;
   padding: 2px 0;
   min-width: 0;
   position: relative;
