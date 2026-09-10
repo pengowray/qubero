@@ -202,3 +202,36 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
+
+## The Lucide icons
+
+The small buttons at the end of an inspector row, copy, edit, expand and
+collapse, wear icons from Lucide. Not a dependency: `web/src/icons.ts` holds
+the four shapes copied out of the icon files, so nothing of Lucide is
+installed, bundled or fetched at runtime, and those copied shapes are what
+ships. They are `copy`, `square-pen`, `unfold-vertical` and `fold-vertical`,
+taken at commit `5d592a96aaeb4a3a09ffd8134f8f5ed878c9a0c5`.
+
+Lucide's licence file also carries an MIT notice from Cole Bemis, for the
+icons Lucide inherited from the Feather project. None of these four is on that
+list, so the ISC terms below are the ones they are used under.
+
+Upstream: https://github.com/lucide-icons/lucide
+
+```
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```

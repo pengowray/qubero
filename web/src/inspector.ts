@@ -8,6 +8,7 @@
 import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { address } from "./dom.ts";
+import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
@@ -647,8 +648,8 @@ export class Inspector {
     input.setAttribute("aria-label", label);
     const acts = document.createElement("div");
     acts.className = "insp-acts";
-    const copy = actionButton(COPY, copyLabel(label));
-    const edit = actionButton(EDIT, editLabel(label));
+    const copy = actionButton(copyIcon(), copyLabel(label));
+    const edit = actionButton(editIcon(), editLabel(label));
     acts.append(copy, edit);
     wrap.append(text, input, acts);
     td.append(wrap);
@@ -868,14 +869,14 @@ export class Inspector {
     cell.title = text;
     const acts = document.createElement("div");
     acts.className = "insp-acts";
-    const copy = actionButton(COPY, copyTip);
-    const expand = actionButton(EXPAND, expandTip);
+    const copy = actionButton(copyIcon(), copyTip);
+    const expand = actionButton(expandIcon(), expandTip);
     acts.append(copy, expand);
     row.append(cell, acts);
     copy.addEventListener("click", () => void this.copyValue(text));
     expand.addEventListener("click", () => {
       const open = row.classList.toggle("is-open");
-      expand.textContent = open ? COLLAPSE : EXPAND;
+      expand.replaceChildren(open ? collapseIcon() : expandIcon());
       const label = open ? collapseTip : expandTip;
       expand.title = label;
       expand.setAttribute("aria-label", label);
@@ -2625,7 +2626,7 @@ const SEL_TEXT_LITERAL_COLLAPSE = "Show the string literal on one line";
 const SEL_LENGTH = "Length";
 const LOADING = "Loading…";
 /**
- * The faces of the row buttons, as glyphs rather than as words.
+ * The faces of the row buttons are icons rather than words.
  *
  * Four small buttons sat at the end of every reading spelling out `Copy`,
  * `Edit`, `Expand`, `Collapse`, which is four words of chrome beside the one
@@ -2634,32 +2635,19 @@ const LOADING = "Loading…";
  * `aria-label`, so the hover and the screen reader are unchanged and only the
  * face is shorter.
  *
- * `\uFE0E` on each is the text presentation selector. None of these four is
- * emoji by default, so it changes nothing today; it is here so that a font
- * update cannot quietly turn one of them into a colour glyph sitting among
- * sans-serif text. Two candidates were rejected for that risk outright:
- * `U+1F5D0 PAGE` is emoji by default, and `U+2FFB` is not a symbol at all but
- * a CJK ideographic description operator that happens to look like two
- * squares in the fonts it was measured in.
+ * They were Unicode characters for a while, and Unicode was the wrong shelf to
+ * take them off. `U+29C9`, `U+270F` and the `U+2922`/`U+2921` pair are a
+ * mathematical operator, a dingbat and two arrows: drawn by different people
+ * for different purposes, at whatever weight each font's designer thought
+ * right, and redrawn again on the next platform. Beside one another they never
+ * matched, which is what a reader sees before they see any meaning.
  *
- * `U+29C9 TWO JOINED SQUARES` for copy, the overlapping-documents shape both
- * macOS and Windows use. `U+270F PENCIL` for edit, the one readers have met
- * everywhere else, rather than its mirrored twin `U+270E`.
- *
- * The expand pair is the one worth explaining. Expand does not open a section:
- * it takes a reading clipped to one line and lets it wrap to as many as it
- * needs, and Collapse puts it back. So the axis is clipped against wrapped,
- * not shut against open, and a `\u25BE` and `\u25B4` pair would have said the
- * wrong thing however natural it looks. `U+2922` and `U+2921` are mirror
- * images of one another at the same width, so the two faces of the one button
- * read as a toggle rather than as two unrelated marks.
+ * The shapes now come from Lucide, one set drawn on one grid at one stroke
+ * width. See `icons.ts` for which file each came from and for why the expand
+ * pair is a fold and not a chevron.
  */
-const COPY = "\u29C9\uFE0E";
-const EDIT = "\u270F\uFE0E";
 const COPIED = "Copied.";
 const COPY_FAILED = "Couldn't copy to the clipboard.";
-const EXPAND = "\u2922\uFE0E";
-const COLLAPSE = "\u2921\uFE0E";
 const copyLabel = (row: string): string => `Copy the ${row.toLowerCase()} value`;
 const expandLabel = (row: string): string => `Show the whole ${row} reading`;
 const collapseLabel = (row: string): string => `Show the ${row} reading on one line`;
@@ -2708,12 +2696,14 @@ function picker(options: readonly string[], value: string, label: string, slot: 
   return s;
 }
 
-/** A small button that stays out of the way until it is wanted. */
-function actionButton(text: string, label: string): HTMLButtonElement {
+/** A small button that stays out of the way until it is wanted. The label is
+ *  the whole sentence, on both the hover and the accessible name; the icon is
+ *  `aria-hidden`, so the sentence is what is read out. */
+function actionButton(face: SVGSVGElement, label: string): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "insp-act";
-  b.textContent = text;
+  b.append(face);
   b.title = label;
   b.setAttribute("aria-label", label);
   return b;

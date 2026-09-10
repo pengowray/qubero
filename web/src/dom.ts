@@ -18,6 +18,21 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * The same, for SVG, where `createElement` would build an HTML element that
+ * merely shares a name and draws nothing.
+ *
+ * Attributes rather than properties: an SVG element's geometry lives in
+ * attributes, and `stroke-width` is not a property name at all.
+ */
+export function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Readonly<Record<string, string>>): SVGElementTagNameMap[K] {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+
 /**
  * An address whose leading `+` says what it is counted from, with the answer
  * on the mark itself.

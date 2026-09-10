@@ -1137,23 +1137,35 @@ button.welcome-crystal {
 .insp-acts:focus-within {
   opacity: 1;
 }
-/* The row buttons, whose faces are glyphs rather than words. The font is set
-   rather than inherited: these sit inside rows that are monospace, and the
-   glyphs were chosen and measured against the sans stack. A fixed width
-   rather than padding, because the four are not the same width and a button
-   column that shifts with the glyph in it is a column that never looks
-   straight. Larger than the words were: a glyph has to carry at a glance
-   what a word carried by being read. */
+/* The row buttons, whose faces are icons rather than words. A fixed width and
+   height rather than padding: the icons are all one size, but so is the
+   column, and a column that measures itself from its contents is a column
+   that moves when the contents change. The box is larger than the drawing
+   inside it, which is the hit area. */
 .insp-act {
-  font-family: var(--sans);
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
   min-height: 0;
   width: 22px;
-  padding: 2px 0;
-  text-align: center;
+  height: 22px;
+  padding: 0;
   border-radius: 4px;
   cursor: pointer;
+}
+/* The drawing. `currentColor` in the icon means this is the only place its
+   colour is decided, so both themes are already handled.
+
+   16 and not 14, which is the size the fold pair settles it at: those two are
+   drawn with a dotted line across the middle, and at 14 the dots fall below a
+   pixel each and grey out into a smear. The buttons sit against 11px text, so
+   this is already the larger of the two, but an icon whose detail has been
+   rounded away is not smaller, it is wrong. */
+.insp-act svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 .insp-selstatus {
   color: var(--muted);

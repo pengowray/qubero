@@ -14,6 +14,7 @@
 // height, which is the one thing the hex view will not tolerate.
 
 import { roleLabel } from "./strings.ts";
+import { svgEl as svg } from "./dom.ts";
 
 /** Where a byte is drawn, in the overlay's own coordinates. Null when that
  *  byte is not on screen. */
@@ -51,20 +52,12 @@ export type LinkPlan = {
 /** A run of bytes on one line of the grid. */
 type Box = { x: number; y: number; w: number; h: number };
 
-const NS = "http://www.w3.org/2000/svg";
-
 /** How many lines of one field the overlay will probe for boxes. A field of a
  *  hundred megabytes covers every line on screen, and the lines on screen are
  *  what bound the work: past a screenful the outline is the whole view and one
  *  more box adds nothing. Generous, so that a very short row count and a very
  *  tall window both fit under it. */
 const PROBE_LINES = 512;
-
-function svg<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string, string>): SVGElementTagNameMap[K] {
-  const e = document.createElementNS(NS, name);
-  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  return e;
-}
 
 /**
  * The lines drawn over the grid for the field at the cursor.
