@@ -117,12 +117,16 @@ fn every_zstd_and_xz_sample_is_traced_as_deep_as_its_shape_allows() {
         assert_eq!(trace.in_bits(), bytes.len() as u64 * 8);
         // The frame was parsed far enough to say where its blocks are, rather
         // than falling back to one step over the whole run.
+        // Every block header the trace names, which for xz is one per block
+        // and one per LZMA2 chunk inside it: this counts the headers rather
+        // than the blocks, and the two stopped being the same number when the
+        // insides of an xz block started being read.
         let blocks =
             trace.steps().filter(|s| matches!(s.kind, StepKind::Header(StepField::BlockHeader, _))).count();
         assert!(blocks > 0, "{name}: read as {} with no block headers found", codec.as_str());
         let symbols = trace.steps().filter(|s| matches!(s.kind, StepKind::Literal(_) | StepKind::Match { .. })).count();
         eprintln!(
-            "--- {name}: {} blocks, {} steps, {symbols} symbols, {} bytes out",
+            "--- {name}: {} block headers, {} steps, {symbols} symbols, {} bytes out",
             blocks,
             trace.len(),
             out.len()

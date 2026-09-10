@@ -191,6 +191,12 @@ fn same(data: &[u8], stream: &[u8]) {
     // The other door of `codec`, which must not be able to answer differently.
     assert_eq!(decode(Codec::Xz, stream).expect("reads"), want, "the two doors disagree");
     check(&trace, stream, &out);
+    // And our own decoder is what read it. Without this the test would pass on
+    // a stream that quietly fell back to the crate: the bytes would be the
+    // crate's bytes, which is what is being compared, and the block map over
+    // them tiles as happily as a trace of symbols does. A block left unopened
+    // is the one thing that tells the two apart.
+    assert!(!trace.steps().any(|s| s.kind == StepKind::Block), "the stream fell back to the crate");
 }
 
 /// A block whose chain is one LZMA2 filter is read to its symbols: a click on
