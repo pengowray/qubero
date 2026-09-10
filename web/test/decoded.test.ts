@@ -12,6 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { chipsHead, DECODED, PROPERTIES, VALUES } from "../src/strings.ts";
+import { addressParts } from "../src/dom.ts";
 
 test("a literal's byte and its symbol are two rows, not one equation", () => {
   // For a literal the symbol number and the byte are the same number in two
@@ -83,9 +84,18 @@ test("the four widths of a match account for the length row", () => {
 
 test("where the bytes went is one address for one byte and two for a run", () => {
   // The leading plus is what says these count from the front of the unpacked
-  // stream rather than from the front of the file.
-  assert.equal(DECODED.wrote("+0x0", null, "1 byte"), "+0x0 · 1 byte");
-  assert.equal(DECODED.wrote("+0x1c", "+0x1e", "3 bytes"), "+0x1c to +0x1e · 3 bytes");
+  // stream rather than from the front of the file, and `dom.ts`'s `address`
+  // hangs what it counts from on the mark itself.
+  assert.equal(DECODED.wrote("+0x0", null), "+0x0");
+  assert.equal(DECODED.wrote("+0x1c", "+0x1e"), "+0x1c to +0x1e");
+});
+
+test("the row saying where the bytes went names a place, not a value", () => {
+  // `Unpacks to +0x0` had two readings: what the code unpacks to, which the
+  // row two above already answered, or where its output was written, which is
+  // the one meant. Only the second survives this label.
+  assert.equal(DECODED.writtenLabel, "Written at");
+  assert.equal(DECODED.endWrites, "writes no bytes");
 });
 
 test("a code's tooltip counts its place in the run, not its symbol", () => {
@@ -152,4 +162,22 @@ test("a match's length is settled by its codes, not by bytes of its own", () => 
   // they fall in.
   assert.equal(PROPERTIES.sizedMatch(), "total length of its two codes and their extra bits");
   assert.equal(PROPERTIES.sized.encoded(), "decoded from its own bytes");
+});
+
+test("only the plus that begins an address says what it counts from", () => {
+  // `formatOffset` writes a sub-byte address as `0x69+7b`, where the plus
+  // means seven bits past the byte. It is a third meaning of the same glyph,
+  // and putting the stream answer on it would be a wrong answer on a mark
+  // that promises a right one.
+  const marks = (text: string): number => addressParts(text).filter((p) => p.mark).length;
+  assert.equal(marks("0x69+7b"), 0);
+  assert.equal(marks("+0x1c"), 1);
+  // Both ends of a range count from the same place, so both are marked.
+  assert.equal(marks("+0x1c to +0x1e"), 2);
+  // And a stream address that is itself sub-byte marks only its front.
+  assert.equal(marks("+0x1c+3b"), 1);
+  // The pieces still join back into what they came from.
+  for (const t of ["0x69+7b", "+0x1c", "+0x1c to +0x1e", "+0x1c+3b", "0x40"]) {
+    assert.equal(addressParts(t).map((p) => p.text).join(""), t);
+  }
 });

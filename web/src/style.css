@@ -300,6 +300,17 @@ button.welcome-crystal {
   color: var(--addr);
 }
 
+/* The `+` in front of an address counted from something, which carries what it
+   is counted from on hover. Marked with a dotted underline, the sign this app
+   already uses for a term that explains itself, and given `help` so the pointer
+   says there is something to read before the reader has gone looking. No colour
+   of its own: it is part of the address it sits on. */
+.addr-from {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
 /* Meaning, shared by Hex and Listing. These five colours identify
    stable data families rather than arbitrary siblings; overlapping UI state
    is carried by background, underline and outline instead. */

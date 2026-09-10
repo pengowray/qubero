@@ -6,10 +6,11 @@
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { address } from "./dom.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
-import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { withPictures } from "./textview.ts";
@@ -963,7 +964,7 @@ export class Inspector {
     this.detail.hidden = false;
     const at = document.createElement("span");
     at.className = "addr";
-    at.textContent = formatAddress(n.offset_bits, n.space);
+    at.append(...address(formatAddress(n.offset_bits, n.space), DECODED_PLUS_TITLE));
     // A field read out of a compressed stream is at an address of that
     // stream, not of the file, and the two look the same written down. The
     // trail above already says which stream; this says which space the number
@@ -1136,11 +1137,11 @@ export class Inspector {
     }
     const rows = document.createElement("dl");
     rows.className = "insp-facts insp-decoded-rows";
-    const add = (label: string, value: string, ...under: Node[]): void => {
+    const add = (label: string, value: string | (Node | string)[], ...under: Node[]): void => {
       const dt = document.createElement("dt");
       dt.textContent = label;
       const dd = document.createElement("dd");
-      dd.append(value, ...under);
+      dd.append(...(typeof value === "string" ? [value] : value), ...under);
       rows.append(dt, dd);
     };
     const step = code.step;
@@ -1170,14 +1171,11 @@ export class Inspector {
     const out = code.out;
     if (out !== null && out.out_end > out.out_start) {
       const bytes = out.out_end - out.out_start;
-      add(
-        DECODED.unpacksLabel,
-        DECODED.wrote(
-          formatAddress(out.out_start * 8, 1),
-          bytes === 1 ? null : formatAddress((out.out_end - 1) * 8, 1),
-          bitSizeText(bytes * 8),
-        ),
+      const at = DECODED.wrote(
+        formatAddress(out.out_start * 8, 1),
+        bytes === 1 ? null : formatAddress((out.out_end - 1) * 8, 1),
       );
+      add(DECODED.writtenLabel, address(at, DECODED_PLUS_TITLE), this.codeClause(DECODED_INSIDE, null));
     }
     this.decoded.replaceChildren(subhead(DECODED.title), rows);
     this.decoded.hidden = false;
@@ -1987,7 +1985,11 @@ export class Inspector {
       value.type = "button";
       value.dataset["bit"] = String(p.bit);
     }
-    value.textContent = p.value;
+    // The `+` on a stream address carries what it counts from, the same as the
+    // address line at the top of the panel. Read off the text rather than
+    // passed down: a Property is a label and a fact, and the one fact that has
+    // a mark on it is the one that starts with the mark.
+    value.append(...address(p.value, DECODED_PLUS_TITLE));
     return value;
   }
 
@@ -2713,7 +2715,7 @@ function insideRow(name: string, delta: number, path: readonly number[]): HTMLEl
   row.dataset["path"] = path.join("/");
   const what = document.createElement("span");
   what.className = "insp-origin-name";
-  what.textContent = PROPERTIES.withinAt(name, `+${formatOffset(delta)}`);
+  what.append(...address(PROPERTIES.withinAt(name, `+${formatOffset(delta)}`), PROPERTIES.withinPlusTitle(name)));
   row.append(what);
   return row;
 }

@@ -10,6 +10,7 @@
 
 import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
+import { address } from "./dom.ts";
 import { DUMP_MIN_BYTES, pathKey, PAGE } from "./flatten.ts";
 import type { Item } from "./flatten.ts";
 import { fieldClass, sectionColor } from "./fieldstyle.ts";
@@ -23,7 +24,7 @@ import { recordTable } from "./records.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
-import { bitSizeText, childWord, countText, DECODED_NO_HEX, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT, UNPACKED } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT, UNPACKED } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -212,10 +213,13 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // length says so in words: "0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
   const written = n.type !== "computed";
-  const at = el("span", "rp-at", written ? formatAddress(n.offset_bits, n.space) : "");
-  // The leading plus says the address is counted inside a stream; this says
-  // what follows from that, for a reader who has not met one before.
-  if (n.space !== 0) at.title = DECODED_NO_HEX;
+  const at = el("span", "rp-at");
+  // The leading plus says the address is counted inside a stream, and carries
+  // what it counts from on the mark itself rather than on the whole address:
+  // the sign is the part that changes meaning, so the sign is what answers for
+  // it. This column has no room for a second line saying so, which is why the
+  // hover is the only place that fact can live here.
+  if (written) at.append(...address(formatAddress(n.offset_bits, n.space), DECODED_PLUS_TITLE));
   row.append(at);
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.

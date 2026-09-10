@@ -48,10 +48,24 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
 /** The same, for a run whose reason is one this build does not know. */
 export const DECODED_REFUSED_OTHER = "not unpacked";
 
-/** Why a decoded field's address has no byte strip and no place on the file
- *  map. Shown on the address itself, where a reader wonders what `+0x1c`
- *  means. */
-export const DECODED_NO_HEX = "Offset in the unpacked stream, not a file address";
+/**
+ * What the `+` in front of a decoded field's address is counted from, carried
+ * on the mark itself.
+ *
+ * The `+` is written in front of two different kinds of address here: one
+ * counted from the front of an unpacked stream, and one counted from the front
+ * of an enclosing structure (`PROPERTIES.withinPlusTitle`). Both reach the
+ * inspector, and written down they are the same glyph. What they have in
+ * common is that a number is being added to something, so the mark says what,
+ * and the two hovers share a shape: `Offset within X`.
+ *
+ * `not a file address` is the half only this one needs. A byte at `+0x13` of
+ * an unpacked stream has no file address at all, nothing to find in the hex
+ * view and no place on the file map; a byte at `+0x14 in section_headers[3]`
+ * has a real file offset and is only being spoken relative to a structure.
+ * That difference is the reason the same glyph needs two hovers.
+ */
+export const DECODED_PLUS_TITLE = "Offset within the unpacked stream, not a file address";
 
 /**
  * A compressed stream opened as a document of its own: the tab it becomes, the
@@ -496,10 +510,22 @@ export const DECODED = {
   lengthLabel: "Length code",
   distanceLabel: "Distance code",
   copiesLabel: "Copies",
-  /** Where the step's output went, in the unpacked stream's own addresses. The
-   *  end mark has no such row: it wrote nothing, and `+0x1c · 0 bytes` would
-   *  put it somewhere. */
-  unpacksLabel: "Unpacks to",
+  /**
+   * Where the step's output went, in the unpacked stream's own addresses.
+   *
+   * `Written at`, not `Unpacks to`, which this replaces. The section's rule is
+   * that the value is exactly the thing the label names, and `Unpacks to`
+   * names a value: read cold, `Unpacks to +0x0` says either "this code unpacks
+   * to what is at +0x0", which is wrong and which the `Literal byte` row two
+   * up has already answered, or "its output was written at +0x0", which is
+   * right. `Written at` can only be read the second way.
+   *
+   * It also pairs with `endWrites` on the end-of-block row: one says a step
+   * wrote nothing, the other says where a step's bytes went, on the same verb.
+   * The end mark has no row here at all, since `+0x1c` and a count of no bytes
+   * would put it somewhere it never was.
+   */
+  writtenLabel: "Written at",
   /**
    * The byte a literal code stood for, hex first and the character after it.
    *
@@ -581,13 +607,21 @@ export const DECODED = {
     `length ${base.toLocaleString()} + ${extra.toLocaleString()} = ${total.toLocaleString()}`,
   distanceSum: (base: number, extra: number, total: number): string =>
     `distance ${base.toLocaleString()} + ${extra.toLocaleString()} = ${total.toLocaleString()}`,
-  /** Where the step's output landed, in the unpacked stream: one address for a
-   *  single byte, and the first and last for a run. The same shape as the
-   *  Integrity section's `Covers` row, since it is the same kind of fact, and
-   *  the leading `+` on both addresses is what says these count from the front
-   *  of the stream rather than from the front of the file. */
-  wrote: (from: string, to: string | null, size: string): string =>
-    to === null ? `${from} · ${size}` : `${from} to ${to} · ${size}`,
+  /**
+   * Where the step's output landed, in the unpacked stream: one address for a
+   * single byte, and the first and last for a run. The leading `+` on both
+   * says they count from the front of the stream rather than of the file, and
+   * carries what it counts from on the mark itself, which `dom.ts`'s `address`
+   * puts there.
+   *
+   * No size on the end, which is where this parts company with the Integrity
+   * section's `Covers` row. A size there is worth comparing, since the rows it
+   * sits among can disagree with it. Here it cannot: the count is the range by
+   * construction, the `Copies` row above has already said it outright, and the
+   * width lines have already added up to it. On a literal it is worse than
+   * redundant, since it is `1 byte` on every literal there has ever been.
+   */
+  wrote: (from: string, to: string | null): string => (to === null ? from : `${from} to ${to}`),
   /**
    * The line under the box of noughts and ones, saying which way round they
    * are. Without it a reader compares the box against the binary column, finds
@@ -1672,6 +1706,13 @@ export const PROPERTIES = {
    *  because that is what `+0x14` is; "within" because the rows are the
    *  things it is within. */
   within: "Offset within",
+
+  /** The same words on the `+` of one of those offsets, naming the structure
+   *  it counts from. The name is already three characters to its right, so
+   *  this is the least necessary of the two `+` hovers; it is here because a
+   *  mark that explains itself in one place and not in the other is a mark the
+   *  reader cannot trust. See `DECODED_PLUS_TITLE`. */
+  withinPlusTitle: (name: string): string => `Offset within ${name}`,
   withinAt: (name: string, at: string): string => `${at} in ${name}`,
 
   /**
