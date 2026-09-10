@@ -31,8 +31,8 @@ use crate::template::{Check, Covers, Named};
 /// What the field at a path checks. No bytes are read to answer this.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckInfo {
-    /// "crc32", "crc16", "sum8", "sum", "sha1", "adler32" — what the interface names
-    /// it. See [`Checksum::as_str`].
+    /// "crc32", "crc16", "crc64", "sum8", "sum", "sha1", "sha256", "adler32" —
+    /// what the interface names it. See [`Checksum::as_str`].
     pub algorithm: &'static str,
     /// The bytes summed, when they are a run of the file: offset and length, in
     /// bytes. A reader can be sent to these.
