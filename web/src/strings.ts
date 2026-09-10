@@ -57,15 +57,15 @@ export const DECODED_REFUSED_OTHER = "not unpacked";
  * of an enclosing structure (`PROPERTIES.withinPlusTitle`). Both reach the
  * inspector, and written down they are the same glyph. What they have in
  * common is that a number is being added to something, so the mark says what,
- * and the two hovers share a shape: `Offset within X`.
+ * and the two are the same sentence: `Offset within X`.
  *
- * `not a file address` is the half only this one needs. A byte at `+0x13` of
- * an unpacked stream has no file address at all, nothing to find in the hex
- * view and no place on the file map; a byte at `+0x14 in section_headers[3]`
- * has a real file offset and is only being spoken relative to a structure.
- * That difference is the reason the same glyph needs two hovers.
+ * It said `, not a file address` as well, and no longer does. Naming the thing
+ * the offset is counted from is the whole job, and a reader told the offset is
+ * within the unpacked stream has already been told it is not within the file.
+ * A clause ruling out the answer the first half has just replaced is a second
+ * sentence to read to learn nothing.
  */
-export const DECODED_PLUS_TITLE = "Offset within the unpacked stream, not a file address";
+export const DECODED_PLUS_TITLE = "Offset within the unpacked stream";
 
 /**
  * A compressed stream opened as a document of its own: the tab it becomes, the
