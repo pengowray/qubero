@@ -901,8 +901,17 @@ export const BTREES = {
   /** The tab's tooltip, in the minimap's order: the question the picture
    *  answers, then what one mark is, then the verbs. Two pictures share the
    *  panel and nothing about a band of boxes says which question it answers,
-   *  so both are named. "The number of ... below it" is the phrase the width
-   *  captions use too, so the words here are the words there.
+   *  so both are named. "The number of ... below it" is the phrase the two
+   *  version 1 width captions use too, so the words here are the words there.
+   *
+   *  It is not quite the version 2 caption's phrase. A version 2 box's own
+   *  records count towards its width as well as the records below it
+   *  (`widthRecords` says why), so "below it" is short by the box's own
+   *  records: one at the root of the measured file. "In or below it" would
+   *  mend that and break chunks, which are never in a node, and a clause per
+   *  version would double the length of a sentence that has to cover both.
+   *  The tooltip orients; the caption under the picture is per version and
+   *  carries the exact rule, so this stays.
    *
    *  A comma and not "and" between the two things said about a box: "each box
    *  under its parent and its width" reads for one beat as a box under its
@@ -957,8 +966,9 @@ export const BTREES = {
   /** What a box's width is, under the picture. A box shows two marks, its
    *  width and the number printed on it, and they are two different facts: the
    *  number is the node's own entry count and the width is the total at the
-   *  bottom of its subtree. Left unsaid, a reader takes the wide box with "3"
-   *  on it for a mistake.
+   *  bottom of its subtree (in a version 1 tree; `widthRecords` says how a
+   *  version 2 tree differs). Left unsaid, a reader takes the wide box with
+   *  "3" on it for a mistake.
    *
    *  A sentence, not "Width: ...". A width is not a count, and a colon puts a
    *  count where the reader was promised a width. And "below it" rather than
@@ -973,9 +983,27 @@ export const BTREES = {
    *  records rather than in links or chunks: both kinds of node hold records,
    *  because a version 2 tree is a B-tree and not a B+ tree.
    *
-   *  "At or below it" and not "below it", because the bottom row is the case
-   *  where the two differ: an internal node's width is the records in the
-   *  leaves under it and a leaf's width is its own records.
+   *  "In it and in the nodes below it", not the version 1 captions' "below
+   *  it" and not the old "in the leaf nodes at or below it". In a version 2
+   *  internal node one record sits between every two children, so records
+   *  live at every level, and a width that counted only the leaves' records
+   *  left the root's weight 48 short of the number printed on the band under
+   *  it: 1,952 against 2,000, the 48 being the root's one record and its two
+   *  children's 23 and 24. The width now counts a box's own records plus
+   *  everything under it, so the root's weight is the band's number, and this
+   *  sentence says so. A version 1 tree has no such clause because a version
+   *  1 index node's entries are pointers at child nodes, which are drawn as
+   *  boxes of their own and so add nothing.
+   *
+   *  "In it" names the same count the key line prints on the box, but as one
+   *  part of what the width is made of, not as a second key to the number;
+   *  the caption still never says what the printed number is.
+   *
+   *  "In the nodes below it" and not "below it" alone, because on a version 2
+   *  screen the band under the bottom row also prints a count of records, and
+   *  "records below it" would offer the band. Records are inside nodes and
+   *  the sentence keeps them there. For a leaf the second half is empty and
+   *  the sentence still reads right: its width is its own records.
    *
    *  Nothing here about the number printed on a box. The key line above says
    *  that, and says it beside a drawn box, which is the one thing a sentence
@@ -987,7 +1015,7 @@ export const BTREES = {
    *  as", not a bracketed list, because there are twelve record types and a
    *  bracket reads as all of them. */
   widthRecords:
-    "Box width is proportional to the number of records in the leaf nodes at or below it. What a record refers to, such as a link, a chunk or an attribute, is outside the tree and is not drawn.",
+    "Box width is proportional to the number of records in it and in the nodes below it. What a record refers to, such as a link, a chunk or an attribute, is outside the tree and is not drawn.",
   /** The key to the number printed on a box, shown beside a drawn box with `N`
    *  in it. The sentence that used to say this ("Number on a box: its own
    *  entry count") was a fact the reader had to hold in mind while looking at
@@ -1002,7 +1030,7 @@ export const BTREES = {
    *
    *  "Records" because that is the word every other line on a version 2 screen
    *  uses: the readout says "holds 7 records", the summary row says "49 leaf
-   *  nodes holding 1,952 records", the band says "1,952 records". One noun for
+   *  nodes holding 1,952 records", the band says "2,000 records". One noun for
    *  one number. Version 1 keeps "entries", where the two rows hold different
    *  things and the generic term is the one that covers both, and where
    *  `entries_used` is what the Listing calls the field at the bytes a click
