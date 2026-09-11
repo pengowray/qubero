@@ -452,10 +452,15 @@ function build(tab: Tab): Page {
     listPane.setBit(bitOffset);
   };
 
-  const goToField = (path: readonly number[]): void => {
+  /** `throughBit` marks a stretch rather than one field: the end of the run a
+   *  folded chip stands for. The cursor and the inspector still go to the
+   *  field the path names, which is the first of the run and the byte the chip
+   *  sits over; what widens is the mark over the bytes. */
+  const goToField = (path: readonly number[], throughBit?: number): void => {
     const n = doc.templateNode(path);
     if (n.status !== "ok") return;
-    view.setHighlight({ startBit: n.node.offset_bits, endBit: n.node.offset_bits + n.node.size_bits });
+    const end = n.node.offset_bits + n.node.size_bits;
+    view.setHighlight({ startBit: n.node.offset_bits, endBit: Math.max(end, throughBit ?? end) });
     picking = true;
     view.setBitCursor(n.node.offset_bits, { pane: "hex" });
     picking = false;
@@ -569,8 +574,8 @@ function build(tab: Tab): Page {
   // a second press, which is what a second press means on every other picture
   // in this app.
   view.onOpenUnpacked = openUnpacked;
-  view.onPickField = (path) => {
-    goToField(path);
+  view.onPickField = (path, throughBit) => {
+    goToField(path, throughBit);
     overview.reveal(path);
   };
   // What the other tabs may do to this one: mark the stretch their cursor

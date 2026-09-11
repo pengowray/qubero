@@ -42,7 +42,9 @@ import { NO_VALUES, type RowValues } from "./valuetable.ts";
  *  the view: every chip and every heading keeps the function it was built
  *  with, so a chip filled again is not a chip built again. */
 export type RowPicks = {
-  readonly field: (path: readonly number[]) => void;
+  /** `throughBit` is the end of a folded run, when the chip pressed stands for
+   *  one: the pick is the whole run and not its first element. */
+  readonly field: (path: readonly number[], throughBit?: number) => void;
   readonly value: (path: readonly number[], bit: number) => void;
   readonly heading: (h: OutlineHeading) => void;
 };

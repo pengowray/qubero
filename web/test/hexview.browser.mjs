@@ -110,4 +110,41 @@ try {
   console.log(JSON.stringify(result, null, 2));
   assert(result.rows < 100);
   for (const [name, ok] of Object.entries(result.checks)) assert(ok, name);
+
+  // What a chip hands back when it is pressed. Here rather than in the unit
+  // tests because filling a chip wants a DOM, and here rather than against a
+  // sample file because no file the other checks build has a run to fold.
+  const chip = await page.evaluate(async () => {
+    const { fillChip, newChip } = await import("/src/hexchips.ts");
+    const { chipText } = await import("/src/chipplan.ts");
+    const span = (name, offsetBytes, sizeBytes) => ({
+      path: [4, offsetBytes], name, trail: ["chunk", "elements"], type: "u32 le", offset_bits: offsetBytes * 8,
+      size_bits: sizeBytes * 8, value: String(offsetBytes), kind: "uint", gap: false, count: 0, unit: null,
+      line: null, sample: [], parts: [], bits: null, opens: false,
+    });
+    const picks = [];
+    const el = newChip((path, throughBit) => picks.push({ path, throughBit }));
+    document.body.append(el);
+    // A run of three four-byte elements starting at byte 100, drawn as one
+    // chip: the pick has to be all twelve bytes and not the first four.
+    const run = [span("[0]", 100, 4), span("[1]", 104, 4), span("[2]", 108, 4)];
+    const folded = { span: run[0], carried: false, run };
+    fillChip(el, folded, chipText(folded));
+    el.click();
+    const one = { span: span("page_size", 200, 2), carried: false, run: [] };
+    fillChip(el, one, chipText(one));
+    el.click();
+    return {
+      runEnd: el._runEnd,
+      picks,
+      ends: { run: (108 + 4) * 8, one: undefined },
+    };
+  });
+  console.log(JSON.stringify(chip, null, 2));
+  assert.equal(chip.picks.length, 2, "both presses reached the handler");
+  assert.equal(chip.picks[0].throughBit, chip.ends.run, "a folded chip picks its whole run");
+  assert.equal(chip.picks[1].throughBit, undefined, "a chip that folded nothing picks one field");
+  // The element is reused, so the run's end has to be cleared and not left to
+  // widen the next field drawn in it.
+  assert.equal(chip.runEnd, undefined, "a refilled chip does not keep the old run's end");
 } finally { await browser.close(); }

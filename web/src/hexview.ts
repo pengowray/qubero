@@ -408,7 +408,7 @@ export class HexView {
 
   onCursorChange: (c: CursorState) => void = () => {};
   /** A field picked in the annotation column. */
-  onPickField: (path: readonly number[]) => void = () => {};
+  onPickField: (path: readonly number[], throughBit?: number) => void = () => {};
   /** A chip marked as holding a file was pressed twice: open those bytes as a
    *  document of their own. The same thing the listing's Open unpacked does,
    *  reached from the bytes rather than from the list of parts. */
@@ -561,8 +561,8 @@ export class HexView {
 
   /** Pick the field a chip stands for. Held as one function for the life of
    *  the view, since every chip keeps it. */
-  private readonly pickField = (path: readonly number[]): void => {
-    this.onPickField(path);
+  private readonly pickField = (path: readonly number[], throughBit?: number): void => {
+    this.onPickField(path, throughBit);
   };
 
   /** Pick the element a value cell stands for, and stand on its first bit.

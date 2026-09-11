@@ -30,8 +30,13 @@ export function chipsOf(el: HTMLElement): ChipEl[] {
 }
 
 /** A chip element, with the path of the field it stands for kept on it, so one
- *  click handler serves the button for as long as the button lives. */
-export type ChipEl = HTMLButtonElement & { _path?: readonly number[] | undefined };
+ *  click handler serves the button for as long as the button lives. `_runEnd`
+ *  is the last bit of the run a folded chip stands for, so that pressing
+ *  `elements 2 values` marks both of them and not only the first. */
+export type ChipEl = HTMLButtonElement & {
+  _path?: readonly number[] | undefined;
+  _runEnd?: number | undefined;
+};
 
 /**
  * An empty chip, ready to be filled.
@@ -42,7 +47,7 @@ export type ChipEl = HTMLButtonElement & { _path?: readonly number[] | undefined
  * on it, and taking the element out from under a finger is read as the touch
  * being cancelled, which stops the drag that is scrolling the view.
  */
-export function newChip(onPick: (path: readonly number[]) => void): ChipEl {
+export function newChip(onPick: (path: readonly number[], throughBit?: number) => void): ChipEl {
   const el = document.createElement("button") as ChipEl;
   el.type = "button";
   el.className = "hv-chip";
@@ -53,7 +58,7 @@ export function newChip(onPick: (path: readonly number[]) => void): ChipEl {
   el.addEventListener("click", (e) => {
     e.stopPropagation();
     const path = el._path;
-    if (path !== undefined) onPick(path);
+    if (path !== undefined) onPick(path, el._runEnd);
   });
   return el;
 }
@@ -67,6 +72,7 @@ export function fillPlain(el: ChipEl, cls: string, text: string, title: string):
   setText(el.lastElementChild as HTMLElement, "");
   if (el.title !== title) el.title = title;
   el._path = undefined;
+  el._runEnd = undefined;
   el.disabled = true;
   el.removeAttribute("aria-label");
 }
@@ -134,6 +140,15 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   if (label === null) el.removeAttribute("aria-label");
   else el.setAttribute("aria-label", label);
   el._path = s.gap ? undefined : s.path;
+  // The whole run, when this chip folded one. `expandRuns`'s note says the run
+  // is one pick; it was one pick of the first element until this, so pressing
+  // `elements 2 values` marked one of the two and the reader was told the
+  // chip's count was wrong. The elements of a run are consecutive siblings
+  // with nothing between them -- a gap is not foldable, so a gap ends a run --
+  // so the first one's start and the last one's end are the run's extent and
+  // nothing else falls inside it.
+  const last = c.run[c.run.length - 1];
+  el._runEnd = last === undefined ? undefined : last.offset_bits + last.size_bits;
   // Read back by the view's own listener rather than by a handler per chip:
   // there are six hundred of these on screen and they are reused across
   // redraws, so what a chip offers has to live on the element.
@@ -160,7 +175,7 @@ export function fillNote(
   b: ChipBlock | null,
   continued: boolean,
   tail: boolean,
-  onPick: (path: readonly number[]) => void,
+  onPick: (path: readonly number[], throughBit?: number) => void,
 ): void {
   const n = b === null ? 0 : b.shown;
   const rest = b !== null && b.shown < b.entries.length;
