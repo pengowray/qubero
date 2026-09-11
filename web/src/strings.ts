@@ -726,6 +726,12 @@ export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu
  *  selected" there would suggest an answer exists and the user missed it. */
 export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";
 
+/** The Logical outline for an ELF, when the header no longer has the tables it
+ *  is built from. It once had them under different numbers, and reading those
+ *  numbers silently gave a file with four segments an empty Segments list; the
+ *  names are read now, and a name that is not there is said out loud. */
+export const ELF_TABLES_MISSING = "This ELF header has no program or section header table, so there is no outline to draw. The file may be truncated.";
+
 /**
  * The treemap: what a box stands for, and what the five ways of dividing the
  * file are called.

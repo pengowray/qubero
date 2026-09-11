@@ -2624,8 +2624,8 @@ impl Editor {
         let Some(program) = &sh.bpf else {
             return reply::<ElfContentsDto>(Err(EvalError::Failed("could not resolve ELF tables".into())));
         };
-        let sections = program.sections.iter().enumerate().map(|(i, section)| ElfSectionDto {
-            path: vec![7, 14, 0, i],
+        let sections = program.sections.iter().map(|section| ElfSectionDto {
+            path: section.path.clone(),
             name: section.name.clone(),
             kind: section.kind as f64,
             address: section.addr as f64,

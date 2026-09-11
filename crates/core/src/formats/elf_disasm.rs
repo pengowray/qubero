@@ -37,6 +37,12 @@ const REL: i128 = 9;
 /// A section, as much of it as naming an instruction needs.
 #[derive(Debug, Clone, Default)]
 pub struct Section {
+    /// Where this section's header sits in the parsed tree, as `Symbol::path`
+    /// is for a symbol. Kept here because it is found by name while the
+    /// headers are being read, and a caller that writes the same path down as
+    /// a literal goes stale the next time a field is added to the ELF header:
+    /// `section_name_base` went in and moved every table after it along one.
+    pub path: Vec<usize>,
     pub name: String,
     pub kind: i128,
     /// Where the section is when the program is running, which is what a
@@ -106,6 +112,7 @@ impl Program {
         for i in 0..count {
             let h = child(&headers, i);
             p.sections.push(Section {
+                path: h.clone(),
                 name: String::new(),
                 kind: int_field(ev, doc, &h, "type")?,
                 addr: int_field(ev, doc, &h, "address")? as u64,

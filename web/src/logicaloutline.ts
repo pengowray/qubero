@@ -1,6 +1,6 @@
 import { formatBytes, formatOffset } from "./doc.ts";
 import type { ContentObject, Doc, TemplateReply } from "./doc.ts";
-import { countText } from "./strings.ts";
+import { countText, ELF_TABLES_MISSING } from "./strings.ts";
 
 /** One format-independent entry in a file's semantic outline. `sourcePath`
  * connects it back to the storage template without making that template's
@@ -946,6 +946,29 @@ function enumName(value: string | null, fallback: string): string {
   return value?.replace(/ \([^)]*\)$/, "") || fallback;
 }
 
+/** More children than any structure read here has, as a bound on one call. The
+ *  core clamps it to how many there really are, so the parent need not be read
+ *  first to find out. */
+const MOST_FIELDS = 64;
+
+/** One structure's fields, by the name the template gives them, with the place
+ *  each sits among its siblings.
+ *
+ *  Every path into an ELF here used to be a literal number, and the template
+ *  has since grown two fields in the middle of structures those numbers
+ *  counted through: `section_name_base` in the header, and `name` in every
+ *  section header. Both moved everything after them along one, and nothing
+ *  said so. The segment table's path landed on a leaf, a leaf has no children,
+ *  and the outline told a reader that an executable with four mapped regions
+ *  had none; a section showed its type where its flags belong. A name cannot
+ *  go stale that way, and one call reads a whole structure. `elf_disasm.rs`
+ *  walks the same tree by the same names. */
+function fieldsOf(doc: Doc, path: readonly number[]): TemplateReply<ReadonlyMap<string, { readonly at: number; readonly value: string }>> {
+  const kids = doc.templateChildren(path, 0, MOST_FIELDS);
+  if (kids.status !== "ok") return kids;
+  return { status: "ok", node: new Map(kids.node.map((k, at) => [k.name, { at, value: k.value }])) };
+}
+
 function elfOutline(
   doc: Doc,
   expanded: ReadonlySet<string>,
@@ -961,7 +984,15 @@ function elfOutline(
   const objectType = enumName(nodeValue(doc, [...header, 0]), "object");
   const machine = enumName(nodeValue(doc, [...header, 1]), "machine");
   const entry = Number(nodeValue(doc, [...header, 3]) ?? 0);
-  const programHeaders = doc.templateNode([...header, 13, 0]);
+  const headerFields = fieldsOf(doc, header);
+  if (headerFields.status !== "ok") return headerFields;
+  const segmentTable = headerFields.node.get("program_headers")?.at;
+  const sectionTable = headerFields.node.get("section_headers")?.at;
+  const sectionBodies = headerFields.node.get("sections")?.at;
+  if (segmentTable === undefined || sectionTable === undefined || sectionBodies === undefined) {
+    return { status: "error", message: ELF_TABLES_MISSING };
+  }
+  const programHeaders = doc.templateNode([...header, segmentTable, 0]);
   if (programHeaders.status !== "ok") return programHeaders;
   const nodes: LogicalNode[] = [{
     id: "/", parentId: null, label: "Program image", fullName: "/", depth: 0, group: true, hasChildren: true,
@@ -978,49 +1009,51 @@ function elfOutline(
     });
   };
 
-  addGroup("/segments", "Segments", programHeaders.node.child_count, `${programHeaders.node.child_count.toLocaleString()} mapped regions`, [...header, 13]);
+  addGroup("/segments", "Segments", programHeaders.node.child_count, `${programHeaders.node.child_count.toLocaleString()} mapped regions`, [...header, segmentTable]);
   for (let i = 0; i < programHeaders.node.child_count; i++) {
-    const path = [...header, 13, 0, i];
+    const path = [...header, segmentTable, 0, i];
     const segment = doc.templateNode(path);
     if (segment.status !== "ok") return segment;
-    const wide = bits.startsWith("64");
-    const offsetIndex = wide ? 2 : 1;
-    const addressIndex = wide ? 3 : 2;
-    const fileSizeIndex = wide ? 5 : 4;
-    const memorySizeIndex = wide ? 6 : 5;
-    const flagsIndex = wide ? 1 : 6;
-    const fileSize = Number(nodeValue(doc, [...path, fileSizeIndex]) ?? 0);
-    const memorySize = Number(nodeValue(doc, [...path, memorySizeIndex]) ?? 0);
-    const offset = Number(nodeValue(doc, [...path, offsetIndex]) ?? 0);
-    const address = nodeValue(doc, [...path, addressIndex]) ?? "0";
-    const kind = enumName(nodeValue(doc, [...path, 0]), "segment");
-    const flags = nodeValue(doc, [...path, flagsIndex]) ?? "";
+    // A 64-bit program header is not a 32-bit one with wider words: the flags
+    // sit next to the type in one and after the sizes in the other. The names
+    // are the same in both, so reading by name is what the two widths have in
+    // common and there is no branch on the width here at all.
+    const fields = fieldsOf(doc, path);
+    if (fields.status !== "ok") return fields;
+    const field = (name: string): string => fields.node.get(name)?.value ?? "";
+    const fileSize = Number(field("file_size"));
+    const memorySize = Number(field("memory_size"));
+    const offset = Number(field("offset"));
+    const address = Number(field("virtual_address"));
+    const kind = enumName(field("type"), "segment");
+    const flags = field("flags");
     nodes.push({
       id: `/segments/${i}`, parentId: "/segments", label: `${kind} ${i + 1}`, fullName: `/segments/${i}`,
       depth: 2, group: false, hasChildren: false, sourcePath: path, sourceBits: segment.node.offset_bits,
       sourceText: formatOffset(segment.node.offset_bits),
-      value: [`file ${formatOffset(offset * 8)}`, `virtual ${address}`, flags, memorySize !== fileSize ? `${formatBytes(fileSize)} file → ${formatBytes(memorySize)} memory` : ""].filter(Boolean).join(" · "),
+      value: [`file ${formatOffset(offset * 8)}`, `virtual ${formatOffset(address * 8)}`, flags, memorySize !== fileSize ? `${formatBytes(fileSize)} file → ${formatBytes(memorySize)} memory` : ""].filter(Boolean).join(" · "),
       type: "segment", logicalBytes: memorySize, logicalApproximate: false, title: `${kind} segment`,
     });
   }
 
-  addGroup("/sections", "Sections", elf.sections.length, `${elf.sections.length.toLocaleString()} linked sections`, [...header, 14]);
+  addGroup("/sections", "Sections", elf.sections.length, `${elf.sections.length.toLocaleString()} linked sections`, [...header, sectionTable]);
   for (let i = 0; i < elf.sections.length; i++) {
     const section = elf.sections[i];
     if (section === undefined) continue;
-    const headerPath = section.path;
-    const flags = nodeValue(doc, [...headerPath, 2]) ?? "";
-    const kind = ELF_SECTION_KINDS.get(section.kind) ?? enumName(nodeValue(doc, [...headerPath, 1]), `type ${section.kind}`);
+    const fields = fieldsOf(doc, section.path);
+    if (fields.status !== "ok") return fields;
+    const flags = fields.node.get("flags")?.value ?? "";
+    const kind = ELF_SECTION_KINDS.get(section.kind) ?? enumName(fields.node.get("type")?.value ?? null, `type ${section.kind}`);
     nodes.push({
       id: `/sections/${i}`, parentId: "/sections", label: section.name || (i === 0 ? "Null section" : `Section ${i}`),
       fullName: section.name || `/sections/${i}`, depth: 2, group: false, hasChildren: false,
-      sourcePath: [7, 15, i], sourceBits: section.offset * 8, sourceText: section.kind === 8 ? "memory only" : formatOffset(section.offset * 8),
+      sourcePath: [...header, sectionBodies, i], sourceBits: section.offset * 8, sourceText: section.kind === 8 ? "memory only" : formatOffset(section.offset * 8),
       value: [kind, flags, section.address > 0 ? `virtual ${formatOffset(section.address * 8)}` : ""].filter(Boolean).join(" · "),
       type: "section", logicalBytes: section.size, logicalApproximate: false, title: section.name || `Section ${i}`,
     });
   }
 
-  addGroup("/symbols", "Symbols", elf.symbol_total, `${elf.symbol_total.toLocaleString()} named and unnamed symbols`, [...header, 15]);
+  addGroup("/symbols", "Symbols", elf.symbol_total, `${elf.symbol_total.toLocaleString()} named and unnamed symbols`, [...header, sectionBodies]);
   for (let i = 0; i < elf.symbols.length; i++) {
     const symbol = elf.symbols[i];
     if (symbol === undefined) continue;
