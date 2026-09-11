@@ -2478,7 +2478,9 @@ button.insp-prop-head:hover {
 }
 .sv-at {
   flex: none;
-  width: 11ch;
+  /* One character wider than the address it holds: the `@` in front of every
+     address costs a column the same character everywhere it is sized in `ch`. */
+  width: 12ch;
   color: var(--addr);
 }
 /* Always filled, so the column reads down the page and no row makes the reader
@@ -3071,7 +3073,8 @@ button.insp-xrow-where:hover {
 .rp-range,
 .rp-at {
   flex: none;
-  width: 74px;
+  /* 81px, not 74: one monospace character more, for the `@` in front. */
+  width: 81px;
   color: var(--addr);
 }
 .rp-range {
@@ -3293,7 +3296,7 @@ button.insp-xrow-where:hover {
 }
 .bd-at {
   flex: none;
-  width: 9ch;
+  width: 10ch;
   color: var(--addr);
 }
 .bd-hex {
@@ -3393,7 +3396,7 @@ button.insp-xrow-where:hover {
 }
 .lp-at {
   flex: none;
-  width: 9ch;
+  width: 10ch;
   color: var(--addr);
 }
 .lp-name {
