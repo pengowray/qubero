@@ -901,9 +901,17 @@ export const BTREES = {
   /** The tab's tooltip, in the minimap's order: the question the picture
    *  answers, then what one mark is, then the verbs. Two pictures share the
    *  panel and nothing about a band of boxes says which question it answers,
-   *  so both are named. "Below it" is the phrase the width captions use too,
-   *  so the word here is the word there. */
-  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent and its width in proportion to the links or chunks below it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing.",
+   *  so both are named. "The number of ... below it" is the phrase the width
+   *  captions use too, so the words here are the words there.
+   *
+   *  A comma and not "and" between the two things said about a box: "each box
+   *  under its parent and its width" reads for one beat as a box under its
+   *  width, because "and" offers "its width" to the preposition before "in
+   *  proportion to" takes it back. The comma makes them two parallel
+   *  fragments, which is what they are. The width rule also has to stay inside
+   *  the "Top:" part, because every mark on the bottom picture is one pixel
+   *  wide and a loose sentence about box width would be false of it. */
+  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent, its width proportional to the number of links or chunks below it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing.",
   /** Under the heading, which is the owning object's path. The two jobs a
    *  version 1 tree does are two different pictures (a group tree has a row a
    *  chunk tree does not), so the job is stated rather than left to be read
