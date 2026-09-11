@@ -6,10 +6,12 @@
 //
 // `--view listing` scrolls the listing instead, so the hex view's numbers have
 // something to be worse or better than. Draw counts do not carry across: the
-// hex view reads the wheel and redraws every row, the listing is scrolled by
-// the browser and keeps the rows whose keys are still on screen. What does
-// carry across is the `browser:` line, the frame gaps, and the `document:`
-// line counting what the scroll did to the document.
+// hex view reads the wheel and draws for each report, the listing is scrolled
+// by the browser and draws only when the window of items changes. Both now
+// keep the rows whose addresses are still on screen and write only the ones
+// arriving at an edge. What carries across is the `browser:` line, the frame
+// gaps, and the `document:` line counting what the scroll did to the
+// document.
 //
 // Playwright comes from the global install; this package does not depend on it.
 import { createRequire } from "node:module";
@@ -120,15 +122,16 @@ const INSTRUMENT = (which) => {
     time(proto, ["frame", "placeSpans", "planValues", "measure", "settleHeights", "finish", "fitRows", "markHover", "relayout"]);
     const rows = v.grid ?? v.rows;
     if (rows !== undefined) {
-      time(Object.getPrototypeOf(rows), ["write", "heights", "drawHeader", "drawRow", "drawCells", "drawNotes", "drawPinned", "layOutRow", "fitParts", "ensure", "noteMetrics", "hexPitch"], "rows.");
+      time(Object.getPrototypeOf(rows), ["write", "heights", "place", "drawHeader", "drawRow", "drawCells", "drawNotes", "drawPinned", "layOutRow", "fitParts", "ensure", "noteMetrics", "hexPitch"], "rows.");
     }
   }
   // What a scroll costs the document, on the one footing the two views share.
-  // The hex view keeps its rows and writes new text into their cells; the
-  // listing keeps the rows whose keys are still in the window and gives the
-  // rest new elements. Neither is readable as the other's draw count, so
-  // count what each of them does to the document instead: nodes added, tops
-  // and classes rewritten, and cells given new text.
+  // Both keep the rows already standing for an address in the window and build
+  // or rewrite only the ones arriving at an edge. Neither is readable as the
+  // other's draw count, so count what each of them does to the document
+  // instead: nodes added, tops and classes rewritten, and cells given new
+  // text. This is the deterministic half of the report, and on a noisy machine
+  // it is the half to read first.
   const watched = document.querySelector(listing ? ".rp-scroll" : ".hv-rows");
   if (watched !== null) {
     new MutationObserver((records) => {

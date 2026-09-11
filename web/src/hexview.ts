@@ -1243,7 +1243,7 @@ export class HexView {
     }
     // Pinned to the last row rather than the bottom edge: the rows do not
     // always fill the space, and a point in the slack under them is nowhere.
-    const last = this.grid.inner.lastElementChild?.getBoundingClientRect().bottom ?? r.bottom;
+    const last = this.grid.lastRow()?.getBoundingClientRect().bottom ?? r.bottom;
     const y = Math.min(r.bottom - 1, last - 1, Math.max(r.top + 1, d.y));
     const hit = this.hitAt(d.x, y, d.pane);
     const anchor = hit === null ? 0 : hit.bit >= d.anchor ? d.anchor : d.anchor + d.unit;

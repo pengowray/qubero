@@ -138,8 +138,12 @@ const chips = await page.evaluate(() => {
   // and their chips are whatever the window they were last drawn for said.
   const box = document.querySelector(".hexview .hv-rows") ?? document.querySelector(".hv-rows");
   const view = box.getBoundingClientRect();
-  const top = Number(box.querySelector(".hv-row [data-off]")?.getAttribute("data-off") ?? 0);
-  const rows = [...box.querySelectorAll(".hv-row")].filter((r) => {
+  // Down the screen, not through the document: a row element stands for an
+  // address and keeps it as the view scrolls, so where it sits among the
+  // children says nothing about where it is drawn.
+  const all = [...box.querySelectorAll(".hv-row")].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  const top = Number(all[0]?.querySelector("[data-off]")?.getAttribute("data-off") ?? 0);
+  const rows = all.filter((r) => {
     const b = r.getBoundingClientRect();
     const off = Number(r.querySelector("[data-off]")?.getAttribute("data-off") ?? -1);
     return b.bottom > view.top && b.top < view.bottom && off >= top && off < top + 4096;

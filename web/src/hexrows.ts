@@ -13,6 +13,16 @@
 // an element, and an element that leaves the document is a touch the browser
 // calls off, which stops the drag that is scrolling the view.
 //
+// **An element stands for an address, not for a place on screen.** The pool
+// used to be read by the row's place in the view: element 0 drew whatever the
+// top row was, so a scroll of two rows rewrote all twenty-nine of them, and
+// scrolling by a notch cost what scrolling by a screenful cost. Now `place`
+// hands each address the element that already held it, and only the rows
+// arriving at an edge are written. Which row is drawn where is said by the
+// flex `order` on the element, so the document's order never changes: nothing
+// is moved, nothing is taken out, and a finger stays on what it was on. See
+// `place` for what the number is and why it is not just the row's address.
+//
 // The frame's type is imported back from `hexview.ts`. Only the type: the
 // class here is what that file imports, so at run time the two go one way.
 
@@ -44,6 +54,12 @@ export type RowPicks = {
  *  than taken for the empty block the new row wants. */
 const VALS_UNKNOWN = "\u0000";
 
+/** How far the view may wander from the mark the flex orders are counted from
+ *  before the mark is moved, and half of which is left free on each side of it
+ *  when it is. See `place`: the order is a 32-bit integer and a row number is
+ *  not, so what goes on the element is a distance rather than an address. */
+const ORDER_SPAN = 1_000_000;
+
 /** One line of cells: an address, the bytes, their text and their fields. A row
  *  is one of these unless a part starts part-way along it. */
 type LineParts = {
@@ -74,6 +90,12 @@ type RowParts = {
   /** The byte the row starts at, so the addresses on its cells are written
    *  again only when the view has moved. */
   start: number;
+  /** The row this element is standing for, or -1 for one that stands for
+   *  nothing yet. Kept apart from `start`, which is the address the cells were
+   *  last written with: a row past the end of the file is given an element and
+   *  never written, so the two say different things and only this one says
+   *  which element `place` should hand that row next time. */
+  holds: number;
   /** True for a row past the end of the file, which is emptied rather than
    *  drawn. */
   blank: boolean;
@@ -112,9 +134,24 @@ export class HexRows {
   /** What the pinned strip last said, so it is filled again only when it would
    *  say something else. */
   private pinnedKey = "";
+  /** The pool, in the order the elements were made and put in the document.
+   *  Nothing ever moves inside it. */
   private rowEls: HTMLElement[] = [];
   /** The elements each row is made of, kept between draws. See `fitParts`. */
   private parts: RowParts[] = [];
+  /** Which element of the pool draws each row of the view, top row first, and
+   *  the same elements again for the callers that want them that way. Both are
+   *  written by `place` and read by everything after it. */
+  private win: number[] = [];
+  private winEls: HTMLElement[] = [];
+  /** What is taken off a row's address to get its flex `order`. The order is a
+   *  32-bit integer in the browser and a row number is not: a file can have
+   *  more rows than that, and `rowheights.ts` counts them in doubles for the
+   *  same reason. So the number written is the row's distance from a mark that
+   *  is moved up to the view whenever the view has wandered far from it, which
+   *  keeps every order small and positive and costs a rewrite of the
+   *  twenty-nine orders once every million rows. */
+  private orderBase = 0;
   private partsShape = "";
   private headerShape = "";
   /** What `fitParts` last built the lines for, so a line added mid-draw for a
@@ -133,9 +170,17 @@ export class HexRows {
     this.pinned.className = "hv-note hv-note-pinned hv-empty";
   }
 
-  /** The row elements, for reading a point on screen back to a byte. */
+  /** The row elements in the order they are drawn, top row first, for reading
+   *  a point on screen back to a byte. Not the order they sit in the document,
+   *  which stopped meaning anything when rows began to be reused. */
   get rows(): readonly HTMLElement[] {
-    return this.rowEls;
+    return this.winEls;
+  }
+
+  /** The last row of the view, which is what a drag pulled below the rows is
+   *  pinned to. Read in drawn order for the same reason `rows` is. */
+  lastRow(): HTMLElement | null {
+    return this.winEls[this.winEls.length - 1] ?? null;
   }
 
   /** Put the rows at the scroll position: the top row starts above the edge
@@ -152,14 +197,177 @@ export class HexRows {
   write(f: Frame): number[] {
     this.drawHeader(f);
     this.fitParts(f.bpr, f.binary, f.showText, f.fields, f.below);
+    this.place(f.bpr === 0 ? 0 : Math.floor(f.start / f.bpr));
     this.carried = null;
     const heights: number[] = [];
-    for (let r = 0; r < this.rowEls.length; r++) {
+    for (let r = 0; r < this.win.length; r++) {
       const h = this.drawRow(r, f);
       if (h !== null) heights.push(h);
     }
     this.drawPinned();
     return heights;
+  }
+
+  /**
+   * Hand each row of the view the element that is to draw it.
+   *
+   * A row that was on screen last draw keeps the element it was in, wherever
+   * on screen it has moved to; the rows arriving at an edge take the elements
+   * the rows that left the other edge have given up. The element that drew a
+   * row still says so, in `start` and in the keys beside it, so a row that
+   * kept its element finds every one of those guards already holding what it
+   * was going to write and writes nothing at all. That is the whole of the
+   * saving: a one-notch scroll used to rewrite twenty-nine rows and now writes
+   * the two that arrived.
+   *
+   * Where a row is drawn is said by the flex `order` on its element rather
+   * than by its place among the children. Two things follow from that and both
+   * are the point:
+   *
+   *  - Nothing is ever moved in the document, so a finger resting on a row
+   *    keeps the element it is resting on. Reusing rows makes the rule about
+   *    not detaching a row under a touch easier to keep, not harder.
+   *  - The rows are still laid out one under the next by the browser, at
+   *    whatever height each came out. Nothing here positions a row, so a row
+   *    whose height was predicted wrong still pushes the ones below it down
+   *    rather than landing on top of them. The other way of doing this —
+   *    absolute tops written from the measured heights — would have made the
+   *    draw responsible for that, and for nothing gained.
+   *
+   * **What stops a reused row saying something out of date.** Nothing here
+   * decides that a row needs no work: every row is still drawn in full on
+   * every draw, `cellDraw` still works out what each of its cells says, and
+   * every write is still `if (it differs) write it`. A row that kept its
+   * element finds those guards already holding what it was going to write, so
+   * it writes nothing; a row given a recycled element finds them holding the
+   * row that element used to draw, so it writes everything. The guards are the
+   * ones that were already there and not one of them was loosened:
+   *
+   *  - `start` is the address the cells were written with, so a recycled
+   *    element has `moved` true and every `data-off` is written again.
+   *  - `layoutKey` covers what the row is *made of*: where it is cut, which
+   *    parts start on it, how wide the address column is. `noteKey` covers
+   *    every chip the row shows, taken from the plan's own output rather than
+   *    from what went into it; `valsKey` covers the table of values.
+   *  - The headings themselves are not keyed at all. They were, by the part's
+   *    identity, and that turned out to be a key that misses: a part's range,
+   *    its size and its share of the file all change while it stays the same
+   *    part, and an unmapped run at the end of a file does it on every edit.
+   *    While an element drew a different row on every scroll the stale text
+   *    was always written over before anyone saw it. It is now `drawHeads`'s
+   *    business, every draw, guarded write by guarded write like the cells.
+   *  - `fitParts` throws every one of them away when the shape of the view
+   *    changes, and clears `holds` with them, so a row drawn at eight bytes to
+   *    the line cannot be handed an element that drew sixteen.
+   *  - The three things a row says because of *where it is* rather than which
+   *    address it holds — the top row's carried chips, the last row's "more
+   *    fields below", and the rule under the column header — all reach the
+   *    element through `noteKey` or through the `hv-row-top` class written
+   *    below.
+   *
+   * One gap in that, which this did not open and does not close: `noteKey` is
+   * built from what a chip *says*, not from which field it is. Two fields with
+   * the same name and the same value in different structures key the same, and
+   * an element recycled from one to the other keeps the tooltip and the path a
+   * press on it follows. It was as possible before, when every element drew a
+   * new row every scroll; a recycled element is now the only way to reach it.
+   *
+   * None of this was left to reasoning: `web/tools/staleness.mjs` runs the same
+   * script of scrolls, cursor moves, selections, an edit, mode changes, resizes
+   * and row widths against a server drawing the old way and one drawing this
+   * way, and compares every visible cell, class, chip and heading after every
+   * step, as well as asking the browser whether the rows really do fall down
+   * the screen in the order the view hands them out. Twelve sample files, and
+   * the only differences it turned up are the headings, in the old drawing:
+   *
+   *  - `tagged.mp3`: type a byte past the end of the file and the heading over
+   *    the unclaimed run at the end goes on saying what it was a byte ago.
+   *  - `initramfs.img`: the same edit leaves a heading drawn at the wrong
+   *    level, which is a different height as well as a different size of text,
+   *    so the row it sits on is the wrong height too.
+   *
+   * Both outlive five more draws at the same place, so they are not a frame's
+   * lag; they last until something else moves the row.
+   *
+   * Everything else it reported was about something other than the drawing,
+   * and each took a control run to say so. Worth knowing before spending a day
+   * on one:
+   *
+   *  - Two pages doing the same thing are not doing it at the same moment. The
+   *    listing walks the file in the background and the chips come from an
+   *    answer that arrives when it arrives, so a step taken a quarter of a
+   *    second after a long jump or a change of row width can catch one page
+   *    with a heading or a highlight the other does not have yet. Drive the
+   *    same step on its own and both agree; wait and redraw and both agree.
+   *  - The old build's checkout has to be one nobody is working in. Half of
+   *    these differences turned out to be another branch's uncommitted work
+   *    and a wasm rebuild being served as the thing to beat.
+   *
+   * **What it is worth.** `web/tools/wheelcost.mjs` on `hello.exe` at
+   * 1280x800, runs interleaved against a server on the commit before this one:
+   *
+   * | | attributes written | text written | browser layout | browser style | draw |
+   * |---|---|---|---|---|---|
+   * | one notch, before      |  1,406 |    508 |   6-8ms |  2-3ms | 16-23ms |
+   * | one notch, after       |     60 |     18 |     1ms |    1ms |  7-8ms |
+   * | thirty notches, before | 32,158 | 12,358 | 118ms | 50ms | 311ms |
+   * | thirty notches, after  |  1,742 |    464 |  13ms | 12ms | 114ms |
+   *
+   * The counts are what to read: they are deterministic, and the times on this
+   * machine are not — the same code measured 311ms and 571ms for the same
+   * thirty notches an hour apart. Measure the two alternately, never all of
+   * one and then all of the other, and take the "before" from a checkout that
+   * nobody is editing: half a day went into differences that turned out to be
+   * another branch's uncommitted work being served as the thing to beat.
+   *
+   * What is left in the draw is script — working out what every row would say,
+   * so as to find that it already says it — and the next thing worth attacking
+   * is `placeSpans`, at about 1.8ms a draw, rather than anything here.
+   */
+  private place(topRow: number): void {
+    const n = this.rowEls.length;
+    // Far from the mark the orders are counted from, or behind it: move it,
+    // and leave room on both sides of the view. Putting the mark on the top
+    // row instead would leave the next scroll upward crossing it again, and
+    // every notch up after that would rewrite all twenty-nine orders. Every
+    // order below is written again on the draw that moves the mark, which is
+    // one draw in half a million rows.
+    if (topRow < this.orderBase || topRow - this.orderBase > ORDER_SPAN) this.orderBase = Math.max(0, topRow - ORDER_SPAN / 2);
+    const win: number[] = new Array(n).fill(-1);
+    const spare: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const w = (this.parts[i] as RowParts).holds - topRow;
+      // `win[w] === -1` as well as the range: two elements claiming one row
+      // can only happen if something below got out of step, and the second one
+      // becoming spare is the reading that leaves every row drawn once.
+      if (w >= 0 && w < n && win[w] === -1) win[w] = i;
+      else spare.push(i);
+    }
+    let s = 0;
+    for (let w = 0; w < n; w++) {
+      if (win[w] === -1) win[w] = spare[s++] as number;
+      const i = win[w] as number;
+      (this.parts[i] as RowParts).holds = topRow + w;
+      const el = this.rowEls[i] as HTMLElement;
+      const order = String(topRow + w - this.orderBase);
+      if (el.style.order !== order) el.style.order = order;
+      // Which row of the file this is. The grid's children are no longer in
+      // the order they are drawn, so a reader going through them one at a time
+      // would be told the wrong thing by their arrangement; this is the
+      // attribute `role="grid"` has for saying it outright. It is the row's
+      // own number, so it is written when a row is given a new element and not
+      // again while it keeps it.
+      const at = String(topRow + w + 1);
+      if (el.getAttribute("aria-rowindex") !== at) el.setAttribute("aria-rowindex", at);
+      // The top row is named on the element: the stylesheet takes the rule off
+      // the first heading of the view so it does not double the column
+      // header's own, and which element that is no longer follows from where
+      // it sits among the children.
+      if (el.classList.contains("hv-row-top") !== (w === 0)) el.classList.toggle("hv-row-top", w === 0);
+      this.winEls[w] = el;
+    }
+    this.win = win;
+    this.winEls.length = n;
   }
 
   /**
@@ -203,7 +411,7 @@ export class HexRows {
    * rather than a pixel are the ones that could move a row under a reader.
    */
   heights(predicted: readonly number[]): number[] {
-    return predicted.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));
+    return predicted.map((h, i) => (h === 0 ? 0 : (this.winEls[i]?.offsetHeight ?? h)));
   }
 
   /** The fonts a chip's name and its value are drawn in, read off a chip that
@@ -230,7 +438,7 @@ export class HexRows {
   /** The side column's width and where it starts, read off the first row.
    *  Null when there is no column to read. */
   noteMetrics(): NoteMetrics | null {
-    const noteEl = this.rowEls[0]?.querySelector(".hv-note") as HTMLElement | null;
+    const noteEl = this.winEls[0]?.querySelector(".hv-note") as HTMLElement | null;
     if (noteEl === null || noteEl === undefined) return null;
     // `clientWidth` counts the note's own left padding, which no chip can be
     // drawn in.
@@ -244,7 +452,7 @@ export class HexRows {
   /** How wide a byte of the bytes is drawn, so a byte of an aligned value
    *  table can be drawn at the same pitch. Zero when there is none to read. */
   hexPitch(binary: boolean): number {
-    const cell = this.rowEls[0]?.querySelector(binary ? ".hv-bits > span" : ".hv-hex > span");
+    const cell = this.winEls[0]?.querySelector(binary ? ".hv-bits > span" : ".hv-hex > span");
     return cell instanceof HTMLElement ? cell.getBoundingClientRect().width : 0;
   }
 
@@ -252,12 +460,12 @@ export class HexRows {
    *  the pool and the byte's place in the row. A heading may have cut the row,
    *  so which line the cell is on is the pool's business, not the caller's. */
   cellFor(row: number, at: number): HTMLElement | undefined {
-    return this.parts[row]?.hexCells[at];
+    return this.parts[this.win[row] ?? -1]?.hexCells[at];
   }
 
   /** How wide a whole row is, which is what a note below the bytes gets. */
   rowWidth(): number {
-    return this.rowEls[0]?.clientWidth ?? 0;
+    return this.winEls[0]?.clientWidth ?? 0;
   }
 
   /** Stand the pinned strip over the side column rather than over the whole
@@ -317,8 +525,31 @@ export class HexRows {
    * Only the first line carries the address, since a row address is a multiple
    * of the row width and the address of a cut is not.
    */
-  private layOutRow(row: HTMLElement, parts: RowParts, at: RowPieces, fileBits: number, addrWidth: number): void {
+  /**
+   * Write the headings above a row's lines, on every draw.
+   *
+   * Not behind `layoutKey`, which names the parts that start on the row and
+   * not what any of them says. A heading's name, its range, how big it is and
+   * how much of the file that is all change under the same key: an unmapped
+   * run at the end of a file grows as the file is edited or as more of it
+   * arrives, and the part that names it keeps its key throughout. While a row
+   * element drew a different row on every scroll that never showed, because
+   * the key changed for the row rather than for the heading. It shows now, so
+   * the headings are worked out every draw and written where they differ, the
+   * way the cells are. `fillHeadings` guards every write, and a row with no
+   * heading — which is nearly all of them — costs two comparisons.
+   */
+  private drawHeads(parts: RowParts, at: RowPieces, fileBits: number): void {
     const { rowStart, segs } = at;
+    for (const [j, lp] of parts.lines.entries()) {
+      const on = j < segs.length;
+      const pos = on ? (segs[j] as number) : 0;
+      fillHeadings(lp.head, on ? (at.heads[j] ?? []) : [], fileBits, rowStart + pos, this.picks.heading);
+    }
+  }
+
+  private layOutRow(row: HTMLElement, parts: RowParts, at: RowPieces, addrWidth: number): void {
+    const { segs } = at;
     const { bpr, binary, fields, below } = this.lineShape;
     while (parts.lines.length < segs.length) parts.lines.push(this.makeLine());
     // Every line the row has ever needed, in order, whether or not this
@@ -328,10 +559,10 @@ export class HexRows {
     const kids: HTMLElement[] = [];
     for (const [j, lp] of parts.lines.entries()) {
       const on = j < segs.length;
-      const pos = on ? (segs[j] as number) : 0;
-      // Always in place, empty when no part starts here, so that a heading
-      // arriving or leaving writes into a block that is already there.
-      fillHeadings(lp.head, on ? (at.heads[j] ?? []) : [], fileBits, rowStart + pos, this.picks.heading);
+      // Always in the row, empty when no part starts here, so that a heading
+      // arriving or leaving writes into a block that is already there. What
+      // goes in it is `drawHeads`'s business, on every draw rather than only
+      // on the ones that lay the row out again.
       kids.push(lp.head);
       if (lp.line.hidden === on) lp.line.hidden = !on;
       kids.push(lp.line);
@@ -389,6 +620,17 @@ export class HexRows {
       this.rowEls.pop()?.remove();
       this.parts.pop();
     }
+    // What `place` last worked out is about a pool that is no longer this
+    // size. Trimmed rather than emptied: `rows` is read between here and the
+    // next `write` -- `fitRows` reads a row to take its height off the
+    // stylesheet -- and an empty answer there reads as a view with no rows at
+    // all. A pool that grew leaves the old window standing, which is a true
+    // answer about fewer rows than there now are, and `place` replaces it
+    // whole on the next draw either way.
+    if (this.win.length > want) {
+      this.win.length = want;
+      this.winEls.length = want;
+    }
   }
 
   /**
@@ -417,6 +659,7 @@ export class HexRows {
         hexCells: [...first.hex],
         textCells: [...first.text],
         start: -1,
+        holds: -1,
         blank: false,
         layoutKey: "",
         noteKey: "",
@@ -511,8 +754,9 @@ export class HexRows {
    * arranged so the browser is asked once, at the end.
    */
   private drawRow(r: number, f: Frame): number | null {
-    const row = this.rowEls[r];
-    const parts = this.parts[r];
+    const i = this.win[r] ?? -1;
+    const row = this.rowEls[i];
+    const parts = this.parts[i];
     if (!row || parts === undefined) return null;
     const { bpr, len, start } = f;
     const rowStart = start + r * bpr;
@@ -532,16 +776,22 @@ export class HexRows {
     parts.blank = false;
     const heads = f.headsByRow[r] ?? [];
     const at = rowPieces(heads, rowStart, bpr, f.condensed, f.sizes, f.rowHeight);
-    // The share of the file changes with its length, so the key does too.
-    const layoutKey = `${at.segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
+    // Which parts start on this row and where the row is cut for them, which
+    // is what the lines and the blocks between them are made of, and how wide
+    // the address column is, which is what a cut row's later lines hold open
+    // and empty. Not what any of those parts says: a heading's name, range and
+    // share change under the same key, and they are written every draw by
+    // `drawHeads` rather than keyed here.
+    const layoutKey = `${at.segs.join(",")}#${heads.map((h) => h.key).join("|")}@${f.addrWidth}`;
     if (layoutKey !== parts.layoutKey) {
-      this.layOutRow(row, parts, at, len * 8, f.addrWidth);
+      this.layOutRow(row, parts, at, f.addrWidth);
       parts.layoutKey = layoutKey;
       parts.noteKey = "";
       parts.valsKey = VALS_UNKNOWN;
       // Cells that changed line have to be told which byte they draw again.
       parts.start = -1;
     }
+    this.drawHeads(parts, at, len * 8);
     let height = f.rowHeight * at.segs.length;
     for (const h of at.headHeights) height += h;
     const addr = (parts.lines[0] as LineParts).addr;
@@ -681,7 +931,7 @@ export class HexRows {
       reading: r === 0 ? this.topReading(vals) : null,
     });
     if (planned.pinned !== null) this.carried = planned.pinned;
-    const trailer = f.more && r === this.rowEls.length - 1;
+    const trailer = f.more && r === this.win.length - 1;
     const key = rowNoteKey(planned.blocks, trailer);
     // The table goes in the first line's block: a heading may cut the row, but
     // the table spans the row's whole width and belongs to all of it.

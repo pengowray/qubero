@@ -454,8 +454,16 @@ button.welcome-crystal {
    is above the edge, so the view scrolls by pixels rather than by whole rows.
    `will-change` keeps the shift on the compositor: without it a touch drag
    repaints every row of text on every frame. */
+/* A column of flex items rather than a block of blocks, so that which row is
+   drawn where is a number on the row rather than its place among the
+   children. A row element stands for one address for as long as that address
+   is on screen, and a scroll moves the addresses through the pool without
+   moving an element in the document: see `HexRows.place`. */
 .hv-rows-inner {
   will-change: transform;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 /* A row is at least one line of cells tall and grows to hold its chips and
    the headings above it; the view counts rows by the minimum and lets the
@@ -464,6 +472,9 @@ button.welcome-crystal {
    it at full width. */
 .hv-row {
   min-height: 20px;
+  /* Never shrink to fit: the column's own height is whatever its rows add up
+     to, and a row squeezed to make them fit would be a row of clipped text. */
+  flex: none;
 }
 .hv-line {
   display: flex;
@@ -759,8 +770,10 @@ button.welcome-crystal {
   height: var(--hv-subheading-first);
 }
 /* Straight under the column header's own rule, a second rule is a double
-   line. */
-.hv-row:first-child > .hv-headings:first-child > .hv-heading:first-child {
+   line. The top row is named by a class rather than by `:first-child`: rows
+   are reused across draws, so the element at the top of the view is whichever
+   one holds the top address and not the first child of the column. */
+.hv-row-top > .hv-headings:first-child > .hv-heading:first-child {
   border-top-color: transparent;
 }
 /* Beside the bytes the strip stands over the top of the side column, so it
