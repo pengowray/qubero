@@ -383,6 +383,11 @@ export class HexView {
   private fit: { readonly rowHeight: number; readonly visibleRows: number } | null = null;
   /** How tall the space for rows is, from the same measurement. */
   private viewH = 0;
+  /** How wide the box the rows are laid out in was when it was last drawn, so
+   *  a resize can say whether a row could have come out a different height.
+   *  Negative until there has been a box to measure, which makes the first
+   *  layout a change of width and so measures everything. */
+  private boxWidth = -1;
   /** What the stylesheet says a heading line, a smaller one, and one line of
    *  chips are tall, so a row's height can be worked out before it is drawn.
    *  Read with `fit`, since only a change of style moves them. */
@@ -619,15 +624,25 @@ export class HexView {
     return this.rightColumn.endsWith("-condensed");
   }
 
-  /** Throw away every size the browser answered, and ask again. */
-  private remeasure(): void {
+  /**
+   * Throw away every size the browser answered, and ask again.
+   *
+   * `keepHeights` is for the one caller that knows a row cannot have come out
+   * a different height: a box that is the same width as it was. What a row
+   * holds wraps to the width of the field column and to nothing else, so a box
+   * that only grew or shrank downwards leaves every measured height standing.
+   * Every other caller has changed what a row is made of.
+   */
+  private remeasure(keepHeights = false): void {
     this.metrics = null;
     this.fit = null;
-    // Every measured height was taken at the old shape, so none of them stand.
-    this.ledger.clearMeasured();
-    // Where the chips go is decided from a measurement that has just been
-    // thrown away, so it is decided again.
-    this.arrangement = "unknown";
+    if (!keepHeights) {
+      // Every measured height was taken at the old shape, so none of them stand.
+      this.ledger.clearMeasured();
+      // Where the chips go is decided from a measurement that has just been
+      // thrown away, so it is decided again.
+      this.arrangement = "unknown";
+    }
     this.fitRows();
   }
 
@@ -646,15 +661,56 @@ export class HexView {
     this.showCursor();
   }
 
+  /**
+   * Draw again for a box that is a different size: a window resize, a panel
+   * opening, the view coming back on screen.
+   *
+   * **The place in the file is a byte, not a pixel.** `topPx` is how far into
+   * the top row the top edge falls, and a row is only as tall as the chips
+   * beside it wrapped to; a narrower column wraps them onto more lines and the
+   * same row comes out taller. So the same `topPx` is a different set of bytes
+   * after a resize than before it, and the taller the row the further it is
+   * out: the row `hdf4/tvattr.hdf` opens with is 214px at one width and 172px
+   * at another, and 100px into it is the middle of a heading in one and the
+   * middle of a line of bytes in the other. The row the reader was on is what
+   * they were reading, so it is put whole against the top edge instead, which
+   * is where a reload would have put it.
+   *
+   * Only when that row really did come out a different height. A box that is
+   * the same width leaves every row exactly as it was, and nothing moves.
+   */
   relayout(): void {
-    this.remeasure();
-    // Draw where the view was, then pull it back if that turns out to be past
-    // the end: the total is an estimate until the rows around here have been
-    // measured, and clamping by the old one would jog the view while the
-    // reader is only resizing the window.
-    this.topRow = Math.min(this.topRow, Math.max(0, this.totalRows - 1));
+    // Read in the same forced layout `fitRows` pays for a moment later. The
+    // rows are laid out across this box, so it is the width that says whether
+    // anything a row holds could have wrapped differently.
+    const width = this.rowsEl.clientWidth;
+    const sameWidth = width === this.boxWidth;
+    this.boxWidth = width;
+    const anchor = Math.min(this.topRow, Math.max(0, this.totalRows - 1));
+    const was = this.ledger.heightOf(anchor);
+    this.remeasure(sameWidth);
+    this.topRow = anchor;
     this.render();
-    if (this.scrollY > this.maxScrollY) this.scrollToY(this.maxScrollY);
+    // A view that is hidden or not in the document draws nothing, so there is
+    // nothing measured to go on and nothing on screen to put right. It comes
+    // back through here when it is shown, and this box is a width of zero
+    // until it is, which makes that pass a change of width.
+    if (this.el.hidden || !this.el.isConnected) return;
+    // The draw above measured the rows on screen, so this is the height the
+    // browser really gave the row, not the one it was reckoned to have. Not
+    // while a finger is on the view: a resize mid-drag is the window manager's
+    // doing and the drag is the reader's.
+    if ((this.topPx > 0 || this.topRow !== anchor) && this.dragging === null && this.selDrag === null && this.ledger.heightOf(anchor) !== was) {
+      this.topRow = anchor;
+      this.topPx = 0;
+      this.render();
+    }
+    // Then pull the view back if it now sits past the end of the file. Only
+    // where the last row is on screen to say so: everywhere else the total is
+    // an estimate, short by whatever the rows it has never measured really
+    // carry, and clamping by it would jog the view while the reader is only
+    // resizing the window.
+    if (this.topRow + this.grid.rows.length >= this.totalRows && this.scrollY > this.maxScrollY) this.scrollToY(this.maxScrollY);
   }
 
   /**
