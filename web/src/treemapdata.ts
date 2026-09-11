@@ -719,7 +719,13 @@ export function boxTitle(node: TreeNode, share: number, unit: Unit, inside: stri
   const pct = percentText(share, 1);
   const of = inside === null ? TREEMAP.ofFile(pct) : TREEMAP.ofPart(pct, inside);
   const parts = [node.name, size, of];
-  if (node.range !== undefined) parts.push(formatOffset(node.range.offsetBits));
+  // Where the box sits, unless the box is already named after that. A run of
+  // one byte class is named by the address it starts at, so appending the same
+  // address again read as two facts and was one: `@0x0 · 539,648 bytes · 75%
+  // of file · @0x0`. Compared as text rather than as a number, since what is
+  // being avoided is the reader seeing the same characters twice.
+  const at = node.range === undefined ? null : formatOffset(node.range.offsetBits);
+  if (at !== null && at !== node.name) parts.push(at);
   const head = node.detail === undefined ? parts.join(" · ") : `${parts.join(" · ")}\n${node.detail}`;
   return node.openable === true ? `${head}\n${TREEMAP.openHint}` : head;
 }
