@@ -4738,3 +4738,165 @@ table.rec tr.is-on td {
 .tmp-big .tmp-bar h3 {
   font-size: 15px;
 }
+
+/* The B-trees tab: one B-tree drawn in the shape the file gives it, with the
+   same nodes plotted a second time by address underneath. Nothing here is
+   coloured by what a node is: an index node and a link table are told apart by
+   the row they are on and by the words under the picture, so the one colour in
+   the picture is free to mean "this is the one you picked". */
+.btp {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* A column of flex children shrinks them all by default, and this one holds
+     two drawn pictures whose heights are the number of rows the tree has. A
+     tree squeezed into whatever was left over is a tree with rows missing. */
+  flex: 0 0 auto;
+}
+.btp-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* The object whose tree this is, by its own name in the file. Bright and
+   monospaced: it is a path, and it is the one line that says which of a file's
+   many trees is on screen. */
+.btp-head {
+  margin-right: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Which of the two jobs the tree does. A group tree and a chunk tree look
+   almost the same until the bottom row. */
+.btp-job {
+  font-size: 12px;
+  color: var(--muted);
+}
+.btp-plot,
+.btp-strip {
+  min-width: 0;
+}
+/* Drawn at the width the box happens to be, and redrawn when that changes:
+   stretching one drawn at another width would put the marks at addresses they
+   are not at, which is the one thing the strip is for. */
+.btp-svg {
+  display: block;
+}
+/* One node. The fill is faint because the picture is read by where the boxes
+   are and how wide they are; the outline is what separates two boxes that sit
+   side by side under one parent. */
+.btp-box {
+  fill: color-mix(in srgb, var(--accent) 12%, transparent);
+  stroke: var(--line);
+  stroke-width: 1px;
+  cursor: pointer;
+}
+.btp-box:hover {
+  fill: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+/* Where the cursor is, and what the reader pressed. Two different facts, so
+   two different marks: the cursor's node is outlined, the pressed one is
+   filled. A box can be both. */
+.btp-box.is-here,
+.btp-mark.is-here {
+  stroke: var(--accent);
+  stroke-width: 2px;
+}
+.btp-box.is-on {
+  fill: var(--accent);
+}
+.btp-mark.is-on {
+  fill: var(--accent);
+}
+/* The node's own count, on the box when the box is wide enough for it. */
+.btp-count {
+  fill: var(--fg);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+/* One node on the address strip. A mark rather than a box: it stands for
+   where the node is, and its width would otherwise be read as the same fact
+   the tree picture's widths are. */
+.btp-mark {
+  fill: var(--muted);
+  cursor: pointer;
+  shape-rendering: crispEdges;
+}
+.btp-mark:hover {
+  fill: var(--fg);
+}
+/* The captions: what the widths mean, and what the strip is a picture of.
+   Both say something the picture cannot, so neither is optional chrome. */
+.btp-line {
+  font-size: 11px;
+  color: var(--muted);
+}
+/* One line a row of the tree: how many nodes are on it and what they hold. */
+.btp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.btp-row {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--fg);
+}
+.btp-row-short {
+  font-family: var(--sans);
+  color: var(--warn);
+}
+/* The two ends of the strip's own span, so the distances on it have a scale. */
+.btp-span {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--addr);
+}
+/* The node the reader pressed, written out: one fact a line, because an
+   address and a key range are two facts and gluing them reads as one. */
+.btp-readout {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--fg);
+}
+.btp-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+/* Over the window, on the treemap's own mechanism and with its own look: a
+   glance and a read are different jobs, and a tree deep enough to matter is
+   exactly the one a reader wants full screen. */
+.btp-big {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  /* As tall as the tree is, not as tall as the window. A treemap fills
+     whatever box it is given because its areas are shares of one whole; a tree
+     has as many rows as it has rows, and stretching the box under them would
+     leave a field of empty panel that reads as a picture that failed to
+     draw. */
+  max-height: calc(100vh - 16px);
+  z-index: 40;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
+  overflow: auto;
+}
+.btp-big .btp-head {
+  font-size: 15px;
+}
+.btp-big .btp-count {
+  font-size: 11px;
+}

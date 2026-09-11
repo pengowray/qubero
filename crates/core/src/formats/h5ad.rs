@@ -134,7 +134,7 @@ pub fn contents<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Contents>
 }
 
 /// The object header of the root group, which every other object hangs under.
-fn root_header<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Vec<usize>>> {
+pub(crate) fn root_header<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Vec<usize>>> {
     let Some(sb) = ev.child_named(doc, &[], "superblock")? else { return Ok(None) };
     // Version 0 and 1 name the root group with a symbol table entry; the later
     // ones name its object header outright.
@@ -149,7 +149,7 @@ fn root_header<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Vec
 
 /// What a field that reads its contents somewhere else points at, where it
 /// points at anything.
-fn inside<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<Option<Vec<usize>>> {
+pub(crate) fn inside<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<Option<Vec<usize>>> {
     if ev.node(doc, path)?.child_count == 0 {
         return Ok(None);
     }
@@ -269,7 +269,7 @@ fn walk<S: Source>(
 /// the ones that did not fit. Those nest: a header with a lot to say writes a
 /// continuation whose last message is another continuation, so this follows
 /// them as far as they go.
-fn collect_messages<S: Source>(
+pub(crate) fn collect_messages<S: Source>(
     ev: &mut Evaluator,
     doc: &Document<S>,
     header: &[usize],

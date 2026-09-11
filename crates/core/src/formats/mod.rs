@@ -87,6 +87,7 @@ mod hdf4;
 mod hdf5;
 pub mod h5ad;
 pub mod hdf5_chunk;
+pub mod hdf5_tree;
 mod id3;
 mod iff;
 mod ilbm;

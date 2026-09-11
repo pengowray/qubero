@@ -865,6 +865,170 @@ export const TREEMAP = {
 } as const;
 
 /**
+ * The B-trees tab: one HDF5 version 1 B-tree drawn as bands, and the same
+ * nodes again by file address.
+ *
+ * Two traps run through every string here. A number with no stated origin:
+ * every count is either a field the Listing shows by that name (`node_level`,
+ * `entries_used`, `symbol_count`) or a sum the row names, and there is
+ * deliberately no "% full", because HDF5's capacity per node has not been
+ * checked against the specification and a guessed denominator would be a
+ * number from nowhere. And a label whose value is not the thing it names: an
+ * index node's width is not its entry count, `0, 0, 0` is not a chunk index,
+ * and "level 2" is not two below the root. Each of those has a string below
+ * that says the other reading out loud.
+ *
+ * HDF5's own names for the two node kinds are `TREE` and `SNOD` ("symbol
+ * table node"). They are called index node and link table here: what a TREE
+ * holds is pointers into the index, and what an SNOD holds is the group's
+ * links, so the names say what is inside. The signature is carried along in
+ * brackets on the readout, because it is the first four bytes a reader sees
+ * after pressing the box and it is the term the specification is written in.
+ */
+export const BTREES = {
+  /** The rail tab beside Contents and Logical. Standard, searchable
+   *  vocabulary, and the tab is shown only for HDF5, so it cannot be taken
+   *  for any other tree in the file. */
+  tab: "B-trees",
+  /** The tab's tooltip, in the minimap's order: the question the picture
+   *  answers, then what one mark is, then the verbs. Two pictures share the
+   *  panel and nothing about a band of boxes says which question it answers,
+   *  so both are named. "Reached through" is the phrase the width captions
+   *  use too, so the word here is the word there. */
+  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent and as wide as what is reached through it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing.",
+  /** Under the heading, which is the owning object's path. The two jobs a
+   *  version 1 tree does are two different pictures (a group tree has a row a
+   *  chunk tree does not), so the job is stated rather than left to be read
+   *  off the shape. "B-tree" is repeated because the heading is a path and
+   *  the tab is a plural. */
+  jobGroup: "B-tree of this group's links",
+  jobChunk: "B-tree of this dataset's chunks",
+  /** Line 1 of the heading when the owning object is past the Contents list's
+   *  cap. Not "unnamed object": an HDF5 object can genuinely have no name, and
+   *  this one has one that was not fetched. The rail already says "{n} more not
+   *  listed" for the cap, so this says the same thing in the same words, and
+   *  keeps the tree's address so the heading still says which tree is up. */
+  unnamed: (treeAt: string): string => `Object not listed under Logical · tree at ${treeAt}`,
+  /** What a box's width is, under the picture. A box shows two marks, its
+   *  width and the number printed on it, and they are two different facts: the
+   *  number is the node's own entry count and the width is the total at the
+   *  bottom of its subtree. Left unsaid, a reader takes the wide box with "3"
+   *  on it for a mistake. "Reached through" rather than "under": under reads
+   *  spatially, and nothing is drawn under a link table, whose links are inside
+   *  it. The chunk caption adds that the chunks themselves are not drawn,
+   *  because a reader who has seen a group tree's bottom row of link tables
+   *  will look for the row that is not there. */
+  widthGroup: "Width: how many links are reached through the box. Number on a box: its own entry count.",
+  widthChunk:
+    "Width: how many chunks are reached through the box. Number on a box: its own entry count. The chunks themselves are not drawn.",
+  /** One row of the summary for a row of index nodes. The level is written with
+   *  the field's own name, `node_level`, because that is where the number came
+   *  from and what the Listing calls it at those bytes; a bare "level 2" is a
+   *  number with no origin and two directions. The direction is stated once, in
+   *  the title, rather than on every row. */
+  rowIndex: (n: number, level: number): string => `${countText(n, "index node")} · node_level ${level.toLocaleString()}`,
+  /** On the summary rows. HDF5 counts levels up from the leaves, which is the
+   *  opposite of how the picture is stacked, so a reader who assumed "level 2
+   *  is two rows down" would be wrong about every row but one. */
+  levelTitle: "node_level as the file writes it: 0 on the bottom row of index nodes, highest at the root",
+  /** The summary row for the link tables, and for a chunk tree's bottom row of
+   *  index nodes. Two counts on one line need the relation between them said,
+   *  or "36 link tables · 1,204 links" can be read as 1,204 each; the verb says
+   *  it. "Pointing at" on the chunk row is the same verb as the readout's, and
+   *  is the reason there is no chunk row under it. */
+  rowLinks: (nodes: number, links: number): string =>
+    `${countText(nodes, "link table")} holding ${countText(links, "link")}`,
+  rowChunks: (nodes: number, chunks: number): string =>
+    `${countText(nodes, "index node")} pointing at ${countText(chunks, "chunk")}`,
+  /** Siblings too narrow to press, drawn as one box. Says what happened to
+   *  them in `TREEMAP.pooledTitle`'s words. Not `… N more`: the treemap's
+   *  ellipsis marks content cut short beside content that was drawn, and here
+   *  nothing in the pool is drawn on its own. `noun` is singular; `countText`
+   *  makes the plural. */
+  pooled: (n: number, noun: string): string => `${countText(n, noun)}, too narrow to draw apart`,
+  /** The two node kinds, by what they hold, and the signature each one carries
+   *  in the file. See the block comment for why these and not HDF5's own
+   *  names, and why the signature is here anyway. */
+  kindIndex: "index node",
+  kindLinks: "link table",
+  signIndex: "TREE",
+  signLinks: "SNOD",
+  /** First line of a node's readout and tooltip, and the whole tooltip of a
+   *  mark on the address strip. The signature is what is written at that
+   *  address, so the line a reader takes to the hex view names both what we
+   *  call it and what they will find there. */
+  selectedAt: (kind: string, sign: string, address: string): string => `${kind} (${sign}) at ${address}`,
+  /** The node's own count, `entries_used` or `symbol_count`, with the verb that
+   *  fits the kind: an index node points at things and a link table holds
+   *  names. One string with a swappable noun read "36 link tables" on a box
+   *  that holds no link table; the verb is what makes the count the count of
+   *  the right thing. `noun` is singular and is what the next row down holds:
+   *  index nodes, link tables, chunks, or links. */
+  pointsAt: (n: number, noun: string): string => `points at ${countText(n, noun)}`,
+  holds: (n: number, noun: string): string => `holds ${countText(n, noun)}`,
+  /** A group-tree node's key range, as the two link names at its ends. Two
+   *  labelled facts rather than "X to Y": a link name can contain a space or
+   *  the word "to", and the labels survive that. One link is one fact. */
+  selectedRange: (first: string, last: string): string =>
+    first === last ? `link ${first}` : `first link ${first} · last link ${last}`,
+  /** A chunk-tree node's key range. The keys are offsets into the dataset
+   *  counted in elements, so "element offset" is on the visible line: a reader
+   *  who saw `0, 0, 0` with no label would take it for a chunk index and the
+   *  range for three chunks. */
+  selectedChunkRange: (first: string, last: string): string =>
+    `first chunk at element offset ${first} · last at ${last}`,
+  /** The line under a chunk range. HDF5 writes one number per dimension and
+   *  then one more, an offset within an element, that is always 0; so a reader
+   *  counting the numbers in `950, 950, 0` gets a rank one too high and a
+   *  dimension that does not exist. The rank is stated as a number so nobody
+   *  counts, and the 0 is named for what it is. `coords` is how many numbers
+   *  one key holds; the caller leaves the line out when it is 0. */
+  chunkRangeNote: (coords: number): string =>
+    `${(coords - 1).toLocaleString()} dimensions. The last number of each offset is always 0: HDF5 writes it as the offset within an element.`,
+  /** Over the address strip. Says which axis this is, since the picture above
+   *  it is in tree order and the two look alike, and that the rows are the
+   *  same rows. */
+  stripCaption: "The same nodes and rows, placed by file address",
+  /** Under the strip. The strip is zoomed to the tree's own span, not the
+   *  file, and a reader who assumed the file would misjudge every distance on
+   *  it; the warning sits beside the two numbers that are the span. */
+  stripSpan: (from: string, to: string): string => `${from} to ${to} · this tree's span, not the whole file`,
+  /** Nodes whose addresses land on one pixel column of the strip, drawn as one
+   *  mark. Same shape as `pooled`; the strip merges by address and the tree by
+   *  width, so the reason is worded for the strip. */
+  stripPooled: (n: number): string => `${countText(n, "node")}, too close together to draw apart`,
+  /** Under the summary rows when the walk hit its cap. "At least": the count is
+   *  the nodes the walk saw and did not take, not their descendants, which it
+   *  never saw. The rail's "{n} more not listed", with the floor said out
+   *  loud. */
+  omitted: (n: number): string => `At least ${n.toLocaleString()} more nodes not drawn`,
+  /** The empty state. One string, because the caller cannot tell why the walk
+   *  found nothing: the core reads version 1 trees only, parses a version 2
+   *  tree no further than its root, and a file can genuinely have no version 1
+   *  tree. So it claims only what is known (looked, found none), names this
+   *  tab's scope without a "yet" that would promise anything, and lists the
+   *  three ordinary reasons without saying which one this is. Not "this file
+   *  has no B-trees": a file written with version 2 trees has plenty. */
+  none: "No version 1 B-tree found for the object at the cursor, or for the root group. This tab draws version 1 B-trees only. A group that keeps its links in its header, a dataset that is not chunked, and a file written with version 2 B-trees have no version 1 B-tree.",
+  /** The mouse verbs. The first sentence is the treemap's and means the same.
+   *  The second is not: the treemap's "open it" zooms into the box, and here a
+   *  double-click puts the node in the Listing, so the destination is named
+   *  the way the minimap names its Block section. */
+  hint: "Click a box to go to its bytes. Double-click to open it in the Listing.",
+  /** On a node whose children the walk did not all reach, in its tooltip and
+   *  readout. Both consequences on one line because they always arrive
+   *  together: a node with an unreached child keeps no range (see
+   *  `hdf5_tree.rs`, `ranges`), so a separate "range not known" line would say
+   *  the same thing twice. `noun` is `link` or `chunk` by the tree's job. */
+  truncated: (noun: string): string =>
+    `Not all of this node's children were read; first and last ${noun} not shown.`,
+  /** The rail's two shapes for pending and failed, naming what is being read.
+   *  `TREEMAP.failed` says "the fields", which this walk does not read. */
+  reading: "Reading the B-tree…",
+  failed: (message: string): string => `Couldn't read the B-tree: ${message}`,
+} as const;
+
+/**
  * What the treemap calls one field kind. `TemplateNode.kind` is the
  * evaluator's vocabulary and half of it is not self-explaining: `unread`,
  * `unset` and `magic` say nothing to someone reading a picture.

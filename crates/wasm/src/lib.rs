@@ -1120,6 +1120,52 @@ struct ContentsDto {
     columns: f64,
 }
 
+/// One node of an HDF5 version 1 B-tree, as much of it as a picture of the
+/// tree needs.
+#[derive(Serialize)]
+struct TreeNodeDto {
+    path: Vec<usize>,
+    /// Index into the node list, or -1 for the root.
+    parent: f64,
+    /// `index` for a `TREE` node, `links` for the symbol table node a group
+    /// tree hangs under its bottom row. The words are the host's to translate;
+    /// what crosses is which of the two kinds of node this is.
+    kind: &'static str,
+    address: f64,
+    size_bits: f64,
+    /// What the file wrote as this node's level. Zero for a link table, which
+    /// sits below the levels rather than on one.
+    level: f64,
+    /// Rows below the root, counted by the walk.
+    depth: f64,
+    /// `entries_used` or `symbol_count`, the file's own count and no fraction
+    /// of anything.
+    entries: f64,
+    /// The ends of the node's key range, or empty where the walk could not
+    /// settle both. For a group tree these are link names; for a chunk tree
+    /// they are the comma-separated numbers of a chunk's offset in the dataset.
+    first_key: String,
+    last_key: String,
+    /// True when children of this node were not reached, so its count stands
+    /// and its range does not.
+    truncated: bool,
+}
+
+/// One HDF5 version 1 B-tree, walked into the shape it has in the file.
+#[derive(Serialize)]
+struct TreeDto {
+    /// `group` for a tree indexing a group's links, `chunk` for one indexing a
+    /// dataset's chunks. The two do not have the same silhouette: only a group
+    /// tree has link tables under its bottom row.
+    job: &'static str,
+    nodes: Vec<TreeNodeDto>,
+    omitted: f64,
+    /// How many numbers one chunk key holds: one per dataset dimension plus one
+    /// more that HDF5 writes as an offset inside an element and always sets to
+    /// zero. Zero for a group tree.
+    coords: f64,
+}
+
 /// The named parts of an ELF file. Unlike the storage template, these have
 /// resolved section and symbol names rather than string-table offsets.
 #[derive(Serialize)]
@@ -2433,6 +2479,63 @@ impl Editor {
                 })
                 .collect(),
         }))
+    }
+
+    /// The HDF5 version 1 B-tree the field at `path` belongs to, walked into
+    /// the shape it has in the file: {status:"ok",node:{job,nodes,..}}, or a
+    /// null node where the file has no such tree to answer with.
+    ///
+    /// `path` is where the cursor is, which is usually not a node of a tree.
+    /// The core works out which tree that means: the one the cursor is inside,
+    /// else the one the object header it is inside names, else the root
+    /// group's. `limit` caps the nodes walked, and the answer says how many
+    /// children it left out.
+    pub fn btree(&mut self, space: u32, path: &[u32], limit: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        if sh.template != "hdf5" {
+            return reply(Ok(None::<TreeDto>));
+        }
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        let Some(e) = &mut sh.eval else {
+            return reply::<Option<TreeDto>>(Err(EvalError::Failed("no template".into())));
+        };
+        e.begin_slice();
+        let found = match qubero_core::formats::hdf5_tree::tree(e, &sh.doc, &p, limit as usize) {
+            Ok(t) => t,
+            Err(err) => return reply::<Option<TreeDto>>(Err(err)),
+        };
+        reply(Ok(found.map(|t| {
+            use qubero_core::formats::hdf5_tree::{Job, Kind, NO_PARENT};
+            TreeDto {
+                job: match t.job {
+                    Job::Group => "group",
+                    Job::Chunk => "chunk",
+                },
+                omitted: t.omitted as f64,
+                coords: t.coords as f64,
+                nodes: t
+                    .nodes
+                    .into_iter()
+                    .map(|n| TreeNodeDto {
+                        path: n.path,
+                        parent: if n.parent == NO_PARENT { -1.0 } else { n.parent as f64 },
+                        kind: match n.kind {
+                            Kind::Index => "index",
+                            Kind::LinkTable => "links",
+                        },
+                        address: n.address as f64,
+                        size_bits: n.size_bits as f64,
+                        level: n.level as f64,
+                        depth: n.depth as f64,
+                        entries: n.entries as f64,
+                        first_key: n.first_key,
+                        last_key: n.last_key,
+                        truncated: n.truncated,
+                    })
+                    .collect(),
+            }
+        })))
     }
 
     /// Named ELF sections and a bounded prefix of its symbols. The semantic
