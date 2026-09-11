@@ -18,6 +18,7 @@ break while fixing it.
 | 5. A recycled chip can carry a stale tooltip | `e239ac0` |
 | 10. ELF segment virtual addresses do not carry the mark | `a0b51ac` |
 | 12. `.claude/launch.json` lies to a worktree, in the port half of it | `b681f5a` |
+| 6. A box never says what its width means | `5ed2006`, `01b7e27` |
 
 Number 10 was the small one on the list and it was sitting on a real defect.
 The line about `busybox-x86_64` reporting 0 mapped regions was not a quirk of
@@ -99,7 +100,7 @@ mismatch on any row of that file, in any column mode, at 1500 wide. That is not
 the bug being absent. `heightOf` is `base + structural + the measured extra`,
 and the draw measures every row it draws, so after a draw the two sides of that
 comparison are the same number by construction. The same shape of trap as
-number 6 below: a reading taken after the thing that sets it.
+number 5 below: a reading taken after the thing that sets it.
 
 **What would mean something:** `base + structuralOf(row)` against
 `offsetHeight`, on rows where `ledger.hasMeasured(row)` is still false, or the
@@ -110,23 +111,7 @@ wraps it, or the reverse. The prediction is otherwise exact, row for row,
 across 870 rows of 30 draws on three sample files, so this is a narrow bug and
 not a general looseness.
 
-### 4. A box now knows what its width means and still does not say it
-
-`Placed.weight` is the count a box's width stands for, and `Box.weight` now
-carries it through to the drawn box (`5ed2006`). The line on the tooltip and
-the readout that would print it is not written: `nodeLines` still gives the
-node's own entry count and never says what the width is.
-
-**What to do:** one line in `boxTitle` / `readoutLines` (`web/src/btreedraw.ts`),
-after the holds/points-at pair and before the key range. The noun comes from
-the tree and not from the node: records for a version 2 tree whatever the
-node's kind, links for a version 1 group tree even on an index node. Keep the
-wording consistent with `BTREES.widthGroup` / `widthChunk` / `widthRecords`,
-which say width is proportional to what is in and below a box. Note that an
-empty node is given a weight of 1 so that it still has a box to press, so the
-number can read 1 where the truth is 0.
-
-### 5. Version 2 nodes below the root cannot be opened in the Listing
+### 4. Version 2 nodes below the root cannot be opened in the Listing
 
 The template places only the version 2 root node, so nodes below it have no
 path. Clicking still goes to their bytes; double-click opens nothing, and
@@ -140,7 +125,7 @@ arithmetic in Rust and reads the nodes directly. Closing the gap means giving
 the template that capability, which is real format work in a declarative
 language, not another walk.
 
-### 6. "The number on a box is what is in the band below it" is not true of v2
+### 5. "The number on a box is what is in the band below it" is not true of v2
 
 A version 2 B-tree is a B-tree, not a B+ tree: a record sits between every two
 children, so an internal node points at one more child than it holds records.
@@ -151,14 +136,21 @@ N children" on the readout. It is written down because the terminal band was
 added to teach that rule, and the rule has an exception the drawing does not
 show.
 
-### 7. One duplicated number
+### 6. Two places a number reads twice
 
 The summary line says `999 link tables holding 4,000 links` while the band
 below says `4,000 links`. Deliberate: the summary is the only place the counts
-read without hovering. It is the panel's one repeated figure, noted so a future
-reader does not take it for an oversight.
+read without hovering.
 
-### 8. The hex/decimal toggle is deferred, and `@` was chosen for it
+The second is new, from the width line (`01b7e27`). On a bottom-row box the
+node's own count and what its width stands for are the same number, so the
+readout reads `holds 9 records` and then `width stands for 9 records in it`.
+The two lines have different subjects and a reader sees them agree, which is
+the rule shown where it holds rather than one fact said twice. It is the one
+place the two lines carry the same figure, noted so a future reader does not
+take either for an oversight.
+
+### 7. The hex/decimal toggle is deferred, and `@` was chosen for it
 
 `@` was picked over `$A60` and `A60h` because both of those assert **hex** by
 convention, and a base toggle would make them lie. `@` claims nothing about
@@ -172,7 +164,7 @@ base. If the toggle is built:
 - The goto placeholder says `Go to offset (hex)` and must follow the toggle, or
   it contradicts what is on screen.
 
-### 9. `.claude/launch.json` and a worktree: the half that is still unverified
+### 8. `.claude/launch.json` and a worktree: the half that is still unverified
 
 The port half is fixed (`b681f5a`): the entries no longer set `PORT`
 themselves, so the preview tool's reserved port is the one vite listens on, and
@@ -228,6 +220,8 @@ view.render();` then measure.
   viewport shrinking under a finger.
 - `web/test/hexview.browser.mjs` - 13 checks, three of them about row reuse by
   address.
+- `npm test` in `web` - 282 unit tests, including what a B-tree box's width
+  stands for on the four shapes HDF5 writes.
 
 Current numbers, 2026-09-11, for comparison:
 
