@@ -58,6 +58,11 @@ export type Box = {
   readonly nodes: readonly number[];
   readonly x: number;
   readonly w: number;
+  /** What the width stands for: the weights of the nodes drawn as this box,
+   *  added up. The pixels are what the reader sees and this is the number
+   *  behind them, so a box can say what its own width means rather than
+   *  leaving the caption under the picture to say it for every box at once. */
+  readonly weight: number;
 };
 
 /** Where each node sits in the tree picture, before neighbours are merged.
@@ -185,7 +190,8 @@ export function boxesOf(tree: Tree, placed: readonly Placed[], width: number): B
     let parent = -2;
     const flush = (end: number): void => {
       if (pool.length === 0) return;
-      out.push({ key: keyOf(pool), row: d, nodes: pool, x: from, w: Math.max(MIN_W, end - from) });
+      const weight = pool.reduce((sum, i) => sum + (placed[i]?.weight ?? 0), 0);
+      out.push({ key: keyOf(pool), row: d, nodes: pool, x: from, w: Math.max(MIN_W, end - from), weight });
       pool = [];
     };
     for (let i = 0; i < tree.nodes.length; i++) {

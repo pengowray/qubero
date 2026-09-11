@@ -352,6 +352,24 @@ test("a version 2 tree gets the caption about records, the others their own", ()
   assert.equal(widthCaption(chunkTreeV1()), BTREES.widthChunk);
 });
 
+test("a box carries the weight its width stands for, pooled boxes included", () => {
+  // The number behind the pixels, so a box can say what its own width means
+  // rather than leaving the caption under the picture to say it for all of
+  // them at once. The root's is the whole tree's, which is the number that was
+  // wrong for every version 2 tree.
+  const tree = groupTreeV2();
+  const placed = place(tree, WIDTH);
+  const boxes = boxesOf(tree, placed, WIDTH);
+  const root = boxes.find((b) => b.row === 0);
+  assert.equal(root?.weight, placed[0]?.weight);
+  assert.equal(root?.weight, leafCount(tree));
+  // A pooled box stands for its nodes' weights added up, not for one of them.
+  const pooled = boxesOf(groupTreeV1(), place(groupTreeV1(), WIDTH), WIDTH).find((b) => b.nodes.length > 1);
+  assert.ok(pooled !== undefined);
+  const sum = pooled.nodes.reduce((total, i) => total + (place(groupTreeV1(), WIDTH)[i]?.weight ?? 0), 0);
+  assert.equal(pooled.weight, sum);
+});
+
 test("a row too wide for its boxes pools neighbouring siblings, and only those", () => {
   // 999 link tables across 256 pixels: most boxes have to stand for several,
   // and a box that stood for two nodes with different parents would sit across
