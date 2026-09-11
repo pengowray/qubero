@@ -13,7 +13,7 @@
 
 import type { Doc } from "./doc.ts";
 import type { FieldPick } from "./doc.ts";
-import { emptyState, flatten, PAGE, pathKey, refold } from "./flatten.ts";
+import { emptyState, flatten, hopPath, PAGE, pathKey, refold } from "./flatten.ts";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.ts";
 import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.ts";
 import { markStrip } from "./bytestrip.ts";
@@ -983,7 +983,12 @@ export class ListingReport {
   }
 
   /** Bring the field at `path` on screen and select it. */
-  reveal(path: readonly number[]): void {
+  reveal(where: readonly number[]): void {
+    // A field that reads its contents somewhere else has no row of its own:
+    // the listing draws the thing it points at in its place. So a path naming
+    // one is followed the same way the walk followed it, and the row that
+    // arrives is the row that is there. See `hop` in `flatten`.
+    const path = hopPath(this.src, where);
     const node = this.doc.templateNode(path);
     if (node.status !== "ok") return;
     this.selected = { path, offsetBits: node.node.offset_bits, sizeBits: node.node.size_bits };

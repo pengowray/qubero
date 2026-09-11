@@ -72,7 +72,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: str
   return node;
 }
 
-/** `0x1000 – 0x1fff`, the stretch a heading covers. A part of no bytes has no
+/** `@0x1000 – @0x1fff`, the stretch a heading covers. A part of no bytes has no
  *  range to give, which is what a field placed somewhere else looks like. */
 export function rangeText(offsetBits: number, sizeBits: number, space = 0): string {
   if (sizeBits === 0) return formatAddress(offsetBits, space);
@@ -182,6 +182,11 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
     row.append(swatch);
   }
   row.append(el("b", "rp-name", headingTitle(item, fileBits)));
+  // The same mark a hopping row wears in its type column. A heading has no
+  // type column to put it in, so it goes beside the title, where the range
+  // that follows it is the one a reader would otherwise expect to find inside
+  // whatever this sits under. Only on a part that was reached by address.
+  if (item.via !== null) row.append(el("span", "rp-via", item.via));
   const space = spaceOf(item);
   row.append(el("span", "rp-range", rangeText(item.offsetBits, item.sizeBits, space)));
   // The byte strip and the file map both show bytes of the file, and a
@@ -210,7 +215,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   if (isSelected(c.selected, item.offsetBits, item.sizeBits) || c.nearest === item.key) row.classList.add("is-on");
   indent(row, item.depth);
   // A computed value is not written anywhere, so it has no address, and its
-  // length says so in words: "0x101a7" and "0 bytes" would be answers to
+  // length says so in words: "@0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
   const written = n.type !== "computed";
   const at = el("span", "rp-at");
@@ -243,7 +248,13 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   }
   if (item.reads !== null) value.append(readsLink(item.reads));
   row.append(value);
-  row.append(el("span", "rp-type", n.type));
+  // A row that stands for a pointer and what it points at says so here, and
+  // only here: `at → ObjectHeader` names the thing and says it was reached
+  // rather than contained, which is what the step of indent above it cannot
+  // be trusted to mean. Every other row is where it was declared and the
+  // column is the plain type, so the arrow marks the rows that hop and
+  // nothing else.
+  row.append(el("span", "rp-type", item.via ?? n.type));
   row.append(el("span", "rp-size", written ? bitSizeText(n.size_bits) : REPORT.notStored));
   // A toggle that opens a strip of nothing is a dead control, and so is one
   // over bytes that are not in the file.

@@ -748,7 +748,10 @@ function build(tab: Tab): Page {
   goto.setAttribute("aria-label", "Go to offset, hexadecimal");
   goto.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
-    const t = goto.value.trim().replace(/^0x/i, "");
+    // An address copied off the screen arrives as `@0x40`, so the box takes
+    // the mark off before it takes the `0x` off. Neither is required: what a
+    // reader types by hand is still bare digits.
+    const t = goto.value.trim().replace(/^@/, "").replace(/^0x/i, "");
     if (!/^[0-9a-f]+$/i.test(t)) return goto.classList.add("invalid");
     goto.classList.remove("invalid");
     const to = parseInt(t, 16);

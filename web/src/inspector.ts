@@ -5,7 +5,7 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { ADDRESS_MARK, formatAddress, formatBytes, formatOffset, offsetDigits } from "./doc.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { address } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
@@ -1485,7 +1485,7 @@ export class Inspector {
       b.type = "button";
       b.className = "insp-goto";
       // The last byte's address, not the bit before the end: `formatOffset` of
-      // one bit short of the boundary reads `0x39+7b`, which is a bit position
+      // one bit short of the boundary reads `@0x39+7b`, which is a bit position
       // and not an address a reader can go to.
       b.textContent = CHECKED.range(formatOffset(run.at * 8), formatOffset((run.at + run.bytes - 1) * 8), formatBytes(run.bytes));
       b.addEventListener("click", () => this.onGoTo(run.at * 8, [{ startBit: run.at * 8, endBit: (run.at + run.bytes) * 8 }]));
@@ -2606,6 +2606,25 @@ export class Inspector {
         continue;
       }
       const n = node.node;
+      // A field that reads its contents somewhere else and the thing it points
+      // at are one step, the way the listing draws them as one row: the
+      // pointer's type names what is there and says it was reached by address,
+      // and the crumb goes to the target, which is where the bytes are.
+      // Pointers nest, and the outermost type already reads `at → at → X`,
+      // so the whole run of them is the one step. See `hop` in `flatten`.
+      let at = n;
+      let past = i;
+      while (past < path.length && path[past] === 0 && at.size_bits === 0 && at.composite && at.child_count === 1) {
+        const next = this.doc.templateNode(path.slice(0, past + 1));
+        if (next.status !== "ok" || next.node.name !== at.name) break;
+        at = next.node;
+        past += 1;
+      }
+      if (past > i) {
+        items.push({ label: `${n.name} (${n.type})`, path: path.slice(0, past), here: past === path.length });
+        i = past;
+        continue;
+      }
       const isList = n.composite && n.type.endsWith("[]");
       if (isList && i < path.length) {
         // Fold the element index into the list's own name.
@@ -2960,7 +2979,7 @@ function insideRow(name: string, delta: number, path: readonly number[]): HTMLEl
   row.dataset["path"] = path.join("/");
   const what = document.createElement("span");
   what.className = "insp-origin-name";
-  what.append(...address(PROPERTIES.withinAt(name, `+${formatOffset(delta)}`), PROPERTIES.withinPlusTitle(name)));
+  what.append(...address(PROPERTIES.withinAt(name, `${ADDRESS_MARK}+${offsetDigits(delta)}`), PROPERTIES.withinPlusTitle(name)));
   row.append(what);
   return row;
 }

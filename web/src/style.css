@@ -2478,7 +2478,9 @@ button.insp-prop-head:hover {
 }
 .sv-at {
   flex: none;
-  width: 11ch;
+  /* One character wider than the address it holds: the `@` in front of every
+     address costs a column the same character everywhere it is sized in `ch`. */
+  width: 12ch;
   color: var(--addr);
 }
 /* Always filled, so the column reads down the page and no row makes the reader
@@ -3071,7 +3073,8 @@ button.insp-xrow-where:hover {
 .rp-range,
 .rp-at {
   flex: none;
-  width: 74px;
+  /* 81px, not 74: one monospace character more, for the `@` in front. */
+  width: 81px;
   color: var(--addr);
 }
 .rp-range {
@@ -3105,6 +3108,15 @@ button.insp-xrow-where:hover {
   width: 105px;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--muted);
+}
+/* What a part was reached through, on the heading of a part reached by an
+   address rather than by lying next to what came before it. A row says the
+   same thing in its type column; a heading has no type column, so it says it
+   here, in the type column's colour and typeface. */
+.rp-via {
+  flex: none;
+  font-family: var(--mono);
   color: var(--muted);
 }
 /* The mark on a row that has something under it. A fixed width whether or not
@@ -3293,7 +3305,7 @@ button.insp-xrow-where:hover {
 }
 .bd-at {
   flex: none;
-  width: 9ch;
+  width: 10ch;
   color: var(--addr);
 }
 .bd-hex {
@@ -3393,7 +3405,7 @@ button.insp-xrow-where:hover {
 }
 .lp-at {
   flex: none;
-  width: 9ch;
+  width: 10ch;
   color: var(--addr);
 }
 .lp-name {

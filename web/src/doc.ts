@@ -2,8 +2,8 @@
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
 import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
-import { formatBytes, formatOffset } from "./format.ts";
-export { byteText, formatBytes, formatOffset, percentText } from "./format.ts";
+import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.ts";
+export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { UNPACKED } from "./strings.ts";
 
 const CHUNK_SIZE = 64 * 1024;
@@ -1169,7 +1169,7 @@ export class ReadFailure extends Error {
 }
 
 function describeReadFailure(offset: number, length: number, cause: unknown): string {
-  const where = `${formatBytes(length)} at offset 0x${offset.toString(16).toUpperCase()}`;
+  const where = `${formatBytes(length)} at offset ${formatOffset(offset * 8)}`;
   const reason =
     cause instanceof DOMException && cause.name === "NotReadableError"
       ? "The file has changed or moved since it was opened."
@@ -1179,17 +1179,18 @@ function describeReadFailure(offset: number, length: number, cause: unknown): st
   return `Could not read ${where} from the original file. ${reason}`;
 }
 
-/** An offset as `0x1f`, or `0x1f+3b` when it falls inside a byte. Lowercase
- * to match the hex gutter, so every address in the app reads the same way. */
-
 /**
  * An address, in whatever space it belongs to. A field of the file gets the
- * plain address; one inside a decoded stream gets a leading `+`, because
+ * plain address; one inside a decoded stream gets a `+` as well, because
  * `0x1c` of a stream and `0x1c` of the file are different bytes and a reader
  * comparing the listing against the hex view has to be able to tell.
+ *
+ * The mark stays in front of the `+`: `@+0x1c`, not `+@0x1c`. Every address
+ * on screen begins with the same character, and what the address is counted
+ * from is the next question, not the first one.
  */
 export function formatAddress(bits: number, space: number): string {
-  return space === 0 ? formatOffset(bits) : `+${formatOffset(bits)}`;
+  return space === 0 ? formatOffset(bits) : `${ADDRESS_MARK}+${offsetDigits(bits)}`;
 }
 
 /**

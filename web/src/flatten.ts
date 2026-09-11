@@ -106,6 +106,9 @@ export type Item = Common &
         readonly from: number;
         readonly to: number;
         readonly open: boolean;
+        /** What this part was reached through, when it was reached rather
+         *  than contained. See `hop`. */
+        readonly via: string | null;
       }
     | {
         readonly kind: "row";
@@ -118,6 +121,11 @@ export type Item = Common &
          *  a field exists because something uses it, and that is the answer
          *  to what a length prefix is for. */
         readonly reads: { readonly name: string; readonly path: readonly number[] } | null;
+        /** The type of the field that pointed here, when this row stands for
+         *  a pointer and its target at once: `at → ObjectHeader`. Null for
+         *  every row that is where it was declared, which is nearly all of
+         *  them. See `hop`. */
+        readonly via: string | null;
       }
     | {
         /** Bytes no row of the listing covers. `unmapped` says which kind:
@@ -485,18 +493,22 @@ export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, 
     const parent = src.node(item.path.slice(0, -1));
     return parent.status === "ok" ? parent.node.child_count : 0;
   };
+  // An item that stands for a pointer and its target already holds the target,
+  // so walking it again hops nothing and the pointer's type would be lost. It
+  // comes back in instead: what the item said the first time is what it says
+  // after a click on its fold.
   if (item.kind === "row") {
-    child(w, item.node, item.depth, total(), item.reads);
+    child(w, item.node, item.depth, total(), item.reads, "headings", item.via);
   } else if (item.kind === "heading" && item.node !== null && item.level === 1) {
     // A heading at this level is what `child` makes of a composite nothing
     // reads, so that is what to hand back to it.
-    child(w, item.node, item.depth, total(), null);
+    child(w, item.node, item.depth, total(), null, "headings", item.via);
   } else if (item.kind === "heading" && item.node !== null) {
     // A top-level part, which `sections` made by reading its children and
     // handing them to `heading`. Reading them again is the same question with
     // the same answer, since nothing above this item moved.
     const inner = w.kids(item.path, item.node.child_count);
-    heading(w, item.path, item.node, item.level, item.from, item.to, inner, item.title);
+    heading(w, item.path, item.node, item.level, item.from, item.to, inner, item.title, true, item.via);
   } else return null;
   // What the item stood over: its own byte strip, which sits at its depth, and
   // then everything indented under it. The first item at its depth or above is
@@ -524,19 +536,35 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
   // its cross-reference table before the table itself — so a running cursor
   // through the declarations answers the wrong question, and a field that
   // points elsewhere answers it at the pointer rather than at the target.
-  type Part = { readonly from: number; readonly to: number; readonly inner: Slice | null; readonly extent: Span | null };
+  type Part = {
+    readonly from: number;
+    readonly to: number;
+    /** The one composite this part is, once a pointer has been followed to
+     *  what it points at. Null for a part made of a run of plain fields. */
+    readonly node: TemplateNode | null;
+    readonly via: string | null;
+    readonly inner: Slice | null;
+    readonly extent: Span | null;
+  };
   const parts: Part[] = [];
   breaks.forEach((from, b) => {
     const to = breaks[b + 1] ?? kids.length;
     const first = kids[from];
     if (first === undefined) return;
     if (to - from === 1 && first.composite) {
-      const inner = w.kids([...path, from], first.child_count);
-      const covers = pointee(w, [...path, from], first, inner);
-      parts.push({ from, to, inner, extent: extentOf([covers]) });
+      // A part of the file that is one pointer is the part it points at. Only
+      // when what it points at is a structure: a heading is a division of the
+      // file with rows under it, and a pointer to a single string has none to
+      // put there, so that one keeps the pointer's own row.
+      const h = hop(w, first);
+      const node = h.node.composite ? h.node : first;
+      const via = h.node.composite ? h.via : null;
+      const inner = w.kids(node.path, node.child_count);
+      const covers = pointee(w, node.path, node, inner);
+      parts.push({ from, to, node, via, inner, extent: extentOf([covers]) });
       return;
     }
-    parts.push({ from, to, inner: null, extent: extentOf(kids.slice(from, to)) });
+    parts.push({ from, to, node: null, via: null, inner: null, extent: extentOf(kids.slice(from, to)) });
   });
   // Rule 1 is about the file, not only about the insides of a structure. The
   // parts of a 450 MiB HDF5 file that its template describes are its first
@@ -568,21 +596,19 @@ function sections(w: Walk, path: readonly number[], parent: TemplateNode, kids: 
   };
   at(parent.offset_bits);
   for (const part of parts) {
-    const first = kids[part.from];
-    if (first === undefined) continue;
     w.section += 1;
-    if (part.to - part.from === 1 && first.composite) {
-      const kidPath = [...path, part.from];
+    const only = part.node;
+    if (only !== null) {
       // A list of a handful of structures is a handful of parts of the file,
       // not one part holding a list: three SQLite pages read as three. Only a
       // list drawn whole can be, since a part of the file that is only some of
       // a list is not a part of the file.
-      const how = part.inner === null ? "headings" : (w.opts.density?.(first, part.inner.nodes) ?? densityOf(part.inner.nodes));
-      if (part.inner !== null && part.inner.from === 0 && part.inner.nodes.length === first.child_count && elementsAreSections(first, part.inner.nodes, w.sectionListMax, w.fileBits, how)) {
+      const how = part.inner === null ? "headings" : (w.opts.density?.(only, part.inner.nodes) ?? densityOf(part.inner.nodes));
+      if (part.inner !== null && part.inner.from === 0 && part.inner.nodes.length === only.child_count && elementsAreSections(only, part.inner.nodes, w.sectionListMax, w.fileBits, how)) {
         w.section -= 1;
-        sections(w, kidPath, first, part.inner.nodes, part.inner.from, first.name);
+        sections(w, only.path, only, part.inner.nodes, part.inner.from, only.name);
       } else {
-        heading(w, kidPath, first, 0, part.from, part.to, part.inner, titleOf(first, list));
+        heading(w, only.path, only, 0, part.from, part.to, part.inner, titleOf(only, list), true, part.via);
       }
     } else {
       runHeading(w, path, kids, part.from, part.to, breaks, base);
@@ -626,6 +652,87 @@ function pointee(w: Walk, path: readonly number[], node: TemplateNode, inner: Sl
   return only !== undefined && only.size_bits > 0 ? only : node;
 }
 
+/** A node the listing drew in place of the field that pointed at it, and the
+ *  type of the field that did the pointing. */
+export type Hop = { readonly node: TemplateNode; readonly via: string | null };
+
+/**
+ * What one item stands for, where a field reads its contents somewhere else.
+ *
+ * A field declared with `Ty::At` costs no bytes where it stands and reads its
+ * contents at an address taken from the file. The core gives it exactly one
+ * child: the thing at that address, which keeps the field's own name (see
+ * `place_child` in `eval/mod.rs`) and carries the real type. So the tree holds
+ * two nodes saying the same thing one level apart: `object` of type
+ * `at → ObjectHeader` with `object` of type `ObjectHeader` inside it. Drawing
+ * both spends a level of indent and a row on a repeat. HDF5 reaches
+ * everything by address, so that doubled every hop: two messages sat seven
+ * levels deep, and a b-tree of depth three cost six levels before a key.
+ *
+ * Worse than the length, the indent says something false. Everywhere else in
+ * the listing a step in means "these bytes are inside those bytes", and here
+ * it means "reached from", with nothing to say so: the target is usually
+ * nowhere near the pointer.
+ *
+ * Both go away by drawing the pair as one item. The item is the child, which
+ * is where the bytes are, and which is the path a hex click and `locate` land
+ * on; what it wears is the pointing field's type, `at → ObjectHeader`, which
+ * the core already writes and which says both what the thing is and that it
+ * was reached rather than contained. The arrow lands only on the rows that
+ * hop, so the formats where the indent means exactly what it says are left
+ * alone.
+ *
+ * The shape is what tells one of these apart, since a type name is all the
+ * view has to go on: no bytes of its own, one child, and that child carrying
+ * its name. `Ty::PointerList` and `Ty::Chain` place their children by address
+ * the same way, but call them `[0]`, `[1]`, …, so a list that happens to hold
+ * one element does not match and keeps its element row, which is right: `[0]`
+ * is a name the wrapper does not say. `Ty::Decoded` does pass its
+ * name to its one child, but a compressed run covers the bytes it occupies,
+ * so it fails the first test.
+ *
+ * Pointers nest, and so does this: `at → at → X` is what the outer field's
+ * type already reads, so the walk down keeps the first type it saw and stops
+ * at the first node that is not another pointer.
+ *
+ * Nothing is collapsed away where the pointer did not arrive: a null address,
+ * a ring, or an offset past the end leaves the child unreadable, and then the
+ * pointing field is the only node there is and stands as its own row. Bytes
+ * that have not been read yet leave it alone the same way, and the re-walk
+ * when they land collapses it then.
+ */
+function hop(w: Walk, node: TemplateNode, inner: Slice | null = null): Hop {
+  let at = node;
+  let via: string | null = null;
+  let kids = inner;
+  // Far past any real nesting: the core refuses a thousand, and a file that
+  // manages a hundred here is one this loop should leave rather than follow.
+  for (let step = 0; step < 64; step++) {
+    if (at.size_bits !== 0 || !at.composite || at.child_count !== 1) break;
+    const only = (kids ?? w.kids(at.path, 1))?.nodes[0];
+    if (only === undefined || only.name !== at.name) break;
+    via ??= at.type;
+    at = only;
+    kids = null;
+  }
+  return { node: at, via };
+}
+
+/**
+ * Where the item standing for the field at `path` actually is.
+ *
+ * Everything that sends the listing to a field names it by its path: a link
+ * from the field that reads it, a click in the hex view, the outline. A
+ * pointing field has no row of its own once its target has taken its place,
+ * so a path naming one has to be followed the same way the walk followed it,
+ * or the listing is asked for a row that is not there.
+ */
+export function hopPath(src: TreeSource, path: readonly number[]): readonly number[] {
+  const w = new Walk(src, emptyState, {});
+  const at = src.node(path);
+  return at.status === "ok" ? hop(w, at.node).node.path : path;
+}
+
 /** One part of the file with a field of its own to name it. */
 function heading(
   w: Walk,
@@ -637,6 +744,7 @@ function heading(
   inner: Slice | null,
   title: string = node.name,
   wanted = true,
+  via: string | null = null,
 ): void {
   const key = pathKey(path);
   const open = level === 0 || wanted;
@@ -655,6 +763,7 @@ function heading(
     from,
     to,
     open,
+    via,
   });
   // What the strip covers must not depend on whether the reader has opened
   // the heading: the same bytes button gave two different stretches before and
@@ -728,6 +837,7 @@ function runHeading(
     from,
     to,
     open: true,
+    via: null,
   });
   // The run's own edges are where the parts either side of it begin, so there
   // is nothing unaccounted for at them.
@@ -947,7 +1057,13 @@ function isWholeBytes(offsetBits: number, sizeBits: number): boolean {
   return offsetBits % 8 === 0 && sizeBits % 8 === 0;
 }
 
-function child(w: Walk, node: TemplateNode, depth: number, total: number, reads: { readonly name: string; readonly path: readonly number[] } | null = null, how: Density = "headings"): void {
+function child(w: Walk, declared: TemplateNode, depth: number, total: number, reads: { readonly name: string; readonly path: readonly number[] } | null = null, how: Density = "headings", was: string | null = null): void {
+  // A field that reads its contents somewhere else is drawn as what it reads,
+  // wearing the pointing field's type. `was` is that type coming back in on a
+  // second walk of an item already hopped: see `refold`.
+  const h = hop(w, declared);
+  const node = h.node;
+  const via = h.via ?? was;
   const key = pathKey(node.path);
   // A structure that places another field is not a division of the file, so it
   // stays a row: an array of cell pointers belongs beside the fields it was
@@ -961,7 +1077,7 @@ function child(w: Walk, node: TemplateNode, depth: number, total: number, reads:
       w.opts.formatCard?.(node) != null;
     // Null rather than an empty slice: "not read" and "read, and empty" are
     // different answers, and the strip's extent turns on which it is.
-    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null, node.name, open);
+    heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null, node.name, open, via);
     return;
   }
   const open = node.composite && node.child_count > 0 && w.isOpen(key, arrivesOpen(node, total));
@@ -976,6 +1092,7 @@ function child(w: Walk, node: TemplateNode, depth: number, total: number, reads:
     node,
     open,
     reads,
+    via,
   });
   const dump = !node.composite && arrivesDumped(node);
   w.strip(`r:${key}`, node.path, node.name, { start: node.offset_bits, end: endBits(node) }, depth, { arrivesShowing: dump, dump });
