@@ -1071,7 +1071,7 @@ mod v2 {
         // an address plus a whole number of offsets is not one of these, and
         // says so rather than reading offsets out of the wrong place.
         if out.records == Records::Read && job == Job::Chunk {
-            if record_size > ADDR && (record_size - ADDR) % 8 == 0 {
+            if record_size > ADDR && (record_size - ADDR).is_multiple_of(8) {
                 out.coords = (record_size - ADDR) / 8;
             } else {
                 out.records = Records::Unread;
@@ -1244,7 +1244,7 @@ mod v2 {
     /// nowhere would hand the view a "still reading" it can never finish
     /// waiting for.
     fn read_at<S: Source>(doc: &Document<S>, at: u64, len: u64) -> R<Vec<u8>> {
-        let end = at.checked_add(len).unwrap_or(u64::MAX);
+        let end = at.saturating_add(len);
         if len < 4 || end > doc.len_bytes() {
             return Err(EvalError::Failed("b-tree node outside the file".into()));
         }

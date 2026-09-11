@@ -928,6 +928,18 @@ export const BTREES = {
    *  than to the object in the heading, and type 0 is named "testing", which
    *  "this object's testing" would make nonsense of. */
   jobOther: (typeName: string): string => `B-tree indexing ${typeName}`,
+  /** The same line for a version 2 tree whose type byte no version of the
+   *  specification names. `jobOther` cannot serve: the walk sends an empty
+   *  name for one of those, and the line would read "B-tree indexing  ·
+   *  version 2 B-tree".
+   *
+   *  The byte is the only fact there is, so the line is the byte and, in
+   *  `leafRecordsTitle`'s and `recordsUnknown`'s own words, that nothing names
+   *  it. Without that clause a bare "type 200" reads as a code this knew and
+   *  chose not to spell out. Decimal, because the Listing prints the `type`
+   *  field in decimal. */
+  jobUnknown: (type: number): string =>
+    `B-tree indexing records of type ${type.toLocaleString()}, which no version of the HDF5 specification names`,
   /** Appended to whichever of the three job lines is shown. The two versions
    *  are different structures with different silhouettes, and a reader who has
    *  seen one and is now looking at the other needs to be told which.
@@ -961,12 +973,21 @@ export const BTREES = {
    *  records rather than in links or chunks: both kinds of node hold records,
    *  because a version 2 tree is a B-tree and not a B+ tree.
    *
-   *  The last sentence is for the reader who has seen a version 1 group tree
-   *  and is looking for the bottom row of link tables that is not there. It
-   *  covers every job, including the types that index neither links nor
-   *  chunks. */
+   *  "At or below it" and not "below it", because the bottom row is the case
+   *  where the two differ: an internal node's width is the records in the
+   *  leaves under it and a leaf's width is its own records.
+   *
+   *  Nothing here about the number printed on a box. The key line above says
+   *  that, and says it beside a drawn box, which is the one thing a sentence
+   *  cannot do; saying it twice in two lines in two different words is the
+   *  defect this caption would otherwise be.
+   *
+   *  The second sentence is for the reader who has seen a version 1 group tree
+   *  and is looking for the bottom row of link tables that is not there. "Such
+   *  as", not a bracketed list, because there are twelve record types and a
+   *  bracket reads as all of them. */
   widthRecords:
-    "Width: how many records are in the leaves reached through the box. Number on a box: its own record count. What a record refers to (a link, a chunk, an attribute) lives outside the tree and is not drawn.",
+    "Box width is proportional to the number of records in the leaf nodes at or below it. What a record refers to, such as a link, a chunk or an attribute, is outside the tree and is not drawn.",
   /** The key to the number printed on a box, shown beside a drawn box with `N`
    *  in it. The sentence that used to say this ("Number on a box: its own
    *  entry count") was a fact the reader had to hold in mind while looking at
@@ -975,6 +996,18 @@ export const BTREES = {
    *  drawn box is a key, and "this" invites reading it as a node in the tree. */
   entriesChip: "N",
   entriesKey: "entries in that node",
+  /** The same key for a version 2 tree, where the number is a record count.
+   *  Same shape, one noun changed, so the legend reads the same way in both
+   *  and only the word differs.
+   *
+   *  "Records" because that is the word every other line on a version 2 screen
+   *  uses: the readout says "holds 7 records", the summary row says "49 leaf
+   *  nodes holding 1,952 records", the band says "1,952 records". One noun for
+   *  one number. Version 1 keeps "entries", where the two rows hold different
+   *  things and the generic term is the one that covers both, and where
+   *  `entries_used` is what the Listing calls the field at the bytes a click
+   *  lands on. */
+  recordsKey: "records in that node",
   /** The band under the last row of boxes: the links or chunks the tree
    *  indexes. They are not nodes, so they are drawn as one dashed, undivided
    *  band rather than as boxes, and the label is a count with its unit.

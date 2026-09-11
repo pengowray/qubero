@@ -95,6 +95,12 @@ export class BTreePanel {
   private readonly plot: HTMLElement;
   private readonly widths: HTMLElement;
   private readonly keyLine: HTMLElement;
+  /** The words beside the drawn box in the key, which are the one part of it
+   *  that depends on the tree: a version 1 node's number is entries and a
+   *  version 2 node's is records, and every other line on the panel says
+   *  whichever of the two it is. Held so that a repaint can set the text
+   *  rather than build the row again. */
+  private readonly keyLabel: HTMLElement;
   private readonly rows: HTMLElement;
   private readonly stripCap: HTMLElement;
   private readonly strip: HTMLElement;
@@ -153,7 +159,9 @@ export class BTreePanel {
     this.plot.addEventListener("dblclick", (e) => this.hit(e, true));
     this.widths = document.createElement("div");
     this.widths.className = "btp-line";
-    this.keyLine = keyRow();
+    const key = keyRow();
+    this.keyLine = key.row;
+    this.keyLabel = key.label;
     this.rows = document.createElement("div");
     this.rows.className = "btp-rows";
     this.stripCap = document.createElement("div");
@@ -398,6 +406,7 @@ export class BTreePanel {
     this.head.textContent = this.ownerName ?? this.owner(tree);
     this.job.textContent = jobCaption(tree);
     this.keyLine.hidden = false;
+    this.keyLabel.textContent = tree.version === 2 ? BTREES.recordsKey : BTREES.entriesKey;
     this.widths.textContent = widthCaption(tree);
     this.stripCap.textContent = BTREES.stripCaption;
     const placed = place(tree, width);
@@ -690,13 +699,12 @@ export class BTreePanel {
       this.drawReadout();
       // A node with no path is not in the Listing to be opened: the template
       // places only the root of a version 2 tree, and the rest are read from
-      // their bytes. Going to the bytes is what is left, and is what the
-      // single press does, so the second press does that rather than sending
-      // the Listing to the root of the file, which an empty path would.
-      if (node.path.length === 0) {
-        this.onJump(node.address * 8, node.address * 8 + node.size_bits);
-        return;
-      }
+      // their bytes. So the second press does nothing beyond putting the mark
+      // back. Not the jump again: the first of the two presses already made
+      // it, and a second would record a step from where the reader is to where
+      // they already are. An empty path handed on would send the Listing to
+      // the root of the file, which is worse than nothing.
+      if (node.path.length === 0) return;
       this.onPick({ path: node.path, startBit: node.address * 8, endBit: node.address * 8 + node.size_bits });
       return;
     }
@@ -824,8 +832,12 @@ function keyOf(nodes: readonly number[]): string {
  *  another file cannot tell from a picture of three rows of boxes which kind
  *  they are looking at unless it says. */
 function jobCaption(tree: Tree): string {
-  const job =
-    tree.job === "group" ? BTREES.jobGroup : tree.job === "chunk" ? BTREES.jobChunk : BTREES.jobOther(tree.record_type_name);
+  // On `records` and not on the name being empty, because the two cases are
+  // not the same fact: a type the specification names is a thing this tree
+  // indexes and can be said outright, and a type byte nothing names is a
+  // number and a caveat.
+  const other = tree.records === "unknown" ? BTREES.jobUnknown(tree.record_type) : BTREES.jobOther(tree.record_type_name);
+  const job = tree.job === "group" ? BTREES.jobGroup : tree.job === "chunk" ? BTREES.jobChunk : other;
   return job + BTREES.versionTag(tree.version);
 }
 
@@ -916,13 +928,15 @@ function leafBand(tree: Tree): { label: string; title: string } | null {
  * draws them, with `N` where the count goes, and four words saying what the
  * count counts.
  *
- * Built once and never redrawn: it says nothing about the tree on screen, and
- * a legend rebuilt on every paint is work done during a scroll for a picture
- * that did not change. Its own class rather than `.btp-box`, which is
- * pressable and answers the mouse; a key that lights up under the cursor is a
- * control that does nothing.
+ * Built once and never rebuilt: a legend rebuilt on every paint is work done
+ * during a scroll for a picture that did not change. One word of it does
+ * depend on the tree, because a version 1 node's number is entries and a
+ * version 2 node's is records, so the row is handed back with that word's
+ * element and a repaint sets its text. Its own class rather than `.btp-box`,
+ * which is pressable and answers the mouse; a key that lights up under the
+ * cursor is a control that does nothing.
  */
-function keyRow(): HTMLElement {
+function keyRow(): { row: HTMLElement; label: HTMLElement } {
   const row = document.createElement("div");
   row.className = "btp-key";
   const svg = document.createElementNS(SVG, "svg");
@@ -946,7 +960,7 @@ function keyRow(): HTMLElement {
   const label = document.createElement("span");
   label.textContent = BTREES.entriesKey;
   row.append(svg, label);
-  return row;
+  return { row, label };
 }
 
 /**
