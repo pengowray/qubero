@@ -13,6 +13,16 @@
 // an element, and an element that leaves the document is a touch the browser
 // calls off, which stops the drag that is scrolling the view.
 //
+// **An element stands for an address, not for a place on screen.** The pool
+// used to be read by the row's place in the view: element 0 drew whatever the
+// top row was, so a scroll of two rows rewrote all twenty-nine of them, and
+// scrolling by a notch cost what scrolling by a screenful cost. Now `place`
+// hands each address the element that already held it, and only the rows
+// arriving at an edge are written. Which row is drawn where is said by the
+// flex `order` on the element, so the document's order never changes: nothing
+// is moved, nothing is taken out, and a finger stays on what it was on. See
+// `place` for what the number is and why it is not just the row's address.
+//
 // The frame's type is imported back from `hexview.ts`. Only the type: the
 // class here is what that file imports, so at run time the two go one way.
 
@@ -74,6 +84,12 @@ type RowParts = {
   /** The byte the row starts at, so the addresses on its cells are written
    *  again only when the view has moved. */
   start: number;
+  /** The row this element is standing for, or -1 for one that stands for
+   *  nothing yet. Kept apart from `start`, which is the address the cells were
+   *  last written with: a row past the end of the file is given an element and
+   *  never written, so the two say different things and only this one says
+   *  which element `place` should hand that row next time. */
+  holds: number;
   /** True for a row past the end of the file, which is emptied rather than
    *  drawn. */
   blank: boolean;
@@ -112,9 +128,24 @@ export class HexRows {
   /** What the pinned strip last said, so it is filled again only when it would
    *  say something else. */
   private pinnedKey = "";
+  /** The pool, in the order the elements were made and put in the document.
+   *  Nothing ever moves inside it. */
   private rowEls: HTMLElement[] = [];
   /** The elements each row is made of, kept between draws. See `fitParts`. */
   private parts: RowParts[] = [];
+  /** Which element of the pool draws each row of the view, top row first, and
+   *  the same elements again for the callers that want them that way. Both are
+   *  written by `place` and read by everything after it. */
+  private win: number[] = [];
+  private winEls: HTMLElement[] = [];
+  /** What is taken off a row's address to get its flex `order`. The order is a
+   *  32-bit integer in the browser and a row number is not: a file can have
+   *  more rows than that, and `rowheights.ts` counts them in doubles for the
+   *  same reason. So the number written is the row's distance from a mark that
+   *  is moved up to the view whenever the view has wandered far from it, which
+   *  keeps every order small and positive and costs a rewrite of the
+   *  twenty-nine orders once every million rows. */
+  private orderBase = 0;
   private partsShape = "";
   private headerShape = "";
   /** What `fitParts` last built the lines for, so a line added mid-draw for a
@@ -133,9 +164,17 @@ export class HexRows {
     this.pinned.className = "hv-note hv-note-pinned hv-empty";
   }
 
-  /** The row elements, for reading a point on screen back to a byte. */
+  /** The row elements in the order they are drawn, top row first, for reading
+   *  a point on screen back to a byte. Not the order they sit in the document,
+   *  which stopped meaning anything when rows began to be reused. */
   get rows(): readonly HTMLElement[] {
-    return this.rowEls;
+    return this.winEls;
+  }
+
+  /** The last row of the view, which is what a drag pulled below the rows is
+   *  pinned to. Read in drawn order for the same reason `rows` is. */
+  lastRow(): HTMLElement | null {
+    return this.winEls[this.winEls.length - 1] ?? null;
   }
 
   /** Put the rows at the scroll position: the top row starts above the edge
@@ -152,14 +191,121 @@ export class HexRows {
   write(f: Frame): number[] {
     this.drawHeader(f);
     this.fitParts(f.bpr, f.binary, f.showText, f.fields, f.below);
+    this.place(f.bpr === 0 ? 0 : Math.floor(f.start / f.bpr));
     this.carried = null;
     const heights: number[] = [];
-    for (let r = 0; r < this.rowEls.length; r++) {
+    for (let r = 0; r < this.win.length; r++) {
       const h = this.drawRow(r, f);
       if (h !== null) heights.push(h);
     }
     this.drawPinned();
     return heights;
+  }
+
+  /**
+   * Hand each row of the view the element that is to draw it.
+   *
+   * A row that was on screen last draw keeps the element it was in, wherever
+   * on screen it has moved to; the rows arriving at an edge take the elements
+   * the rows that left the other edge have given up. The element that drew a
+   * row still says so, in `start` and in the keys beside it, so a row that
+   * kept its element finds every one of those guards already holding what it
+   * was going to write and writes nothing at all. That is the whole of the
+   * saving: a one-notch scroll used to rewrite twenty-nine rows and now writes
+   * the two that arrived.
+   *
+   * Where a row is drawn is said by the flex `order` on its element rather
+   * than by its place among the children. Two things follow from that and both
+   * are the point:
+   *
+   *  - Nothing is ever moved in the document, so a finger resting on a row
+   *    keeps the element it is resting on. Reusing rows makes the rule about
+   *    not detaching a row under a touch easier to keep, not harder.
+   *  - The rows are still laid out one under the next by the browser, at
+   *    whatever height each came out. Nothing here positions a row, so a row
+   *    whose height was predicted wrong still pushes the ones below it down
+   *    rather than landing on top of them. The other way of doing this —
+   *    absolute tops written from the measured heights — would have made the
+   *    draw responsible for that, and for nothing gained.
+   *
+   * **What stops a reused row saying something out of date.** Nothing here
+   * decides that a row needs no work: every row is still drawn in full on
+   * every draw, `cellDraw` still works out what each of its cells says, and
+   * every write is still `if (it differs) write it`. A row that kept its
+   * element finds those guards already holding what it was going to write, so
+   * it writes nothing; a row given a recycled element finds them holding the
+   * row that element used to draw, so it writes everything. The guards are the
+   * ones that were already there and not one of them was loosened:
+   *
+   *  - `start` is the address the cells were written with, so a recycled
+   *    element has `moved` true and every `data-off` is written again.
+   *  - `layoutKey` covers where the row is cut, the headings above it and the
+   *    file's length; `noteKey` covers every chip the row shows, taken from
+   *    the plan's own output rather than from what went into it; `valsKey`
+   *    covers the table of values.
+   *  - `fitParts` throws every one of them away when the shape of the view
+   *    changes, and clears `holds` with them, so a row drawn at eight bytes to
+   *    the line cannot be handed an element that drew sixteen.
+   *  - The three things a row says because of *where it is* rather than which
+   *    address it holds — the top row's carried chips, the last row's "more
+   *    fields below", and the rule under the column header — all reach the
+   *    element through `noteKey` or through the `hv-row-top` class written
+   *    above.
+   *
+   * That was checked rather than reasoned: `web/tools/staleness.mjs` runs the
+   * same script of scrolls, cursor moves, selections, mode changes and resizes
+   * against a server drawing the old way and one drawing this way, and
+   * compares every visible cell, class, chip and heading after every step. 513
+   * steps over nine sample files, no difference anywhere.
+   *
+   * **What it is worth.** `web/tools/wheelcost.mjs` on `hello.exe` at
+   * 1280x800, runs interleaved against a server on the commit before this one:
+   *
+   * | | attributes written | text written | browser layout | browser style | draw |
+   * |---|---|---|---|---|---|
+   * | one notch, before | 1,406 | 508 | 8ms | 3ms | 20-24ms |
+   * | one notch, after  |    57 |  18 | 1ms | 1ms |  8ms |
+   * | thirty notches, before | 32,187 | 12,358 | 174ms | 67ms | 432ms |
+   * | thirty notches, after  |  1,667 |    464 |  16ms | 17ms | 137ms |
+   *
+   * The counts are what to read: they are deterministic, and the times on this
+   * machine are not. What is left in the draw is script — working out what
+   * every row would say, so as to find that it already says it — and the next
+   * thing worth attacking is `placeSpans` rather than anything here.
+   */
+  private place(topRow: number): void {
+    const n = this.rowEls.length;
+    // Far from the mark the orders are counted from, or behind it: move it to
+    // the view. Every order below is then written again, which is what the
+    // guard on the write costs on the one draw in a million where this fires.
+    if (topRow < this.orderBase || topRow - this.orderBase > 1_000_000) this.orderBase = topRow;
+    const win: number[] = new Array(n).fill(-1);
+    const spare: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const w = (this.parts[i] as RowParts).holds - topRow;
+      // `win[w] === -1` as well as the range: two elements claiming one row
+      // can only happen if something below got out of step, and the second one
+      // becoming spare is the reading that leaves every row drawn once.
+      if (w >= 0 && w < n && win[w] === -1) win[w] = i;
+      else spare.push(i);
+    }
+    let s = 0;
+    for (let w = 0; w < n; w++) {
+      if (win[w] === -1) win[w] = spare[s++] as number;
+      const i = win[w] as number;
+      (this.parts[i] as RowParts).holds = topRow + w;
+      const el = this.rowEls[i] as HTMLElement;
+      const order = String(topRow + w - this.orderBase);
+      if (el.style.order !== order) el.style.order = order;
+      // The top row is named on the element: the stylesheet takes the rule off
+      // the first heading of the view so it does not double the column
+      // header's own, and which element that is no longer follows from where
+      // it sits among the children.
+      if (el.classList.contains("hv-row-top") !== (w === 0)) el.classList.toggle("hv-row-top", w === 0);
+      this.winEls[w] = el;
+    }
+    this.win = win;
+    this.winEls.length = n;
   }
 
   /**
@@ -203,7 +349,7 @@ export class HexRows {
    * rather than a pixel are the ones that could move a row under a reader.
    */
   heights(predicted: readonly number[]): number[] {
-    return predicted.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));
+    return predicted.map((h, i) => (h === 0 ? 0 : (this.winEls[i]?.offsetHeight ?? h)));
   }
 
   /** The fonts a chip's name and its value are drawn in, read off a chip that
@@ -230,7 +376,7 @@ export class HexRows {
   /** The side column's width and where it starts, read off the first row.
    *  Null when there is no column to read. */
   noteMetrics(): NoteMetrics | null {
-    const noteEl = this.rowEls[0]?.querySelector(".hv-note") as HTMLElement | null;
+    const noteEl = this.winEls[0]?.querySelector(".hv-note") as HTMLElement | null;
     if (noteEl === null || noteEl === undefined) return null;
     // `clientWidth` counts the note's own left padding, which no chip can be
     // drawn in.
@@ -244,7 +390,7 @@ export class HexRows {
   /** How wide a byte of the bytes is drawn, so a byte of an aligned value
    *  table can be drawn at the same pitch. Zero when there is none to read. */
   hexPitch(binary: boolean): number {
-    const cell = this.rowEls[0]?.querySelector(binary ? ".hv-bits > span" : ".hv-hex > span");
+    const cell = this.winEls[0]?.querySelector(binary ? ".hv-bits > span" : ".hv-hex > span");
     return cell instanceof HTMLElement ? cell.getBoundingClientRect().width : 0;
   }
 
@@ -252,12 +398,12 @@ export class HexRows {
    *  the pool and the byte's place in the row. A heading may have cut the row,
    *  so which line the cell is on is the pool's business, not the caller's. */
   cellFor(row: number, at: number): HTMLElement | undefined {
-    return this.parts[row]?.hexCells[at];
+    return this.parts[this.win[row] ?? -1]?.hexCells[at];
   }
 
   /** How wide a whole row is, which is what a note below the bytes gets. */
   rowWidth(): number {
-    return this.rowEls[0]?.clientWidth ?? 0;
+    return this.winEls[0]?.clientWidth ?? 0;
   }
 
   /** Stand the pinned strip over the side column rather than over the whole
@@ -389,6 +535,14 @@ export class HexRows {
       this.rowEls.pop()?.remove();
       this.parts.pop();
     }
+    // Whatever `place` last worked out is about a pool that no longer exists.
+    // Nothing reads these before the next `write`, which calls `place` again,
+    // but leaving an index in here that is past the end of the pool would be a
+    // trap for whatever reads them next.
+    if (this.win.length !== want) {
+      this.win.length = 0;
+      this.winEls.length = 0;
+    }
   }
 
   /**
@@ -417,6 +571,7 @@ export class HexRows {
         hexCells: [...first.hex],
         textCells: [...first.text],
         start: -1,
+        holds: -1,
         blank: false,
         layoutKey: "",
         noteKey: "",
@@ -511,8 +666,9 @@ export class HexRows {
    * arranged so the browser is asked once, at the end.
    */
   private drawRow(r: number, f: Frame): number | null {
-    const row = this.rowEls[r];
-    const parts = this.parts[r];
+    const i = this.win[r] ?? -1;
+    const row = this.rowEls[i];
+    const parts = this.parts[i];
     if (!row || parts === undefined) return null;
     const { bpr, len, start } = f;
     const rowStart = start + r * bpr;
@@ -681,7 +837,7 @@ export class HexRows {
       reading: r === 0 ? this.topReading(vals) : null,
     });
     if (planned.pinned !== null) this.carried = planned.pinned;
-    const trailer = f.more && r === this.rowEls.length - 1;
+    const trailer = f.more && r === this.win.length - 1;
     const key = rowNoteKey(planned.blocks, trailer);
     // The table goes in the first line's block: a heading may cut the row, but
     // the table spans the row's whole width and belongs to all of it.
