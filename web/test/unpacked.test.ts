@@ -38,19 +38,19 @@ const line = (s: Step, file = "hello.txt.zst"): string =>
   unpackedOrigin(file, s.in_start, s.in_end, s.kind, s.len, s.dist);
 
 test("a match says how long it is and how far back it reaches", () => {
-  assert.equal(line(MATCH), "from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: match, 5 bytes back 12");
+  assert.equal(line(MATCH), "from bits @0x1a3.5 to @0x1a4.2 of hello.txt.zst: match, 5 bytes back 12");
 });
 
 test("a step that read nothing says so, and still says where", () => {
   // LZMA's range coder pulls a byte only when it needs one, so most of its
   // literals pull none. The range is empty and its one bit is where the decoder
-  // stood; `bits 0x6.0 to 0x6.0` would put the step on a bit it never read. The
+  // stood; `bits @0x6.0 to @0x6.0` would put the step on a bit it never read. The
   // panel row is the same line without `from`, under a heading that says it.
   const literal: Step = { in_start: 0x6 * 8, in_end: 0x6 * 8, out_start: 0x40, out_end: 0x41, kind: "literal" };
-  assert.equal(line(literal, "hello.txt.lz"), "from no bits at 0x6.0 of hello.txt.lz: literal");
+  assert.equal(line(literal, "hello.txt.lz"), "from no bits at @0x6.0 of hello.txt.lz: literal");
   assert.equal(
     unpackedOriginRow("hello.txt.lz", literal.in_start, literal.in_end, literal.kind),
-    "no bits at 0x6.0 of hello.txt.lz: literal",
+    "no bits at @0x6.0 of hello.txt.lz: literal",
   );
 });
 
@@ -60,20 +60,20 @@ test("properties the container supplied have no bits of the run to point at", ()
   // the front of the stream, ahead of the five bytes that prime the coder.
   assert.equal(
     unpackedOrigin("hello.txt.lz", 0, 0, "header", undefined, undefined, "lzma_props"),
-    "from no bits at 0x0.0 of hello.txt.lz: LZMA properties (lc, lp, pb)",
+    "from no bits at @0x0.0 of hello.txt.lz: LZMA properties (lc, lp, pb)",
   );
   assert.equal(
     unpackedOriginRow("hello.txt.lz", 0, 0, "header", undefined, undefined, "lzma_props"),
-    "no bits at 0x0.0 of hello.txt.lz: LZMA properties (lc, lp, pb)",
+    "no bits at @0x0.0 of hello.txt.lz: LZMA properties (lc, lp, pb)",
   );
 });
 
 test("a bit offset is the byte in hex and the bit after a dot", () => {
-  assert.equal(UNPACKED.bit(0), "0x0.0");
-  assert.equal(UNPACKED.bit(0x1a3 * 8 + 5), "0x1a3.5");
+  assert.equal(UNPACKED.bit(0), "@0x0.0");
+  assert.equal(UNPACKED.bit(0x1a3 * 8 + 5), "@0x1a3.5");
   // A whole byte still says which bit, so every offset on the line reads the
   // same way and none of them has to be guessed at.
-  assert.equal(UNPACKED.bit(0x1a4 * 8), "0x1a4.0");
+  assert.equal(UNPACKED.bit(0x1a4 * 8), "@0x1a4.0");
 });
 
 test("a match of one byte is not called 1 bytes", () => {
@@ -81,8 +81,8 @@ test("a match of one byte is not called 1 bytes", () => {
 });
 
 test("the steps that only name themselves", () => {
-  assert.equal(line(PLAIN("literal")), "from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: literal");
-  assert.equal(line(PLAIN("stored")), "from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: stored");
+  assert.equal(line(PLAIN("literal")), "from bits @0x1a3.5 to @0x1a4.2 of hello.txt.zst: literal");
+  assert.equal(line(PLAIN("stored")), "from bits @0x1a3.5 to @0x1a4.2 of hello.txt.zst: stored");
   assert.equal(UNPACKED.step("block"), "block header");
   assert.equal(UNPACKED.step("header"), "block header");
   assert.equal(UNPACKED.step("table"), "Huffman table");

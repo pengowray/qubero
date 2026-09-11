@@ -7,6 +7,8 @@
 // is grey in one column and not in the next is a difference a reader has to
 // account for.
 
+import { ADDRESS_MARK } from "./format.ts";
+
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   props: Partial<HTMLElementTagNameMap[K]> = {},
@@ -58,21 +60,27 @@ export function address(text: string, from: string): (Node | string)[] {
  *
  * Split out from `address` so the rule can be read and tested without a
  * document, since the rule is the part that can be wrong. A `+` is the mark
- * only where an address begins: at the front of the text, or after a space,
- * which is what the second address of a range comes after. Both ends of
- * `+0x13 to +0x17` count from the same place, so both are marked.
+ * only where an address begins: at the front of the text, after a space, which
+ * is what the second address of a range comes after, or straight after the
+ * `@` that now begins every address. Both ends of `@+0x13 to @+0x17` count
+ * from the same place, so both are marked.
  *
  * The `+` this must not touch is the one inside an address. `formatOffset`
- * writes a sub-byte address as `0x69+7b`, where the plus means seven bits past
- * the byte: a third meaning of the glyph, and one this app cannot give up,
- * since bit addresses are most of what it is for. A mark that promises to say
- * what an offset is added to must not sit on a plus it would answer wrongly.
+ * writes a sub-byte address as `@0x69+7b`, where the plus means seven bits
+ * past the byte: a third meaning of the glyph, and one this app cannot give
+ * up, since bit addresses are most of what it is for. A mark that promises to
+ * say what an offset is added to must not sit on a plus it would answer
+ * wrongly. The `@` is what keeps the two apart: a plus it introduces is the
+ * front of the address, a plus further in is bits.
+ *
+ * The `@` stays plain text. It has nothing to explain, so it gets no hover and
+ * no rule under it; the dotted line is the sign that there is more to read.
  */
 export function addressParts(text: string): { readonly text: string; readonly mark: boolean }[] {
   const out: { text: string; mark: boolean }[] = [];
   let at = 0;
   for (let i = text.indexOf("+"); i >= 0; i = text.indexOf("+", i + 1)) {
-    if (i !== 0 && text[i - 1] !== " ") continue;
+    if (i !== 0 && text[i - 1] !== " " && text[i - 1] !== ADDRESS_MARK) continue;
     if (i > at) out.push({ text: text.slice(at, i), mark: false });
     out.push({ text: "+", mark: true });
     at = i + 1;

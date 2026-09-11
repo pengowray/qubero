@@ -72,7 +72,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: str
   return node;
 }
 
-/** `0x1000 – 0x1fff`, the stretch a heading covers. A part of no bytes has no
+/** `@0x1000 – @0x1fff`, the stretch a heading covers. A part of no bytes has no
  *  range to give, which is what a field placed somewhere else looks like. */
 export function rangeText(offsetBits: number, sizeBits: number, space = 0): string {
   if (sizeBits === 0) return formatAddress(offsetBits, space);
@@ -210,7 +210,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   if (isSelected(c.selected, item.offsetBits, item.sizeBits) || c.nearest === item.key) row.classList.add("is-on");
   indent(row, item.depth);
   // A computed value is not written anywhere, so it has no address, and its
-  // length says so in words: "0x101a7" and "0 bytes" would be answers to
+  // length says so in words: "@0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
   const written = n.type !== "computed";
   const at = el("span", "rp-at");

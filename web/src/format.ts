@@ -6,13 +6,47 @@
 // half to move.
 
 /**
- * An address, as the gutter writes it. Sub-byte offsets carry the bit as
- * `+3b`, since a field that starts inside a byte has no plain address.
+ * The mark that says a number is a place in a file and not a value.
+ *
+ * `0x` alone said both. A treemap box called `0xa60` sat beside boxes called
+ * `Zeros` and `Data`, and `Written at +0x1c` sat two rows under a literal
+ * byte of `0x4d`, with nothing but the reader's memory to tell the two apart.
+ *
+ * `@` over the other conventions because the others assert a base. `$A60` and
+ * `A60h` both mean hex and would have to be unpicked the day addresses can be
+ * shown in decimal; `@` says only "a place", which stays true in any base.
+ * `[0x..]` was out because this app already writes array indices that way, so
+ * `records[0]` and an address would have looked like the same kind of thing.
+ * Colour was tried and pulled: it shouted, and an address is not an alarm.
+ *
+ * It goes in front of everything, the `+` of a stream address included, so
+ * every address on screen starts with the same character and the eye can
+ * stop reading after one.
  */
-export function formatOffset(bits: number): string {
+export const ADDRESS_MARK = "@";
+
+/**
+ * An address with nothing in front of it, for the callers that put the mark
+ * back themselves because something else has to go between.
+ *
+ * Sub-byte offsets carry the bit as `+3b`, since a field that starts inside a
+ * byte has no plain address.
+ */
+export function offsetDigits(bits: number): string {
   const byte = Math.floor(bits / 8);
   const rem = bits % 8;
   return `0x${byte.toString(16)}${rem === 0 ? "" : `+${rem}b`}`;
+}
+
+/**
+ * An address, marked: `@0x40`, or `@0x69+7b` where it falls inside a byte.
+ *
+ * Lowercase hex, as the gutter writes it. The gutter itself is the one place
+ * that leaves the mark off: a column of nothing but addresses, in the spot
+ * every hex editor puts them, says what it is by being there.
+ */
+export function formatOffset(bits: number): string {
+  return `${ADDRESS_MARK}${offsetDigits(bits)}`;
 }
 
 /** A size, in the units a reader would say it in. */

@@ -7,7 +7,7 @@
 // by template name and field name on the JS side; the core stays a describer of
 // the bytes that are literally in the file.
 
-import { formatBytes } from "./doc.ts";
+import { formatBytes, formatOffset } from "./doc.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
 
 /** The most this will open into a tab, packed or unpacked. Everything opened
@@ -49,7 +49,7 @@ export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): Op
     // `unpacked_size` is the header's number once a ZIP64 entry's placeholder
     // has been answered from its extra fields; older templates have neither.
     const unpacked = numberField(siblings, "unpacked_size") ?? numberField(siblings, "uncompressed_size");
-    const where = `${entry} in ${doc.name}, ${formatBytes(packed)} at offset 0x${at.toString(16)}`;
+    const where = `${entry} in ${doc.name}, ${formatBytes(packed)} at offset ${formatOffset(at * 8)}`;
     if (method === 0) {
       return withLimit(packed, {
         name: entry,
@@ -86,7 +86,7 @@ export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): Op
     return withLimit(Math.max(packed, unpacked ?? 0), {
       name,
       detail: `${name} · deflate, ${formatBytes(packed)}${grows}`,
-      origin: `${name} in ${doc.name}, ${formatBytes(packed)} at offset 0x${at.toString(16)}, decompressed with deflate`,
+      origin: `${name} in ${doc.name}, ${formatBytes(packed)} at offset ${formatOffset(at * 8)}, decompressed with deflate`,
       load: async () => inflateRaw(await loadBytes(doc, at, packed)),
     });
   }
@@ -96,7 +96,7 @@ export function openPlan(doc: Doc, path: readonly number[], n: TemplateNode): Op
   return withLimit(packed, {
     name: n.name,
     detail: `${n.name} · ${formatBytes(packed)}`,
-    origin: `${n.name} in ${doc.name}, ${formatBytes(packed)} at offset 0x${at.toString(16)}`,
+    origin: `${n.name} in ${doc.name}, ${formatBytes(packed)} at offset ${formatOffset(at * 8)}`,
     load: () => loadBytes(doc, at, packed),
   });
 }
