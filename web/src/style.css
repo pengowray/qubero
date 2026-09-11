@@ -4843,6 +4843,11 @@ table.rec tr.is-on td {
    the page in either theme. */
 .btp-leaf {
   fill: none;
+  /* An SVG shape with no fill is hit-tested on its outline alone, so the band
+     would answer the mouse on its one dashed pixel and nowhere else. Its
+     tooltip is the string that stops the band being read two ways, and a
+     reader hovers the middle of a band, not its edge. */
+  pointer-events: all;
   stroke: var(--muted);
   stroke-width: 1px;
   stroke-dasharray: 3 3;
