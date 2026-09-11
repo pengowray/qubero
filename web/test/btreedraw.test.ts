@@ -332,11 +332,19 @@ test("a capped version 2 walk weighs less than the band, and the band still stan
     record_type: 10,
     records_total: 400,
     omitted: 3,
-    root: { entries: 4, kind: "index", level: 1, kids: [84, 84].map(leaf) },
+    // The core sets this wherever the cap cuts a node's children
+    // (`hdf5_tree.rs`, the version 2 walk: `taken < pointers`), so a fixture
+    // with `omitted` and no flag is a tree the walk could not have produced.
+    root: { entries: 4, kind: "index", level: 1, truncated: true, kids: [84, 84].map(leaf) },
   });
   assert.equal(leafCount(tree), 400);
   assert.equal(place(tree, WIDTH)[0]?.weight, 4 + 168);
   assert.notEqual(leafBand(tree), null);
+  // And the box says its count is a lower bound, so the reader is not left to
+  // read 172 against a band printing 400 and take one of them for wrong.
+  const box = boxesOf(tree, place(tree, WIDTH), WIDTH).find((b) => b.row === 0);
+  assert.ok(box !== undefined);
+  assert.ok(readoutLines(tree, box).includes(BTREES.widthStandsV2(4 + 168, false, true)));
 });
 
 test("the band says links or chunks in words, over the count that is weighed", () => {
