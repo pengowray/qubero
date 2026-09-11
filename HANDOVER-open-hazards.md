@@ -16,9 +16,9 @@ break while fixing it.
 | 1. `ensure()` detaches rows when the window shrinks | `dda8a41` |
 | 4. Two browser assertions encode an assumption row reuse retired | `a13fb68` |
 | 5. A recycled chip can carry a stale tooltip | `e239ac0` |
+| 6. A box never says what its width means | `5ed2006`, `01b7e27` |
 | 10. ELF segment virtual addresses do not carry the mark | `a0b51ac` |
 | 12. `.claude/launch.json` lies to a worktree, in the port half of it | `b681f5a` |
-| 6. A box never says what its width means | `5ed2006`, `01b7e27` |
 
 Number 10 was the small one on the list and it was sitting on a real defect.
 The line about `busybox-x86_64` reporting 0 mapped regions was not a quirk of
