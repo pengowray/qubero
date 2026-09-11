@@ -31,12 +31,12 @@ import type { Span } from "./doc.ts";
 import type { Frame } from "./hexview.ts";
 import { chipsHead, NO_TEMPLATE } from "./strings.ts";
 import type { ChipMeasure } from "./chipfit.ts";
-import { pinnedNoteKey, planRowChips, rowNoteKey, type Chip, type ChipBlock, type Reading } from "./chipplan.ts";
+import { pinnedNoteKey, planRowChips, rowNoteKey, valsBeforeChips, type Chip, type ChipBlock, type Reading } from "./chipplan.ts";
 import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.ts";
 import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.ts";
 import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.ts";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.ts";
-import { NO_VALUES, type RowValues } from "./valuetable.ts";
+import { NO_VALUES, type PlacedCell, type RowValues } from "./valuetable.ts";
 
 /** What pressing something in a row does. Held as one object for the life of
  *  the view: every chip and every heading keeps the function it was built
@@ -48,6 +48,22 @@ export type RowPicks = {
   readonly value: (path: readonly number[], bit: number) => void;
   readonly heading: (h: OutlineHeading) => void;
 };
+
+/**
+ * Put the table of a folded run's values where the bytes say it goes.
+ *
+ * The table is the block's last child and stays that way: `valsOf` reads it
+ * off the end and `fillNote` puts a new chip in front of it. What moves is
+ * where it is *drawn*, by the flex `order` the rows themselves are placed
+ * with, so nothing is taken out of the document under a finger.
+ *
+ * `valsBeforeChips` holds the reasoning and is where the rule is tested.
+ */
+function orderVals(block: HTMLElement, first: ChipBlock | undefined, vals: RowValues): void {
+  const last = vals.cells[vals.cells.length - 1];
+  const order = valsBeforeChips(first, last === undefined ? null : last.endBit) ? "-1" : "";
+  if (block.style.order !== order) block.style.order = order;
+}
 
 /** What a row's table key is set to when what the block holds is no longer
  *  known: a row past the end of the file, or one whose lines were laid out
@@ -949,6 +965,7 @@ export class HexRows {
     // The table goes in the first line's block: a heading may cut the row, but
     // the table spans the row's whole width and belongs to all of it.
     let block = valsOf(firstNote);
+    const valsChanged = vals.key !== parts.valsKey;
     if (vals.lines > 0 || block !== null) {
       if (block === null) {
         block = newVals(this.picks.value);
@@ -971,12 +988,14 @@ export class HexRows {
       // rewriting every value on screen.
       markVals(block, vals, f.cursorBit);
     }
-    if (key !== parts.noteKey) {
+    const chipsChanged = key !== parts.noteKey;
+    if (chipsChanged) {
       parts.noteKey = key;
       for (const [j, b] of planned.blocks.entries()) {
         fillNote((parts.lines[j] as LineParts).note, b, false, trailer && j === segs.length - 1, this.picks.field);
       }
     }
+    if (block !== null && (chipsChanged || valsChanged)) orderVals(block, planned.blocks[0], vals);
     // The chips and the table share a block, and beside the bytes the first
     // line of it is the row's own height. Which is why the chips' own
     // `extraHeight` is not what is returned: the table is a further line under

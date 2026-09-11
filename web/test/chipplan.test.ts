@@ -23,6 +23,7 @@ import {
   planRowChips,
   rowNoteKey,
   sameList,
+  valsBeforeChips,
   type Chip,
   type ChipBlock,
 } from "../src/chipplan.ts";
@@ -351,6 +352,36 @@ test("beside the bytes the chips share the row's own line; below them every line
 
 test("a row with no chips adds nothing to its height", () => {
   assert.equal(plan([]).extraHeight, 0);
+});
+
+// ----- where the table of a folded run's values goes on the row -----
+
+test("the values of a run that ends part way along a row go before the chips after it", () => {
+  // `userblock-512.h5`: a run of 64 four-byte elements ends eight bytes into
+  // the row at 0x1b60 and 52 bytes of compressed data start there. The table
+  // holding 62 and 63 was drawn under `bytes 52 bytes`, so the column read
+  // backwards: a chip over bytes further along the row, above the values of
+  // the bytes before it.
+  const after = plan([{ span: span({ name: "bytes", offset_bits: 8 * 8, size_bits: 52 * 8 }), carried: false, run: [] }]);
+  assert.equal(valsBeforeChips(after.blocks[0], 8 * 8), true);
+  // The row the run starts on: its chip names the run, so it comes first and
+  // the table hangs under it, which is where it has always gone.
+  const naming = plan([{ span: span({ name: "[0]", offset_bits: 0, size_bits: 4 * 8 }), carried: false, run: [] }]);
+  assert.equal(valsBeforeChips(naming.blocks[0], 16 * 8), false);
+  // A chip on each side of the run keeps the table last: between two chips it
+  // would break them onto a line the row's height was not counted for.
+  const both = plan([
+    { span: span({ name: "count", offset_bits: 0, size_bits: 8 }), carried: false, run: [] },
+    { span: span({ name: "bytes", offset_bits: 12 * 8, size_bits: 4 * 8 }), carried: false, run: [] },
+  ]);
+  assert.equal(valsBeforeChips(both.blocks[0], 12 * 8), false);
+});
+
+test("a row with no table, and one with no chips, leave the order alone", () => {
+  const chips = plan([{ span: span({ name: "bytes", offset_bits: 8 * 8, size_bits: 8 }), carried: false, run: [] }]);
+  assert.equal(valsBeforeChips(chips.blocks[0], null), false);
+  assert.equal(valsBeforeChips(plan([]).blocks[0], 8 * 8), false);
+  assert.equal(valsBeforeChips(undefined, 8 * 8), false);
 });
 
 // ----- the keys that say when the chips have to be written again -----

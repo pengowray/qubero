@@ -367,8 +367,37 @@ function pieceHeight(o: RowChipOpts, blockHeight: number): number {
   return o.below ? o.rowHeight + blockHeight : Math.max(o.rowHeight, blockHeight);
 }
 
-/** What a row's chips say, as one string, so they are written again only when
- *  they would say something else. */
+/**
+ * Whether the table of a folded run's values belongs before the row's chips
+ * rather than after them.
+ *
+ * The table is drawn under the chips, which is right while the run reaches the
+ * end of the row: the chips there name fields that start before it. A run that
+ * stops part way along a row leaves the rest of the row to other fields, and
+ * their chips were drawn above the run's own last values -- `bytes 52 bytes`
+ * over the 62 and 63 of the run it follows, which is the column read
+ * backwards.
+ *
+ * True only when every chip on the row starts at or after the last value's
+ * end, so the answer is one of the two ends and never between two chips. The
+ * table takes a line of its own at either end, so the row comes out the height
+ * `chipLayout` counted for it; a table between two chips would break them onto
+ * a line more than that, and a row taller than the ledger says is what the
+ * top-row rule is about. A row with a chip on each side of the run keeps the
+ * table last, which is out of order in the same small way and is the lesser of
+ * the two.
+ *
+ * `valsEndBit` is null on a row with no table. A block with nothing showing
+ * answers false: there is nothing for the table to be in front of.
+ */
+export function valsBeforeChips(first: ChipBlock | undefined, valsEndBit: number | null): boolean {
+  if (valsEndBit === null || first === undefined || first.shown === 0) return false;
+  for (let i = 0; i < first.shown; i++) {
+    if ((first.entries[i] as Chip).span.offset_bits < valsEndBit) return false;
+  }
+  return true;
+}
+
 /** Which field a chip is, for the keys below.
  *
  *  The keys say when a chip has to be written again, and they used to say it
@@ -382,6 +411,8 @@ function fieldKey(c: Chip | undefined): string {
   return c === undefined ? "" : `${c.span.path.join(".")}|`;
 }
 
+/** What a row's chips say, as one string, so they are written again only when
+ *  they would say something else. */
 export function rowNoteKey(blocks: readonly ChipBlock[], trailer: boolean): string {
   const block = (b: ChipBlock | null): string =>
     b === null
