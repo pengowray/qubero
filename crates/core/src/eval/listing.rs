@@ -729,6 +729,12 @@ impl Evaluator {
             if self.is_contents(&path[..k]) {
                 continue;
             }
+            // Nor does a field that reads its contents somewhere else: the one
+            // thing it points at keeps its name, so the step is that name
+            // twice over. See the `Ty::At` arm of `place_child`.
+            if matches!(self.memo[&path[..k]].ty, Ty::At { .. }) {
+                continue;
+            }
             let r = self.memo[&path[..k]].clone();
             trail.push(self.label(doc, &path[..k], &r)?);
         }
