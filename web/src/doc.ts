@@ -726,31 +726,44 @@ export type FieldGraph = {
   readonly omitted: number;
 };
 
-/** One node of an HDF5 version 1 B-tree. */
+/** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
+  /** Where the node is in the template. Empty for a version 2 node below the
+   *  root, which the template does not place: such a box goes to its bytes and
+   *  is not opened in the Listing, because there is no field there to open. */
   readonly path: readonly number[];
   /** Index into the node list, or -1 for the root. Every node but the root
    *  comes after its parent in the list. */
   readonly parent: number;
-  /** `index` for a `TREE` node at any level, `links` for the symbol table node
-   *  a group tree hangs below its bottom row of index nodes. A chunk tree has
-   *  no `links` node: its bottom row points at the chunks. */
-  readonly kind: "index" | "links";
+  /** `index` for a `TREE` node at any level or a version 2 `BTIN`, `links` for
+   *  the symbol table node a version 1 group tree hangs below its bottom row,
+   *  `leaf` for a version 2 `BTLF`. Only a version 1 group tree has `links`
+   *  nodes: every other silhouette here stops at a row that points at things
+   *  which are not nodes. */
+  readonly kind: "index" | "links" | "leaf";
+  /** The four bytes written at `address`: `TREE`, `SNOD`, `BTIN` or `BTLF`. */
+  readonly sign: string;
   /** Where the node starts in the file, in bytes. */
   readonly address: number;
   readonly size_bits: number;
-  /** What the file wrote as this node's level. Zero for a link table, which
-   *  sits below the levels rather than on one. */
+  /** What the file wrote as this node's level, for a version 1 index node.
+   *  Zero for a link table, which sits below the levels rather than on one. A
+   *  version 2 node writes no level, so this is the header's depth less the
+   *  rows walked to reach it: level 0 is the bottom row in both versions. */
   readonly level: number;
   /** Rows below the root of this tree, counted by the walk. */
   readonly depth: number;
-  /** The file's own `entries_used` or `symbol_count`, with no denominator: the
-   *  bound HDF5's K values put on these is not settled here, and a fraction
-   *  whose bottom half was guessed is worse than a count. */
+  /** The file's own `entries_used`, `symbol_count`, or version 2 record count,
+   *  with no denominator: the bound HDF5 puts on these is not settled here, and
+   *  a fraction whose bottom half was guessed is worse than a count. A version
+   *  2 internal node points at one more child than it holds records, because a
+   *  record sits between every two children. */
   readonly entries: number;
   /** The ends of the node's key range, or empty where the walk could not
-   *  settle both. Link names for a group tree; for a chunk tree, the
-   *  comma-separated numbers of a chunk's offset inside the dataset. */
+   *  settle both, and empty throughout a version 2 group tree, whose records
+   *  hold the hash of a name rather than the name. Link names for a version 1
+   *  group tree; for a chunk tree of either version, the comma-separated
+   *  numbers of a chunk's offset inside the dataset. */
   readonly first_key: string;
   readonly last_key: string;
   /** True when children of this node were not reached, so its count stands and
@@ -759,23 +772,40 @@ export type TreeNode = {
 };
 
 /**
- * One HDF5 version 1 B-tree, walked into the shape it has in the file.
+ * One HDF5 B-tree, walked into the shape it has in the file.
  *
  * Which tree is decided by the core from the path handed in: the tree the
  * cursor is inside, else the tree the object header it is inside names, else
- * the root group's.
+ * the root group's, else the first tree under the root group.
  */
 export type Tree = {
   /** `group` for a tree indexing a group's links, `chunk` for one indexing a
-   *  dataset's chunks. */
-  readonly job: "group" | "chunk";
+   *  dataset's chunks, `other` for a version 2 tree indexing neither. */
+  readonly job: "group" | "chunk" | "other";
+  /** 1 or 2: which of the two structures this is. The silhouettes differ, so
+   *  the captions do. */
+  readonly version: number;
+  /** The record type byte a version 2 header writes, and the name the HDF5
+   *  specification gives it. Zero and empty for a version 1 tree. */
+  readonly record_type: number;
+  readonly record_type_name: string;
+  /** How far the walk got with the records: `read` where what a record holds is
+   *  known, `unread` where the specification names the type and the core does
+   *  not read it, `unknown` where no version of the specification names it. The
+   *  shape is drawn for all three, because it depends only on the record size;
+   *  a shape drawn over records nobody read has to say so. */
+  readonly records: "read" | "unread" | "unknown";
   readonly nodes: readonly TreeNode[];
   /** Children that exist and were not walked, as far as the walk knows. */
   readonly omitted: number;
-  /** How many numbers one chunk key holds: one per dataset dimension plus one
-   *  more that HDF5 writes as an offset inside an element and always sets to
-   *  zero. Zero for a group tree. */
+  /** How many numbers one chunk key holds. Zero for a group tree and for a tree
+   *  whose records were not read. */
   readonly coords: number;
+  /** True where the last of those numbers is the always-zero offset within an
+   *  element, which a version 1 chunk key ends with and a version 2 record does
+   *  not. Without it a reader counting the numbers in `950, 950, 0` gets a rank
+   *  one too high. */
+  readonly coords_pad: boolean;
 };
 
 /** What a type permits, beyond what this file's bytes happen to say. */

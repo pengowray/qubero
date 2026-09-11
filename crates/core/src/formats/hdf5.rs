@@ -1069,6 +1069,28 @@ fn row_block_size() -> T {
     T::switch(E::field("row"), cases, T::computed(starting))
 }
 
+/// What a version 2 b-tree's records are, by the type byte its header writes.
+/// Section IV.A.2.h of the HDF5 File Format Specification, version 3.0.
+///
+/// Shared with [`super::hdf5_tree`], which walks one of these trees and has to
+/// say in words which of the twelve it found. Two copies of a table like this
+/// drift, and the way they drift is that a reader is told a tree holds link
+/// names while the Listing at the same bytes calls it something else.
+pub(crate) const BTREE2_TYPE: &[(i128, &str)] = &[
+    (0, "testing"),
+    (1, "huge objects, indirectly accessed"),
+    (2, "huge objects, filtered and indirectly accessed"),
+    (3, "huge objects, directly accessed"),
+    (4, "huge objects, filtered and directly accessed"),
+    (5, "link names"),
+    (6, "link creation order"),
+    (7, "shared object header messages"),
+    (8, "attribute names"),
+    (9, "attribute creation order"),
+    (10, "chunks, unfiltered"),
+    (11, "chunks, filtered"),
+];
+
 /// A version 2 b-tree: what a group written by a newer library uses to find a
 /// link by the hash of its name, and what a chunked dataset written by one
 /// uses to find a chunk.
@@ -1078,33 +1100,21 @@ fn row_block_size() -> T {
 /// which is a length and an offset into the heap above rather than an address
 /// in the file. The links themselves are read from the heap's blocks, so
 /// nothing is lost by leaving the index alone.
+///
+/// Only the root node is placed, and its children are left as the bytes of a
+/// `children` field. Placing them would take the widths of the two counts in
+/// a child pointer, and those come out of an iteration over the tree's levels
+/// with a base-two logarithm in it, which is not something an expression here
+/// can do. [`super::hdf5_tree`] does that arithmetic in Rust and reads the
+/// nodes below the root as bytes, so the shape of one of these is drawn even
+/// though the Listing stops at the root.
 fn btree2() -> T {
     T::structure(
         "BTree2",
         vec![
             ("signature", T::magic(b"BTHD")),
             ("version", T::u8()),
-            (
-                "type",
-                T::enumeration(
-                    "BTree2Type",
-                    T::u8(),
-                    &[
-                        (0, "testing"),
-                        (1, "huge objects, indirectly accessed"),
-                        (2, "huge objects, filtered and indirectly accessed"),
-                        (3, "huge objects, directly accessed"),
-                        (4, "huge objects, filtered and directly accessed"),
-                        (5, "link names"),
-                        (6, "link creation order"),
-                        (7, "shared object header messages"),
-                        (8, "attribute names"),
-                        (9, "attribute creation order"),
-                        (10, "chunks, unfiltered"),
-                        (11, "chunks, filtered"),
-                    ],
-                ),
-            ),
+            ("type", T::enumeration("BTree2Type", T::u8(), BTREE2_TYPE)),
             ("node_size", T::u32(Little).counted_as("bytes")),
             ("record_size", T::u16(Little).counted_as("bytes")),
             ("depth", T::u16(Little)),
@@ -2624,6 +2634,315 @@ mod tests {
         assert!(matches!(value, Value::Bytes { len: 0, .. }), "{value:?}");
     }
 
+
+    // A file with version 2 structures in it, built by hand. The addresses are
+    // spread out so that nothing in it touches anything else: what these tests
+    // are about is a walk that reads its own way from one node to the next,
+    // and two structures that happened to abut would hide a length read wrong.
+    const V2_ROOT_HEADER: u64 = 96;
+    const V2_BTHD: u64 = 256;
+    const V2_BTIN: u64 = 1024;
+    const V2_LEAF_A: u64 = 2048;
+    const V2_LEAF_B: u64 = 3072;
+    const V2_NODE_SIZE: u64 = 512;
+    const V2_RECORD: u64 = 24;
+    const V2_END: u64 = 4096;
+
+    /// The path from the file down to the version 2 tree's header: the root
+    /// group's object header, its link info message, and the tree that message
+    /// names.
+    const V2_TREE: &[usize] = &[
+        2, // superblock
+        8, // the root group's object header
+        0, //
+        6, // its messages
+        0, // the link info message
+        4, // its body
+        7, // the name index the body names
+        0, //
+    ];
+
+    /// A file with a version 2 superblock, a version 2 root group object
+    /// header holding a link info message, and the version 2 b-tree that
+    /// message names: a `BTIN` root over two `BTLF` leaves.
+    ///
+    /// The record type is 10, unfiltered chunks, because that is the one of
+    /// the two read types whose records a test can assert about: a link name
+    /// record holds a hash and a heap id and nothing that could be checked
+    /// against a name. The records are 24 bytes, which is an address and two
+    /// dimension offsets, so this is a rank 2 dataset's chunk index.
+    fn v2_file() -> Vec<u8> {
+        let mut f = Vec::new();
+        put(&mut f, 0, b"\x89HDF\r\n\x1a\n");
+        // A version 2 superblock: eight bytes for both an address and a
+        // length, and the root group's header named outright rather than
+        // through a symbol table entry.
+        put(&mut f, 8, &[2, 8, 8, 0]);
+        put(&mut f, 12, &addr_bytes(0));
+        put(&mut f, 20, &addr_bytes(u64::MAX));
+        put(&mut f, 28, &addr_bytes(V2_END));
+        put(&mut f, 36, &addr_bytes(V2_ROOT_HEADER));
+        // The root group's object header, version 2: no message count, flags
+        // saying its messages are sized in one byte, and one message in them.
+        put(&mut f, V2_ROOT_HEADER, b"OHDR");
+        put(&mut f, V2_ROOT_HEADER + 4, &[2, 0, 22]);
+        // A link info message: a type, a size, flags, and then the body, which
+        // names a fractal heap it has none of and the tree that indexes it.
+        put(&mut f, V2_ROOT_HEADER + 7, &[0x02]);
+        put(&mut f, V2_ROOT_HEADER + 8, &18u16.to_le_bytes());
+        put(&mut f, V2_ROOT_HEADER + 10, &[0, 0, 0]);
+        put(&mut f, V2_ROOT_HEADER + 13, &addr_bytes(u64::MAX));
+        put(&mut f, V2_ROOT_HEADER + 21, &addr_bytes(V2_BTHD));
+        // The header: node size 512, records of 24 bytes, one level of
+        // internal nodes over the leaves.
+        put(&mut f, V2_BTHD, b"BTHD");
+        put(&mut f, V2_BTHD + 4, &[0, 10]);
+        put(&mut f, V2_BTHD + 6, &(V2_NODE_SIZE as u32).to_le_bytes());
+        put(&mut f, V2_BTHD + 10, &(V2_RECORD as u16).to_le_bytes());
+        put(&mut f, V2_BTHD + 12, &1u16.to_le_bytes());
+        put(&mut f, V2_BTHD + 14, &[100, 40]);
+        put(&mut f, V2_BTHD + 16, &addr_bytes(V2_BTIN));
+        put(&mut f, V2_BTHD + 24, &1u16.to_le_bytes());
+        put(&mut f, V2_BTHD + 26, &5u64.to_le_bytes());
+        // The root: one record of its own and two children. A pointer at this
+        // level is an address and one byte of record count, and no running
+        // total, because the level below it is the leaves.
+        put(&mut f, V2_BTIN, b"BTIN");
+        put(&mut f, V2_BTIN + 4, &[0, 10]);
+        put(&mut f, V2_BTIN + 6, &chunk_record(400));
+        put(&mut f, V2_CHILD, &addr_bytes(V2_LEAF_A));
+        put(&mut f, V2_CHILD + 8, &[2]);
+        put(&mut f, V2_CHILD + 9, &addr_bytes(V2_LEAF_B));
+        put(&mut f, V2_CHILD + 17, &[2]);
+        // Two leaves of two records each, in order, which is what makes the
+        // root's range run from the first of the first to the last of the last.
+        put(&mut f, V2_LEAF_A, b"BTLF");
+        put(&mut f, V2_LEAF_A + 4, &[0, 10]);
+        put(&mut f, V2_LEAF_A + 6, &chunk_record(0));
+        put(&mut f, V2_LEAF_A + 6 + V2_RECORD, &chunk_record(200));
+        put(&mut f, V2_LEAF_B, b"BTLF");
+        put(&mut f, V2_LEAF_B + 4, &[0, 10]);
+        put(&mut f, V2_LEAF_B + 6, &chunk_record(600));
+        put(&mut f, V2_LEAF_B + 6 + V2_RECORD, &chunk_record(800));
+        f.resize(V2_END as usize, 0);
+        f
+    }
+
+    /// Where the root's first child pointer starts: past the signature, the
+    /// version, the type and the one record it holds.
+    const V2_CHILD: u64 = V2_BTIN + 6 + V2_RECORD;
+
+    /// One unfiltered chunk record: where the chunk is, and where in the
+    /// dataset it starts. Two dimensions, the second of them always 50, so a
+    /// test can tell the two numbers of a key apart.
+    fn chunk_record(row: u64) -> [u8; 24] {
+        let mut out = [0u8; 24];
+        out[0..8].copy_from_slice(&addr_bytes(V2_END));
+        out[8..16].copy_from_slice(&row.to_le_bytes());
+        out[16..24].copy_from_slice(&50u64.to_le_bytes());
+        out
+    }
+
+    fn v2_tree(f: Vec<u8>, at: &[usize], limit: usize) -> super::super::hdf5_tree::Tree {
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+        super::super::hdf5_tree::tree(&mut ev, &doc, at, limit).expect("walk").expect("a tree")
+    }
+
+    /// The shape of a version 2 tree is not written in the file. The widths of
+    /// the two counts in a child pointer come out of the node size, the record
+    /// size and the depth, and every child address after the first is read at
+    /// a place those widths decide. Walked, the three nodes come back where
+    /// the file put them.
+    #[test]
+    fn a_version_2_tree_is_walked_from_its_header() {
+        use super::super::hdf5_tree::{Job, Kind, Records};
+        let tree = v2_tree(v2_file(), &[0], 64);
+        assert_eq!(tree.version, 2);
+        assert_eq!(tree.job, Job::Chunk);
+        assert_eq!(tree.records, Records::Read);
+        assert_eq!(tree.record_type, 10);
+        assert_eq!(tree.nodes.len(), 3, "{tree:?}");
+        assert_eq!(tree.nodes[0].address, V2_BTIN);
+        assert_eq!(tree.nodes[0].sign, "BTIN");
+        assert_eq!(tree.nodes[0].kind, Kind::Index);
+        // The level counts up from the leaves, the way a version 1 node's own
+        // `node_level` does, so level 0 is the bottom row in both versions.
+        assert_eq!(tree.nodes[0].level, 1);
+        assert_eq!(tree.nodes[0].entries, 1);
+        assert_eq!(tree.nodes[1].address, V2_LEAF_A);
+        assert_eq!(tree.nodes[1].sign, "BTLF");
+        assert_eq!(tree.nodes[1].kind, Kind::Leaf);
+        assert_eq!(tree.nodes[1].level, 0);
+        assert_eq!(tree.nodes[1].depth, 1);
+        assert_eq!(tree.nodes[1].entries, 2);
+        assert_eq!(tree.nodes[2].address, V2_LEAF_B);
+        // A node is measured to what it wrote and not to the 512 bytes it was
+        // given, or every node of a tree would be drawn the same size and none
+        // of them would say how full it is.
+        assert_eq!(tree.nodes[1].size_bits, (10 + 2 * 24) * 8);
+        assert_eq!(tree.nodes[0].size_bits, (10 + 24 + 2 * 9) * 8);
+    }
+
+    /// A chunk tree's keys are the offsets in its own leaves' records, carried
+    /// up by the same pass the version 1 walk uses. A version 2 record holds
+    /// one number per dimension and no more, unlike a version 1 key, which
+    /// ends with an offset inside an element that is always zero.
+    #[test]
+    fn a_version_2_chunk_range_comes_from_the_records_at_the_bottom() {
+        let tree = v2_tree(v2_file(), &[0], 64);
+        assert_eq!(tree.coords, 2);
+        assert!(!tree.coords_pad);
+        assert_eq!(tree.nodes[1].first_key, "0, 50");
+        assert_eq!(tree.nodes[1].last_key, "200, 50");
+        assert_eq!(tree.nodes[2].first_key, "600, 50");
+        assert_eq!(tree.nodes[2].last_key, "800, 50");
+        // The root's own record sits between its children, so the children's
+        // span is the root's span.
+        assert_eq!(tree.nodes[0].first_key, "0, 50");
+        assert_eq!(tree.nodes[0].last_key, "800, 50");
+    }
+
+    /// A record type this does not read keeps its shape and is said to be
+    /// unread. The shape of a version 2 tree depends on the record size and
+    /// not on what a record means, so there is a true picture to be had; what
+    /// would not be true is a range, and there is none.
+    #[test]
+    fn an_unread_record_type_keeps_its_shape_and_says_so() {
+        use super::super::hdf5_tree::Records;
+        // Type 11: filtered chunks, whose offsets sit behind a field as wide
+        // as the layout message decided, which is not in the tree at all.
+        let mut f = v2_file();
+        put(&mut f, V2_BTHD + 5, &[11]);
+        let tree = v2_tree(f, &[0], 64);
+        assert_eq!(tree.records, Records::Unread);
+        assert_eq!(tree.record_type_name, "chunks, filtered");
+        assert_eq!(tree.nodes.len(), 3);
+        assert_eq!(tree.coords, 0);
+        assert!(tree.nodes.iter().all(|n| n.first_key.is_empty()), "{tree:?}");
+        // A type no version of the specification names says that instead, and
+        // is not quietly drawn as one of the types that is named.
+        let mut f = v2_file();
+        put(&mut f, V2_BTHD + 5, &[200]);
+        let tree = v2_tree(f, &[0], 64);
+        assert_eq!(tree.records, Records::Unknown);
+        assert_eq!(tree.record_type_name, "");
+        assert_eq!(tree.nodes.len(), 3);
+    }
+
+    /// A group tree's records hold the hash of a link's name and an id into a
+    /// fractal heap, and no name. So there is no range to show and none is
+    /// shown: a hash where a name belongs is a label whose value is not the
+    /// thing it names. Nothing is marked short either, because nothing was
+    /// missed.
+    #[test]
+    fn a_version_2_group_tree_shows_no_key_range_at_all() {
+        use super::super::hdf5_tree::{Job, Kind};
+        let mut f = v2_file();
+        put(&mut f, V2_BTHD + 5, &[5]);
+        let tree = v2_tree(f, &[0], 64);
+        assert_eq!(tree.job, Job::Group);
+        assert_eq!(tree.coords, 0);
+        assert!(tree.nodes.iter().all(|n| n.first_key.is_empty() && n.last_key.is_empty()), "{tree:?}");
+        assert!(tree.nodes.iter().all(|n| !n.truncated), "{tree:?}");
+        // And it has no row of link tables, which is the row that tells a
+        // version 1 group tree apart from everything else: these links are in
+        // the heap, which the tree does not point at.
+        assert!(tree.nodes.iter().all(|n| n.kind != Kind::LinkTable));
+    }
+
+    /// A pointer at a node that is not the node the level says should be there
+    /// is not followed. The signature is checked against the level rather than
+    /// taken as whatever it happens to be, because a `BTLF` a level above the
+    /// leaves means the depth and the nodes disagree and nothing below them
+    /// can be trusted.
+    #[test]
+    fn a_child_that_is_not_the_node_it_was_promised_to_be_is_refused() {
+        let mut f = v2_file();
+        put(&mut f, V2_LEAF_B, b"JUNK");
+        let tree = v2_tree(f, &[0], 64);
+        assert_eq!(tree.nodes.len(), 2, "{tree:?}");
+        // The root says it did not read all of its children, so it keeps no
+        // range: its own would be right at one end and short at the other.
+        assert!(tree.nodes[0].truncated);
+        assert_eq!(tree.nodes[0].first_key, "");
+    }
+
+    /// An address past the end of the file refuses rather than reading. The
+    /// order matters: a document reads past its own end as bytes still on
+    /// their way, so a walk that read first and checked after would hand the
+    /// view a "still reading" it could never finish waiting for.
+    #[test]
+    fn a_pointer_outside_the_file_refuses_rather_than_waiting() {
+        let mut f = v2_file();
+        put(&mut f, V2_CHILD, &addr_bytes(1 << 40));
+        let tree = v2_tree(f, &[0], 64);
+        assert_eq!(tree.nodes.len(), 2, "{tree:?}");
+        assert!(tree.nodes[0].truncated);
+    }
+
+    /// A child pointing back at its own parent is a ring, and following one is
+    /// not slow but endless. The walk stops at an address it has already been
+    /// to and says the node above it is short.
+    #[test]
+    fn a_ring_of_child_pointers_stops() {
+        let mut f = v2_file();
+        put(&mut f, V2_CHILD, &addr_bytes(V2_BTIN));
+        put(&mut f, V2_CHILD + 9, &addr_bytes(V2_BTIN));
+        let tree = v2_tree(f, &[0], 64);
+        assert_eq!(tree.nodes.len(), 1, "{tree:?}");
+        assert!(tree.nodes[0].truncated);
+    }
+
+    /// A record count larger than a node of that size can hold was read out of
+    /// the wrong bytes, and going on with it would read the records and the
+    /// child pointers out of the wrong bytes too.
+    #[test]
+    fn a_record_count_too_big_for_its_node_is_refused() {
+        let mut f = v2_file();
+        put(&mut f, V2_CHILD + 8, &[250]);
+        let tree = v2_tree(f, &[0], 64);
+        assert_eq!(tree.nodes.len(), 2, "{tree:?}");
+        assert!(tree.nodes[0].truncated);
+    }
+
+    /// The cap counts the same way it does for a version 1 tree: nodes drawn,
+    /// with what it left out said rather than dropped.
+    #[test]
+    fn a_version_2_cap_says_how_many_children_it_left_out() {
+        let tree = v2_tree(v2_file(), &[0], 1);
+        assert_eq!(tree.nodes.len(), 1);
+        assert_eq!(tree.omitted, 2);
+        assert!(tree.nodes[0].truncated);
+        assert_eq!(tree.nodes[0].first_key, "");
+    }
+
+    /// A version 2 object header writes no message count, so a search for one
+    /// that asked only for that field found no object header at all in a file
+    /// a recent library wrote, and the tab was empty wherever the cursor
+    /// stood. From inside the tree's own header the walk answers with that
+    /// tree.
+    ///
+    /// The root node is the one node of one of these the template places, and
+    /// it carries the path that takes a reader to it; every node below it has
+    /// none, because there is no field at those bytes to go to.
+    #[test]
+    fn a_version_2_object_header_is_found_by_its_flags() {
+        let f = v2_file();
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+        // The cursor on the header's own `node_size`, which is inside the
+        // tree's header and inside the object header above it.
+        let mut at = V2_TREE.to_vec();
+        at.push(3);
+        let tree = super::super::hdf5_tree::tree(&mut ev, &doc, &at, 64).expect("walk").expect("a tree");
+        assert_eq!(tree.nodes[0].address, V2_BTIN);
+        let mut root = V2_TREE.to_vec();
+        root.extend_from_slice(&[12, 0]);
+        assert_eq!(tree.nodes[0].path, root);
+        assert!(tree.nodes[1].path.is_empty());
+        assert_eq!(ev.node(&doc, &tree.nodes[0].path).expect("root node").offset_bits / 8, V2_BTIN);
+    }
     /// `sniff` over a file that is exactly these bytes.
     fn sniffed(head: &[u8]) -> Option<&'static str> {
         crate::formats::sniff(head, head.len() as u64)

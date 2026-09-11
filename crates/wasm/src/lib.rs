@@ -1120,30 +1120,45 @@ struct ContentsDto {
     columns: f64,
 }
 
-/// One node of an HDF5 version 1 B-tree, as much of it as a picture of the
-/// tree needs.
+/// One node of an HDF5 B-tree, as much of it as a picture of the tree needs.
 #[derive(Serialize)]
 struct TreeNodeDto {
+    /// Where the node is in the template. Empty for a version 2 node below the
+    /// root, which the template does not place: the host takes such a box to
+    /// its bytes and does not try to open it in the Listing, because there is
+    /// no field there to open.
     path: Vec<usize>,
     /// Index into the node list, or -1 for the root.
     parent: f64,
-    /// `index` for a `TREE` node, `links` for the symbol table node a group
-    /// tree hangs under its bottom row. The words are the host's to translate;
-    /// what crosses is which of the two kinds of node this is.
+    /// `index` for a `TREE` or a `BTIN`, `links` for the symbol table node a
+    /// version 1 group tree hangs under its bottom row, `leaf` for a `BTLF`.
+    /// The words are the host's to translate; what crosses is which of the
+    /// three kinds of node this is.
     kind: &'static str,
+    /// The four bytes written at `address`. Sent rather than worked out from
+    /// `kind` and the tree's version, so that what a reader is told to expect
+    /// at an address is what the walk checked for there.
+    sign: &'static str,
     address: f64,
     size_bits: f64,
-    /// What the file wrote as this node's level. Zero for a link table, which
-    /// sits below the levels rather than on one.
+    /// What the file wrote as this node's level, for a version 1 index node.
+    /// Zero for a link table, which sits below the levels rather than on one.
+    /// A version 2 node writes no level, so this is the header's depth less
+    /// the rows walked to reach it, which keeps level 0 meaning the bottom row
+    /// of index nodes in both versions.
     level: f64,
     /// Rows below the root, counted by the walk.
     depth: f64,
-    /// `entries_used` or `symbol_count`, the file's own count and no fraction
-    /// of anything.
+    /// `entries_used`, `symbol_count`, or a version 2 node's record count. The
+    /// file's own number and no fraction of anything. A version 2 internal
+    /// node points at one more child than it holds records, because a record
+    /// sits between every two children.
     entries: f64,
     /// The ends of the node's key range, or empty where the walk could not
-    /// settle both. For a group tree these are link names; for a chunk tree
-    /// they are the comma-separated numbers of a chunk's offset in the dataset.
+    /// settle both, and empty throughout a version 2 group tree, whose records
+    /// hold the hash of a name rather than the name. For a version 1 group
+    /// tree these are link names; for a chunk tree of either version they are
+    /// the comma-separated numbers of a chunk's offset in the dataset.
     first_key: String,
     last_key: String,
     /// True when children of this node were not reached, so its count stands
@@ -1151,19 +1166,39 @@ struct TreeNodeDto {
     truncated: bool,
 }
 
-/// One HDF5 version 1 B-tree, walked into the shape it has in the file.
+/// One HDF5 B-tree, walked into the shape it has in the file.
 #[derive(Serialize)]
 struct TreeDto {
     /// `group` for a tree indexing a group's links, `chunk` for one indexing a
-    /// dataset's chunks. The two do not have the same silhouette: only a group
-    /// tree has link tables under its bottom row.
+    /// dataset's chunks, `other` for a version 2 tree indexing neither: a
+    /// file's shared messages, an object's attributes, or its huge objects.
+    /// Only a version 1 group tree has link tables under its bottom row, so
+    /// `job` alone does not settle the silhouette; `version` does.
     job: &'static str,
+    /// 1 or 2: which of the two structures this is.
+    version: f64,
+    /// The record type byte a version 2 header writes, and the name the
+    /// specification gives it. Zero and empty for a version 1 tree, which has
+    /// no such byte.
+    record_type: f64,
+    record_type_name: &'static str,
+    /// How far the walk got with the records: `read` where what a record holds
+    /// is known here, `unread` where the specification names the type and this
+    /// does not read it, `unknown` where no version of the specification names
+    /// it. The shape is drawn whichever of the three it is, because the shape
+    /// depends only on the record size, and the host says outright when the
+    /// records behind a drawn shape were not read.
+    records: &'static str,
     nodes: Vec<TreeNodeDto>,
     omitted: f64,
-    /// How many numbers one chunk key holds: one per dataset dimension plus one
-    /// more that HDF5 writes as an offset inside an element and always sets to
-    /// zero. Zero for a group tree.
+    /// How many numbers one chunk key holds. Zero for a group tree and for a
+    /// tree whose records were not read.
     coords: f64,
+    /// True where the last of those numbers is the always-zero offset within
+    /// an element, which a version 1 chunk key ends with and a version 2
+    /// record does not. Without it a reader counting the numbers in
+    /// `950, 950, 0` gets a rank one too high.
+    coords_pad: bool,
 }
 
 /// The named parts of an ELF file. Unlike the storage template, these have
@@ -2481,15 +2516,16 @@ impl Editor {
         }))
     }
 
-    /// The HDF5 version 1 B-tree the field at `path` belongs to, walked into
-    /// the shape it has in the file: {status:"ok",node:{job,nodes,..}}, or a
-    /// null node where the file has no such tree to answer with.
+    /// The HDF5 B-tree the field at `path` belongs to, of either version,
+    /// walked into the shape it has in the file:
+    /// {status:"ok",node:{job,version,nodes,..}}, or a null node where the file
+    /// has no tree to answer with.
     ///
     /// `path` is where the cursor is, which is usually not a node of a tree.
     /// The core works out which tree that means: the one the cursor is inside,
     /// else the one the object header it is inside names, else the root
-    /// group's. `limit` caps the nodes walked, and the answer says how many
-    /// children it left out.
+    /// group's, else the first tree under the root group. `limit` caps the
+    /// nodes walked, and the answer says how many children it left out.
     pub fn btree(&mut self, space: u32, path: &[u32], limit: u32) -> String {
         self.go(space);
         let sh = self.sm();
@@ -2506,14 +2542,24 @@ impl Editor {
             Err(err) => return reply::<Option<TreeDto>>(Err(err)),
         };
         reply(Ok(found.map(|t| {
-            use qubero_core::formats::hdf5_tree::{Job, Kind, NO_PARENT};
+            use qubero_core::formats::hdf5_tree::{Job, Kind, Records, NO_PARENT};
             TreeDto {
                 job: match t.job {
                     Job::Group => "group",
                     Job::Chunk => "chunk",
+                    Job::Other => "other",
+                },
+                version: f64::from(t.version),
+                record_type: f64::from(t.record_type),
+                record_type_name: t.record_type_name,
+                records: match t.records {
+                    Records::Read => "read",
+                    Records::Unread => "unread",
+                    Records::Unknown => "unknown",
                 },
                 omitted: t.omitted as f64,
                 coords: t.coords as f64,
+                coords_pad: t.coords_pad,
                 nodes: t
                     .nodes
                     .into_iter()
@@ -2523,7 +2569,9 @@ impl Editor {
                         kind: match n.kind {
                             Kind::Index => "index",
                             Kind::LinkTable => "links",
+                            Kind::Leaf => "leaf",
                         },
+                        sign: n.sign,
                         address: n.address as f64,
                         size_bits: n.size_bits as f64,
                         level: n.level as f64,

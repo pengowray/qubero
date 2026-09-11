@@ -284,3 +284,163 @@ fn walk(
         }
     }
 }
+
+/// Every version 2 B-tree in every file to hand, walked, and the walk checked
+/// against itself.
+///
+/// The widths of the two counts in a child pointer are not written anywhere in
+/// an HDF5 file. They come out of the node size, the record size and the depth
+/// by an arithmetic the library does and the format does not record, so the
+/// only proof that arithmetic is right is a real file: get a width wrong by one
+/// byte and every child address after the first is read from the middle of the
+/// pointer before it.
+///
+/// What is asserted is what a wrong width breaks. An internal node points at
+/// one more child than it holds records, always, because a version 2 tree is a
+/// B-tree and a record sits between every two children; a node's level is one
+/// below its parent's; and a node whose bytes are not the `BTIN` or `BTLF` the
+/// level called for is refused, which shows up as a parent that says it did not
+/// read all of its children. So a tree that comes back with the right number of
+/// children on every node, nothing refused and nothing left out, was walked by
+/// pointers that landed where they were meant to.
+///
+/// Skips where there is no file with one in it. A version 2 tree is written by
+/// a recent library and only for a group with more links than fit in its
+/// header, or a dataset with more than one unlimited dimension, so plenty of
+/// real HDF5 files have none.
+#[test]
+fn every_version_2_btree_is_walked_by_pointers_that_land() {
+    use qubero_core::formats::hdf5_tree::{Job, Kind, Records, Tree, NO_PARENT};
+
+    let mut dirs = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
+    if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
+        dirs.extend(extra.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
+    }
+    let mut found = Vec::new();
+    for dir in &dirs {
+        collect(dir, 3, &mut found);
+    }
+    found.sort();
+    let mut walked = 0usize;
+    for path in &found {
+        let Ok(file) = File::open(path) else { continue };
+        let Ok(len) = file.metadata().map(|m| m.len()) else { continue };
+        let doc = Document::new(FileSource { file: RefCell::new(file), len });
+        let mut ev = Evaluator::new(hdf5());
+        if !matches!(ev.node(&doc, &[0]).map(|n| n.value), Ok(Value::Magic { ok: true, .. })) {
+            continue;
+        }
+        let mut headers = Vec::new();
+        let mut seen = 0usize;
+        headers2(&mut ev, &doc, &[], &mut seen, &mut headers);
+        for header in &headers {
+            let tree: Tree = match qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, header, 4096) {
+                Ok(Some(t)) => t,
+                Ok(None) => panic!("{}: a BTree2 at {header:?} answered with no tree", path.display()),
+                Err(e) => panic!("{}: a BTree2 at {header:?} does not walk: {e:?}", path.display()),
+            };
+            assert_eq!(tree.version, 2, "{}: {header:?} walked as a version 1 tree", path.display());
+            walked += 1;
+            let depth = tree.nodes.iter().map(|n| n.depth).max().unwrap_or(0);
+            let leaves = tree.nodes.iter().filter(|n| n.kind == Kind::Leaf).count();
+            let records: u64 = tree.nodes.iter().map(|n| n.entries).sum();
+            eprintln!(
+                "--- {}: {} tree at {:#x}, {} deep, {} nodes, {leaves} leaves, {records} records, {} omitted",
+                path.display(),
+                tree.record_type_name,
+                tree.nodes.first().map(|n| n.address).unwrap_or(0),
+                depth + 1,
+                tree.nodes.len(),
+                tree.omitted
+            );
+            assert_eq!(tree.nodes[0].parent, NO_PARENT);
+            // A version 2 tree never has the row a version 1 group tree has.
+            assert!(tree.nodes.iter().all(|n| n.kind != Kind::LinkTable), "{}: a link table in a version 2 tree", path.display());
+            // A group tree's records name links in a heap, so there is nothing
+            // to show as a range and nothing is shown.
+            if tree.job == Job::Group {
+                assert!(tree.nodes.iter().all(|n| n.first_key.is_empty()), "{}: a hash shown as a name", path.display());
+            }
+            if tree.omitted > 0 {
+                continue;
+            }
+            let mut children = vec![0u64; tree.nodes.len()];
+            for node in tree.nodes.iter().skip(1) {
+                children[node.parent] += 1;
+                let up = &tree.nodes[node.parent];
+                assert_eq!(node.level + 1, up.level, "{}: a node not one level below its parent", path.display());
+                assert_eq!(node.depth, up.depth + 1, "{}: a node not one row below its parent", path.display());
+            }
+            for (i, node) in tree.nodes.iter().enumerate() {
+                assert!(!node.truncated, "{}: node {i} at {:#x} refused a child", path.display(), node.address);
+                match node.kind {
+                    Kind::Leaf => {
+                        assert_eq!(node.level, 0);
+                        assert_eq!(node.sign, "BTLF");
+                        assert_eq!(children[i], 0);
+                    }
+                    _ => {
+                        assert!(node.level > 0);
+                        assert_eq!(node.sign, "BTIN");
+                        // The one number a wrong pointer width would not give.
+                        assert_eq!(
+                            children[i],
+                            node.entries + 1,
+                            "{}: node {i} at {:#x} holds {} records and has {} children",
+                            path.display(),
+                            node.address,
+                            node.entries,
+                            children[i]
+                        );
+                    }
+                }
+            }
+            // An unfiltered chunk tree's leaves read their own ranges, so a
+            // tree that was walked whole has one on every leaf that holds
+            // anything.
+            if tree.records == Records::Read && tree.job == Job::Chunk {
+                assert!(tree.coords > 0 && !tree.coords_pad);
+                assert!(
+                    tree.nodes.iter().all(|n| n.kind != Kind::Leaf || n.entries == 0 || !n.first_key.is_empty()),
+                    "{}: a leaf with records and no range",
+                    path.display()
+                );
+            }
+        }
+    }
+    if walked == 0 {
+        eprintln!("skipped: no version 2 B-tree in {dirs:?}. Put an HDF5 file written with libver=latest there.");
+    }
+}
+
+/// Every version 2 B-tree header under `path`. The template names one `BTree2`
+/// wherever it places one, which is what makes the search a walk rather than a
+/// scan for the signature: a `BTHD` in the middle of a dataset's bytes is not
+/// a tree the file reached.
+fn headers2(
+    ev: &mut Evaluator,
+    doc: &Document<FileSource>,
+    path: &[usize],
+    seen: &mut usize,
+    out: &mut Vec<Vec<usize>>,
+) {
+    if *seen >= BUDGET {
+        return;
+    }
+    let Ok(node) = ev.node(doc, path) else { return };
+    *seen += 1;
+    if node.type_name == "BTree2" {
+        out.push(path.to_vec());
+        // The nodes under it are the tree, and walking into them here would be
+        // a second walk of the same bytes for nothing.
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut p = path.to_vec();
+        p.push(i);
+        headers2(ev, doc, &p, seen, out);
+        if *seen >= BUDGET {
+            return;
+        }
+    }
+}
