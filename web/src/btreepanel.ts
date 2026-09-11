@@ -217,10 +217,12 @@ export class BTreePanel {
     this.draw();
   }
 
-  /** Walk the tree again if the tab is on screen and the walk is owed. */
+  /** Draw again, walking the tree first if the walk is owed. The walk itself
+   *  happens in the redraw, which is a turn later: a document change is one of
+   *  the things that asks for this, and a chunk landing during a scroll must
+   *  not turn into a walk inside the handler that noticed it. */
   pump(): void {
     if (!this.visible) return;
-    if (this.stale) this.walk(this.from);
     this.draw();
   }
 
@@ -570,10 +572,12 @@ export class BTreePanel {
       if (node === undefined) return;
       lines = nodeLines(tree, node);
       // How many bytes the node takes, which only the readout has room for.
-      // Beside the count on purpose: how full a node is and how big it is are
-      // the same question asked two ways, and HDF5 writes the spare room.
-      const second = lines[1];
-      if (second !== undefined) lines[1] = `${second} · ${formatBytes(Math.ceil(node.size_bits / 8))}`;
+      // On the line with the address, not the line with the count: "points at
+      // 28 link tables · 480 B" reads as 480 bytes of link tables at least as
+      // readily as 480 bytes of this node, and the address line has nothing
+      // else on it a size could belong to.
+      const first = lines[0];
+      if (first !== undefined) lines[0] = `${first} · ${formatBytes(Math.ceil(node.size_bits / 8))}`;
       // What the numbers in a chunk key are. The visible line says "element
       // offset"; this says how many of the numbers are dimensions, so that
       // nobody counts them and gets one too many.
