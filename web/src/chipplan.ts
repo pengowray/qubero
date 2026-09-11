@@ -379,7 +379,10 @@ export function rowNoteKey(blocks: readonly ChipBlock[], trailer: boolean): stri
         `${b.shown}/${b.entries.length}/${b.texts[b.shown]?.name ?? ""}~` +
         b.texts
           .slice(0, b.shown)
-          .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${t.name}${t.detail}`)
+          // The mark for an element of an opened-out run: it shows no name, so
+          // a chip reused from a named one would otherwise say the same thing
+          // here and keep the class it was drawn with.
+          .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${b.entries[i]?.element === true ? "\u00b7" : ""}${t.name}${t.detail}`)
           .join("");
   return `${trailer ? "+" : ""}${blocks.map(block).join("")}`;
 }
