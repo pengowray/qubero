@@ -17,6 +17,16 @@
  *   things are under it, which for the bottom row is the node's own count and
  *   above it is the total beneath. That is not the same fact as a node's own
  *   entry count, so the caption says which one the widths are.
+ *
+ *   Under the last row of boxes is one more band, dashed and undivided, for
+ *   the links or chunks the tree indexes. Those are not nodes: a group's links
+ *   sit inside the link tables above, a dataset's chunks sit somewhere else in
+ *   the file entirely, and neither has a mark on the address picture. Drawing
+ *   the band anyway is what makes the picture say where a chunk tree stops,
+ *   which a caption used to have to say in prose, and what makes the number
+ *   printed on a box readable: every box's number is how many things are in
+ *   the band directly below it, which at the root is two or three boxes a
+ *   reader can count.
  * - The same nodes by file address, zoomed to the tree's own span. Tree order
  *   runs left to right in the first picture and address order in the second,
  *   so whether a tidy tree is scattered through the file is a thing to see
@@ -84,6 +94,7 @@ export class BTreePanel {
   private readonly job: HTMLElement;
   private readonly plot: HTMLElement;
   private readonly widths: HTMLElement;
+  private readonly keyLine: HTMLElement;
   private readonly rows: HTMLElement;
   private readonly stripCap: HTMLElement;
   private readonly strip: HTMLElement;
@@ -142,6 +153,7 @@ export class BTreePanel {
     this.plot.addEventListener("dblclick", (e) => this.hit(e, true));
     this.widths = document.createElement("div");
     this.widths.className = "btp-line";
+    this.keyLine = keyRow();
     this.rows = document.createElement("div");
     this.rows.className = "btp-rows";
     this.stripCap = document.createElement("div");
@@ -157,7 +169,7 @@ export class BTreePanel {
     this.note.className = "btp-note";
     this.note.textContent = BTREES.hint;
 
-    this.el.append(bar, this.job, this.plot, this.widths, this.rows, this.stripCap, this.strip, this.span, this.readout, this.note);
+    this.el.append(bar, this.job, this.plot, this.keyLine, this.widths, this.rows, this.stripCap, this.strip, this.span, this.readout, this.note);
 
     // The picture is drawn at the size the box happens to be, so it has to be
     // drawn again when the box changes size. Throwing the panel over the
@@ -365,6 +377,7 @@ export class BTreePanel {
       this.head.textContent = "";
       this.job.textContent = this.empty;
       this.plot.replaceChildren();
+      this.keyLine.hidden = true;
       this.widths.textContent = "";
       this.rows.replaceChildren();
       this.stripCap.textContent = "";
@@ -378,6 +391,7 @@ export class BTreePanel {
     const width = Math.max(1, Math.floor(this.plot.clientWidth || this.el.clientWidth));
     this.head.textContent = this.ownerName ?? this.owner(tree);
     this.job.textContent = tree.job === "group" ? BTREES.jobGroup : BTREES.jobChunk;
+    this.keyLine.hidden = false;
     this.widths.textContent = tree.job === "group" ? BTREES.widthGroup : BTREES.widthChunk;
     this.stripCap.textContent = BTREES.stripCaption;
     const placed = place(tree, width);
@@ -417,11 +431,14 @@ export class BTreePanel {
     return this.ownerName;
   }
 
-  /** The tree itself: one band per row, each box under its parent's span. */
+  /** The tree itself: one band per row, each box under its parent's span, and
+   *  under the last of them the band of links or chunks the tree indexes. */
   private drawTree(tree: Tree, width: number): SVGElement {
     const rowH = this.big ? ROW_H_BIG : ROW_H;
     const depth = Math.max(...tree.nodes.map((n) => n.depth)) + 1;
-    const height = depth * rowH + (depth - 1) * ROW_GAP;
+    const leaves = leafBand(tree);
+    const bands = depth + (leaves === null ? 0 : 1);
+    const height = bands * rowH + (bands - 1) * ROW_GAP;
     const svg = document.createElementNS(SVG, "svg");
     svg.setAttribute("class", "btp-svg");
     svg.setAttribute("width", String(width));
@@ -451,6 +468,34 @@ export class BTreePanel {
         text.textContent = one.entries.toLocaleString();
         svg.append(text);
       }
+    }
+    // The links or chunks themselves, as one dashed band across the full
+    // width. Undivided because they are not nodes and have no place of their
+    // own here: a group's links are inside the link tables in the row above,
+    // and a dataset's chunks are elsewhere in the file. Drawn all the same,
+    // because a picture that stops at the last row of boxes leaves a chunk
+    // tree looking like a group tree with its bottom row missing, and leaves
+    // the number printed on a box with nothing to count against.
+    if (leaves !== null) {
+      const y = depth * (rowH + ROW_GAP);
+      const band = document.createElementNS(SVG, "rect");
+      band.setAttribute("x", "0.5");
+      band.setAttribute("y", String(y + 0.5));
+      band.setAttribute("width", String(Math.max(1, width - 2)));
+      band.setAttribute("height", String(rowH - 1));
+      band.setAttribute("class", "btp-leaf");
+      // No `data-key`, so a press on it falls out of `hit` before it looks for
+      // a node. There is nowhere to go: the walk never gave these an address.
+      const title = document.createElementNS(SVG, "title");
+      title.textContent = leaves.title;
+      band.append(title);
+      svg.append(band);
+      const text = document.createElementNS(SVG, "text");
+      text.setAttribute("x", String(width / 2));
+      text.setAttribute("y", String(y + rowH / 2));
+      text.setAttribute("class", "btp-leafcount");
+      text.textContent = leaves.label;
+      svg.append(text);
     }
     return svg;
   }
@@ -703,6 +748,71 @@ function holdWord(tree: Tree, node: TreeNode): string {
 
 function keyOf(nodes: readonly number[]): string {
   return nodes.join(",");
+}
+
+/**
+ * The band under the last row of boxes, or null where there is no honest one
+ * to draw.
+ *
+ * The count is the same sum `drawRows` puts in words on the last row, so the
+ * picture and the line under it never disagree, and both are a floor when the
+ * walk stopped early. Null when the last row drawn is index nodes that should
+ * have had children: the walk ran out before it reached the bottom of the
+ * tree, so what is below that row was never counted and a band would be a
+ * number from nowhere. `omitted` says that happened.
+ */
+function leafBand(tree: Tree): { label: string; title: string } | null {
+  const depth = Math.max(...tree.nodes.map((n) => n.depth));
+  const row = tree.nodes.filter((n) => n.depth === depth);
+  const first = row[0];
+  if (first === undefined) return null;
+  const held = row.reduce((sum, n) => sum + n.entries, 0);
+  const capped = tree.omitted > 0;
+  if (first.kind === "links") {
+    return { label: BTREES.leafLinks(held, capped), title: BTREES.leafLinksTitle(row.length, held, capped) };
+  }
+  if (tree.job === "chunk" && first.level === 0) {
+    return { label: BTREES.leafChunks(held, capped), title: BTREES.leafChunksTitle(row.length, held, capped) };
+  }
+  return null;
+}
+
+/**
+ * The key to the number printed on a box: one box drawn the way the picture
+ * draws them, with `N` where the count goes, and four words saying what the
+ * count counts.
+ *
+ * Built once and never redrawn: it says nothing about the tree on screen, and
+ * a legend rebuilt on every paint is work done during a scroll for a picture
+ * that did not change. Its own class rather than `.btp-box`, which is
+ * pressable and answers the mouse; a key that lights up under the cursor is a
+ * control that does nothing.
+ */
+function keyRow(): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "btp-key";
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "btp-svg btp-keysvg");
+  svg.setAttribute("width", "26");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("viewBox", "0 0 26 14");
+  svg.setAttribute("aria-hidden", "true");
+  const box = document.createElementNS(SVG, "rect");
+  box.setAttribute("x", "0.5");
+  box.setAttribute("y", "0.5");
+  box.setAttribute("width", "25");
+  box.setAttribute("height", "13");
+  box.setAttribute("class", "btp-chip");
+  const text = document.createElementNS(SVG, "text");
+  text.setAttribute("x", "13");
+  text.setAttribute("y", "7");
+  text.setAttribute("class", "btp-count");
+  text.textContent = BTREES.entriesChip;
+  svg.append(box, text);
+  const label = document.createElement("span");
+  label.textContent = BTREES.entriesKey;
+  row.append(svg, label);
+  return row;
 }
 
 /**

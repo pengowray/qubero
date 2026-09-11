@@ -878,6 +878,14 @@ export const TREEMAP = {
  * and "level 2" is not two below the root. Each of those has a string below
  * that says the other reading out loud.
  *
+ * Two of these were paragraphs of caption until the picture was changed to
+ * carry them. The number on a box is explained by the band the picture now
+ * draws below the last row of boxes, because every box's number counts what is
+ * in the band directly beneath it; and the band is also what says where a
+ * chunk tree stops, which used to be the sentence "The chunks themselves are
+ * not drawn". A caption that a reader has to hold in mind while looking at a
+ * picture is a fault in the picture.
+ *
  * HDF5's own names for the two node kinds are `TREE` and `SNOD` ("symbol
  * table node"). They are called index node and link table here: what a TREE
  * holds is pointers into the index, and what an SNOD holds is the group's
@@ -893,9 +901,9 @@ export const BTREES = {
   /** The tab's tooltip, in the minimap's order: the question the picture
    *  answers, then what one mark is, then the verbs. Two pictures share the
    *  panel and nothing about a band of boxes says which question it answers,
-   *  so both are named. "Reached through" is the phrase the width captions
-   *  use too, so the word here is the word there. */
-  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent and as wide as what is reached through it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing.",
+   *  so both are named. "Below it" is the phrase the width captions use too,
+   *  so the word here is the word there. */
+  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent and its width in proportion to the links or chunks below it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing.",
   /** Under the heading, which is the owning object's path. The two jobs a
    *  version 1 tree does are two different pictures (a group tree has a row a
    *  chunk tree does not), so the job is stated rather than left to be read
@@ -913,14 +921,61 @@ export const BTREES = {
    *  width and the number printed on it, and they are two different facts: the
    *  number is the node's own entry count and the width is the total at the
    *  bottom of its subtree. Left unsaid, a reader takes the wide box with "3"
-   *  on it for a mistake. "Reached through" rather than "under": under reads
-   *  spatially, and nothing is drawn under a link table, whose links are inside
-   *  it. The chunk caption adds that the chunks themselves are not drawn,
-   *  because a reader who has seen a group tree's bottom row of link tables
-   *  will look for the row that is not there. */
-  widthGroup: "Width: how many links are reached through the box. Number on a box: its own entry count.",
-  widthChunk:
-    "Width: how many chunks are reached through the box. Number on a box: its own entry count. The chunks themselves are not drawn.",
+   *  on it for a mistake.
+   *
+   *  A sentence, not "Width: ...". A width is not a count, and a colon puts a
+   *  count where the reader was promised a width. And "below it" rather than
+   *  the old "reached through it", which was a riddle: what made the spatial
+   *  word wrong was that nothing used to be drawn below a link table, whose
+   *  links are inside it. The picture now draws that band (`leafLinks`), so
+   *  every box in the picture, bottom row included, has the things its width
+   *  counts drawn directly below it. */
+  widthGroup: "Box width is proportional to the number of links below it.",
+  widthChunk: "Box width is proportional to the number of chunks below it.",
+  /** The key to the number printed on a box, shown beside a drawn box with `N`
+   *  in it. The sentence that used to say this ("Number on a box: its own
+   *  entry count") was a fact the reader had to hold in mind while looking at
+   *  the picture; the drawn box says where the number appears, so the words
+   *  only have to say what it counts. "That node" rather than "this node": the
+   *  drawn box is a key, and "this" invites reading it as a node in the tree. */
+  entriesChip: "N",
+  entriesKey: "entries in that node",
+  /** The band under the last row of boxes: the links or chunks the tree
+   *  indexes. They are not nodes, so they are drawn as one dashed, undivided
+   *  band rather than as boxes, and the label is a count with its unit.
+   *
+   *  Drawn at all because the picture has to say where each kind of tree ends.
+   *  A group tree's bottom row of link tables and a chunk tree's bottom row of
+   *  index nodes look alike, and the only thing that told a reader the chunk
+   *  tree had no further row was a caption saying "the chunks themselves are
+   *  not drawn". It also makes the number printed on a box readable without
+   *  being told: every box's number is how many things are in the band
+   *  directly below it, which at the root is two or three boxes to count.
+   *
+   *  "Or more" when the walk hit its node cap, because the count is then a
+   *  floor. The warning line under the summary counts nodes, and nothing in it
+   *  says the link or chunk total is short as well. It goes after the noun
+   *  rather than in front of the number, so that the tooltip's own verb can
+   *  never run into it: "point at at least 400 chunks" is a stutter, and
+   *  "point at 400 chunks or more" is not. */
+  leafLinks: (n: number, capped: boolean): string => `${countText(n, "link")}${capped ? " or more" : ""}`,
+  leafChunks: (n: number, capped: boolean): string => `${countText(n, "chunk")}${capped ? " or more" : ""}`,
+  /** The band's tooltip, and the one string that stops the band being read two
+   *  ways. The band sits in the same place under both kinds of tree and means
+   *  something different under each: a group's links are inside the link
+   *  tables in the row above, and a dataset's chunks are somewhere else in the
+   *  file. So each tooltip carries the readout's own verb, `holds` or `points
+   *  at`, and then the location word in plain English, because a reader who
+   *  reads those two verbs as synonyms still has to get the fact.
+   *
+   *  The second sentence denies both places a reader would go looking: the
+   *  boxes above and the address picture below, named in `stripCaption`'s own
+   *  words. "These" only while the count is a total: with `or more` on it the
+   *  number no longer names a set anyone can point at. */
+  leafLinksTitle: (nodes: number, links: number, capped: boolean): string =>
+    `${rowAbove(nodes, "link table", capped)} ${nodes === 1 ? "holds" : "hold"} ${capped ? "" : "these "}${BTREES.leafLinks(links, capped)} inside ${nodes === 1 ? "it" : "them"}. Links are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+  leafChunksTitle: (nodes: number, chunks: number, capped: boolean): string =>
+    `${rowAbove(nodes, "index node", capped)} ${nodes === 1 ? "points" : "point"} at ${capped ? "" : "these "}${BTREES.leafChunks(chunks, capped)}, which are blocks of data elsewhere in the file. Chunks are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
   /** One row of the summary for a row of index nodes. The level is written with
    *  the field's own name, `node_level`, because that is where the number came
    *  from and what the Listing calls it at those bytes; a bare "level 2" is a
@@ -934,8 +989,11 @@ export const BTREES = {
   /** The summary row for the link tables, and for a chunk tree's bottom row of
    *  index nodes. Two counts on one line need the relation between them said,
    *  or "36 link tables · 1,204 links" can be read as 1,204 each; the verb says
-   *  it. "Pointing at" on the chunk row is the same verb as the readout's, and
-   *  is the reason there is no chunk row under it. */
+   *  it. "Pointing at" on the chunk row is the same verb as the readout's and
+   *  as the chunk band's tooltip, so the row a reader is looking at and the
+   *  band beneath it are described the same way. This is the line in words for
+   *  the band the picture draws, which is redundancy on purpose: it is the one
+   *  place the counts can be read without hovering anything. */
   rowLinks: (nodes: number, links: number): string =>
     `${countText(nodes, "link table")} holding ${countText(links, "link")}`,
   rowChunks: (nodes: number, chunks: number): string =>
@@ -987,8 +1045,14 @@ export const BTREES = {
     `${(coords - 1).toLocaleString()} dimensions. The last number of each offset is always 0: HDF5 writes it as the offset within an element.`,
   /** Over the address strip. Says which axis this is, since the picture above
    *  it is in tree order and the two look alike, and that the rows are the
-   *  same rows. */
-  stripCaption: "The same nodes and rows, placed by file address",
+   *  same rows.
+   *
+   *  "In the same rows" rather than "and rows": the tree picture ends in a
+   *  band of links or chunks, which are not nodes and have no address of their
+   *  own here, so it has one band more than the strip has rows. A reader
+   *  counting four bands above and three below needs the sentence to say that
+   *  the rows being matched are the rows of nodes. */
+  stripCaption: "The same nodes, in the same rows, placed by file address",
   /** Under the strip. The strip is zoomed to the tree's own span, not the
    *  file, and a reader who assumed the file would misjudge every distance on
    *  it; the warning sits beside the two numbers that are the span. */
@@ -1005,11 +1069,16 @@ export const BTREES = {
   /** The empty state. One string, because the caller cannot tell why the walk
    *  found nothing: the core reads version 1 trees only, parses a version 2
    *  tree no further than its root, and a file can genuinely have no version 1
-   *  tree. So it claims only what is known (looked, found none), names this
-   *  tab's scope without a "yet" that would promise anything, and lists the
-   *  three ordinary reasons without saying which one this is. Not "this file
-   *  has no B-trees": a file written with version 2 trees has plenty. */
-  none: "No version 1 B-tree found for the object at the cursor, or for the root group. This tab draws version 1 B-trees only. A group that keeps its links in its header, a dataset that is not chunked, and a file written with version 2 B-trees have no version 1 B-tree.",
+   *  tree. So it says only what is known, which is where it looked and that it
+   *  found nothing there. Not "this file has no B-trees": a file written with
+   *  version 2 trees has plenty, and this sentence claims nothing about the
+   *  rest of the file.
+   *
+   *  It used to go on to name the three ordinary reasons a file has no version
+   *  1 tree. That was a paragraph about what the tab does not do, in front of
+   *  a reader who wanted a tree and did not get one, and none of it said which
+   *  reason applied to the file in front of them. */
+  none: "No version 1 B-tree found for the object at the cursor, or for the root group.",
   /** The mouse verbs. The first sentence is the treemap's and means the same.
    *  The second is not: the treemap's "open it" zooms into the box, and here a
    *  double-click puts the node in the Listing, so the destination is named
@@ -1058,6 +1127,21 @@ export const KIND_LABEL: Readonly<Record<string, string>> = {
 /** How many children a row stands for, named by what they are: `97,280 blocks`
  *  for a run of quantised weights, `2,560 values` for a run of numbers, and
  *  `items` for a list whose format has no word of its own for them. */
+/**
+ * The row of boxes directly above the band of links or chunks, named by what
+ * is on it, for `BTREES.leafLinksTitle` and `BTREES.leafChunksTitle`.
+ *
+ * No numeral when there is one box: "The 1 link table in the row above" is a
+ * numeral a reader stops on, and the single box is right there to be counted.
+ * "Drawn" only when the walk was capped, which is the case where the row on
+ * screen is short of the row in the file and the count would otherwise be read
+ * as the file's.
+ */
+function rowAbove(nodes: number, noun: string, capped: boolean): string {
+  const what = nodes === 1 ? noun : countText(nodes, noun);
+  return `The ${what}${capped ? " drawn" : ""} in the row above`;
+}
+
 export function countText(n: number, noun: string): string {
   return `${n.toLocaleString()} ${n === 1 ? noun : plural(noun)}`;
 }

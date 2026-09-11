@@ -4834,6 +4834,54 @@ table.rec tr.is-on td {
   dominant-baseline: central;
   pointer-events: none;
 }
+/* The links or chunks the tree indexes, under the last row of boxes. Dashed
+   and unfilled because they are not nodes of the tree: they have no address of
+   their own in the walk, no mark on the strip below, and nothing to go to, so
+   nothing here may look pressable. One band rather than one shape each,
+   because a group of four thousand links would otherwise be four thousand
+   shapes on one pixel row. Both colours are tokens, so the dashes read against
+   the page in either theme. */
+.btp-leaf {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1px;
+  stroke-dasharray: 3 3;
+  cursor: default;
+}
+/* The count in the band. Bright like a box's number, because it is the
+   information; the band around it is what says these are not nodes. */
+.btp-leafcount {
+  fill: var(--fg);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+/* The key to the number on a box: a drawn box with N in it, then the words.
+   Its own fill and stroke rather than `.btp-box`'s, which carry a pointer
+   cursor and a hover fill: a key that answers the mouse is a control that
+   does nothing. */
+.btp-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+/* A `display` of its own beats the browser's rule for `hidden`, so the key to
+   a picture that is not there would stay on screen over the empty state. */
+.btp-key[hidden] {
+  display: none;
+}
+.btp-keysvg {
+  flex: 0 0 auto;
+}
+.btp-chip {
+  fill: color-mix(in srgb, var(--accent) 12%, transparent);
+  stroke: var(--line);
+  stroke-width: 1px;
+}
 /* One node on the address strip. A mark rather than a box: it stands for
    where the node is, and its width would otherwise be read as the same fact
    the tree picture's widths are. */
@@ -4846,7 +4894,9 @@ table.rec tr.is-on td {
   fill: var(--fg);
 }
 /* The captions: what the widths mean, and what the strip is a picture of.
-   Both say something the picture cannot, so neither is optional chrome. */
+   Both say something the picture cannot, which is the test a caption here has
+   to pass. What the number on a box counts, and where a chunk tree stops,
+   used to be captions and are now drawn (`.btp-key`, `.btp-leaf`). */
 .btp-line {
   font-size: 11px;
   color: var(--muted);
@@ -4912,4 +4962,7 @@ table.rec tr.is-on td {
 }
 .btp-big .btp-count {
   font-size: 11px;
+}
+.btp-big .btp-leafcount {
+  font-size: 12px;
 }
