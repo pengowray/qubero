@@ -35,6 +35,14 @@ billions of px. So the hex view (`web/src/hexview.ts`) keeps a `topRow`, renders
 the rows that fit, and owns its scrollbar (row <-> offset). This is the documented
 exception to "use a library for UI primitives": no virtual-list library survives this.
 
+A row element stands for an address, not for a place on screen: `HexRows.place` in
+`web/src/hexrows.ts` hands each row the element that already held it and writes only
+the rows arriving at an edge, so a one-notch scroll costs a notch rather than a
+screenful. Which row is drawn where is a flex `order`, so nothing moves in the
+document and a finger keeps the element it is resting on. That integer is 32-bit and
+a row number is not, for the reason above, so the order is counted from a mark that
+follows the view.
+
 ### Workspace
 - `crates/core`: pure Rust, no wasm deps, `cargo test` natively. All logic lives here.
 - `crates/wasm`: wasm-bindgen surface only. Offsets cross as `f64` (exact to 2^53).

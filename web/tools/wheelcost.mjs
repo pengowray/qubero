@@ -122,7 +122,7 @@ const INSTRUMENT = (which) => {
     time(proto, ["frame", "placeSpans", "planValues", "measure", "settleHeights", "finish", "fitRows", "markHover", "relayout"]);
     const rows = v.grid ?? v.rows;
     if (rows !== undefined) {
-      time(Object.getPrototypeOf(rows), ["write", "heights", "drawHeader", "drawRow", "drawCells", "drawNotes", "drawPinned", "layOutRow", "fitParts", "ensure", "noteMetrics", "hexPitch"], "rows.");
+      time(Object.getPrototypeOf(rows), ["write", "heights", "place", "drawHeader", "drawRow", "drawCells", "drawNotes", "drawPinned", "layOutRow", "fitParts", "ensure", "noteMetrics", "hexPitch"], "rows.");
     }
   }
   // What a scroll costs the document, on the one footing the two views share.

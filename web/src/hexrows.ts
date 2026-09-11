@@ -54,6 +54,12 @@ export type RowPicks = {
  *  than taken for the empty block the new row wants. */
 const VALS_UNKNOWN = "\u0000";
 
+/** How far the view may wander from the mark the flex orders are counted from
+ *  before the mark is moved, and half of which is left free on each side of it
+ *  when it is. See `place`: the order is a 32-bit integer and a row number is
+ *  not, so what goes on the element is a distance rather than an address. */
+const ORDER_SPAN = 1_000_000;
+
 /** One line of cells: an address, the bytes, their text and their fields. A row
  *  is one of these unless a part starts part-way along it. */
 type LineParts = {
@@ -239,10 +245,17 @@ export class HexRows {
    *
    *  - `start` is the address the cells were written with, so a recycled
    *    element has `moved` true and every `data-off` is written again.
-   *  - `layoutKey` covers where the row is cut, the headings above it and the
-   *    file's length; `noteKey` covers every chip the row shows, taken from
-   *    the plan's own output rather than from what went into it; `valsKey`
-   *    covers the table of values.
+   *  - `layoutKey` covers what the row is *made of*: where it is cut, which
+   *    parts start on it, how wide the address column is. `noteKey` covers
+   *    every chip the row shows, taken from the plan's own output rather than
+   *    from what went into it; `valsKey` covers the table of values.
+   *  - The headings themselves are not keyed at all. They were, by the part's
+   *    identity, and that turned out to be a key that misses: a part's range,
+   *    its size and its share of the file all change while it stays the same
+   *    part, and an unmapped run at the end of a file does it on every edit.
+   *    While an element drew a different row on every scroll the stale text
+   *    was always written over before anyone saw it. It is now `drawHeads`'s
+   *    business, every draw, guarded write by guarded write like the cells.
    *  - `fitParts` throws every one of them away when the shape of the view
    *    changes, and clears `holds` with them, so a row drawn at eight bytes to
    *    the line cannot be handed an element that drew sixteen.
@@ -250,35 +263,56 @@ export class HexRows {
    *    address it holds — the top row's carried chips, the last row's "more
    *    fields below", and the rule under the column header — all reach the
    *    element through `noteKey` or through the `hv-row-top` class written
-   *    above.
+   *    below.
    *
-   * That was checked rather than reasoned: `web/tools/staleness.mjs` runs the
-   * same script of scrolls, cursor moves, selections, mode changes and resizes
-   * against a server drawing the old way and one drawing this way, and
-   * compares every visible cell, class, chip and heading after every step. 513
-   * steps over nine sample files, no difference anywhere.
+   * One gap in that, which this did not open and does not close: `noteKey` is
+   * built from what a chip *says*, not from which field it is. Two fields with
+   * the same name and the same value in different structures key the same, and
+   * an element recycled from one to the other keeps the tooltip and the path a
+   * press on it follows. It was as possible before, when every element drew a
+   * new row every scroll; a recycled element is now the only way to reach it.
+   *
+   * None of this was left to reasoning: `web/tools/staleness.mjs` runs the same
+   * script of scrolls, cursor moves, selections, an edit, mode changes, resizes
+   * and row widths against a server drawing the old way and one drawing this
+   * way, and compares every visible cell, class, chip and heading after every
+   * step, as well as asking the browser whether the rows really do fall down
+   * the screen in the order the view hands them out. That is what found the
+   * headings, on `tagged.mp3`: type a byte past the end of the file and the
+   * heading over the unclaimed run at the end still said what it was a byte
+   * ago. It is the one difference the run turned up, and it is the old drawing
+   * that has it.
    *
    * **What it is worth.** `web/tools/wheelcost.mjs` on `hello.exe` at
    * 1280x800, runs interleaved against a server on the commit before this one:
    *
    * | | attributes written | text written | browser layout | browser style | draw |
    * |---|---|---|---|---|---|
-   * | one notch, before | 1,406 | 508 | 8ms | 3ms | 20-24ms |
-   * | one notch, after  |    57 |  18 | 1ms | 1ms |  8ms |
-   * | thirty notches, before | 32,187 | 12,358 | 174ms | 67ms | 432ms |
-   * | thirty notches, after  |  1,667 |    464 |  16ms | 17ms | 137ms |
+   * | one notch, before      |  1,406 |    508 |   8-14ms |  4-5ms |  23-44ms |
+   * | one notch, after       |     60 |     18 |      1ms |    1ms |   8-11ms |
+   * | thirty notches, before | 32,350 | 12,358 |    206ms |   83ms |    520ms |
+   * | thirty notches, after  |  2,090 |    464 |     25ms |   29ms |    255ms |
    *
    * The counts are what to read: they are deterministic, and the times on this
-   * machine are not. What is left in the draw is script — working out what
-   * every row would say, so as to find that it already says it — and the next
-   * thing worth attacking is `placeSpans` rather than anything here.
+   * machine are not — the same code measured 432ms and 571ms for the same
+   * thirty notches an hour apart. The thirty-notch draw times are not quite
+   * comparable either, since the faster draw lets more of the wheel's reports
+   * through as draws of their own: forty of them against thirty-five, so the
+   * time for one went from 14ms to 7ms.
+   *
+   * What is left in the draw is script — working out what every row would say,
+   * so as to find that it already says it — and the next thing worth attacking
+   * is `placeSpans`, at about 1.8ms a draw, rather than anything here.
    */
   private place(topRow: number): void {
     const n = this.rowEls.length;
-    // Far from the mark the orders are counted from, or behind it: move it to
-    // the view. Every order below is then written again, which is what the
-    // guard on the write costs on the one draw in a million where this fires.
-    if (topRow < this.orderBase || topRow - this.orderBase > 1_000_000) this.orderBase = topRow;
+    // Far from the mark the orders are counted from, or behind it: move it,
+    // and leave room on both sides of the view. Putting the mark on the top
+    // row instead would leave the next scroll upward crossing it again, and
+    // every notch up after that would rewrite all twenty-nine orders. Every
+    // order below is written again on the draw that moves the mark, which is
+    // one draw in half a million rows.
+    if (topRow < this.orderBase || topRow - this.orderBase > ORDER_SPAN) this.orderBase = Math.max(0, topRow - ORDER_SPAN / 2);
     const win: number[] = new Array(n).fill(-1);
     const spare: number[] = [];
     for (let i = 0; i < n; i++) {
@@ -297,6 +331,14 @@ export class HexRows {
       const el = this.rowEls[i] as HTMLElement;
       const order = String(topRow + w - this.orderBase);
       if (el.style.order !== order) el.style.order = order;
+      // Which row of the file this is. The grid's children are no longer in
+      // the order they are drawn, so a reader going through them one at a time
+      // would be told the wrong thing by their arrangement; this is the
+      // attribute `role="grid"` has for saying it outright. It is the row's
+      // own number, so it is written when a row is given a new element and not
+      // again while it keeps it.
+      const at = String(topRow + w + 1);
+      if (el.getAttribute("aria-rowindex") !== at) el.setAttribute("aria-rowindex", at);
       // The top row is named on the element: the stylesheet takes the rule off
       // the first heading of the view so it does not double the column
       // header's own, and which element that is no longer follows from where
@@ -463,8 +505,31 @@ export class HexRows {
    * Only the first line carries the address, since a row address is a multiple
    * of the row width and the address of a cut is not.
    */
-  private layOutRow(row: HTMLElement, parts: RowParts, at: RowPieces, fileBits: number, addrWidth: number): void {
+  /**
+   * Write the headings above a row's lines, on every draw.
+   *
+   * Not behind `layoutKey`, which names the parts that start on the row and
+   * not what any of them says. A heading's name, its range, how big it is and
+   * how much of the file that is all change under the same key: an unmapped
+   * run at the end of a file grows as the file is edited or as more of it
+   * arrives, and the part that names it keeps its key throughout. While a row
+   * element drew a different row on every scroll that never showed, because
+   * the key changed for the row rather than for the heading. It shows now, so
+   * the headings are worked out every draw and written where they differ, the
+   * way the cells are. `fillHeadings` guards every write, and a row with no
+   * heading — which is nearly all of them — costs two comparisons.
+   */
+  private drawHeads(parts: RowParts, at: RowPieces, fileBits: number): void {
     const { rowStart, segs } = at;
+    for (const [j, lp] of parts.lines.entries()) {
+      const on = j < segs.length;
+      const pos = on ? (segs[j] as number) : 0;
+      fillHeadings(lp.head, on ? (at.heads[j] ?? []) : [], fileBits, rowStart + pos, this.picks.heading);
+    }
+  }
+
+  private layOutRow(row: HTMLElement, parts: RowParts, at: RowPieces, addrWidth: number): void {
+    const { segs } = at;
     const { bpr, binary, fields, below } = this.lineShape;
     while (parts.lines.length < segs.length) parts.lines.push(this.makeLine());
     // Every line the row has ever needed, in order, whether or not this
@@ -474,10 +539,10 @@ export class HexRows {
     const kids: HTMLElement[] = [];
     for (const [j, lp] of parts.lines.entries()) {
       const on = j < segs.length;
-      const pos = on ? (segs[j] as number) : 0;
-      // Always in place, empty when no part starts here, so that a heading
-      // arriving or leaving writes into a block that is already there.
-      fillHeadings(lp.head, on ? (at.heads[j] ?? []) : [], fileBits, rowStart + pos, this.picks.heading);
+      // Always in the row, empty when no part starts here, so that a heading
+      // arriving or leaving writes into a block that is already there. What
+      // goes in it is `drawHeads`'s business, on every draw rather than only
+      // on the ones that lay the row out again.
       kids.push(lp.head);
       if (lp.line.hidden === on) lp.line.hidden = !on;
       kids.push(lp.line);
@@ -535,13 +600,16 @@ export class HexRows {
       this.rowEls.pop()?.remove();
       this.parts.pop();
     }
-    // Whatever `place` last worked out is about a pool that no longer exists.
-    // Nothing reads these before the next `write`, which calls `place` again,
-    // but leaving an index in here that is past the end of the pool would be a
-    // trap for whatever reads them next.
-    if (this.win.length !== want) {
-      this.win.length = 0;
-      this.winEls.length = 0;
+    // What `place` last worked out is about a pool that is no longer this
+    // size. Trimmed rather than emptied: `rows` is read between here and the
+    // next `write` -- `fitRows` reads a row to take its height off the
+    // stylesheet -- and an empty answer there reads as a view with no rows at
+    // all. A pool that grew leaves the old window standing, which is a true
+    // answer about fewer rows than there now are, and `place` replaces it
+    // whole on the next draw either way.
+    if (this.win.length > want) {
+      this.win.length = want;
+      this.winEls.length = want;
     }
   }
 
@@ -688,16 +756,22 @@ export class HexRows {
     parts.blank = false;
     const heads = f.headsByRow[r] ?? [];
     const at = rowPieces(heads, rowStart, bpr, f.condensed, f.sizes, f.rowHeight);
-    // The share of the file changes with its length, so the key does too.
-    const layoutKey = `${at.segs.join(",")}#${heads.map((h) => h.key).join("|")}@${len}`;
+    // Which parts start on this row and where the row is cut for them, which
+    // is what the lines and the blocks between them are made of, and how wide
+    // the address column is, which is what a cut row's later lines hold open
+    // and empty. Not what any of those parts says: a heading's name, range and
+    // share change under the same key, and they are written every draw by
+    // `drawHeads` rather than keyed here.
+    const layoutKey = `${at.segs.join(",")}#${heads.map((h) => h.key).join("|")}@${f.addrWidth}`;
     if (layoutKey !== parts.layoutKey) {
-      this.layOutRow(row, parts, at, len * 8, f.addrWidth);
+      this.layOutRow(row, parts, at, f.addrWidth);
       parts.layoutKey = layoutKey;
       parts.noteKey = "";
       parts.valsKey = VALS_UNKNOWN;
       // Cells that changed line have to be told which byte they draw again.
       parts.start = -1;
     }
+    this.drawHeads(parts, at, len * 8);
     let height = f.rowHeight * at.segs.length;
     for (const h of at.headHeights) height += h;
     const addr = (parts.lines[0] as LineParts).addr;
