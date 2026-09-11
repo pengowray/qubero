@@ -132,6 +132,86 @@ fn a_user_block_changes_where_the_file_begins_and_nothing_else() {
     assert_eq!(plain, named("userblock-512.h5"));
 }
 
+/// A version 4 layout message names one of five ways of indexing a dataset's
+/// chunks, and the file in the collection has a dataset for each. All five are
+/// named, and four of them lead to the chunks themselves: an implicit index
+/// writes no entries anywhere, so it is the one that says where its run starts
+/// and stops there.
+///
+/// The numbers are what says the indexes were walked rather than merely read.
+/// Every unfiltered dataset in that file counts up from nought, and a chunk
+/// reached through a wrong address, or read as a run of the wrong length, does
+/// not produce them.
+#[test]
+fn every_version_4_chunk_index_reaches_its_chunks() {
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let path = dir.join("hdf5").join("chunk-indexes-v4.h5");
+    let file = File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let len = file.metadata().unwrap().len();
+    let doc = Document::new(FileSource { file: RefCell::new(file), len });
+    let mut ev = Evaluator::new(hdf5());
+
+    let (mut indexes, mut numbers, mut filtered) = (Vec::new(), Vec::new(), 0usize);
+    gather(&mut ev, &doc, &[], &mut 0usize, &mut indexes, &mut numbers, &mut filtered, &path);
+
+    indexes.sort();
+    indexes.dedup();
+    assert_eq!(
+        indexes,
+        vec!["extensible array", "fixed array", "implicit", "single chunk", "version 2 b-tree"],
+        "{}: not every chunk index was named",
+        path.display()
+    );
+    for want in 0..16 {
+        assert!(numbers.contains(&want), "{}: the chunks never gave up {want}", path.display());
+    }
+    assert!(filtered >= 2, "{}: only {filtered} filtered chunks", path.display());
+}
+
+/// Every node under `path`, collecting what the chunk indexes are called, the
+/// numbers the chunks hold, and how many chunks a filter wrote.
+#[allow(clippy::too_many_arguments)]
+fn gather(
+    ev: &mut Evaluator,
+    doc: &Document<FileSource>,
+    path: &[usize],
+    seen: &mut usize,
+    indexes: &mut Vec<String>,
+    numbers: &mut Vec<i128>,
+    filtered: &mut usize,
+    file: &Path,
+) {
+    if *seen >= BUDGET {
+        return;
+    }
+    let node = ev
+        .node(doc, path)
+        .unwrap_or_else(|e| panic!("{}: {path:?} does not read: {e:?}", file.display()));
+    *seen += 1;
+    if node.name == "index_type" {
+        if let Value::Enum { name: Some(n), .. } = &node.value {
+            indexes.push(n.clone());
+        }
+    }
+    if node.type_name == "FilteredChunk" {
+        *filtered += 1;
+    }
+    if let Value::Int(v) = node.value {
+        numbers.push(v);
+    }
+    for i in 0..node.child_count as usize {
+        let mut p = path.to_vec();
+        p.push(i);
+        gather(ev, doc, &p, seen, indexes, numbers, filtered, file);
+        if *seen >= BUDGET {
+            return;
+        }
+    }
+}
+
 /// The sample collection, wherever it is. None when there is none.
 fn sample_dir() -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();

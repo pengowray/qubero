@@ -30,7 +30,7 @@
 //!
 //! ## What is read
 //!
-//! Superblock versions 0 and 1, the object header of version 1 and its
+//! Superblock versions 0 to 3, the object header of version 1 and its
 //! messages, version 1 b-trees (both the group ones and the chunk ones),
 //! local heaps, and symbol table nodes. The messages read as their own fields
 //! are the ones a dataset is made of: dataspace, datatype, both fill values,
@@ -41,6 +41,32 @@
 //!
 //! The object header of version 2 (`OHDR`) is read as far as its messages,
 //! which are the same messages in a shorter wrapper.
+//!
+//! ## Where a chunk is
+//!
+//! A data layout message of version 1, 2 or 3 has one answer for a chunked
+//! dataset: a version 1 b-tree, keyed by where the chunk sits in the dataset.
+//! Versions 4 and 5, which arrived with HDF5 1.10 and are what a file written
+//! to the latest library version gets, name one of five others instead, and
+//! which one follows from the dataset's shape rather than being asked for.
+//!
+//! All five are read. A single chunk index is the address of the one chunk
+//! and nothing else. An implicit index is no index: the chunks are written one
+//! after another in the order they are counted. A fixed array is one entry per
+//! chunk, in that same order, for a dataset whose dimensions cannot grow; an
+//! extensible array is the same for one dimension that can, with the first
+//! handful of entries in the index block itself; and more than one dimension
+//! that can grow is a version 2 b-tree, which was already read here for a
+//! group's links. The entries of both arrays are followed to the chunks, and
+//! an unfiltered chunk reads as elements, since the chunk dimensions
+//! multiplied together are how many bytes one chunk comes to.
+//!
+//! That last multiplication is why a version 4 message cannot be read as a
+//! version 3 one with the numbers moved about. Version 3 writes the chunk
+//! dimensions in four bytes each and the size of an element beside them;
+//! version 4 writes them in as many bytes as the largest of them needs, one
+//! to eight, and the last dimension is the element size rather than a
+//! dimension of the chunk.
 //!
 //! ## What is not
 //!
@@ -77,6 +103,26 @@
 //! and a heap grown past the largest direct block size, whose later rows hold
 //! indirect blocks rather than direct ones. Telling those apart takes a base
 //! two logarithm, which the expressions here do not have.
+//!
+//! The same logarithm is what stops the chunk indexes short. An extensible
+//! array past its index block keeps the rest of its entries in data blocks and
+//! then in secondary blocks of doubling size, and how many addresses of each
+//! the index block holds is worked out from the array's size rather than
+//! written down; so the entries in the index block are read and the addresses
+//! after them are not. A fixed array whose entry count is past what one page
+//! holds is paged, and a page's worth of entries is a power of two the same
+//! way, so a paged data block is left as it stands. Neither array's checksums
+//! are placed.
+//!
+//! An implicit index's chunks are not placed either, for a different reason:
+//! the run is the chunk count times the chunk size, and the count is the
+//! dataspace rounded up a chunk at a time in every dimension, which is a
+//! division this has no fold for. The address is read and says where they
+//! start.
+//!
+//! A virtual dataset is read as far as the global heap collection holding its
+//! mapping. What is in that object, the selections in this dataset and the
+//! names of the files and datasets they come from, keeps its bytes.
 //!
 //! ## The elements
 //!
@@ -151,6 +197,8 @@ pub fn hdf5_part() -> Part {
         .with_type("HeapIndirectBlock", heap_indirect_block())
         .with_type("BTree2", btree2())
         .with_type("BTree2Node", btree2_node())
+        .with_type("FixedArray", fixed_array())
+        .with_type("ExtensibleArray", extensible_array())
 }
 
 /// The eight bytes every HDF5 superblock opens with.
@@ -1388,13 +1436,17 @@ fn data_layout() -> T {
             ("version", T::u8()),
             (
                 "body",
-                // Version 4 and whatever follows it write the dimensions in
-                // a width the message itself declares and name one of half a
-                // dozen ways of indexing the chunks. That is a machine of its
-                // own; until it is here, such a message keeps its bytes.
+                // Version 5 is version 4 byte for byte. What it changes is one
+                // width in the chunk index rather than anything in the message:
+                // the size of a filtered chunk, which version 4 wrote in as
+                // few bytes as an unfiltered chunk needs plus one, and version
+                // 5 writes in as many as an address takes, so that a filter
+                // which makes a chunk bigger cannot overflow the field. The
+                // entry works that width out from its own size and so reads
+                // either. A version past that keeps its bytes.
                 T::switch(
                     E::field("version"),
-                    vec![(1, layout_v1()), (2, layout_v1()), (3, layout_v3())],
+                    vec![(1, layout_v1()), (2, layout_v1()), (3, layout_v3()), (4, layout_v4()), (5, layout_v4())],
                     T::bytes(E::Remaining),
                 ),
             ),
@@ -1436,7 +1488,9 @@ fn layout_v1() -> T {
 }
 
 fn layout_class() -> T {
-    T::enumeration("LayoutClass", T::u8(), &[(0, "compact"), (1, "contiguous"), (2, "chunked")])
+    // A virtual dataset is a version 4 class and cannot appear in the earlier
+    // messages, which is why naming it here costs those nothing.
+    T::enumeration("LayoutClass", T::u8(), &[(0, "compact"), (1, "contiguous"), (2, "chunked"), (3, "virtual")])
 }
 
 fn layout_v3() -> T {
@@ -1449,24 +1503,8 @@ fn layout_v3() -> T {
                 T::switch(
                     E::field("layout_class"),
                     vec![
-                        (
-                            0,
-                            T::structure(
-                                "Compact",
-                                vec![("size", T::u16(Little)), ("data", elements(Described::Beside, E::field("size")))],
-                            ),
-                        ),
-                        (
-                            1,
-                            T::structure(
-                                "Contiguous",
-                                vec![
-                                    ("address", addr()),
-                                    ("size", length()),
-                                    ("data", at_address("address", elements(Described::Beside, E::field("size")))),
-                                ],
-                            ),
-                        ),
+                        (0, compact_storage()),
+                        (1, contiguous_storage()),
                         (
                             2,
                             T::structure(
@@ -1491,6 +1529,339 @@ fn layout_v3() -> T {
                     T::bytes(E::Remaining),
                 ),
             ),
+        ],
+    )
+}
+
+/// Compact and contiguous, which versions 3 and 4 write the same way: the
+/// elements in the message itself, or one run of them at an address.
+fn compact_storage() -> T {
+    T::structure(
+        "Compact",
+        vec![("size", T::u16(Little)), ("data", elements(Described::Beside, E::field("size")))],
+    )
+}
+
+fn contiguous_storage() -> T {
+    T::structure(
+        "Contiguous",
+        vec![
+            ("address", addr()),
+            ("size", length()),
+            ("data", at_address("address", elements(Described::Beside, E::field("size")))),
+        ],
+    )
+}
+
+/// Versions 4 and 5, which a file written to the latest library version gets.
+/// Compact and contiguous are what version 3 made them, a virtual dataset is only
+/// here, and a chunked one names which of five indexes places its chunks
+/// rather than always being a version 1 b-tree.
+fn layout_v4() -> T {
+    T::structure(
+        "Layout",
+        vec![
+            ("layout_class", layout_class()),
+            (
+                "storage",
+                T::switch(
+                    E::field("layout_class"),
+                    vec![(0, compact_storage()), (1, contiguous_storage()), (2, chunked_v4()), (3, virtual_storage())],
+                    T::bytes(E::Remaining),
+                ),
+            ),
+        ],
+    )
+}
+
+/// Chunked, version 4. The dimensions are written in a width the message
+/// declares rather than always in four bytes, and the last of them is the size
+/// of an element, as it is in version 3: so the dimensions multiplied together
+/// are the bytes one whole chunk comes to, which is what places an unfiltered
+/// chunk whose size nothing else writes down.
+///
+/// Which index is used follows from the dataset rather than being chosen: one
+/// chunk covering the whole thing is a single chunk index, dimensions that
+/// cannot grow are a fixed array, one that can is an extensible array, and
+/// more than one that can is a version 2 b-tree. A version 1 b-tree, which is
+/// all a version 3 message could name, never appears here.
+fn chunked_v4() -> T {
+    T::structure(
+        "Chunked",
+        vec![
+            (
+                "flags",
+                T::flags(
+                    "ChunkedFlags",
+                    T::u8(),
+                    &[(0, "partial edge chunks unfiltered"), (1, "single chunk filtered")],
+                ),
+            ),
+            ("dimensionality", T::u8()),
+            ("dimension_size", T::u8().counted_as("bytes")),
+            (
+                "chunk_dimensions",
+                T::array(T::uint_expr(E::field("dimension_size").mul(E::lit(8)), Little), E::field("dimensionality")),
+            ),
+            ("index_type", chunk_index_type()),
+            (
+                "index",
+                T::switch(
+                    E::field("index_type"),
+                    vec![
+                        (1, single_chunk_index()),
+                        // How many entries one page of the array's data block
+                        // holds, as the number of bits it takes to count them.
+                        (3, T::structure("FixedArrayIndex", vec![("page_bits", T::u8())])),
+                        (
+                            4,
+                            T::structure(
+                                "ExtensibleArrayIndex",
+                                vec![
+                                    ("max_entry_count_bits", T::u8()),
+                                    ("index_block_entries", T::u8().counted_as("entries")),
+                                    ("secondary_block_min_pointers", T::u8()),
+                                    ("data_block_min_entries", T::u8().counted_as("entries")),
+                                    ("data_block_page_bits", T::u8()),
+                                ],
+                            ),
+                        ),
+                        (
+                            5,
+                            T::structure(
+                                "BTree2Index",
+                                vec![
+                                    ("node_size", T::u32(Little).counted_as("bytes")),
+                                    ("split_percent", T::u8()),
+                                    ("merge_percent", T::u8()),
+                                ],
+                            ),
+                        ),
+                    ],
+                    // An implicit index writes nothing: the chunks are all
+                    // there, one after another, in the order they are counted.
+                    T::bytes(E::lit(0)),
+                ),
+            ),
+            ("address", addr()),
+            (
+                "chunks",
+                T::switch(
+                    E::field("index_type"),
+                    vec![
+                        (1, at_address("address", single_chunk())),
+                        (3, at_address("address", T::Named("FixedArray".into()))),
+                        (4, at_address("address", T::Named("ExtensibleArray".into()))),
+                        (5, at_address("address", T::Named("BTree2".into()))),
+                    ],
+                    // An implicit index's run is as long as the chunk count
+                    // times the chunk size, and the count is the dataspace
+                    // rounded up a dimension at a time. There is no such
+                    // division here, so the run is left where it is.
+                    T::bytes(E::lit(0)),
+                ),
+            ),
+        ],
+    )
+}
+
+fn chunk_index_type() -> T {
+    T::enumeration(
+        "ChunkIndexType",
+        T::u8(),
+        &[
+            (0, "version 1 b-tree"),
+            (1, "single chunk"),
+            (2, "implicit"),
+            (3, "fixed array"),
+            (4, "extensible array"),
+            (5, "version 2 b-tree"),
+        ],
+    )
+}
+
+/// A single chunk index writes nothing at all unless a filter ran, in which
+/// case what the filter left and which filters were skipped are here: there is
+/// no entry anywhere else to keep them, since the address in the message is
+/// the chunk itself rather than an index.
+fn single_chunk_index() -> T {
+    when(
+        bit("flags", 1),
+        T::structure(
+            "SingleChunkIndex",
+            vec![("chunk_size", length().counted_as("bytes")), ("filter_mask", T::u32(Little))],
+        ),
+    )
+}
+
+/// The one chunk, which is the whole dataset: as many bytes as the chunk
+/// dimensions multiplied together, or as many as the filter left when one ran.
+fn single_chunk() -> T {
+    T::switch(
+        bit("flags", 1),
+        vec![(1, filtered_chunk(E::within(&["index", "chunk_size"])))],
+        elements(Described::Beside, E::product_of("chunk_dimensions")),
+    )
+}
+
+/// A chunk a filter pipeline wrote, which keeps its bytes: what is in the file
+/// is the pipeline's output, and undoing it is not something a field can do.
+/// Marked so the panel can find the reader that does.
+fn filtered_chunk(size: E) -> T {
+    T::structure("FilteredChunk", vec![("bytes", T::bytes(size))]).packed_as(super::hdf5_chunk::PACKING)
+}
+
+/// Where the chunks of a dataset whose dimensions cannot grow are: one entry
+/// per chunk, in the order the chunks are counted, with nothing to search and
+/// no key to compare. The array knows how many entries there will ever be
+/// when it is made, which is what a fixed dataspace buys.
+fn fixed_array() -> T {
+    T::structure(
+        "FixedArray",
+        vec![
+            ("signature", T::magic(b"FAHD")),
+            ("version", T::u8()),
+            ("client_id", array_client_id()),
+            ("entry_size", T::u8().counted_as("bytes")),
+            ("page_bits", T::u8()),
+            ("max_entry_count", length().counted_as("entries")),
+            ("data_block_address", addr()),
+            ("checksum", T::u32(Little)),
+            ("data_block", at_address("data_block_address", fixed_array_data_block())),
+        ],
+    )
+}
+
+fn fixed_array_data_block() -> T {
+    T::structure(
+        "FixedArrayDataBlock",
+        vec![
+            ("signature", T::magic(b"FADB")),
+            ("version", T::u8()),
+            ("client_id", array_client_id()),
+            ("header_address", addr()),
+            (
+                "entries",
+                // More entries than one page holds and the block is paged:
+                // what follows is a bitmap of which pages were written, then
+                // the pages themselves, each with a checksum of its own. That
+                // is not read, and the division says which this is.
+                T::switch(
+                    E::field("max_entry_count").sub(E::lit(1)).div(E::lit(1).shl(E::field("page_bits"))),
+                    vec![(0, T::array(array_entry(), E::field("max_entry_count")).counted_as("entries"))],
+                    T::bytes(E::lit(0)),
+                ),
+            ),
+        ],
+    )
+}
+
+/// Where the chunks of a dataset with one dimension that can grow are. The
+/// first handful of entries are in the index block itself, which is the whole
+/// of a small dataset's index; past that they are in data blocks the index
+/// block points at, and past that in secondary blocks of doubling size.
+fn extensible_array() -> T {
+    T::structure(
+        "ExtensibleArray",
+        vec![
+            ("signature", T::magic(b"EAHD")),
+            ("version", T::u8()),
+            ("client_id", array_client_id()),
+            // The spec calls this the element size; it is named as the fixed
+            // array's is, because one entry is read by the same fields.
+            ("entry_size", T::u8().counted_as("bytes")),
+            ("max_entry_count_bits", T::u8()),
+            ("index_block_entries", T::u8().counted_as("entries")),
+            ("data_block_min_entries", T::u8().counted_as("entries")),
+            ("secondary_block_min_pointers", T::u8()),
+            ("data_block_page_bits", T::u8()),
+            ("secondary_block_count", length().counted_as("blocks")),
+            ("secondary_block_size", length().counted_as("bytes")),
+            ("data_block_count", length().counted_as("blocks")),
+            ("data_block_size", length().counted_as("bytes")),
+            ("max_index_set", length()),
+            ("entry_count", length().counted_as("entries")),
+            ("index_block_address", addr()),
+            ("checksum", T::u32(Little)),
+            ("index_block", at_address("index_block_address", extensible_array_index_block())),
+        ],
+    )
+}
+
+fn extensible_array_index_block() -> T {
+    T::structure(
+        "ExtensibleArrayIndexBlock",
+        vec![
+            ("signature", T::magic(b"EAIB")),
+            ("version", T::u8()),
+            ("client_id", array_client_id()),
+            ("header_address", addr()),
+            ("entries", T::array(array_entry(), E::field("index_block_entries")).counted_as("entries")),
+            // The addresses of the data blocks kept here and of the secondary
+            // blocks follow, and how many there are of each is a base two
+            // logarithm of the array's size away, which the expressions here
+            // do not have. They keep no bytes, and neither does the checksum
+            // after them.
+        ],
+    )
+}
+
+/// What either array calls its entries: a chunk's address, and, where a filter
+/// ran, how much of the chunk was written and which filters were skipped. How
+/// wide that size is, is whatever the entry has left once the address and the
+/// mask have taken theirs.
+fn array_entry() -> T {
+    T::structure(
+        "Entry",
+        vec![
+            ("chunk_address", addr()),
+            (
+                "filtered",
+                T::switch(
+                    E::field("client_id"),
+                    vec![(
+                        1,
+                        T::inline_structure(
+                            "Filtered",
+                            vec![
+                                (
+                                    "chunk_size",
+                                    T::uint_expr(E::field("entry_size").sub(E::lit(12)).mul(E::lit(8)), Little)
+                                        .counted_as("bytes"),
+                                ),
+                                ("filter_mask", T::u32(Little)),
+                            ],
+                        ),
+                    )],
+                    T::bytes(E::lit(0)),
+                ),
+            ),
+            (
+                "chunk",
+                T::switch(
+                    E::field("client_id"),
+                    vec![(1, at_address("chunk_address", filtered_chunk(E::within(&["filtered", "chunk_size"]))))],
+                    at_address("chunk_address", elements(Described::Beside, E::product_of("chunk_dimensions"))),
+                ),
+            ),
+        ],
+    )
+}
+
+fn array_client_id() -> T {
+    T::enumeration("ArrayClient", T::u8(), &[(0, "chunks, unfiltered"), (1, "chunks, filtered")])
+}
+
+/// A virtual dataset, whose elements are in other datasets and other files.
+/// What maps this dataset's selections onto theirs is one object in a global
+/// heap collection, reached the same way a variable-length element is.
+fn virtual_storage() -> T {
+    T::structure(
+        "Virtual",
+        vec![
+            ("collection_address", addr()),
+            ("object_index", T::u32(Little)),
+            ("collection", at_address("collection_address", T::Named("GlobalHeap".into()))),
         ],
     )
 }
@@ -2098,6 +2469,75 @@ mod tests {
         second.pop();
         second.push(1);
         assert_eq!(read(&f, &second).1.as_int(), Some(1000));
+    }
+
+    /// The same file with the dataset laid out the way HDF5 1.10 and later lay
+    /// one out: a version 4 layout message, chunked, with a single chunk index.
+    /// The message body is the same 24 bytes the version 3 one had, since a
+    /// chunk covering the whole of a two-element dataset takes fewer.
+    ///
+    /// The dataspace and datatype messages in front of it are untouched, which
+    /// is the point: nothing in the layout message says what an element is,
+    /// and nothing but the chunk dimensions says how many bytes there are.
+    fn single_chunk_file() -> Vec<u8> {
+        let mut f = one_link_file();
+        // Three messages in, each of the two before it eight bytes of header
+        // and sixteen of body, and then this one's own header.
+        let body = ALPHA_HEADER + 16 + 24 + 24 + 8;
+        // Version 4, chunked, no flags, two dimensions written in one byte
+        // each: a chunk of two elements four bytes wide. Then a single chunk
+        // index, which writes nothing of its own.
+        put(&mut f, body, &[4, 2, 0, 2, 1, 2, 4, 1]);
+        put(&mut f, body + 8, &addr_bytes(DATA));
+        f
+    }
+
+    /// The path from the layout message's body down to the elements of the one
+    /// chunk: the layout, its storage, the chunks the address places, and the
+    /// run inside them.
+    const SINGLE_CHUNK: &[usize] = &[6, 0, 6, 2, 4, 1, 1, 7, 0, 2];
+
+    /// A version 4 layout message places the same bytes a version 3 one did,
+    /// and nothing in it writes down how many there are: the chunk dimensions
+    /// multiplied together are the size of a chunk, and the last of them is
+    /// the size of an element rather than a dimension. Read the dimensionality
+    /// the way version 3 writes it, one too many, and the run is four times
+    /// too long.
+    #[test]
+    fn a_version_4_layout_reads_the_single_chunk_it_points_at() {
+        let f = single_chunk_file();
+        let mut first = LINK.to_vec();
+        first.extend_from_slice(SINGLE_CHUNK);
+        first.extend_from_slice(&[0]);
+        assert_eq!(read(&f, &first).1.as_int(), Some(-7));
+        let mut second = LINK.to_vec();
+        second.extend_from_slice(SINGLE_CHUNK);
+        second.extend_from_slice(&[1]);
+        assert_eq!(read(&f, &second).1.as_int(), Some(1000));
+
+        // Two elements and no more: the chunk is eight bytes because two
+        // times four is, and the array stops there.
+        let mut run = LINK.to_vec();
+        run.extend_from_slice(SINGLE_CHUNK);
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+        let node = ev.node(&doc, &run).expect("elements");
+        assert!(matches!(node.value, Value::Composite { count: 2 }), "{:?}", node.value);
+    }
+
+    /// Which index a version 4 message names is a byte of its own, and the
+    /// four that are not a single chunk are read as an index rather than as
+    /// the chunk itself. An unknown one keeps its bytes instead of reading the
+    /// address as something it is not.
+    #[test]
+    fn an_unknown_chunk_index_is_left_alone() {
+        let mut f = single_chunk_file();
+        let body = ALPHA_HEADER + 16 + 24 + 24 + 8;
+        put(&mut f, body + 7, &[9]);
+        let mut chunks = LINK.to_vec();
+        chunks.extend_from_slice(&[6, 0, 6, 2, 4, 1, 1, 7]);
+        let (_, value) = read(&f, &chunks);
+        assert!(matches!(value, Value::Bytes { len: 0, .. }), "{value:?}");
     }
 
     /// A pointer that says "nothing here" is not followed. Every optional part
