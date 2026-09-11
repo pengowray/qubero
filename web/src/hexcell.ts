@@ -10,10 +10,30 @@
 // `.js` specifier back to the file it came from.
 import { fieldClass } from "./fieldstyle.ts";
 
-/** Write a cell's characters, unless they are already the ones it shows.
- *  Scrolling changes every one of them and a cursor key changes none, and the
- *  browser charges for a write either way. */
+/**
+ * Write a cell's characters, unless they are already the ones it shows.
+ *
+ * Scrolling changes every one of them and a cursor key changes none, and the
+ * browser charges for a write either way, which is what the comparison is for.
+ *
+ * The write goes through the text node rather than through `textContent`.
+ * Assigning `textContent` throws the old text node away and builds a new one,
+ * so a scroll that rewrites every cell of every row was adding hundreds of
+ * nodes a draw and mutating none. Setting `nodeValue` on the node already
+ * there changes the characters in place.
+ *
+ * Only where the cell holds exactly one text node, which is what a cell is.
+ * Anything else, an empty cell or one somebody put an element inside, falls
+ * back to `textContent`, whose job is to make the cell hold one text node
+ * again. The read is the same story: `textContent` on an element walks its
+ * descendants to build a string, and `nodeValue` is the string.
+ */
 export function setText(el: HTMLElement, text: string): void {
+  const first = el.firstChild;
+  if (first !== null && first === el.lastChild && first.nodeType === 3) {
+    if (first.nodeValue !== text) first.nodeValue = text;
+    return;
+  }
   if (el.textContent !== text) el.textContent = text;
 }
 
