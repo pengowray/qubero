@@ -142,6 +142,43 @@ fn the_block_check_of_a_default_xz_is_taken_and_passes() {
     assert_eq!(after.covered_bytes, 210, "what the block actually unpacked to");
 }
 
+/// The same, for a check whose format never writes down what the run comes to.
+///
+/// zlib's Adler-32 covers everything the stream unpacks to and the header says
+/// nothing about how much that is, so before anything opens the run there is
+/// no count to give and the packed length stands in. Opening it to take the
+/// sum is what settles the number, exactly as it is for an xz block, and this
+/// pins that the whole-run case reaches for the same answer the per-member one
+/// does. The two used to differ: this one printed the packed length as though
+/// it were the count of what was summed.
+#[test]
+fn the_adler32_of_a_zlib_stream_counts_what_it_unpacked_to_once_it_can() {
+    let Some(root) = samples() else { return };
+    let path = root.join("compressed").join("hello.zz");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("skipped: no {}", path.display());
+        return;
+    };
+    let packed = bytes.len() as u64;
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("zlib").expect("the zlib template"));
+    let check = ev.child_named(&doc, &[], "adler32").unwrap().expect("no adler32 at the top of a zlib stream");
+
+    let info = ev.check_of(&doc, &check).unwrap().expect("a zlib stream's sum checks something");
+    assert_eq!(info.algorithm, "adler32");
+    assert!(!info.unpacked_member, "the whole run, not one member of it");
+    assert!(!info.covered_exact, "nothing has opened the stream yet to say the true count");
+    assert!(info.covered_bytes < packed, "the packed length stands in, and it is inside the file");
+
+    let v = ev.run_check(&doc, &check).unwrap().expect("the check is taken");
+    assert!(v.ok, "computed {}, stored {}", v.computed, v.stored);
+
+    let after = ev.check_of(&doc, &check).unwrap().expect("still a check");
+    assert!(after.covered_exact, "the stream is open now, so the true count is free");
+    assert_ne!(after.covered_bytes, info.covered_bytes, "the stand-in was not what the sum covered");
+    eprintln!("{}: adler32 over {} unpacked bytes", path.display(), after.covered_bytes);
+}
+
 struct Walk {
     /// Nodes looked at, which is what the budget is spent on: a file with no
     /// checks in it must not walk to the end of a million-element table to

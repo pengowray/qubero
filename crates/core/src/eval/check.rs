@@ -361,14 +361,29 @@ impl Evaluator {
                     return of(Some(run), None, run.1, true);
                 }
                 // What the file says it comes to, when it says anything: a
-                // real count, and `covered_exact` says so. Without one there
-                // is nothing here but the packed length, kept only so an
-                // interface can decide whether to unpack the run unasked; it
-                // is not the count of what was summed and must not be shown
-                // as one.
+                // real count, and `covered_exact` says so.
+                //
+                // Where it says nothing, the decoder can, and asking costs
+                // nothing once the run is open: `Spaces::get` is a lookup and
+                // never a decode, which is the same reach
+                // [`Covers::UnpackedMember`] makes below and is safe for the
+                // same reason. A 7z substream and a zlib stream are the two
+                // that get here, and both used to show the packed length as
+                // though it were the count of what was summed.
+                //
+                // Nothing open yet leaves the packed length standing in,
+                // marked as the estimate it is. It is kept rather than dropped
+                // so an interface can still decide whether to unpack the run
+                // unasked; what it must not do is print it as a count.
                 let (claimed, exact) = match len {
                     Some(e) => (u64::try_from(self.eval_expr(doc, end, e)?).unwrap_or(run.1), true),
-                    None => (run.1, false),
+                    None => match self.spaces.get(&p) {
+                        Some(space::Opened::Space(id)) => match self.spaces.trace(id) {
+                            Some(t) => (t.out_bytes(), true),
+                            None => (run.1, false),
+                        },
+                        _ => (run.1, false),
+                    },
                 };
                 of(None, Some(Unpacked { run, at: p, member: None }), claimed, exact)
             }
