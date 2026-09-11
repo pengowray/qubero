@@ -192,11 +192,15 @@ export class HexRows {
    * this read again needs a reason better than its share of the draw timer,
    * and `web/tools/wheelcost.mjs` will show you the same flat numbers.
    *
-   * What the prediction is worth is a separate question, and it is worth a
-   * lot: measured against this read it is exact at the default width on every
-   * sample tried. At narrower widths a plain row's line box beats the
-   * stylesheet's minimum height and every row comes out a pixel or two taller
-   * than predicted, so nothing downstream should assume the two agree.
+   * What the prediction is worth is a separate question, and mostly it is
+   * worth a lot. Compared against this read, row by row: at 1280x800 and 16
+   * bytes to the row, sixty draws of scrolling over `hello.exe`, `notes.sqlite`
+   * and `bat.wav` predicted every row exactly. Put a viewport resize in the
+   * middle of the run and it stops agreeing: most rows then come out one or
+   * two pixels taller than predicted, and a handful come out a whole chip line
+   * shorter. Why a resize should do that was not chased down. So nothing
+   * downstream may assume the two agree, and the ones that are out by a line
+   * rather than a pixel are the ones that could move a row under a reader.
    */
   heights(predicted: readonly number[]): number[] {
     return predicted.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));

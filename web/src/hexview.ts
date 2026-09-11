@@ -1686,8 +1686,11 @@ export class HexView {
     // values never draws a cell, so there was never an answer to remember and
     // the question was put again every draw: a search of the grid, a computed
     // style and a throwaway canvas, once a frame, for nothing. Measured on
-    // `hello.exe`, which has chips and no values, forty notches of wheel came
-    // to 380ms of drawing before and 344ms after, over four runs each.
+    // `hello.exe`, which has chips and no values: twenty notches of wheel cost
+    // 109 and 88ms of script before and 105 and 82ms after, three runs each,
+    // every pair in that direction. Script rather than the draw's own timer,
+    // because that timer charges the draw for the layout `heights` forces a
+    // moment later, which is a bill this change does not touch.
     const fonts = fields && this.chipFonts === null ? this.grid.chipFont() : null;
     const valFonts =
       fields && this.valFonts === null && f.values.some((v) => v.lines > 0) ? this.grid.valueFont() : null;
