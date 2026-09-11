@@ -9,7 +9,9 @@ import {
   alignedFits,
   alignedWidth,
   chooseLayout,
+  columnsLineUp,
   rowLayout,
+  strideBits,
   typeDigits,
   uniformFit,
   uniformWidth,
@@ -83,7 +85,37 @@ test("a number is as wide as its type can be, not as wide as it happens to be", 
 // ----- chooseLayout: one answer per run -----
 
 test("a run that fits its bits chooses aligned", () => {
-  assert.equal(chooseLayout(run({ stride: 24, from: 0, to: 12, text: () => "-394928" }), WIDE), "aligned");
+  assert.equal(chooseLayout(run({ stride: 32, from: 0, to: 12, text: () => "-394928" }), WIDE), "aligned");
+});
+
+test("a stride the row does not divide chooses uniform, however well it fits", () => {
+  // 24-bit samples over a 16-byte row: every value fits the bits it is stored
+  // in, and the columns still come out like brickwork, a third of a byte
+  // further along each row. The uniform layout lines them up instead.
+  const samples = run({ stride: 24, from: 0, to: 12, text: () => "-394928" });
+  assert.equal(alignedFits([samples], WIDE), true);
+  assert.equal(columnsLineUp(samples, WIDE.bpr), false);
+  assert.equal(chooseLayout(samples, WIDE), "uniform");
+  // Three bytes a value does divide a 24-byte row, and there the columns hold.
+  assert.equal(columnsLineUp(samples, 24), true);
+  assert.equal(chooseLayout(samples, { ...WIDE, bpr: 24, noteWidth: 700 }), "aligned");
+});
+
+test("elements that are not a fixed width apart keep the aligned layout", () => {
+  // Records that end on what they read have no columns to line up either way,
+  // so they stay beside the bytes they were read from.
+  const records = run({ stride: 32, from: 0, to: 4, text: () => "ok" });
+  const ragged = {
+    ...records,
+    cells: records.cells.map((c, i) => ({ ...c, offset_bits: c.offset_bits + (i % 2) * 8 })),
+  };
+  assert.equal(strideBits(ragged.cells), null);
+  assert.equal(columnsLineUp(ragged, WIDE.bpr), true);
+});
+
+test("a run with one element on screen has no stride to read", () => {
+  assert.equal(strideBits(run({ stride: 24, from: 0, to: 1 }).cells), null);
+  assert.equal(strideBits(run({ stride: 24, from: 0, to: 3 }).cells), 24);
 });
 
 test("a run that does not fit its bits chooses uniform", () => {

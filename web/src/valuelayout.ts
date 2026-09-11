@@ -159,6 +159,55 @@ export function alignedBit(runs: readonly RunCells[], o: FitOpts): number {
   return any ? need : Infinity;
 }
 
+/**
+ * The bits from one element of a run to the next, where every element is the
+ * same distance from the one before it. Null where they are not, and for a run
+ * with fewer than two elements on screen, neither of which is a run whose
+ * values could be lined up in columns anyway.
+ */
+export function strideBits(cells: readonly Cell[]): number | null {
+  const first = cells[0];
+  const second = cells[1];
+  if (first === undefined || second === undefined) return null;
+  const each = second.offset_bits - first.offset_bits;
+  if (each <= 0) return null;
+  for (let i = 2; i < cells.length; i++) {
+    const at = cells[i] as Cell;
+    const before = cells[i - 1] as Cell;
+    if (at.offset_bits - before.offset_bits !== each) return null;
+  }
+  return each;
+}
+
+/**
+ * Whether the run's values fall in the same places on every row.
+ *
+ * A run whose stride divides the row puts its elements at the same offsets
+ * down the whole table: 16-bit samples at 16 bytes a row are eight columns,
+ * row after row. One whose stride does not is laid like brickwork — 24-bit
+ * samples over a 16-byte row start a third of a byte further along each time,
+ * and every sixth one is cut in half by the row edge. Every value is still
+ * over its own bytes, which is what the aligned layout is for, but a column of
+ * values that never line up is not one the eye can run down, and running down
+ * them is what the table is for. Those runs take the uniform layout instead,
+ * which draws each value once at one width: a row holds five or six of them
+ * rather than a fixed number, and the columns line up.
+ *
+ * A run whose elements are not a fixed width apart — records that end on
+ * what they read — has no columns to line up either way, and keeps the
+ * aligned layout, where at least each reading sits beside its own bytes.
+ */
+export function columnsLineUp(run: RunCells, bpr: number): boolean {
+  const each = strideBits(run.cells);
+  return each === null || ((bpr * 8) % each === 0);
+}
+
+/** Whether a run is drawn over the bits it is stored in: its values fit the
+ *  room their bits are worth, and they line up from row to row. */
+export function alignedRun(run: RunCells, o: FitOpts): boolean {
+  return alignedFits([run], o) && columnsLineUp(run, o.bpr);
+}
+
 /** How wide the aligned table is drawn on this screenful: a byte of it has the
  *  pitch of a hex cell, or as much more as the widest value of the runs that
  *  are aligned needs, and never more than the column. One width for the
@@ -166,7 +215,7 @@ export function alignedBit(runs: readonly RunCells[], o: FitOpts): number {
 export function alignedWidth(runs: readonly RunCells[], o: FitOpts): number {
   const columns = o.bpr * 8;
   const column = o.noteWidth || COLUMN_GUESS;
-  const aligned = runs.filter((r) => alignedFits([r], o));
+  const aligned = runs.filter((r) => alignedRun(r, o));
   const bit = aligned.length > 0 ? alignedBit(aligned, o) : (o.hexPitch > 0 ? o.hexPitch : PITCH_GUESS) / 8;
   return Math.min(column, columns * bit);
 }
@@ -237,7 +286,7 @@ export function uniformWidth(runs: readonly RunCells[], measure: ChipMeasure): n
  */
 export function chooseLayout(run: RunCells, o: FitOpts): Layout {
   if (run.cells.some((c) => c.kind === "symbol")) return "flow";
-  return alignedFits([run], o) ? "aligned" : "uniform";
+  return alignedRun(run, o) ? "aligned" : "uniform";
 }
 
 /**

@@ -845,6 +845,19 @@ button.welcome-crystal {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* One element of a run, drawn after the chip that folded it. The chip in
+   front has named the list and said how many, so this one carries its value
+   alone; which element it is, is its place in the row. Hiding the name rather
+   than leaving it empty is what takes the flex gap away with it, which is what
+   `chipWidth` measures. Nothing here changes the padding or the border: the
+   column predicts how many lines a row's chips take before the browser lays
+   them out, and a pixel either way is what decides three lines against four. */
+.hv-chip-el > b {
+  display: none;
+}
+.hv-chip-el {
+  background: color-mix(in srgb, var(--field-color) 6%, transparent);
+}
 /* A field that began above the top row: named here so nothing on screen is
    left unexplained. */
 .hv-chip-carried > b::before {

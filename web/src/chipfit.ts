@@ -77,8 +77,11 @@ export const GUESS_TEXT: ChipMeasure = {
  *  choose by. Rounded up, since a fraction under the column's own whole
  *  pixels is what makes the difference between three lines and four. */
 export function chipWidth(name: string, detail: string, text: ChipMeasure = GUESS_TEXT): number {
-  const inner = detail === "" ? 0 : CHIP_INNER + text.value(detail);
-  return Math.ceil(CHIP_CHROME + text.name(name) + inner);
+  // The gap is between the two, so a chip with only one of them has none: an
+  // element of an expanded run shows its value and no name at all.
+  const gap = name === "" || detail === "" ? 0 : CHIP_INNER;
+  const value = detail === "" ? 0 : text.value(detail);
+  return Math.ceil(CHIP_CHROME + (name === "" ? 0 : text.name(name)) + gap + value);
 }
 
 export type ChipLayout = {

@@ -12,7 +12,7 @@
 // `.js` specifier back to the file it came from.
 import { fieldClass } from "./fieldstyle.ts";
 import { chipDetail, type ChipMeasure } from "./chipfit.ts";
-import { chipText, continuedDetail, type Chip, type ChipBlock, type ChipText } from "./chipplan.ts";
+import { chipLabel, continuedDetail, type Chip, type ChipBlock, type ChipText } from "./chipplan.ts";
 import { setText } from "./hexcell.ts";
 
 /** How many entries one screenful of the annotation column may hold. */
@@ -92,6 +92,9 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   // name and the value by `firstElementChild` and `lastElementChild`, and
   // anything appended here would be written over on the next redraw.
   if (s.opens) cls += " hv-chip-opens";
+  // One element of a run drawn after the chip that folded it: no name, and
+  // tucked against the chip before it so the run reads as one strip.
+  if (c.element === true) cls += " hv-chip-el";
   if (el.className !== cls) el.className = cls;
   setText(el.firstElementChild as HTMLElement, name);
   const shown = extra ? continuedDetail(detail) : detail;
@@ -114,6 +117,12 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
     // see and a first-time reader should not have to work out.
     title = `Starts above the visible rows: ${path}, ${detail}`;
     label = `starts above: ${name}, ${detail}`;
+  } else if (c.element === true) {
+    // The chip shows its value and nothing else, so which element it is has to
+    // be said in words: on screen that is its place in the row, which a reader
+    // going through the column one button at a time never sees.
+    title = `${path} · ${s.type}`;
+    label = `${s.name} ${detail}`;
   } else {
     title = `${path} · ${s.type}`;
   }
@@ -180,7 +189,7 @@ export function fillNote(
   let at = n;
   if (rest && b !== null) {
     const left = b.entries.slice(b.shown);
-    const named = left.slice(0, 8).map((c) => chipText(c).name);
+    const named = left.slice(0, 8).map((c) => chipLabel(c));
     if (left.length > named.length) named.push("…");
     const what = left.length === 1 ? "field starts" : "fields start";
     fillPlain(

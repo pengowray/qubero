@@ -11,8 +11,10 @@ import type { ChipMeasure } from "../src/chipfit.ts";
 import {
   bucketChips,
   carriedName,
+  chipLabel,
   chipText,
   continuedDetail,
+  expandRuns,
   foldable,
   listName,
   pinnedNoteKey,
@@ -102,6 +104,54 @@ test("a carried chip is measured with the arrow its stylesheet draws", () => {
 test("a chip drawn above the bytes it names says the field runs on", () => {
   assert.equal(continuedDetail("4 bytes"), "4 bytes · continued");
   assert.equal(continuedDetail(""), "continued");
+});
+
+// ----- a folded run, opened out again -----
+
+test("the elements of a folded run are drawn after the chip that folded them", () => {
+  const elements = [element(0, 0), element(1, 2), element(2, 4)];
+  const folded: Chip = { span: elements[0] as Span, carried: false, run: elements };
+  const out = expandRuns([folded]);
+  assert.equal(out.length, 4);
+  assert.deepEqual(chipText(out[0] as Chip), { name: "cell_pointers", detail: "3 values" });
+  // Each element is its own chip over its own bytes, so each is its own pick.
+  assert.deepEqual(
+    out.slice(1).map((c) => [c.span.path, c.element === true]),
+    [
+      [[0], true],
+      [[0], true],
+      [[0], true],
+    ],
+  );
+});
+
+test("an element chip says what it reads as and leaves the name to the chip in front", () => {
+  const el: Chip = { span: element(1, 2, { value: "2049" }), carried: false, run: [], element: true };
+  assert.deepEqual(chipText(el), { name: "", detail: "2049" });
+  // Where a chip has to be named in words rather than drawn, it is its number.
+  assert.equal(chipLabel(el), "[1]");
+});
+
+test("a chip that is not an element is untouched by the expansion", () => {
+  const one: Chip = { span: span({ name: "page_size", offset_bits: 0, size_bits: 16 }), carried: false, run: [] };
+  assert.deepEqual(expandRuns([one]), [one]);
+});
+
+test("an element carried in from above is named by the strip, and the rest of its run opens out below", () => {
+  // The fold refuses to start on a chip carried in from above, and the top row
+  // hands its carried chips to the pinned strip. What is left is the elements
+  // that start on the row, folded among themselves and then opened out: the
+  // same chips the row holds anywhere else, which is what keeps its height
+  // from depending on where it falls.
+  const spans = [element(0, 0), element(1, 2), element(2, 4)];
+  const chips = placeChips(spans, 1, 16, 16, 2).byRow[0] as Chip[];
+  const top = plan(chips, { top: true, rowStart: 1 });
+  assert.equal(top.pinned?.entries.length, 1);
+  assert.deepEqual((top.blocks[0] as { texts: { name: string; detail: string }[] }).texts, [
+    { name: "cell_pointers", detail: "2 values" },
+    { name: "", detail: "1" },
+    { name: "", detail: "1" },
+  ]);
 });
 
 // ----- where the spans land -----

@@ -40,7 +40,7 @@ function row(
 
 // ----- aligned -----
 
-test("24-bit samples at 16 bytes a row: the sixth of each row is split", () => {
+test("aligned: an element the row edge cuts is drawn on both rows", () => {
   const cells = [run({ stride: 24, from: 0, to: 12, text: (i) => `v${i}` })];
   const first = row(cells, 0);
   assert.equal(first.layout, "aligned");

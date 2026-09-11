@@ -23,10 +23,13 @@ import { VALUES } from "./strings.ts";
 // this file's subject, and which shape they take is next door.
 export {
   alignedFits,
+  alignedRun,
   alignedWidth,
   chooseLayout,
+  columnsLineUp,
   isScale,
   rowLayout,
+  strideBits,
   typeDigits,
   uniformWidth,
   VALUE_GAP,

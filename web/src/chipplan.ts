@@ -21,7 +21,15 @@ import { chipDetail, chipLayout, chipWidth, runDetail, type ChipMeasure } from "
 /** A span named on a row, whether it started above the view, and the elements
  *  of its list it stands for when a run of them is drawn as one chip: empty
  *  for a chip that is one field. */
-export type Chip = { span: Span; carried: boolean; run: Span[] };
+export type Chip = {
+  span: Span;
+  carried: boolean;
+  run: Span[];
+  /** True for one element drawn after the chip that folded its run. It says
+   *  only what it reads as: the chip before it has already named the list, and
+   *  which element this is, is its place in the row. */
+  element?: boolean;
+};
 
 /** What a chip says: the name in bold and the value after it. */
 export type ChipText = { readonly name: string; readonly detail: string };
@@ -88,13 +96,47 @@ export function pinnedText(t: ChipText, c: Chip, reading: Reading | null): ChipT
 /** What a chip says. A run of list elements is named for the list and says
  *  how many; a structure that reads on one line is the whole chip, since
  *  `[47]` is the element's number in a repeat and says nothing, and the
- *  line says everything. */
+ *  line says everything. An element drawn after its run's chip says only its
+ *  value, for the same reason: `[3]` names nothing the row does not already
+ *  show, and the chip before it has named the list. */
 export function chipText(c: Chip): ChipText {
   const s = c.span;
   if (c.run.length > 0) return { name: listName(s), detail: runDetail(c.run.length) };
+  if (c.element === true) return { name: "", detail: chipDetail(s) };
   if (s.gap) return { name: GAP_LABEL, detail: chipDetail(s) };
   if (s.line !== null) return { name: s.line, detail: "" };
   return { name: s.name, detail: chipDetail(s) };
+}
+
+/** What a chip is called where it has to be named in words rather than drawn:
+ *  the tooltip of the `+N` that counts what did not fit. An element chip shows
+ *  no name, so it is listed by its number. */
+export function chipLabel(c: Chip): string {
+  return c.element === true ? c.span.name : chipText(c).name;
+}
+
+/**
+ * The chips of a row, with the elements of every folded run drawn after the
+ * chip that folded them.
+ *
+ * `cell_pointers 3 values` says how many and not one of them, and the reader
+ * who wants the third has nothing to click: the run is one chip, so the whole
+ * run is one pick. The elements go back after it, each its own chip over its
+ * own bytes, and the chip that folded them stays in front to name the list and
+ * say how many there are.
+ *
+ * The order is the bytes' order, so the chips read the way the row does. What
+ * does not fit is counted by `chipLayout` the same as any other chip: a run of
+ * sixty-four bytes is sixty-four chips, and the column caps them by line
+ * rather than by run.
+ */
+export function expandRuns(chips: readonly Chip[]): Chip[] {
+  const out: Chip[] = [];
+  for (const c of chips) {
+    out.push(c);
+    for (const s of c.run) out.push({ span: s, carried: false, run: [], element: true });
+  }
+  return out;
 }
 
 /** Where the spans on screen land: which one covers each byte, and which are
@@ -259,7 +301,8 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
   if (o.top) buckets[0] = (buckets[0] as Chip[]).filter((c) => !c.carried);
 
   /** One block's chips, and how many lines of the column they take. */
-  const layOut = (entries: Chip[]): { block: ChipBlock; lines: number } => {
+  const layOut = (chips: Chip[]): { block: ChipBlock; lines: number } => {
+    const entries = expandRuns(chips);
     const texts = entries.map((c) => chipText(c));
     const { shown, lines } = chipLayout(
       texts.map((t, i) => chipWidth(carriedName(t.name, entries[i]), t.detail, o.measure)),
