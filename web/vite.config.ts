@@ -96,8 +96,17 @@ function whereAmI(): Plugin {
 }
 
 export default defineConfig({
-  // PORT lets a second dev server (another session, another branch) get its own port.
-  server: { port: Number(process.env["PORT"]) || 17272 },
+  // PORT lets a second dev server (another session, another branch) get its own
+  // port. The preview tool sets it: `.claude/launch.json` names a preferred
+  // port per entry and the tool passes the one it actually reserved, so an
+  // entry must not set PORT itself. Two of them used to, which is how a
+  // session was handed one port while vite listened on another and the page
+  // came back as nothing at all.
+  //
+  // `strictPort` for the other half of that: a port in use is an error rather
+  // than a quiet move to the next one. Vite has no way to tell whoever started
+  // it that it went somewhere else.
+  server: { port: Number(process.env["PORT"]) || 17272, strictPort: true },
   build: { target: "es2022" },
   plugins: [whereAmI(), localFiles()],
 });
