@@ -24,6 +24,27 @@ export const CODEPAGES_A = [
 /** The DOS pages, which is what a capture of a DOS screen is in. */
 export const CODEPAGES_B = ["CP437", "CP850", "CP866"] as const;
 
+/**
+ * The character sets the hex view's text column can be drawn in, in the order
+ * they are offered. ASCII first: it is what a hex dump's text column has
+ * always been, and is what the view starts in.
+ *
+ * `SCREEN_GLYPHS` is not a page but a second rule for reading one. CP437 the
+ * encoding says nothing about the bytes below 0x20; CP437 on a DOS screen
+ * draws a face, a note or an arrow for every one of them, because the
+ * hardware had a glyph for all 256 values. A column drawn that way says
+ * something about every byte in the file rather than about ninety-five of
+ * them.
+ *
+ * The names have to be the ones the core answers `glyph_column` with, which
+ * is why the page lists are the same ones the text view's chooser uses.
+ */
+export const SCREEN_GLYPHS = "CP437 as a screen draws it";
+export const HEX_GLYPHS_ASCII = "ASCII";
+export const HEX_GLYPH_SETS = [HEX_GLYPHS_ASCII, ...CODEPAGES_A, ...CODEPAGES_B, SCREEN_GLYPHS] as const;
+export const HEX_GLYPHS_KEY = "qubero.hex.glyphs";
+export const HEX_GLYPHS_DEFAULT = HEX_GLYPHS_ASCII;
+
 /** Languages the selection can be written as a string literal in. */
 export const LITERAL_LANGS = ["C", "Rust", "Python", "JavaScript", "JSON", "C#", "Go"] as const;
 

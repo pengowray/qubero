@@ -13,7 +13,7 @@
 //! either as the bytes it was drawn in or as the Unicode something translated
 //! them to, and both have to read the same.
 
-use crate::text::{cp437_char, Settled};
+use crate::text::{cp437_char, CodePage, Settled};
 
 /// The glyphs the low half of CP437 has on a screen, which is where a control
 /// character has a picture instead of an effect. 0x00 is left out on purpose:
@@ -55,12 +55,44 @@ impl Glyphs {
         }
     }
 
+    /// The name the reader picks a column's characters by, out of every page
+    /// the app offers plus the two rules that are not a page.
+    pub fn by_name(name: &str) -> Option<Glyphs> {
+        if name == Glyphs::Screen.name() {
+            return Some(Glyphs::Screen);
+        }
+        if name == Settled::Ascii.name() {
+            return Some(Glyphs::Printable(Settled::Ascii));
+        }
+        CodePage::by_name(name).map(|p| Glyphs::Printable(Settled::SingleByte(p)))
+    }
+
+    /// Every byte's character in one string, 256 long, U+FFFD standing where
+    /// this column writes its stand-in instead.
+    ///
+    /// What the hex view's text column is drawn from: one crossing of the
+    /// wasm boundary per choice of column, rather than one per byte on screen.
+    /// No page defines U+FFFD itself, which is what leaves it free to mean
+    /// "nothing here".
+    pub fn column(self) -> String {
+        (0..=u8::MAX).map(|b| self.of(b).unwrap_or('\u{fffd}')).collect()
+    }
+
     /// The character this column would have written for `b`, or nothing where
     /// it would have written its stand-in instead.
+    ///
+    /// A single-byte page answers from its own table: the page's undefined
+    /// bytes are U+FFFD already, and a control character is a byte a column
+    /// writing to a pipe has nothing to draw for, which together is the whole
+    /// rule. The encodings that are not a single-byte page get the printable
+    /// ASCII ninety-five, since that is all a column one character wide can
+    /// say about them.
     pub fn of(self, b: u8) -> Option<char> {
         match self {
-            Glyphs::Printable(Settled::Latin1) => ((0x20..=0x7e).contains(&b) || b >= 0xa0).then(|| b as char),
-            Glyphs::Printable(Settled::Cp437) => (b >= 0x20 && b != 0x7f).then(|| cp437_char(b)),
+            Glyphs::Printable(Settled::SingleByte(page)) => {
+                let c = page.char_of(b);
+                (c != '\u{fffd}' && !c.is_control()).then_some(c)
+            }
             Glyphs::Printable(_) => (0x20..=0x7e).contains(&b).then(|| b as char),
             // 0x7f is left out with 0x00: the glyph for it is a house, but
             // what comes through a clipboard is as often the control character
@@ -91,6 +123,37 @@ mod tests {
     fn the_two_bytes_tools_disagree_about_are_left_open() {
         assert_eq!(Glyphs::Screen.of(0), None);
         assert_eq!(Glyphs::Screen.of(0x7f), None);
+    }
+
+    #[test]
+    fn a_page_above_latin_1_reaches_the_column() {
+        let win = Glyphs::by_name("Windows-1252").expect("Windows-1252 is on offer");
+        // 0x80 is the euro sign in this page, and undefined in Latin-1's.
+        assert_eq!(win.of(0x80), Some('\u{20ac}'));
+        assert_eq!(Glyphs::Printable(Settled::Latin1).of(0x80), None);
+        // 0x81 is one of the page's five holes, so the column says nothing.
+        assert_eq!(win.of(0x81), None);
+    }
+
+    #[test]
+    fn a_column_is_two_hundred_and_fifty_six_characters() {
+        for g in [Glyphs::Screen, Glyphs::Printable(Settled::Cp437), Glyphs::Printable(Settled::Ascii)] {
+            let col: Vec<char> = g.column().chars().collect();
+            assert_eq!(col.len(), 256, "{}", g.name());
+            for (b, c) in col.iter().enumerate() {
+                let want = g.of(b as u8).unwrap_or('\u{fffd}');
+                assert_eq!(*c, want, "{} at {b:#04x}", g.name());
+            }
+        }
+    }
+
+    #[test]
+    fn every_name_the_chooser_offers_is_one_the_core_knows() {
+        assert_eq!(Glyphs::by_name("ASCII"), Some(Glyphs::Printable(Settled::Ascii)));
+        assert_eq!(Glyphs::by_name("CP437"), Some(Glyphs::Printable(Settled::Cp437)));
+        assert_eq!(Glyphs::by_name(Glyphs::Screen.name()), Some(Glyphs::Screen));
+        assert_eq!(Glyphs::by_name("UTF-8"), None);
+        assert_eq!(Glyphs::by_name(""), None);
     }
 
     #[test]

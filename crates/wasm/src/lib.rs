@@ -3402,6 +3402,22 @@ impl Editor {
     }
 }
 
+/// The characters the hex view's text column writes, one per byte value, as a
+/// string 256 characters long. U+FFFD stands where the column has nothing to
+/// show for a byte and writes its stand-in instead.
+///
+/// A whole table rather than a character at a time: the column is redrawn a
+/// few hundred cells at a go, and a boundary crossing per cell would put the
+/// cost of the choice on every frame instead of on the choosing. The caller
+/// holds the answer until the reader picks another column.
+///
+/// An empty string comes back for a name the core does not know, which is what
+/// a caller with a stale choice saved gets, and is its cue to fall back.
+#[wasm_bindgen]
+pub fn glyph_column(name: &str) -> String {
+    qubero_core::hexdump::glyphs::Glyphs::by_name(name).map(|g| g.column()).unwrap_or_default()
+}
+
 /// Text typed into the text view, as the bytes it is in the file's encoding.
 ///
 /// The answer is a refusal or a run of bytes, never both and never a guess: an

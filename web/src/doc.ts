@@ -1,8 +1,9 @@
 // Document facade: owns the wasm Editor and streams chunks in from a File/Blob.
 // Nothing here ever reads the whole file; only the chunks the view asks for.
 
-import init, { Editor, dump_scan, dump_bytes, text_encode } from "./pkg/qubero_wasm.js";
+import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "./pkg/qubero_wasm.js";
 import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.ts";
+import type { GlyphSet } from "./hexcell.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { UNPACKED } from "./strings.ts";
 
@@ -1366,6 +1367,35 @@ function ensureWasm(): Promise<unknown> {
     throw new EditorMissing(e);
   });
   return wasmReady;
+}
+
+/** Sets already fetched, by the name they were asked for. @see glyphColumn */
+const glyphSets = new Map<string, GlyphSet>();
+
+/**
+ * The characters the hex view's text column writes under one named set, or
+ * null for a name the core does not know.
+ *
+ * The whole table of 256 comes over at once and is kept: the column is
+ * redrawn a few hundred cells at a time, and a call per cell would charge
+ * every frame for a choice the reader made once. Only callable once a file is
+ * open, which is also the only time there is a column to draw.
+ */
+export function glyphColumn(name: string): GlyphSet | null {
+  const had = glyphSets.get(name);
+  if (had !== undefined) return had;
+  // Split by code point rather than by UTF-16 unit: every page the app offers
+  // stays inside the BMP today, and a set that did not would otherwise arrive
+  // as halves of characters.
+  const chars = [...glyph_column(name)];
+  if (chars.length !== 256) return null;
+  // The core writes U+FFFD for a byte the set has no character for. Here that
+  // becomes an empty entry, so a cell asks "is there a character" rather than
+  // comparing against one, and so no set can ever draw a replacement
+  // character as if it meant something.
+  const table = chars.map((c) => (c === "\ufffd" ? "" : c));
+  glyphSets.set(name, table);
+  return table;
 }
 
 export class Doc {

@@ -1,4 +1,4 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, prefetchMagic, type MapStep } from "./doc.ts";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, prefetchMagic, type MapStep } from "./doc.ts";
 import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
@@ -17,9 +17,21 @@ import { markFromRange, markFromStep } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence, templateTypeName } from "./filetype.ts";
-import { DUMP, EDITOR_WONT_LOAD, GRAPH, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
-import { CODEPAGES_A, CODEPAGES_B, UNICODE_ENCODINGS } from "./encodings.ts";
+import {
+  CODEPAGES_A,
+  CODEPAGES_B,
+  HEX_GLYPH_SETS,
+  HEX_GLYPHS_ASCII,
+  HEX_GLYPHS_DEFAULT,
+  HEX_GLYPHS_KEY,
+  rememberChoice,
+  SCREEN_GLYPHS,
+  storedChoice,
+  UNICODE_ENCODINGS,
+} from "./encodings.ts";
+import { ASCII_GLYPHS } from "./hexcell.ts";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -836,7 +848,54 @@ function build(tab: Tab): Page {
     const c: RightColumn = isRightColumn(column.value) ? column.value : "text";
     localStorage.setItem(columnKey(), c);
     view.setRightColumn(c);
+    syncGlyphsShown();
   });
+
+  // Which characters the text column is drawn in. ASCII is what a hex dump's
+  // text column has always been, and is still the default; the rest are for
+  // the files where the printable ninety-five leave most of the column as
+  // full stops, which is every file from DOS.
+  const glyphs = el("select", { className: "tb-glyphs" });
+  glyphs.setAttribute("aria-label", HEXGLYPHS.label);
+  glyphs.title = HEXGLYPHS.title;
+  glyphs.append(el("option", { value: HEX_GLYPHS_ASCII, textContent: HEXGLYPHS.ascii }));
+  /** What each set is called on screen, which is what a refusal names: the
+   *  core's own name for the screen rule is a sentence, not a label. */
+  const glyphLabel = (name: string): string =>
+    name === SCREEN_GLYPHS ? HEXGLYPHS.screen : name === HEX_GLYPHS_ASCII ? HEXGLYPHS.ascii : name;
+  // Grouped the way the text view's chooser is, and for the same reason:
+  // twelve entries in one list is a list nobody reads to the end of. The last
+  // group holds one entry because what is in it is not a page at all.
+  for (const [label, entries] of [
+    [HEXGLYPHS.groupPages, CODEPAGES_A.map((n) => [n, n] as const)],
+    [HEXGLYPHS.groupDos, CODEPAGES_B.map((n) => [n, n] as const)],
+    [HEXGLYPHS.groupScreen, [[SCREEN_GLYPHS, HEXGLYPHS.screen] as const]],
+  ] as const) {
+    const group = el("optgroup");
+    group.label = label;
+    for (const [value, text] of entries) group.append(el("option", { value, textContent: text }));
+    glyphs.append(group);
+  }
+  /** Hand the view a set, falling back to ASCII for a name the core has never
+   *  heard of, which is what a choice saved by an older build can be. */
+  const useGlyphs = (name: string): void => {
+    const table = glyphColumn(name);
+    const chosen = table === null ? HEX_GLYPHS_ASCII : name;
+    view.setGlyphs(table ?? ASCII_GLYPHS, glyphLabel(chosen));
+    glyphs.value = chosen;
+  };
+  useGlyphs(storedChoice(HEX_GLYPHS_KEY, HEX_GLYPH_SETS, HEX_GLYPHS_DEFAULT));
+  glyphs.addEventListener("change", () => {
+    rememberChoice(HEX_GLYPHS_KEY, glyphs.value);
+    useGlyphs(glyphs.value);
+  });
+  /** The chooser says nothing where the text column is not drawn, so it is
+   *  not offered there. Kept out of `hexOnly` because it has this second
+   *  reason to be hidden as well as the view it belongs to. */
+  const syncGlyphsShown = (): void => {
+    const showsText = column.value === "text" || column.value.startsWith("both");
+    glyphs.hidden = view.el.hidden || !showsText;
+  };
 
   // The arrows from a field's dependencies to the field, over the bytes. Only
   // over the hex grid: the listing already draws the structure as a tree and
@@ -1101,6 +1160,7 @@ function build(tab: Tab): Page {
     strings.el.hidden = !stringsOn;
     if (graph !== null) graph.el.hidden = !graphOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
+    syncGlyphsShown();
     for (const c of textOnly) c.hidden = !textOn;
     for (const c of stringsOnly) c.hidden = !stringsOn;
     for (const [btn, on] of [
@@ -1215,6 +1275,7 @@ function build(tab: Tab): Page {
     width,
     mode,
     column,
+    glyphs,
     linksBtn,
     tmpl,
     undoBtn,

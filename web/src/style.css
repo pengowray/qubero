@@ -498,6 +498,11 @@ button.welcome-crystal {
   display: inline-block;
   width: 1ch;
   border-radius: 2px;
+  /* The DOS pages put card suits, arrows and faces in the column, and a
+     browser that reaches for its emoji font for those draws them wider than
+     the cell and in colour. Ask for the text presentation, which the code
+     pages mean. */
+  font-variant-emoji: text;
 }
 .hv-np {
   color: var(--muted);

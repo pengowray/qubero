@@ -4,7 +4,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { cellDraw, covers, highlightBits, markBits, selectionBits, type CellInput } from "../src/hexcell.ts";
+import {
+  ASCII_GLYPHS,
+  cellDraw,
+  covers,
+  glyphOf,
+  highlightBits,
+  markBits,
+  selectionBits,
+  type CellInput,
+  type GlyphSet,
+} from "../src/hexcell.ts";
+
+/** A set with a character for every byte, standing in for one of the DOS
+ *  pages without pulling the core in: the tests run under `node --test`. */
+const EVERY_BYTE: GlyphSet = Array.from({ length: 256 }, (_, b) => String.fromCharCode(0x2500 + b));
 
 const cell = (o: Partial<CellInput> = {}): CellInput => ({
   off: 0,
@@ -17,6 +31,7 @@ const cell = (o: Partial<CellInput> = {}): CellInput => ({
   sel: null,
   link: null,
   cursor: -1,
+  glyphs: ASCII_GLYPHS,
   pane: "hex",
   nibble: 0,
   insertMode: false,
@@ -153,4 +168,25 @@ test("in binary the bits carry the cursor, except past the end where there are n
   const past = cellDraw(cell({ binary: true, cursor: 16, off: 16, len: 16 }));
   assert.equal(past.hexText, "        ");
   assert.equal(past.hex.includes("hv-cur"), true);
+});
+
+test("the ASCII set has the printable ninety-five and nothing else", () => {
+  assert.equal(ASCII_GLYPHS.length, 256);
+  assert.equal(glyphOf(ASCII_GLYPHS, 0x41), "A");
+  assert.equal(glyphOf(ASCII_GLYPHS, 0x20), " ");
+  // Both ends of the printable run, and the two bytes just outside it.
+  assert.equal(glyphOf(ASCII_GLYPHS, 0x7e), "~");
+  assert.equal(glyphOf(ASCII_GLYPHS, 0x1f), "\u00b7");
+  assert.equal(glyphOf(ASCII_GLYPHS, 0x7f), "\u00b7");
+});
+
+test("a set with a character for every byte leaves no cell standing in", () => {
+  const high = cellDraw(cell({ byte: 0xb0, glyphs: EVERY_BYTE }));
+  assert.equal(high.asciiText, String.fromCharCode(0x2500 + 0xb0));
+  assert.equal(classes(high.ascii).includes("hv-np"), false);
+  // The same byte under ASCII has no character, so it is stood in for and
+  // marked.
+  const ascii = cellDraw(cell({ byte: 0xb0 }));
+  assert.equal(ascii.asciiText, "\u00b7");
+  assert.equal(classes(ascii.ascii).includes("hv-np"), true);
 });

@@ -141,6 +141,8 @@ export type CellInput = {
   /** The stretch another tab is looking at, or null. */
   readonly link: Bits | null;
   readonly cursor: number;
+  /** The characters the text column writes, the reader's choice of set. */
+  readonly glyphs: GlyphSet;
   readonly pane: "hex" | "ascii";
   readonly nibble: 0 | 1;
   readonly insertMode: boolean;
@@ -159,8 +161,35 @@ export type CellDraw = {
   readonly bits: string;
 };
 
-export function asciiGlyph(b: number): string {
-  return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
+/**
+ * The characters the text column writes, one per byte value, with "" for a
+ * byte the set has no character for. 256 entries.
+ *
+ * A table rather than a rule: which characters a column shows is the reader's
+ * choice now, and the choices live in the core, where the code pages already
+ * are. The core hands over one table per choice and this is what a cell looks
+ * a byte up in. @see glyphColumn in doc.ts
+ */
+export type GlyphSet = readonly string[];
+
+/** What a cell writes for a byte its set has no character for. A full stop
+ *  raised off the baseline, so a row of them does not read as sentences. */
+export const STAND_IN = "·";
+
+/** The set every file starts in: the printable ASCII ninety-five and nothing
+ *  else, which is the column every hex dump has had since the first one.
+ *
+ *  Built here rather than fetched, because this file is the one the tests run
+ *  under `node --test` and it cannot reach the wasm. It is also what the view
+ *  draws with until a chosen set has arrived. */
+export const ASCII_GLYPHS: GlyphSet = Array.from({ length: 256 }, (_, b) =>
+  b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "",
+);
+
+/** What the column shows for a byte: its character, or the stand-in. */
+export function glyphOf(glyphs: GlyphSet, b: number): string {
+  const g = glyphs[b] ?? "";
+  return g === "" ? STAND_IN : g;
 }
 
 /** Every byte as two hex digits, so a cell's text is a lookup rather than a
@@ -179,8 +208,12 @@ export function cellDraw(c: CellInput): CellDraw {
   let asciiText: string;
   if (off < len) {
     const b = c.byte;
-    asciiText = complete ? asciiGlyph(b) : " ";
-    if (complete && !(b >= 0x20 && b < 0x7f)) ac += " hv-np";
+    // A byte the set has no character for is marked as well as stood in for:
+    // the stand-in is a character the set could itself contain, and a reader
+    // has to be able to tell a full stop from the absence of one.
+    const glyph = c.glyphs[b] ?? "";
+    asciiText = complete ? (glyph === "" ? STAND_IN : glyph) : " ";
+    if (complete && glyph === "") ac += " hv-np";
     if (!binary) {
       text = complete ? HEX[b] ?? "" : "··";
       if (!complete) hc += " hv-pending";

@@ -875,6 +875,7 @@ export class HexRows {
         sel: sb,
         link: f.linked,
         cursor: f.cursor,
+        glyphs: f.glyphs,
         pane: f.pane,
         nibble: f.nibble,
         insertMode: f.insertMode,

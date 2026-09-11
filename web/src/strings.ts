@@ -1933,6 +1933,48 @@ export const SEARCH_PLACEHOLDER = {
   hex: { find: "89 50 4e 47", replace: "00 ff" },
 } as const;
 
+/**
+ * A character named in a sentence about itself, quoted so that a refused dash
+ * or middle dot does not read as stray punctuation. One with no glyph to show
+ * is written as its code point instead: empty quotes say nothing, and a
+ * combining mark would attach itself to the quote.
+ */
+export function quotedChar(char: string): string {
+  return /[\p{C}\p{Z}\p{M}]/u.test(char)
+    ? `U+${(char.codePointAt(0) ?? 0).toString(16).padStart(4, "0").toUpperCase()}`
+    : `"${char}"`;
+}
+
+/** Which characters the hex view's text column is drawn in. */
+export const HEXGLYPHS = {
+  /** The chooser, named the way its neighbour "Column beside the bytes" is,
+   *  and reusing that neighbour's own word for the column. Not "encoding":
+   *  that is the text view's word for a different question, and the last
+   *  entry here is not an encoding at all. */
+  label: "Text column character set",
+  /** Bare, and first, the way the text view's "Auto-detect" is. Qualifying it
+   *  as printable ASCII would imply the pages below are not. */
+  ascii: "ASCII",
+  groupPages: "Windows and ISO",
+  groupDos: "DOS",
+  /** The one entry that is not a page needs the group to say so, since the
+   *  toolbar shows an option without the group it came from. */
+  groupScreen: "Control characters drawn too",
+  /** CP437 as the DOS video hardware drew it, which has a face, a note or an
+   *  arrow where the encoding has nothing. Named for the screen first: beside
+   *  the DOS pages, anything leading with "CP437" is skimmed as one of them. */
+  screen: "DOS screen (CP437)",
+  /** On the chooser. The only place the dimmed stand-in is explained: a cell
+   *  carries no hover text of its own, and until the reader hovers here the
+   *  screen says nothing but "ASCII". */
+  title: "Text column character set. A dimmed · is a byte with no character in this set.",
+  /** Typing a character the chosen set has no byte for. The same shape as the
+   *  text view's refusal, so a reader meets one sentence across the two views,
+   *  and "character set" points at the chooser by the name it is under. */
+  refused: (char: string, set: string): string =>
+    `${quotedChar(char)} isn't in ${set}. Pick another character set to type it.`,
+} as const;
+
 /** The plain text view: the file read as the text it is. Everything here is a
  *  mark in the margin rather than a sentence, because the text is what the
  *  reader came for and the marks are the exceptions. */
@@ -1959,17 +2001,11 @@ export const TEXTVIEW = {
    *  that conditional: a file that really is ASCII and a mistyped key need no
    *  encoding changed.
    *
-   *  The character is quoted, since a refused dash or middle dot reads as
-   *  stray punctuation bare. One that has no glyph to show is written as its
-   *  code point instead: empty quotes say nothing, and a combining mark would
-   *  attach itself to the quote. Every encoding offered here holds ASCII, so
-   *  the quote character can never be the refused one. */
-  refused: (char: string, encoding: string): string => {
-    const shown = /[\p{C}\p{Z}\p{M}]/u.test(char)
-      ? `U+${(char.codePointAt(0) ?? 0).toString(16).padStart(4, "0").toUpperCase()}`
-      : `"${char}"`;
-    return `${shown} isn't in ${encoding}. Pick another encoding to type it.`;
-  },
+   *  @see quotedChar for how the character itself is written. Every encoding
+   *  offered here holds ASCII, so the quote character can never be the
+   *  refused one. */
+  refused: (char: string, encoding: string): string =>
+    `${quotedChar(char)} isn't in ${encoding}. Pick another encoding to type it.`,
   /** The encoding chooser's first entry. "Auto-detect" rather than "from the
    *  file", which would claim the file said, and only a byte-order mark does. */
   encodingAuto: "Auto-detect",

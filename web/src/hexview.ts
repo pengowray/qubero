@@ -23,11 +23,12 @@ import type { Doc, Span } from "./doc.ts";
 import type { OutlineHeading, Viewport } from "./outline.ts";
 import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.ts";
 import { placeChips, type Chip, type ChipBlock } from "./chipplan.ts";
-import { asciiGlyph, HEX } from "./hexcell.ts";
+import { ASCII_GLYPHS, glyphOf, HEX, type GlyphSet } from "./hexcell.ts";
 import { HexRows } from "./hexrows.ts";
 import { HexLinks } from "./hexlinks.ts";
 import { headingHeight, headingsByRow, type HeadingSizes } from "./hexheadings.ts";
 import { RowHeights, type StructuralExtra } from "./rowheights.ts";
+import { HEXGLYPHS } from "./strings.ts";
 import type { Cell } from "./doc.ts";
 import { ValueFetch } from "./valuefetch.ts";
 import {
@@ -199,6 +200,8 @@ export type Frame = {
    *  what the next one does. */
   readonly cursor: number;
   readonly bit: number;
+  /** The characters the text column writes, one per byte value. */
+  readonly glyphs: GlyphSet;
   readonly pane: Pane;
   readonly nibble: 0 | 1;
   readonly insertMode: boolean;
@@ -336,6 +339,11 @@ export class HexView {
    */
   private linked: BitRange | null = null;
   private rightColumn: RightColumn = "text";
+  /** The characters the text column writes, and the name the reader picked
+   *  them by. ASCII until told otherwise, which is what a hex dump's text
+   *  column has always been. */
+  private glyphs: GlyphSet = ASCII_GLYPHS;
+  private glyphsName = "ASCII";
   /** What the field column asks the core for, which fields are on screen and
    *  what a folded run's elements read as — and what it keeps on screen while
    *  it waits for the next answer. */
@@ -779,6 +787,22 @@ export class HexView {
       insertMode: this.insertMode,
       mode: this.mode,
     };
+  }
+
+  /**
+   * Draw the text column in these characters instead.
+   *
+   * Nothing is remeasured: a cell is one character wide whatever is in it, so
+   * no row changes height and the place in the file is untouched.
+   *
+   * `name` is the set as the chooser shows it, not as the core spells it: it
+   * is only ever put in a sentence, and "DOS screen (CP437) isn't..." is the
+   * sentence, not the core's longer name for the same rule.
+   */
+  setGlyphs(glyphs: GlyphSet, name: string): void {
+    this.glyphs = glyphs;
+    this.glyphsName = name;
+    this.render();
   }
 
   setMode(mode: ViewMode): void {
@@ -1478,8 +1502,16 @@ export class HexView {
       ? e.key === "0" || e.key === "1"
       : this.pane === "hex"
         ? !Number.isNaN(parseInt(e.key, 16))
-        : e.key.charCodeAt(0) <= 0xff;
-    if (!usable) return;
+        // A character the column can show is a character it can take: the set
+        // in use is what turns the one into the other, both ways round.
+        : this.glyphs.includes(e.key);
+    if (!usable) {
+      // Said rather than ignored, and said before the selection is touched: a
+      // reader who types an accent into a CP437 column is owed the difference
+      // between "not in this set" and a key that did nothing.
+      if (!bitMode && this.pane === "ascii") this.say(HEXGLYPHS.refused(e.key, this.glyphsName));
+      return;
+    }
     // Typing over a selection replaces it, and the delete and the first digit
     // are one thing the user did, so they undo together.
     const replacing = this.selectionRange !== null;
@@ -1541,8 +1573,12 @@ export class HexView {
   }
 
   private typeAscii(ch: string, insert = false): void {
-    const code = ch.charCodeAt(0);
-    if (code > 0xff) return;
+    // The byte this column would have shown the character for. The lowest one
+    // where a set draws the same character twice, which is the byte a reader
+    // typing it means: in CP437 as a screen draws it, 0x0D and 0x266A are one
+    // character, and the low byte is the one somebody typing a note wants.
+    const code = this.glyphs.indexOf(ch);
+    if (code < 0) return;
     const atEnd = this.cursor >= this.doc.lengthBytes;
     if (insert || this.insertMode || atEnd) this.doc.insert(this.cursor, Uint8Array.of(code));
     else this.doc.overwrite(this.cursor, Uint8Array.of(code));
@@ -1569,7 +1605,9 @@ export class HexView {
     const asText = this.pane === "ascii";
     // The text column's own reading, byte for byte, so what is copied is what
     // is on screen rather than a decode it never showed.
-    const text = asText ? Array.from(bytes, asciiGlyph).join("") : Array.from(bytes, (b) => HEX[b] ?? "").join(" ");
+    const text = asText
+      ? Array.from(bytes, (b) => glyphOf(this.glyphs, b)).join("")
+      : Array.from(bytes, (b) => HEX[b] ?? "").join(" ");
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -1716,6 +1754,7 @@ export class HexView {
       chipMeasure,
       cursor: this.cursor,
       bit: this.bit,
+      glyphs: this.glyphs,
       pane: this.pane,
       nibble: this.nibble,
       insertMode: this.insertMode,
