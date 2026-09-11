@@ -2020,6 +2020,77 @@ mod tests {
         (node.name, node.value)
     }
 
+    /// A cursor nowhere near a tree still gets one: the root group's, which
+    /// every file with a version 0 superblock has. Without this a reader who
+    /// opened the tab before moving the cursor would be told the file has no
+    /// B-tree, which would be a lie about a file with one at 0x88.
+    #[test]
+    fn a_cursor_outside_every_tree_gets_the_root_group_s() {
+        let f = one_link_file();
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+        let tree = super::super::hdf5_tree::tree(&mut ev, &doc, &[0], 64).expect("walk").expect("a tree");
+        assert_eq!(tree.job, super::super::hdf5_tree::Job::Group);
+        assert_eq!(tree.nodes.len(), 2, "{tree:?}");
+        assert_eq!(tree.nodes[0].kind, super::super::hdf5_tree::Kind::Index);
+        assert_eq!(tree.nodes[0].address, BTREE);
+        assert_eq!(tree.nodes[0].entries, 1);
+        assert_eq!(tree.nodes[0].depth, 0);
+        // The row a chunk tree does not have: the links are one hop past the
+        // bottom index node, in a node of their own.
+        assert_eq!(tree.nodes[1].kind, super::super::hdf5_tree::Kind::LinkTable);
+        assert_eq!(tree.nodes[1].address, SNOD);
+        assert_eq!(tree.nodes[1].depth, 1);
+        assert_eq!(tree.nodes[1].entries, 1);
+    }
+
+    /// A key range is read at the bottom, from the names a link table holds,
+    /// and every node above takes the span of its children. The index node
+    /// over one link table covers exactly that link.
+    #[test]
+    fn a_key_range_comes_from_the_names_at_the_bottom() {
+        let f = one_link_file();
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+        let tree = super::super::hdf5_tree::tree(&mut ev, &doc, &[0], 64).expect("walk").expect("a tree");
+        assert_eq!(tree.nodes[1].first_key, "alpha");
+        assert_eq!(tree.nodes[1].last_key, "alpha");
+        assert_eq!(tree.nodes[0].first_key, "alpha");
+        assert_eq!(tree.nodes[0].last_key, "alpha");
+    }
+
+    /// From inside a node, the walk climbs to the root of that node's own
+    /// tree. The climb has to stop where one tree ends: a group's tree sits,
+    /// in the template, under the tree of the group above it, so a climb that
+    /// went to the topmost `TREE` would answer with the root group's tree
+    /// wherever the reader stood.
+    #[test]
+    fn a_cursor_inside_a_node_gets_that_node_s_own_tree() {
+        let f = one_link_file();
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+        // The link itself, which sits inside the symbol table node.
+        let tree = super::super::hdf5_tree::tree(&mut ev, &doc, LINK, 64).expect("walk").expect("a tree");
+        assert_eq!(tree.nodes[0].address, BTREE);
+        assert_eq!(tree.nodes.len(), 2);
+    }
+
+    /// The cap is a cap on nodes drawn, and what it costs is counted rather
+    /// than quietly dropped.
+    #[test]
+    fn a_cap_says_how_many_children_it_left_out() {
+        let f = one_link_file();
+        let doc = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(hdf5());
+        let tree = super::super::hdf5_tree::tree(&mut ev, &doc, &[0], 1).expect("walk").expect("a tree");
+        assert_eq!(tree.nodes.len(), 1);
+        assert_eq!(tree.omitted, 1);
+        assert!(tree.nodes[0].truncated);
+        // A node whose children were not all reached keeps no range: it would
+        // be right at one end and short at the other.
+        assert_eq!(tree.nodes[0].first_key, "");
+    }
+
     #[test]
     fn a_link_is_named_by_the_heap_the_tree_hangs_under() {
         let f = one_link_file();

@@ -726,6 +726,58 @@ export type FieldGraph = {
   readonly omitted: number;
 };
 
+/** One node of an HDF5 version 1 B-tree. */
+export type TreeNode = {
+  readonly path: readonly number[];
+  /** Index into the node list, or -1 for the root. Every node but the root
+   *  comes after its parent in the list. */
+  readonly parent: number;
+  /** `index` for a `TREE` node at any level, `links` for the symbol table node
+   *  a group tree hangs below its bottom row of index nodes. A chunk tree has
+   *  no `links` node: its bottom row points at the chunks. */
+  readonly kind: "index" | "links";
+  /** Where the node starts in the file, in bytes. */
+  readonly address: number;
+  readonly size_bits: number;
+  /** What the file wrote as this node's level. Zero for a link table, which
+   *  sits below the levels rather than on one. */
+  readonly level: number;
+  /** Rows below the root of this tree, counted by the walk. */
+  readonly depth: number;
+  /** The file's own `entries_used` or `symbol_count`, with no denominator: the
+   *  bound HDF5's K values put on these is not settled here, and a fraction
+   *  whose bottom half was guessed is worse than a count. */
+  readonly entries: number;
+  /** The ends of the node's key range, or empty where the walk could not
+   *  settle both. Link names for a group tree; for a chunk tree, the
+   *  comma-separated numbers of a chunk's offset inside the dataset. */
+  readonly first_key: string;
+  readonly last_key: string;
+  /** True when children of this node were not reached, so its count stands and
+   *  its range does not. */
+  readonly truncated: boolean;
+};
+
+/**
+ * One HDF5 version 1 B-tree, walked into the shape it has in the file.
+ *
+ * Which tree is decided by the core from the path handed in: the tree the
+ * cursor is inside, else the tree the object header it is inside names, else
+ * the root group's.
+ */
+export type Tree = {
+  /** `group` for a tree indexing a group's links, `chunk` for one indexing a
+   *  dataset's chunks. */
+  readonly job: "group" | "chunk";
+  readonly nodes: readonly TreeNode[];
+  /** Children that exist and were not walked, as far as the walk knows. */
+  readonly omitted: number;
+  /** How many numbers one chunk key holds: one per dataset dimension plus one
+   *  more that HDF5 writes as an offset inside an element and always sets to
+   *  zero. Zero for a group tree. */
+  readonly coords: number;
+};
+
 /** What a type permits, beyond what this file's bytes happen to say. */
 /** One row of a cross-reference stream, already decoded. `offset` is a real
  *  place in the file for an in-use row and -1 for every other kind. */
@@ -1737,6 +1789,21 @@ export class Doc {
    */
   graph(path: readonly number[], limit: number): TemplateReply<FieldGraph> {
     return this.handleReply<FieldGraph>(this.editor.graph(this.space, Uint32Array.from(path), limit));
+  }
+
+  /**
+   * The HDF5 version 1 B-tree the field at `path` belongs to, walked.
+   *
+   * `path` is where the cursor is, which is usually not a node of a tree; the
+   * core works out which tree that means. Null for a file with no such tree,
+   * and for every format that is not HDF5.
+   *
+   * `limit` caps the nodes walked. A group holding a million links has a
+   * quarter of a million link tables, and the reply says how many children it
+   * left out rather than growing without end.
+   */
+  btree(path: readonly number[], limit: number): TemplateReply<Tree | null> {
+    return this.handleReply<Tree | null>(this.editor.btree(this.space, Uint32Array.from(path), limit));
   }
 
   /**

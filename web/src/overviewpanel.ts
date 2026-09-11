@@ -17,12 +17,13 @@
 // last named.
 
 import { formatBytes, formatOffset, percentText } from "./doc.ts";
-import { NO_TEMPLATE, REPORT } from "./strings.ts";
+import { BTREES, NO_TEMPLATE, REPORT } from "./strings.ts";
 import type { Doc } from "./doc.ts";
 import type { FieldPick } from "./doc.ts";
 import { factRow, noneLine, noteLine } from "./dom.ts";
 import { MinimapPanel } from "./minimappanel.ts";
 import { TreemapPanel } from "./treemappanel.ts";
+import { BTreePanel } from "./btreepanel.ts";
 import type { MapSegment } from "./filemap.ts";
 import type { OutlineHeading, Viewport } from "./outline.ts";
 import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.ts";
@@ -49,6 +50,7 @@ const TYPE_LABEL = "Type";
 const UNKNOWN_TYPE = "Not identified";
 const CONTENTS_TAB = "Contents";
 const LOGICAL_TAB = "Logical";
+const BTREES_TAB = BTREES.tab;
 /** A template is chosen and the listing has not walked it yet. */
 const PARTS_PENDING = "Listing the parts of the file…";
 /** A template is chosen and walking it found no parts to list. */
@@ -70,7 +72,7 @@ type Part = { readonly head: OutlineHeading; readonly subs: readonly OutlineHead
  *  inside one of those. */
 type Place = { readonly part: number; readonly sub: number };
 
-type Tab = "contents" | "logical";
+type Tab = "contents" | "logical" | "btrees";
 
 function pathKey(path: readonly number[]): string {
   return path.join("/");
@@ -157,8 +159,12 @@ export class OverviewPanel {
   private readonly tabs: HTMLElement;
   private readonly contentsTab: HTMLButtonElement;
   private readonly logicalTab: HTMLButtonElement;
+  private readonly btreesTab: HTMLButtonElement;
   private readonly contentsEl: HTMLElement;
   private readonly logicalEl: HTMLElement;
+  /** The third tab's whole panel: one B-tree drawn in the shape the file gives
+   *  it. A panel of its own rather than a list, the way the treemap is. */
+  private readonly btrees: BTreePanel;
   /** The two pictures of the file, in the order the questions come: where the
    *  bytes of each kind are, then how much of the file each part is. */
   private readonly minimap: MinimapPanel;
@@ -252,13 +258,22 @@ export class OverviewPanel {
     this.tabs.setAttribute("role", "tablist");
     this.contentsTab = this.tabButton(CONTENTS_TAB, "contents");
     this.logicalTab = this.tabButton(LOGICAL_TAB, "logical");
-    this.tabs.append(this.contentsTab, this.logicalTab);
+    this.btreesTab = this.tabButton(BTREES_TAB, "btrees");
+    this.btreesTab.title = BTREES.what;
+    this.tabs.append(this.contentsTab, this.logicalTab, this.btreesTab);
     this.contentsEl = document.createElement("div");
     this.contentsEl.className = "ov-parts";
     this.contentsEl.setAttribute("role", "tabpanel");
     this.logicalEl = document.createElement("div");
     this.logicalEl.className = "ov-logical";
     this.logicalEl.setAttribute("role", "tabpanel");
+    // The same two verbs as the two maps above: a press goes to the node's
+    // bytes, a second press opens it in the listing.
+    this.btrees = new BTreePanel(this.doc);
+    this.btrees.el.setAttribute("role", "tabpanel");
+    this.btrees.onJump = (startBit, endBit) => this.onJump(startBit, endBit);
+    this.btrees.onPick = (pick) => this.onPick(pick);
+    this.btrees.onResize = () => this.pump();
 
     // Where the bytes of each kind are, with the parts of the file as a strip
     // under it and the block a reader opened out of it under that.
@@ -293,6 +308,7 @@ export class OverviewPanel {
       this.tabs,
       this.contentsEl,
       this.logicalEl,
+      this.btrees.el,
     );
     this.el.append(header, this.body);
 
@@ -318,7 +334,7 @@ export class OverviewPanel {
     });
 
     const savedTab = localStorage.getItem("qubero.rail.tab");
-    this.tab = savedTab === "logical" ? "logical" : "contents";
+    this.tab = savedTab === "logical" || savedTab === "btrees" ? savedTab : "contents";
     this.syncTabs();
 
     this.logicalEl.addEventListener("click", (e) => this.onLogicalClick(e));
@@ -441,6 +457,9 @@ export class OverviewPanel {
       }
     }
     this.scheduleLogical();
+    // The B-trees tab marks the node the cursor landed in, the same way the
+    // graph view marks the field it was drawn for.
+    this.btrees.reveal(path);
   }
 
   /** Drop the selection in the Logical tab. */
@@ -467,6 +486,8 @@ export class OverviewPanel {
     // is stating a number it does not have.
     this.drawFacts();
     if (this.logicalStale && this.tab === "logical") this.scheduleLogical();
+    this.btrees.setShown(this.tab === "btrees" && !this.body.hidden);
+    this.btrees.pump();
   }
 
   private drawFacts(): void {
@@ -497,20 +518,39 @@ export class OverviewPanel {
     return b;
   }
 
-  /** Show the chosen tab, and only offer Logical where a format has objects
-   *  of its own to list. The template is sniffed after the document opens, so
-   *  the offer can appear, or go, later. */
+  /**
+   * Show the chosen tab, and only offer the two that not every format has:
+   * Logical where a format has objects of its own to list, B-trees where one
+   * keeps its structure in a tree of nodes scattered through the file. The
+   * template is sniffed after the document opens, so either offer can appear,
+   * or go, later.
+   *
+   * The B-trees tab is offered for the one format that has them at all rather
+   * than for a file already known to have one, because knowing that is the
+   * walk itself, and a walk run to decide whether to show a hidden tab is a
+   * walk nobody asked for. A file of that format with no version 1 tree in it
+   * says so in the panel.
+   */
   private syncTabs(): void {
     const hasLogical = hasLogicalOutline(this.doc);
+    const hasTrees = this.doc.template === "hdf5";
     this.logicalTab.hidden = !hasLogical;
+    this.btreesTab.hidden = !hasTrees;
     if (!hasLogical && this.tab === "logical") this.tab = "contents";
-    const logical = this.tab === "logical";
-    this.contentsTab.classList.toggle("is-on", !logical);
-    this.logicalTab.classList.toggle("is-on", logical);
-    this.contentsTab.setAttribute("aria-selected", String(!logical));
-    this.logicalTab.setAttribute("aria-selected", String(logical));
-    this.contentsEl.hidden = logical;
-    this.logicalEl.hidden = !logical;
+    if (!hasTrees && this.tab === "btrees") this.tab = "contents";
+    for (const [button, panel, tab] of [
+      [this.contentsTab, this.contentsEl, "contents"],
+      [this.logicalTab, this.logicalEl, "logical"],
+      [this.btreesTab, this.btrees.el, "btrees"],
+    ] as const) {
+      const on = this.tab === tab;
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-selected", String(on));
+      panel.hidden = !on;
+    }
+    // The panel walks the tree only while it can be seen, so it has to be told
+    // both ways round rather than working it out from its own visibility.
+    this.btrees.setShown(this.tab === "btrees" && !this.body.hidden);
   }
 
   // ----- the contents -----
@@ -921,6 +961,11 @@ export class OverviewPanel {
     this.selectedPath = row.dataset["path"] ?? null;
     for (const other of this.logicalEl.querySelectorAll(".ov-lrow.is-selected")) other.classList.remove("is-selected");
     row.classList.add("is-selected");
+    // The B-trees tab follows whichever object the reader is standing on, and
+    // picking one here is standing on it. Told directly rather than through
+    // the cursor: picking sets the cursor with the round trip suppressed, so
+    // nothing comes back this way to say where the reader went.
+    this.btrees.reveal(path);
     if (!Number.isFinite(start)) return;
     this.onPick({ path, startBit: start, endBit: start + 8 });
   }
