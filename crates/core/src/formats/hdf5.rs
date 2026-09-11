@@ -1598,10 +1598,10 @@ fn chunked_v4() -> T {
                 ),
             ),
             ("dimensionality", T::u8()),
-            ("dimension_size", T::u8().counted_as("bytes")),
+            ("dimension_width", T::u8().counted_as("bytes")),
             (
                 "chunk_dimensions",
-                T::array(T::uint_expr(E::field("dimension_size").mul(E::lit(8)), Little), E::field("dimensionality")),
+                T::array(T::uint_expr(E::field("dimension_width").mul(E::lit(8)), Little), E::field("dimensionality")),
             ),
             ("index_type", chunk_index_type()),
             (
@@ -2526,9 +2526,9 @@ mod tests {
     }
 
     /// Which index a version 4 message names is a byte of its own, and the
-    /// four that are not a single chunk are read as an index rather than as
-    /// the chunk itself. An unknown one keeps its bytes instead of reading the
-    /// address as something it is not.
+    /// address means something different under each: the one chunk, an array,
+    /// a b-tree. An index type this does not know is not followed, rather than
+    /// the address being read as whichever of those was guessed at.
     #[test]
     fn an_unknown_chunk_index_is_left_alone() {
         let mut f = single_chunk_file();
