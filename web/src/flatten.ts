@@ -663,9 +663,9 @@ export type Hop = { readonly node: TemplateNode; readonly via: string | null };
  * contents at an address taken from the file. The core gives it exactly one
  * child: the thing at that address, which keeps the field's own name (see
  * `place_child` in `eval/mod.rs`) and carries the real type. So the tree holds
- * two nodes saying the same thing one level apart — `object` of type
- * `at → ObjectHeader` with `object` of type `ObjectHeader` inside it — and
- * drawing both spends a level of indent and a row on a repeat. HDF5 reaches
+ * two nodes saying the same thing one level apart: `object` of type
+ * `at → ObjectHeader` with `object` of type `ObjectHeader` inside it. Drawing
+ * both spends a level of indent and a row on a repeat. HDF5 reaches
  * everything by address, so that doubled every hop: two messages sat seven
  * levels deep, and a b-tree of depth three cost six levels before a key.
  *
@@ -686,8 +686,8 @@ export type Hop = { readonly node: TemplateNode; readonly via: string | null };
  * view has to go on: no bytes of its own, one child, and that child carrying
  * its name. `Ty::PointerList` and `Ty::Chain` place their children by address
  * the same way, but call them `[0]`, `[1]`, …, so a list that happens to hold
- * one element does not match and keeps its element row — which is right,
- * since `[0]` is a name the wrapper does not say. `Ty::Decoded` does pass its
+ * one element does not match and keeps its element row, which is right: `[0]`
+ * is a name the wrapper does not say. `Ty::Decoded` does pass its
  * name to its one child, but a compressed run covers the bytes it occupies,
  * so it fails the first test.
  *
