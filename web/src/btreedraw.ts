@@ -60,15 +60,36 @@ export type Box = {
   readonly w: number;
   /** What the width stands for: the weights of the nodes drawn as this box,
    *  added up. The pixels are what the reader sees and this is the number
-   *  behind them, so a box can say what its own width means rather than
-   *  leaving the caption under the picture to say it for every box at once. */
+   *  behind them. */
   readonly weight: number;
+  /** The same, from `Placed.count`, which is the honest number and the one the
+   *  readout prints. Zero where there is none. */
+  readonly count: number;
+  /** True where any node in the box has children the walk never reached, so
+   *  `count` is a lower bound. */
+  readonly floor: boolean;
 };
 
 /** Where each node sits in the tree picture, before neighbours are merged.
  *  `weight` is the count the width stands for, kept beside the pixels because
  *  it is the number a test can check and a pixel is not. */
-export type Placed = { x: number; w: number; weight: number };
+export type Placed = {
+  x: number;
+  w: number;
+  weight: number;
+  /** The same quantity with no floor under it and no fallback in it: what the
+   *  tree really indexes in and below this node. `weight` is what the drawing
+   *  needs, so it is at least 1 and an index node whose children were never
+   *  walked falls back to its own entry count; both of those are facts about
+   *  the picture rather than about the file, and neither may be printed as a
+   *  number of links, chunks or records. Zero where there is no honest one. */
+  count: number;
+  /** Whether this node or anything under it had children the walk never
+   *  reached, so `count` is a lower bound. Worked out here rather than read
+   *  off `TreeNode.truncated`, which the core carries upward only in `ranges`
+   *  and so never in a version 2 group tree. */
+  floor: boolean;
+};
 
 /** One line of the summary under the picture. `short` is the muted class the
  *  warnings and caveats take; `title` is the one row that explains itself on
@@ -108,6 +129,22 @@ function held(tree: Tree, node: TreeNode, childless: boolean): number {
 }
 
 /**
+ * The same, for the number that is printed rather than the number that is
+ * drawn.
+ *
+ * Two differences from `held`, and both are the difference between a width and
+ * a count. A version 1 node's entries are links or chunks only on the bottom
+ * row; above it they are pointers at nodes, and `held`'s fallback counts them
+ * anyway because a box with no width is worse than a box whose width is a
+ * guess. The test for the bottom row is `leafCount`'s, so the root's `count`
+ * and the band's number are the same quantity from the same rule.
+ */
+function indexed(tree: Tree, node: TreeNode): number {
+  if (tree.version === 2) return node.entries;
+  return node.kind === "links" || (tree.job === "chunk" && node.level === 0) ? node.entries : 0;
+}
+
+/**
  * Where every node sits across the width, by how much of what the tree indexes
  * is at or below it.
  *
@@ -126,6 +163,8 @@ export function place(tree: Tree, width: number): Placed[] {
     if (parent >= 0) kids[parent]?.push(i);
   }
   const weight = new Array<number>(tree.nodes.length).fill(0);
+  const count = new Array<number>(tree.nodes.length).fill(0);
+  const floor = new Array<boolean>(tree.nodes.length).fill(false);
   // Backwards over a breadth-first list: every child is settled before its
   // parent is asked about.
   for (let i = tree.nodes.length - 1; i >= 0; i--) {
@@ -133,8 +172,10 @@ export function place(tree: Tree, width: number): Placed[] {
     const node = tree.nodes[i];
     const below = own.reduce((sum, k) => sum + (weight[k] ?? 0), 0);
     weight[i] = Math.max(1, (node === undefined ? 0 : held(tree, node, own.length === 0)) + below);
+    count[i] = (node === undefined ? 0 : indexed(tree, node)) + own.reduce((sum, k) => sum + (count[k] ?? 0), 0);
+    floor[i] = (node?.truncated ?? false) || own.some((k) => floor[k] === true);
   }
-  const placed: Placed[] = tree.nodes.map(() => ({ x: 0, w: 0, weight: 0 }));
+  const placed: Placed[] = tree.nodes.map((_, i) => ({ x: 0, w: 0, weight: 0, count: count[i] ?? 0, floor: floor[i] ?? false }));
   const root = placed[0];
   if (root !== undefined) {
     root.x = 0;
@@ -191,7 +232,9 @@ export function boxesOf(tree: Tree, placed: readonly Placed[], width: number): B
     const flush = (end: number): void => {
       if (pool.length === 0) return;
       const weight = pool.reduce((sum, i) => sum + (placed[i]?.weight ?? 0), 0);
-      out.push({ key: keyOf(pool), row: d, nodes: pool, x: from, w: Math.max(MIN_W, end - from), weight });
+      const count = pool.reduce((sum, i) => sum + (placed[i]?.count ?? 0), 0);
+      const floor = pool.some((i) => placed[i]?.floor === true);
+      out.push({ key: keyOf(pool), row: d, nodes: pool, x: from, w: Math.max(MIN_W, end - from), weight, count, floor });
       pool = [];
     };
     for (let i = 0; i < tree.nodes.length; i++) {
@@ -326,7 +369,7 @@ function holdWord(tree: Tree, node: TreeNode): string {
  * instead of a range, because that is the same fact: the core clears a range
  * it could only settle at one end.
  */
-function nodeLines(tree: Tree, node: TreeNode): string[] {
+function nodeLines(tree: Tree, node: TreeNode, box: Box): string[] {
   const lines = [BTREES.selectedAt(kindWord(node), signWord(node), formatOffset(node.address * 8))];
   if (tree.version === 2) {
     // Both kinds of version 2 node hold records, so the count is a count of
@@ -338,6 +381,18 @@ function nodeLines(tree: Tree, node: TreeNode): string[] {
   } else {
     const noun = holdWord(tree, node);
     lines.push(node.kind === "links" ? BTREES.holds(node.entries, noun) : BTREES.pointsAt(node.entries, noun));
+  }
+  // What the box's own width stands for, which is the other of the two marks a
+  // box carries and the only one nothing said. Above the truncated branch, so
+  // a node whose children were not all reached still gets it: the count is a
+  // lower bound there and says so. Nothing is printed where there is no honest
+  // number; `BTREES.widthStands` says when that is.
+  if (box.count > 0) {
+    lines.push(
+      tree.version === 2
+        ? BTREES.widthStandsV2(box.count, node.kind === "leaf", box.floor)
+        : BTREES.widthStands(box.count, tree.job === "chunk" ? "chunk" : "link", box.floor),
+    );
   }
   if (node.truncated) {
     // The clause about a missing range only belongs where a range was going to
@@ -366,7 +421,7 @@ export function boxTitle(tree: Tree, box: Box): string {
   }
   const node = tree.nodes[box.nodes[0] ?? -1];
   if (node === undefined) return "";
-  return nodeLines(tree, node).join("\n");
+  return nodeLines(tree, node, box).join("\n");
 }
 
 /**
@@ -390,7 +445,7 @@ export function readoutLines(tree: Tree, box: Box): string[] {
   }
   const node = tree.nodes[box.nodes[0] ?? -1];
   if (node === undefined) return [];
-  const lines = nodeLines(tree, node);
+  const lines = nodeLines(tree, node, box);
   // How many bytes the node takes, which only the readout has room for. On the
   // line with the address, not the line with the count: "points at 28 link
   // tables · 480 B" reads as 480 bytes of link tables at least as readily as

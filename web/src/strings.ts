@@ -726,11 +726,32 @@ export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu
  *  selected" there would suggest an answer exists and the user missed it. */
 export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";
 
-/** The Logical outline for an ELF, when the header no longer has the tables it
- *  is built from. It once had them under different numbers, and reading those
- *  numbers silently gave a file with four segments an empty Segments list; the
- *  names are read now, and a name that is not there is said out loud. */
-export const ELF_TABLES_MISSING = "This ELF header has no program or section header table, so there is no outline to draw. The file may be truncated.";
+/** The Logical tab for an ELF, when the parsed header has no field of a name
+ *  the tab reads it by. Shown after `LOGICAL_FAILED`'s "Couldn't read the
+ *  objects:", so it is the clause after that colon and starts with a capital
+ *  as the core's messages do.
+ *
+ *  It fires on one cause only. The tab once reached into the header by child
+ *  index, the template grew a field in the middle, and a file with four
+ *  program headers listed "0 mapped regions"; the fields are read by name now,
+ *  and this is what is said when a name is not there. A truncated or malformed
+ *  file cannot get here: a structure lists every field it has, and one that
+ *  cannot be read fails the whole listing with the core's own message. So a
+ *  name is missing only when the template names it differently from the code
+ *  that asks, which is Qubero's fault, and the line says so before anything
+ *  else. An earlier draft said "The file may be truncated", which sent a
+ *  reader to check a file that was never at fault, and "no program or section
+ *  header table", which reads both as no program-header table or
+ *  section-header table and as no program, or no table.
+ *
+ *  The field is named with the template's own underscored name, because that
+ *  is what the Listing prints under the ELF header and a reader who wants to
+ *  see for themselves can. "The Logical tab" is the tab's label; "outline" is
+ *  what the code calls it and no screen does. "Qubero's ELF template" is true
+ *  of an eBPF file as well: `bpf` routes here and its header is `elf.rs`'s
+ *  `body()`. */
+export const ELF_FIELD_MISSING = (name: string): string =>
+  `This is a bug in Qubero, not a problem with the file. Qubero's ELF template has no field called ${name}, which the Logical tab needs.`;
 
 /**
  * The treemap: what a box stands for, and what the five ways of dividing the
@@ -1191,6 +1212,65 @@ export const BTREES = {
    *  index nodes, link tables, chunks, or links. */
   pointsAt: (n: number, noun: string): string => `points at ${countText(n, noun)}`,
   holds: (n: number, noun: string): string => `holds ${countText(n, noun)}`,
+  /** The width line of a node's readout and tooltip: what this box's width
+   *  stands for, as a number. A box carries two marks and they are two
+   *  different counts. The number printed on it is the node's own entries,
+   *  which `holds` and `pointsAt` put in words on the line above; the width is
+   *  the total of what the tree indexes in and under the box, which is
+   *  `Placed.count`, and until this line nothing on the box said so. The
+   *  captions (`widthGroup`, `widthChunk`, `widthRecords`) give the rule once
+   *  for the whole picture; this gives the number for the one box under the
+   *  pointer, which is the only way a reader can check the rule against a box,
+   *  and that check is what found the root of a version 2 tree weighing 1,952
+   *  under a band saying 2,000.
+   *
+   *  "Width stands for", with the width as the subject. Not "width: 1,204
+   *  links", for the reason `widthGroup` gives: a width is not a count, and a
+   *  colon puts a count where a width was promised. Not "drawn 1,204 links
+   *  wide", which reads for a beat as 1,204 links having been drawn, under a
+   *  version 2 caption that has just said records are not drawn. Not "spans
+   *  1,204 links", which never says "width" and so reads as a second count of
+   *  the same kind as "points at".
+   *
+   *  One string with a swappable noun is safe here where it was not for
+   *  `holds` and `pointsAt`. Those verbs say what the node does to the things
+   *  counted, so the verb had to agree with the noun. Here the verb describes
+   *  the width, and the noun is the unit the width is measured in: it stands
+   *  for links, chunks or records the same way. What does change is the place
+   *  clause, and it changes with the version rather than with the noun, which
+   *  is why there are two of these and no verb switch.
+   *
+   *  "At least" when the subtree was not all walked, in `omitted`'s words and
+   *  position: "or more" after the noun runs into "below it" and reads as a
+   *  direction. `place` works the flag out by carrying `truncated` up the
+   *  tree, because the core carries it up only in `ranges`, which a version 2
+   *  group tree never runs.
+   *
+   *  Not shown at all when the count is 0, and the count is `Placed.count`,
+   *  not `Placed.weight`. The weight is floored to 1 so an empty node is still
+   *  a box that can be pressed, and that floor is a fact about the drawing;
+   *  this line prints facts about the file, and a 1 here against "holds 0
+   *  records" on the line above would be neither. The same rule leaves the
+   *  line off a version 1 node above the bottom row whose children the walk
+   *  never reached: its entries are child nodes and not links or chunks, so
+   *  there is no honest number, and the `truncated` line already says why.
+   *  `noun` is singular; `countText` makes the plural. */
+  widthStands: (n: number, noun: string, floor: boolean): string =>
+    `width stands for ${floor ? "at least " : ""}${countText(n, noun)} below it`,
+  /** The same line for a version 2 tree, whose boxes are counted in records
+   *  and whose own records count towards the width.
+   *
+   *  `widthRecords`'s clause, word for word: "in it and in the nodes below
+   *  it". "Below it" alone would be short by the box's own records, which is
+   *  the error this whole line exists to let a reader catch, and it would also
+   *  offer the band, which on a version 2 screen prints a count of records
+   *  too.
+   *
+   *  A leaf keeps only "in it". The second half on a leaf sends a reader below
+   *  it, where the band prints the header's `records_total`, a different
+   *  number. */
+  widthStandsV2: (n: number, leaf: boolean, floor: boolean): string =>
+    `width stands for ${floor ? "at least " : ""}${countText(n, "record")} in it${leaf ? "" : " and in the nodes below it"}`,
   /** The second readout line of a version 2 internal node, which points at one
    *  more child than it holds records. That is what a B-tree is, as against a
    *  B+ tree: a record sits between every two children and is not repeated

@@ -1,6 +1,6 @@
 import { formatBytes, formatOffset } from "./doc.ts";
 import type { ContentObject, Doc, TemplateReply } from "./doc.ts";
-import { countText, ELF_TABLES_MISSING } from "./strings.ts";
+import { countText, ELF_FIELD_MISSING } from "./strings.ts";
 
 /** One format-independent entry in a file's semantic outline. `sourcePath`
  * connects it back to the storage template without making that template's
@@ -969,6 +969,11 @@ function fieldsOf(doc: Doc, path: readonly number[]): TemplateReply<ReadonlyMap<
   return { status: "ok", node: new Map(kids.node.map((k, at) => [k.name, { at, value: k.value }])) };
 }
 
+/** The header fields the outline is built from, in the order a reader meets
+ *  them on screen, so the one named in the error is the first thing that is
+ *  actually missing. */
+const ELF_TABLES = ["program_headers", "section_headers", "sections"];
+
 function elfOutline(
   doc: Doc,
   expanded: ReadonlySet<string>,
@@ -986,12 +991,11 @@ function elfOutline(
   const entry = Number(nodeValue(doc, [...header, 3]) ?? 0);
   const headerFields = fieldsOf(doc, header);
   if (headerFields.status !== "ok") return headerFields;
-  const segmentTable = headerFields.node.get("program_headers")?.at;
-  const sectionTable = headerFields.node.get("section_headers")?.at;
-  const sectionBodies = headerFields.node.get("sections")?.at;
-  if (segmentTable === undefined || sectionTable === undefined || sectionBodies === undefined) {
-    return { status: "error", message: ELF_TABLES_MISSING };
-  }
+  const missing = ELF_TABLES.find((name) => !headerFields.node.has(name));
+  if (missing !== undefined) return { status: "error", message: ELF_FIELD_MISSING(missing) };
+  const segmentTable = headerFields.node.get("program_headers")?.at ?? 0;
+  const sectionTable = headerFields.node.get("section_headers")?.at ?? 0;
+  const sectionBodies = headerFields.node.get("sections")?.at ?? 0;
   const programHeaders = doc.templateNode([...header, segmentTable, 0]);
   if (programHeaders.status !== "ok") return programHeaders;
   const nodes: LogicalNode[] = [{

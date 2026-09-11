@@ -20,7 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { Tree, TreeNode } from "../src/doc.ts";
-import { boxesOf, leafBand, leafCount, place, widthCaption } from "../src/btreedraw.ts";
+import { boxesOf, leafBand, leafCount, place, readoutLines, widthCaption, type Box } from "../src/btreedraw.ts";
 import { BTREES } from "../src/strings.ts";
 
 /** One node of a fixture, with its children. Written as a tree because that is
@@ -31,6 +31,9 @@ type Spec = {
   kind: TreeNode["kind"];
   /** HDF5's own level, counted up from the bottom row. */
   level: number;
+  /** Children this node has and the walk did not reach, which makes every
+   *  count at or above it a lower bound. */
+  truncated?: boolean;
   kids?: Spec[];
 };
 
@@ -67,7 +70,7 @@ function build(shape: Shape): Tree {
         entries: spec.entries,
         first_key: "",
         last_key: "",
-        truncated: false,
+        truncated: spec.truncated ?? false,
       });
       for (const kid of spec.kids ?? []) next.push({ spec: kid, parent: here, depth: depth + 1 });
     }
@@ -343,6 +346,96 @@ test("the band says links or chunks in words, over the count that is weighed", (
   assert.equal(leafBand(chunkTreeV1())?.label, BTREES.leafChunks(400, false));
   assert.equal(leafBand(groupTreeV2())?.label, BTREES.leafLinksV2(2000));
   assert.equal(leafBand(chunkTreeV2())?.label, BTREES.leafChunksV2(400));
+});
+
+test("a box says what its own width stands for, in the tree's noun", () => {
+  // The caption under the picture gives the rule once; this is the number for
+  // the one box under the pointer, which is the only way a reader can hold the
+  // rule against a box. It is the check that would have caught a root weighing
+  // 1,952 under a band saying 2,000.
+  const root = (tree: Tree): string[] => {
+    const box = boxesOf(tree, place(tree, WIDTH), WIDTH).find((b) => b.row === 0);
+    assert.ok(box !== undefined);
+    return readoutLines(tree, box);
+  };
+  const g1 = groupTreeV1();
+  assert.ok(root(g1).includes(BTREES.widthStands(4000, "link", false)));
+  const c1 = chunkTreeV1();
+  assert.ok(root(c1).includes(BTREES.widthStands(400, "chunk", false)));
+  // The root's number and the band's are one quantity counted two ways, so a
+  // reader comparing the widest box with the line under it compares one fact.
+  const g2 = groupTreeV2();
+  assert.ok(root(g2).includes(BTREES.widthStandsV2(leafCount(g2) ?? 0, false, false)));
+  assert.equal(place(g2, WIDTH)[0]?.count, leafCount(g2));
+  assert.equal(place(g1, WIDTH)[0]?.count, leafCount(g1));
+});
+
+test("a version 2 leaf's width stands for what is in it, and stops there", () => {
+  // "And in the nodes below it" on a leaf sends the reader below it, where the
+  // band prints the header's total, a different number.
+  const tree = groupTreeV2();
+  // Wide enough that a leaf gets a box of its own rather than being pooled
+  // with its neighbours, which is what the line is about.
+  const wide = 4000;
+  const all = boxesOf(tree, place(tree, wide), wide);
+  const last = Math.max(...all.map((b) => b.row));
+  const box = all.find((b) => b.row === last && b.nodes.length === 1);
+  assert.ok(box !== undefined);
+  const node = tree.nodes[box.nodes[0] ?? -1];
+  assert.equal(node?.kind, "leaf");
+  assert.ok(readoutLines(tree, box).includes(BTREES.widthStandsV2(box.count, true, false)));
+});
+
+test("a count that is a lower bound says so, all the way up the tree", () => {
+  // The flag is carried up here rather than read off the node, because the
+  // core carries it up only where it settles a key range, which a version 2
+  // group tree never does.
+  const tree = build({
+    version: 2,
+    job: "group",
+    records_total: 90,
+    root: { entries: 2, kind: "index", level: 1, kids: [
+      { entries: 44, kind: "leaf", level: 0 },
+      { entries: 44, kind: "leaf", level: 0, truncated: true },
+    ] },
+  });
+  const boxes = boxesOf(tree, place(tree, WIDTH), WIDTH);
+  const root = boxes.find((b) => b.row === 0);
+  assert.ok(root !== undefined);
+  assert.equal(root.floor, true);
+  assert.ok(readoutLines(tree, root).includes(BTREES.widthStandsV2(90, false, true)));
+});
+
+test("a box with no honest number to print says nothing about its width", () => {
+  // An empty node is drawn a sliver wide so it can be pressed, and that 1 is a
+  // fact about the picture. Printed against "holds 0 links" on the line above
+  // it would be a fact about the file, and false.
+  const empty = build({
+    version: 1,
+    job: "group",
+    root: { entries: 2, kind: "index", level: 1, kids: [{ entries: 0, kind: "links", level: 0 }, { entries: 4, kind: "links", level: 0 }] },
+  });
+  const placed = place(empty, WIDTH);
+  assert.equal(placed[1]?.weight, 1);
+  assert.equal(placed[1]?.count, 0);
+  const box = boxesOf(empty, placed, WIDTH).find((b) => b.nodes.length === 1 && b.nodes[0] === 1);
+  assert.ok(box !== undefined);
+  assert.ok(!readoutLines(empty, box).some((line) => line.startsWith("width stands for")));
+
+  // And a version 1 node above the bottom row whose children were never
+  // reached: its entries are nodes, not links, so there is no number of links
+  // to print at all. `truncated` is the line that says what happened.
+  const stopped = build({
+    version: 1,
+    job: "group",
+    omitted: 12,
+    root: { entries: 2, kind: "index", level: 2, kids: many(2, { entries: 28, kind: "index", level: 1 }) },
+  });
+  assert.equal(leafCount(stopped), null);
+  assert.equal(place(stopped, WIDTH)[0]?.count, 0);
+  const top = boxesOf(stopped, place(stopped, WIDTH), WIDTH).find((b) => b.row === 0);
+  assert.ok(top !== undefined);
+  assert.ok(!readoutLines(stopped, top).some((line) => line.startsWith("width stands for")));
 });
 
 test("a version 2 tree gets the caption about records, the others their own", () => {
