@@ -354,7 +354,13 @@ const main = async () => {
 
   await run("down", 1);
   await run("up", -1);
-  if (a.spin > 0) await spin(page, a, metrics);
+  // The spin dispatches its own wheel reports, which is the only way to keep
+  // one turning faster than a frame. They reach the hex view, which reads the
+  // wheel itself; they scroll nothing in the listing, where the browser does
+  // the scrolling and only trusts a report it made. So the spin would report
+  // a listing sitting still, which reads as a fast one.
+  if (a.spin > 0 && a.view === "listing") console.log("spin   not measured here: an untrusted wheel report scrolls nothing the browser scrolls itself");
+  else if (a.spin > 0) await spin(page, a, metrics);
   await browser.close();
 };
 
