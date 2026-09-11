@@ -892,6 +892,11 @@ pub enum Encoding {
     Latin1,
     /// The DOS code page, which fills the high half with box drawing and accents.
     Cp437,
+    /// The same page as a DOS screen drew it, where the bytes below 0x20 have
+    /// a face, a note or an arrow instead of an effect. What a screen captured
+    /// straight into a file is in, which is what Doom's sign-off lump is.
+    /// @see crate::text::CodePage::Cp437Screen
+    Cp437Screen,
     Utf16(Endian),
     /// A byte-order mark at the front decides; without one, `fallback`.
     Bom { fallback: Box<Encoding> },
@@ -917,6 +922,7 @@ impl Encoding {
             Encoding::Bom { .. } => "text bom".into(),
             Encoding::Unknown => "text?".into(),
             Encoding::P8scii => "p8scii".into(),
+            Encoding::Cp437Screen => "cp437 screen".into(),
         }
     }
 }

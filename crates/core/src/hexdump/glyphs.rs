@@ -13,19 +13,7 @@
 //! either as the bytes it was drawn in or as the Unicode something translated
 //! them to, and both have to read the same.
 
-use crate::text::{cp437_char, CodePage, Settled};
-
-/// The glyphs the low half of CP437 has on a screen, which is where a control
-/// character has a picture instead of an effect. 0x00 is left out on purpose:
-/// a screen has nothing to draw for it, and a tool that writes something there
-/// is writing a stand-in, which is worked out from the dump rather than
-/// assumed.
-const CP437_LOW: [char; 31] = [
-    '\u{263a}', '\u{263b}', '\u{2665}', '\u{2666}', '\u{2663}', '\u{2660}', '\u{2022}', '\u{25d8}',
-    '\u{25cb}', '\u{25d9}', '\u{2642}', '\u{2640}', '\u{266a}', '\u{266b}', '\u{263c}', '\u{25ba}',
-    '\u{25c4}', '\u{2195}', '\u{203c}', '\u{00b6}', '\u{00a7}', '\u{25ac}', '\u{21a8}', '\u{2191}',
-    '\u{2193}', '\u{2192}', '\u{2190}', '\u{221f}', '\u{2194}', '\u{25b2}', '\u{25bc}',
-];
+use crate::text::{cp437_screen_char, CodePage, Settled};
 
 /// How a dump turned a byte into a character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,15 +82,11 @@ impl Glyphs {
                 (c != '\u{fffd}' && !c.is_control()).then_some(c)
             }
             Glyphs::Printable(_) => (0x20..=0x7e).contains(&b).then(|| b as char),
-            // 0x7f is left out with 0x00: the glyph for it is a house, but
-            // what comes through a clipboard is as often the control character
-            // itself, and a byte two tools disagree about is one to say
-            // nothing about rather than one to call a conflict.
-            Glyphs::Screen => match b {
-                0 | 0x7f => None,
-                b if b < 0x20 => Some(CP437_LOW[b as usize - 1]),
-                b => Some(cp437_char(b)),
-            },
+            // The same two bytes the screen page leaves undefined, 0x00 and
+            // 0x7f, are the two tools disagree about: a screen drew a blank
+            // and a house, and what comes through a clipboard is as often the
+            // control character itself. @see crate::text::CP437_SCREEN_LOW
+            Glyphs::Screen => Some(cp437_screen_char(b)).filter(|c| *c != '\u{fffd}'),
         }
     }
 }

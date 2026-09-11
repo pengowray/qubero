@@ -258,6 +258,33 @@ const P8SCII_HIGH: [char; 128] = [
     '\u{30f2}', '\u{30f3}', '\u{30c3}', '\u{30e3}', '\u{30e5}', '\u{30e7}', '\u{25dc}', '\u{25dd}',
 ];
 
+/// The glyphs the low half of CP437 has on a screen, which is where a control
+/// character has a picture instead of an effect: 0x01 is a smiling face and
+/// 0x0D a musical note, because the DOS video hardware had a glyph for all 256
+/// values and no way to say "do nothing here".
+///
+/// 0x00 is left out on purpose, and so is 0x7F: a screen drew a blank and a
+/// house for those two, but what comes out of a tool or through a clipboard is
+/// as often the control character itself, and a byte two writers disagree
+/// about is one to say nothing about. Both read as undefined, which is how the
+/// rest of a page's holes read.
+const CP437_SCREEN_LOW: [char; 32] = [
+    '\u{fffd}', '\u{263a}', '\u{263b}', '\u{2665}', '\u{2666}', '\u{2663}', '\u{2660}', '\u{2022}',
+    '\u{25d8}', '\u{25cb}', '\u{25d9}', '\u{2642}', '\u{2640}', '\u{266a}', '\u{266b}', '\u{263c}',
+    '\u{25ba}', '\u{25c4}', '\u{2195}', '\u{203c}', '\u{00b6}', '\u{00a7}', '\u{25ac}', '\u{21a8}',
+    '\u{2191}', '\u{2193}', '\u{2192}', '\u{2190}', '\u{221f}', '\u{2194}', '\u{25b2}', '\u{25bc}',
+];
+
+/// What a byte is on a DOS screen, or U+FFFD for the two nobody agrees about.
+/// @see CP437_SCREEN_LOW
+pub fn cp437_screen_char(b: u8) -> char {
+    match b {
+        0x7f => '\u{fffd}',
+        b if b < 0x20 => CP437_SCREEN_LOW[b as usize],
+        b => cp437_char(b),
+    }
+}
+
 /// A single-byte code page: ASCII below 0x80, a table of 128 characters above
 /// it. Which one a file is in is never in the bytes, so it is a choice the
 /// reader makes, and the two slots the panel offers are one from each family.
@@ -278,6 +305,11 @@ pub enum CodePage {
     /// against: it is named by the templates that read a cart, since that is
     /// the only place these bytes mean this.
     P8scii,
+    /// CP437 as a DOS screen drew it, which has a picture where the encoding
+    /// has a control character. Not a page either, for the same reason as
+    /// `P8scii`: it is named by the templates that read a screen captured into
+    /// a file, and a file is never guessed against it. @see CP437_SCREEN_LOW
+    Cp437Screen,
 }
 
 impl CodePage {
@@ -311,6 +343,7 @@ impl CodePage {
             CodePage::Cp850 => "CP850",
             CodePage::Cp866 => "CP866",
             CodePage::P8scii => "P8SCII",
+            CodePage::Cp437Screen => "CP437 screen",
         }
     }
 
@@ -335,12 +368,20 @@ impl CodePage {
             CodePage::Cp850 => &CP850_HIGH,
             CodePage::Cp866 => &CP866_HIGH,
             CodePage::P8scii => &P8SCII_HIGH,
+            // The screen and the encoding part below 0x80 and nowhere else.
+            CodePage::Cp437Screen => &CP437_HIGH,
         }
     }
 
     /// What this page reads a byte as, or U+FFFD where it defines nothing.
+    ///
+    /// Every page is ASCII below 0x80 except the one that is not a page: a DOS
+    /// screen drew a picture for the control characters, which is the whole
+    /// reason that entry exists.
     pub fn char_of(self, b: u8) -> char {
-        if b < 0x80 {
+        if self == CodePage::Cp437Screen {
+            cp437_screen_char(b)
+        } else if b < 0x80 {
             b as char
         } else {
             self.high()[(b - 0x80) as usize]
@@ -409,6 +450,7 @@ pub fn settle(enc: &Encoding, head: &[u8]) -> (Settled, usize, Option<String>) {
         Encoding::Latin1 => (Settled::Latin1, 0, None),
         Encoding::Cp437 => (Settled::Cp437, 0, None),
         Encoding::P8scii => (Settled::SingleByte(CodePage::P8scii), 0, None),
+        Encoding::Cp437Screen => (Settled::SingleByte(CodePage::Cp437Screen), 0, None),
         Encoding::Utf16(e) => (Settled::Utf16(*e), 0, None),
         Encoding::Bom { fallback } => match head {
             [0xef, 0xbb, 0xbf, ..] => (Settled::Utf8, 3, Some("Read as UTF-8, from a byte-order mark".into())),

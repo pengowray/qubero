@@ -152,6 +152,7 @@ mod utmp;
 mod vpk;
 mod w4v;
 mod wad;
+mod wad_names;
 mod xar;
 mod xz;
 mod wav;
