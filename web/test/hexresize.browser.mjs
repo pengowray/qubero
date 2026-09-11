@@ -85,33 +85,63 @@ try {
       ledgerAgrees: Math.abs(view.ledger.heightOf(0) - narrow) < 1.5,
     };
 
-    // Down the file, so there is something measured to keep, and part way into
-    // a row again.
-    view.scrollTo(40);
-    await new Promise((r) => requestAnimationFrame(r));
-    view.topPx = 12;
-    view.render();
-    await new Promise((r) => requestAnimationFrame(r));
-    const at = { row: view.topRow, px: view.topPx, height: view.ledger.heightOf(view.topRow), total: view.ledger.totalHeight(), first: view.ledger.heightOf(0) };
-
-    // The same width, a different height: nothing about a row changes.
-    size(700, 600);
-    await new Promise((r) => requestAnimationFrame(r));
-    const onHeight = {
-      keptPlace: view.topRow === at.row && view.topPx === at.px,
-      keptHeights: view.ledger.heightOf(at.row) === at.height,
-      keptTotal: view.ledger.totalHeight() >= at.total,
-      // A row nowhere near the view, and the only way to know how tall it is
-      // is to have measured it: forgetting it would take the total with it.
-      keptRowsOffScreen: view.ledger.heightOf(0) === at.first && at.first > view.ledger.baseHeight,
+    // A box that is only a different height, in both arrangements: the chips
+    // beside the bytes, and the chips under them in a box too narrow to hold a
+    // column beside. Neither can rewrap for a height, so neither may move.
+    const sameWidth = async (w, from, to) => {
+      size(w, from);
+      await new Promise((r) => requestAnimationFrame(r));
+      // Over the first row at this width, so that it has been measured at this
+      // width and what the ledger says about it means something.
+      view.scrollTo(0);
+      await new Promise((r) => requestAnimationFrame(r));
+      // Down the file, so there is something measured to keep, and part way
+      // into a row again.
+      view.scrollTo(40);
+      await new Promise((r) => requestAnimationFrame(r));
+      view.topPx = 12;
+      view.render();
+      await new Promise((r) => requestAnimationFrame(r));
+      const at = { row: view.topRow, px: view.topPx, height: view.ledger.heightOf(view.topRow), total: view.ledger.totalHeight(), first: view.ledger.heightOf(0) };
+      size(w, to);
+      await new Promise((r) => requestAnimationFrame(r));
+      return {
+        arrangement: view.arrangement,
+        at,
+        checks: {
+          keptPlace: view.topRow === at.row && view.topPx === at.px,
+          keptHeights: view.ledger.heightOf(at.row) === at.height,
+          keptTotal: view.ledger.totalHeight() >= at.total,
+          // A row nowhere near the view, and the only way to know how tall it
+          // is is to have measured it: forgetting it would take the total with
+          // it.
+          keptRowsOffScreen: view.ledger.heightOf(0) === at.first && at.first > view.ledger.baseHeight,
+        },
+      };
     };
-    return { onWidth, onHeight, wide, narrow, at };
+    // 800 rather than the widest box there is: a row wide enough to hold every
+    // chip on one line is the base height, and a ledger that had been emptied
+    // would answer the same for it, so the check would pass without meaning
+    // anything.
+    const onHeightNarrow = await sameWidth(700, 800, 600);
+    const onHeightWide = await sameWidth(800, 800, 600);
+    return {
+      onWidth,
+      onHeightNarrow: onHeightNarrow.checks,
+      onHeightWide: onHeightWide.checks,
+      arrangements: { narrow: onHeightNarrow.arrangement, wide: onHeightWide.arrangement },
+      wide,
+      narrow,
+      at: { narrow: onHeightNarrow.at, wide: onHeightWide.at },
+    };
   });
   console.log(JSON.stringify(result, null, 2));
-  for (const [group, checks] of Object.entries(result)) {
-    if (typeof checks !== "object") continue;
-    for (const [name, ok] of Object.entries(checks)) assert(ok, `${group}.${name}`);
+  for (const group of ["onWidth", "onHeightNarrow", "onHeightWide"]) {
+    for (const [name, ok] of Object.entries(result[group])) assert(ok, `${group}.${name}`);
   }
+  // The two same-width legs are only worth running if they were in different
+  // arrangements: a check that passed twice in one of them says half as much.
+  assert(result.arrangements.narrow !== result.arrangements.wide, "arrangements differ");
 } finally {
   await browser.close();
 }
