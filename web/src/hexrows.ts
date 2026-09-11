@@ -609,7 +609,7 @@ export class HexRows {
     }
   }
 
-  ensure(want: number): void {
+  ensure(want: number, shrink = true): void {
     while (this.rowEls.length < want) {
       const r = document.createElement("div");
       r.className = "hv-row";
@@ -617,9 +617,19 @@ export class HexRows {
       this.inner.append(r);
       this.rowEls.push(r);
     }
-    while (this.rowEls.length > want) {
-      this.rowEls.pop()?.remove();
-      this.parts.pop();
+    // `shrink` is false while a finger is on a row. Taking an element out of
+    // the document is a touch the browser calls off, which stops the drag that
+    // is scrolling the view, and the pool is not in screen order: the element
+    // this would pop holds whichever file row it last drew, which can be the
+    // row under the finger while the row is still on screen. So a viewport
+    // that got smaller mid-drag keeps its spare rows until the finger lifts.
+    // They go on being drawn below the bottom edge for the length of the drag,
+    // which is a few rows of work against a drag that stops dead.
+    if (shrink) {
+      while (this.rowEls.length > want) {
+        this.rowEls.pop()?.remove();
+        this.parts.pop();
+      }
     }
     // What `place` last worked out is about a pool that is no longer this
     // size. Trimmed rather than emptied: `rows` is read between here and the
@@ -628,7 +638,7 @@ export class HexRows {
     // all. A pool that grew leaves the old window standing, which is a true
     // answer about fewer rows than there now are, and `place` replaces it
     // whole on the next draw either way.
-    if (this.win.length > want) {
+    if (shrink && this.win.length > want) {
       this.win.length = want;
       this.winEls.length = want;
     }

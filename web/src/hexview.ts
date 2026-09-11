@@ -733,7 +733,7 @@ export class HexView {
    */
   private fitRows(): void {
     if (this.fit !== null) {
-      this.grid.ensure(this.visibleRows);
+      this.grid.ensure(this.visibleRows, this.dragging === null);
       return;
     }
     const probe = this.grid.rows[0];
@@ -764,8 +764,9 @@ export class HexView {
     this.rebuildStructural();
     if (probe !== undefined) this.fit = { rowHeight: this.rowHeight, visibleRows: fit };
     // Unconditional: on the first pass there are no row elements yet, however
-    // many of them fit.
-    this.grid.ensure(this.visibleRows);
+    // many of them fit. Not the shrinking half of it, though, while a finger
+    // is on a row: see `ensure`.
+    this.grid.ensure(this.visibleRows, this.dragging === null);
   }
 
   // ----- cursor & scrolling -----
@@ -1155,6 +1156,10 @@ export class HexView {
     if (!this.dragging) return;
     const { startY, startPx, lastT, velocity } = this.dragging;
     this.dragging = null;
+    // The finger is off, so a pool held open through the drag can be trimmed
+    // now. It is only ever bigger than the view if the viewport shrank while
+    // the drag was running.
+    this.grid.ensure(this.visibleRows);
     if (Math.abs(startY - e.clientY) <= 6) return void this.clickCell(e.target);
     // A finger that came to rest before lifting was placing the view, not
     // throwing it, however fast it was moving a moment earlier.

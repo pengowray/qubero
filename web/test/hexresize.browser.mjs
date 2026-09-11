@@ -125,8 +125,40 @@ try {
     // anything.
     const onHeightNarrow = await sameWidth(700, 800, 600);
     const onHeightWide = await sameWidth(800, 800, 600);
+
+    // A viewport that gets smaller during a touch drag. A phone does this by
+    // itself: the URL bar comes back while a finger is on the screen. Trimming
+    // the row pool there takes an element out of the document, the browser
+    // calls the touch off, and the drag stops dead part way down the file. The
+    // pool is not in screen order either, so the element trimmed is whichever
+    // file row it last drew and can be the one under the finger.
+    size(800, 800);
+    await new Promise((r) => requestAnimationFrame(r));
+    const rowsEl = view.el.querySelector(".hv-rows");
+    // A synthetic pointer has no capture to take; the drag itself is real.
+    const capture = rowsEl.setPointerCapture.bind(rowsEl);
+    rowsEl.setPointerCapture = () => {};
+    const pool = [...view.grid.rows];
+    const under = pool[Math.min(10, pool.length - 1)];
+    const touch = (type, clientY) =>
+      rowsEl.dispatchEvent(new PointerEvent(type, { pointerId: 1, pointerType: "touch", clientY, bubbles: true }));
+    touch("pointerdown", 400);
+    touch("pointermove", 380);
+    size(800, 380);
+    await new Promise((r) => requestAnimationFrame(r));
+    const onShrinkUnderFinger = {
+      poolWholeUnderFinger: pool.every((row) => row.isConnected),
+      rowUnderFingerStillThere: under.isConnected,
+    };
+    touch("pointerup", 360);
+    await new Promise((r) => requestAnimationFrame(r));
+    // And the pool really did have rows to give up, so the check above is not
+    // passing because nothing was ever going to be trimmed.
+    onShrinkUnderFinger.trimmedOnceTheFingerIsOff = view.grid.rows.length < pool.length;
+    rowsEl.setPointerCapture = capture;
     return {
       onWidth,
+      onShrinkUnderFinger,
       onHeightNarrow: onHeightNarrow.checks,
       onHeightWide: onHeightWide.checks,
       arrangements: { narrow: onHeightNarrow.arrangement, wide: onHeightWide.arrangement },
@@ -136,7 +168,7 @@ try {
     };
   });
   console.log(JSON.stringify(result, null, 2));
-  for (const group of ["onWidth", "onHeightNarrow", "onHeightWide"]) {
+  for (const group of ["onWidth", "onShrinkUnderFinger", "onHeightNarrow", "onHeightWide"]) {
     for (const [name, ok] of Object.entries(result[group])) assert(ok, `${group}.${name}`);
   }
   // The two same-width legs are only worth running if they were in different
