@@ -366,11 +366,11 @@ export function boxTitle(tree: Tree, box: Box): string {
 /**
  * What the pressed box is, written out for under the picture.
  *
- * Strings and not elements, which is the one place this file breaks its own
- * pattern on purpose: the readout is the longest piece of reasoning on the
- * panel, every line of it turns on which version and which job the tree is,
- * and a list of strings is a thing a test can read. The panel wraps each one
- * in a `div` and nothing is lost.
+ * Strings and not elements, as `rowLines` gives data and not elements: what
+ * belongs to the picture is which words a tree gets, which turns on its
+ * version and its job and is the part worth a test, and what belongs to the
+ * panel is the `div` around each one. Nothing is lost by the split, and what
+ * is gained is that these two can be read without a document.
  *
  * A box naming a node the tree does not have gives an empty list rather than
  * leaving the last readout up. It cannot happen, because every box was built

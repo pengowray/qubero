@@ -315,6 +315,27 @@ test("a walk that stopped above the bottom row prints no band and no count", () 
   assert.equal(leafBand(tree), null);
 });
 
+test("a capped version 2 walk weighs less than the band, and the band still stands", () => {
+  // The one place the root's weight and the band's count are meant to differ.
+  // The band prints the header's `record_count`, which is true of the whole
+  // tree whatever the walk reached; the weight is what the walk actually
+  // found. Making them agree here would mean either inventing records the
+  // walk never saw or printing a total the file disagrees with, and
+  // `omitted` is the line that accounts for the gap.
+  const leaf = (entries: number): Spec => ({ entries, kind: "leaf", level: 0 });
+  const tree = build({
+    version: 2,
+    job: "chunk",
+    record_type: 10,
+    records_total: 400,
+    omitted: 3,
+    root: { entries: 4, kind: "index", level: 1, kids: [84, 84].map(leaf) },
+  });
+  assert.equal(leafCount(tree), 400);
+  assert.equal(place(tree, WIDTH)[0]?.weight, 4 + 168);
+  assert.notEqual(leafBand(tree), null);
+});
+
 test("the band says links or chunks in words, over the count that is weighed", () => {
   // The band's label and the root's weight are the same number, so a reader
   // comparing the widest box with the line under it is comparing one fact.
