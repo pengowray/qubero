@@ -47,7 +47,13 @@ try {
     const load = performance.now() - start;
     await new Promise(resolve => requestAnimationFrame(resolve));
     const headerNode = view.grid.header.firstChild;
-    const cell = view.grid.cellFor(0, 0);
+    // A cell by the address it holds. An element stands for a file row and not
+    // for a place on screen, so asking for "the cell at slot 0" after a scroll
+    // asks about a different row and tells you nothing about reuse.
+    const cellAt = off => view.el.querySelector(`.hv-hex [data-off="${off}"]`);
+    // The pool is never taken apart. Which row is drawn in which element
+    // changes as the view moves; the set of elements does not.
+    const pool = new Set(view.grid.rows);
     for (let i = 0; i < 60; i++) {
       view.scrollToY(2000 + i * 20);
       await new Promise(resolve => requestAnimationFrame(resolve));
@@ -55,8 +61,19 @@ try {
     const checks = {
       headerReused: headerNode === view.grid.header.firstChild,
       spansReused: timings.spans.length === 1,
-      cellsReused: cell === view.grid.cellFor(0, 0),
+      poolReused: view.grid.rows.every(row => pool.has(row)),
     };
+    // And an element follows the address it holds: a row still on screen after
+    // a scroll is still drawn in the element it was drawn in before. Taken
+    // from the middle of the view so it survives the scroll either way.
+    const held = view.grid.cellFor(15, 0);
+    const heldOff = held.dataset.off;
+    view.scrollToY(2000 + 59 * 20 + 120);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    // It really did move up the screen, so identity is not being read off an
+    // element that never left its slot.
+    checks.cellMoved = view.grid.cellFor(15, 0) !== held;
+    checks.cellFollowsAddress = cellAt(heldOff) === held;
     const calls = timings.spans.length;
     doc.overwrite(48, Uint8Array.of(123));
     checks.editsInvalidate = timings.spans.length > calls;
@@ -64,11 +81,17 @@ try {
     checks.editVisible = view.el.querySelector('.hv-hex [data-off="48"]').textContent === "7b";
     view.setCursor(doc.lengthBytes - 8);
     checks.boundaryRefetched = view.fetch.spanCache.spans.some(s => s.value === "IEND");
-    // Growing the viewport needs more rows, but leaves existing cells alive.
-    const first = view.grid.cellFor(0, 0);
+    // Growing the viewport needs more rows, but leaves the ones already drawn
+    // alive and in the elements they were drawn in. Not asked of the top row:
+    // a resize keeps the reader on the same byte, which can put a different
+    // row at the top, and that is the resize working rather than failing.
+    const anchored = view.grid.cellFor(2, 0);
+    const anchoredOff = anchored.dataset.off;
     view.el.style.height = "760px";
     view.relayout();
-    checks.resizeReusesCells = first === view.grid.cellFor(0, 0);
+    checks.resizeKeepsCells = cellAt(anchoredOff) === anchored;
+    // A different row width is a different row, so here the elements do go.
+    const first = view.grid.cellFor(0, 0);
     view.setBytesPerRow(32);
     checks.widthChangesCells = first !== view.grid.cellFor(0, 0) && view.grid.cellFor(0, 31) !== undefined;
     view.el.hidden = true;
