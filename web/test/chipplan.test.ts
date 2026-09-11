@@ -24,6 +24,7 @@ import {
   rowNoteKey,
   sameList,
   type Chip,
+  type ChipBlock,
 } from "../src/chipplan.ts";
 
 /** A span with everything a chip reads, and the rest at its resting value. */
@@ -362,6 +363,17 @@ test("the key changes when a chip's name or value changes, and not otherwise", (
   assert.notEqual(rowNoteKey(one.blocks, false), rowNoteKey(other.blocks, false));
   // The note that the column has stopped listing fields is part of the key.
   assert.notEqual(rowNoteKey(one.blocks, false), rowNoteKey(one.blocks, true));
+});
+
+test("two fields that read the same in different structures are not the same key", () => {
+  // What a recycled element used to be handed: same name, same value, a
+  // different field. The chip kept the tooltip and the press path of the one
+  // it drew before.
+  const at = (path: number[]): Chip => ({ span: span({ path, name: "length", offset_bits: 0, size_bits: 16, value: "64" }), carried: false, run: [] });
+  assert.notEqual(rowNoteKey(plan([at([3, 0])]).blocks, false), rowNoteKey(plan([at([4, 0])]).blocks, false));
+  const pinned = (path: number[]): ChipBlock | null =>
+    plan([{ span: span({ path, name: "length", offset_bits: 0, size_bits: 800, value: "64" }), carried: true, run: [] }], { top: true }).pinned;
+  assert.notEqual(pinnedNoteKey(pinned([3, 0])), pinnedNoteKey(pinned([4, 0])));
 });
 
 test("the key names the first field that did not fit, so a changed tooltip is redrawn", () => {

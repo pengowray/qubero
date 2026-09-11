@@ -369,6 +369,19 @@ function pieceHeight(o: RowChipOpts, blockHeight: number): number {
 
 /** What a row's chips say, as one string, so they are written again only when
  *  they would say something else. */
+/** Which field a chip is, for the keys below.
+ *
+ *  The keys say when a chip has to be written again, and they used to say it
+ *  from what the chip *reads*: its name and its value. Two fields with the
+ *  same name and the same value in different structures keyed the same, so an
+ *  element recycled from one to the other kept the first one's tooltip and
+ *  followed its path when pressed. The path is what a chip actually is, and
+ *  putting it first leaves the name and the value after a run of digits and
+ *  dots that no name starts with. */
+function fieldKey(c: Chip | undefined): string {
+  return c === undefined ? "" : `${c.span.path.join(".")}|`;
+}
+
 export function rowNoteKey(blocks: readonly ChipBlock[], trailer: boolean): string {
   const block = (b: ChipBlock | null): string =>
     b === null
@@ -382,7 +395,7 @@ export function rowNoteKey(blocks: readonly ChipBlock[], trailer: boolean): stri
           // The mark for an element of an opened-out run: it shows no name, so
           // a chip reused from a named one would otherwise say the same thing
           // here and keep the class it was drawn with.
-          .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${b.entries[i]?.element === true ? "\u00b7" : ""}${t.name}${t.detail}`)
+          .map((t, i) => `${b.entries[i]?.carried === true ? "^" : ""}${b.entries[i]?.element === true ? "\u00b7" : ""}${fieldKey(b.entries[i])}${t.name}${t.detail}`)
           .join("");
   return `${trailer ? "+" : ""}${blocks.map(block).join("")}`;
 }
@@ -395,6 +408,6 @@ export function pinnedNoteKey(b: ChipBlock | null): string {
     : `${b.shown}/${b.entries.length}~` +
         b.texts
           .slice(0, b.shown)
-          .map((t) => `${t.name}${t.detail}`)
+          .map((t, i) => `${fieldKey(b.entries[i])}${t.name}${t.detail}`)
           .join("");
 }

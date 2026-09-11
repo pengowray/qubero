@@ -265,12 +265,13 @@ export class HexRows {
    *    element through `noteKey` or through the `hv-row-top` class written
    *    below.
    *
-   * One gap in that, which this did not open and does not close: `noteKey` is
-   * built from what a chip *says*, not from which field it is. Two fields with
-   * the same name and the same value in different structures key the same, and
-   * an element recycled from one to the other keeps the tooltip and the path a
-   * press on it follows. It was as possible before, when every element drew a
-   * new row every scroll; a recycled element is now the only way to reach it.
+   * `noteKey` was built from what a chip *says* and not from which field it is,
+   * which left two fields with the same name and the same value in different
+   * structures keying the same: an element recycled from one to the other kept
+   * the tooltip and the path a press on it follows. It was as possible before,
+   * when every element drew a new row every scroll, but a recycled element made
+   * it the ordinary way in rather than the rare one. The field's path is part
+   * of the key now; see `fieldKey` in `chipplan.ts`.
    *
    * None of this was left to reasoning: `web/tools/staleness.mjs` runs the same
    * script of scrolls, cursor moves, selections, an edit, mode changes, resizes
