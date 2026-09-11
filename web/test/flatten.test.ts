@@ -777,6 +777,121 @@ test("a part that points somewhere else is measured where it points", () => {
   assert.deepEqual(order, ["heading", "gap", "heading", "gap"]);
 });
 
+// A pointer and what it points at, the way the core hands the pair over: the
+// field costs no bytes where it stands, its type says it points, and its one
+// child carries the field's own name and the real type. HDF5 is made of
+// these, and the pair is drawn as one item. See `hop` in `flatten`.
+const HOPS: Spec = {
+  name: "file",
+  bytes: 0x220,
+  kids: [
+    { name: "magic", bytes: 8 },
+    {
+      name: "object",
+      bytes: 0,
+      type: "at → ObjectHeader",
+      kids: [
+        {
+          name: "object",
+          bytes: 2,
+          at: 0x100,
+          type: "ObjectHeader",
+          kids: [
+            { name: "version", bytes: 1 },
+            { name: "count", bytes: 1 },
+            {
+              name: "messages",
+              bytes: 0,
+              type: "at → Message[]",
+              kids: [{ name: "messages", bytes: 0x20, at: 0x200, type: "Message[]", kids: [{ name: "[0]", bytes: 0x20 }] }],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** The items carrying a field of this name, in the order they are drawn. */
+function named(items: readonly Item[], name: string): Item[] {
+  return items.filter((i) => (i.kind === "row" || i.kind === "heading") && i.node?.name === name);
+}
+
+function viaOf(item: Item | undefined): string | null | undefined {
+  return item !== undefined && (item.kind === "row" || item.kind === "heading") ? item.via : undefined;
+}
+
+test("a pointer and what it points at are one item, and it is at what it points at", () => {
+  const items = run(HOPS).items;
+  // Not two rows a level apart saying `object` twice.
+  const object = named(items, "object");
+  assert.equal(object.length, 1, JSON.stringify(shape(items)));
+  assert.equal(object[0]?.offsetBits, 0x100 * 8);
+  assert.equal(object[0]?.sizeBits, 2 * 8);
+  // The path is the target's, since that is the node a click on the bytes
+  // finds and the node the inspector has anything to say about.
+  assert.deepEqual(object[0]?.path, [1, 0]);
+  // And the pointing field's type is what says the bytes are elsewhere.
+  assert.equal(viaOf(object[0]), "at → ObjectHeader");
+});
+
+test("a pointer inside what a pointer points at hops again", () => {
+  const items = run(HOPS).items;
+  const messages = named(items, "messages");
+  assert.equal(messages.length, 1, JSON.stringify(shape(items)));
+  assert.equal(messages[0]?.offsetBits, 0x200 * 8);
+  assert.deepEqual(messages[0]?.path, [1, 0, 2, 0]);
+  assert.equal(viaOf(messages[0]), "at → Message[]");
+  // Two hops, and the deepest row is the element of the list at the far end
+  // of the second one. Without the collapse it sits two levels lower.
+  assert.equal(Math.max(...items.map((i) => i.depth)), 2);
+});
+
+test("a list that holds one element is not a pointer", () => {
+  // The same shape from the outside: no bytes of its own and one child. What
+  // tells them apart is the name, since a pointer hands its own name to the
+  // one thing it points at and a list calls its elements `[0]`, `[1]`, … .
+  const list: Spec = {
+    name: "file",
+    bytes: 0x100,
+    kids: [
+      { name: "head", bytes: 8 },
+      { name: "entries", bytes: 0, type: "offsets → Entry", kids: [{ name: "[0]", bytes: 16, at: 0x40, type: "Entry", kids: [{ name: "a", bytes: 16 }] }] },
+    ],
+  };
+  const items = run(list).items;
+  assert.equal(named(items, "entries").length, 1, JSON.stringify(shape(items)));
+  assert.equal(named(items, "[0]").length, 1, JSON.stringify(shape(items)));
+  assert.equal(viaOf(named(items, "entries")[0]), null);
+});
+
+test("a pointer that leads nowhere keeps its own row", () => {
+  // A null address, a ring, or an offset past the end: the core has a field
+  // that points and nothing to hand back for it. There is one node there, so
+  // there is one row, and it is the pointer where the pointer is.
+  const dangling: Spec = {
+    name: "file",
+    bytes: 0x100,
+    kids: [{ name: "magic", bytes: 8 }, { name: "object", bytes: 0, type: "at → ObjectHeader", count: 1, kids: [] }],
+  };
+  const items = run(dangling).items;
+  const object = named(items, "object");
+  assert.equal(object.length, 1, JSON.stringify(shape(items)));
+  assert.equal(object[0]?.offsetBits, 8 * 8);
+  assert.equal(object[0]?.sizeBits, 0);
+  assert.equal(viaOf(object[0]), null);
+});
+
+test("a pointer whose bytes have not arrived is left alone until they do", () => {
+  const waiting = run(HOPS, emptyState, new Set(["1"]));
+  assert.ok(waiting.pending);
+  const object = named(waiting.items, "object");
+  assert.equal(object.length, 1);
+  assert.equal(viaOf(object[0]), null);
+  // And the walk after the bytes land is the collapsed one.
+  assert.equal(viaOf(named(run(HOPS).items, "object")[0]), "at → ObjectHeader");
+});
+
 test("a hole between two parts of the file is a row of its own", () => {
   const split: Spec = {
     name: "file",
@@ -806,7 +921,11 @@ function foldKey(item: Item): string | null {
 }
 
 function ids(items: readonly Item[]): string[] {
-  return items.map((i) => `${i.key} ${i.section}/${i.depth} @${i.offsetBits}+${i.sizeBits}`);
+  // `via` is in here because a walk of one item has to work out again what
+  // the whole walk worked out: an item standing for a pointer and its target
+  // holds the target, so a second walk of it has nothing left to hop and
+  // would drop the mark without this.
+  return items.map((i) => `${i.key} ${i.section}/${i.depth} @${i.offsetBits}+${i.sizeBits} ${viaOf(i) ?? ""}`);
 }
 
 /** Every fold in the list, opened one at a time and shut again, both ways
@@ -837,6 +956,7 @@ test("opening one fold gives the list a whole walk would", () => {
   assert.ok(foldsAgree(SQLITE) > 0);
   assert.ok(foldsAgree(GGUF) > 0);
   assert.ok(foldsAgree(ZIP_TAIL) >= 0);
+  assert.ok(foldsAgree(HOPS) > 0);
 });
 
 test("closing one fold gives the list a whole walk would", () => {

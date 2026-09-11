@@ -3107,6 +3107,15 @@ button.insp-xrow-where:hover {
   text-overflow: ellipsis;
   color: var(--muted);
 }
+/* What a part was reached through, on the heading of a part reached by an
+   address rather than by lying next to what came before it. A row says the
+   same thing in its type column; a heading has no type column, so it says it
+   here, in the type column's colour and typeface. */
+.rp-via {
+  flex: none;
+  font-family: var(--mono);
+  color: var(--muted);
+}
 /* The mark on a row that has something under it. A fixed width whether or not
    there is a mark, so the names below a heading still line up. */
 .rp-twist {

@@ -2606,6 +2606,25 @@ export class Inspector {
         continue;
       }
       const n = node.node;
+      // A field that reads its contents somewhere else and the thing it points
+      // at are one step, the way the listing draws them as one row: the
+      // pointer's type names what is there and says it was reached by address,
+      // and the crumb goes to the target, which is where the bytes are.
+      // Pointers nest, and the outermost type already reads `at → at → X`,
+      // so the whole run of them is the one step. See `hop` in `flatten`.
+      let at = n;
+      let past = i;
+      while (past < path.length && path[past] === 0 && at.size_bits === 0 && at.composite && at.child_count === 1) {
+        const next = this.doc.templateNode(path.slice(0, past + 1));
+        if (next.status !== "ok" || next.node.name !== at.name) break;
+        at = next.node;
+        past += 1;
+      }
+      if (past > i) {
+        items.push({ label: `${n.name} (${n.type})`, path: path.slice(0, past), here: past === path.length });
+        i = past;
+        continue;
+      }
       const isList = n.composite && n.type.endsWith("[]");
       if (isList && i < path.length) {
         // Fold the element index into the list's own name.
