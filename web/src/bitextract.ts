@@ -6,7 +6,7 @@ import { bitFormula, formatLength, formatOffset } from "./doc.ts";
 import { BYTE_NOTE } from "./strings.ts";
 
 /** Where a run of bits starts and how far it runs, both in the editor's own
- *  notation: `0x27ba64d3, len: 0+4b`. */
+ *  notation: `@0x27ba64d3, len: 0+4b`. */
 export function whereLine(bit: number, width: number): HTMLElement {
   const e = document.createElement("div");
   e.className = "insp-formula-where";

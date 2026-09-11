@@ -285,7 +285,7 @@ test("the cells still join back into the string they came from", () => {
 });
 
 test("only the plus that begins an address says what it counts from", () => {
-  // `formatOffset` writes a sub-byte address as `0x69+7b`, where the plus
+  // `formatOffset` writes a sub-byte address as `@0x69+7b`, where the plus
   // means seven bits past the byte. It is a third meaning of the same glyph,
   // and putting the stream answer on it would be a wrong answer on a mark
   // that promises a right one.
@@ -296,8 +296,21 @@ test("only the plus that begins an address says what it counts from", () => {
   assert.equal(marks("+0x1c to +0x1e"), 2);
   // And a stream address that is itself sub-byte marks only its front.
   assert.equal(marks("+0x1c+3b"), 1);
+  // The same again with the address mark in front, which is the form every
+  // one of these now reaches the screen in. The `@` moves the front of the
+  // address one character along, and the rule has to follow it.
+  assert.equal(marks("@0x69+7b"), 0);
+  assert.equal(marks("@+0x1c"), 1);
+  assert.equal(marks("@+0x1c to @+0x1e"), 2);
+  assert.equal(marks("@+0x1c+3b"), 1);
+  assert.equal(marks("@0x40"), 0);
+  // The mark itself is never the marked piece: it stays in the plain text
+  // beside the number, with no hover of its own.
+  assert.equal(addressParts("@+0x1c").filter((p) => p.mark)[0]?.text, "+");
+  // A file address inside a sentence, as the Properties rows write it.
+  assert.equal(marks("@+0x14 in section_headers[3]"), 1);
   // The pieces still join back into what they came from.
-  for (const t of ["0x69+7b", "+0x1c", "+0x1c to +0x1e", "+0x1c+3b", "0x40"]) {
+  for (const t of ["0x69+7b", "+0x1c", "+0x1c to +0x1e", "+0x1c+3b", "0x40", "@0x69+7b", "@+0x1c", "@+0x1c to @+0x1e", "@+0x1c+3b", "@0x40"]) {
     assert.equal(addressParts(t).map((p) => p.text).join(""), t);
   }
 });

@@ -5,7 +5,7 @@
 // The cursor is a bit position, so these readings start wherever it is: put the
 // cursor three bits into a byte and the rows show what a u16 there would say.
 
-import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
+import { ADDRESS_MARK, formatAddress, formatBytes, formatOffset, offsetDigits } from "./doc.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
 import { address } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
@@ -1485,7 +1485,7 @@ export class Inspector {
       b.type = "button";
       b.className = "insp-goto";
       // The last byte's address, not the bit before the end: `formatOffset` of
-      // one bit short of the boundary reads `0x39+7b`, which is a bit position
+      // one bit short of the boundary reads `@0x39+7b`, which is a bit position
       // and not an address a reader can go to.
       b.textContent = CHECKED.range(formatOffset(run.at * 8), formatOffset((run.at + run.bytes - 1) * 8), formatBytes(run.bytes));
       b.addEventListener("click", () => this.onGoTo(run.at * 8, [{ startBit: run.at * 8, endBit: (run.at + run.bytes) * 8 }]));
@@ -2960,7 +2960,7 @@ function insideRow(name: string, delta: number, path: readonly number[]): HTMLEl
   row.dataset["path"] = path.join("/");
   const what = document.createElement("span");
   what.className = "insp-origin-name";
-  what.append(...address(PROPERTIES.withinAt(name, `+${formatOffset(delta)}`), PROPERTIES.withinPlusTitle(name)));
+  what.append(...address(PROPERTIES.withinAt(name, `${ADDRESS_MARK}+${offsetDigits(delta)}`), PROPERTIES.withinPlusTitle(name)));
   row.append(what);
   return row;
 }

@@ -1,7 +1,7 @@
 // Text that more than one view shows. Two views naming the same thing two ways
 // is the reader's problem, not a detail of whichever file happens to draw it.
 
-import { formatBytes, formatOffset } from "./format.ts";
+import { ADDRESS_MARK, formatBytes, formatOffset } from "./format.ts";
 // Type only, and erased: `doc.ts` imports this file at run time, and the
 // clause tables below are keyed by the words the core sends in `Shape`.
 import type { FieldTime, Shape } from "./doc.ts";
@@ -154,7 +154,7 @@ export const CHECKED = {
    */
   ownLabel: "Its own bytes",
   /**
-   * That row's fact: `0x94 to 0x9b · 8 B, summed as spaces (0x20)`. The
+   * That row's fact: `@0x94 to @0x9b · 8 B, summed as spaces (0x20)`. The
    * address first, in the same form as the `Covers` row, so the two sit in one
    * column and a reader can see that this run lies inside that one without
    * being told. The clause after the comma is the deviation, and the row only
@@ -344,15 +344,17 @@ export const UNPACKED = {
    * sentence should not have to know which it was handed.
    */
   originRow: (bits: string, file: string, step: string): string => `${bits} of ${file}: ${step}`,
-  /** One end of that range: `0x1a3.5` is bit 5 of byte 0x1a3. */
-  bit: (bit: number): string => `0x${Math.floor(bit / 8).toString(16)}.${bit % 8}`,
+  /** One end of that range: `@0x1a3.5` is bit 5 of byte 0x1a3. Marked like
+   *  every other address, since it is one, and it is read beside byte counts
+   *  and code numbers that are not. */
+  bit: (bit: number): string => `${ADDRESS_MARK}0x${Math.floor(bit / 8).toString(16)}.${bit % 8}`,
   /**
-   * The stretch of the compressed run a step read, noun and all: `bits 0x1a3.5
-   * to 0x1a4.2` is half-open, from the first bit up to but not including the
+   * The stretch of the compressed run a step read, noun and all: `bits @0x1a3.5
+   * to @0x1a4.2` is half-open, from the first bit up to but not including the
    * second.
    *
-   * A step that read nothing is `no bits at 0x6.0`. Its two ends are the same
-   * bit, and `bits 0x6.0 to 0x6.0` would put the step on a bit it never
+   * A step that read nothing is `no bits at @0x6.0`. Its two ends are the same
+   * bit, and `bits @0x6.0 to @0x6.0` would put the step on a bit it never
    * touched. This is the usual case for LZMA, not a corner of it: the range
    * coder pulls a byte only when its arithmetic runs short, so most symbols
    * pull none and one later symbol pulls the byte that paid for several. Two
@@ -533,14 +535,14 @@ export const DECODED = {
    *
    * `Written at`, not `Unpacks to`, which this replaces. The section's rule is
    * that the value is exactly the thing the label names, and `Unpacks to`
-   * names a value: read cold, `Unpacks to +0x0` says either "this code unpacks
-   * to what is at +0x0", which is wrong and which the `Literal byte` row two
+   * names a value: read cold, `Unpacks to @+0x0` says either "this code unpacks
+   * to what is at @+0x0", which is wrong and which the `Literal byte` row two
    * up has already answered, or "its output was written at +0x0", which is
    * right. `Written at` can only be read the second way.
    *
    * It also pairs with `endWrites` on the end-of-block row: one says a step
    * wrote nothing, the other says where a step's bytes went, on the same verb.
-   * The end mark has no row here at all, since `+0x1c` and a count of no bytes
+   * The end mark has no row here at all, since `@+0x1c` and a count of no bytes
    * would put it somewhere it never was.
    */
   writtenLabel: "Written at",
@@ -1331,7 +1333,7 @@ export const VALUES = {
 } as const;
 
 /** What `b[n]` means in a shift-and-mask expression. Worth saying, because the
- *  same panel writes `0x131+4b` for an address four bits into a byte, and one
+ *  same panel writes `@0x131+4b` for an address four bits into a byte, and one
  *  `b` there is bits and the other is bytes. */
 export const BYTE_NOTE = "b[n] is the byte at address n";
 
@@ -1463,8 +1465,10 @@ export const DUMP = {
     const cut = file.replace(/\.(txt|log|prn|asc|out|dump)$/i, "");
     return cut === file ? `${file} (bytes)` : cut;
   },
-  /** Where the dump starts, when it is not the front of a file. */
-  startsAt: (at: number): string => `from 0x${at.toString(16)}`,
+  /** Where the dump starts, when it is not the front of a file. The address
+   *  is marked because it is read in a line of prose, beside a byte count
+   *  that is not an address. */
+  startsAt: (at: number): string => `from ${formatOffset(at * 8)}`,
   /** The tab's tooltip: where these bytes came from. */
   origin: (file: string, tool: string): string => `Decoded from the ${tool === "" ? "hex" : tool} dump in ${file}`,
   /** Stretches the dump did not describe. They read as zeros; where that
@@ -1785,8 +1789,8 @@ export const PROPERTIES = {
   typeFrom: (field: string, value: string): string => (value === "" ? `from ${field}` : `from ${field} = ${value}`),
 
   /** Over the list of structures round the field, each with the field's
-   *  offset inside it: `section_headers[3]  +0x14`, nearest first. "Offset"
-   *  because that is what `+0x14` is; "within" because the rows are the
+   *  offset inside it: `section_headers[3]  @+0x14`, nearest first. "Offset"
+   *  because that is what `@+0x14` is; "within" because the rows are the
    *  things it is within. */
   within: "Offset within",
 
