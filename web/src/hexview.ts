@@ -1681,9 +1681,16 @@ export class HexView {
   private measure(f: Frame): { widened: boolean; refont: boolean; trackH: number } {
     const fields = f.fields;
     const below = f.below;
-    const read = fields && (this.chipFonts === null || this.valFonts === null) ? this.grid.fonts() : null;
-    const fonts = this.chipFonts === null ? (read?.chip ?? null) : null;
-    const valFonts = this.valFonts === null ? (read?.value ?? null) : null;
+    // Each font asked for only while it is still unknown, and the value cells'
+    // only on a frame that draws one. A file whose fields carry no table of
+    // values never draws a cell, so there was never an answer to remember and
+    // the question was put again every draw: a search of the grid, a computed
+    // style and a throwaway canvas, once a frame, for nothing. Measured on
+    // `hello.exe`, which has chips and no values, forty notches of wheel came
+    // to 380ms of drawing before and 344ms after, over four runs each.
+    const fonts = fields && this.chipFonts === null ? this.grid.chipFont() : null;
+    const valFonts =
+      fields && this.valFonts === null && f.values.some((v) => v.lines > 0) ? this.grid.valueFont() : null;
     let widened = false;
     let refont = false;
     if (valFonts !== null) {

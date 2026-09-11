@@ -169,15 +169,58 @@ export class HexRows {
    * chips a row holds and what it counts as left over; what the view scrolls
    * by has to be what the browser drew, or a row taller than it was reckoned
    * to be spills over the one below it.
+   *
+   * **This read looks like the draw's biggest cost and is not.** It shows up
+   * that way because `offsetHeight` makes the browser lay the page out before
+   * it answers, so the frame's layout happens inside this call and a timer
+   * around the draw charges the draw for it. Take the call out and the layout
+   * simply happens at the end of the frame instead, for the same money. Two
+   * ways of taking it out were measured against the same machine in the same
+   * session, three to four interleaved runs each, on `hello.exe`,
+   * `notes.sqlite` and `zarr-zip64.zip`, at viewports up to 1920x2400 where
+   * frames were being dropped:
+   *
+   *  - Answering from the prediction and never reading at all.
+   *  - Reading at the head of the next draw instead, off the rows the browser
+   *    has already laid out and painted, which is free.
+   *
+   * Both halved the browser's layout count, 52 to 30 over thirty wheel
+   * notches, and neither moved its layout time, its style time, its script
+   * time, how many draws a spin got through, or how many frames went late.
+   * The second layout was the cheap one: nothing had been written since the
+   * first, so there was nothing for it to redo. Both were reverted. Attacking
+   * this read again needs a reason better than its share of the draw timer,
+   * and `web/tools/wheelcost.mjs` will show you the same flat numbers.
+   *
+   * What the prediction is worth is a separate question, and it is worth a
+   * lot: measured against this read it is exact at the default width on every
+   * sample tried. At narrower widths a plain row's line box beats the
+   * stylesheet's minimum height and every row comes out a pixel or two taller
+   * than predicted, so nothing downstream should assume the two agree.
    */
   heights(predicted: readonly number[]): number[] {
     return predicted.map((h, i) => (h === 0 ? 0 : (this.rowEls[i]?.offsetHeight ?? h)));
   }
 
-  /** The fonts a chip's name and value are drawn in, and the one a value cell
-   *  is, read off elements that have been drawn. Null until there is one. */
-  fonts(): { chip: ChipMeasure | null; value: ChipMeasure | null } {
-    return { chip: readChipFonts(this.inner), value: readValFont(this.inner) };
+  /** The fonts a chip's name and its value are drawn in, read off a chip that
+   *  has been drawn. Null until there is one. */
+  chipFont(): ChipMeasure | null {
+    return readChipFonts(this.inner);
+  }
+
+  /**
+   * The font a value cell is drawn in, read off a cell that has been drawn.
+   * Null until there is one.
+   *
+   * Asked for on its own rather than beside the chips'. Most files draw no
+   * table of values at all, so that answer was null on every draw for ever and
+   * the caller, having nothing to remember, asked again next draw: a search of
+   * the whole grid, a computed style and a throwaway canvas, once a frame, for
+   * a font nothing was going to be measured in. The caller now asks only on a
+   * frame that has a cell to read.
+   */
+  valueFont(): ChipMeasure | null {
+    return readValFont(this.inner);
   }
 
   /** The side column's width and where it starts, read off the first row.
