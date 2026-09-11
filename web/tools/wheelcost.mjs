@@ -4,6 +4,13 @@
 //
 //   node web/tools/wheelcost.mjs --url http://localhost:2416/?url=/samples/notes.sqlite
 //
+// `--view listing` scrolls the listing instead, so the hex view's numbers have
+// something to be worse or better than. Draw counts do not carry across: the
+// hex view reads the wheel and redraws every row, the listing is scrolled by
+// the browser and keeps the rows whose keys are still on screen. What does
+// carry across is the `browser:` line, the frame gaps, and the `document:`
+// line counting what the scroll did to the document.
+//
 // Playwright comes from the global install; this package does not depend on it.
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -25,11 +32,17 @@ async function loadChromium() {
 }
 
 function parseArgs(argv) {
-  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24, css: "", links: false, spin: 0, every: 8 };
+  const a = { url: "http://localhost:2416/?url=/samples/notes.sqlite", notches: 6, delta: 100, width: 1280, height: 800, wait: 400, gap: 24, css: "", links: false, spin: 0, every: 8, view: "hex" };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = argv[i + 1];
     if (k === "--url") { a.url = v; i++; }
+    // Which view is scrolled. The listing draws rows too, and the reader's
+    // complaint is that the hex view is worse than it: the two are not
+    // comparable draw for draw, since the listing keeps the rows it already
+    // has and only tells them a new top, so what is worth comparing is what
+    // the browser spends and how many nodes the scroll touches.
+    else if (k === "--view") { a.view = v; i++; }
     else if (k === "--notches") { a.notches = Number(v); i++; }
     else if (k === "--delta") { a.delta = Number(v); i++; }
     else if (k === "--width") { a.width = Number(v); i++; }
@@ -50,13 +63,17 @@ function parseArgs(argv) {
 }
 
 /** Count every draw and time it, and time the layout the browser does after. */
-const INSTRUMENT = () => {
-  const v = window.__qubero.view;
+const INSTRUMENT = (which) => {
+  const listing = which === "listing";
+  const v = listing ? window.__qubero.structure : window.__qubero.view;
   const proto = Object.getPrototypeOf(v);
-  const state = { draws: 0, drawMs: 0, deepest: 0, depth: 0, top: 0, longest: 0, frames: 0 };
+  const state = { draws: 0, drawMs: 0, deepest: 0, depth: 0, top: 0, longest: 0, frames: 0, nodes: 0, moves: 0, text: 0 };
   window.__wc = state;
-  const render = proto.render;
-  proto.render = function patched() {
+  // The hex view draws from `render`; the listing from `paint`, which the
+  // scroller's own event calls. Both are the whole of a draw.
+  const drawName = listing ? "paint" : "render";
+  const render = proto[drawName];
+  proto[drawName] = function patched() {
     const outer = state.depth === 0;
     if (outer) state.top++;
     state.depth++;
@@ -98,10 +115,29 @@ const INSTRUMENT = () => {
       };
     }
   };
-  time(proto, ["frame", "placeSpans", "planValues", "measure", "settleHeights", "finish", "fitRows", "markHover", "relayout"]);
-  const rows = v.grid ?? v.rows;
-  if (rows !== undefined) {
-    time(Object.getPrototypeOf(rows), ["write", "heights", "drawHeader", "drawRow", "drawCells", "drawNotes", "drawPinned", "layOutRow", "fitParts", "ensure", "noteMetrics", "hexPitch"], "rows.");
+  if (listing) time(proto, ["paint", "rebuild", "remeasure", "trail", "context", "indexAt", "nearestToSelection"]);
+  else {
+    time(proto, ["frame", "placeSpans", "planValues", "measure", "settleHeights", "finish", "fitRows", "markHover", "relayout"]);
+    const rows = v.grid ?? v.rows;
+    if (rows !== undefined) {
+      time(Object.getPrototypeOf(rows), ["write", "heights", "drawHeader", "drawRow", "drawCells", "drawNotes", "drawPinned", "layOutRow", "fitParts", "ensure", "noteMetrics", "hexPitch"], "rows.");
+    }
+  }
+  // What a scroll costs the document, on the one footing the two views share.
+  // The hex view keeps its rows and writes new text into their cells; the
+  // listing keeps the rows whose keys are still in the window and gives the
+  // rest new elements. Neither is readable as the other's draw count, so
+  // count what each of them does to the document instead: nodes added, tops
+  // and classes rewritten, and cells given new text.
+  const watched = document.querySelector(listing ? ".rp-scroll" : ".hv-rows");
+  if (watched !== null) {
+    new MutationObserver((records) => {
+      for (const r of records) {
+        if (r.type === "childList") state.nodes += r.addedNodes.length;
+        else if (r.type === "characterData") state.text++;
+        else state.moves++;
+      }
+    }).observe(watched, { subtree: true, childList: true, characterData: true, attributes: true });
   }
   // How evenly the browser got to paint: a frame it could not finish inside
   // its budget is a step the reader sees as a stall.
@@ -116,6 +152,7 @@ const INSTRUMENT = () => {
   requestAnimationFrame(tick);
   state.reset = () => {
     state.draws = 0; state.drawMs = 0; state.deepest = 0; state.top = 0; state.longest = 0; state.frames = 0;
+    state.nodes = 0; state.moves = 0; state.text = 0;
     for (const p of Object.values(state.parts)) { p.n = 0; p.ms = 0; }
     state.gaps.length = 0;
   };
@@ -208,8 +245,12 @@ const main = async () => {
     });
     await page.waitForTimeout(a.wait);
   }
+  if (a.view === "listing") {
+    await page.evaluate(() => window.__qubero.setView("listing"));
+    await page.waitForTimeout(a.wait);
+  }
   if (a.css !== "") await page.addStyleTag({ content: a.css });
-  await page.evaluate(INSTRUMENT);
+  await page.evaluate(INSTRUMENT, a.view);
 
   // What the browser itself spends, as against what the view's own code does:
   // style and layout are the bill a draw runs up and the forced read at the
@@ -221,18 +262,32 @@ const main = async () => {
     return Object.fromEntries(m.map((x) => [x.name, x.value]));
   };
 
-  const box = await page.locator(".hv-rows").first().boundingBox();
+  const box = await page.locator(a.view === "listing" ? ".rp-scroll" : ".hv-rows").first().boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+  // How far the view actually went. The hex view applies the wheel's own
+  // delta, so thirty notches of forty move it twelve hundred pixels; the
+  // listing is scrolled by the browser, which animates a wheel and drops what
+  // is left of one animation when the next report lands, so the same thirty
+  // notches move it a couple of hundred. Nothing per notch compares across the
+  // two until the distance is on the line beside it.
+  const where = async () =>
+    await page.evaluate(
+      (listing) => (listing ? (document.querySelector(".rp-scroll")?.scrollTop ?? 0) : window.__qubero.view.scrollY),
+      a.view === "listing",
+    );
 
   const run = async (label, dir) => {
     await page.evaluate(() => window.__wc.reset());
     const before = await metrics();
+    const wasAt = await where();
     const t0 = Date.now();
     for (let i = 0; i < a.notches; i++) {
       await page.mouse.wheel(0, dir * a.delta);
       if (a.gap > 0) await page.waitForTimeout(a.gap);
     }
     await page.waitForTimeout(a.wait);
+    const went = Math.abs((await where()) - wasAt);
     const s = await page.evaluate(() => ({ ...window.__wc, reset: undefined, parts: JSON.parse(JSON.stringify(window.__wc.parts)) }));
     const wall = Date.now() - t0;
     const after = await metrics();
@@ -254,6 +309,15 @@ const main = async () => {
       `       frames ${gaps.length}  frame ms median ${at(0.5).toFixed(1)}  p90 ${at(0.9).toFixed(1)}` +
         `  worst ${(gaps[gaps.length - 1] ?? 0).toFixed(1)}  over 32ms ${gaps.filter((g) => g > 32).length}`,
     );
+    const per = (n) => (went === 0 ? "-" : (n / (went / 1000)).toFixed(0));
+    console.log(
+      `       scrolled ${went}px  per 1000px: draws ${per(s.top)}  draw ms ${per(s.drawMs)}` +
+        `  style+layout ms ${per(spent("RecalcStyleDuration") + spent("LayoutDuration"))}`,
+    );
+    console.log(
+      `       document: nodes added ${s.nodes}  attributes ${s.moves}  text ${s.text}` +
+        `  per 1000px ${per(s.nodes + s.moves + s.text)}`,
+    );
     const parts = Object.entries(s.parts)
       .filter(([, p]) => p.ms >= 1)
       .sort((x, y) => y[1].ms - x[1].ms)
@@ -271,7 +335,12 @@ const main = async () => {
   // book a frame to ask what fields are on it. CDP's own `mouse.wheel` is paced
   // slower than a frame, so only reports made from inside the page tell these
   // apart.
-  const burst = await page.evaluate(() => {
+  // Only the hex view: it reads the wheel itself, so a report is a draw and
+  // the question is whether five of them in a frame are one. The listing is
+  // scrolled by the browser and draws from the scroll event, which the browser
+  // already fires once a frame; an untrusted `WheelEvent` scrolls nothing
+  // there, so the burst would count nothing.
+  const burst = a.view === "listing" ? null : await page.evaluate(() => {
     const v = window.__qubero.view;
     const before = window.__wc.draws;
     for (let i = 0; i < 5; i++) {
@@ -281,7 +350,7 @@ const main = async () => {
       requestAnimationFrame(() => requestAnimationFrame(() => done(window.__wc.draws - before))),
     );
   });
-  console.log(`burst  five wheel reports in one frame -> ${burst} draws (2 or 3 is coalesced, 5 is not)`);
+  if (burst !== null) console.log(`burst  five wheel reports in one frame -> ${burst} draws (2 or 3 is coalesced, 5 is not)`);
 
   await run("down", 1);
   await run("up", -1);
