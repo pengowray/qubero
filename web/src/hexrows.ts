@@ -277,28 +277,48 @@ export class HexRows {
    * and row widths against a server drawing the old way and one drawing this
    * way, and compares every visible cell, class, chip and heading after every
    * step, as well as asking the browser whether the rows really do fall down
-   * the screen in the order the view hands them out. That is what found the
-   * headings, on `tagged.mp3`: type a byte past the end of the file and the
-   * heading over the unclaimed run at the end still said what it was a byte
-   * ago. It is the one difference the run turned up, and it is the old drawing
-   * that has it.
+   * the screen in the order the view hands them out. Twelve sample files, and
+   * the only differences it turned up are the headings, in the old drawing:
+   *
+   *  - `tagged.mp3`: type a byte past the end of the file and the heading over
+   *    the unclaimed run at the end goes on saying what it was a byte ago.
+   *  - `initramfs.img`: the same edit leaves a heading drawn at the wrong
+   *    level, which is a different height as well as a different size of text,
+   *    so the row it sits on is the wrong height too.
+   *
+   * Both outlive five more draws at the same place, so they are not a frame's
+   * lag; they last until something else moves the row.
+   *
+   * Everything else it reported was about something other than the drawing,
+   * and each took a control run to say so. Worth knowing before spending a day
+   * on one:
+   *
+   *  - Two pages doing the same thing are not doing it at the same moment. The
+   *    listing walks the file in the background and the chips come from an
+   *    answer that arrives when it arrives, so a step taken a quarter of a
+   *    second after a long jump or a change of row width can catch one page
+   *    with a heading or a highlight the other does not have yet. Drive the
+   *    same step on its own and both agree; wait and redraw and both agree.
+   *  - The old build's checkout has to be one nobody is working in. Half of
+   *    these differences turned out to be another branch's uncommitted work
+   *    and a wasm rebuild being served as the thing to beat.
    *
    * **What it is worth.** `web/tools/wheelcost.mjs` on `hello.exe` at
    * 1280x800, runs interleaved against a server on the commit before this one:
    *
    * | | attributes written | text written | browser layout | browser style | draw |
    * |---|---|---|---|---|---|
-   * | one notch, before      |  1,406 |    508 |   8-14ms |  4-5ms |  23-44ms |
-   * | one notch, after       |     60 |     18 |      1ms |    1ms |   8-11ms |
-   * | thirty notches, before | 32,350 | 12,358 |    206ms |   83ms |    520ms |
-   * | thirty notches, after  |  2,090 |    464 |     25ms |   29ms |    255ms |
+   * | one notch, before      |  1,406 |    508 |   6-8ms |  2-3ms | 16-23ms |
+   * | one notch, after       |     60 |     18 |     1ms |    1ms |  7-8ms |
+   * | thirty notches, before | 32,158 | 12,358 | 118ms | 50ms | 311ms |
+   * | thirty notches, after  |  1,742 |    464 |  13ms | 12ms | 114ms |
    *
    * The counts are what to read: they are deterministic, and the times on this
-   * machine are not — the same code measured 432ms and 571ms for the same
-   * thirty notches an hour apart. The thirty-notch draw times are not quite
-   * comparable either, since the faster draw lets more of the wheel's reports
-   * through as draws of their own: forty of them against thirty-five, so the
-   * time for one went from 14ms to 7ms.
+   * machine are not — the same code measured 311ms and 571ms for the same
+   * thirty notches an hour apart. Measure the two alternately, never all of
+   * one and then all of the other, and take the "before" from a checkout that
+   * nobody is editing: half a day went into differences that turned out to be
+   * another branch's uncommitted work being served as the thing to beat.
    *
    * What is left in the draw is script — working out what every row would say,
    * so as to find that it already says it — and the next thing worth attacking
