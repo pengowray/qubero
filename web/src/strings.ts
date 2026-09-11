@@ -911,7 +911,7 @@ export const BTREES = {
    *  fragments, which is what they are. The width rule also has to stay inside
    *  the "Top:" part, because every mark on the bottom picture is one pixel
    *  wide and a loose sentence about box width would be false of it. */
-  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent, its width proportional to the number of links or chunks below it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing.",
+  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent, its width proportional to the number of links, chunks or records below it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing; in a version 2 tree only the root node is placed there.",
   /** Under the heading, which is the owning object's path. The two jobs a
    *  version 1 tree does are two different pictures (a group tree has a row a
    *  chunk tree does not), so the job is stated rather than left to be read
@@ -919,6 +919,23 @@ export const BTREES = {
    *  the tab is a plural. */
   jobGroup: "B-tree of this group's links",
   jobChunk: "B-tree of this dataset's chunks",
+  /** The same line for a version 2 tree doing neither job. A version 2 tree is
+   *  typed, and four of the twelve types index something that is not a group's
+   *  links or a dataset's chunks. `typeName` is the specification's own phrase
+   *  for the type, so the line says what the file says.
+   *
+   *  No possessive: shared object header messages belong to the file rather
+   *  than to the object in the heading, and type 0 is named "testing", which
+   *  "this object's testing" would make nonsense of. */
+  jobOther: (typeName: string): string => `B-tree indexing ${typeName}`,
+  /** Appended to whichever of the three job lines is shown. The two versions
+   *  are different structures with different silhouettes, and a reader who has
+   *  seen one and is now looking at the other needs to be told which.
+   *
+   *  "version 2 B-tree" rather than a bare "version 2", because an HDF5 object
+   *  header has versions 1 and 2 of its own and the heading above this line is
+   *  an object's path. One word buys the one reading. */
+  versionTag: (v: number): string => ` · version ${v} B-tree`,
   /** Line 1 of the heading when the owning object is past the Contents list's
    *  cap. Not "unnamed object": an HDF5 object can genuinely have no name, and
    *  this one has one that was not fetched. The rail already says "{n} more not
@@ -940,6 +957,16 @@ export const BTREES = {
    *  counts drawn directly below it. */
   widthGroup: "Box width is proportional to the number of links below it.",
   widthChunk: "Box width is proportional to the number of chunks below it.",
+  /** The same line for a version 2 tree, where the boxes are counted in
+   *  records rather than in links or chunks: both kinds of node hold records,
+   *  because a version 2 tree is a B-tree and not a B+ tree.
+   *
+   *  The last sentence is for the reader who has seen a version 1 group tree
+   *  and is looking for the bottom row of link tables that is not there. It
+   *  covers every job, including the types that index neither links nor
+   *  chunks. */
+  widthRecords:
+    "Width: how many records are in the leaves reached through the box. Number on a box: its own record count. What a record refers to (a link, a chunk, an attribute) lives outside the tree and is not drawn.",
   /** The key to the number printed on a box, shown beside a drawn box with `N`
    *  in it. The sentence that used to say this ("Number on a box: its own
    *  entry count") was a fact the reader had to hold in mind while looking at
@@ -984,6 +1011,47 @@ export const BTREES = {
     `${rowAbove(nodes, "link table", capped)} ${nodes === 1 ? "holds" : "hold"} ${capped ? "" : "these "}${BTREES.leafLinks(links, capped)} inside ${nodes === 1 ? "it" : "them"}. Links are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
   leafChunksTitle: (nodes: number, chunks: number, capped: boolean): string =>
     `${rowAbove(nodes, "index node", capped)} ${nodes === 1 ? "points" : "point"} at ${capped ? "" : "these "}${BTREES.leafChunks(chunks, capped)}, which are blocks of data elsewhere in the file. Chunks are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+  /** The same band under a version 2 tree, for the two record types this tab
+   *  decodes. The noun is still what the tree indexes and not "records": a
+   *  version 2 tree is a B-tree, its records sit inside the internal nodes and
+   *  the leaves, and a band of "records" under the leaves would put them where
+   *  a B+ tree keeps them. One record per link and per chunk, so the header's
+   *  `record_count` is the link or chunk count exactly. Never "or more": that
+   *  count is the header's own field and stands when the walk was capped.
+   *
+   *  Word for word `leafLinks(n, false)` and `leafChunks(n, false)`; a name of
+   *  their own so the call site says which tree it is drawing. Only for types
+   *  5 and 10. Type 6 is a group tree whose records this does not decode, and
+   *  takes `leafRecords`, which claims nothing about what a record holds. */
+  leafLinksV2: (n: number): string => countText(n, "link"),
+  leafChunksV2: (n: number): string => countText(n, "chunk"),
+  /** The band under a version 2 tree whose record type this does not decode.
+   *  "Record" is the only honest noun left, and the field name is on the label
+   *  because the summary row just above prints "49 leaf nodes holding 1,952
+   *  records" with a smaller number: internal nodes hold records too, so the
+   *  header's total and the bottom row's sum differ, and one noun over two
+   *  numbers needs its origin said where both are on screen. */
+  leafRecords: (n: number): string => `${countText(n, "record")} · record_count in the tree header`,
+  /** The three tooltips. Each says where the indexed things live, that the
+   *  records naming them are in every row rather than in a row of their own,
+   *  and that the count is the header's `record_count`; then the closing
+   *  sentence of `leafLinksTitle`, verbatim but for the noun. `rowAbove` is
+   *  not used and cannot be: nothing in the row above holds a version 2
+   *  tree's links, which are in the fractal heap.
+   *
+   *  `capped` adds one clause saying the count stands anyway, because
+   *  `omitted` prints "At least N more nodes not drawn" under the summary and
+   *  a reader who has read that will ask whether this number is short too.
+   *
+   *  `typeName` is null for a type byte no version of the specification names,
+   *  which the walk reports as an empty name; the byte is printed instead, so
+   *  the sentence never reads `records of type ""`. */
+  leafLinksV2Title: (n: number, capped: boolean): string =>
+    `These ${countText(n, "link")} are in the group's fractal heap, a separate structure this tree does not point at. Each link has one record, inside the internal nodes (BTIN) and leaf nodes (BTLF) above, holding a hash of the link's name and an id into that heap; the count is the tree header's record_count${capped ? ", so it stands even though not every node was drawn" : ""}. Links are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+  leafChunksV2Title: (n: number, capped: boolean): string =>
+    `These ${countText(n, "chunk")} are blocks of data elsewhere in the file. Each chunk has one record, inside the internal nodes (BTIN) and leaf nodes (BTLF) above, holding the chunk's address and its offset in the dataset; the count is the tree header's record_count${capped ? ", so it stands even though not every node was drawn" : ""}. Chunks are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+  leafRecordsTitle: (n: number, typeName: string | null, typeByte: number, capped: boolean): string =>
+    `The tree header's record_count is ${n.toLocaleString()}, and the records are inside the internal nodes (BTIN) and leaf nodes (BTLF) above, not in a row of their own${capped ? "; the count is the header's, so it stands even though not every node was drawn" : ""}. This tab does not decode records of ${typeName === null ? `type ${typeByte.toLocaleString()}, which no version of the HDF5 specification names` : `type "${typeName}"`}, so what each record refers to is not shown. Whatever it is, it is not a node of the tree, so it is not drawn as a box and is not among the nodes placed by file address below.`,
   /** One row of the summary for a row of index nodes. The level is written with
    *  the field's own name, `node_level`, because that is where the number came
    *  from and what the Listing calls it at those bytes; a bare "level 2" is a
@@ -1006,6 +1074,22 @@ export const BTREES = {
     `${countText(nodes, "link table")} holding ${countText(links, "link")}`,
   rowChunks: (nodes: number, chunks: number): string =>
     `${countText(nodes, "index node")} pointing at ${countText(chunks, "chunk")}`,
+  /** The same two rows for a version 2 tree, whose nodes are internal nodes
+   *  and leaves and whose entries are records.
+   *
+   *  `rowInternal`'s second number is rows of this picture rather than a field
+   *  of the file, and says so: a version 2 node writes no level of its own, so
+   *  `node_level` would be a field name over a number the file never wrote.
+   *  `levelTitle` does not belong on these lines for the same reason.
+   *
+   *  `rowLeaves` joins its two counts with a verb, the way `rowLinks` does and
+   *  for the same reason: "49 leaf nodes · 1,952 records" reads as 1,952 each.
+   *  The noun is "leaf node" because the plural of "leaf" the pluraliser makes
+   *  is "leafs". */
+  rowInternal: (n: number, above: number): string =>
+    `${countText(n, "internal node")} · ${countText(above, "row")} above the leaves`,
+  rowLeaves: (nodes: number, records: number): string =>
+    `${countText(nodes, "leaf node")} holding ${countText(records, "record")}`,
   /** Siblings too narrow to press, drawn as one box. Says what happened to
    *  them in `TREEMAP.pooledTitle`'s words. Not `… N more`: the treemap's
    *  ellipsis marks content cut short beside content that was drawn, and here
@@ -1019,6 +1103,14 @@ export const BTREES = {
   kindLinks: "link table",
   signIndex: "TREE",
   signLinks: "SNOD",
+  /** The two kinds a version 2 tree is made of. Not `kindIndex` for a `BTIN`:
+   *  "index node" was coined here because what a `TREE` holds needed
+   *  explaining, and "internal node" is the specification's own word for a
+   *  `BTIN`. The summary row says "internal node" too, so a reader never has
+   *  two names for one box. The signatures come from the walk, so the readout
+   *  reads "leaf node (BTLF) at 0x…". */
+  kindInternal: "internal node",
+  kindLeaf: "leaf node",
   /** First line of a node's readout and tooltip, and the whole tooltip of a
    *  mark on the address strip. The signature is what is written at that
    *  address, so the line a reader takes to the hex view names both what we
@@ -1032,6 +1124,15 @@ export const BTREES = {
    *  index nodes, link tables, chunks, or links. */
   pointsAt: (n: number, noun: string): string => `points at ${countText(n, noun)}`,
   holds: (n: number, noun: string): string => `holds ${countText(n, noun)}`,
+  /** The second readout line of a version 2 internal node, which points at one
+   *  more child than it holds records. That is what a B-tree is, as against a
+   *  B+ tree: a record sits between every two children and is not repeated
+   *  below. The reason is on the line rather than in a tooltip, because the
+   *  mismatch is visible in one glance at two lines that read "holds 7
+   *  records" and "points at 8 child nodes", and nobody who thinks they have
+   *  found a bug hovers over the thing to check. */
+  pointsAtChildren: (n: number): string =>
+    `points at ${countText(n, "child node")}, one more than its record count: a record sits between every two children`,
   /** A group-tree node's key range, as the two link names at its ends. Two
    *  labelled facts rather than "X to Y": a link name can contain a space or
    *  the word "to", and the labels survive that. One link is one fact. */
@@ -1051,6 +1152,12 @@ export const BTREES = {
    *  one key holds; the caller leaves the line out when it is 0. */
   chunkRangeNote: (coords: number): string =>
     `${(coords - 1).toLocaleString()} dimensions. The last number of each offset is always 0: HDF5 writes it as the offset within an element.`,
+  /** The same line for a version 2 chunk tree, whose records hold one number
+   *  per dimension and no trailing zero. It earns its row rather than being
+   *  left out: a reader who learned from a version 1 tree that the last number
+   *  is padding will read `950, 950, 0` here as two dimensions. Saying what
+   *  the numbers are closes that without naming the other version. */
+  chunkRangeNoteV2: (coords: number): string => `${countText(coords, "dimension")}, one number per dimension`,
   /** Over the address strip. Says which axis this is, since the picture above
    *  it is in tree order and the two look alike, and that the rows are the
    *  same rows.
@@ -1074,24 +1181,76 @@ export const BTREES = {
    *  never saw. The rail's "{n} more not listed", with the floor said out
    *  loud. */
   omitted: (n: number): string => `At least ${n.toLocaleString()} more nodes not drawn`,
-  /** The empty state. One string, because the caller cannot tell why the walk
-   *  found nothing: the core reads version 1 trees only, parses a version 2
-   *  tree no further than its root, and a file can genuinely have no version 1
-   *  tree. So it says only what is known, which is where it looked and that it
-   *  found nothing there. Not "this file has no B-trees": a file written with
-   *  version 2 trees has plenty, and this sentence claims nothing about the
-   *  rest of the file.
+  /** Under the summary rows of a version 2 tree whose records this does not
+   *  read. A version 2 tree is typed and there are twelve types; two of them
+   *  are read here. The shape is still the file's own shape, because it comes
+   *  out of the header and the child pointers and not out of the records at
+   *  all, so the picture stands and this says what it does not cover.
    *
-   *  It used to go on to name the three ordinary reasons a file has no version
-   *  1 tree. That was a paragraph about what the tab does not do, in front of
-   *  a reader who wanted a tree and did not get one, and none of it said which
-   *  reason applied to the file in front of them. */
-  none: "No version 1 B-tree found for the object at the cursor, or for the root group.",
+   *  The origin of the counts is stated exactly. A `BTIN` and a `BTLF` write
+   *  no count of their own: a node's record count is in the child pointer that
+   *  named it, and the root's is in the `BTHD` header. "From the node headers"
+   *  would have been an origin the file does not have.
+   *
+   *  No "yet", which would promise, and no "failed", which would be wrong:
+   *  nothing went wrong here. The type's own name is quoted because several of
+   *  them contain a comma. */
+  recordsUnread: (typeName: string): string =>
+    `Records not read: this tab does not decode records of type "${typeName}". The shape and counts come from the tree's header and child pointers, not from the records.`,
+  /** The same for a type byte no version of the specification names. In
+   *  decimal, because the Listing prints the `type` field in decimal and a
+   *  reader should be able to match the number at those bytes. The second
+   *  sentence is word for word `recordsUnread`'s: the picture is as good in
+   *  both cases and only the reason differs. */
+  recordsUnknown: (type: number): string =>
+    `Records not read: type byte ${type.toLocaleString()} is not named by any version of the HDF5 specification. The shape and counts come from the tree's header and child pointers, not from the records.`,
+  /** Under the summary rows of a version 2 group tree, which shows no first or
+   *  last link anywhere. Not an omission to be inferred: the records genuinely
+   *  do not hold a name, and a reader looking for the range a version 1 group
+   *  tree has is owed the reason rather than left to guess the walk failed.
+   *
+   *  Named in `selectedRange`'s words, "first link" and "last link", so the
+   *  missing thing is named the same way whether it is there or not. Shown
+   *  only for the type whose records are read: where they are not,
+   *  `recordsUnread` already accounts for the missing range, and two notes
+   *  about one absence read as two problems. */
+  groupRecordsNote:
+    "No first or last link is shown: a version 2 group record holds the hash of a link's name and an id into the group's fractal heap, not the name.",
+  /** In the readout of a version 2 node below the root. Fact, reason,
+   *  consequence, and the consequence stays: the readout comes up on the first
+   *  press, so this line is what stops the second one, and a reader who has
+   *  just read the hint under the picture is owed the contradiction spelled
+   *  out rather than left to find it. */
+  notInListing: "Not in the Listing: only the root node of a version 2 tree is placed there, so double-click opens nothing.",
+  /** On a node whose children were not all read, in a tree that shows no key
+   *  ranges at all: a version 2 group tree, one indexing something else, and
+   *  any tree whose records were not read. `truncated`'s "first and last link
+   *  not shown" would read there as a second thing gone wrong, when no range
+   *  was ever going to be shown. */
+  truncatedNoRange: "Not all of this node's children were read.",
+  /** The empty state. One string, because the caller cannot tell which of the
+   *  reasons applies. So it says only what is known, which is where it looked
+   *  and that it found nothing there. Not "this file has no B-trees": this
+   *  sentence claims nothing about the rest of the file.
+   *
+   *  It said "version 1 B-tree" and "this tab draws version 1 B-trees only"
+   *  while that was true. Both versions are drawn now, so the version is gone
+   *  from the first sentence and the reasons that are left are reasons a file
+   *  has no tree of either kind. The four ways of indexing chunks that are not
+   *  a tree are named because they are what a reader will find in the Listing
+   *  instead, and a chunked dataset with no B-tree is the commonest way to
+   *  arrive here in a file a recent library wrote. */
+  none: "No B-tree found for the object at the cursor, or for the root group. This happens for a group small enough to keep its links in its own header, for a dataset that is not chunked, and for a chunked dataset whose chunks are indexed by an array (fixed, extensible, single-chunk or implicit) rather than by a tree.",
   /** The mouse verbs. The first sentence is the treemap's and means the same.
    *  The second is not: the treemap's "open it" zooms into the box, and here a
    *  double-click puts the node in the Listing, so the destination is named
-   *  the way the minimap names its Block section. */
-  hint: "Click a box to go to its bytes. Double-click to open it in the Listing.",
+   *  the way the minimap names its Block section.
+   *
+   *  The clause after the semicolon is there because this line is written into
+   *  the panel once, before any tree has been walked, so the one string has to
+   *  be true of both versions. Without it the sentence is a promise that fails
+   *  on every box of a version 2 tree but one. */
+  hint: "Click a box to go to its bytes. Double-click to open it in the Listing; in a version 2 tree only the root node is placed there.",
   /** On a node whose children the walk did not all reach, in its tooltip and
    *  readout. Both consequences on one line because they always arrive
    *  together: a node with an unreached child keeps no range (see

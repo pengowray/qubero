@@ -795,6 +795,12 @@ export type Tree = {
    *  shape is drawn for all three, because it depends only on the record size;
    *  a shape drawn over records nobody read has to say so. */
   readonly records: "read" | "unread" | "unknown";
+  /** How many records the tree holds in all, from the version 2 header's own
+   *  field. Zero for a version 1 tree. Not the sum of the nodes' counts: a
+   *  version 2 internal node holds records the leaves under it do not repeat,
+   *  so summing the bottom row would print a total the file disagrees with, and
+   *  this stands when the walk was capped. */
+  readonly records_total: number;
   readonly nodes: readonly TreeNode[];
   /** Children that exist and were not walked, as far as the walk knows. */
   readonly omitted: number;

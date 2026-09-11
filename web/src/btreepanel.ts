@@ -280,7 +280,13 @@ export class BTreePanel {
 
   /** Which node of the drawn tree holds the field at `path`, or -1. A node's
    *  own path is a prefix of every path inside it, and the deepest such node
-   *  is the one the cursor is actually in. */
+   *  is the one the cursor is actually in.
+   *
+   *  A node with no path of its own is passed over rather than matched. Every
+   *  version 2 node below the root has one, because the template places only
+   *  the root, and an empty path is a prefix of every path there is: matched,
+   *  it would light whichever of those boxes came first wherever the cursor
+   *  stood. */
   private nodeAt(path: readonly number[]): number {
     const tree = this.tree;
     if (tree === null) return -1;
@@ -288,7 +294,7 @@ export class BTreePanel {
     let deepest = -1;
     for (let i = 0; i < tree.nodes.length; i++) {
       const p = tree.nodes[i]?.path;
-      if (p === undefined || p.length > path.length) continue;
+      if (p === undefined || p.length === 0 || p.length > path.length) continue;
       if (!p.every((step, k) => step === path[k])) continue;
       if (p.length > deepest) {
         deepest = p.length;
@@ -390,9 +396,9 @@ export class BTreePanel {
     this.note.hidden = false;
     const width = Math.max(1, Math.floor(this.plot.clientWidth || this.el.clientWidth));
     this.head.textContent = this.ownerName ?? this.owner(tree);
-    this.job.textContent = tree.job === "group" ? BTREES.jobGroup : BTREES.jobChunk;
+    this.job.textContent = jobCaption(tree);
     this.keyLine.hidden = false;
-    this.widths.textContent = tree.job === "group" ? BTREES.widthGroup : BTREES.widthChunk;
+    this.widths.textContent = widthCaption(tree);
     this.stripCap.textContent = BTREES.stripCaption;
     const placed = place(tree, width);
     this.boxes = boxesOf(tree, placed, width);
@@ -524,7 +530,12 @@ export class BTreePanel {
       const held = row.reduce((sum, n) => sum + n.entries, 0);
       const line = document.createElement("div");
       line.className = "btp-row";
-      if (first.kind === "links") line.textContent = BTREES.rowLinks(row.length, held);
+      // A version 2 node holds records, both kinds of it, and writes no level
+      // of its own. So neither of the version 1 rows fits and neither does
+      // `levelTitle`, which names a field those nodes do not have.
+      if (first.kind === "leaf") line.textContent = BTREES.rowLeaves(row.length, held);
+      else if (tree.version === 2) line.textContent = BTREES.rowInternal(row.length, first.level);
+      else if (first.kind === "links") line.textContent = BTREES.rowLinks(row.length, held);
       else if (tree.job === "chunk" && first.level === 0) line.textContent = BTREES.rowChunks(row.length, held);
       else {
         line.textContent = BTREES.rowIndex(row.length, first.level);
@@ -539,6 +550,18 @@ export class BTreePanel {
       const line = document.createElement("div");
       line.className = "btp-row btp-row-short";
       line.textContent = BTREES.omitted(tree.omitted);
+      out.push(line);
+    }
+    // What the drawing does not cover. A version 2 tree is typed and this
+    // reads two of the twelve types; the shape of one comes out of its header
+    // and its child pointers rather than out of its records, so the picture
+    // stands for a type whose records were not read and says so here. A tree
+    // drawn as though its records were understood when they were not is the
+    // one thing this must never do.
+    for (const text of caveats(tree)) {
+      const line = document.createElement("div");
+      line.className = "btp-row btp-row-short";
+      line.textContent = text;
       out.push(line);
     }
     this.rows.replaceChildren(...out);
@@ -626,9 +649,16 @@ export class BTreePanel {
       // What the numbers in a chunk key are. The visible line says "element
       // offset"; this says how many of the numbers are dimensions, so that
       // nobody counts them and gets one too many.
+      // A version 1 key ends with an offset within an element that is always
+      // zero and a version 2 record does not, so the two notes count the
+      // numbers differently. `coords_pad` is which, from the walk, because
+      // reading it off the version would be a rule this file made up.
       if (tree.job === "chunk" && node.first_key !== "" && tree.coords > 0) {
-        lines.push(BTREES.chunkRangeNote(tree.coords));
+        lines.push(tree.coords_pad ? BTREES.chunkRangeNote(tree.coords) : BTREES.chunkRangeNoteV2(tree.coords));
       }
+      // A node the template never placed has nowhere in the Listing to open,
+      // and the reader has just read a hint that says double-click opens one.
+      if (node.path.length === 0) lines.push(BTREES.notInListing);
     }
     this.readout.replaceChildren(
       ...lines.map((text) => {
@@ -658,6 +688,15 @@ export class BTreePanel {
       this.selected = key;
       this.light();
       this.drawReadout();
+      // A node with no path is not in the Listing to be opened: the template
+      // places only the root of a version 2 tree, and the rest are read from
+      // their bytes. Going to the bytes is what is left, and is what the
+      // single press does, so the second press does that rather than sending
+      // the Listing to the root of the file, which an empty path would.
+      if (node.path.length === 0) {
+        this.onJump(node.address * 8, node.address * 8 + node.size_bits);
+        return;
+      }
       this.onPick({ path: node.path, startBit: node.address * 8, endBit: node.address * 8 + node.size_bits });
       return;
     }
@@ -693,12 +732,27 @@ export class BTreePanel {
 
 const SVG = "http://www.w3.org/2000/svg";
 
-/** What kind of node this is, in words, and the signature written at it. */
+/** What kind of node this is, in words, and the signature written at it.
+ *
+ *  Three words for three structures. "Internal node" rather than "index node"
+ *  for a `BTIN`, because that is the specification's own word for one and the
+ *  summary row uses it; "index node" was coined here for a `TREE`, whose
+ *  contents needed explaining. */
 function kindWord(node: TreeNode): string {
-  return node.kind === "links" ? BTREES.kindLinks : BTREES.kindIndex;
+  if (node.kind === "links") return BTREES.kindLinks;
+  if (node.kind === "leaf") return BTREES.kindLeaf;
+  return node.sign === "BTIN" ? BTREES.kindInternal : BTREES.kindIndex;
 }
 
+/** The four bytes written at the node's address.
+ *
+ *  The core sends them, because it is the core that checked for them: it reads
+ *  a version 2 node by its signature and refuses the node when the signature
+ *  is not the one the level called for. Worked out here instead, from the kind
+ *  and the version, this would be a claim about bytes nothing in this file has
+ *  seen. The two constants are the fallback for a walk that sent none. */
 function signWord(node: TreeNode): string {
+  if (node.sign !== "") return node.sign;
   return node.kind === "links" ? BTREES.signLinks : BTREES.signIndex;
 }
 
@@ -712,13 +766,25 @@ function signWord(node: TreeNode): string {
  * it could only settle at one end.
  */
 function nodeLines(tree: Tree, node: TreeNode): string[] {
-  const noun = holdWord(tree, node);
-  const lines = [
-    BTREES.selectedAt(kindWord(node), signWord(node), formatOffset(node.address * 8)),
-    node.kind === "links" ? BTREES.holds(node.entries, noun) : BTREES.pointsAt(node.entries, noun),
-  ];
+  const lines = [BTREES.selectedAt(kindWord(node), signWord(node), formatOffset(node.address * 8))];
+  if (tree.version === 2) {
+    // Both kinds of version 2 node hold records, so the count is a count of
+    // records and the verb is "holds" for both. An internal node points at one
+    // more child than that, which is what a B-tree is, and the second line is
+    // where a reader who noticed the mismatch finds out why.
+    lines.push(BTREES.holds(node.entries, "record"));
+    if (node.kind === "index") lines.push(BTREES.pointsAtChildren(node.entries + 1));
+  } else {
+    const noun = holdWord(tree, node);
+    lines.push(node.kind === "links" ? BTREES.holds(node.entries, noun) : BTREES.pointsAt(node.entries, noun));
+  }
   if (node.truncated) {
-    lines.push(BTREES.truncated(tree.job === "chunk" ? "chunk" : "link"));
+    // The clause about a missing range only belongs where a range was going to
+    // be shown. A version 2 group tree has none to begin with, and a tree whose
+    // records were not read has none either; there the clause would read as a
+    // second thing gone wrong.
+    const ranged = tree.job === "chunk" && tree.records === "read";
+    lines.push(ranged ? BTREES.truncated("chunk") : tree.version === 1 ? BTREES.truncated("link") : BTREES.truncatedNoRange);
     return lines;
   }
   if (node.first_key === "") return lines;
@@ -750,6 +816,54 @@ function keyOf(nodes: readonly number[]): string {
   return nodes.join(",");
 }
 
+/** The line under the heading: what this tree indexes, and which of the two
+ *  structures it is.
+ *
+ *  The version is on the line for every tree and not only for a version 2 one.
+ *  The two have different silhouettes, and a reader comparing a file to
+ *  another file cannot tell from a picture of three rows of boxes which kind
+ *  they are looking at unless it says. */
+function jobCaption(tree: Tree): string {
+  const job =
+    tree.job === "group" ? BTREES.jobGroup : tree.job === "chunk" ? BTREES.jobChunk : BTREES.jobOther(tree.record_type_name);
+  return job + BTREES.versionTag(tree.version);
+}
+
+/** The line under the picture: what a box's width is and what the number on it
+ *  is, which are two different facts about the same box.
+ *
+ *  A version 2 tree gets its own, because both of those facts are records
+ *  rather than links or chunks: a version 2 tree is a B-tree, both kinds of
+ *  node hold records, and what a record refers to is not in the tree at all. */
+function widthCaption(tree: Tree): string {
+  if (tree.version === 2) return BTREES.widthRecords;
+  return tree.job === "group" ? BTREES.widthGroup : BTREES.widthChunk;
+}
+
+/**
+ * What the drawing does not cover, in the order a reader meets it: what the
+ * records are, and then why there are no keys.
+ *
+ * A version 2 B-tree is typed and the core reads two of the twelve types. The
+ * shape of one does not depend on the type: it comes out of the header's node
+ * size, record size and depth and out of the counts in the child pointers, so
+ * a tree of a type nobody here decoded still has a true picture. What it does
+ * not have is anything to say about the contents, and a picture that stayed
+ * silent about that would be a picture a reader took for a full account.
+ */
+function caveats(tree: Tree): string[] {
+  const out: string[] = [];
+  if (tree.records === "unread") out.push(BTREES.recordsUnread(tree.record_type_name));
+  if (tree.records === "unknown") out.push(BTREES.recordsUnknown(tree.record_type));
+  // Why a version 2 group tree shows no first or last link anywhere: its
+  // records hold a hash and a heap id, and the names are in the heap. Only
+  // where the records were read, because `recordsUnread` has already accounted
+  // for the missing range otherwise, and two notes about one absence read as
+  // two problems.
+  if (tree.version === 2 && tree.job === "group" && tree.records === "read") out.push(BTREES.groupRecordsNote);
+  return out;
+}
+
 /**
  * The band under the last row of boxes, or null where there is no honest one
  * to draw.
@@ -762,6 +876,26 @@ function keyOf(nodes: readonly number[]): string {
  * number from nowhere. `omitted` says that happened.
  */
 function leafBand(tree: Tree): { label: string; title: string } | null {
+  // A version 2 tree's count is the header's own `record_count`, so the band
+  // does not go null when the walk stopped above the leaves and does not say
+  // "or more": what it prints is the file's number, not a sum of the last row
+  // drawn. It could not be a sum of that row anyway: a version 2 tree is a
+  // B-tree, its internal nodes hold records the leaves do not repeat, and the
+  // bottom row adds up to less than the whole.
+  if (tree.version === 2) {
+    const n = tree.records_total;
+    const capped = tree.omitted > 0;
+    if (tree.records === "read" && tree.record_type === 5) {
+      return { label: BTREES.leafLinksV2(n), title: BTREES.leafLinksV2Title(n, capped) };
+    }
+    if (tree.records === "read" && tree.record_type === 10) {
+      return { label: BTREES.leafChunksV2(n), title: BTREES.leafChunksV2Title(n, capped) };
+    }
+    // A type whose records were not read. The count is still the header's, so
+    // the band is drawn; what a record refers to is not claimed.
+    const name = tree.records === "unknown" ? null : tree.record_type_name;
+    return { label: BTREES.leafRecords(n), title: BTREES.leafRecordsTitle(n, name, tree.record_type, capped) };
+  }
   const depth = Math.max(...tree.nodes.map((n) => n.depth));
   const row = tree.nodes.filter((n) => n.depth === depth);
   const first = row[0];

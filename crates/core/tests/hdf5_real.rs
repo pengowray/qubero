@@ -333,6 +333,21 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
         let mut headers = Vec::new();
         let mut seen = 0usize;
         headers2(&mut ev, &doc, &[], &mut seen, &mut headers);
+        // A cursor that has not moved yet, in a file that has a tree
+        // somewhere. The root group of a file a recent library wrote usually
+        // keeps its handful of links in its own header and has no tree of its
+        // own, so answering with the root group's and stopping would say "no
+        // B-tree" about a file with one; the walk goes on to the first tree
+        // under it.
+        if !headers.is_empty() {
+            let from_nowhere = qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, &[], 4096);
+            assert!(
+                matches!(from_nowhere, Ok(Some(_))),
+                "{}: a file with {} version 2 trees answered a resting cursor with {from_nowhere:?}",
+                path.display(),
+                headers.len()
+            );
+        }
         for header in &headers {
             let tree: Tree = match qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, header, 4096) {
                 Ok(Some(t)) => t,

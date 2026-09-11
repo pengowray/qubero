@@ -225,6 +225,17 @@ pub struct Tree {
     pub record_type_name: &'static str,
     /// How far this walk got with the records. See [`Records`].
     pub records: Records,
+    /// How many records the tree holds in all, which a version 2 header writes
+    /// in a field of its own. Zero for a version 1 tree, which writes no such
+    /// number anywhere.
+    ///
+    /// Not the sum of the walked nodes' counts, and the difference matters
+    /// twice over. It is the file's own number, so it stands when the walk was
+    /// capped. And a version 2 tree is a B-tree rather than a B+ tree: its
+    /// internal nodes hold records of their own that are not repeated in the
+    /// leaves, so the bottom row's counts add up to less than the whole and a
+    /// view that summed them would print a total the file disagrees with.
+    pub records_total: u64,
     /// Root first, then every node reached, each after its parent.
     pub nodes: Vec<Node>,
     /// Children that exist and were not walked, as far as the walk knows.
@@ -602,6 +613,7 @@ fn walk<S: Source>(ev: &mut Evaluator, doc: &Document<S>, root: &[usize], limit:
         record_type: 0,
         record_type_name: "",
         records: Records::Read,
+        records_total: 0,
         nodes: Vec::new(),
         omitted: 0,
         coords: 0,
@@ -1039,6 +1051,7 @@ mod v2 {
             record_type: u8::try_from(kind).unwrap_or(0),
             record_type_name: name,
             records,
+            records_total: super::field_int(ev, doc, header, "record_count")?.unwrap_or(0),
             nodes: Vec::new(),
             omitted: 0,
             coords: 0,

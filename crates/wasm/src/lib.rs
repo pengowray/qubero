@@ -1189,6 +1189,12 @@ struct TreeDto {
     /// depends only on the record size, and the host says outright when the
     /// records behind a drawn shape were not read.
     records: &'static str,
+    /// How many records the tree holds in all, which a version 2 header writes
+    /// in a field of its own. Zero for a version 1 tree. Not the sum of the
+    /// nodes' counts: a version 2 internal node holds records the leaves under
+    /// it do not repeat, so a host that summed the bottom row would print a
+    /// total the file disagrees with, and this stands when the walk was capped.
+    records_total: f64,
     nodes: Vec<TreeNodeDto>,
     omitted: f64,
     /// How many numbers one chunk key holds. Zero for a group tree and for a
@@ -2557,6 +2563,7 @@ impl Editor {
                     Records::Unread => "unread",
                     Records::Unknown => "unknown",
                 },
+                records_total: t.records_total as f64,
                 omitted: t.omitted as f64,
                 coords: t.coords as f64,
                 coords_pad: t.coords_pad,

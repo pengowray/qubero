@@ -2762,6 +2762,10 @@ mod tests {
         assert_eq!(tree.job, Job::Chunk);
         assert_eq!(tree.records, Records::Read);
         assert_eq!(tree.record_type, 10);
+        // The header's own count, and not the sum of the nodes': the root's own
+        // record is not repeated in a leaf, so the leaves add up to four.
+        assert_eq!(tree.records_total, 5);
+        assert_eq!(tree.nodes.iter().map(|n| n.entries).sum::<u64>(), 5);
         assert_eq!(tree.nodes.len(), 3, "{tree:?}");
         assert_eq!(tree.nodes[0].address, V2_BTIN);
         assert_eq!(tree.nodes[0].sign, "BTIN");
