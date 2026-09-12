@@ -770,6 +770,14 @@ export type TreeNode = {
   /** True when children of this node were not reached, so its count stands and
    *  its range does not. */
   readonly truncated: boolean;
+  /** Where the node's first entry starts, in bits from the node's own address,
+   *  and how many bits one entry takes. Every kind of node here writes its
+   *  entries at a fixed stride, so the two numbers place all `entries` of them
+   *  without a list: entry `i` is at `address * 8 + first_entry_bits + i *
+   *  entry_bits`. Both zero where the walk could not settle the stride, which
+   *  is the one case a view must not divide the node up. */
+  readonly first_entry_bits: number;
+  readonly entry_bits: number;
 };
 
 /**
