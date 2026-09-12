@@ -172,15 +172,22 @@ pub fn pdb() -> Template {
                 (
                     "directory",
                     T::switch(
-                        runs_together("directory_run", blocks()),
-                        vec![(
-                            1,
-                            T::at(
-                                E::elem("block_map", E::lit(0)).mul(size()),
-                                T::sized(E::field("directory_bytes"), directory()),
-                            ),
-                        )],
-                        scattered_directory(blocks()),
+                        // A file that claims no directory has no first block
+                        // to read one at, and every entry of an empty list
+                        // agrees about everything, so this is asked first.
+                        blocks().equals(E::lit(0)),
+                        vec![(1, T::bytes(E::lit(0)))],
+                        T::switch(
+                            runs_together("directory_run", blocks()),
+                            vec![(
+                                1,
+                                T::at(
+                                    E::elem("block_map", E::lit(0)).mul(size()),
+                                    T::sized(E::field("directory_bytes"), directory()),
+                                ),
+                            )],
+                            scattered_directory(blocks()),
+                        ),
                     ),
                 ),
             ],
@@ -492,8 +499,8 @@ mod tests {
     /// The streams the fixture holds: the old directory, the info stream, an
     /// empty one, a number that is not in use, and one whose blocks are in the
     /// wrong order to be read where they lie.
-    const SIZES: [u32; 5] = [0x20, 84, 0, 0xffff_ffff, 700];
-    const BLOCKS: [&[u32]; 5] = [&[4], &[5], &[], &[], &[7, 6]];
+    const SIZES: [u32; 6] = [0x20, 84, 72, 0xffff_ffff, 700, 0];
+    const BLOCKS: [&[u32]; 6] = [&[4], &[5], &[6], &[], &[8, 7], &[]];
 
     /// An info stream: the four numbers a debugger matches a PDB by, two named
     /// streams, and one feature code.
@@ -518,6 +525,24 @@ mod tests {
         v
     }
 
+    /// A type stream of two records: the header that says where they are and
+    /// how many type numbers they cover, and the records themselves.
+    fn types() -> Vec<u8> {
+        let mut v = 20040203u32.to_le_bytes().to_vec();
+        v.extend_from_slice(&56u32.to_le_bytes());
+        v.extend_from_slice(&0x1000u32.to_le_bytes());
+        v.extend_from_slice(&0x1002u32.to_le_bytes());
+        v.extend_from_slice(&16u32.to_le_bytes());
+        v.resize(56, 0);
+        for kind in [0x1002u16, 0x1008] {
+            v.extend_from_slice(&6u16.to_le_bytes());
+            v.extend_from_slice(&kind.to_le_bytes());
+            v.extend_from_slice(&[0x77; 4]);
+        }
+        assert_eq!(v.len() as u32, SIZES[2]);
+        v
+    }
+
     /// A PDB laid out the way a compiler lays one out: the superblock, the two
     /// free-block maps, the directory, the streams' blocks, and the block map.
     ///
@@ -538,19 +563,19 @@ mod tests {
         let mut v = MAGIC.to_vec();
         v.extend_from_slice(&(BLOCK as u32).to_le_bytes());
         v.extend_from_slice(&2u32.to_le_bytes());
-        v.extend_from_slice(&9u32.to_le_bytes());
+        v.extend_from_slice(&10u32.to_le_bytes());
         v.extend_from_slice(&directory_bytes.unwrap_or(directory.len() as u32).to_le_bytes());
         v.extend_from_slice(&0u32.to_le_bytes());
-        v.extend_from_slice(&8u32.to_le_bytes());
-        v.resize(BLOCK * 9, 0);
+        v.extend_from_slice(&9u32.to_le_bytes());
+        v.resize(BLOCK * 10, 0);
         let write = |v: &mut Vec<u8>, block: usize, bytes: &[u8]| {
             v[BLOCK * block..BLOCK * block + bytes.len()].copy_from_slice(bytes);
         };
         write(&mut v, 3, &directory);
         write(&mut v, 5, &info());
+        write(&mut v, 6, &types());
         for (i, block) in map.iter().enumerate() {
-            write(&mut v, 8, &[]);
-            v[BLOCK * 8 + i * 4..BLOCK * 8 + i * 4 + 4].copy_from_slice(&block.to_le_bytes());
+            v[BLOCK * 9 + i * 4..BLOCK * 9 + i * 4 + 4].copy_from_slice(&block.to_le_bytes());
         }
         v
     }
@@ -562,14 +587,14 @@ mod tests {
         let d = Document::new(MemSource(pdb_file(None, &[3])));
         let mut e = Evaluator::new(pdb());
         // A whole number of blocks, which is what the file length has to be.
-        assert_eq!(e.node(&d, &[BLOCK_COUNT]).unwrap().value.as_int(), Some(9));
-        assert_eq!(e.node(&d, &[CLAIMED]).unwrap().value.as_int(), Some(BLOCK as i128 * 9));
+        assert_eq!(e.node(&d, &[BLOCK_COUNT]).unwrap().value.as_int(), Some(10));
+        assert_eq!(e.node(&d, &[CLAIMED]).unwrap().value.as_int(), Some(BLOCK as i128 * 10));
         // One block holds the directory, and the map says which.
         assert_eq!(e.node(&d, &[BLOCK_MAP, 0]).unwrap().child_count, 1);
         assert_eq!(e.node(&d, &[BLOCK_MAP, 0, 0]).unwrap().value.as_int(), Some(3));
-        // Five streams, the first of them the old directory.
-        assert_eq!(e.node(&d, &[DIRECTORY, 0, 0]).unwrap().value.as_int(), Some(5));
-        assert_eq!(e.node(&d, &[DIRECTORY, 0, 2]).unwrap().child_count, 5);
+        // Six streams, the first of them the old directory.
+        assert_eq!(e.node(&d, &[DIRECTORY, 0, 0]).unwrap().value.as_int(), Some(6));
+        assert_eq!(e.node(&d, &[DIRECTORY, 0, 2]).unwrap().child_count, 6);
         assert_eq!(e.node(&d, &[DIRECTORY, 0, 2, 0, 0]).unwrap().value, Value::Enum {
             raw: 0,
             name: Some("old directory".into()),
@@ -586,12 +611,12 @@ mod tests {
         let mut e = Evaluator::new(pdb());
         let blocks = |e: &mut Evaluator, i: usize| e.node(&d, &[DIRECTORY, 0, 2, i, 2]).unwrap().child_count;
         assert_eq!(blocks(&mut e, 0), 1);
-        assert_eq!(blocks(&mut e, 2), 0);
         assert_eq!(blocks(&mut e, 3), 0);
-        // 700 bytes is two blocks of 512, and the second of them is block 6.
+        assert_eq!(blocks(&mut e, 5), 0);
+        // 700 bytes is two blocks of 512, and the second of them is block 7.
         assert_eq!(blocks(&mut e, 4), 2);
         assert_eq!(e.node(&d, &[DIRECTORY, 0, 2, 4, 1]).unwrap().value.as_int(), Some(700));
-        assert_eq!(e.node(&d, &[DIRECTORY, 0, 2, 4, 2, 1]).unwrap().value.as_int(), Some(6));
+        assert_eq!(e.node(&d, &[DIRECTORY, 0, 2, 4, 2, 1]).unwrap().value.as_int(), Some(7));
     }
 
     /// A stream whose blocks are one run is read where it lies, and the info
@@ -641,13 +666,13 @@ mod tests {
     /// read across one would be a number nobody wrote.
     #[test]
     fn a_scattered_directory_reads_as_its_blocks() {
-        let d = Document::new(MemSource(pdb_file(Some(600), &[3, 6])));
+        let d = Document::new(MemSource(pdb_file(Some(600), &[3, 7])));
         let mut e = Evaluator::new(pdb());
         assert_eq!(e.node(&d, &[BLOCK_MAP, 0]).unwrap().child_count, 2);
         // The blocks, read again as the offsets they work out to, and the
         // bytes at each one.
         assert_eq!(e.node(&d, &[DIRECTORY, 0, 0]).unwrap().child_count, 2);
-        assert_eq!(e.node(&d, &[DIRECTORY, 0, 0, 1, 1]).unwrap().value.as_int(), Some(BLOCK as i128 * 6));
+        assert_eq!(e.node(&d, &[DIRECTORY, 0, 0, 1, 1]).unwrap().value.as_int(), Some(BLOCK as i128 * 7));
         assert_eq!(e.node(&d, &[DIRECTORY, 1]).unwrap().child_count, 2);
         assert_eq!(e.node(&d, &[DIRECTORY, 1, 0]).unwrap().size_bits, BLOCK as u64 * 8);
     }
@@ -658,7 +683,7 @@ mod tests {
     fn a_directory_of_two_blocks_side_by_side_still_reads() {
         let d = Document::new(MemSource(pdb_file(Some(600), &[3, 4])));
         let mut e = Evaluator::new(pdb());
-        assert_eq!(e.node(&d, &[DIRECTORY, 0, 0]).unwrap().value.as_int(), Some(5));
+        assert_eq!(e.node(&d, &[DIRECTORY, 0, 0]).unwrap().value.as_int(), Some(6));
         assert_eq!(e.node(&d, &[DIRECTORY, 0]).unwrap().size_bits, 600 * 8);
     }
 
@@ -684,4 +709,32 @@ mod tests {
         assert_eq!(e.node(&d, &[7, 1, 1]).unwrap().value.as_int(), Some(1024 * 5));
         assert_eq!(e.node(&d, &[8]).unwrap().child_count, 2);
     }
+
+    /// The type stream's records start where its header says and tile the
+    /// space it gives them: two records over sixteen bytes, each as long as it
+    /// says plus the two bytes the length does not count.
+    #[test]
+    fn the_type_stream_reads_its_records_after_its_header() {
+        let d = Document::new(MemSource(pdb_file(None, &[3])));
+        let mut e = Evaluator::new(pdb());
+        let tpi = [DIRECTORY, 0, 2, 2, 4, 0];
+        let at = |field: usize| [tpi.as_slice(), &[field]].concat();
+        assert_eq!(e.node(&d, &at(0)).unwrap().value, Value::Enum {
+            raw: 20040203,
+            name: Some("V80".into()),
+            hex: false
+        });
+        // The whole stream is read: the header and the records fill it.
+        assert_eq!(e.node(&d, &tpi).unwrap().size_bits, u64::from(SIZES[2]) * 8);
+        let records = [at(15).as_slice(), &[0]].concat();
+        assert_eq!(e.node(&d, &records).unwrap().child_count, 2);
+        assert_eq!(e.node(&d, &records).unwrap().size_bits, 16 * 8);
+        // As many records as the two type numbers in the header are apart.
+        let span = e.node(&d, &at(3)).unwrap().value.as_int().unwrap()
+            - e.node(&d, &at(2)).unwrap().value.as_int().unwrap();
+        assert_eq!(span, 2);
+        assert_eq!(e.node(&d, &[records.as_slice(), &[1, 1]].concat()).unwrap().value.as_int(), Some(0x1008));
+        assert_eq!(e.node(&d, &[records.as_slice(), &[1, 2]].concat()).unwrap().size_bits, 4 * 8);
+    }
+
 }
