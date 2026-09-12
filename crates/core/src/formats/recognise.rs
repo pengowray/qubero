@@ -113,6 +113,11 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"MM\x00*", "tiff"),
     (b".snd", "au"),
     (b"%PDF-", "pdf"),
+    // Debug symbols from a Microsoft toolchain, in the container of 1999 and
+    // in the one before it. Both open with the same sixteen characters and
+    // differ from the seventeenth, so neither is a prefix of the other.
+    (pdb::MAGIC, "pdb"),
+    (pdb::MAGIC_2, "pdb2"),
     (b"8BPS", "psd"),
     (b"%!PS-Adobe-", "eps"),
     (b"\xc5\xd0\xd3\xc6", "eps"),

@@ -117,6 +117,7 @@ mod parquet;
 pub mod thrift;
 mod pcx;
 mod pico8;
+mod pdb;
 mod pdf;
 pub mod pdf_objstm;
 pub mod pdf_xref;
@@ -237,6 +238,7 @@ pub use pe::pe;
 pub use pak::pak;
 pub use parquet::parquet;
 pub use pcx::pcx;
+pub use pdb::{pdb, pdb2};
 pub use pdf::pdf;
 pub use pi1::pi1;
 pub use pickle::pickle;
@@ -432,6 +434,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("srw", camera_raw),
     ("jpeg", |_| jpeg()),
     ("journal", |_| journal()),
+    ("pdb", |_| pdb()),
+    ("pdb2", |_| pdb2()),
     ("pdf", |_| pdf()),
     ("hdf5", |_| hdf5()),
     ("appledouble", |_| appledouble()),
