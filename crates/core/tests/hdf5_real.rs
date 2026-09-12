@@ -509,9 +509,9 @@ fn headers2(
 ///
 /// The two numbers a node carries are what lets a view divide the box it draws
 /// into the entries the node holds, so the thing to check is that dividing on
-/// them arrives where the file's own entries are. Three ways of asking, on a
-/// file written by a classic library, which is the only kind that has these
-/// nodes at all:
+/// them arrives where the file's own entries are. Four ways of asking, of every
+/// tree in every file written by a library old enough to have these nodes at
+/// all:
 ///
 /// - Every element of the node's array sits exactly where the stride puts it,
 ///   not merely the first, which is the one the stride was measured from.
@@ -521,10 +521,12 @@ fn headers2(
 ///   than out of the template: a stride that is short by a field reads this
 ///   from the middle of the entry before it, and no number comes back.
 /// - The name at the last place the stride puts is the name the walk says the
-///   node's range ends at.
+///   node's range ends at, for a link table.
+/// - The chunk offsets at the last place the stride puts are the offsets the
+///   walk says a level-zero chunk node's range ends at.
 #[test]
 fn a_version_1_node_s_stride_lands_on_its_own_entries() {
-    use qubero_core::formats::hdf5_tree::{Kind, NO_PARENT};
+    use qubero_core::formats::hdf5_tree::Job;
 
     let Some(dir) = sample_dir() else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
@@ -542,10 +544,89 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
         .expect("walks")
         .expect("a tree");
     assert_eq!(tree.version, 1, "{}: not a version 1 tree", path.display());
-    assert!(tree.omitted == 0, "{}: the walk was capped", path.display());
+    let tables = stride_lands(&mut ev, &doc, &tree, &path);
+    assert!(tables > 0, "{}: a version 1 group tree with no link table under it", path.display());
+
+    // And every other version 1 tree in every file to hand, for the sake of
+    // the other kind of entry. A chunk tree's entries are the wider of the
+    // two: a size, a filter mask and one offset per dimension of the dataset
+    // in front of the child address, with the dimension count in a message of
+    // an object header above the tree rather than in the node, so a stride
+    // taken from the widths a group entry has would be short by all of it.
+    //
+    // Not insisted on, because no file in the collection has one: a library
+    // recent enough to write the chunked datasets in it indexes them some
+    // other way. What was checked is printed rather than assumed.
+    let mut dirs = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
+    dirs.push(dir.join("hdf5"));
+    if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
+        dirs.extend(extra.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
+    }
+    let mut found = Vec::new();
+    for dir in &dirs {
+        collect(dir, 3, &mut found);
+    }
+    found.sort();
+    found.dedup();
+    let (mut groups, mut chunks) = (0usize, 0usize);
+    for path in &found {
+        let Ok(file) = File::open(path) else { continue };
+        let Ok(len) = file.metadata().map(|m| m.len()) else { continue };
+        let doc = Document::new(FileSource { file: RefCell::new(file), len });
+        let mut ev = Evaluator::new(hdf5());
+        // The signature is the first field of a file that opens with one and
+        // the second of a file that keeps a user block in front of it.
+        let signed = |ev: &mut Evaluator, at: &[usize]| {
+            matches!(ev.node(&doc, at).map(|n| n.value), Ok(Value::Magic { ok: true, .. }))
+        };
+        if !signed(&mut ev, &[0]) && !signed(&mut ev, &[1, 0]) {
+            continue;
+        }
+        let (mut trees, mut seen) = (Vec::new(), 0usize);
+        trees1(&mut ev, &doc, &[], &mut seen, &mut trees);
+        for at in &trees {
+            let Ok(Some(tree)) = qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, at, 4096) else { continue };
+            if tree.version != 1 {
+                continue;
+            }
+            match tree.job {
+                Job::Chunk => chunks += 1,
+                _ => groups += 1,
+            }
+            stride_lands(&mut ev, &doc, &tree, path);
+        }
+    }
+    eprintln!("--- version 1 trees whose entries were placed by their stride: {groups} group, {chunks} chunk");
+    assert!(groups > 0);
+}
+
+/// The checks above, over one walked tree, answering how many link tables it
+/// held. Every version 1 tree to hand is asked the same questions, because
+/// what one of these files is made of depends on which library wrote it and
+/// what was put in it.
+fn stride_lands(
+    ev: &mut Evaluator,
+    doc: &Document<FileSource>,
+    tree: &qubero_core::formats::hdf5_tree::Tree,
+    path: &Path,
+) -> usize {
+    use qubero_core::formats::hdf5_tree::{Job, Kind, NO_PARENT};
+
+    // Every address written inside an HDF5 file counts from the base address
+    // its superblock names, and a walked node says where it is in the file, so
+    // a child address read out of an entry is short by exactly that. It is 512
+    // in the one file here that keeps a user block in front of its superblock
+    // and nought in the rest, and leaving it out reads the right bytes and
+    // calls them wrong.
+    let base = base_of(ev, doc);
     let mut tables = 0usize;
     for (i, node) in tree.nodes.iter().enumerate() {
-        assert!(node.entries > 0, "{}: an empty node at {:#x}", path.display(), node.address);
+        // A node with nothing in it says no stride rather than a stride there
+        // is nothing at, which is the one answer a view must not divide on.
+        if node.entries == 0 {
+            assert_eq!((node.first_entry_bits, node.entry_bits), (0, 0), "{}: {:#x}", path.display(), node.address);
+            continue;
+        }
         assert!(node.entry_bits > 0, "{}: no stride at {:#x}", path.display(), node.address);
         let end = node.first_entry_bits + node.entries * node.entry_bits;
         assert!(
@@ -558,11 +639,11 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
         );
         // Every one of them, against where the template put it.
         let field = if node.kind == Kind::LinkTable { "symbols" } else { "entries" };
-        let array = ev.child_named(&doc, &node.path, field).expect("reads").expect("an array");
+        let array = ev.child_named(doc, &node.path, field).expect("reads").expect("an array");
         for k in 0..node.entries {
             let mut one = array.clone();
             one.push(k as usize);
-            let placed = ev.node(&doc, &one).expect("reads").offset_bits;
+            let placed = ev.node(doc, &one).expect("reads").offset_bits;
             assert_eq!(
                 placed,
                 node.address * 8 + node.first_entry_bits + k * node.entry_bits,
@@ -577,10 +658,35 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
             // the walk says the range ends at.
             let mut last = array.clone();
             last.push(node.entries as usize - 1);
-            assert_eq!(name_of(&mut ev, &doc, &last), node.last_key, "{}: {:#x}", path.display(), node.address);
+            assert_eq!(name_of(ev, doc, &last), node.last_key, "{}: {:#x}", path.display(), node.address);
+            continue;
+        }
+        // The bottom row of a chunk tree points at the chunks, which are the
+        // dataset's payload rather than nodes, so there is nothing under it to
+        // check the addresses against. What it has instead is its own key
+        // range: the offsets of the last chunk it indexes, eight bytes into
+        // the entry the stride puts last, behind the size and the filter mask.
+        if tree.job == Job::Chunk && node.level == 0 {
+            let at = node.address * 8 + node.first_entry_bits + (node.entries - 1) * node.entry_bits + 64;
+            let mut buf = vec![0u8; tree.coords as usize * 8];
+            assert!(doc.read_bits(at, tree.coords * 64, &mut buf).is_empty());
+            let read: Vec<String> =
+                buf.chunks(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()).to_string()).collect();
+            assert_eq!(
+                read.join(", "),
+                node.last_key,
+                "{}: the last chunk of the node at {:#x} is not where its stride puts it",
+                path.display(),
+                node.address
+            );
             continue;
         }
         // The child addresses, read out of the file at the end of each entry.
+        // Only where every child was reached: a node the cap stopped at still
+        // places its entries, and what it cannot do is name all of them.
+        if node.truncated {
+            continue;
+        }
         let children: Vec<u64> =
             tree.nodes.iter().filter(|n| n.parent != NO_PARENT && n.parent == i).map(|n| n.address).collect();
         assert_eq!(children.len(), node.entries as usize, "{}: {:#x}", path.display(), node.address);
@@ -589,7 +695,7 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
             let mut buf = [0u8; 8];
             assert!(doc.read_bits(at, 64, &mut buf).is_empty());
             assert_eq!(
-                u64::from_le_bytes(buf),
+                u64::from_le_bytes(buf) + base,
                 *child,
                 "{}: entry {j} of the node at {:#x} does not end at its child's address",
                 path.display(),
@@ -597,7 +703,69 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
             );
         }
     }
-    assert!(tables > 0, "{}: a version 1 group tree with no link table under it", path.display());
+    tables
+}
+
+/// Every version 1 B-tree node the template places under `path`. The tree a
+/// walk starts from is the root above whichever of these it is handed, so the
+/// nodes below one are looked at again and answer with the same tree; what
+/// this is for is finding the trees at all, in a file whose datasets keep
+/// theirs a long way down.
+fn trees1(
+    ev: &mut Evaluator,
+    doc: &Document<FileSource>,
+    path: &[usize],
+    seen: &mut usize,
+    out: &mut Vec<Vec<usize>>,
+) {
+    if *seen >= BUDGET {
+        return;
+    }
+    let Ok(node) = ev.node(doc, path) else { return };
+    *seen += 1;
+    if node.type_name == "BTree" {
+        out.push(path.to_vec());
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut p = path.to_vec();
+        p.push(i);
+        trees1(ev, doc, &p, seen, out);
+        if *seen >= BUDGET {
+            return;
+        }
+    }
+}
+
+/// What the file's superblock says its addresses count from. Nought for a file
+/// that begins with its signature, and whatever is in front of the superblock
+/// for a file that keeps a user block there.
+fn base_of(ev: &mut Evaluator, doc: &Document<FileSource>) -> u64 {
+    // Two or three levels down, depending on the file: a file that opens with
+    // its signature has the superblock among the root's fields, and one with a
+    // user block in front has the whole of that file inside a field of its
+    // own.
+    let mut at: Vec<Vec<usize>> = vec![Vec::new()];
+    for _ in 0..3 {
+        let mut below = Vec::new();
+        for path in at {
+            if let Ok(Some(field)) = ev.child_named(doc, &path, "base_address") {
+                if let Ok(node) = ev.node(doc, &field) {
+                    if let Some(base) = node.value.as_int() {
+                        return u64::try_from(base).unwrap_or(0);
+                    }
+                }
+            }
+            let Ok(node) = ev.node(doc, &path) else { continue };
+            for i in 0..node.child_count as usize {
+                let mut one = path.clone();
+                one.push(i);
+                below.push(one);
+            }
+        }
+        at = below;
+    }
+    0
 }
 
 /// The link name of a symbol table entry, which the template reads out of the
