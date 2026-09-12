@@ -259,6 +259,123 @@ export function keyOf(nodes: readonly number[]): string {
 }
 
 /**
+ * One entry of one node, drawn as a slice of that node's box.
+ *
+ * Until these were drawn, a node holding nine records showed the nine nowhere:
+ * the number was printed on the box, the band underneath counted the same nine
+ * things, and neither could be pointed at. An entry is a run of bytes at a
+ * fixed stride inside the node, so a slice is a place in the file and goes to
+ * its own bytes like any other mark here.
+ *
+ * Only a node with nothing drawn below it is divided. An index node's entries
+ * are pointers at the children on the next row, which are drawn at their own
+ * weights, so equal slices above unequal boxes would draw a correspondence the
+ * file does not have. A childless node's entries point at things that are not
+ * boxes in this picture at all: the links in a table, the chunks a bottom row
+ * indexes, the records of a version 2 leaf.
+ */
+export type Entry = {
+  readonly key: string;
+  /** Index into `Tree.nodes` of the node this is an entry of, and which entry
+   *  of it, counted from zero. */
+  readonly node: number;
+  readonly index: number;
+  readonly row: number;
+  readonly x: number;
+  readonly w: number;
+  readonly startBit: number;
+  readonly endBit: number;
+};
+
+/** Keys for the two kinds of mark that share one `data-key` attribute. A box
+ *  is keyed by the node numbers it stands for, joined with commas; the letter
+ *  in front of an entry's key is what keeps `e0:3` out of the list `0,3`,
+ *  which is a box standing for two pooled siblings. */
+export function entryKey(node: number, index: number): string {
+  return `e${node}:${index}`;
+}
+
+export function readEntryKey(key: string): { node: number; index: number } | null {
+  const m = /^e(\d+):(\d+)$/.exec(key);
+  if (m === null) return null;
+  return { node: Number(m[1]), index: Number(m[2]) };
+}
+
+/**
+ * The slices to draw, from the boxes already placed.
+ *
+ * Four things stop a node being divided, and each of them is a case where the
+ * slices would say something untrue or useless:
+ *
+ * - Children drawn below it, for the reason in [`Entry`].
+ * - A stride the walk could not settle, which it reports as zero. A picture
+ *   that divided such a node would be dividing it by a guess.
+ * - Entries that would not reach `MIN_W`, the same floor a box has to clear to
+ *   be pressable. The count printed on the box is what carries the number
+ *   there.
+ * - A last entry that would end past the node's own bytes. That cannot happen
+ *   from a correct walk; if it does, the arithmetic is wrong somewhere and the
+ *   picture must not be the thing that asserts it.
+ *
+ * One entry is not drawn either: a slice the width of the box is the box, and
+ * a reader who pressed it would land on bytes a shade different from the ones
+ * the box goes to for no visible reason.
+ */
+export function entriesOf(tree: Tree, boxes: readonly Box[]): Entry[] {
+  const parents = new Array<boolean>(tree.nodes.length).fill(false);
+  for (const node of tree.nodes) {
+    if (node.parent >= 0) parents[node.parent] = true;
+  }
+  const out: Entry[] = [];
+  for (const box of boxes) {
+    if (box.nodes.length !== 1) continue;
+    const i = box.nodes[0] ?? -1;
+    const node = tree.nodes[i];
+    if (node === undefined || parents[i] === true) continue;
+    const n = node.entries;
+    if (n < 2 || node.entry_bits <= 0) continue;
+    if (box.w < n * MIN_W) continue;
+    if (node.first_entry_bits + n * node.entry_bits > node.size_bits) continue;
+    for (let k = 0; k < n; k++) {
+      const startBit = node.address * 8 + node.first_entry_bits + k * node.entry_bits;
+      out.push({
+        key: entryKey(i, k),
+        node: i,
+        index: k,
+        row: box.row,
+        x: box.x + (box.w * k) / n,
+        w: box.w / n,
+        startBit,
+        endBit: startBit + node.entry_bits,
+      });
+    }
+  }
+  return out;
+}
+
+/** What one entry of this node is called: the thing it holds or points at,
+ *  singular. A version 2 node of either kind holds records, a link table holds
+ *  links, and a bottom-row index node of a chunk tree points at chunks. */
+export function entryNoun(tree: Tree, node: TreeNode): string {
+  if (tree.version === 2) return "record";
+  if (node.kind === "links") return "link";
+  return tree.job === "chunk" ? "chunk" : BTREES.kindLinks;
+}
+
+/** One slice written out: which entry of how many, where it is and how long.
+ *  The same lines for the tooltip and the readout, as `nodeLines` is for a
+ *  box. */
+export function entryLines(tree: Tree, entry: Entry): string[] {
+  const node = tree.nodes[entry.node];
+  if (node === undefined) return [];
+  const bytes = formatBytes(Math.ceil((entry.endBit - entry.startBit) / 8));
+  return [
+    BTREES.entryAt(entryNoun(tree, node), entry.index + 1, node.entries, formatOffset(entry.startBit), bytes),
+    BTREES.entryIn(kindWord(node), signWord(node), formatOffset(node.address * 8)),
+  ];
+}
+
+/**
  * How many things the band under the last row of boxes stands for, or null
  * where there is no honest number to print.
  *
@@ -550,7 +667,7 @@ export function widthCaption(tree: Tree): string {
 /** The tree itself: one band per row, each box under its parent's span, and
  *  under the last of them the band of links, chunks or records the tree
  *  indexes. */
-export function drawTree(tree: Tree, boxes: readonly Box[], width: number, rowH: number): SVGElement {
+export function drawTree(tree: Tree, boxes: readonly Box[], entries: readonly Entry[], width: number, rowH: number): SVGElement {
   const depth = Math.max(...tree.nodes.map((n) => n.depth)) + 1;
   const leaves = leafBand(tree);
   const bands = depth + (leaves === null ? 0 : 1);
@@ -560,6 +677,10 @@ export function drawTree(tree: Tree, boxes: readonly Box[], width: number, rowH:
   svg.setAttribute("width", String(width));
   svg.setAttribute("height", String(height));
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  // Three passes in paint order, rather than a box and its number together:
+  // the slices of a node sit over the box they divide, and the number a box
+  // carries has to stay legible over a slice the mouse is on.
+  const labels = document.createDocumentFragment();
   for (const box of boxes) {
     const rect = document.createElementNS(SVG, "rect");
     rect.setAttribute("x", String(box.x));
@@ -582,9 +703,25 @@ export function drawTree(tree: Tree, boxes: readonly Box[], width: number, rowH:
       text.setAttribute("y", String(box.row * (rowH + ROW_GAP) + rowH / 2));
       text.setAttribute("class", "btp-count");
       text.textContent = one.entries.toLocaleString();
-      svg.append(text);
+      labels.append(text);
     }
   }
+  // What is inside the nodes that have nothing under them: one slice an entry,
+  // each a run of bytes to go to. `entriesOf` says which nodes get them.
+  for (const entry of entries) {
+    const rect = document.createElementNS(SVG, "rect");
+    rect.setAttribute("x", String(entry.x));
+    rect.setAttribute("y", String(entry.row * (rowH + ROW_GAP)));
+    rect.setAttribute("width", String(Math.max(1, entry.w - 1)));
+    rect.setAttribute("height", String(rowH));
+    rect.setAttribute("class", "btp-entry");
+    rect.dataset["key"] = entry.key;
+    const title = document.createElementNS(SVG, "title");
+    title.textContent = entryLines(tree, entry).join("\n");
+    rect.append(title);
+    svg.append(rect);
+  }
+  svg.append(labels);
   // The links, chunks or records themselves, as one dashed band across the
   // full width. Undivided because they are not nodes and have no place of
   // their own here: a group's links are inside the link tables in the row

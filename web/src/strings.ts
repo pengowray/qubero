@@ -1212,6 +1212,15 @@ export const BTREES = {
    *  index nodes, link tables, chunks, or links. */
   pointsAt: (n: number, noun: string): string => `points at ${countText(n, noun)}`,
   holds: (n: number, noun: string): string => `holds ${countText(n, noun)}`,
+  /** One entry of a node, drawn as a slice of its box and written out on
+   *  hover and in the readout. Which of how many first, because that is what
+   *  a reader pressing the third slice of nine is checking, then where it is
+   *  and how long, in the readout's own order. */
+  entryAt: (noun: string, index: number, of: number, address: string, bytes: string): string =>
+    `${noun} ${index.toLocaleString()} of ${of.toLocaleString()} · ${address} · ${bytes}`,
+  /** And which node it is inside, so a slice pressed in a row of them still
+   *  says which box it came out of. */
+  entryIn: (kind: string, sign: string, address: string): string => `in the ${kind} (${sign}) at ${address}`,
   /** The width line of a node's readout and tooltip: what this box's width
    *  stands for, as a number. A box carries two marks and they are two
    *  different counts. The number printed on it is the node's own entries,

@@ -208,6 +208,40 @@ pub struct Node {
     /// True when children of this node exist that the walk did not reach, so
     /// its count is what is under it and its range is not.
     pub truncated: bool,
+    /// Where the node's first entry starts, counted in bits from
+    /// [`Node::address`], and how many bits one entry takes. Every node here
+    /// writes its entries at a fixed stride, so these two place all
+    /// [`Node::entries`] of them without a list per node: entry `i` starts at
+    /// `address * 8 + first_entry_bits + i * entry_bits`. Without them a view
+    /// has a node's bytes and no way to divide them, which is a box a reader
+    /// can open and not a box a reader can point at.
+    ///
+    /// What one entry covers is whatever the file writes per entry, and that
+    /// is a different thing in each of the four kinds of node:
+    ///
+    /// - A `TREE` entry is a key and the child address under it: the pair the
+    ///   template places as one element of the node's `entries`, so a view
+    ///   dividing on this stride divides exactly where the Listing does. The
+    ///   key that closes the node's range is not an entry. It sits alone at
+    ///   `first_entry_bits + entries * entry_bits`, and so do the slots HDF5
+    ///   reserved and has not filled yet, which hold whatever was written
+    ///   there last; neither is placed by these two numbers.
+    /// - An `SNOD` entry is one symbol table entry: a link's name offset, its
+    ///   object header address, and the cache HDF5 keeps beside them. Not the
+    ///   name, which is in the group's heap somewhere else entirely.
+    /// - A `BTLF` or `BTIN` entry is one record, `record_size` bytes of it.
+    ///   The child pointers a `BTIN` writes after its records are not on this
+    ///   stride and are not entries: there is one more of them than there are
+    ///   records, and how wide one is is nowhere in the file (see the `v2`
+    ///   module's `Shape`). Nor is the four-byte checksum either kind ends
+    ///   with.
+    ///
+    /// Both zero together where the walk could not settle the stride, which
+    /// here is a version 1 node with no entries in it: an empty array is
+    /// nothing to measure, and a node with no entries is nothing to divide. A
+    /// view must divide nothing on a zero, rather than take it for a stride.
+    pub first_entry_bits: u64,
+    pub entry_bits: u64,
 }
 
 /// One B-tree, walked.
@@ -683,18 +717,29 @@ fn add<S: Source>(
         first_key: String::new(),
         last_key: String::new(),
         truncated: false,
+        first_entry_bits: 0,
+        entry_bits: 0,
     });
     if kind == Kind::LinkTable {
         out.nodes[here].entries = field_int(ev, doc, at, "symbol_count")?.unwrap_or(0);
         let (first, last) = link_names(ev, doc, at)?;
         out.nodes[here].first_key = first;
         out.nodes[here].last_key = last;
+        let (at_bits, wide) = stride(ev, doc, at, "symbols", info.offset_bits)?;
+        out.nodes[here].first_entry_bits = at_bits;
+        out.nodes[here].entry_bits = wide;
         return Ok(());
     }
     let level = field_int(ev, doc, at, "node_level")?.unwrap_or(0);
     let used = field_int(ev, doc, at, "entries_used")?.unwrap_or(0);
     out.nodes[here].level = level;
     out.nodes[here].entries = used;
+    // Before the three returns below, and not after them: a level-zero chunk
+    // node returns as soon as it has read its keys, and it is the node a
+    // reader most wants divided, since each of its entries is a chunk.
+    let (at_bits, wide) = stride(ev, doc, at, "entries", info.offset_bits)?;
+    out.nodes[here].first_entry_bits = at_bits;
+    out.nodes[here].entry_bits = wide;
     if parent == NO_PARENT {
         // Every node of one tree carries the same `node_type`; the root's is
         // read and the rest are taken on its word, which saves a read a node.
@@ -745,6 +790,35 @@ fn add<S: Source>(
 fn field_int<S: Source>(ev: &mut Evaluator, doc: &Document<S>, at: &[usize], name: &str) -> R<Option<u64>> {
     let Some(field) = ev.child_named(doc, at, name)? else { return Ok(None) };
     Ok(ev.node(doc, &field)?.value.as_int().and_then(|v| u64::try_from(v).ok()))
+}
+
+/// Where the first element of the array `name` starts, in bits from `from`,
+/// and how many bits one element takes. Both zero for an array with nothing in
+/// it. See [`Node::first_entry_bits`].
+///
+/// Read from where the template put the entries rather than worked out from
+/// the widths a superblock declares, because those widths are not one number
+/// and not all of them are nearby. A group tree's key is a heap offset as wide
+/// as the file's lengths; a chunk tree's is a size, a filter mask and one
+/// offset per dimension of the dataset, and the dimension count is in a message
+/// of an object header somewhere above the tree. The template has already read
+/// all of it to place the entry, and an entry it placed is one a reader can
+/// open; a width computed here beside it would be a second answer to the
+/// question, free to disagree with the first.
+///
+/// One element measured and not two differenced: the elements of an array sit
+/// one after another, so an element's own length is the step to the next one,
+/// and a node holding a single entry is measured the same way as a node holding
+/// two thousand.
+fn stride<S: Source>(ev: &mut Evaluator, doc: &Document<S>, at: &[usize], name: &str, from: u64) -> R<(u64, u64)> {
+    let Some(array) = ev.child_named(doc, at, name)? else { return Ok((0, 0)) };
+    if ev.node(doc, &array)?.child_count == 0 {
+        return Ok((0, 0));
+    }
+    let mut first = array;
+    first.push(0);
+    let first = ev.node(doc, &first)?;
+    Ok((first.offset_bits.saturating_sub(from), first.size_bits))
 }
 
 /// The first and last link name in a link table, which is where a group tree's
@@ -1200,6 +1274,18 @@ mod v2 {
             first_key: String::new(),
             last_key: String::new(),
             truncated: false,
+            // Both kinds write their records straight after the signature, the
+            // version and the type byte, each `record_size` long, which is
+            // where [`chunk_keys`] reads them from. `HEAD` and not `PREFIX`:
+            // the four bytes that make up the difference are the checksum at
+            // the far end of the node, not something in front of the records.
+            //
+            // Settled even for a node holding no records, because the header
+            // settles it and not the node: there is simply nothing at the
+            // stride. The child pointers a `BTIN` writes after its records are
+            // not on it; see [`Node::first_entry_bits`].
+            first_entry_bits: HEAD * 8,
+            entry_bits: shape.record_size * 8,
         });
         if leaf {
             if out.coords > 0 {

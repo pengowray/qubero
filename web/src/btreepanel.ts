@@ -57,6 +57,9 @@ import {
   boxesOf,
   drawStrip,
   drawTree,
+  entriesOf,
+  entryLines,
+  readEntryKey,
   jobCaption,
   keyRow,
   place,
@@ -68,7 +71,7 @@ import {
   STRIP_H,
   STRIP_H_BIG,
 } from "./btreedraw.ts";
-import type { Box } from "./btreedraw.ts";
+import type { Box, Entry } from "./btreedraw.ts";
 import { BTREES, TREEMAP } from "./strings.ts";
 
 /** How many nodes one walk draws. A group of a million links has a quarter of
@@ -117,6 +120,9 @@ export class BTreePanel {
   /** The node the cursor is in, as an index into the tree's nodes. */
   private lit = -1;
   private boxes: readonly Box[] = [];
+  /** The slices drawn inside the boxes that have nothing under them, one an
+   *  entry of a node. Empty wherever `entriesOf` refused to divide a node. */
+  private entries: readonly Entry[] = [];
   private big = false;
   private shown = false;
   private frame = 0;
@@ -386,10 +392,14 @@ export class BTreePanel {
       this.job.textContent = this.empty;
       this.plot.replaceChildren();
       this.keyLine.hidden = true;
+      this.widths.hidden = true;
       this.widths.textContent = "";
       this.rows.replaceChildren();
+      this.stripCap.hidden = true;
       this.stripCap.textContent = "";
+      this.strip.hidden = true;
       this.strip.replaceChildren();
+      this.span.hidden = true;
       this.span.textContent = "";
       this.readout.textContent = "";
       this.note.hidden = true;
@@ -399,17 +409,39 @@ export class BTreePanel {
     const width = Math.max(1, Math.floor(this.plot.clientWidth || this.el.clientWidth));
     this.head.textContent = this.ownerName ?? this.owner(tree);
     this.job.textContent = jobCaption(tree);
-    this.keyLine.hidden = false;
     this.keyLabel.textContent = tree.version === 2 ? BTREES.recordsKey : BTREES.entriesKey;
     this.widths.textContent = widthCaption(tree);
     this.stripCap.textContent = BTREES.stripCaption;
     const placed = place(tree, width);
     this.boxes = boxesOf(tree, placed, width);
-    this.plot.replaceChildren(drawTree(tree, this.boxes, width, this.big ? ROW_H_BIG : ROW_H));
+    this.entries = entriesOf(tree, this.boxes);
+    this.plot.replaceChildren(drawTree(tree, this.boxes, this.entries, width, this.big ? ROW_H_BIG : ROW_H));
     this.drawRows(tree);
-    const strip = drawStrip(tree, width, this.big ? STRIP_H_BIG : STRIP_H);
-    this.strip.replaceChildren(strip.svg);
-    this.span.textContent = strip.span;
+    // Two of the lines under the picture are about telling boxes apart, and a
+    // picture with one box in it has nothing to tell apart: a width is only a
+    // proportion against another width, and a key to the number on a box is a
+    // second drawn box beside the only real one. Both go rather than stand
+    // there saying nothing about the tree on screen.
+    const many = this.boxes.length > 1;
+    this.widths.hidden = !many;
+    this.keyLine.hidden = !many;
+    // The address picture is the tree's nodes in file order against its own
+    // span. One node is in one order and spans its own bytes, so the strip is
+    // a single mark against a scale it defines, its caption promises a second
+    // reading of something, and the span line prints the node's own address
+    // twice. The readout carries where that node is.
+    const placedApart = tree.nodes.length > 1;
+    this.stripCap.hidden = !placedApart;
+    this.strip.hidden = !placedApart;
+    this.span.hidden = !placedApart;
+    if (placedApart) {
+      const strip = drawStrip(tree, width, this.big ? STRIP_H_BIG : STRIP_H);
+      this.strip.replaceChildren(strip.svg);
+      this.span.textContent = strip.span;
+    } else {
+      this.strip.replaceChildren();
+      this.span.textContent = "";
+    }
     this.drawReadout();
     this.light();
   }
@@ -461,6 +493,17 @@ export class BTreePanel {
   /** What the pressed box is, written out under the picture, one line a div. */
   private drawReadout(): void {
     const tree = this.tree;
+    const entry = this.entries.find((e) => e.key === this.selected);
+    if (tree !== null && entry !== undefined) {
+      this.readout.replaceChildren(
+        ...entryLines(tree, entry).map((text) => {
+          const line = document.createElement("div");
+          line.textContent = text;
+          return line;
+        }),
+      );
+      return;
+    }
     const box = this.boxes.find((b) => b.key === this.selected);
     if (tree === null || box === undefined) {
       this.readout.replaceChildren();
@@ -484,6 +527,19 @@ export class BTreePanel {
     if (tree === null || !(target instanceof Element)) return;
     const key = (target as SVGElement & { dataset: DOMStringMap }).dataset["key"];
     if (key === undefined) return;
+    // A slice inside a node. It goes to its own bytes and is marked like a
+    // box, and a second press does no more than a first: an entry is a run of
+    // bytes the template places under the node, with no field of its own for
+    // the Listing to open.
+    if (readEntryKey(key) !== null) {
+      this.selected = this.selected === key ? null : key;
+      this.light();
+      this.drawReadout();
+      const entry = this.entries.find((e) => e.key === key);
+      if (this.selected === null || entry === undefined) return;
+      this.onJump(entry.startBit, entry.endBit);
+      return;
+    }
     const nodes = key.split(",").map(Number);
     const node = tree.nodes[nodes[0] ?? -1];
     if (node === undefined) return;

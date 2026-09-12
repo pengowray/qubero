@@ -4843,6 +4843,25 @@ table.rec tr.is-on td {
 .btp-mark.is-on {
   fill: var(--accent);
 }
+/* One entry of a node, drawn inside the box that holds it. Lines rather than
+   boxes: they divide a shape that is already there, and a filled slice would
+   read as a node of its own on a picture whose only filled shapes are nodes.
+   Hit-tested across the whole slice for `.btp-leaf`'s reason: an unfilled SVG
+   shape answers the mouse on its outline alone, and a reader points at the
+   middle of a slice. */
+.btp-entry {
+  fill: none;
+  pointer-events: all;
+  stroke: color-mix(in srgb, var(--line) 70%, transparent);
+  stroke-width: 1px;
+  cursor: pointer;
+}
+.btp-entry:hover {
+  fill: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.btp-entry.is-on {
+  fill: var(--accent);
+}
 /* The node's own count, on the box when the box is wide enough for it. */
 .btp-count {
   fill: var(--fg);

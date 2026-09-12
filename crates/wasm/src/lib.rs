@@ -1164,6 +1164,19 @@ struct TreeNodeDto {
     /// True when children of this node were not reached, so its count stands
     /// and its range does not.
     truncated: bool,
+    /// Where the node's first entry starts, in bits from `address`, and how
+    /// many bits one entry takes, so the host can place all `entries` of them
+    /// without a list: entry `i` is at `address * 8 + first_entry_bits + i *
+    /// entry_bits`. What one entry covers is a key and a child address for a
+    /// `TREE`, one symbol table entry for an `SNOD`, one record for a `BTLF`
+    /// or a `BTIN`. A `TREE`'s closing key and a `BTIN`'s child pointers are
+    /// not entries and are not on the stride.
+    ///
+    /// Both zero where the walk could not settle the stride, which is the one
+    /// case a host must leave the node undivided rather than take the zero for
+    /// a width.
+    first_entry_bits: f64,
+    entry_bits: f64,
 }
 
 /// One HDF5 B-tree, walked into the shape it has in the file.
@@ -2587,6 +2600,8 @@ impl Editor {
                         first_key: n.first_key,
                         last_key: n.last_key,
                         truncated: n.truncated,
+                        first_entry_bits: n.first_entry_bits as f64,
+                        entry_bits: n.entry_bits as f64,
                     })
                     .collect(),
             }

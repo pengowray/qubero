@@ -20,7 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { Tree, TreeNode } from "../src/doc.ts";
-import { boxesOf, leafBand, leafCount, place, readoutLines, widthCaption, type Box } from "../src/btreedraw.ts";
+import { boxesOf, entriesOf, leafBand, leafCount, place, readoutLines, widthCaption, type Box } from "../src/btreedraw.ts";
 import { BTREES } from "../src/strings.ts";
 
 /** One node of a fixture, with its children. Written as a tree because that is
@@ -35,6 +35,10 @@ type Spec = {
    *  count at or above it a lower bound. */
   truncated?: boolean;
   kids?: Spec[];
+  /** How many bits one entry of this node takes. Left out where a fixture is
+   *  about the shape of the tree, which is most of them: a node with no stride
+   *  is one the walk could not divide, and `entriesOf` draws no slices in it. */
+  stride?: number;
 };
 
 type Shape = {
@@ -71,6 +75,11 @@ function build(shape: Shape): Tree {
         first_key: "",
         last_key: "",
         truncated: spec.truncated ?? false,
+        // 8 bytes in, 8 bytes an entry: made up like the addresses, and large
+        // enough that every entry of a 512 byte node stays inside it, so a
+        // fixture never trips `entriesOf`'s check on the last entry.
+        first_entry_bits: spec.stride === undefined ? 0 : 64,
+        entry_bits: spec.stride ?? 0,
       });
       for (const kid of spec.kids ?? []) next.push({ spec: kid, parent: here, depth: depth + 1 });
     }
@@ -486,4 +495,46 @@ test("a row too wide for its boxes pools neighbouring siblings, and only those",
   // Every node on the row is in exactly one box, so nothing is drawn twice and
   // nothing is dropped.
   assert.equal(bottom.reduce((sum, b) => sum + b.nodes.length, 0), 999);
+});
+
+/** One leaf and nothing else: the shape a group of nine links is written as,
+ *  and the shape every general caption on the panel says nothing about. */
+function oneLeaf(entries: number, stride?: number): Tree {
+  const root: Spec = { entries, kind: "leaf", level: 0 };
+  return build({ version: 2, job: "group", records_total: entries, record_type: 6, root: stride === undefined ? root : { ...root, stride } });
+}
+
+test("a node with nothing under it is divided into its entries, and one with children is not", () => {
+  const tree = oneLeaf(9, 8 * 8);
+  const entries = entriesOf(tree, boxesOf(tree, place(tree, WIDTH), WIDTH));
+  assert.equal(entries.length, 9);
+  // The slices fill the box left to right, each the same width, in the order
+  // the file writes them.
+  assert.equal(entries[0]?.x, 0);
+  assert.ok(Math.abs((entries[8]?.x ?? 0) + (entries[8]?.w ?? 0) - WIDTH) < 0.001);
+  for (const [i, entry] of entries.entries()) {
+    assert.equal(entry.index, i);
+    assert.equal(entry.startBit, (tree.nodes[0]?.address ?? 0) * 8 + 64 + i * 64);
+    assert.equal(entry.endBit - entry.startBit, 64);
+  }
+  // An index node's entries point at the boxes on the next row, which are
+  // drawn at their own weights; equal slices over unequal children would draw
+  // a correspondence the file does not have.
+  const deep = groupTreeV2();
+  const drawn = entriesOf(deep, boxesOf(deep, place(deep, WIDTH), WIDTH));
+  for (const entry of drawn) assert.equal(deep.nodes.some((n) => n.parent === entry.node), false);
+});
+
+test("a node is left undivided where the slices would be a guess, a smear, or past its end", () => {
+  const noStride = oneLeaf(9);
+  assert.deepEqual(entriesOf(noStride, boxesOf(noStride, place(noStride, WIDTH), WIDTH)), []);
+  // 200 records across 256 pixels is under the width a mark has to reach to be
+  // pressable, so the count printed on the box is what carries the number.
+  const many = oneLeaf(200, 8 * 8);
+  assert.deepEqual(entriesOf(many, boxesOf(many, place(many, WIDTH), WIDTH)), []);
+  // A stride that would run the last entry past the node's own bytes is
+  // arithmetic gone wrong upstream, and the picture must not be what asserts
+  // it: the fixture's nodes are 512 bytes.
+  const past = oneLeaf(9, 80 * 8);
+  assert.deepEqual(entriesOf(past, boxesOf(past, place(past, WIDTH), WIDTH)), []);
 });
