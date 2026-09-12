@@ -116,6 +116,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     // Debug symbols from a Microsoft toolchain, in the container of 1999 and
     // in the one before it. Both open with the same sixteen characters and
     // differ from the seventeenth, so neither is a prefix of the other.
+    // A .NET build's symbols, which are ECMA-335 metadata rather than the
+    // container above. The version string is part of the signature: the root
+    // on its own is what an assembly carries inside it.
+    (ppdb::MAGIC, "portablepdb"),
     (pdb::MAGIC, "pdb"),
     (pdb::MAGIC_2, "pdb2"),
     (b"8BPS", "psd"),

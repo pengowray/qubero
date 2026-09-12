@@ -58,6 +58,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   pef: "Pentax PEF",
   pdb: "Microsoft program database (MSF 7.00)",
   pdb2: "Microsoft program database (MSF 2.00)",
+  portablepdb: "Portable PDB (.NET debug symbols)",
   psd: "Adobe Photoshop PSD/PSB",
   rpm: "RPM package",
   rw2: "Panasonic RW2",

@@ -119,6 +119,7 @@ mod pcx;
 mod pico8;
 mod pdb;
 mod pdf;
+mod ppdb;
 pub mod pdf_objstm;
 pub mod pdf_xref;
 mod pe;
@@ -240,6 +241,7 @@ pub use parquet::parquet;
 pub use pcx::pcx;
 pub use pdb::{pdb, pdb2};
 pub use pdf::pdf;
+pub use ppdb::ppdb;
 pub use pi1::pi1;
 pub use pickle::pickle;
 pub use picotron::{p64png, p64rom};
@@ -437,6 +439,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("pdb", |_| pdb()),
     ("pdb2", |_| pdb2()),
     ("pdf", |_| pdf()),
+    ("portablepdb", |_| ppdb()),
     ("hdf5", |_| hdf5()),
     ("appledouble", |_| appledouble()),
     ("applesingle", |_| applesingle()),
