@@ -2490,14 +2490,15 @@ which the IR cannot describe, so a NAL unit stops at its header bits. What is
 left for an H.264 Annex B stream is a template for one; the measure it needs is
 built, and see "A stream that ends at something longer than a byte".
 
-A program database's streams are their block lists and nothing more. A PDB is a
-paged container, so a stream of more than one block is nowhere in the file as a
-run of bytes, and the blocks are stored rather than compressed: joining them is
-the whole of what is missing, and nothing in the IR says "one space stitched
-from several runs". A Godot `RSCC` written across more than one block waits on
-the same sentence. So the header, the block map and the stream directory read,
-and the type records, the module list and the source file names inside those
-blocks do not.
+A program database's scattered streams are their block lists and nothing more.
+A PDB is a paged container, so a stream whose blocks are not consecutive is
+nowhere in the file as a run of bytes, and the blocks are stored rather than
+compressed: joining them is the whole of what is missing, and nothing in the IR
+says "one space stitched from several runs". A Godot `RSCC` written across more
+than one block waits on the same sentence. A stream whose blocks *are* one
+ascending run is read where it lies, which covers the stream directory in every
+PDB measured and the info stream in nearly all of them; see `formats/pdb.rs`
+for the check that says so and for what a stream is read as once it is found.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 
