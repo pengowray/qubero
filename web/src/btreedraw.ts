@@ -94,7 +94,7 @@ export type Placed = {
 /** One line of the summary under the picture. `short` is the muted class the
  *  warnings and caveats take; `title` is the one row that explains itself on
  *  hover. */
-export type RowLine = { readonly text: string; readonly short: boolean; readonly title?: string };
+export type RowLine = { readonly text: string; readonly short: boolean; readonly title?: string; readonly muted?: boolean };
 
 /**
  * How many of the things this tree indexes a node holds itself, as against
@@ -353,26 +353,47 @@ export function entriesOf(tree: Tree, boxes: readonly Box[]): Entry[] {
   return out;
 }
 
-/** What one entry of this node is called: the thing it holds or points at,
- *  singular. A version 2 node of either kind holds records, a link table holds
- *  links, and a bottom-row index node of a chunk tree points at chunks. */
-export function entryNoun(tree: Tree, node: TreeNode): string {
-  if (tree.version === 2) return "record";
-  if (node.kind === "links") return "link";
-  return tree.job === "chunk" ? "chunk" : BTREES.kindLinks;
+/** What one entry of a node is called. A version 2 node of either kind holds
+ *  records, which is the word every line on such a screen uses; a version 1
+ *  node's entry is a symbol table entry or a key and a child pointer, and
+ *  "entry" is what the count on the box and the key beside it already call
+ *  those. */
+export function entryNoun(tree: Tree): string {
+  return tree.version === 2 ? "record" : "entry";
 }
 
-/** One slice written out: which entry of how many, where it is and how long.
- *  The same lines for the tooltip and the readout, as `nodeLines` is for a
- *  box. */
+/**
+ * One slice written out: which entry of how many, where it is and how long,
+ * and then what it holds where that is known.
+ *
+ * The index is the Listing's own, counted from zero and in brackets, because
+ * pressing a slice puts the cursor in those bytes and the row it lands on is
+ * labelled that way. "Entry 3" over a row reading `[2]` would be a number with
+ * the wrong origin.
+ *
+ * What a slice holds is thin on purpose for now: the walk sends the stride and
+ * nothing per entry, so a link's name, a chunk's offset and a child's address
+ * are not here to print. The two lines that can be said without them are said:
+ * what a version 2 group's record holds instead of a name, and that a record of
+ * an undecoded type was not read.
+ */
 export function entryLines(tree: Tree, entry: Entry): string[] {
   const node = tree.nodes[entry.node];
   if (node === undefined) return [];
   const bytes = formatBytes(Math.ceil((entry.endBit - entry.startBit) / 8));
-  return [
-    BTREES.entryAt(entryNoun(tree, node), entry.index + 1, node.entries, formatOffset(entry.startBit), bytes),
-    BTREES.entryIn(kindWord(node), signWord(node), formatOffset(node.address * 8)),
-  ];
+  const lines = [BTREES.entryAt(entryNoun(tree), entry.index, node.entries, formatOffset(entry.startBit), bytes)];
+  if (tree.version === 2 && tree.records !== "read") lines.push(BTREES.recordNotDecoded);
+  else if (tree.version === 2 && tree.job === "group") lines.push(BTREES.recordLinkHash);
+  return lines;
+}
+
+/** The same slice for the readout under the picture, which unlike the tooltip
+ *  does not sit beside the box it came out of and has to say which node that
+ *  was. */
+export function entryReadout(tree: Tree, entry: Entry): string[] {
+  const node = tree.nodes[entry.node];
+  if (node === undefined) return [];
+  return [...entryLines(tree, entry), BTREES.entryIn(kindWord(node), signWord(node), formatOffset(node.address * 8))];
 }
 
 /**
@@ -504,7 +525,8 @@ function nodeLines(tree: Tree, node: TreeNode, box: Box): string[] {
   // a node whose children were not all reached still gets it: the count is a
   // lower bound there and says so. Nothing is printed where there is no honest
   // number; `BTREES.widthStands` says when that is.
-  if (box.count > 0) {
+  const rows = Math.max(...tree.nodes.map((n) => n.depth)) + 1;
+  if (box.count > 0 && rows > 1) {
     lines.push(
       tree.version === 2
         ? BTREES.widthStandsV2(box.count, node.kind === "leaf", box.floor)
@@ -520,6 +542,13 @@ function nodeLines(tree: Tree, node: TreeNode, box: Box): string[] {
     lines.push(ranged ? BTREES.truncated("chunk") : tree.version === 1 ? BTREES.truncated("link") : BTREES.truncatedNoRange);
     return lines;
   }
+  // Why a version 2 group node shows no range: its records hold a hash of a
+  // name and an id into the fractal heap. On the node rather than under the
+  // picture, because it is a fact about what is inside this node and a reader
+  // meets it when they press one. Only where the records were read; where they
+  // were not, the summary already says so and two notes about one absence read
+  // as two problems.
+  if (tree.version === 2 && tree.job === "group" && tree.records === "read") lines.push(BTREES.nodeLinkHashes);
   if (node.first_key === "") return lines;
   lines.push(
     tree.job === "chunk"
@@ -623,16 +652,12 @@ export function rowLines(tree: Tree): RowLine[] {
   // a tree of a type nobody here decoded still has a true picture. What it does
   // not have is anything to say about the contents, and a picture that stayed
   // silent about that would be a picture a reader took for a full account.
-  if (tree.records === "unread") out.push({ text: BTREES.recordsUnread(tree.record_type_name), short: true });
-  if (tree.records === "unknown") out.push({ text: BTREES.recordsUnknown(tree.record_type), short: true });
-  // Why a version 2 group tree shows no first or last link anywhere: its
-  // records hold a hash and a heap id, and the names are in the heap. Only
-  // where the records were read, because `recordsUnread` has already accounted
-  // for the missing range otherwise, and two notes about one absence read as
-  // two problems.
-  if (tree.version === 2 && tree.job === "group" && tree.records === "read") {
-    out.push({ text: BTREES.groupRecordsNote, short: true });
-  }
+  // Muted rather than warned. The warn colour on these rows put a red line
+  // under a healthy tree of any type but the two this decodes, which is most
+  // of the twelve; what is red on this panel is `omitted` and `stripPooled`,
+  // the lines that say the picture is short of the file.
+  if (tree.records === "unread") out.push({ text: BTREES.recordsUnread(tree.record_type_name), short: false, muted: true });
+  if (tree.records === "unknown") out.push({ text: BTREES.recordsUnknown(tree.record_type), short: false, muted: true });
   return out;
 }
 
@@ -643,14 +668,44 @@ export function rowLines(tree: Tree): RowLine[] {
  *  The two have different silhouettes, and a reader comparing a file to
  *  another file cannot tell from a picture of three rows of boxes which kind
  *  they are looking at unless it says. */
+/**
+ * What this tree holds, and what its keys are in order of.
+ *
+ * A version 2 tree says which of the twelve record types it is, and the four
+ * types that are a group's links or a dataset's chunks are two pairs: by name
+ * or by creation order, filtered or not. Those are different orders over the
+ * same things, and a line that said only "links" would leave a reader holding
+ * two trees of a group unable to tell which was which. Every other named type
+ * is the specification's own phrase, which is the word the Listing prints at
+ * the header's `type` field.
+ *
+ * A version 1 tree is untyped and its job is what it hangs under, so it takes
+ * the unqualified pair. Its group keys are names and its chunk keys are
+ * offsets, which is what the two lines already say.
+ */
+function jobWords(tree: Tree, other: string): string {
+  if (tree.version === 1) return tree.job === "group" ? BTREES.jobLinksByName : tree.job === "chunk" ? BTREES.jobChunks : other;
+  switch (tree.record_type) {
+    case 5:
+      return BTREES.jobLinksByName;
+    case 6:
+      return BTREES.jobLinksByOrder;
+    case 10:
+      return BTREES.jobChunksV2(false);
+    case 11:
+      return BTREES.jobChunksV2(true);
+    default:
+      return other;
+  }
+}
+
 export function jobCaption(tree: Tree): string {
   // On `records` and not on the name being empty, because the two cases are
   // not the same fact: a type the specification names is a thing this tree
   // indexes and can be said outright, and a type byte nothing names is a
   // number and a caveat.
   const other = tree.records === "unknown" ? BTREES.jobUnknown(tree.record_type) : BTREES.jobOther(tree.record_type_name);
-  const job = tree.job === "group" ? BTREES.jobGroup : tree.job === "chunk" ? BTREES.jobChunk : other;
-  return job + BTREES.versionTag(tree.version);
+  return jobWords(tree, other) + BTREES.versionTag(tree.version);
 }
 
 /** The line under the picture: what a box's width is and what the number on it

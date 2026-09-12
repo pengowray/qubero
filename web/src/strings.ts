@@ -947,14 +947,16 @@ export const BTREES = {
    *  fragments, which is what they are. The width rule also has to stay inside
    *  the "Top:" part, because every mark on the bottom picture is one pixel
    *  wide and a loose sentence about box width would be false of it. */
-  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent, its width proportional to the number of links, chunks or records below it. Bottom: the same nodes placed by file address. Click a box to go to its bytes. Double-click to open it in the Listing; in a version 2 tree only the root node is placed there.",
+  what: "The shape of one B-tree in this HDF5 file: how far it branches, how deep it goes, and where its nodes sit in the file. Top: the tree, root at the top, each box under its parent, its width proportional to the number of links, chunks or records below it. Bottom: the same nodes placed by file address. Click a node or an entry to go to its bytes. Double-click a node to open it in the Listing.",
   /** Under the heading, which is the owning object's path. The two jobs a
    *  version 1 tree does are two different pictures (a group tree has a row a
    *  chunk tree does not), so the job is stated rather than left to be read
    *  off the shape. "B-tree" is repeated because the heading is a path and
    *  the tab is a plural. */
-  jobGroup: "B-tree of this group's links",
-  jobChunk: "B-tree of this dataset's chunks",
+  jobLinksByName: "Links by name",
+  jobLinksByOrder: "Links by creation order",
+  jobChunks: "Chunks by offset",
+  jobChunksV2: (filtered: boolean): string => `Chunks by offset, ${filtered ? "filtered" : "unfiltered"}`,
   /** The same line for a version 2 tree doing neither job. A version 2 tree is
    *  typed, and four of the twelve types index something that is not a group's
    *  links or a dataset's chunks. `typeName` is the specification's own phrase
@@ -963,7 +965,7 @@ export const BTREES = {
    *  No possessive: shared object header messages belong to the file rather
    *  than to the object in the heading, and type 0 is named "testing", which
    *  "this object's testing" would make nonsense of. */
-  jobOther: (typeName: string): string => `B-tree indexing ${typeName}`,
+  jobOther: (typeName: string): string => typeName.charAt(0).toUpperCase() + typeName.slice(1),
   /** The same line for a version 2 tree whose type byte no version of the
    *  specification names. `jobOther` cannot serve: the walk sends an empty
    *  name for one of those, and the line would read "B-tree indexing  ·
@@ -975,7 +977,7 @@ export const BTREES = {
    *  chose not to spell out. Decimal, because the Listing prints the `type`
    *  field in decimal. */
   jobUnknown: (type: number): string =>
-    `B-tree indexing records of type ${type.toLocaleString()}, which no version of the HDF5 specification names`,
+    `Record type ${type.toLocaleString()}, not named by any version of the HDF5 specification`,
   /** Appended to whichever of the three job lines is shown. The two versions
    *  are different structures with different silhouettes, and a reader who has
    *  seen one and is now looking at the other needs to be told which.
@@ -989,7 +991,15 @@ export const BTREES = {
    *  this one has one that was not fetched. The rail already says "{n} more not
    *  listed" for the cap, so this says the same thing in the same words, and
    *  keeps the tree's address so the heading still says which tree is up. */
-  unnamed: (treeAt: string): string => `Object not listed under Logical · tree at ${treeAt}`,
+  headGroup: (path: string): string => `${BTREES.headGroupWord} ${path}`,
+  headDataset: (path: string): string => `${BTREES.headDatasetWord} ${path}`,
+  /** The kind words on their own, for the heading of a tree whose owner the
+   *  contents list could not name. Capitalised because the heading starts with
+   *  one. */
+  headGroupWord: "Group",
+  headDatasetWord: "Dataset",
+  headObjectWord: "Object",
+  unnamed: (kind: string, treeAt: string): string => `${kind} not listed under Logical · tree at ${treeAt}`,
   /** What a box's width is, under the picture. A box shows two marks, its
    *  width and the number printed on it, and they are two different facts: the
    *  number is the node's own entry count and the width is the total at the
@@ -1041,8 +1051,7 @@ export const BTREES = {
    *  and is looking for the bottom row of link tables that is not there. "Such
    *  as", not a bracketed list, because there are twelve record types and a
    *  bracket reads as all of them. */
-  widthRecords:
-    "Box width is proportional to the number of records in it and in the nodes below it. What a record refers to, such as a link, a chunk or an attribute, is outside the tree and is not drawn.",
+  widthRecords: "Box width is proportional to the number of records in it and in the nodes below it.",
   /** The key to the number printed on a box, shown beside a drawn box with `N`
    *  in it. The sentence that used to say this ("Number on a box: its own
    *  entry count") was a fact the reader had to hold in mind while looking at
@@ -1096,9 +1105,9 @@ export const BTREES = {
    *  words. "These" only while the count is a total: with `or more` on it the
    *  number no longer names a set anyone can point at. */
   leafLinksTitle: (nodes: number, links: number, capped: boolean): string =>
-    `${rowAbove(nodes, "link table", capped)} ${nodes === 1 ? "holds" : "hold"} ${capped ? "" : "these "}${BTREES.leafLinks(links, capped)} inside ${nodes === 1 ? "it" : "them"}. Links are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+    `${BTREES.leafLinks(links, capped)}, one per entry of the ${perEntryOf(nodes, "link table", capped)} above. The tree ends here: links are not nodes.`,
   leafChunksTitle: (nodes: number, chunks: number, capped: boolean): string =>
-    `${rowAbove(nodes, "index node", capped)} ${nodes === 1 ? "points" : "point"} at ${capped ? "" : "these "}${BTREES.leafChunks(chunks, capped)}, which are blocks of data elsewhere in the file. Chunks are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+    `${BTREES.leafChunks(chunks, capped)}, one per entry of the ${perEntryOf(nodes, "index node", capped)} above, each a block of data elsewhere in the file. The tree ends here: chunks are not nodes.`,
   /** The same band under a version 2 tree, for the two record types this tab
    *  decodes. The noun is still what the tree indexes and not "records": a
    *  version 2 tree is a B-tree, its records sit inside the internal nodes and
@@ -1135,11 +1144,11 @@ export const BTREES = {
    *  which the walk reports as an empty name; the byte is printed instead, so
    *  the sentence never reads `records of type ""`. */
   leafLinksV2Title: (n: number, capped: boolean): string =>
-    `These ${countText(n, "link")} are in the group's fractal heap, a separate structure this tree does not point at. Each link has one record, inside the internal nodes (BTIN) and leaf nodes (BTLF) above, holding a hash of the link's name and an id into that heap; the count is the tree header's record_count${capped ? ", so it stands even though not every node was drawn" : ""}. Links are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+    `${countText(n, "link")}, one record each in the nodes above. The names are in the group's fractal heap, not in the tree. The count is the tree header's record_count${capped ? ", so it stands though not every node was drawn" : ""}. The tree ends here: links are not nodes.`,
   leafChunksV2Title: (n: number, capped: boolean): string =>
-    `These ${countText(n, "chunk")} are blocks of data elsewhere in the file. Each chunk has one record, inside the internal nodes (BTIN) and leaf nodes (BTLF) above, holding the chunk's address and its offset in the dataset; the count is the tree header's record_count${capped ? ", so it stands even though not every node was drawn" : ""}. Chunks are not nodes of the tree, so they are not drawn as boxes and are not among the nodes placed by file address below.`,
+    `${countText(n, "chunk")}, one record each in the nodes above, each a block of data elsewhere in the file. The count is the tree header's record_count${capped ? ", so it stands though not every node was drawn" : ""}. The tree ends here: chunks are not nodes.`,
   leafRecordsTitle: (n: number, typeName: string | null, typeByte: number, capped: boolean): string =>
-    `The tree header's record_count is ${n.toLocaleString()}, and the records are inside the internal nodes (BTIN) and leaf nodes (BTLF) above, not in a row of their own${capped ? "; the count is the header's, so it stands even though not every node was drawn" : ""}. This tab does not decode records of ${typeName === null ? `type ${typeByte.toLocaleString()}, which no version of the HDF5 specification names` : `type "${typeName}"`}, so what each record refers to is not shown. Whatever it is, it is not a node of the tree, so it is not drawn as a box and is not among the nodes placed by file address below.`,
+    `${countText(n, "record")}, the tree header's record_count, held in the nodes above${capped ? "; it stands though not every node was drawn" : ""}. Records of ${typeName === null ? `type ${typeByte.toLocaleString()}, which no version of the HDF5 specification names,` : `type "${typeName}"`} are not decoded here, so what each one refers to is not shown.`,
   /** One row of the summary for a row of index nodes. The level is written with
    *  the field's own name, `node_level`, because that is where the number came
    *  from and what the Listing calls it at those bytes; a bare "level 2" is a
@@ -1217,7 +1226,16 @@ export const BTREES = {
    *  a reader pressing the third slice of nine is checking, then where it is
    *  and how long, in the readout's own order. */
   entryAt: (noun: string, index: number, of: number, address: string, bytes: string): string =>
-    `${noun} ${index.toLocaleString()} of ${of.toLocaleString()} · ${address} · ${bytes}`,
+    `${noun} [${index.toLocaleString()}] of ${of.toLocaleString()} at ${address} · ${bytes}`,
+  /** What a version 2 group's record holds, on the record itself. This is what
+   *  used to be a red line under the whole picture saying no first or last link
+   *  is shown: the same fact, on the thing it is a fact about, when the reader
+   *  is looking at it. */
+  recordLinkHash: "holds the hash of a link's name and its id in the group's fractal heap",
+  /** A record of a type this tab does not decode. Two words: the summary under
+   *  the picture already says which type and why, and a sentence here would
+   *  say it once a record. */
+  recordNotDecoded: "not decoded",
   /** And which node it is inside, so a slice pressed in a row of them still
    *  says which box it came out of. */
   entryIn: (kind: string, sign: string, address: string): string => `in the ${kind} (${sign}) at ${address}`,
@@ -1323,7 +1341,7 @@ export const BTREES = {
    *  own here, so it has one band more than the strip has rows. A reader
    *  counting four bands above and three below needs the sentence to say that
    *  the rows being matched are the rows of nodes. */
-  stripCaption: "The same nodes, in the same rows, placed by file address",
+  stripCaption: "The same nodes, placed by file address",
   /** Under the strip. The strip is zoomed to the tree's own span, not the
    *  file, and a reader who assumed the file would misjudge every distance on
    *  it; the warning sits beside the two numbers that are the span. */
@@ -1352,14 +1370,14 @@ export const BTREES = {
    *  nothing went wrong here. The type's own name is quoted because several of
    *  them contain a comma. */
   recordsUnread: (typeName: string): string =>
-    `Records not read: this tab does not decode records of type "${typeName}". The shape and counts come from the tree's header and child pointers, not from the records.`,
+    `Records of type "${typeName}" are not decoded here. The shape and counts come from the tree header and the child pointers.`,
   /** The same for a type byte no version of the specification names. In
    *  decimal, because the Listing prints the `type` field in decimal and a
    *  reader should be able to match the number at those bytes. The second
    *  sentence is word for word `recordsUnread`'s: the picture is as good in
    *  both cases and only the reason differs. */
   recordsUnknown: (type: number): string =>
-    `Records not read: type byte ${type.toLocaleString()} is not named by any version of the HDF5 specification. The shape and counts come from the tree's header and child pointers, not from the records.`,
+    `Records of type ${type.toLocaleString()} are not decoded here: no version of the HDF5 specification names that type. The shape and counts come from the tree header and the child pointers.`,
   /** Under the summary rows of a version 2 group tree, which shows no first or
    *  last link anywhere. Not an omission to be inferred: the records genuinely
    *  do not hold a name, and a reader looking for the range a version 1 group
@@ -1370,14 +1388,13 @@ export const BTREES = {
    *  only for the type whose records are read: where they are not,
    *  `recordsUnread` already accounts for the missing range, and two notes
    *  about one absence read as two problems. */
-  groupRecordsNote:
-    "No first or last link is shown: a version 2 group record holds the hash of a link's name and an id into the group's fractal heap, not the name.",
+  nodeLinkHashes: "records hold name hashes and fractal heap ids; the link names are in the heap",
   /** In the readout of a version 2 node below the root. Fact, reason,
    *  consequence, and the consequence stays: the readout comes up on the first
    *  press, so this line is what stops the second one, and a reader who has
    *  just read the hint under the picture is owed the contradiction spelled
    *  out rather than left to find it. */
-  notInListing: "Not in the Listing: only the root node of a version 2 tree is placed there, so double-click opens nothing.",
+  notInListing: "Not in the Listing: only the root of a version 2 tree is placed there, so double-click does nothing here.",
   /** On a node whose children were not all read, in a tree that shows no key
    *  ranges at all: a version 2 group tree, one indexing something else, and
    *  any tree whose records were not read. `truncated`'s "first and last link
@@ -1406,7 +1423,10 @@ export const BTREES = {
    *  the panel once, before any tree has been walked, so the one string has to
    *  be true of both versions. Without it the sentence is a promise that fails
    *  on every box of a version 2 tree but one. */
-  hint: "Click a box to go to its bytes. Double-click to open it in the Listing; in a version 2 tree only the root node is placed there.",
+  hint: (noun: string, rootOnly: boolean): string =>
+    rootOnly
+      ? `Click a node or a ${noun} to go to its bytes. Double-click the root to open it in the Listing; the other nodes are not placed there.`
+      : `Click a node or a ${noun} to go to its bytes. Double-click a node to open it in the Listing.`,
   /** On a node whose children the walk did not all reach, in its tooltip and
    *  readout. Both consequences on one line because they always arrive
    *  together: a node with an unreached child keeps no range (see
@@ -1460,9 +1480,13 @@ export const KIND_LABEL: Readonly<Record<string, string>> = {
  * screen is short of the row in the file and the count would otherwise be read
  * as the file's.
  */
-function rowAbove(nodes: number, noun: string, capped: boolean): string {
-  const what = nodes === 1 ? noun : countText(nodes, noun);
-  return `The ${what}${capped ? " drawn" : ""} in the row above`;
+/** The row a band's things came out of, for the two version 1 band tooltips:
+ *  "the link table above", "the 36 link tables above", and "the link tables
+ *  drawn above" where the walk stopped early and the row on screen is not the
+ *  whole row. */
+function perEntryOf(nodes: number, noun: string, capped: boolean): string {
+  if (capped) return `${plural(noun)} drawn`;
+  return nodes === 1 ? noun : countText(nodes, noun);
 }
 
 export function countText(n: number, noun: string): string {

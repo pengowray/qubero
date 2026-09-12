@@ -58,7 +58,8 @@ import {
   drawStrip,
   drawTree,
   entriesOf,
-  entryLines,
+  entryNoun,
+  entryReadout,
   readEntryKey,
   jobCaption,
   keyRow,
@@ -175,7 +176,6 @@ export class BTreePanel {
     this.readout.className = "btp-readout";
     this.note = document.createElement("div");
     this.note.className = "btp-note";
-    this.note.textContent = BTREES.hint;
 
     this.el.append(bar, this.job, this.plot, this.keyLine, this.widths, this.rows, this.stripCap, this.strip, this.span, this.readout, this.note);
 
@@ -422,9 +422,16 @@ export class BTreePanel {
     // proportion against another width, and a key to the number on a box is a
     // second drawn box beside the only real one. Both go rather than stand
     // there saying nothing about the tree on screen.
-    const many = this.boxes.length > 1;
-    this.widths.hidden = !many;
-    this.keyLine.hidden = !many;
+    // A width is a proportion against another width, so the caption waits for
+    // a row with two boxes on it. The key to the number on a box is a second
+    // drawn box beside the real ones, which is worth its line once there is
+    // more than one row of them to read it against.
+    const rows = Math.max(...tree.nodes.map((n) => n.depth)) + 1;
+    this.widths.hidden = !this.boxes.some((box) => this.boxes.some((other) => other.row === box.row && other !== box));
+    this.keyLine.hidden = rows < 2;
+    // What a press does, which depends on the tree: a version 1 node is placed
+    // in the template and a version 2 node below the root is not.
+    this.note.textContent = BTREES.hint(entryNoun(tree), tree.version === 2 && tree.nodes.length > 1);
     // The address picture is the tree's nodes in file order against its own
     // span. One node is in one order and spans its own bytes, so the strip is
     // a single mark against a scale it defines, its caption promises a second
@@ -455,22 +462,34 @@ export class BTreePanel {
    * cap; the heading says so rather than going blank. */
   private owner(tree: Tree): string {
     const root = tree.nodes[0];
-    if (root === undefined) return BTREES.unnamed("");
+    // The kind for an owner the list could not name, from the job the tree
+    // does: a group tree belongs to a group and a chunk tree to a dataset,
+    // which the walk settled by what the tree hangs under. A version 2 tree
+    // indexing anything else leaves the noun at "object", which is the only
+    // thing true of all twelve record types.
+    const kind = tree.job === "group" ? BTREES.headGroupWord : tree.job === "chunk" ? BTREES.headDatasetWord : BTREES.headObjectWord;
+    if (root === undefined) return BTREES.unnamed(kind, "");
     const at = formatOffset(root.address * 8);
     const reply = this.doc.contents();
     // Not kept while the list is still being read: the bytes it is waiting on
     // arrive and paint again, and an answer cached from a half-read list would
     // outlive the reason it was wrong.
-    if (reply.status !== "ok") return BTREES.unnamed(at);
+    if (reply.status !== "ok") return BTREES.unnamed(kind, at);
     let name = "";
+    let group = false;
     let deepest = -1;
     for (const object of reply.node.objects) {
       if (object.path.length > root.path.length || object.path.length <= deepest) continue;
       if (!object.path.every((step, k) => step === root.path[k])) continue;
       deepest = object.path.length;
       name = object.name;
+      group = object.group;
     }
-    this.ownerName = name === "" ? BTREES.unnamed(at) : name;
+    // The path alone was the whole heading, and the root group's path is one
+    // slash: a line a reader cannot tell from a separator, under a job line
+    // that used to point at it with "this group". The kind word in front is
+    // what makes the shortest path in the file read as a thing.
+    this.ownerName = name === "" ? BTREES.unnamed(kind, at) : group ? BTREES.headGroup(name) : BTREES.headDataset(name);
     return this.ownerName;
   }
 
@@ -482,7 +501,7 @@ export class BTreePanel {
     this.rows.replaceChildren(
       ...rowLines(tree).map((row) => {
         const line = document.createElement("div");
-        line.className = row.short ? "btp-row btp-row-short" : "btp-row";
+        line.className = row.muted === true ? "btp-row btp-row-muted" : row.short ? "btp-row btp-row-short" : "btp-row";
         line.textContent = row.text;
         if (row.title !== undefined) line.title = row.title;
         return line;
@@ -496,7 +515,7 @@ export class BTreePanel {
     const entry = this.entries.find((e) => e.key === this.selected);
     if (tree !== null && entry !== undefined) {
       this.readout.replaceChildren(
-        ...entryLines(tree, entry).map((text) => {
+        ...entryReadout(tree, entry).map((text) => {
           const line = document.createElement("div");
           line.textContent = text;
           return line;

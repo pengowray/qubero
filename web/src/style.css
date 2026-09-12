@@ -4958,6 +4958,13 @@ table.rec tr.is-on td {
   font-family: var(--sans);
   color: var(--warn);
 }
+/* What this tab does not decode, which is a limit of the tab and not a fault
+   in the file. Prose like a warning and muted like a caption: the warn colour
+   belongs to the lines that say the picture is short of the file. */
+.btp-row-muted {
+  font-family: var(--sans);
+  color: var(--muted);
+}
 /* The two ends of the strip's own span, so the distances on it have a scale. */
 .btp-span {
   display: flex;
