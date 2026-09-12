@@ -333,7 +333,10 @@ export function entriesOf(tree: Tree, boxes: readonly Box[]): Entry[] {
     const node = tree.nodes[i];
     if (node === undefined || parents[i] === true) continue;
     const n = node.entries;
-    if (n < 2 || node.entry_bits <= 0) continue;
+    // `> 0` rather than `not <= 0`, so a core built before it sent the stride,
+    // whose nodes have no such field at all, divides nothing instead of
+    // drawing slices at NaN.
+    if (n < 2 || !(node.entry_bits > 0) || !(node.first_entry_bits >= 0)) continue;
     if (box.w < n * MIN_W) continue;
     if (node.first_entry_bits + n * node.entry_bits > node.size_bits) continue;
     for (let k = 0; k < n; k++) {
