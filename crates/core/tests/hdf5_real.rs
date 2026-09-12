@@ -554,9 +554,10 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
     // an object header above the tree rather than in the node, so a stride
     // taken from the widths a group entry has would be short by all of it.
     //
-    // Not insisted on, because no file in the collection has one: a library
-    // recent enough to write the chunked datasets in it indexes them some
-    // other way. What was checked is printed rather than assumed.
+    // Insisted on now that `chunks-btree-v1.h5` is in the collection: a file
+    // written to the default library bound indexes its chunks this way and no
+    // other. What was checked is printed as well, because which files are to
+    // hand depends on where this is run.
     let mut dirs = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
     dirs.push(dir.join("hdf5"));
     if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
@@ -598,6 +599,11 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
     }
     eprintln!("--- version 1 trees whose entries were placed by their stride: {groups} group, {chunks} chunk");
     assert!(groups > 0);
+    // Only where the collection is to hand: the run above this one has just
+    // the two files in `web/public`, and neither has a chunk tree.
+    if dir.join("hdf5").join("chunks-btree-v1.h5").exists() {
+        assert!(chunks > 0, "the collection has a version 1 chunk tree and the sweep did not reach it");
+    }
 }
 
 /// The checks above, over one walked tree, answering how many link tables it
@@ -725,7 +731,11 @@ fn trees1(
     *seen += 1;
     if node.type_name == "BTree" {
         out.push(path.to_vec());
-        return;
+        // And on down through it. A group's datasets hang under the link
+        // tables this tree points at, so a walk that stopped at the first
+        // `TREE` it met found every group tree in a file and no chunk tree at
+        // all: the sweep printed "0 chunk" for a file written with four
+        // hundred of them.
     }
     for i in 0..node.child_count as usize {
         let mut p = path.to_vec();
