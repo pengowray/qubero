@@ -1423,10 +1423,14 @@ export const BTREES = {
    *  the panel once, before any tree has been walked, so the one string has to
    *  be true of both versions. Without it the sentence is a promise that fails
    *  on every box of a version 2 tree but one. */
-  hint: (noun: string, rootOnly: boolean): string =>
-    rootOnly
-      ? `Click a node or a ${noun} to go to its bytes. Double-click the root to open it in the Listing; the other nodes are not placed there.`
-      : `Click a node or a ${noun} to go to its bytes. Double-click a node to open it in the Listing.`,
+  hint: (noun: string, rootOnly: boolean): string => {
+    // "An entry", "a record": the noun is the tree's, so the article has to be
+    // worked out rather than written into the sentence.
+    const one = `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
+    return rootOnly
+      ? `Click a node or ${one} to go to its bytes. Double-click the root to open it in the Listing; the other nodes are not placed there.`
+      : `Click a node or ${one} to go to its bytes. Double-click a node to open it in the Listing.`;
+  },
   /** On a node whose children the walk did not all reach, in its tooltip and
    *  readout. Both consequences on one line because they always arrive
    *  together: a node with an unreached child keeps no range (see
