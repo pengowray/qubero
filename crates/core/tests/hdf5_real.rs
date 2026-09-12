@@ -388,6 +388,50 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
             }
             for (i, node) in tree.nodes.iter().enumerate() {
                 assert!(!node.truncated, "{}: node {i} at {:#x} refused a child", path.display(), node.address);
+                // Where the records are. Both kinds write them straight after
+                // the six bytes of signature, version and type, so a leaf's
+                // last record ends exactly at the four-byte checksum the node
+                // finishes with; an internal node has its child pointers in
+                // between, and ends further along than its records do.
+                assert_eq!(node.first_entry_bits, 6 * 8, "{}: records not at the head of a node", path.display());
+                let end = node.first_entry_bits + node.entries * node.entry_bits;
+                let checked = node.size_bits.saturating_sub(32);
+                match node.kind {
+                    Kind::Leaf => assert_eq!(
+                        end,
+                        checked,
+                        "{}: the records of the leaf at {:#x} do not fill it up to its checksum",
+                        path.display(),
+                        node.address
+                    ),
+                    _ => assert!(
+                        end < checked,
+                        "{}: no room for the child pointers of the node at {:#x}",
+                        path.display(),
+                        node.address
+                    ),
+                }
+                // The last record, read back at the place the stride puts it.
+                // An unfiltered chunk record is an address and then one offset
+                // per dimension, which is what the walk wrote out as the
+                // node's last key: a stride out by a field reads those offsets
+                // from the wrong end of the record and they do not match.
+                if node.kind == Kind::Leaf && node.entries > 0 && tree.coords > 0 && tree.coords <= 16 {
+                    let at = node.address * 8 + node.first_entry_bits + (node.entries - 1) * node.entry_bits + 64;
+                    let mut buf = vec![0u8; tree.coords as usize * 8];
+                    assert!(doc.read_bits(at, tree.coords * 64, &mut buf).is_empty());
+                    let read: Vec<String> = buf
+                        .chunks(8)
+                        .map(|c| u64::from_le_bytes(c.try_into().unwrap()).to_string())
+                        .collect();
+                    assert_eq!(
+                        read.join(", "),
+                        node.last_key,
+                        "{}: the last record of the leaf at {:#x} is not where its stride puts it",
+                        path.display(),
+                        node.address
+                    );
+                }
                 match node.kind {
                     Kind::Leaf => {
                         assert_eq!(node.level, 0);
@@ -458,4 +502,124 @@ fn headers2(
             return;
         }
     }
+}
+
+/// A version 1 node's stride lands on the entries the template placed, and on
+/// nothing else.
+///
+/// The two numbers a node carries are what lets a view divide the box it draws
+/// into the entries the node holds, so the thing to check is that dividing on
+/// them arrives where the file's own entries are. Three ways of asking, on a
+/// file written by a classic library, which is the only kind that has these
+/// nodes at all:
+///
+/// - Every element of the node's array sits exactly where the stride puts it,
+///   not merely the first, which is the one the stride was measured from.
+/// - Every entry of an index node ends at the address of the child underneath
+///   it, since a child address is the last eight bytes of an entry whichever
+///   of the two kinds of key is in front of it. Read out of the file rather
+///   than out of the template: a stride that is short by a field reads this
+///   from the middle of the entry before it, and no number comes back.
+/// - The name at the last place the stride puts is the name the walk says the
+///   node's range ends at.
+#[test]
+fn a_version_1_node_s_stride_lands_on_its_own_entries() {
+    use qubero_core::formats::hdf5_tree::{Kind, NO_PARENT};
+
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let path = dir.join("hdf5").join("groups-and-datasets.h5");
+    let file = File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let len = file.metadata().unwrap().len();
+    let doc = Document::new(FileSource { file: RefCell::new(file), len });
+    let mut ev = Evaluator::new(hdf5());
+
+    // A cursor that has not moved: the root group's tree, which every file
+    // with a version 0 superblock has.
+    let tree = qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, &[], 4096)
+        .expect("walks")
+        .expect("a tree");
+    assert_eq!(tree.version, 1, "{}: not a version 1 tree", path.display());
+    assert!(tree.omitted == 0, "{}: the walk was capped", path.display());
+    let mut tables = 0usize;
+    for (i, node) in tree.nodes.iter().enumerate() {
+        assert!(node.entries > 0, "{}: an empty node at {:#x}", path.display(), node.address);
+        assert!(node.entry_bits > 0, "{}: no stride at {:#x}", path.display(), node.address);
+        let end = node.first_entry_bits + node.entries * node.entry_bits;
+        assert!(
+            end <= node.size_bits,
+            "{}: the {} entries at {:#x} run {end} bits past a node of {}",
+            path.display(),
+            node.entries,
+            node.address,
+            node.size_bits
+        );
+        // Every one of them, against where the template put it.
+        let field = if node.kind == Kind::LinkTable { "symbols" } else { "entries" };
+        let array = ev.child_named(&doc, &node.path, field).expect("reads").expect("an array");
+        for k in 0..node.entries {
+            let mut one = array.clone();
+            one.push(k as usize);
+            let placed = ev.node(&doc, &one).expect("reads").offset_bits;
+            assert_eq!(
+                placed,
+                node.address * 8 + node.first_entry_bits + k * node.entry_bits,
+                "{}: entry {k} of the node at {:#x} is not where its stride says",
+                path.display(),
+                node.address
+            );
+        }
+        if node.kind == Kind::LinkTable {
+            tables += 1;
+            // The name at the last place the stride puts, which is the name
+            // the walk says the range ends at.
+            let mut last = array.clone();
+            last.push(node.entries as usize - 1);
+            assert_eq!(name_of(&mut ev, &doc, &last), node.last_key, "{}: {:#x}", path.display(), node.address);
+            continue;
+        }
+        // The child addresses, read out of the file at the end of each entry.
+        let children: Vec<u64> =
+            tree.nodes.iter().filter(|n| n.parent != NO_PARENT && n.parent == i).map(|n| n.address).collect();
+        assert_eq!(children.len(), node.entries as usize, "{}: {:#x}", path.display(), node.address);
+        for (j, child) in children.iter().enumerate() {
+            let at = node.address * 8 + node.first_entry_bits + (j as u64 + 1) * node.entry_bits - 64;
+            let mut buf = [0u8; 8];
+            assert!(doc.read_bits(at, 64, &mut buf).is_empty());
+            assert_eq!(
+                u64::from_le_bytes(buf),
+                *child,
+                "{}: entry {j} of the node at {:#x} does not end at its child's address",
+                path.display(),
+                node.address
+            );
+        }
+    }
+    assert!(tables > 0, "{}: a version 1 group tree with no link table under it", path.display());
+}
+
+/// The link name of a symbol table entry, which the template reads out of the
+/// group's heap and places under a field of no bytes of its own.
+fn name_of(ev: &mut Evaluator, doc: &Document<FileSource>, entry: &[usize]) -> String {
+    let Ok(Some(field)) = ev.child_named(doc, entry, "name") else { return String::new() };
+    let mut at = field;
+    // Down through whatever stands between the field and the text: the field
+    // is placed at an address, and what is at that address is the string.
+    for _ in 0..4 {
+        match ev.node(doc, &at) {
+            Ok(node) => {
+                if let Value::Str(text) = node.value {
+                    return text;
+                }
+                if node.child_count == 0 {
+                    return String::new();
+                }
+                at.push(0);
+            }
+            Err(_) => return String::new(),
+        }
+    }
+    String::new()
 }

@@ -2440,6 +2440,51 @@ mod tests {
         assert_eq!(tree.nodes[0].last_key, "alpha");
     }
 
+    /// Every node says where its entries start and how wide one is, so a view
+    /// can divide the box it draws and send a reader to one entry's bytes.
+    ///
+    /// Checked against the file built above, whose bytes are placed here by
+    /// hand: the tree's one entry is the eight-byte key at `BTREE + 24` and
+    /// the child address at `BTREE + 32`, and the symbol table's one entry is
+    /// the forty bytes from `SNOD + 8`. The addresses are what say the stride
+    /// lands: the child address is the last eight bytes of an entry, so
+    /// reading it back out of the entry the numbers place is reading the
+    /// number this file was built with.
+    #[test]
+    fn a_node_says_where_its_entries_start_and_how_wide_one_is() {
+        let f = one_link_file();
+        let doc = Document::new(MemSource(f.clone()));
+        let mut ev = Evaluator::new(hdf5());
+        let tree = super::super::hdf5_tree::tree(&mut ev, &doc, &[0], 64).expect("walk").expect("a tree");
+        let at = |v: &[u8], b: u64| u64::from_le_bytes(v[b as usize..b as usize + 8].try_into().unwrap());
+
+        // A key and a child address: sixteen bytes, after the twenty-four the
+        // node spends on its signature, its level, its count and its two
+        // siblings.
+        let node = &tree.nodes[0];
+        assert_eq!((node.first_entry_bits, node.entry_bits), (24 * 8, 16 * 8), "{node:?}");
+        let entry = node.address * 8 + node.first_entry_bits;
+        assert_eq!(at(&f, entry / 8), 0, "the key of the one entry is the heap offset the name is at");
+        assert_eq!(at(&f, (entry + node.entry_bits) / 8 - 8), SNOD, "the entry does not end at its child address");
+        // The key that closes the range is not an entry: it sits one stride
+        // past the last one, and is the offset of the end of the heap.
+        assert_eq!(at(&f, (entry + node.entry_bits) / 8), 14);
+
+        // A symbol table entry: a name offset, an object header address, a
+        // cache type, four reserved bytes and sixteen of scratch.
+        let links = &tree.nodes[1];
+        assert_eq!((links.first_entry_bits, links.entry_bits), (8 * 8, 40 * 8), "{links:?}");
+        let entry = links.address * 8 + links.first_entry_bits;
+        assert_eq!(at(&f, entry / 8), 8, "the link's name is at offset 8 in the heap");
+        assert_eq!(at(&f, entry / 8 + 8), ALPHA_HEADER, "the entry does not name the object it points at");
+
+        // The last entry of either ends inside the node rather than past it.
+        for node in &tree.nodes {
+            let end = node.first_entry_bits + node.entries * node.entry_bits;
+            assert!(end <= node.size_bits, "{node:?}: its entries run past the node");
+        }
+    }
+
     /// From inside a node, the walk climbs to the root of that node's own
     /// tree. The climb has to stop where one tree ends: a group's tree sits,
     /// in the template, under the tree of the group above it, so a climb that
