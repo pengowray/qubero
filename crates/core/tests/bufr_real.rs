@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats;
+use qubero_core::formats::bufr_data::{self, Item, Reading, Role};
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
@@ -133,6 +134,158 @@ fn every_sample_tiles_its_messages_with_its_sections() {
     if !read_any {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
     }
+}
+
+/// The bytes of message `m` of a file, where the template put it, read by the
+/// side reader.
+fn reading(name: &str, m: usize) -> Option<Reading> {
+    let (d, mut ev) = read(name)?;
+    let messages: Vec<usize> =
+        (0..ev.node(&d, &[]).unwrap().child_count as usize).filter(|i| ev.node(&d, &[*i]).unwrap().type_name == "Message").collect();
+    let node = ev.node(&d, &[messages[m]]).unwrap();
+    let bytes = std::fs::read(sample(name)?).unwrap();
+    let from = (node.offset_bits / 8) as usize;
+    Some(bufr_data::read(&bytes[from..from + (node.size_bits / 8) as usize]))
+}
+
+/// The values of one subset that are not operators, as (descriptor, text).
+fn values(r: &Reading, subset: usize) -> Vec<(u32, String)> {
+    let (list, at) = if r.header.compressed { (0, subset) } else { (subset, 0) };
+    r.subsets[list]
+        .iter()
+        .filter(|i| i.role != Role::Operator)
+        .map(|i| (i.code, if i.missing(at) { "MISSING".to_string() } else { i.text(at) }))
+        .collect()
+}
+
+/// The `nth` value of an element in a subset, as text. Associated fields and
+/// markers carry the descriptor of the element they are about and are not it,
+/// so they are passed over.
+fn find(r: &Reading, subset: usize, code: u32, nth: usize) -> String {
+    let (list, at) = if r.header.compressed { (0, subset) } else { (subset, 0) };
+    r.subsets[list]
+        .iter()
+        .filter(|i| i.code == code && matches!(i.role, Role::Element | Role::Count | Role::Local))
+        .nth(nth)
+        .map_or("(none)".to_string(), |i| if i.missing(at) { "MISSING".to_string() } else { i.text(at) })
+}
+
+#[test]
+fn a_radiosonde_ascent_reads_as_ecmwf_reads_it() {
+    let Some(r) = reading("temp_101.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    assert_eq!(r.tables_version, 13);
+    let v = values(&r, 0);
+    // Every value, the 427 per cent confidences the bitmap attaches included,
+    // and every one of them matches ecCodes 2.48.0 and pybufrkit 0.2.25.
+    assert_eq!(v.len(), 1531);
+    assert_eq!(v.iter().filter(|x| x.1 == "MISSING").count(), 123);
+    assert_eq!(find(&r, 0, 1001, 0), "70");
+    assert_eq!(find(&r, 0, 1002, 0), "219");
+    assert_eq!(find(&r, 0, 5001, 0), "60.77000");
+    assert_eq!(find(&r, 0, 6001, 0), "-161.83000");
+    // 75 levels, the first at 1020 hPa and 272.1 K.
+    assert_eq!(find(&r, 0, 31001, 0), "75");
+    assert_eq!(find(&r, 0, 7004, 0), "102000");
+    assert_eq!(find(&r, 0, 7004, 3), "98500");
+    assert_eq!(find(&r, 0, 12001, 0), "272.1");
+    assert_eq!(find(&r, 0, 12003, 0), "270.4");
+    let quality: Vec<&Item> = r.subsets[0].iter().filter(|i| i.code == 33007).collect();
+    assert_eq!(quality.len(), 427);
+    // The first per cent confidence is the block number's.
+    assert_eq!(r.subsets[0][quality[0].refers_to.unwrap()].code, 1001);
+    assert_eq!(r.bits_read, 10055);
+}
+
+#[test]
+fn four_compressed_synops_read_subset_by_subset() {
+    let Some(r) = reading("ISMD01_OKPR.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    assert_eq!(values(&r, 2).len(), 116);
+    assert_eq!(find(&r, 2, 1001, 0), "11");
+    assert_eq!(find(&r, 2, 1002, 0), "518");
+    assert_eq!(find(&r, 2, 1015, 0), "Praha-Ruzyne");
+    assert_eq!(find(&r, 2, 5001, 0), "50.10083");
+    assert_eq!(find(&r, 2, 6001, 0), "14.25778");
+    assert_eq!(find(&r, 2, 7030, 0), "364.0");
+    assert_eq!(find(&r, 2, 10004, 0), "97130");
+    let name = r.subsets[0].iter().find(|i| i.code == 1015).unwrap();
+    assert_eq!(name.increment_width, Some(20), "twenty characters a subset");
+    let Some(last) = reading("ISMD01_OKPR.bufr", 3) else { return };
+    assert_eq!(last.value_count(), 840);
+}
+
+#[test]
+fn width_scale_and_associated_field_operators_on_a_compressed_altimeter() {
+    let Some(r) = reading("jaso_214.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    assert_eq!(r.value_count(), 9600);
+    // 0-07-005 under 2-02-131: three decimal places rather than zero.
+    assert_eq!(find(&r, 5, 7005, 0), "0.282");
+    assert_eq!(find(&r, 5, 21062, 0), "11.59");
+    assert_eq!(find(&r, 5, 21062, 1), "0.06");
+    let associated = r.subsets[0].iter().filter(|i| i.role == Role::Associated).count();
+    assert_eq!(associated * 128, 1152);
+}
+
+#[test]
+fn a_compressed_satellite_sounding_reads_every_subset() {
+    let Some(r) = reading("iasi_241.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    assert_eq!((r.header.subsets, r.value_count()), (15, 15_345));
+    assert_eq!(find(&r, 14, 5001, 0), "57.57794");
+    assert_eq!(find(&r, 14, 6001, 0), "154.06107");
+    assert_eq!(find(&r, 14, 4006, 0), "6.943");
+    assert_eq!(find(&r, 14, 14046, 0), "5067");
+    assert_eq!(find(&r, 14, 14046, 2), "4471");
+}
+
+#[test]
+fn difference_statistics_are_read_against_the_element_the_bitmap_names() {
+    let Some(r) = reading("metar_with_2_bias.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    let markers: Vec<&Item> = r.subsets[0].iter().filter(|i| i.role == Role::Marker).collect();
+    assert_eq!(markers.len(), 2);
+    assert!(markers[0].missing(0));
+    assert_eq!(markers[1].text(0), "-100");
+    // 0-10-004, pressure, and one bit wider than it with a negative reference.
+    let target = &r.subsets[0][markers[1].refers_to.unwrap()];
+    assert_eq!(target.code, 10004);
+    assert_eq!(markers[1].width, target.width + 1);
+    assert_eq!(r.subsets[0].iter().filter(|i| i.code == 33007).count(), 23);
+}
+
+#[test]
+fn local_descriptors_read_at_the_width_206_gives_them() {
+    let Some(r) = reading("b002_95.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    let local: Vec<&Item> = r.subsets[0].iter().filter(|i| i.role == Role::Local).collect();
+    assert_eq!(local.len(), 43);
+    assert_eq!((local[0].code, local[0].width, local[0].text(0)), (21192, 8, "59".to_string()));
+    assert_eq!(values(&r, 0).len(), 492);
+}
+
+#[test]
+fn increase_scale_reference_and_width_on_a_compressed_message() {
+    let Some(r) = reading("207003.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    assert_eq!(r.tables_version, 15);
+    assert_eq!(find(&r, 0, 4006, 0), "27.584");
+    assert_eq!(find(&r, 1, 27031, 0), "6675220.00");
+    assert_eq!(find(&r, 1, 28031, 0), "2628450.50");
+}
+
+#[test]
+fn associated_fields_in_front_of_a_radiosonde_in_edition_4() {
+    let Some(r) = reading("uegabe.bufr", 0) else { return };
+    assert_eq!(r.problem, None);
+    let v = values(&r, 0);
+    assert_eq!(v.len(), 334);
+    // The four bits in front of the block number are all ones, which in an
+    // associated field is 15 and not a missing value: ecCodes reads it so.
+    assert_eq!(v[1], (1001, "15".to_string()));
+    assert_eq!(r.subsets[0][2].role, Role::Associated);
+    assert_eq!(find(&r, 0, 1001, 0), "10");
 }
 
 #[test]

@@ -40,6 +40,7 @@ mod appledouble;
 mod au;
 mod bmp;
 mod bufr;
+pub mod bufr_data;
 pub mod bufr_tables;
 mod bzip2;
 mod bdb;
