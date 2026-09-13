@@ -148,11 +148,17 @@ time is not a column anyone can scroll.
 An attribute's value reads as elements as well, and that is what `Expr::Within`
 was added for: the datatype describing an attribute's value is written *inside*
 the attribute, and `Expr::Ref` names a field beside this one and stops there.
-`Within` names a field and then a path down into it. Global heap collections
-are placed too, so a variable-length string is one step from the note that
-points at it; which object in a collection is the one is left to the reader,
-since the objects have no fixed size and there is no expression for "the
-element whose index is this".
+`Within` names a field and then a path down into it. A variable-length element
+is not the string but a note saying how long it is, which global heap
+collection holds it and which object of that collection it is, and the note
+carries the string: the collection is searched for the object with that index,
+and `Expr::StartOf` turns where that object was found into an address to place
+a field at. The objects have no fixed size, so the search is a walk, and what
+one walk learned is kept by the stretch of bytes it covered rather than by the
+path that asked: a column of two thousand strings is two thousand paths to one
+collection, and reading it once per path is quadratic. The bytes are counted in
+the collection and not in the column, since several notes can point at one
+object and an object nothing points at is still part of the heap.
 
 What is read: superblock versions 0 and 1, object headers of version 1 and 2,
 the messages a dataset is made of (dataspace, datatype, layout, filters,
