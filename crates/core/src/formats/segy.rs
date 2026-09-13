@@ -108,7 +108,7 @@ const FORMAT: &[(i128, &str)] = &[
     (1, "4-byte IBM float"),
     (2, "4-byte signed integer"),
     (3, "2-byte signed integer"),
-    (4, "4-byte fixed point with gain"),
+    (4, "4-byte fixed point with gain (obsolete)"),
     (5, "4-byte IEEE float"),
     (6, "8-byte IEEE float"),
     (7, "3-byte signed integer"),
@@ -134,9 +134,9 @@ const SORTING: &[(i128, &str)] = &[
     (2, "CDP ensemble"),
     (3, "single fold continuous profile"),
     (4, "horizontally stacked"),
-    (5, "common source"),
-    (6, "common receiver"),
-    (7, "common offset"),
+    (5, "common source point"),
+    (6, "common receiver point"),
+    (7, "common offset point"),
     (8, "common mid-point"),
     (9, "common conversion point"),
 ];
@@ -157,7 +157,7 @@ const MEASUREMENT_SYSTEM: &[(i128, &str)] = &[(1, "metres"), (2, "feet")];
 
 /// Which sign a rise in pressure, or the geophone case moving up, is written
 /// with.
-const IMPULSE_POLARITY: &[(i128, &str)] = &[(1, "rise in pressure reads negative"), (2, "rise in pressure reads positive")];
+const IMPULSE_POLARITY: &[(i128, &str)] = &[(1, "pressure rise or upward motion stored as negative"), (2, "pressure rise or upward motion stored as positive")];
 
 /// How far the seismic signal lags the pilot signal of a vibrator, in
 /// 45-degree sectors.
@@ -172,7 +172,7 @@ const VIBRATORY_POLARITY: &[(i128, &str)] = &[
     (8, "lags pilot by 292.5° to 337.5°"),
 ];
 
-const FIXED_LENGTH: &[(i128, &str)] = &[(0, "may vary"), (1, "all the same")];
+const FIXED_LENGTH: &[(i128, &str)] = &[(0, "trace length may vary"), (1, "all traces same length")];
 
 /// What the times in a trace header are measured against. GPS is revision
 /// 2's addition.
@@ -209,7 +209,7 @@ const TRACE_ID: &[(i128, &str)] = &[
 const DATA_USE: &[(i128, &str)] = &[(1, "production"), (2, "test")];
 
 const COORDINATE_UNITS: &[(i128, &str)] =
-    &[(1, "length"), (2, "seconds of arc"), (3, "decimal degrees"), (4, "degrees, minutes, seconds")];
+    &[(1, "length (metres or feet)"), (2, "seconds of arc"), (3, "decimal degrees"), (4, "degrees, minutes, seconds")];
 
 const GAIN_TYPE: &[(i128, &str)] = &[(1, "fixed"), (2, "binary"), (3, "floating point")];
 
@@ -411,18 +411,18 @@ fn binary_header(e: Endian) -> T {
             ("format", T::enumeration("SegySampleFormat", i16(), FORMAT)),
             ("ensemble_fold", i16()),
             ("trace_sorting", T::enumeration("SegyTraceSorting", i16(), SORTING)),
-            ("vertical_sum", i16()),
+            ("vertically_summed_traces", i16()),
             ("sweep_start_frequency", i16()),
             ("sweep_end_frequency", i16()),
             // In milliseconds, as the two taper lengths are.
             ("sweep_length", i16()),
             ("sweep_type", T::enumeration("SegySweepType", i16(), SWEEP_TYPE)),
             ("sweep_channel", i16()),
-            ("sweep_taper_start", i16()),
-            ("sweep_taper_end", i16()),
+            ("sweep_start_taper_length", i16()),
+            ("sweep_end_taper_length", i16()),
             ("taper_type", T::enumeration("SegyTaperType", i16(), TAPER_TYPE)),
             ("correlated", T::enumeration("SegyCorrelated", i16(), NO_YES)),
-            ("gain_recovered", T::enumeration("SegyGainRecovered", i16(), YES_NO)),
+            ("binary_gain_recovered", T::enumeration("SegyBinaryGainRecovered", i16(), YES_NO)),
             ("amplitude_recovery", T::enumeration("SegyAmplitudeRecovery", i16(), AMPLITUDE_RECOVERY)),
             ("measurement_system", T::enumeration("SegyMeasurementSystem", i16(), MEASUREMENT_SYSTEM)),
             ("impulse_polarity", T::enumeration("SegyImpulsePolarity", i16(), IMPULSE_POLARITY)),
@@ -437,7 +437,7 @@ fn binary_header(e: Endian) -> T {
             ("minor_revision", T::u8()),
             ("fixed_length_traces", T::enumeration("SegyFixedLength", i16(), FIXED_LENGTH)),
             // -1 says there are some and the last one says so.
-            ("extended_textual_headers", i16()),
+            ("extended_textual_header_count", i16()),
             (
                 "rev2_layout",
                 T::switch(
@@ -490,7 +490,7 @@ fn rev2_layout(e: Endian, two_one: bool) -> T {
         // extended textual headers.
         ("first_trace_offset", T::u64(e)),
         // 3200-byte blocks after the last trace.
-        ("trailer_stanzas", T::i32(e)),
+        ("trailer_stanza_count", T::i32(e)),
         ("unassigned", T::bytes(E::lit(68))),
     ]);
     T::structure("SegyRev2Layout", fields).machinery(&["unassigned"])
@@ -508,7 +508,7 @@ fn rev2_layout(e: Endian, two_one: bool) -> T {
 /// segyio writes a count there in files it labels revision 0.
 fn extended_textual_headers() -> T {
     const NAME: &str = "SegyExtendedTextualHeader";
-    let count = binary(&["extended_textual_headers"]);
+    let count = binary(&["extended_textual_header_count"]);
     let offset = rev2_field(&["rev2_layout", "first_trace_offset"]);
     let fits = |n: E| n.at_least(E::lit(0)).at_most(E::Remaining.div(E::lit(TEXT)));
     let counted = text_blocks(NAME, fits(count.clone()));
@@ -565,7 +565,7 @@ fn traces(e: Endian) -> T {
 
 /// How many 3200-byte trailer blocks a revision 2 file says follow its traces.
 fn trailer_blocks() -> E {
-    rev2_field(&["rev2_layout", "trailer_stanzas"]).at_least(E::lit(0)).at_most(E::Remaining.div(E::lit(TEXT)))
+    rev2_field(&["rev2_layout", "trailer_stanza_count"]).at_least(E::lit(0)).at_most(E::Remaining.div(E::lit(TEXT)))
 }
 
 fn data_trailer() -> T {
@@ -663,7 +663,7 @@ fn trace_header(e: Endian, rev2: bool) -> T {
         ("data_use", T::enumeration("SegyDataUse", i16(), DATA_USE)),
         // From the source point to the receiver group, negative when the
         // receiver is behind the direction the line was shot in.
-        ("offset", i32()),
+        ("source_receiver_offset", i32()),
         ("receiver_elevation", i32()),
         ("source_surface_elevation", i32()),
         ("source_depth", i32()),
@@ -703,8 +703,8 @@ fn trace_header(e: Endian, rev2: bool) -> T {
         ("sweep_end_frequency", i16()),
         ("sweep_length", i16()),
         ("sweep_type", T::enumeration("SegySweepType", i16(), SWEEP_TYPE)),
-        ("sweep_taper_start", i16()),
-        ("sweep_taper_end", i16()),
+        ("sweep_start_taper_length", i16()),
+        ("sweep_end_taper_length", i16()),
         ("taper_type", T::enumeration("SegyTaperType", i16(), TAPER_TYPE)),
         ("alias_filter_frequency", i16()),
         ("alias_filter_slope", i16()),
@@ -735,7 +735,7 @@ fn trace_header(e: Endian, rev2: bool) -> T {
         ("crossline", i32()),
         ("shotpoint", i32()),
         ("shotpoint_scalar", i16()),
-        ("measurement_unit", T::enumeration("SegyUnit", i16(), UNIT)),
+        ("trace_value_unit", T::enumeration("SegyUnit", i16(), UNIT)),
         // The samples times mantissa times ten to the exponent are in
         // `transduction_unit`.
         ("transduction_mantissa", i32()),
@@ -745,9 +745,9 @@ fn trace_header(e: Endian, rev2: bool) -> T {
         ("time_scalar", i16()),
         ("source_type", i16()),
         // In tenths of a degree from the source orientation.
-        ("source_energy_vertical", i16()),
-        ("source_energy_crossline", i16()),
-        ("source_energy_inline", i16()),
+        ("source_energy_direction_vertical", i16()),
+        ("source_energy_direction_crossline", i16()),
+        ("source_energy_direction_inline", i16()),
         ("source_measurement_mantissa", i32()),
         ("source_measurement_exponent", i16()),
         ("source_measurement_unit", i16()),
@@ -819,15 +819,15 @@ fn extension_1(e: Endian) -> T {
             ("source_y", f64()),
             ("group_x", f64()),
             ("group_y", f64()),
-            ("offset", f64()),
+            ("source_receiver_offset", f64()),
             ("sample_count", T::u32(e)),
             // Added to the trace header's second.
-            ("nanoseconds", T::i32(e)),
+            ("nanosecond_of_second", T::i32(e)),
             ("sample_interval", f64()),
             ("recording_device", T::i32(e)),
             // This trace's own count, where it has fewer than the binary
             // header's maximum. Not followed; see the module notes.
-            ("additional_trace_headers", T::u16(e)),
+            ("additional_trace_header_count", T::u16(e)),
             ("last_trace_flag", T::Int { bits: 16, endian: e }),
             ("cdp_x", f64()),
             ("cdp_y", f64()),
