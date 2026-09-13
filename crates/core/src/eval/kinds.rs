@@ -42,7 +42,7 @@
 //!   it here; the caller has `reached_bits` and the file's length and can
 //!   subtract.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::*;
 
@@ -109,6 +109,9 @@ struct Frame {
     /// everything they skipped over a gap and then count the siblings that
     /// fill it as well.
     sequential: bool,
+    /// Whether this is an `At`, whose one child is whatever its address names.
+    /// See [`KindWalk::reached_by_address`].
+    at: bool,
     /// Children of this node that place *their* children by offset, kept back
     /// until the ones laid out in order are done.
     ///
@@ -175,6 +178,7 @@ impl Opening {
             framed: matches!(&r.ty, Ty::Json(shape, _) if shape.composite()) && self.count > 0,
             type_name: r.ty.display_name(),
             sequential: !places(&r.ty),
+            at: matches!(r.ty, Ty::At { .. }),
             deferred: Vec::new(),
             taking: 0,
             already,
@@ -209,6 +213,26 @@ pub struct KindWalk {
     /// any of it past the first, and a progress line drawn from what was read
     /// would sit at nothing while the walk finished.
     reached_bits: u64,
+    /// Where each thing an `At` reached starts and how many bits it covers,
+    /// so that a second address naming the same thing counts nothing.
+    ///
+    /// A file can be a graph rather than a tree. An HDF5 group links to an
+    /// object by its address, and nothing stops two thousand links naming one
+    /// dataset; the template follows each of them, since each is a way a
+    /// reader gets there, and counted each time that one object header would
+    /// be two thousand stretches of the file, which a test over the sample
+    /// collection caught as more bits covered than the file has. Nothing in
+    /// the template can mark one of those links the real one and the rest
+    /// second readings, because none of them is: `Field::aside` is for a
+    /// field that is always a view of somewhere else, and a link is the only
+    /// reading of what it names until another link names it too.
+    ///
+    /// Only what an `At` reached, and only outside a multiplied run. A pointer
+    /// list or a chain names many things, one each, and a set holding every
+    /// chunk of a large dataset is memory this walk is meant not to spend. The
+    /// same thing reached by exactly the same start and length is the case a
+    /// graph makes; anything that overlaps some other way is left as it was.
+    reached_by_address: FxHashSet<(u64, u64)>,
     /// True once the root has been placed, which is what tells a walk that has
     /// not begun from one that has finished. Both have an empty stack.
     started: bool,
@@ -225,6 +249,7 @@ impl KindWalk {
             covered_bits: 0,
             unmapped_bits: 0,
             reached_bits: 0,
+            reached_by_address: FxHashSet::default(),
             started: false,
             done: false,
             file_bits,
@@ -433,6 +458,15 @@ impl Evaluator {
         // next go would skip that child and its bits would be in none of the
         // answers.
         let opening = if descends(&r.ty) { Some(self.opening(doc, &path, &r)?) } else { None };
+        // The same thing reached again through another address. After the
+        // last question that can be interrupted and before anything is written
+        // down, so a go that stops short never finds its own child already
+        // noted. See `reached_by_address`.
+        if walk.stack[top].at && scale == 1 && !walk.reached_by_address.insert((r.offset, size)) {
+            self.note_born(walk, top, &path);
+            self.step_past(walk, top, in_order);
+            return Ok(());
+        }
         if sequential {
             let cursor = walk.stack[top].cursor;
             if r.offset > cursor {

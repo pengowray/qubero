@@ -3285,6 +3285,37 @@ fn a_view_over_bytes_the_fields_describe_is_not_counted_twice() {
     assert_eq!(out.unmapped_bits, 0);
 }
 
+/// Two addresses naming the same thing reach it twice and count it once. An
+/// HDF5 group can hold any number of links to one object, and the template
+/// follows every one, since each is a way a reader gets there; counted every
+/// time, a group of two thousand links to one dataset covers more bits than
+/// its file has.
+///
+/// Something else at the same place is not the same thing: an address to the
+/// same start with a different length still counts.
+#[test]
+fn a_thing_two_addresses_name_is_counted_once() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("first", T::u8()),
+                ("second", T::u8()),
+                ("one", T::at(E::field("first"), T::structure("Thing", vec![("a", T::u16(Big))]))),
+                ("two", T::at(E::field("second"), T::structure("Thing", vec![("a", T::u16(Big))]))),
+                ("wider", T::at(E::field("first"), T::bytes(E::lit(4)))),
+            ],
+        ),
+    );
+    let d = doc(&[4, 4, 0, 0, 1, 2, 3, 4]);
+    let mut ev = Evaluator::new(t);
+    let (out, _) = kinds_to_the_end(&mut ev, &d);
+    assert_eq!(spent(&out, "uint", "u16 be"), (16, 1));
+    assert_eq!(spent(&out, "bytes", "bytes[]"), (32, 1));
+    assert!(out.covered_bits <= d.len_bits(), "{out:?}");
+}
+
 /// Bytes a structure does not cover are a gap. Nothing but the gap is
 /// recorded: a composite's own bits are its children's, and the only bits it
 /// contributes are the ones it is left holding.

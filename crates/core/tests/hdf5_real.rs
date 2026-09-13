@@ -212,6 +212,115 @@ fn gather(
     }
 }
 
+/// Every link in a group of two thousand is named under the template, the
+/// ones in a table under the root table among them, and every node of the
+/// version 2 tree indexing them is where the walk found it.
+///
+/// `fractal-heap-deep.h5` is the one file in the collection whose heap has
+/// grown past its direct rows, so it is the one that says a table's row count
+/// and which of its rows are tables were worked out right: get either wrong
+/// and the 160 links under the second table are not reached, or are read out
+/// of the wrong bytes. The names are known without h5py, because the
+/// generator writes them as a number and a fixed tail, and h5py lists exactly
+/// those.
+#[test]
+fn every_link_in_a_heap_grown_past_its_direct_rows_is_named() {
+    use qubero_core::formats::hdf5_tree::Kind;
+
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let path = dir.join("hdf5").join("fractal-heap-deep.h5");
+    let Ok(file) = File::open(&path) else {
+        eprintln!("skipped: no {}", path.display());
+        return;
+    };
+    let len = file.metadata().unwrap().len();
+    let doc = Document::new(FileSource { file: RefCell::new(file), len });
+    let mut ev = Evaluator::new(hdf5());
+
+    let mut found = Found::default();
+    links(&mut ev, &doc, &[], 0, &mut found, &path);
+
+    let tail = "abcdefghijklmnopqrstuvwxyz".repeat(10);
+    let want: Vec<String> = (0..2000).map(|i| format!("link_{i:04}_{tail}")).collect();
+    let mut got = found.names.clone();
+    got.sort();
+    assert_eq!(got.len(), want.len(), "{}: {} links named in the heap", path.display(), got.len());
+    let wrong: Vec<&String> = got.iter().zip(&want).filter(|(g, w)| g != w).map(|(g, _)| g).take(3).collect();
+    assert!(wrong.is_empty(), "{}: names read that were not written: {wrong:?}", path.display());
+    assert_eq!(found.nested, 160, "{}: links under a table under the root table", path.display());
+
+    assert_eq!(found.trees.len(), 1, "{}: {:?}", path.display(), found.trees);
+    let tree = qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, &found.trees[0], 4096)
+        .expect("walks")
+        .expect("a tree");
+    assert_eq!(tree.omitted, 0);
+    assert_eq!(tree.records_total, 2000);
+    assert_eq!(tree.nodes.iter().map(|n| n.entries).sum::<u64>(), 2000);
+    assert_eq!(tree.nodes.iter().map(|n| n.depth).max(), Some(2), "{}: not a tree of depth 2", path.display());
+    assert!(tree.nodes.iter().filter(|n| n.kind == Kind::Leaf).count() > 1);
+    for node in &tree.nodes {
+        assert!(!node.path.is_empty(), "{}: the node at {:#x} has no path", path.display(), node.address);
+        let at = ev.node(&doc, &node.path).expect("the node reads").offset_bits / 8;
+        assert_eq!(at, node.address, "{}: the node walked at {:#x} is placed at {at:#x}", path.display(), node.address);
+    }
+}
+
+#[derive(Default)]
+struct Found {
+    /// The name of every link read out of a heap block.
+    names: Vec<String>,
+    /// How many of those are in a block under more than one table.
+    nested: usize,
+    /// Where each version 2 tree header is.
+    trees: Vec<Vec<usize>>,
+}
+
+/// Every link under `path`, following only the one link that leads to the big
+/// group, so the two thousand hard links to one dataset are not each walked
+/// into it. `tables` is how many heap tables the walk is inside.
+fn links(
+    ev: &mut Evaluator,
+    doc: &Document<FileSource>,
+    path: &[usize],
+    tables: usize,
+    found: &mut Found,
+    file: &Path,
+) {
+    let node = ev
+        .node(doc, path)
+        .unwrap_or_else(|e| panic!("{}: {path:?} does not read: {e:?}", file.display()));
+    let tables = tables + usize::from(node.type_name == "HeapIndirectBlock");
+    if node.type_name == "BTree2" {
+        found.trees.push(path.to_vec());
+        return;
+    }
+    if node.type_name == "Link" {
+        let name = ev.child_named(doc, path, "name").expect("reads").expect("a link has a name");
+        // The bytes the field covers rather than its value, which is cut short
+        // for display, and these names are 270 characters long.
+        let info = ev.node(doc, &name).expect("reads");
+        assert!(matches!(info.value, Value::Str(_)), "{}: a link name that is not text", file.display());
+        let mut bytes = vec![0u8; (info.size_bits / 8) as usize];
+        assert!(doc.read_bits(info.offset_bits, info.size_bits, &mut bytes).is_empty());
+        let name = String::from_utf8(bytes).expect("a name in UTF-8");
+        if tables > 0 {
+            found.names.push(name.clone());
+            found.nested += usize::from(tables > 1);
+        }
+        if name != "wide" {
+            return;
+        }
+    }
+    for i in 0..node.child_count as usize {
+        let mut p = path.to_vec();
+        p.push(i);
+        links(ev, doc, &p, tables, found, file);
+    }
+}
+
 /// The sample collection, wherever it is. None when there is none.
 fn sample_dir() -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
@@ -375,6 +484,20 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
             // to show as a range and nothing is shown.
             if tree.job == Job::Group {
                 assert!(tree.nodes.iter().all(|n| n.first_key.is_empty()), "{}: a hash shown as a name", path.display());
+            }
+            // The template works the pointer widths out for itself, from the
+            // same three numbers, and places every node. Where it put each one
+            // is where the walk read it, or one of the two has a width wrong.
+            for node in &tree.nodes {
+                assert!(!node.path.is_empty(), "{}: the node at {:#x} has no template path", path.display(), node.address);
+                let placed = ev.node(&doc, &node.path).map(|n| n.offset_bits / 8);
+                assert_eq!(
+                    placed.as_ref().ok(),
+                    Some(&node.address),
+                    "{}: the template places the node walked at {:#x} at {placed:?}",
+                    path.display(),
+                    node.address
+                );
             }
             if tree.omitted > 0 {
                 continue;

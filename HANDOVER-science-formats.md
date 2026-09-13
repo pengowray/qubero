@@ -30,6 +30,9 @@ cases only.
 
 | Was | Commit |
 |---|---|
+| S2: HDF5 fractal-heap indirect blocks, for a heap grown past its largest direct block | `4308a8f` |
+| S2: children of a version 2 B-tree node below the root (`HANDOVER-open-hazards.md` 4) | `4308a8f` |
+| Kind totals counted an HDF5 object once per hard link to it, so `fractal-heap-deep.h5` covered 9.1 Mbit of a 4.9 Mbit file. What an `At` reaches now counts once. | `0d0ac8f` |
 | S3. Field names taken from a sibling list. Now `Field::elem_name_from`: an expression worked out per element of a list, with `Idx` as that element's index, labelling it `[1] y` while the path stays `[1]`. | a47f1ed |
 | NPY structured dtype field names: `[0] channel_0000` | ec4812d |
 | MAT struct fields labelled with their names, struct arrays included: `[2] one` | e0d9fa3 |
@@ -130,10 +133,23 @@ unpacked RNTuple envelope needs one more step rule, through a `Decoded`'s child
 - Paged fixed arrays. A page's worth of entries is a power of two.
 - Implicit-index chunks. The chunk count is each dimension of the dataspace
   divided by the chunk dimension, rounded up, multiplied together.
-- Fractal-heap indirect blocks, for a heap grown past its largest direct block.
-- Children of a version 2 B-tree node below the root
-  (`HANDOVER-open-hazards.md` "Still open" 4). `hdf5_tree.rs` already does the
-  arithmetic in Rust; the template cannot.
+
+The heap tables and the B-tree children are closed (see the Closed table).
+Both are checked by `fractal-heap-deep.h5`, whose group of 2,000 links puts
+160 of them under a second heap table and indexes them with a tree of depth 2.
+What the B-tree work left for the web side is a string: `BTREES.notInListing`
+and the `rootOnly` form of `BTREES.hint` still say only the root of a version
+2 tree is in the Listing. Both now show only for a node the template places
+somewhere other than where `hdf5_tree.rs` read it, which a well-formed file
+never has, so they want rewording rather than removing.
+
+The same file's links are all hard links to one dataset, which made
+`kinds_real`'s `every_sample_adds_up` count that object header once per link,
+9.1 Mbit covered of a 4.9 Mbit file. The kind walk now counts a thing an `At`
+reaches once, by its start and length (`KindWalk::reached_by_address` in
+`eval/kinds.rs`). Pointer lists and chains are not deduplicated, to keep a
+large chunk index out of a set, so a graph built from those would still count
+twice.
 
 Every HDF5 gap here also applies to NetCDF-4, MATLAB 7.3 and `.h5ad`, which are
 HDF5 files.
@@ -199,7 +215,7 @@ Reads further than any other scientific format. Left:
 - Filtered chunks are bytes in the template; `hdf5_chunk.rs` decodes deflate,
   shuffle, fletcher32 as a side reader. szip, nbit, scaleoffset and filters
   32000+ stop the walk.
-- The five S2 items.
+- The S2 items still open.
 - Variable-length strings (S5).
 - Compound datatypes are one element of the right size.
 - Virtual dataset mappings are bytes.
@@ -268,7 +284,7 @@ opened at all, since the app opens one file.
 
 Thin enough that a clean sweep says little: NetCDF classic (3 files, 3 KB, one
 dataset), HDF4 (2 files, 8 KB), GWF (1 file), CDF (2 files), FITS (3 files).
-HDF5's six are small synthetic files; nothing from a real instrument.
+HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
