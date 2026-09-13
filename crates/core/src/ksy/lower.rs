@@ -2165,6 +2165,215 @@ instances:
 		assert!(out.contains("total: computed len_name + 4"), "{out}");
 	}
 
+	/// A `.ksy` with the boilerplate filled in, so a test says only the row of
+	/// the mapping table it is about.
+	fn format(body: &str) -> String {
+		format!("meta:\n  id: t\n  endian: le\n  encoding: ASCII\n{body}")
+	}
+
+	/// The root structure's own lines, which is where a one-field test lands.
+	fn root_of(text: &str) -> String {
+		let out = rendered(text);
+		let start = out.find("root ").expect("a root");
+		out[start..].split("\n\n").next().unwrap_or_default().to_string()
+	}
+
+	fn gaps(text: &str) -> Vec<String> {
+		convert_text(text).report.gaps.iter().map(|g| g.reason.clone()).collect()
+	}
+
+	#[test]
+	fn the_number_types_map_to_widths_and_ends() {
+		let out = root_of(&format(
+			"seq:\n  - id: a\n    type: u2\n  - id: b\n    type: s4be\n  - id: c\n    type: f8\n  - id: d\n    type: b5\n  - id: e\n    type: b3\n",
+		));
+		assert!(out.contains("a: u16le"), "{out}");
+		assert!(out.contains("b: i32be"), "{out}");
+		assert!(out.contains("c: f64le"), "{out}");
+		assert!(out.contains("d: u5be"), "{out}");
+		assert!(out.contains("e: u3be"), "{out}");
+	}
+
+	#[test]
+	fn a_size_becomes_a_length_and_size_eos_becomes_the_rest() {
+		let out = root_of(&format(
+			"seq:\n  - id: n\n    type: u1\n  - id: a\n    size: n * 2\n  - id: b\n    size-eos: true\n",
+		));
+		assert!(out.contains("a: bytes[n * 2]"), "{out}");
+		assert!(out.contains("b: bytes[remaining]"), "{out}");
+	}
+
+	#[test]
+	fn contents_becomes_a_magic() {
+		let out = root_of(&format("seq:\n  - id: a\n    contents: [0x89, 'PNG']\n"));
+		assert!(out.contains("a: magic 89 50 4E 47"), "{out}");
+	}
+
+	#[test]
+	fn text_says_how_far_it_runs_and_what_it_is_in() {
+		let out = root_of(&format(
+			"seq:\n  - id: a\n    type: str\n    size: 4\n  - id: b\n    type: strz\n  - id: c\n    type: str\n    size: 8\n    pad-right: 32\n",
+		));
+		assert!(out.contains("a: text[4] ascii"), "{out}");
+		assert!(out.contains("b: text until 0x00 ascii"), "{out}");
+		assert!(out.contains("c: text[8] padded with 0x20 ascii"), "{out}");
+	}
+
+	#[test]
+	fn a_user_type_becomes_a_name_and_a_sized_one_a_window() {
+		let out = rendered(&format(
+			"seq:\n  - id: a\n    type: inner\n  - id: b\n    type: inner\n    size: 4\ntypes:\n  inner:\n    seq:\n      - id: x\n        type: u1\n",
+		));
+		assert!(out.contains("a: inner"), "{out}");
+		assert!(out.contains("b: sized(4) inner"), "{out}");
+		assert!(out.contains("type inner {"), "{out}");
+	}
+
+	#[test]
+	fn a_nested_type_is_filed_under_its_outer_name() {
+		let out = rendered(&format(
+			"seq:\n  - id: a\n    type: outer\ntypes:\n  outer:\n    seq:\n      - id: b\n        type: nested\n    types:\n      nested:\n        seq:\n          - id: x\n            type: u1\n",
+		));
+		assert!(out.contains("type outer.nested ="), "{out}");
+	}
+
+	#[test]
+	fn the_repeat_forms_become_a_count_an_end_or_a_condition() {
+		let out = root_of(&format(
+			"seq:\n  - id: n\n    type: u1\n  - id: a\n    type: u1\n    repeat: expr\n    repeat-expr: n\n  - id: b\n    type: rec\n    repeat: until\n    repeat-until: _.last == 1\n  - id: c\n    type: u1\n    repeat: eos\ntypes:\n  rec:\n    seq:\n      - id: last\n        type: u1\n",
+		));
+		assert!(out.contains("a: u8be[n]"), "{out}");
+		assert!(out.contains("b: repeat(until element.last == 1) rec"), "{out}");
+		assert!(out.contains("c: repeat(until end) u8be"), "{out}");
+	}
+
+	#[test]
+	fn an_if_becomes_an_optional_field() {
+		let out = root_of(&format(
+			"seq:\n  - id: n\n    type: u1\n  - id: a\n    type: u1\n    if: n > 3\n",
+		));
+		assert!(out.contains("a: optional(when n > 3) u8be"), "{out}");
+	}
+
+	#[test]
+	fn a_switch_on_a_number_becomes_a_switch_and_on_text_a_match() {
+		let out = root_of(&format(
+			"seq:\n  - id: k\n    type: u1\n  - id: a\n    type:\n      switch-on: k\n      cases:\n        1: u1\n        kind::two: u2\n        _: u4\nenums:\n  kind:\n    2: two\n",
+		));
+		assert!(out.contains("a: switch k {1 => u8be, 2 => u16le, _ => u32le}"), "{out}");
+	}
+
+	#[test]
+	fn an_enum_becomes_a_named_table_and_a_label_becomes_its_number() {
+		let out = root_of(&format(
+			"seq:\n  - id: a\n    type: u1\n    enum: kind\n  - id: b\n    type: u1\n    if: a == kind::two\nenums:\n  kind:\n    1: one\n    2: two\n",
+		));
+		assert!(out.contains("a: u8be enum kind {1 = one, 2 = two}"), "{out}");
+		assert!(out.contains("b: optional(when a == 2)"), "{out}");
+	}
+
+	#[test]
+	fn a_value_instance_becomes_a_computed_field_and_a_pos_one_is_placed() {
+		let out = root_of(&format(
+			"seq:\n  - id: n\n    type: u1\ninstances:\n  half:\n    value: n / 2\n  far:\n    pos: n\n    type: u2\n  in_file:\n    pos: n\n    io: _root._io\n    type: u2\n",
+		));
+		assert!(out.contains("half: computed n / 2"), "{out}");
+		assert!(out.contains("far: at(n from window) u16le"), "{out}");
+		assert!(out.contains("in_file: at(n from file) u16le"), "{out}");
+	}
+
+	#[test]
+	fn process_zlib_becomes_a_decoded_run() {
+		let out = root_of(&format("seq:\n  - id: a\n    size: 8\n    process: zlib\n"));
+		assert!(out.contains("a: sized(8) decoded(zlib) bytes[remaining]"), "{out}");
+		assert!(gaps(&format("seq:\n  - id: a\n    size: 8\n    process: xor(5)\n"))[0].contains("xor"));
+	}
+
+	#[test]
+	fn a_parameter_becomes_a_zero_width_field_named_after_it() {
+		let out = rendered(&format(
+			"seq:\n  - id: n\n    type: u1\n  - id: a\n    type: inner(n)\ntypes:\n  inner:\n    params:\n      - id: len\n        type: u4\n    seq:\n      - id: x\n        size: len\n",
+		));
+		assert!(out.contains("a: inner(n)"), "{out}");
+		assert!(out.contains("type inner(n) (machinery len) {"), "{out}");
+		assert!(out.contains("len: computed n"), "{out}");
+		assert!(out.contains("x: bytes[len]"), "{out}");
+	}
+
+	#[test]
+	fn the_stream_questions_become_position_size_and_what_is_left() {
+		let out = root_of(&format(
+			"seq:\n  - id: a\n    type: u1\ninstances:\n  here:\n    value: _io.pos\n  whole:\n    value: _io.size\n  done:\n    value: _io.eof\n",
+		));
+		assert!(out.contains("here: computed pos"), "{out}");
+		assert!(out.contains("whole: computed size of window"), "{out}");
+		assert!(out.contains("done: computed remaining == 0"), "{out}");
+	}
+
+	#[test]
+	fn a_length_is_a_byte_count_and_a_lists_length_is_a_count_of_elements() {
+		let out = root_of(&format(
+			"seq:\n  - id: n\n    type: u1\n  - id: a\n    size: n\n  - id: b\n    type: u1\n    repeat: expr\n    repeat-expr: n\ninstances:\n  bytes_in_a:\n    value: a.size\n  elements_in_b:\n    value: b.size\n",
+		));
+		assert!(out.contains("bytes_in_a: computed sizeof(a)"), "{out}");
+		assert!(out.contains("elements_in_b: computed count of b"), "{out}");
+	}
+
+	#[test]
+	fn a_webide_representation_of_one_field_names_the_record() {
+		let out = rendered(&format(
+			"seq:\n  - id: a\n    type: inner\ntypes:\n  inner:\n    -webide-representation: '{name}'\n    seq:\n      - id: name\n        type: strz\n",
+		));
+		assert!(out.contains("inner (named by name)"), "{out}");
+		let out = rendered(&format(
+			"seq:\n  - id: a\n    type: inner\ntypes:\n  inner:\n    -webide-representation: 'seq {n} of {total}'\n    seq:\n      - id: n\n        type: u1\n      - id: total\n        type: u1\n",
+		));
+		assert!(out.contains("line n worded \"seq\" then total worded \"of\""), "{out}");
+	}
+
+	#[test]
+	fn a_string_compared_with_a_field_is_compared_as_its_bytes() {
+		let out = convert_text(&format(
+			"seq:\n  - id: k\n    size: 2\n  - id: a\n    type: u1\n    if: k == \"OK\"\n",
+		));
+		assert!(out.report.gaps.is_empty(), "{:?}", out.report.gaps);
+		assert_eq!(out.report.notes.len(), 1, "{:?}", out.report.notes);
+		assert!(out.report.notes[0].message.contains("big-endian"));
+		let text = template_text::render(&out.template);
+		assert!(text.contains("optional(when k == 'OK')"), "{text}");
+	}
+
+	#[test]
+	fn what_the_ir_cannot_say_is_named_rather_than_guessed_at() {
+		let bitwise = gaps(&format("instances:\n  a:\n    value: 1 | 2\n"));
+		assert!(bitwise[0].contains("value-or"), "{bitwise:?}");
+		let float = gaps(&format("instances:\n  a:\n    value: 1.5\n"));
+		assert!(float[0].contains("floating point"), "{float:?}");
+		let text = gaps(&format("instances:\n  a:\n    value: '\"hello\"'\n"));
+		assert!(text[0].contains("is text"), "{text:?}");
+		let endian = gaps("meta:\n  id: t\n  endian:\n    switch-on: 1\n    cases:\n      1: le\nseq:\n  - id: a\n    type: u4\n");
+		assert!(endian[0].contains("endianness is chosen while the file is read"), "{endian:?}");
+	}
+
+	#[test]
+	fn a_field_that_could_not_be_read_still_takes_up_its_room() {
+		let out = convert_text(&format(
+			"seq:\n  - id: a\n    size: 4\n    process: xor(9)\n  - id: b\n    type: u1\n",
+		));
+		let text = template_text::render(&out.template);
+		assert!(text.contains("a: bytes[4]"), "{text}");
+		assert!(text.contains("b: u8be"), "{text}");
+		assert_eq!(out.report.gaps.len(), 1);
+	}
+
+	#[test]
+	fn a_bit_run_pads_to_the_byte_the_next_field_starts_on() {
+		let out = root_of(&format("seq:\n  - id: a\n    type: b3\n  - id: b\n    type: u1\n"));
+		assert!(out.contains("a: u3be"), "{out}");
+		assert!(out.contains("padding: u5be"), "{out}");
+		assert!(out.contains("b: u8be"), "{out}");
+	}
+
 	#[test]
 	fn a_fixed_width_structure_can_be_measured() {
 		let ty = Ty::structure("s", vec![("a", Ty::u8()), ("b", Ty::u32(Endian::Little))]);
