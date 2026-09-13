@@ -32,6 +32,7 @@ pub(crate) fn decoded_object() -> T {
 
 mod aiff;
 mod ar;
+mod arrow;
 mod aseprite;
 mod assimp;
 mod appledouble;
@@ -176,6 +177,7 @@ mod wasm_opcodes;
 
 pub use aiff::aiff;
 pub use ar::{ar, deb};
+pub use arrow::arrow;
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
@@ -413,6 +415,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("wad", |_| wad()),
     ("pak", |_| pak()),
     ("parquet", |_| parquet()),
+    ("arrow", |_| arrow()),
     ("hdf4", |_| hdf4()),
     ("cdf", |_| cdf()),
     ("cdrom", |_| cdrom()),

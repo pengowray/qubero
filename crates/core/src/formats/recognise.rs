@@ -62,6 +62,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (parquet::MAGIC, "parquet"),
     // The same table with its footer encrypted, which says so at both ends.
     (parquet::ENCRYPTED, "parquet"),
+    (arrow::MAGIC, "arrow"),
     // The first card of a FITS header, keyword and all: eight bytes of
     // keyword and the `=` that says it has a value.
     (b"SIMPLE  =", "fits"),
