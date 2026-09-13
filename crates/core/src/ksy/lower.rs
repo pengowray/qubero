@@ -59,6 +59,8 @@ pub fn convert(text: &str, imports: &dyn Imports) -> Result<Converted, KsyError>
 		emitted: HashSet::new(),
 		mono: HashMap::new(),
 		parents: HashMap::new(),
+		bit_offset: 0,
+		pending: Vec::new(),
 	};
 	lower.collect_parents();
 
@@ -176,6 +178,13 @@ struct Lower<'a> {
 	/// Which types instantiate each type, which is what decides whether a
 	/// `_parent` reaches a field that is always there.
 	parents: HashMap<String, Vec<String>>,
+	/// How many bits into the current byte the field being lowered starts,
+	/// which is what decides whether a low-bit-first field runs into the next
+	/// byte. Zero everywhere but in the middle of a run of `bN` fields.
+	bit_offset: u32,
+	/// Instances of the type being lowered that have not been written out yet.
+	/// A field naming one of these is reading forwards, which the IR cannot do.
+	pending: Vec<String>,
 }
 
 impl<'a> Lower<'a> {
@@ -255,10 +264,20 @@ impl<'a> Lower<'a> {
 				let _ = first;
 			}
 		}
+		// An imported file's own id is the name of its top-level type, so
+		// `riff::chunk` is the `chunk` declared inside the file called `riff`.
 		for file in self.files {
-			if file.spec.meta.id.as_deref() == Some(first.as_str()) && name.names.len() == 1 {
+			if file.prefix.is_empty() || file.prefix != *first {
+				continue;
+			}
+			if name.names.len() == 1 {
 				return Some((file.prefix.clone(), &file.spec));
 			}
+			if let Some(found) = descend(&file.spec, &name.names[1..]) {
+				return Some((join_name(&file.prefix, &name.names[1..]), found));
+			}
+		}
+		for file in self.files {
 			if let Some(found) = descend(&file.spec, &name.names) {
 				return Some((join_name(&file.prefix, &name.names), found));
 			}
@@ -317,9 +336,77 @@ impl<'a> Lower<'a> {
 			tys.push(Ty::Computed(arg.clone()));
 		}
 
+		// A Kaitai instance is worked out when it is asked for, so a `seq`
+		// field may read one declared below it. The IR reads backwards only, so
+		// the ones that depend on nothing the file holds are written out first,
+		// where a field before them can see them, and the rest stay after the
+		// `seq` where they can see it.
+		let early = early_instances(here);
+		let outer_pending = std::mem::take(&mut self.pending);
+		for (name, instance) in &here.instances {
+			if !early.contains(name) {
+				continue;
+			}
+			match self.lower_instance(ctx, instance) {
+				Ok(ty) => {
+					self.report.became(
+						instance.path().to_string(),
+						instance_source(instance),
+						ty.display_name(),
+					);
+					if let Some(doc) = &instance.doc().summary {
+						docs.push((name.clone(), doc.to_string()));
+					}
+					names.push(name.clone());
+					tys.push(ty);
+				}
+				Err(gap) => {
+					self.report.gap(
+						instance.path().to_string(),
+						instance_source(instance),
+						format!("{} (the instance is dropped)", gap.reason),
+					);
+				}
+			}
+		}
+		self.pending = here
+			.instances
+			.iter()
+			.map(|(n, _)| n.clone())
+			.filter(|n| !early.contains(n))
+			.collect();
+
 		let mut placeable = true;
+		// Kaitai reads bits with a bit position of its own and throws away
+		// what is left of the current byte the moment a field that is not
+		// bits comes along. Nothing in the IR does that by itself, so the
+		// bits thrown away are written out as a field: without them every
+		// offset after a `b3` would be wrong by five bits.
+		let mut loose_bits: u32 = 0;
+		let mut pads = 0;
 		for attr in &here.seq {
 			let name = attr.name();
+			let width = bit_width(attr);
+			if width.is_none() && loose_bits % 8 != 0 {
+				pads += 1;
+				let pad_name =
+					if pads == 1 { "padding".to_string() } else { format!("padding{pads}") };
+				self.report.note(
+					attr.path.clone(),
+					source_of(attr),
+					format!(
+						"Kaitai steps to the next byte here, because the fields before this one were bits; the {} bits it steps over are the `{pad_name}` field",
+						8 - loose_bits % 8
+					),
+				);
+				names.push(pad_name);
+				tys.push(Ty::UInt { bits: 8 - loose_bits % 8, endian: Endian::Big });
+			}
+			self.bit_offset = loose_bits;
+			loose_bits = match width {
+				Some(w) => (loose_bits + w) % 8,
+				None => 0,
+			};
 			if !placeable {
 				self.report.gap(
 					attr.path.clone(),
@@ -348,7 +435,12 @@ impl<'a> Lower<'a> {
 			}
 		}
 
+		self.bit_offset = 0;
 		for (name, instance) in &here.instances {
+			if early.contains(name) {
+				continue;
+			}
+			self.pending.retain(|n| n != name);
 			match self.lower_instance(ctx, instance) {
 				Ok(ty) => {
 					self.report.became(
@@ -372,11 +464,13 @@ impl<'a> Lower<'a> {
 			}
 		}
 
+		self.pending = outer_pending;
 		let fields: Vec<(&str, Ty)> =
 			names.iter().map(String::as_str).zip(tys.into_iter()).collect();
 		let mut ty = Ty::structure(&struct_name(ir_name, here), fields);
-		if !params.is_empty() {
-			let machinery: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+		let mut machinery: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+		machinery.extend(names.iter().filter(|n| n.starts_with("padding")).map(String::as_str));
+		if !machinery.is_empty() {
 			ty = ty.machinery(&machinery);
 		}
 		for (field, doc) in &docs {
@@ -400,7 +494,9 @@ impl<'a> Lower<'a> {
 		let parts = match parse_representation(&text) {
 			Ok(parts) => parts,
 			Err(reason) => {
-				self.report.gap(path, text, reason);
+				// A representation with no field in it is a fixed label, and a
+				// fixed label says no more than the type's own name does.
+				self.report.note(path, text, reason);
 				return ty;
 			}
 		};
@@ -453,8 +549,39 @@ impl<'a> Lower<'a> {
 	// -- one field --------------------------------------------------------
 
 	fn lower_attr(&mut self, ctx: &Ctx<'a>, attr: &AttrSpec) -> Result<Ty, Gap> {
-		let mut ty = self.lower_attr_base(ctx, attr)?;
-		ty = self.apply_enum(ctx, attr, ty)?;
+		self.note_validation(attr);
+		let base = match self.lower_attr_base(ctx, attr) {
+			Ok(ty) => ty,
+			Err(gap) => {
+				// The type could not be said. What stands in its place still
+				// has to take up the room the field takes, or nothing after it
+				// in the structure can be placed: a repeat multiplies it, and
+				// a condition may leave it out.
+				let Some(fallback) = gap.fallback else { return Err(gap) };
+				if !gap.placeable {
+					return Err(Gap { reason: gap.reason, fallback: Some(fallback), placeable: false });
+				}
+				let ty = match self.apply_repeat(ctx, attr, fallback) {
+					Ok(ty) => ty,
+					Err(inner) => {
+						return Err(Gap {
+							reason: gap.reason,
+							fallback: inner.fallback,
+							placeable: false,
+						});
+					}
+				};
+				let ty = match (&attr.if_expr, self.condition(ctx, attr)) {
+					(None, _) => ty,
+					(Some(_), Some(cond)) => Ty::when(cond, ty),
+					(Some(_), None) => {
+						return Err(Gap { reason: gap.reason, fallback: Some(ty), placeable: false });
+					}
+				};
+				return Err(Gap { reason: gap.reason, fallback: Some(ty), placeable: true });
+			}
+		};
+		let mut ty = self.apply_enum(ctx, attr, base)?;
 		ty = self.apply_repeat(ctx, attr, ty)?;
 		if let Some(cond) = &attr.if_expr {
 			let cond = self
@@ -462,12 +589,51 @@ impl<'a> Lower<'a> {
 				.map_err(|r| Gap::keeping(format!("`if`: {r}"), ty.clone()))?;
 			ty = Ty::when(cond, ty);
 		}
-		self.note_validation(attr);
 		Ok(ty)
 	}
 
+	fn condition(&mut self, ctx: &Ctx<'a>, attr: &AttrSpec) -> Option<Expr> {
+		let cond = attr.if_expr.as_ref()?;
+		self.lower_expr(ctx, &attr.path, cond).ok()
+	}
+
 	/// The field's own type, before a repeat or a condition is put round it.
+	/// A type that could not be said falls back to bytes of whatever length is
+	/// still known, so that the fields after it keep their places.
 	fn lower_attr_base(&mut self, ctx: &Ctx<'a>, attr: &AttrSpec) -> Result<Ty, Gap> {
+		match self.lower_attr_base_inner(ctx, attr) {
+			Ok(ty) => Ok(ty),
+			Err(gap) if !gap.placeable => match self.known_length(ctx, attr) {
+				Some(len) => Err(Gap::bytes(gap.reason, len)),
+				None => Err(gap),
+			},
+			Err(gap) => Err(gap),
+		}
+	}
+
+	/// How long the field is, where the `.ksy` says so outright: a `size`, a
+	/// `size-eos`, or the width the type has by being that type.
+	fn known_length(&mut self, ctx: &Ctx<'a>, attr: &AttrSpec) -> Option<Expr> {
+		if let Some(bytes) = &attr.contents {
+			return Some(Expr::Lit(bytes.len() as i128));
+		}
+		match &attr.ty {
+			TypeRef::Bytes { source }
+			| TypeRef::Str { source, .. }
+			| TypeRef::UserFromBytes { source, .. } => self.byte_length(ctx, attr, source),
+			TypeRef::Int { width, .. } | TypeRef::Float { width, .. } => {
+				Some(Expr::Lit(i128::from(*width)))
+			}
+			TypeRef::Switch(_) => attr
+				.size
+				.as_ref()
+				.and_then(|e| self.lower_expr(ctx, &attr.path, e).ok())
+				.or(if attr.size_eos { Some(Expr::Remaining) } else { None }),
+			TypeRef::Bits { .. } | TypeRef::User { .. } => None,
+		}
+	}
+
+	fn lower_attr_base_inner(&mut self, ctx: &Ctx<'a>, attr: &AttrSpec) -> Result<Ty, Gap> {
 		if let Some(bytes) = &attr.contents {
 			return Ok(Ty::magic(bytes));
 		}
@@ -480,6 +646,21 @@ impl<'a> Lower<'a> {
 		}
 		match &attr.ty {
 			TypeRef::Bytes { source } => {
+				// Padding and a terminator take bytes off the *value* while
+				// leaving the field the same length. The IR can say that of
+				// text and not of raw bytes, so the field covers the right
+				// bytes and its value holds what Kaitai would have dropped.
+				if attr.pad_right.is_some() || (attr.terminator.is_some() && !matches!(source, ByteSource::Terminated)) {
+					let what = if attr.pad_right.is_some() { "`pad-right`" } else { "`terminator`" };
+					let len = self.byte_length(ctx, attr, source);
+					return Err(Gap {
+						reason: format!(
+							"{what} takes bytes off the value of a byte field, which the IR can say of text and not of bytes; the value here holds them"
+						),
+						fallback: len.map(Ty::Bytes),
+						placeable: true,
+					});
+				}
 				let inner = |len: Expr| Ty::Bytes(len);
 				self.from_bytes(ctx, attr, source, inner, "bytes")
 			}
@@ -498,7 +679,24 @@ impl<'a> Lower<'a> {
 			// Kaitai's `bit-endian: be` packs from the most significant bit and
 			// `le` from the least, so the two words mean the same thing and the
 			// mapping is the identity. `meta/endian` has no say in it.
-			TypeRef::Bits { width, endian } => Ok(Ty::UInt { bits: *width, endian: *endian }),
+			TypeRef::Bits { width, endian } => {
+				// The IR reads low-bit-first fields out of one byte: a field
+				// packed from the bottom that runs into the next byte is not a
+				// single range of bits and it refuses to place one. Kaitai's
+				// `bit-endian: le` does read such a field, so this is a gap
+				// rather than something to guess at.
+				if *endian == Endian::Little && self.bit_offset % 8 + *width > 8 {
+					return Err(Gap {
+						reason: format!(
+							"a {width}-bit field packed low-bit-first starting {} bits into a byte runs into the next byte, which the IR cannot read as one number",
+							self.bit_offset % 8
+						),
+						fallback: Some(Ty::UInt { bits: *width, endian: Endian::Big }),
+						placeable: true,
+					});
+				}
+				Ok(Ty::UInt { bits: *width, endian: *endian })
+			}
 			TypeRef::Str { zero_terminated, encoding, source } => {
 				self.lower_str(ctx, attr, *zero_terminated, encoding, source)
 			}
@@ -1300,6 +1498,12 @@ impl<'a> Lower<'a> {
 				let Some(Seg::Name(field)) = segs.first() else {
 					return Err("`_root` on its own is a type, not a value".to_string());
 				};
+				if *field == "_io" {
+					return Err(
+						"`_root._io` is the whole file as a stream, and the IR has no expression for the file's own size or position"
+							.to_string(),
+					);
+				}
 				if !visible(root).iter().any(|n| n == field) {
 					return Err(format!("`_root.{field}` names no field of the top-level type"));
 				}
@@ -1316,6 +1520,11 @@ impl<'a> Lower<'a> {
 			_ => {
 				if !self.in_scope(ctx, name) {
 					return Err(format!("no field named `{name}` is in scope"));
+				}
+				if self.pending.iter().any(|n| n == name) {
+					return Err(format!(
+						"`{name}` is worked out after this field, and the IR reads only what comes before"
+					));
 				}
 				self.apply_segs(ctx, path, Acc::Path(vec![name.clone()]), &segs)
 			}
@@ -1430,9 +1639,7 @@ impl<'a> Lower<'a> {
 						}
 					}
 				}
-				Seg::Name(name) if is_method(name) => {
-					Acc::Done(self.apply_method(ctx, acc, name)?)
-				}
+				Seg::Name(name) if is_method(name) => self.apply_method(ctx, acc, name)?,
 				Seg::Name(name) => match acc {
 					Acc::Path(mut p) => {
 						p.push((*name).to_string());
@@ -1452,12 +1659,12 @@ impl<'a> Lower<'a> {
 	}
 
 	/// What a method on a field means in the IR.
-	fn apply_method(&mut self, ctx: &Ctx<'a>, acc: Acc, name: &str) -> Result<Expr, String> {
+	fn apply_method(&mut self, ctx: &Ctx<'a>, acc: Acc, name: &str) -> Result<Acc, String> {
 		let single = match &acc {
 			Acc::Path(p) if p.len() == 1 => Some(p[0].clone()),
 			_ => None,
 		};
-		match name {
+		Ok(match name {
 			// `.to_i` on a number or a boolean is the number it already is.
 			"to_i" => {
 				if let Some(field) = &single {
@@ -1467,38 +1674,45 @@ impl<'a> Lower<'a> {
 						));
 					}
 				}
-				Ok(finish(acc))
+				acc
 			}
-			"value" => Ok(finish(acc)),
+			"value" => acc,
 			"size" | "length" => {
 				let Some(field) = single else {
 					return Err(format!("`.{name}` measures a field, and this is not one"));
 				};
-				if self.field_is_list(ctx, &field) {
-					Ok(Expr::len_of(&field))
+				Acc::Done(if self.field_is_list(ctx, &field) {
+					Expr::len_of(&field)
 				} else {
-					Ok(Expr::size_of(&field))
-				}
+					Expr::size_of(&field)
+				})
 			}
 			"first" | "last" => {
-				let Some(field) = single else {
+				let Acc::Path(array) = acc else {
 					return Err(format!("`.{name}` takes an element of a list, and this is not one"));
 				};
-				if !self.field_is_list(ctx, &field) {
-					return Err(format!("`{field}.{name}` reads an element of something that is not a list"));
+				if array.len() == 1 && !self.field_is_list(ctx, &array[0]) {
+					return Err(format!(
+						"`{}.{name}` reads an element of something that is not a list",
+						array[0]
+					));
 				}
 				let index = if name == "first" {
 					Expr::Lit(0)
+				} else if array.len() == 1 {
+					Expr::len_of(&array[0]).sub(Expr::Lit(1))
 				} else {
-					Expr::len_of(&field).sub(Expr::Lit(1))
+					return Err(format!(
+						"`.{name}` takes the last element of a list one level in, which the IR cannot count"
+					));
 				};
-				Ok(Expr::elem(&field, index))
+				Acc::Elem { array, index, field: Vec::new() }
 			}
 			"to_s" => {
-				Err("`.to_s` reads a number as text, and the IR's expressions are integers".to_string())
+				return Err("`.to_s` reads a number as text, and the IR's expressions are integers".to_string());
 			}
-			other => Err(format!("`.{other}` is not a method the IR has")),
-		}
+			other => return Err(format!("`.{other}` is not a method the IR has")),
+		})
 	}
 
 	/// Whether a name is one of the things the type it is written in can read.
@@ -1710,6 +1924,59 @@ fn process_name(process: &ProcessSpec) -> String {
 	}
 }
 
+/// Which of a type's value instances can be written out before its `seq`: the
+/// ones whose value depends on nothing the file holds, only on parameters,
+/// literals and each other. A `Computed` field takes no bytes, so moving one
+/// earlier changes only which rows can read it.
+fn early_instances(cls: &ClassSpec) -> Vec<String> {
+	let params: Vec<String> = cls.params.iter().map(ParamSpec::name).collect();
+	let mut early: Vec<String> = Vec::new();
+	loop {
+		let mut added = false;
+		for (name, instance) in &cls.instances {
+			if early.contains(name) {
+				continue;
+			}
+			let InstanceSpec::Value(value) = instance else { continue };
+			let mut ok = true;
+			value.value.walk(&mut |node| {
+				if let KExpr::Name(n) = node {
+					if !params.contains(n) && !early.contains(n) && !n.starts_with('_') {
+						ok = false;
+					}
+				}
+				if matches!(node, KExpr::Attribute { .. } | KExpr::Subscript { .. }) {
+					ok = false;
+				}
+			});
+			if let Some(cond) = &value.if_expr {
+				let _ = cond;
+				ok = false;
+			}
+			if ok {
+				early.push(name.clone());
+				added = true;
+			}
+		}
+		if !added {
+			return early;
+		}
+	}
+}
+
+/// How many bits a field takes out of the current byte, where it is one of the
+/// bit-wide fields at all. A repeat or a condition means the answer depends on
+/// the file, and then nothing can be said about where the next field starts.
+fn bit_width(attr: &AttrSpec) -> Option<u32> {
+	if !matches!(attr.repeat, RepeatSpec::No) || attr.if_expr.is_some() {
+		return None;
+	}
+	match &attr.ty {
+		TypeRef::Bits { width, .. } => Some(*width),
+		_ => None,
+	}
+}
+
 /// A list of expressions that is really a list of bytes.
 fn byte_list(items: &[KExpr]) -> Option<Vec<u8>> {
 	let mut out = Vec::new();
@@ -1792,7 +2059,7 @@ fn parse_representation(text: &str) -> Result<Vec<(String, String, String)>, Str
 		rest = &after[close + 1..];
 	}
 	if parts.is_empty() {
-		return Err("the representation names no field".to_string());
+		return Err("the representation is a fixed label with no field in it, so the type reads as its own name".to_string());
 	}
 	Ok(parts)
 }
