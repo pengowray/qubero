@@ -210,6 +210,7 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::DivCeil(a, b)
         | Expr::Less(a, b)
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
@@ -219,6 +220,7 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             expr_refs(a, out);
             expr_refs(b, out);
         }
+        Expr::Log2(a) => expr_refs(a, out),
         Expr::PeekAt { skip, .. } => expr_refs(skip, out),
         Expr::PadTo { n, .. } => expr_refs(n, out),
         Expr::Bit(a, _) => expr_refs(a, out),

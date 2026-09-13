@@ -210,6 +210,18 @@ impl Evaluator {
                 };
                 Some(format!("{name}({l}, {r})"))
             }
+            Expr::DivCeil(a, b) => {
+                let (Some(l), Some(r)) =
+                    (self.substitute(doc, at, a, 0, here, named)?, self.substitute(doc, at, b, 0, here, named)?)
+                else {
+                    return Ok(None);
+                };
+                Some(format!("ceil({l} / {r})"))
+            }
+            Expr::Log2(a) => {
+                let Some(inner) = self.substitute(doc, at, a, 0, here, named)? else { return Ok(None) };
+                Some(format!("log2({inner})"))
+            }
             Expr::PadTo { n, align } => {
                 let Some(inner) = self.substitute(doc, at, n, 0, here, named)? else { return Ok(None) };
                 Some(format!("align({inner}, {align})"))
@@ -325,6 +337,8 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::Div(a, b) => two(a, b, "/")?,
         Expr::Min(a, b) => format!("min({}, {})", write_at(a, 0)?, write_at(b, 0)?),
         Expr::Max(a, b) => format!("max({}, {})", write_at(a, 0)?, write_at(b, 0)?),
+        Expr::DivCeil(a, b) => format!("ceil({} / {})", write_at(a, 6)?, write_at(b, 7)?),
+        Expr::Log2(a) => format!("log2({})", write_at(a, 0)?),
         Expr::PadTo { n, align } => format!("align({}, {align})", write_at(n, 0)?),
         Expr::Bit(a, i) => format!("bit({}, {i})", write_at(a, 0)?),
         _ => return None,

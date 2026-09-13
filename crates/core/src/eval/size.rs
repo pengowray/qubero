@@ -377,6 +377,7 @@ pub(super) fn uniform(e: &Expr) -> bool {
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::DivCeil(a, b)
         | Expr::Or(a, b)
         | Expr::Less(a, b)
         | Expr::Shl(a, b)
@@ -386,6 +387,7 @@ pub(super) fn uniform(e: &Expr) -> bool {
         | Expr::Max(a, b) => {
             uniform(a) && uniform(b)
         }
+        Expr::Log2(a) => uniform(a),
         // Padding asks nothing the run it follows did not already ask.
         Expr::PadTo { n, .. } => uniform(n),
         // Remaining and Idx count from the element; the peeks read it; Prev,

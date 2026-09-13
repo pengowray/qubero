@@ -543,6 +543,7 @@ impl Evaluator {
             | Expr::Sub(a, b)
             | Expr::Mul(a, b)
             | Expr::Div(a, b)
+            | Expr::DivCeil(a, b)
             | Expr::Or(a, b)
             | Expr::Less(a, b)
             | Expr::Shl(a, b)
@@ -553,6 +554,7 @@ impl Evaluator {
                 self.from_expr(doc, at, a, role, out)?;
                 self.from_expr(doc, at, b, role, out)?;
             }
+            Expr::Log2(a) => self.from_expr(doc, at, a, role, out)?,
             // Padding is decided by whatever said how long the run before it
             // was, which is the field worth pointing at.
             Expr::PadTo { n, .. } => self.from_expr(doc, at, n, role, out)?,

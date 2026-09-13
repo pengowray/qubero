@@ -311,6 +311,7 @@ impl<'a> Walk<'a> {
             | Expr::Sub(a, b)
             | Expr::Mul(a, b)
             | Expr::Div(a, b)
+            | Expr::DivCeil(a, b)
             | Expr::Less(a, b)
             | Expr::Shl(a, b)
             | Expr::Shr(a, b)
@@ -318,6 +319,7 @@ impl<'a> Walk<'a> {
             | Expr::Min(a, b)
             | Expr::Max(a, b) => two(a, b),
             Expr::PadTo { n, .. } => self.expr(n, at),
+            Expr::Log2(a) => self.expr(a, at),
             Expr::Bit(a, _) => self.expr(a, at),
             Expr::PeekAt { skip, .. } => self.expr(skip, at),
             // `Remaining` has nothing to measure from where a check's

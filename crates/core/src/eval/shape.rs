@@ -373,6 +373,7 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::DivCeil(a, b)
         | Expr::Or(a, b)
         | Expr::And(a, b)
         | Expr::Less(a, b)
@@ -381,6 +382,7 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
         | Expr::Min(a, b)
         | Expr::Max(a, b) => two(a, b),
         Expr::PadTo { n, .. } => expr_reads(n),
+        Expr::Log2(a) => expr_reads(a),
         Expr::Bit(a, _) => expr_reads(a),
         // Everything left reads something: a field, an element of a list, a
         // peek at bytes ahead, a number the decoder deduced.

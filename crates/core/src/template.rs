@@ -371,6 +371,26 @@ pub enum Expr {
     /// on a boundary would otherwise be padded by. Three formats wrote that
     /// out before it became this.
     PadTo { n: Box<Expr>, align: u32 },
+    /// The first divided by the second, rounded up rather than down.
+    ///
+    /// How many pieces of a fixed size it takes to cover a length: an HDF5
+    /// dataset of 10 rows in chunks of 4 has 3 chunks along that dimension,
+    /// and `(a + b - 1) / b` says the same thing in a form a reader has to
+    /// decode. Both sides are expected to be positive; a negative one rounds
+    /// towards positive infinity, the same as the arithmetic does.
+    DivCeil(Box<Expr>, Box<Expr>),
+    /// The base-2 logarithm of a positive number, rounded down: the position
+    /// of its highest set bit.
+    ///
+    /// A format that doubles something as it grows writes the size it starts
+    /// at and the size it stops at, and how many doublings lie between is
+    /// this. An HDF5 fractal heap's rows of direct blocks and an extensible
+    /// array's data blocks are both counted that way, and the count is never
+    /// written in the file.
+    ///
+    /// Zero or a negative number has no logarithm and fails rather than
+    /// answering with something a file did not say.
+    Log2(Box<Expr>),
     /// One bit of a number, as one or zero.
     ///
     /// What a switch needs to key on a flag. A section of a program says it
@@ -658,6 +678,14 @@ impl Expr {
     }
     pub fn div(self, rhs: Expr) -> Expr {
         Expr::Div(Box::new(self), Box::new(rhs))
+    }
+    /// This divided by `rhs`, rounded up.
+    pub fn div_ceil(self, rhs: Expr) -> Expr {
+        Expr::DivCeil(Box::new(self), Box::new(rhs))
+    }
+    /// The base-2 logarithm of this, rounded down.
+    pub fn log2(self) -> Expr {
+        Expr::Log2(Box::new(self))
     }
     /// One when this is less than `rhs`, and zero otherwise.
     /// This shifted left by `rhs` bits.

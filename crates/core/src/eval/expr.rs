@@ -255,6 +255,22 @@ impl Evaluator {
                 }
                 self.eval_expr_at(doc, at, a, here)? / d
             }
+            Expr::DivCeil(a, b) => {
+                let d = self.eval_expr_at(doc, at, b, here)?;
+                if d == 0 {
+                    return fail("division by zero");
+                }
+                let n = self.eval_expr_at(doc, at, a, here)?;
+                let q = n / d;
+                if n % d != 0 && ((n < 0) == (d < 0)) { q + 1 } else { q }
+            }
+            Expr::Log2(a) => {
+                let n = self.eval_expr_at(doc, at, a, here)?;
+                if n <= 0 {
+                    return fail("logarithm of a number that is not positive");
+                }
+                i128::from(n.ilog2())
+            }
         })
     }
 

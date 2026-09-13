@@ -2378,6 +2378,42 @@ fn a_bit_field_of_a_number_is_a_shift_and_a_mask() {
 }
 
 #[test]
+fn a_division_rounds_up_and_a_logarithm_rounds_down() {
+    // Ten rows in chunks of four is three chunks; a run of 4096 doubled from
+    // 512 is three doublings, and 4095 is still two.
+    let t = T::structure(
+        "Root",
+        vec![
+            ("rows", T::u16(Big)),
+            ("chunk", T::u16(Big)),
+            ("chunks", T::computed(E::field("rows").div_ceil(E::field("chunk")))),
+            ("exact", T::computed(E::lit(12).div_ceil(E::field("chunk")))),
+            ("big", T::computed(E::lit(4096).log2().sub(E::lit(512).log2()))),
+            ("under", T::computed(E::lit(4095).log2().sub(E::lit(512).log2()))),
+            ("one", T::computed(E::lit(1).log2())),
+        ],
+    );
+    let d = doc(&[0, 10, 0, 4]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(3));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(3));
+    assert_eq!(ev.node(&d, &[4]).unwrap().value.as_int(), Some(3));
+    assert_eq!(ev.node(&d, &[5]).unwrap().value.as_int(), Some(2));
+    assert_eq!(ev.node(&d, &[6]).unwrap().value.as_int(), Some(0));
+    assert_eq!(write_expr(&E::field("rows").div_ceil(E::field("chunk"))).as_deref(), Some("ceil(rows / chunk)"));
+    assert_eq!(write_expr(&E::field("rows").add(E::lit(1)).log2()).as_deref(), Some("log2(rows + 1)"));
+}
+
+#[test]
+fn a_logarithm_of_nothing_and_a_division_by_nothing_are_refused() {
+    for e in [E::field("n").log2(), E::lit(5).div_ceil(E::field("n"))] {
+        let t = T::structure("Root", vec![("n", T::u8()), ("x", T::computed(e))]);
+        let mut ev = Evaluator::new(Template::new("t", t));
+        assert!(ev.node(&doc(&[0]), &[1]).is_err());
+    }
+}
+
+#[test]
 fn a_shift_of_more_than_a_word_is_refused_either_way() {
     let t = T::structure("Root", vec![("n", T::u32(Big)), ("after", T::u8())]);
     let d = doc(&[0, 0, 0, 4, 0]);
