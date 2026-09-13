@@ -1197,7 +1197,10 @@ impl<'a> Lower<'a> {
 			KExpr::Name(n) if n == "_io" => Ok(Anchor::Window),
 			KExpr::Attribute { value, attr } if attr == "_io" => match &**value {
 				KExpr::Name(n) if n == "_root" => Ok(Anchor::File),
-				KExpr::Name(n) if n == "_parent" => Ok(Anchor::Window),
+				// `_parent._io` is the window round the type that placed this
+				// one. The IR's `Window` is the window round this field, and
+				// the two are the same only when nothing between them opens a
+				// window of its own, which nothing here can check.
 				other => Err(Gap::dropped(format!(
 					"`io: {other}._io` reads inside another field's stream, which the IR has no anchor for"
 				))),
@@ -2317,6 +2320,27 @@ instances:
 		assert!(out.contains("half: computed n / 2"), "{out}");
 		assert!(out.contains("far: at(n from window) u16le"), "{out}");
 		assert!(out.contains("in_file: at(n from file) u16le"), "{out}");
+	}
+
+	#[test]
+	fn an_instance_is_written_out_before_the_field_that_reads_it() {
+		let out = root_of(&format(
+			"seq:\n  - id: n\n    type: u1\n  - id: body\n    size: doubled\ninstances:\n  doubled:\n    value: n * 2\n",
+		));
+		let computed = out.find("doubled: computed n * 2").unwrap_or_else(|| panic!("{out}"));
+		let reader = out.find("body: bytes[doubled]").unwrap_or_else(|| panic!("{out}"));
+		assert!(computed < reader, "the instance has to come first\n{out}");
+	}
+
+	#[test]
+	fn a_field_reading_an_instance_of_a_later_field_is_a_gap() {
+		let reasons = gaps(&format(
+			"seq:\n  - id: head\n    size: doubled\n  - id: n\n    type: u1\ninstances:\n  doubled:\n    value: n * 2\n",
+		));
+		assert!(
+			reasons.iter().any(|r| r.contains("`doubled` is worked out after this field")),
+			"{reasons:?}"
+		);
 	}
 
 	#[test]
