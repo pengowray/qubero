@@ -3757,6 +3757,116 @@ fn a_tagged_search_finds_an_element_written_out_of_order() {
     assert_eq!(ev.node(&d, &[0, 2, 3]).unwrap().value.as_int(), Some(2), "label 3 is the second");
 }
 
+/// Where a field is, rather than what it says.
+#[test]
+fn start_of_names_where_an_earlier_field_begins() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("head", T::u16(Big)),
+                ("body", T::bytes(E::lit(4))),
+                ("body_at", T::computed(E::start_of(E::field("body")))),
+                // Through a path into an earlier field, and through a list,
+                // which is what a search hands it.
+                ("inner", T::structure("Inner", vec![("a", T::u8()), ("b", T::u8())])),
+                ("b_at", T::computed(E::start_of(E::within(&["inner", "b"])))),
+            ],
+        ),
+    );
+    let d = doc(&[0, 1, 2, 3, 4, 5, 6, 7]);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(2));
+    assert_eq!(ev.node(&d, &[4]).unwrap().value.as_int(), Some(7));
+}
+
+/// And counted from where this copy of the format begins, so that it reads as
+/// an address of the format rather than as a place in whatever holds it.
+///
+/// An HDF5 file behind a 512-byte user block writes every address as if the
+/// block were not there, and a MATLAB 7.3 file is exactly that. An answer
+/// counted from the front of the file would be 512 too large and would be
+/// silently right on every file without one.
+#[test]
+fn start_of_counts_from_the_nearest_origin() {
+    let inner = || {
+        T::structure(
+            "Inner",
+            vec![("head", T::u16(Big)), ("body", T::bytes(E::lit(4))), ("body_at", T::computed(E::start_of(E::field("body"))))],
+        )
+    };
+    let d = doc(&[0; 16]);
+
+    let plain = Template::new("t", T::structure("Root", vec![("preamble", T::bytes(E::lit(3))), ("inner", inner())]));
+    let mut ev = Evaluator::new(plain);
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value.as_int(), Some(5), "from the front of the file");
+
+    let framed =
+        Template::new("t", T::structure("Root", vec![("preamble", T::bytes(E::lit(3))), ("inner", T::origin(inner()))]));
+    let mut ev = Evaluator::new(framed);
+    // An origin is a marker and takes no level of its own, so the field is in
+    // the same place it was.
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value.as_int(), Some(2), "from the front of this copy of the format");
+}
+
+/// A field placed at where a search landed covers that element's bytes: the
+/// two halves together are how the Nth element of a list whose elements vary
+/// in size is read.
+#[test]
+fn an_at_placed_at_a_found_element_covers_its_bytes() {
+    let found = |field: &[&str]| {
+        E::tagged_in_by(E::within(&["collection", "elements"]), &["index"], E::field("want"), field)
+    };
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("address", T::u8()),
+                ("want", T::u8()),
+                (
+                    "collection",
+                    T::at(
+                        E::field("address"),
+                        T::structure(
+                            "Collection",
+                            vec![(
+                                "elements",
+                                T::repeat(
+                                    T::structure(
+                                        "Element",
+                                        vec![
+                                            ("index", T::u8()),
+                                            ("size", T::u8()),
+                                            ("payload", T::bytes(E::field("size"))),
+                                        ],
+                                    ),
+                                    Until::End,
+                                ),
+                            )],
+                        ),
+                    ),
+                ),
+                (
+                    "object",
+                    T::at(
+                        E::start_of(found(&["payload"])),
+                        T::sized(found(&["size"]), T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
+                    ),
+                ),
+            ],
+        ),
+    );
+    // At byte 2: element 7 of one byte, element 3 of two, element 5 of three.
+    let d = doc(&[2, 5, 7, 1, b'a', 3, 2, b'b', b'c', 5, 3, b'd', b'e', b'f']);
+    let mut ev = Evaluator::new(t);
+    let object = ev.node(&d, &[3, 0]).unwrap();
+    assert_eq!(object.value, Value::Str("def".into()));
+    assert_eq!(object.offset_bits / 8, 11, "the third element's payload starts at byte 11");
+    assert_eq!(object.size_bits, 3 * 8);
+}
+
 /// A source that says how many times it was asked for bytes, so that a saving
 /// in reading rather than in memory can be seen.
 struct Counting {

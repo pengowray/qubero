@@ -28,7 +28,7 @@
 //! again.
 
 use crate::document::Document;
-use crate::eval::{EvalError, Evaluator, Value, R};
+use crate::eval::{Evaluator, Value, R};
 use crate::source::Source;
 
 /// How many objects one walk reports. A single-cell atlas has a few hundred;
@@ -432,7 +432,10 @@ fn attribute<S: Source>(ev: &mut Evaluator, doc: &Document<S>, body: &[usize]) -
         match ev.node(doc, &element)?.value {
             Value::Str(s) if i == 0 => text = s,
             // A variable-length string is a note saying where the string is,
-            // and the walk to it is what a reader can do and a field cannot.
+            // and the note now carries the string: the template searches the
+            // global heap collection for the object with that index and places
+            // a field over its bytes. This used to be a walk written out here,
+            // because a field could not do it.
             Value::Composite { .. } if i == 0 => {
                 text = vlen_string(ev, doc, &element)?.unwrap_or_default();
             }
@@ -446,49 +449,17 @@ fn attribute<S: Source>(ev: &mut Evaluator, doc: &Document<S>, body: &[usize]) -
     Ok(Some((name, text, numbers)))
 }
 
-/// The string a variable-length element points at: the object with that index
-/// in the global heap collection at that address, found by walking the
-/// collection from its first object.
+/// The string a variable-length element points at, read off the field the note
+/// carries: `object` is placed at the heap object the search found, so this is
+/// one step through the address and then the text.
 fn vlen_string<S: Source>(ev: &mut Evaluator, doc: &Document<S>, at: &[usize]) -> R<Option<String>> {
-    let number = |ev: &mut Evaluator, doc: &Document<S>, name: &str| -> R<i128> {
-        Ok(match ev.child_named(doc, at, name)? {
-            Some(p) => ev.node(doc, &p)?.value.as_int().unwrap_or(-1),
-            None => -1,
-        })
-    };
-    let want = number(ev, doc, "object_index")?;
-    let length = number(ev, doc, "length")?;
-    if want < 0 || length < 0 {
-        return Ok(None);
+    let Some(object) = ev.child_named(doc, at, "object")? else { return Ok(None) };
+    let Some(inner) = inside(ev, doc, &object)? else { return Ok(None) };
+    match ev.text_value(doc, &inner) {
+        Ok((text, _)) => Ok(Some(text.trim_end_matches('\0').to_string())),
+        Err(e) if e.interrupted() => Err(e),
+        Err(_) => Ok(None),
     }
-    let Some(collection) = ev.child_named(doc, at, "collection")? else { return Ok(None) };
-    let Some(heap) = inside(ev, doc, &collection)? else { return Ok(None) };
-    let Some(objects) = ev.child_named(doc, &heap, "objects")? else { return Ok(None) };
-    let n = ev.node(doc, &objects)?.child_count;
-    for i in 0..n {
-        let mut object = objects.clone();
-        object.push(i as usize);
-        let Some(index) = ev.child_named(doc, &object, "object_index")? else { continue };
-        if ev.node(doc, &index)?.value.as_int() != Some(want) {
-            continue;
-        }
-        let Some(data) = ev.child_named(doc, &object, "payload")? else { return Ok(None) };
-        let info = ev.node(doc, &data)?;
-        let bytes = read_bytes(doc, info.offset_bits, length.min(4096) as u64)?;
-        return Ok(Some(String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string()));
-    }
-    Ok(None)
-}
-
-/// The bytes themselves, since what an object of a heap holds is a run of them
-/// and not a field.
-fn read_bytes<S: Source>(doc: &Document<S>, at_bits: u64, len: u64) -> R<Vec<u8>> {
-    let mut buf = vec![0u8; len as usize];
-    let missing = doc.read_bits(at_bits, len * 8, &mut buf);
-    if !missing.is_empty() {
-        return Err(EvalError::Pending(missing));
-    }
-    Ok(buf)
 }
 
 /// The links a symbol table message leads to: every entry of every node of the

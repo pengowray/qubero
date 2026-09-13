@@ -112,6 +112,26 @@ pub enum Expr {
     /// that rounding is without knowing how many bits the run came to, and
     /// `SizeOf` rounds the answer off before it can be asked.
     BitsOf(Arc<str>),
+    /// Where the field an expression names begins, in bytes, counted the way
+    /// an address in this format is counted: from the nearest
+    /// [`Ty::Origin`] around the field asking, and from the front of the file
+    /// where there is none. So it pairs with [`Anchor::Origin`] and can be
+    /// handed straight to [`Ty::at_origin`], which is the only thing it is
+    /// for.
+    ///
+    /// Every other expression asks what a field *says*. This asks where it
+    /// *is*, which is the one thing a template could not say about an element
+    /// of a list whose elements vary in size. An HDF5 variable-length string
+    /// is somewhere in a global heap collection, and which object it is, is
+    /// written in the note that points at it; the object is found by searching
+    /// the collection for that index, and then the bytes wanted are the ones
+    /// the object was found at. Without this, a search can read a number out
+    /// of the object it found and cannot cover the object's own bytes.
+    ///
+    /// The expression inside has to be one that lands on a field: a name, a
+    /// path, an element of a list, or a search. Arithmetic names no field and
+    /// so has no place to be the start of.
+    StartOf(Box<Expr>),
     /// This element's index in the nearest list it sits in. Zero outside one.
     Idx,
     /// The value of one element of an earlier array, by index. `Ref` names a
@@ -522,6 +542,12 @@ impl Expr {
     /// than a byte.
     pub fn bits_of(name: &str) -> Expr {
         Expr::BitsOf(name.into())
+    }
+    /// Where the field this expression names begins, counted from the nearest
+    /// origin around the field asking, so that it reads as an address of this
+    /// format. See [`Expr::StartOf`].
+    pub fn start_of(e: Expr) -> Expr {
+        Expr::StartOf(Box::new(e))
     }
     /// This element's index in the nearest enclosing list.
     pub fn idx() -> Expr {

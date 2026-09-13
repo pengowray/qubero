@@ -105,6 +105,31 @@ impl Evaluator {
             },
             Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
             Expr::BitsOf(name) => self.lookup_bits(doc, at, name)?.1,
+            // Where a field is rather than what it says, as an address of this
+            // format: counted from the nearest origin, so that handing it to
+            // an `At` anchored the same way lands on those bytes again. See
+            // `Expr::StartOf`.
+            Expr::StartOf(inner) => {
+                let inner = inner.clone();
+                let Some(p) = self.text_path(doc, at, &inner, here)? else {
+                    return fail("nothing there to be the start of");
+                };
+                self.resolve(doc, &p)?;
+                let found = &self.memo[&p];
+                // Offsets of two address spaces are two different numbers.
+                // Answering across them would give the start of a field in an
+                // unpacked stream as if it were a place in the file.
+                let space = self.memo.get(at).map_or(0, |r| r.space);
+                if found.space != space {
+                    return fail("that field is read in another space");
+                }
+                let offset = found.offset;
+                let base = self.origin_of(at).map_or(0, |(offset, _)| offset);
+                if offset < base {
+                    return fail("that field starts before this copy of the format does");
+                }
+                ((offset - base) / 8) as i128
+            }
             // Read where this field starts without taking the bits: what a
             // field that exists only when the byte says so has to ask.
             Expr::Peek { bits, endian } => {
@@ -822,6 +847,15 @@ impl Evaluator {
         let Some(mut p) = self.find_field(at, first) else {
             return fail(format!("unknown field {first}"));
         };
+        // A field whose contents are somewhere else in the file is its
+        // contents, here as in `descend`. `find_field` steps through an `At`
+        // the declaration shows it; a switch that chose one shows nothing
+        // until the field has been read, and an HDF5 address is written that
+        // way because the format spells "nowhere" as an address of its own.
+        self.resolve(doc, &p)?;
+        if matches!(self.memo[&p].ty, Ty::At { .. }) {
+            p.push(0);
+        }
         if !self.descend(doc, &mut p, rest)? {
             return fail(format!("{first} has no field named {}", rest.join(".")));
         }

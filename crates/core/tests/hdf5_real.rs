@@ -996,6 +996,146 @@ fn trees1(
     }
 }
 
+/// The text a variable-length element reads as, where in the file those bytes
+/// are, and what the note in the column says about them.
+struct VlenString {
+    text: String,
+    /// Where the string's bytes are, in bytes from the front of the file.
+    at: u64,
+    /// Where the note that points at them is, which is in the column.
+    note_at: u64,
+    length: i128,
+}
+
+/// A column of variable-length strings reads as the strings, at the places the
+/// file put them.
+///
+/// A variable-length element is sixteen bytes that say how long the string is,
+/// which global heap collection holds it and which object of that collection
+/// it is. The objects vary in size, so nothing but a walk of the collection
+/// finds the one with a given index, and until now the template stopped at the
+/// note. Two thousand strings over two collections, with the indices in the
+/// order the writing happened rather than in any order arithmetic could guess,
+/// is what says the walk finds the right one.
+///
+/// Both files, because the placement is an address like every other address in
+/// this format and counts from where this copy of the file begins. Behind a
+/// 512-byte user block that is not the front of the file, and a base counted
+/// wrong reads the same on the file without one.
+///
+/// The count is also what says the reading closes: every note found is one
+/// written in a column or an attribute, and every object one of them points at
+/// reads as text and holds nothing further. A note reached through another
+/// note's object would show up here as more notes than were written.
+#[test]
+fn a_column_of_variable_length_strings_reads_the_strings_themselves() {
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    for name in ["vlen-strings.h5", "vlen-strings-userblock.h5"] {
+        let path = dir.join("hdf5").join(name);
+        let Ok(file) = File::open(&path) else {
+            eprintln!("skipped: no {}", path.display());
+            continue;
+        };
+        let raw = std::fs::read(&path).expect("reads");
+        let len = file.metadata().unwrap().len();
+        let doc = Document::new(FileSource { file: RefCell::new(file), len });
+        let mut ev = Evaluator::new(hdf5());
+
+        let mut found = Vec::new();
+        vlen_strings(&mut ev, &doc, &[], &mut String::new(), &mut found, &path);
+        let column: Vec<&VlenString> = found.iter().filter(|s| s.text.starts_with("vl-")).collect();
+        eprintln!("--- {}: {} variable-length strings, {} in the column", path.display(), found.len(), column.len());
+
+        assert_eq!(found.len(), 2009, "{}: notes written, not notes reached through notes", path.display());
+        assert_eq!(column.len(), 2000, "{}: the column is 2000 strings", path.display());
+        assert_eq!(column[0].text, "vl-00000-aaa", "{}", path.display());
+        assert_eq!(column[1999].text, "vl-01999-jjj", "{}", path.display());
+
+        // The bytes at the place the template put the string are the string,
+        // which is what says the address was worked out and not guessed.
+        for s in &column {
+            let at = s.at as usize;
+            let want = s.text.as_bytes();
+            assert_eq!(&raw[at..at + want.len()], want, "{}: {} is not at {at:#x}", path.display(), s.text);
+            assert_eq!(s.length, want.len() as i128, "{}: {} says the wrong length", path.display(), s.text);
+        }
+
+        // The notes keep their stride. A column of sixteen-byte notes is
+        // walked by arithmetic, and a note that has to be read to find out how
+        // long it is would mean reading two thousand of them to reach the last.
+        let first = column[0].note_at;
+        for (i, s) in column.iter().enumerate() {
+            assert_eq!(s.note_at, first + 16 * i as u64, "{}: the notes lost their stride at {i}", path.display());
+        }
+
+        // Strings the attributes hold, read the same way. One of them is a
+        // note in a different object header pointing into the same collection.
+        let mut labels: Vec<String> = found.iter().map(|s| s.text.clone()).filter(|t| !t.starts_with("vl-")).collect();
+        labels.sort();
+        labels.dedup();
+        for want in ["first label", "metres per second", "variable-length strings in a global heap"] {
+            assert!(labels.contains(&want.to_string()), "{}: no attribute read as {want:?}: {labels:?}", path.display());
+        }
+
+        // The cursor on one of those strings lands on it as the note reads it,
+        // exactly on its bytes and no wider. The bytes are still counted in
+        // the collection and not here, which is what `Field::aside` says; what
+        // a reader standing on them is looking at is the string.
+        let bit = column[1999].at * 8;
+        let landed = ev.locate(&doc, bit).expect("the cursor lands somewhere");
+        let node = ev.node(&doc, &landed).expect("and on something that reads");
+        assert_eq!(node.offset_bits, bit, "{}: the cursor landed at {:#x}", path.display(), node.offset_bits / 8);
+        assert_eq!(node.size_bits, 12 * 8, "{}: the cursor covered {} bits", path.display(), node.size_bits);
+        assert_eq!(node.value, Value::Str("vl-01999-jjj".into()), "{}: the cursor landed on {:?}", path.display(), node.value);
+    }
+}
+
+/// Every variable-length string under `path`, with the name of the dataset or
+/// attribute it belongs to.
+fn vlen_strings(
+    ev: &mut Evaluator,
+    doc: &Document<FileSource>,
+    path: &[usize],
+    name: &mut String,
+    out: &mut Vec<VlenString>,
+    file: &Path,
+) {
+    let node = ev
+        .node(doc, path)
+        .unwrap_or_else(|e| panic!("{}: {path:?} does not read: {e:?}", file.display()));
+    if let (Value::Str(s), true) = (&node.value, node.name == "name") {
+        if !s.is_empty() {
+            *name = s.clone();
+        }
+    }
+    if node.type_name == "GlobalHeapId" {
+        let number = |ev: &mut Evaluator, field: &str| -> i128 {
+            match ev.child_named(doc, path, field) {
+                Ok(Some(p)) => ev.node(doc, &p).map(|n| n.value.as_int().unwrap_or(-1)).unwrap_or(-1),
+                _ => -1,
+            }
+        };
+        let length = number(ev, "length");
+        let object = ev.child_named(doc, path, "object").ok().flatten().expect("a note carries its object");
+        let mut at = object;
+        at.push(0);
+        if let Ok(inner) = ev.node(doc, &at) {
+            if let Value::Str(text) = inner.value {
+                out.push(VlenString { text, at: inner.offset_bits / 8, note_at: node.offset_bits / 8, length });
+            }
+        }
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut p = path.to_vec();
+        p.push(i);
+        vlen_strings(ev, doc, &p, name, out, file);
+    }
+}
+
 /// What the file's superblock says its addresses count from. Nought for a file
 /// that begins with its signature, and whatever is in front of the superblock
 /// for a file that keeps a user block there.
