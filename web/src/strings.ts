@@ -2621,8 +2621,8 @@ export const DIAGRAM = {
   regionLabel: "The format as boxes and arrows",
   /** Under the title, once, so a reader knows what they are looking at before
    *  they look for their file in it. */
-  about: (format: string): string => `The ${format} format, as the template describes it. Not this file.`,
-  noTemplate: "No format is chosen, so there is nothing to draw.",
+  about: (format: string): string => `How a ${format} file is structured: every part the format can have, not what this file holds.`,
+  noTemplate: "No format chosen. Pick one above to draw its structure.",
   /**
    * Types the picture leaves out.
    *
@@ -2631,7 +2631,7 @@ export const DIAGRAM = {
    * named number rather than a structure, a third is past the core's cap. A
    * sentence naming one of those would be wrong about the other two.
    */
-  omitted: (n: number): string => (n === 1 ? "1 type is not drawn." : `${n.toLocaleString()} types are not drawn.`),
+  omitted: (n: number): string => (n === 1 ? "1 type not drawn" : `${n.toLocaleString()} types not drawn`),
   /** The row that stands for the fields a long type's box does not show.
    *  Clicking it shows them. */
   more: (n: number): string => `… ${n.toLocaleString()} more fields`,
@@ -2639,23 +2639,23 @@ export const DIAGRAM = {
   less: "Show fewer fields",
   /** On a box's title. The core names a type by what the format calls it, which
    *  two types in one format may share; this says which one this is. */
-  boxPath: (path: string): string => `Reached by ${path}`,
+  boxPath: (path: string): string => `Path: ${path}`,
   fit: "Fit",
-  fitTitle: "Draw the whole diagram inside the window",
+  fitTitle: "Fit the whole diagram in the window",
   /** What a click on a field row does. Only the format's first type can be
    *  found in the file so far, so the promise is kept narrow. */
-  pickTitle: "Put the cursor on this field in the open file",
+  pickTitle: "Go to this field in the open file",
   /** The columns, as a screen reader reads them out. The table itself shows no
    *  header row: four of them repeated per box is more ink than the words are
    *  worth. */
   column: {
-    pos: "Position in the type",
+    pos: "Offset within the type",
     size: "Size",
     type: "Type",
     name: "Field",
     /** A switch box's rows are values rather than fields, so its first column
      *  is the value the switch reads and not a place in the file. */
-    caseValue: "Read as this value",
+    caseValue: "Value",
   },
 } as const;
 
