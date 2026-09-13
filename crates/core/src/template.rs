@@ -1808,7 +1808,20 @@ pub enum Ty {
     ///
     /// The list itself covers no bytes where it is declared, like an `At`: what
     /// covers bytes is its elements, wherever they turned out to be.
-    Chain { first: Expr, next: Arc<[String]>, elem: Box<Ty>, anchor: Anchor },
+    ///
+    /// `adjust` is added to every offset, the first and each `next` alike, the
+    /// same way a [`Ty::PointerList`] and a [`Ty::Gather`] adjust theirs. It is
+    /// nought for a chain read where the format wrote it, and what a chain read
+    /// somewhere else needs: a compressed CDF holds everything after its
+    /// eight-byte signature and nothing else, so the whole of one unpacks into
+    /// a run whose first byte is the file's ninth, while every offset inside it
+    /// still counts from the file's first. Without this the chains in such a
+    /// run land eight bytes late, which is the middle of the record before.
+    ///
+    /// The tests for whether the walk is over are made on the offset as it was
+    /// written: nought still means "no more" and all ones still means it, so a
+    /// chain that ends does not come alive because an adjustment moved it.
+    Chain { first: Expr, next: Arc<[String]>, elem: Box<Ty>, anchor: Anchor, adjust: Expr },
     /// A flat list of elements placed at offsets read from records the
     /// template walks to, wherever those records are.
     ///
@@ -2579,6 +2592,19 @@ impl Ty {
             next: next.iter().map(|s| s.to_string()).collect(),
             elem: Box::new(elem),
             anchor,
+            adjust: Expr::Lit(0),
+        }
+    }
+    /// The same, with `adjust` added to every offset the walk reads. See
+    /// [`Ty::Chain::adjust`], which is what a chain followed inside a run that
+    /// does not start where the format counts from needs.
+    pub fn chain_adjusted(first: Expr, next: &[&str], anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
+        Ty::Chain {
+            first,
+            next: next.iter().map(|s| s.to_string()).collect(),
+            elem: Box::new(elem),
+            anchor,
+            adjust,
         }
     }
     /// A list whose children are placed from records the template walks to:

@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| CDF values: VXR chain, VVR and CVVR values typed by the variable, attribute and pad values, byte order from the encoding, gzip and run-length (new `Codec::CdfRle`) unpacked for blocks and whole files, versions 2.5 to 2.7. `psp_fld_...cdf` names 70,002 of 70,003 bytes, up from 48,749. | 6f39711, 78faa34 |
 | ROOT: a reader beside the template (`root_streamer.rs`, `root_tree.rs`) decodes `StreamerInfo` and every `TTree`: classes, branches, leaves, every basket's offset and entry range, and simple leaves' values, listed in the Logical tab as `ROOT contents`. Checked against uproot on all eight samples. The template still cannot place the baskets (see S4's correction). | 8ab3571 |
 | NetCDF classic: a file with exactly one record variable writes its records unpadded, and the template stepped by the padded `vsize`. `recsize` is now the unpadded width in that case. Also fixed on the way: a record variable narrower than four bytes read values that belonged to later records. Four generated samples pin both cases. | 82c8c9d |
 | miniSEED 3: a new template (`mseed3.rs`) recognised by `MS\x03`, records sized from their three lengths, extra headers as JSON, Steim frames shared with `mseed.rs`. Three libmseed samples. | 14e413d |
@@ -247,15 +248,29 @@ list, Parquet is the least unread.
 
 ### NASA CDF
 
-Descriptor chains read; values do not. Checked against a tree, not only the
-module doc: variable index records (VXR), value records (VVR), compressed value
-records (CVVR) and sparseness records all fall to the `T::bytes(E::Remaining)`
-default in `cdf.rs`, as do attribute entry values and pad values. Needs a
-switch on the encoding field in the descriptor record, the way GWF and ELF
-switch on byte order. Whole-file compression is not unpacked. Version 2.x stops
-after the global descriptor. The 66 unused-space records in
-`psp_fld_l2_mag_rtn_1min_20200104_v02.cdf` are placed and really are free
-space, so its bytes-named figure undercounts nothing there.
+Values read now (see Closed): the VXR chain, each block's VVR or CVVR typed by
+the variable's data type, attribute and pad values, byte order switched on
+the CDR's encoding, gzip CVVRs and whole-file CCRs unpacked, version 2.5 to
+2.7 read at half width. Five samples, all cross-checked with cdflib. Left:
+
+- Huffman and adaptive Huffman compression (`d103a2x.cdf` in NASA's
+  distribution) identify their codec and keep their bytes; a run-length
+  compressed *block* has no signature to peek at and stays bytes.
+- Sparse-record reconstruction, and multi-file variables (`example1.cdf`'s
+  `.v0` to `.v3` sit in other files).
+- VAX and VMS Alpha/Itanium encodings read at the right width as IEEE and are
+  wrong, as `mat.rs` does for level 4 on a VAX; the doc says so.
+- Records are sized from the block's room (`remaining / records / width`)
+  rather than from `product(dim_sizes)`, because a dimension the variable does
+  not vary along is not stored; the shape is in the descriptor for a reader
+  to fold in.
+- CDF_EPOCH (float64 ms since 0 AD) and CDF_TIME_TT2000 (int64 ns since J2000
+  on TAI) are not declared as moments. `Counted.zero` is whole seconds,
+  `moment_number` takes only integers, and TT2000 counts TAI so a linear count
+  is up to 5.8 s out after 2017. A `time.rs` item, not a template one.
+- The template needed `Ty::Chain` to take an `adjust` and to take its room
+  from its anchor rather than the file, so a chain inside an unpacked run does
+  not end where the compressed file does. `T::chain` defaults `adjust` to 0.
 
 ### HDF4
 

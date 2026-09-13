@@ -15,6 +15,7 @@
 //! stream is opened whole or not at all, which is why there is a cap.
 
 pub mod bzip2;
+pub mod cdfrle;
 pub mod compress;
 pub mod fastlz;
 pub mod frames;
@@ -166,6 +167,11 @@ pub enum Codec {
     /// where a `userdata()` value would be. The run handed here starts at the
     /// `pxu\0` and may be longer than the elements need.
     PicotronPxu,
+    /// NASA CDF's run-length encoding, which counts runs of zeroes and nothing
+    /// else: a zero byte escapes the count that follows it, and every other
+    /// byte is itself. One of the four ways a CDF may be squeezed, and the one
+    /// a file written by IDL usually is. See [`crate::codec::cdfrle`].
+    CdfRle,
 }
 
 impl Codec {
@@ -192,6 +198,7 @@ impl Codec {
             Codec::Pico8Pxa => "pico-8 pxa",
             Codec::Pico8Old => "pico-8 old code",
             Codec::PicotronPxu => "picotron pxu",
+            Codec::CdfRle => "cdf rle",
         }
     }
 }
@@ -960,6 +967,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Pico8Pxa => pico8::pxa(data)?,
         Codec::Pico8Old => pico8::old(data)?,
         Codec::PicotronPxu => pxu::pxu(data)?,
+        Codec::CdfRle => cdfrle::stream(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -993,6 +1001,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Bzip2
         | Codec::Compress
         | Codec::Gzip
+        | Codec::CdfRle
         | Codec::FastLz => {
             decode_traced(codec, data)?.0
         }
