@@ -248,7 +248,7 @@ const SIGNATURE_SOURCE: Record<SigMatch["format"]["source"], string> = {
 const SIGNATURE_WORD: Record<SigMatch["format"]["source"], string> = { wikidata: "Wikidata", file: "file rules" };
 const OTHERS_HEADING = "Other answers:";
 const DISAGREES = "names a different format";
-const SIGNATURES_INTRO = "Formats whose signature this file matches:";
+const SIGNATURES_INTRO = "Signature matches:";
 const WIKIPEDIA_LINK = "Wikipedia";
 const SIGNATURES_CREDIT = (fetched: string): string => `Signature sources: ${fetched}.`;
 /** The toolbar, for a file only a signature could name. */
