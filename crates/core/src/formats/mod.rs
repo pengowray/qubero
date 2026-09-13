@@ -180,7 +180,7 @@ pub use ar::{ar, deb};
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
-pub use bam::{bam, bgzf};
+pub use bam::{bai, bam, bgzf, csi};
 pub use bmp::bmp;
 pub use bzip2::bzip2;
 pub use cab::cab;
@@ -393,6 +393,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("gzip", |_| gzip()),
     ("bgzf", |_| bgzf()),
     ("bam", |_| bam()),
+    ("bai", |_| bai()),
+    ("csi", |_| csi()),
     ("zlib", |_| zlib()),
     ("bzip2", |_| bzip2()),
     ("lzip", |_| lzip()),

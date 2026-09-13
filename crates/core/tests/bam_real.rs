@@ -1,6 +1,6 @@
 //! Real BAM, BAI and CSI files from htslib's and samtools' tests.
 //!
-//! Four BAMs, each for a different way the stream meets its blocks:
+//! Five BAMs, for the different ways the stream meets its blocks:
 //! `range.bam` keeps its header in the first block and its 112 records in the
 //! second, `no_hdr_sq_1.bam` keeps everything in one, `mpileup.1.bam` writes
 //! a header too long for one block, and `bgzf_boundaries1.bam` and
@@ -8,6 +8,9 @@
 //! seventeen. The records the side reader finds were checked field by field
 //! against bamnostic 1.3 (pysam does not build on Windows); the counts, names
 //! and one whole record are pinned here.
+//!
+//! Two BAIs, checked against bamnostic and against the records their BAMs
+//! hold, and two CSIs, which are BGZF files and read inside their block.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
@@ -204,4 +207,133 @@ fn the_side_reader_finds_every_record_once() {
         assert_eq!(records[count - 1].virtual_offset(), last_offset, "{name}");
         assert!(records.iter().all(|r| r.problem.is_none()), "{name}");
     }
+}
+
+fn int(ev: &mut Evaluator, d: &Document<MemSource>, from: &[usize], names: &[&str]) -> i128 {
+    let p = at(ev, d, from, names);
+    ev.node(d, &p).unwrap().value.as_int().unwrap_or_else(|| panic!("{names:?} is not a number"))
+}
+
+/// `range.bam.bai` as bamnostic reads it: seven references, the first four
+/// with bin 4681 and the summary bin, the last three empty, and no unplaced
+/// reads. bamnostic stops at the first empty reference, so those three are
+/// checked against the specification's layout rather than against it.
+#[test]
+fn a_bai_reads_as_bamnostic_reads_it() {
+    let (d, mut ev) = skip_without!(read("range.bam.bai", "bai"));
+    assert_eq!(int(&mut ev, &d, &[], &["n_ref"]), 7);
+    let refs = at(&mut ev, &d, &[], &["references"]);
+    let expected = [(32_964_608, 32_969_740, 18), (32_969_740, 32_979_376, 34), (32_979_376, 32_990_967, 41), (32_990_967, 872_218_624, 19)];
+    for (i, (beg, end, mapped)) in expected.into_iter().enumerate() {
+        let r = [refs.clone(), vec![i]].concat();
+        assert_eq!(int(&mut ev, &d, &r, &["n_bin"]), 2, "reference {i}");
+        let bins = at(&mut ev, &d, &r, &["bins"]);
+        let bin = [bins.clone(), vec![0]].concat();
+        assert_eq!(int(&mut ev, &d, &bin, &["bin"]), 4681);
+        let chunk = [at(&mut ev, &d, &bin, &["chunks"]), vec![0]].concat();
+        assert_eq!(int(&mut ev, &d, &chunk, &["chunk_beg", "voffset"]), beg);
+        assert_eq!(int(&mut ev, &d, &chunk, &["chunk_end", "voffset"]), end);
+        assert_eq!(int(&mut ev, &d, &chunk, &["chunk_beg", "block_offset"]), beg >> 16);
+        assert_eq!(int(&mut ev, &d, &chunk, &["chunk_beg", "in_block"]), beg & 0xffff);
+        let summary = [bins, vec![1]].concat();
+        assert_eq!(int(&mut ev, &d, &summary, &["bin"]), 37450);
+        assert_eq!(int(&mut ev, &d, &summary, &["chunks", "n_mapped"]), mapped);
+        assert_eq!(int(&mut ev, &d, &summary, &["chunks", "n_unmapped"]), 0);
+        let ioffsets = at(&mut ev, &d, &r, &["ioffsets"]);
+        assert_eq!(int(&mut ev, &d, &[ioffsets, vec![0]].concat(), &["voffset"]), beg);
+    }
+    for i in 4..7 {
+        assert_eq!(int(&mut ev, &d, &[refs.clone(), vec![i]].concat(), &["n_bin"]), 0);
+    }
+    assert_eq!(int(&mut ev, &d, &[], &["n_no_coor"]), 0);
+    assert_eq!(ev.node(&d, &[]).unwrap().size_bits, d.len_bits());
+}
+
+/// Every place a BAI points into its BAM, the start of each chunk and each
+/// window of the linear index, is where the side reader found a record start,
+/// and every chunk end is a record start or the end of the stream. That ties the
+/// index template and the side reader to each other, and both to htslib,
+/// which wrote the index.
+#[test]
+fn every_offset_a_bai_gives_is_where_a_record_starts() {
+    for name in ["range.bam", "mpileup.1.bam"] {
+        let (bam, mut bam_ev) = skip_without!(read(name, "bgzf"));
+        let found = blocks(&mut bam_ev, &bam);
+        let starts: std::collections::HashSet<u64> =
+            found.iter().flat_map(|b| b.records.iter().map(|r| r.virtual_offset())).collect();
+        // The end of the last record, which htslib writes either as the
+        // start of the empty last block or as the end of the file after it:
+        // `range.bam.bai` does the first and `mpileup.1.bam.bai` the second.
+        let ends_of_stream = [found.last().unwrap().block_offset << 16, bam.len_bytes() << 16];
+
+        let (d, mut ev) = skip_without!(read(&format!("{name}.bai"), "bai"));
+        let refs = at(&mut ev, &d, &[], &["references"]);
+        let (mut begins, mut ends) = (0, 0);
+        for i in 0..ev.node(&d, &refs).unwrap().child_count as usize {
+            let r = [refs.clone(), vec![i]].concat();
+            let bins = at(&mut ev, &d, &r, &["bins"]);
+            for j in 0..ev.node(&d, &bins).unwrap().child_count as usize {
+                let bin = [bins.clone(), vec![j]].concat();
+                let chunks = at(&mut ev, &d, &bin, &["chunks"]);
+                if ev.node(&d, &chunks).unwrap().type_name == "ReferenceSummary" {
+                    continue;
+                }
+                for k in 0..ev.node(&d, &chunks).unwrap().child_count as usize {
+                    let c = [chunks.clone(), vec![k]].concat();
+                    let beg = int(&mut ev, &d, &c, &["chunk_beg", "voffset"]) as u64;
+                    let end = int(&mut ev, &d, &c, &["chunk_end", "voffset"]) as u64;
+                    assert!(starts.contains(&beg), "{name}: chunk starts at {}:{}", beg >> 16, beg & 0xffff);
+                    assert!(starts.contains(&end) || ends_of_stream.contains(&end),"{name}: chunk ends at {}:{}", end >> 16, end & 0xffff);
+                    begins += 1;
+                    ends += 1;
+                }
+            }
+            let ioffsets = at(&mut ev, &d, &r, &["ioffsets"]);
+            for k in 0..ev.node(&d, &ioffsets).unwrap().child_count as usize {
+                let v = int(&mut ev, &d, &[ioffsets.clone(), vec![k]].concat(), &["voffset"]) as u64;
+                assert!(starts.contains(&v), "{name}: window {k} of reference {i} at {}:{}", v >> 16, v & 0xffff);
+            }
+        }
+        assert!(begins > 0 && ends > 0, "{name}");
+    }
+}
+
+/// Two CSI indexes, which are BGZF files: the one beside `no_hdr_sq_1.bam`
+/// and htslib's `index.bam.csi`, whose BAM is not in the collection. Both use
+/// depth 2, so the summary bin is 74 and not a BAI's 37450.
+#[test]
+fn a_csi_reads_inside_its_bgzf_block() {
+    let (d, mut ev) = skip_without!(read("no_hdr_sq_1.bam.csi", "bgzf"));
+    let p = payload(&mut ev, &d, 0);
+    assert_eq!(ev.node(&d, &p).unwrap().type_name, "Csi");
+    assert_eq!((int(&mut ev, &d, &p, &["min_shift"]), int(&mut ev, &d, &p, &["depth"])), (14, 2));
+    let refs = at(&mut ev, &d, &p, &["references"]);
+    assert_eq!(ev.node(&d, &refs).unwrap().child_count, 5);
+    let bins = at(&mut ev, &d, &[refs.clone(), vec![0]].concat(), &["bins"]);
+    let bin = [bins.clone(), vec![0]].concat();
+    assert_eq!(int(&mut ev, &d, &bin, &["bin"]), 1);
+    // The first record of `no_hdr_sq_1.bam` is at 0:268, and the chunk runs
+    // to the last block, at 1663.
+    assert_eq!(int(&mut ev, &d, &bin, &["loffset", "voffset"]), 268);
+    let chunk = [at(&mut ev, &d, &bin, &["chunks"]), vec![0]].concat();
+    assert_eq!(int(&mut ev, &d, &chunk, &["chunk_beg", "in_block"]), 268);
+    assert_eq!(int(&mut ev, &d, &chunk, &["chunk_end", "block_offset"]), 1663);
+    let summary = [bins, vec![1]].concat();
+    assert_eq!(int(&mut ev, &d, &summary, &["bin"]), 74);
+    assert_eq!(int(&mut ev, &d, &summary, &["chunks", "n_mapped"]), 6);
+    assert_eq!(int(&mut ev, &d, &p, &["n_no_coor"]), 0);
+
+    let (d, mut ev) = skip_without!(read("index.bam.csi", "bgzf"));
+    let p = payload(&mut ev, &d, 0);
+    let refs = at(&mut ev, &d, &p, &["references"]);
+    let bins_per_ref: Vec<u64> = (0..7)
+        .map(|i| {
+            let bins = at(&mut ev, &d, &[refs.clone(), vec![i]].concat(), &["bins"]);
+            ev.node(&d, &bins).unwrap().child_count
+        })
+        .collect();
+    assert_eq!(bins_per_ref, [2, 2, 0, 0, 2, 0, 0]);
+    assert_eq!(int(&mut ev, &d, &p, &["n_no_coor"]), 50);
+    let node = ev.node(&d, &p).unwrap();
+    assert_eq!(node.size_bits, 296 * 8);
 }
