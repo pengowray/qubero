@@ -609,3 +609,310 @@ fn every_sample_reads() {
     }
     assert!(checked >= 8, "only {checked} samples read");
 }
+
+// ---------------------------------------------------------------------------
+// RNTuple, read by the template. Every number and name below was read out of
+// the same two files by uproot 5.7.6 (`f['Staff'].field_records`,
+// `.column_records`, `.page_link_list`, `.arrays()`), and the template has to
+// come to the same.
+
+/// The first node under `at`, breadth first, whose type is called `name`. The
+/// path from an anchor to its envelope depends on whether it was compressed and
+/// with what, so it is looked for rather than spelled.
+fn find_type(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], name: &str, depth: u32) -> Option<Vec<usize>> {
+    let mut level = vec![at.to_vec()];
+    for _ in 0..depth {
+        let mut next = Vec::new();
+        for p in level {
+            let Ok(node) = ev.node(d, &p) else { continue };
+            if node.type_name == name {
+                return Some(p);
+            }
+            for i in 0..node.child_count.min(16) as usize {
+                next.push([p.as_slice(), &[i]].concat());
+            }
+        }
+        level = next;
+    }
+    None
+}
+
+/// The one RNTuple anchor in a sample, which in both samples is the first key
+/// of the top directory, opened out of its block if it was compressed.
+fn rntuple_anchor(d: &Document<MemSource>, ev: &mut Evaluator) -> Vec<usize> {
+    let record = [DIRECTORY.as_slice(), &[K_FIELDS + 2, 11, 0, K_FIELDS + 1, 0, K_FIELDS, 0, K_FIELDS]].concat();
+    find_type(d, ev, &record, "RNTupleAnchor", 10).expect("an anchor")
+}
+
+fn rntuple_sample(folder: &Path, name: &str) -> (Document<MemSource>, Evaluator) {
+    let path = folder.join(name);
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    (Document::new(MemSource(bytes)), Evaluator::new(root()))
+}
+
+/// What a column's type is called, as the template reads it.
+fn enum_name(value: Value) -> String {
+    match value {
+        Value::Enum { name: Some(name), .. } => name,
+        other => panic!("not a named value: {other:?}"),
+    }
+}
+
+#[test]
+fn rntuple_headers_list_the_fields_and_columns_uproot_reads() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let staff_fields = [
+        ("Category", "std::int32_t"),
+        ("Flag", "std::uint32_t"),
+        ("Age", "std::int32_t"),
+        ("Service", "std::int32_t"),
+        ("Children", "std::int32_t"),
+        ("Grade", "std::int32_t"),
+        ("Step", "std::int32_t"),
+        ("Hrweek", "std::int32_t"),
+        ("Cost", "std::int32_t"),
+        ("Division", "std::string"),
+        ("Nation", "std::string"),
+    ];
+    // Column type and the field it belongs to. A compressed ntuple stores its
+    // integers split and zigzagged and its string offsets split and as
+    // differences; an uncompressed one stores both as they are.
+    let mut staff_columns: Vec<(&str, usize)> = (0..9).map(|i| (if i == 1 { "SplitUInt32" } else { "SplitInt32" }, i)).collect();
+    staff_columns.extend([("SplitIndex64", 9), ("Char", 9), ("SplitIndex64", 10), ("Char", 10)]);
+    let viewer_fields = [("firstName", "std::string"), ("lastName", "std::string")];
+    let viewer_columns = [("Index64", 0), ("Char", 0), ("Index64", 1), ("Char", 1)];
+    let cases: [(&str, &str, &[(&str, &str)], &[(&str, usize)], bool); 2] = [
+        ("ntpl001_staff_rntuple_v1-0-1-0.root", "Staff", &staff_fields, &staff_columns, true),
+        ("rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root", "Contributors", &viewer_fields, &viewer_columns, false),
+    ];
+    for (file, ntuple, fields, columns, packed) in cases {
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let anchor = rntuple_anchor(&d, &mut ev);
+        let header = find_type(&d, &mut ev, &[anchor.as_slice(), &[15]].concat(), "RNTupleEnvelope", 10).expect("a header");
+        // Whether the header came out of a block is what the anchor's two
+        // lengths say, and the envelope says which space it is in.
+        assert_eq!(ev.node(&d, &header).unwrap().space != 0, packed, "{file}");
+        let payload = [header.as_slice(), &[2]].concat();
+        let at = |more: &[usize]| [payload.as_slice(), more].concat();
+        assert_eq!(ev.node(&d, &at(&[2, 1])).unwrap().value, Value::Str(ntuple.into()), "{file}");
+        let writer = ev.node(&d, &at(&[4, 1])).unwrap().value;
+        assert!(matches!(&writer, Value::Str(s) if s.starts_with("ROOT v6.")), "{file}: {writer:?}");
+
+        assert_eq!(ev.node(&d, &at(&[5, 2])).unwrap().child_count as usize, fields.len(), "{file}");
+        for (i, (name, type_name)) in fields.iter().enumerate() {
+            let field = at(&[5, 2, i]);
+            assert_eq!(ev.node(&d, &field).unwrap().name, format!("[{i}] {name}"), "{file}");
+            assert_eq!(ev.node(&d, &[field.as_slice(), &[7, 1]].concat()).unwrap().value, Value::Str((*type_name).into()));
+            // Every field of both files is top-level, so its own parent.
+            assert_eq!(ev.node(&d, &[field.as_slice(), &[3]].concat()).unwrap().value.as_int(), Some(i as i128));
+        }
+        assert_eq!(ev.node(&d, &at(&[6, 2])).unwrap().child_count as usize, columns.len(), "{file}");
+        for (i, (type_name, field)) in columns.iter().enumerate() {
+            let column = at(&[6, 2, i]);
+            assert_eq!(enum_name(ev.node(&d, &[column.as_slice(), &[1]].concat()).unwrap().value), *type_name, "{file} column {i}");
+            assert_eq!(ev.node(&d, &[column.as_slice(), &[3]].concat()).unwrap().value.as_int(), Some(*field as i128));
+            assert_eq!(ev.node(&d, &column).unwrap().name, format!("[{i}] {}", fields[*field].0), "{file}");
+        }
+
+        // The footer names the header it goes with by the same checksum the
+        // header ends with.
+        let footer = find_type(&d, &mut ev, &[anchor.as_slice(), &[16]].concat(), "RNTupleEnvelope", 10).expect("a footer");
+        let header_sum = ev.node(&d, &[header.as_slice(), &[3]].concat()).unwrap().value;
+        assert_eq!(ev.node(&d, &[footer.as_slice(), &[2, 2]].concat()).unwrap().value, header_sum, "{file}");
+        eprintln!("--- {file}: {} fields and {} columns, as uproot reads them", fields.len(), columns.len());
+    }
+}
+
+/// One cluster's pages, one per column in both samples: element count, then
+/// the locator's size and offset. Every page in both files has a checksum after
+/// it. uproot's `page_link_list`.
+const STAFF_PAGES: [(i128, u64, u64); 13] = [
+    (3354, 3643, 642),
+    (3354, 1196, 4293),
+    (3354, 2226, 5497),
+    (3354, 1392, 7731),
+    (3354, 1051, 9131),
+    (3354, 1504, 10190),
+    (3354, 1655, 11702),
+    (3354, 273, 13365),
+    (3354, 6147, 13646),
+    (3354, 591, 19801),
+    (7811, 2062, 20400),
+    (3354, 32, 22470),
+    (6708, 1747, 22510),
+];
+const VIEWER_PAGES: [(i128, u64, u64); 4] = [(22, 176, 620), (178, 178, 804), (22, 176, 990), (193, 193, 1174)];
+
+/// The page list of the first cluster group, found through the footer the
+/// anchor points at, and the payload of the envelope it turned out to be.
+fn page_list_payload(d: &Document<MemSource>, ev: &mut Evaluator, anchor: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    let footer = find_type(d, ev, &[anchor, &[16]].concat(), "RNTupleEnvelope", 10).expect("a footer");
+    let group = [footer.as_slice(), &[2, 4, 2, 0]].concat();
+    let list = find_type(d, ev, &[group.as_slice(), &[6]].concat(), "RNTupleEnvelope", 10).expect("a page list");
+    (group, [list.as_slice(), &[2]].concat())
+}
+
+#[test]
+fn rntuple_pages_are_placed_where_uproot_finds_them() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // The file, its entries, the page list's length unpacked and its
+    // locator, the pages, and the compression settings every column has.
+    let cases: [(&str, u64, (u64, u64, u64), &[(i128, u64, u64)], u64); 2] = [
+        ("ntpl001_staff_rntuple_v1-0-1-0.root", 3354, (604, 194, 24307), &STAFF_PAGES, 505),
+        ("rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root", 22, (244, 244, 1409), &VIEWER_PAGES, 0),
+    ];
+    for (file, entries, (length, size, offset), pages, settings) in cases {
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let anchor = rntuple_anchor(&d, &mut ev);
+        let (group, payload) = page_list_payload(&d, &mut ev, &anchor);
+        let at = |base: &[usize], more: &[usize]| [base, more].concat();
+        assert_eq!(ev.node(&d, &at(&group, &[2])).unwrap().value, Value::UInt(entries as u128), "{file}");
+        assert_eq!(ev.node(&d, &at(&group, &[4])).unwrap().value, Value::UInt(length as u128), "{file}");
+        assert_eq!(ev.node(&d, &at(&group, &[5, 0])).unwrap().value.as_int(), Some(size as i128), "{file}");
+        let placed = ev.node(&d, &at(&group, &[6, 0])).unwrap();
+        assert_eq!((placed.offset_bits / 8, placed.size_bits / 8, placed.space), (offset, size, 0), "{file}");
+
+        assert_eq!(ev.node(&d, &at(&payload, &[1, 2, 0, 2])).unwrap().value, Value::UInt(entries as u128), "{file}");
+        let columns = at(&payload, &[2, 2, 0, 2]);
+        assert_eq!(ev.node(&d, &columns).unwrap().child_count as usize, pages.len(), "{file}");
+        let mut covered = 0;
+        for (j, (elements, size, offset)) in pages.iter().enumerate() {
+            let column = at(&columns, &[j]);
+            assert_eq!(ev.node(&d, &at(&column, &[5])).unwrap().child_count, 1, "{file} column {j}");
+            assert_eq!(ev.node(&d, &at(&column, &[7])).unwrap().value, Value::UInt(settings as u128), "{file} column {j}");
+            let entry = at(&column, &[5, 0]);
+            assert_eq!(ev.node(&d, &at(&entry, &[1])).unwrap().value.as_int(), Some(*elements), "{file} column {j}");
+            // Negative, because a checksum follows.
+            assert_eq!(ev.node(&d, &at(&entry, &[0])).unwrap().value.as_int(), Some(-*elements), "{file} column {j}");
+            let data = ev.node(&d, &at(&entry, &[3, 0, 0])).unwrap();
+            assert_eq!((data.offset_bits / 8, data.size_bits / 8, data.space), (*offset, *size, 0), "{file} column {j}");
+            let sum = ev.node(&d, &at(&entry, &[3, 0, 1])).unwrap();
+            assert_eq!((sum.offset_bits / 8, sum.size_bits / 8), (offset + size, 8), "{file} column {j}");
+            covered += size + 8;
+        }
+        eprintln!("--- {file}: {} pages placed, {covered} of {} bytes", pages.len(), d.len_bytes());
+    }
+}
+
+/// How many bytes of the file some field of the tree names: the union of every
+/// field with no children, in the file's own space. `skip` names fields whose
+/// contents are not walked, which is how the same file is measured as the
+/// template read it before page lists were followed.
+fn named_bytes(d: &Document<MemSource>, ev: &mut Evaluator, skip: &dyn Fn(&str, &[usize]) -> bool) -> u64 {
+    let mut spans = Vec::new();
+    let mut stack = vec![Vec::new()];
+    while let Some(p) = stack.pop() {
+        let Ok(node) = ev.node(d, &p) else { continue };
+        if skip(&node.name, &p) {
+            continue;
+        }
+        // Walked into whatever space it is in, since a page list read out of
+        // a compressed footer places its pages back in the file; counted only
+        // where it is the file's own bytes.
+        if node.child_count == 0 {
+            if node.size_bits > 0 && node.space == 0 {
+                spans.push((node.offset_bits, node.offset_bits + node.size_bits));
+            }
+            continue;
+        }
+        for i in 0..node.child_count as usize {
+            stack.push([p.as_slice(), &[i]].concat());
+        }
+    }
+    spans.sort();
+    let (mut total, mut reach) = (0, 0);
+    for (start, end) in spans {
+        let start = start.max(reach);
+        if end > start {
+            total += end - start;
+            reach = end;
+        }
+    }
+    total / 8
+}
+
+#[test]
+fn rntuple_pages_read_as_the_values_uproot_reads() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // Stored as they stand, header and all, so every column's type can be read
+    // from its page list and every page reads as its values: a string's offsets
+    // are where each one ends, and its characters are all of them one after
+    // another.
+    let first = [
+        "Jakob", "Philippe", "Axel", "Danilo", "Simon", "Bertrand", "Max", "Javier", "Enrico", "Sergey", "Giovanna",
+        "Jerry", "Florine Willemijn", "Bernhard Manfred", "Vincenzo Eduardo", "Jolly", "Alaettin Serhan", "Jonas",
+        "Maciej", "Giacomo", "Grigori", "Special thanks",
+    ];
+    let last = [
+        "Blomer", "Canal", "Naumann", "Piparo", "Leisibach", "Bellenot", "Orok", "Lopez-Gomez", "Guiraud", "Linev",
+        "Lazzari Miotto", "Ling", "de Geus", "Gruber", "Padulano", "Chen", "Mete", "Hahnfeld", "Szymanski", "Parolini",
+        "Rybkine", "to all framework developers in the experiments",
+    ];
+    let file = "rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root";
+    let (d, mut ev) = rntuple_sample(&folder, file);
+    let anchor = rntuple_anchor(&d, &mut ev);
+    let (_, payload) = page_list_payload(&d, &mut ev, &anchor);
+    let columns = [payload.as_slice(), &[2, 2, 0, 2]].concat();
+    let at = |base: &[usize], more: &[usize]| [base, more].concat();
+    for (k, (field, names)) in [("firstName", first), ("lastName", last)].into_iter().enumerate() {
+        let (index, chars) = (at(&columns, &[2 * k]), at(&columns, &[2 * k + 1]));
+        assert_eq!(ev.node(&d, &index).unwrap().name, format!("[{}] {field}", 2 * k));
+        assert_eq!(enum_name(ev.node(&d, &at(&index, &[3])).unwrap().value), "Index64");
+        assert_eq!(enum_name(ev.node(&d, &at(&chars, &[3])).unwrap().value), "Char");
+        let offsets = at(&index, &[5, 0, 3, 0, 0]);
+        let mut end = 0u128;
+        for (i, name) in names.iter().enumerate() {
+            end += name.len() as u128;
+            assert_eq!(ev.node(&d, &at(&offsets, &[i])).unwrap().value, Value::UInt(end), "{field} [{i}]");
+        }
+        assert_eq!(ev.node(&d, &offsets).unwrap().child_count, 22);
+        let text = ev.node(&d, &at(&chars, &[5, 0, 3, 0, 0])).unwrap().value;
+        assert_eq!(text, Value::Str(names.concat()), "{field}");
+    }
+
+    // Compressed, header and all, so no page can learn its column's type (see
+    // `typed` in the template). Each page still opens, because it opens as a
+    // zstd block, and what comes out is as long as its elements at the width
+    // the header gives them: 7,811 characters of `Division` is what uproot
+    // reads as 3,354 strings.
+    let file = "ntpl001_staff_rntuple_v1-0-1-0.root";
+    let (d, mut ev) = rntuple_sample(&folder, file);
+    let anchor = rntuple_anchor(&d, &mut ev);
+    let (_, payload) = page_list_payload(&d, &mut ev, &anchor);
+    let columns = [payload.as_slice(), &[2, 2, 0, 2]].concat();
+    let widths = [4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 1, 8, 1];
+    for (j, ((elements, size, _), width)) in STAFF_PAGES.iter().zip(widths).enumerate() {
+        let column = at(&columns, &[j]);
+        assert!(ev.node(&d, &at(&column, &[3])).unwrap().absent, "column {j} has a type it cannot have read");
+        let data = at(&column, &[5, 0, 3, 0, 0]);
+        assert_eq!(ev.node(&d, &data).unwrap().size_bits / 8, *size);
+        let block = at(&data, &[0]);
+        assert_eq!(enum_name(ev.node(&d, &at(&block, &[0])).unwrap().value), "zstd", "column {j}");
+        let opened = ev.node(&d, &at(&block, &[4, 1, 0, 0])).unwrap();
+        assert_ne!(opened.space, 0);
+        assert_eq!(opened.size_bits / 8, (*elements as u64) * width, "column {j}");
+    }
+
+    // What the tree names of each file, with the page lists followed and as it
+    // was before they were: the anchor and its envelopes and nothing they point
+    // at. `spans` cannot say this for a ROOT file, because it indexes a placed
+    // field only once its walk has passed the field that places it, and every
+    // key list is written after the records it lists.
+    for file in ["ntpl001_staff_rntuple_v1-0-1-0.root", "rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root"] {
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let before = named_bytes(&d, &mut ev, &|name, _| name == "page_list");
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let after = named_bytes(&d, &mut ev, &|_, _| false);
+        eprintln!("--- {file}: {before} bytes named without the page lists, {after} with, of {}", d.len_bytes());
+        assert!(after > before, "{file}");
+    }
+}
