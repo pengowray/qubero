@@ -216,7 +216,7 @@ fn whole_or_cut(whole: T, size: E) -> T {
 /// The last bytes of a block, where what they start carries on into the next
 /// block and is not read here.
 fn continued() -> T {
-    T::structure("Continued", vec![("bytes", T::bytes(E::Remaining))])
+    T::structure("ContinuesInNextBlock", vec![("bytes", T::bytes(E::Remaining))])
 }
 
 /// One reference sequence: its name, with the NUL counted in the length, and
@@ -234,7 +234,8 @@ fn reference() -> T {
     )
 }
 
-/// The bits of `flag`, as samtools names them.
+/// The bits of `flag`, in the pair-and-mate words samtools and its readers use
+/// rather than the specification's segments and templates.
 const FLAG_BITS: &[(u32, &str)] = &[
     (0, "paired"),
     (1, "proper pair"),
@@ -244,10 +245,10 @@ const FLAG_BITS: &[(u32, &str)] = &[
     (5, "mate reverse strand"),
     (6, "first in pair"),
     (7, "second in pair"),
-    (8, "secondary"),
+    (8, "secondary alignment"),
     (9, "failed QC"),
     (10, "duplicate"),
-    (11, "supplementary"),
+    (11, "supplementary alignment"),
 ];
 
 /// The operations a CIGAR is written in, by the number BAM stores for each.
@@ -755,7 +756,7 @@ pub(crate) mod tests {
         assert_eq!(ev.node(&d, &records).unwrap().child_count, 2);
         assert_eq!(ev.node(&d, &[records.clone(), vec![0]].concat()).unwrap().type_name, "AlignmentRecord");
         let cut = ev.node(&d, &[records, vec![1]].concat()).unwrap();
-        assert_eq!((cut.type_name.as_str(), cut.size_bits), ("Continued", 80));
+        assert_eq!((cut.type_name.as_str(), cut.size_bits), ("ContinuesInNextBlock", 80));
 
         // The second block is the rest of that record, and reads as its bytes.
         let later = [at_named(&mut ev, &d, &[0, 1], &["compressed"]), vec![0]].concat();
@@ -909,7 +910,7 @@ pub(crate) mod tests {
         let bins = at_named(&mut ev, &d, &[refs, vec![1]].concat(), &["bins"]);
         assert_eq!(ev.node(&d, &bins).unwrap().child_count, 1);
         let cut_bin = ev.node(&d, &[bins, vec![0]].concat()).unwrap();
-        assert_eq!((cut_bin.type_name.as_str(), cut_bin.size_bits), ("Continued", 26 * 8));
+        assert_eq!((cut_bin.type_name.as_str(), cut_bin.size_bits), ("ContinuesInNextBlock", 26 * 8));
     }
 
     /// One BGZF block holding `data`, compressed at the default level, the way

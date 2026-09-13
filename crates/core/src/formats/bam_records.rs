@@ -367,7 +367,7 @@ pub fn records_in_block_within<E>(
                 break;
             }
             None => {
-                out.problem = Some(format!("Stopped at byte {at}: there is no BGZF block there."));
+                out.problem = Some(format!("Stopped at byte {at}: no BGZF block starts there."));
                 break;
             }
         };
@@ -378,14 +378,14 @@ pub fn records_in_block_within<E>(
         if out.bytes_walked > limit {
             let mb = limit >> 20;
             out.problem = Some(match span {
-                None => format!("Stopped after unpacking {mb} MB from the start of the file without reaching this block."),
-                Some(_) => format!("Stopped after unpacking {mb} MB: the last record here runs on past that."),
+                None => format!("Stopped at this viewer's {mb} MB limit on unpacked data, before reaching this block."),
+                Some(_) => format!("Stopped at this viewer's {mb} MB limit on unpacked data: a record in this block runs past the limit."),
             });
             break;
         }
         let bytes = read(member.at, member.len)?;
         let Some(data) = inflate(&member, &bytes) else {
-            out.problem = Some(format!("Stopped at the block at byte {}: it would not inflate.", member.at));
+            out.problem = Some(format!("Stopped at byte {}: the BGZF block there would not inflate.", member.at));
             break;
         };
         out.blocks_walked += 1;
@@ -425,7 +425,7 @@ pub fn records_in_block_within<E>(
 pub fn decode_record(body: &[u8]) -> Record {
     let mut r = Record { block_size: body.len() as u32, ..Record::default() };
     if body.len() < 32 {
-        r.problem = Some("The record is shorter than its 32 bytes of fixed fields.".into());
+        r.problem = Some("The 32 bytes of fixed fields run past the end of the record.".into());
         return r;
     }
     let i32_at = |at: usize| i32::from_le_bytes(body[at..at + 4].try_into().expect("four bytes"));
@@ -520,7 +520,7 @@ fn decode_tags(mut b: &[u8]) -> (Vec<Tag>, Option<String>) {
                 let sub = b[0] as char;
                 let count = u32_at(&b[1..]) as usize;
                 let Some(width) = width(sub) else {
-                    return (tags, Some(format!("Tag {tag} is an array of type {sub}, which the specification does not define.")));
+                    return (tags, Some(format!("Tag {tag} is an array with element type {sub}, which the specification does not define; the tags after it were not read.")));
                 };
                 let Some(bytes) = b.get(5..count.checked_mul(width).and_then(|n| n.checked_add(5)).unwrap_or(usize::MAX)) else {
                     return short(tags, &tag);
@@ -732,7 +732,7 @@ mod tests {
         let len = file.len() as u64;
         let read = |a: u64, n: u64| -> Result<Vec<u8>, ()> { Ok(file[a as usize..(a + n) as usize].to_vec()) };
         let got = records_in_block_within(read, len, at[at.len() - 2], 1000).unwrap();
-        assert!(got.problem.expect("a problem").starts_with("Stopped after unpacking"));
+        assert!(got.problem.expect("a problem").starts_with("Stopped at this viewer's 0 MB limit"));
         // And within the limit the same block reads.
         let read = |a: u64, n: u64| -> Result<Vec<u8>, ()> { Ok(file[a as usize..(a + n) as usize].to_vec()) };
         let got = records_in_block_within(read, len, at[at.len() - 2], 1 << 20).unwrap();
