@@ -56,11 +56,10 @@
 //!
 //! `TSCALn` and `TZEROn` say what the numbers in a column are worth: a stored
 //! value `x` means `TZEROn + TSCALn * x`, and `BZERO` and `BSCALE` say the
-//! same of an image's pixels. When both cards are whole numbers that sum is
-//! worked out, and each number reads as the integer on disk with what it is
-//! worth beside it. The integer on disk is what an edit writes; the worth
-//! takes no bits, the way a Steim word's differences hang off the word in
-//! `mseed`.
+//! same of an image's pixels. That sum is worked out, and each number reads as
+//! the number on disk with what it is worth beside it. The number on disk is
+//! what an edit writes; the worth takes no bits, the way a Steim word's
+//! differences hang off the word in `mseed`.
 //!
 //! The commonest case by far is the unsigned convention: an unsigned 16-bit
 //! column is written as a signed one with a zero point of 32768, so 65535 is
@@ -68,10 +67,15 @@
 //! reading those bytes as a 16-bit unsigned number would answer 32767, which
 //! is a number nobody wrote. The sum is the reading.
 //!
-//! A scale or a zero point with a fraction in it is not worked out and cannot
-//! be, for the reason GRIB's packed values are not: an expression in this IR
-//! is an integer. Those are shown beside the column, as the cards wrote them,
-//! and the sum is the reader's to make.
+//! When both cards are whole numbers and the column holds integers, the sum is
+//! made in whole numbers, which is exact however large it is: a 64-bit column
+//! written unsigned has a zero point of 2^63, past where a double counts in
+//! ones. A card with a fraction or an exponent in it, `TSCAL2 = 2.5` or
+//! `BZERO = 3.276800E4`, and a column of floats, are worked out as reals, from
+//! the real each card's text spells. The worth of a float then comes from the
+//! float as its row shows it, the shortest decimal that reads back as its
+//! bits, so it agrees with astropy, which works from the bits, to about eight
+//! significant figures rather than to the last digit.
 //!
 //! A row is a list of cells rather than a field per column, so a table may
 //! have as many columns as the standard allows, which is 999: a keyword is
@@ -106,19 +110,15 @@
 //!   names a column that way.
 //! - Heap arrays are found by walking every cell of every row, so a table of
 //!   millions of rows takes that long before its heap has any children.
-//! - A scale or a zero point with a fraction in it, which the integers here
-//!   cannot add: the cards are shown beside the column and the sum is left to
-//!   the reader. A variable-length column is not scaled at all, since its heap
-//!   arrays are typed by the letter after the `P` and nothing carries the
-//!   cards that far.
+//! - A variable-length column is not scaled at all, since its heap arrays are
+//!   typed by the letter after the `P` and nothing carries the cards that far.
 //! - A scaled image walks the header for `BZERO` and `BSCALE` once a pixel,
 //!   so a scaled image of a million pixels is a million walks. An image that
 //!   says nothing about its pixels pays none of it.
-//! - A real written with no digits before the point, `TZERO1 = .5`, fails its
-//!   card: the digits are read as a run that ends at the point, and a run with
-//!   nothing in it is not a number. An exponent, `1.0E2`, reads as the 1 and
-//!   leaves `E2` in the text after it, which is a value this declines to call
-//!   a whole number rather than one it reads wrong.
+//! - A real written with no digits before the point, `TZERO1 = .5`, reads as
+//!   the real it is but fails the test of whether it changes anything, which
+//!   reads the digits either side of the point as whole numbers, and a run
+//!   with nothing in it is not a number. The column fails with it.
 //! - An axis the header says is there and does not give a length for. A
 //!   missing keyword and a keyword whose value is zero both answer 0, and an
 //!   axis of zero says there is no data, so a header that declares `NAXIS = 3`
@@ -358,22 +358,23 @@ fn logical_body() -> T {
 ///
 /// `BSCALE`, `BZERO`, `TSCALn` and `TZEROn` are the cards that say what a
 /// stored number is worth, and the standard writes all four as reals: `1`,
-/// `1.0` and `1.0E0` are the same value and a file may hold any of them. They
-/// cannot be read as one number here, since an expression in this IR is an
-/// integer and there is no float to read digits into.
+/// `1.0` and `1.0E0` are the same value and a file may hold any of them. The
+/// value is the text, and what a scale is worth is the real that text spells,
+/// read by `real(...)` where the worth is worked out.
 ///
-/// So they are read as two. The digits before the point are the value a whole
-/// number has, and the digits after it are what says whether it is one: `1`,
-/// `1.` and `1.00` all read as 1 with nothing after the point, and `1.5` reads
-/// as 1 with a 5. That is the whole of what the unsigned convention needs to
-/// be sure of, which is that a zero point is exactly 32768 and not nearly.
+/// The two runs of digits are for deciding which way to work it out. A whole
+/// number with no exponent is summed in whole numbers, which is exact at any
+/// size, and anything else in reals. The digits before the point are the value
+/// a whole number has, and the digits after it are what says whether it is
+/// one: `1`, `1.` and `1.00` all read as 1 with nothing after the point, and
+/// `1.5` reads as 1 with a 5. That is what the unsigned convention on a 64-bit
+/// column needs to be sure of, which is that a zero point is exactly 2^63 and
+/// not the nearest double to it.
 ///
 /// The run of digits before the point ends at the point, so the point is part
 /// of it; what follows is read only when a digit follows, so `1.` has nothing
-/// after it. An exponent ends both runs and stays in the text after them,
-/// which reads `1.0E2` as 1 and not as 100. Nothing in the standard scales a
-/// column by a power of ten written that way, and a value this cannot read as
-/// a whole number is one it declines to call unsigned.
+/// after it. An exponent ends both runs and stays in the text after them, and
+/// `exp` says it is there, which sends the sum to reals.
 ///
 /// The card itself still reads as the text it is written as, and the two runs
 /// of digits are a second reading of those same bytes, laid back over them
@@ -628,33 +629,24 @@ fn columns() -> T {
 /// One column of a table, as its cards describe it.
 ///
 /// `scale` and `zero` are what the numbers in the column are worth: the
-/// standard says a stored value `x` means `TZEROn + TSCALn * x`, and that is
-/// as far as this goes, because the IR's arithmetic is over integers and both
-/// of those are reals. So the two are shown beside the column and the reader
-/// is told what they mean, the same way GRIB shows a packed value's reference
-/// and scale without pretending to have the measurement. What is on disk stays
-/// on disk, and stays editable as the integer it is.
-///
-/// The one case where the standard means something a type can say outright is
-/// the unsigned convention, and that is read in the cell rather than here: a
-/// column written as a signed integer with a zero point of exactly half its
-/// range, and no scaling, *is* an unsigned column, and an eight-bit column
-/// written unsigned with a zero point of -128 is a signed one. See
-/// [`binary_cell`].
+/// standard says a stored value `x` means `TZEROn + TSCALn * x`, and these are
+/// the two reals the cards spell, `2.0E+01` included, with the standard's own
+/// defaults of one and nought for a card that is not there. The sum itself is
+/// made in the cells, where each value reads as the number on disk with what
+/// it is worth beside it. See [`binary_cell`].
 fn column() -> T {
     let n = E::Idx.add(E::lit(1));
     let form = |part: &str| numbered_at("TFORM", n.clone(), &["body", "value", "form", part]);
-    let written = |prefix: &str| numbered_at(prefix, n.clone(), &["body", "value", "text"]);
+    let written = |prefix: &str| E::real_text(numbered_at(prefix, n.clone(), &["body", "value", "text"]));
     T::inline_structure(
         "Column",
         vec![
             ("code", T::computed_text(form("code"))),
             ("repeat", T::computed(form("repeat").or(E::lit(1)))),
-            // What the numbers in this column are worth, as the cards wrote
-            // them: `TZERO3 = 0.4` says 0.4 here too. The sum is the reader's
-            // to make, since these are reals and this IR has only integers.
-            ("scale", T::computed_text(written("TSCAL"))),
-            ("zero", T::computed_text(written("TZERO"))),
+            // What the numbers in this column are worth, as the reals the
+            // cards spell: `TZERO3 = 0.4` says 0.4 here too.
+            ("scale", T::computed_real(written("TSCAL").or(E::real(1.0)))),
+            ("zero", T::computed_real(written("TZERO"))),
             // The letter after a `P` or a `Q`, which says what the heap array
             // a descriptor points at holds. Nothing for any other column.
             ("elem_code", T::computed_text(form("elem_code"))),
@@ -712,7 +704,9 @@ fn data_array() -> T {
     // What the header says a pixel is worth: `BZERO + BSCALE * stored`, the
     // same reading a table's columns get from `TZEROn` and `TSCALn`. The
     // commonest case is the unsigned convention, an image written signed with
-    // a zero point of half its range. See [`worth_of`].
+    // a zero point of half its range, and that sum is made in whole numbers;
+    // a card with a fraction or an exponent in it is made in reals, and so is
+    // an image of floats. See [`worth_of`].
     //
     // The test sits outside the array, so it is made once for the whole image
     // rather than once a pixel; the sum inside it is made per pixel, and it
@@ -720,15 +714,32 @@ fn data_array() -> T {
     // is a million walks. Only an image that says it is scaled pays it.
     let real = |name: &str, part: &str| card_at(name, &["body", "value", "parts", part]);
     let scale = real("BSCALE", "int").or(E::lit(1));
+    // The same two in reals, for a card with a fraction or an exponent in it.
+    let real_scale = E::real_text(card_at("BSCALE", &["body", "value", "text"])).or(E::real(1.0));
+    let real_zero = E::real_text(card_at("BZERO", &["body", "value", "text"]));
+    let reals = |ty: T| T::array(worth_of(ty, real_scale.clone(), real_zero.clone(), false), placed_count());
+    // Whether the cards change a pixel at all, the way a column's are asked.
+    // See [`binary_cell`].
+    let said = E::cond(
+        card_at("BZERO", &["keynum"]).or(card_at("BSCALE", &["keynum"])),
+        real("BZERO", "int")
+            .or(real("BZERO", "frac"))
+            .or(real("BZERO", "exp"))
+            .or(scale.clone().sub(E::lit(1)))
+            .or(real("BSCALE", "frac"))
+            .or(real("BSCALE", "exp")),
+        E::lit(0),
+    );
     let scaled = |ty: T| {
         let plain = of(ty.clone());
-        let with = T::array(worth_of(ty, scale.clone(), real("BZERO", "int")), placed_count());
-        let whole = T::switch(real("BSCALE", "frac"), vec![(0, with)], plain.clone());
-        let both = T::switch(real("BZERO", "frac"), vec![(0, whole)], plain.clone());
-        let plain_scale = T::switch(real("BSCALE", "exp"), vec![(0, both)], plain.clone());
-        let both = T::switch(real("BZERO", "exp"), vec![(0, plain_scale)], plain.clone());
-        T::switch(real("BZERO", "int").or(scale.clone().sub(E::lit(1))), vec![(0, plain)], both)
+        let with = T::array(worth_of(ty.clone(), scale.clone(), real("BZERO", "int"), true), placed_count());
+        let whole = T::switch(real("BSCALE", "frac"), vec![(0, with)], reals(ty.clone()));
+        let both = T::switch(real("BZERO", "frac"), vec![(0, whole)], reals(ty.clone()));
+        let plain_scale = T::switch(real("BSCALE", "exp"), vec![(0, both)], reals(ty.clone()));
+        let both = T::switch(real("BZERO", "exp"), vec![(0, plain_scale)], reals(ty));
+        T::switch(said.clone(), vec![(0, plain)], both)
     };
+    let scaled_float = |ty: T| T::switch(said.clone(), vec![(0, of(ty.clone()))], reals(ty));
     T::switch(
         card_value("BITPIX"),
         vec![
@@ -736,8 +747,8 @@ fn data_array() -> T {
             (16, scaled(T::Int { bits: 16, endian: Big })),
             (32, scaled(T::Int { bits: 32, endian: Big })),
             (64, scaled(T::Int { bits: 64, endian: Big })),
-            (-32, of(T::F32(Big))),
-            (-64, of(T::F64(Big))),
+            (-32, scaled_float(T::F32(Big))),
+            (-64, scaled_float(T::F64(Big))),
         ],
         // A BITPIX nobody defined: the room is right, since the same number
         // sized it, and what is in it is anyone's guess.
@@ -951,42 +962,63 @@ fn binary_cell() -> T {
     let of = |ty: T, width: i128| T::array(ty, r.clone().at_most(E::Remaining.div(E::lit(width))));
     let pair = |name: &str, ty: T| T::inline_structure(name, vec![("re", ty.clone()), ("im", ty)]);
     // A column whose cards say its numbers are worth something else. The
-    // integer on disk stays the integer on disk and stays editable as one;
+    // number on disk stays the number on disk and stays editable as one;
     // what the header says it means sits beside it. See [`worth_of`].
-    let scale = real("TSCAL", "int").or(E::lit(1));
-    let scaled = |ty: T, width: i128| {
-        let plain = of(ty.clone(), width);
+    let card = |prefix: &str| numbered_at(prefix, n.clone(), &["body", "value", "text"]);
+    let column = |ty: T, width: i128, whole: bool| {
         // What the cards say, read on the cell rather than on each value in
         // it: a value sits in a list of its own, and `Idx` answers for the
         // nearest list around the field asking, which down there is the run
         // of values and not the run of cells. The cell knows which column it
         // is; the values reach its answer by looking outwards.
         let values = T::array(
-            worth_of(ty, E::field("scale"), E::field("zero")),
+            worth_of(ty, E::field("scale"), E::field("zero"), whole),
             r.clone().at_most(E::Remaining.div(E::lit(width))),
         );
-        let with = T::structure(
-            "Scaled column",
-            vec![
-                ("scale", T::computed(scale.clone())),
-                ("zero", T::computed(real("TZERO", "int"))),
-                ("values", values),
-            ],
-        )
-        .machinery(&["scale", "zero"])
-        .payload(&["values"]);
-        // Both cards whole numbers with no exponent on them, or this cannot
-        // say what a value means.
-        let whole = T::switch(real("TSCAL", "frac"), vec![(0, with)], plain.clone());
-        let both = T::switch(real("TZERO", "frac"), vec![(0, whole)], plain.clone());
-        let plain_scale = T::switch(real("TSCAL", "exp"), vec![(0, both)], plain.clone());
-        let both = T::switch(real("TZERO", "exp"), vec![(0, plain_scale)], plain.clone());
-        // Nothing said, or nothing that changes a value: the plain type. The
-        // scale is only looked up when there is no zero point, since `Or`
-        // stops at the first answer and most columns have neither card.
-        let said = real("TZERO", "int").or(scale.clone().sub(E::lit(1)));
-        T::switch(said, vec![(0, plain)], both)
+        let (scale, zero) = match whole {
+            true => (T::computed(real("TSCAL", "int").or(E::lit(1))), T::computed(real("TZERO", "int"))),
+            false => (
+                T::computed_real(E::real_text(card("TSCAL")).or(E::real(1.0))),
+                T::computed_real(E::real_text(card("TZERO"))),
+            ),
+        };
+        T::structure("Scaled column", vec![("scale", scale), ("zero", zero), ("values", values)])
+            .machinery(&["scale", "zero"])
+            .payload(&["values"])
     };
+    // Whether the cards change a value at all. A column with neither card
+    // pays for two searches and falls through: `Cond` asks the rest only when
+    // one of them is there, and most columns have neither. A zero point that
+    // is not nought, or a scale that is not one, in any part of how it is
+    // written, is a change; `1.0E0` is counted as one, which costs a row that
+    // says so and nothing else.
+    let present = |prefix: &str| numbered_at(prefix, n.clone(), &["keynum"]);
+    let said = E::cond(
+        present("TZERO").or(present("TSCAL")),
+        real("TZERO", "int")
+            .or(real("TZERO", "frac"))
+            .or(real("TZERO", "exp"))
+            .or(real("TSCAL", "int").or(E::lit(1)).sub(E::lit(1)))
+            .or(real("TSCAL", "frac"))
+            .or(real("TSCAL", "exp")),
+        E::lit(0),
+    );
+    let scaled = |ty: T, width: i128| {
+        let plain = of(ty.clone(), width);
+        let reals = column(ty.clone(), width, false);
+        // Both cards whole numbers with no exponent on them, and the sum is
+        // made in whole numbers, which is exact however large: the unsigned
+        // convention on a 64-bit column is a zero point of 2^63, and a double
+        // stops counting in ones at 2^53. Anything else is made in reals.
+        let whole = T::switch(real("TSCAL", "frac"), vec![(0, column(ty, width, true))], reals.clone());
+        let both = T::switch(real("TZERO", "frac"), vec![(0, whole)], reals.clone());
+        let plain_scale = T::switch(real("TSCAL", "exp"), vec![(0, both)], reals.clone());
+        let both = T::switch(real("TZERO", "exp"), vec![(0, plain_scale)], reals);
+        T::switch(said.clone(), vec![(0, plain)], both)
+    };
+    // A float column has no whole-number sum to make, and is scaled in reals
+    // whenever its cards say anything.
+    let scaled_float = |ty: T, width: i128| T::switch(said.clone(), vec![(0, of(ty.clone(), width))], column(ty, width, false));
     let text = T::text(StrLen::Fixed(r.clone().at_most(E::Remaining)), Encoding::Ascii);
     T::matches(
         form("code"),
@@ -1001,8 +1033,8 @@ fn binary_cell() -> T {
             ("J", scaled(T::Int { bits: 32, endian: Big }, 4)),
             ("K", scaled(T::Int { bits: 64, endian: Big }, 8)),
             ("A", text),
-            ("E", of(T::F32(Big), 4)),
-            ("D", of(T::F64(Big), 8)),
+            ("E", scaled_float(T::F32(Big), 4)),
+            ("D", scaled_float(T::F64(Big), 8)),
             ("C", of(pair("Complex", T::F32(Big)), 8)),
             ("M", of(pair("Complex", T::F64(Big)), 16)),
             // A variable-length array is written as how many there are and
@@ -1029,11 +1061,16 @@ fn binary_cell() -> T {
 /// signed with a zero point of half its range. That is a bias and not a
 /// reinterpretation: 65535 is written as the signed 32767, whose bytes read as
 /// a 16-bit unsigned number are 32767 and not 65535, so reading the column as
-/// unsigned would answer with a number nobody wrote. The sum is the reading,
-/// and the sum is exact whenever both cards are whole numbers.
-fn worth_of(stored: T, scale: E, zero: E) -> T {
+/// unsigned would answer with a number nobody wrote. The sum is the reading.
+///
+/// `whole` says both cards are whole numbers and the stored number is an
+/// integer, and then the sum is made in whole numbers and is exact however
+/// large it is. Otherwise it is made in reals: a scale of 2.5, a zero point of
+/// 0.4, a card written `2.0E+01`, or a column of floats.
+fn worth_of(stored: T, scale: E, zero: E, whole: bool) -> T {
     let worth = E::field("stored").mul(scale).add(zero);
-    T::inline_structure("Scaled", vec![("stored", stored), ("worth", T::computed(worth))]).payload(&["stored"])
+    let worth = if whole { T::computed(worth) } else { T::computed_real(worth) };
+    T::inline_structure("Scaled", vec![("stored", stored), ("worth", worth)]).payload(&["stored"])
 }
 
 /// The cell of a variable-length column: the descriptors in it, and the letter
@@ -1650,16 +1687,19 @@ mod tests {
         assert_eq!(signed.type_name, "i16 be[]");
         assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 1, 0]).unwrap().value, Value::Int(-1));
         // And what the header said the numbers are worth is on one row beside
-        // the column rather than spread over the cards.
-        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 0, 0, 2]).unwrap().value), "1");
-        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 0, 0, 3]).unwrap().value), "32768");
+        // the column rather than spread over the cards, with the standard's
+        // own default for the card that is not there.
+        assert_eq!(ev.node(&d, &[0, 1, 3, 0, 0, 2]).unwrap().value, Value::Float(1.0));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 0, 0, 3]).unwrap().value, Value::Float(32768.0));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 0, 1, 2]).unwrap().value, Value::Float(1.0));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 0, 1, 3]).unwrap().value, Value::Float(0.0));
     }
 
     /// A zero point written with a point after it is the same whole number,
-    /// and a whole number is one this can add. One with a fraction after the
-    /// point is not, and the column says what the card said instead.
+    /// and is added in whole numbers. One with a fraction or an exponent is
+    /// added as a real, and a zero point of nought changes nothing.
     #[test]
-    fn a_zero_point_is_only_added_when_it_is_a_whole_number() {
+    fn a_zero_point_is_added_as_a_whole_number_or_as_a_real() {
         let table = |zero: &str| {
             let card = format!("TZERO1  = {zero:>20}");
             let cards = ["TFIELDS =                    1", "TFORM1  = '1I      '", card.as_str()];
@@ -1668,17 +1708,70 @@ mod tests {
             b.extend_from_slice(&padded(vec![0xff, 0xff]));
             b
         };
-        for written in ["32768", "32768.", "32768.0", "32768.00", "-32768", "1"] {
+        let worth = |written: &str| {
             let (d, mut ev) = eval(table(written));
             assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().type_name, "Scaled column", "{written}");
+            ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 2, 0, 1]).unwrap().value
+        };
+        for (written, want) in [("32768", 32767), ("32768.", 32767), ("32768.0", 32767), ("32768.00", 32767), ("-32768", -32769), ("1", 0)] {
+            assert_eq!(worth(written), Value::Int(want), "{written}");
         }
-        // A fraction; a zero point of zero, which changes nothing; and an
-        // exponent, which is a power of ten the integers here cannot take.
         // `2.0E+01` is twenty, and reading its digits alone would say two.
-        for written in ["32768.5", "0.5", "0", "2.0E+01", "1.0E-3", "3.2768E4", "2.0D1"] {
+        for (written, want) in [("32768.5", 32767.5), ("0.5", -0.5), ("2.0E+01", 19.0), ("1.0E-3", -0.999), ("3.2768E4", 32767.0), ("2.0D1", 19.0)] {
+            assert_eq!(worth(written), Value::Float(want), "{written}");
+        }
+        for written in ["0", "0.0", "0."] {
             let (d, mut ev) = eval(table(written));
             assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().type_name, "i16 be[]", "{written}");
         }
+    }
+
+    /// A scale and a zero point written with exponents, one of them Fortran's
+    /// `D`, over a column of integers and a column of floats. What a value is
+    /// worth is the reals the cards spell, and the relations panel writes the
+    /// sum out with them in place.
+    #[test]
+    fn a_scale_written_with_an_exponent_scales_the_column() {
+        let cards = [
+            "TFIELDS =                    2",
+            "TFORM1  = '1J      '",
+            "TSCAL1  =              2.0E+01 / twenty",
+            "TZERO1  =               1.5D-1",
+            "TFORM2  = '2E      '",
+            "TSCAL2  =                  2.5",
+            "TZERO2  =                  0.4",
+        ];
+        let mut b = primary();
+        b.extend_from_slice(&table_header(&cards, 1, 12, 0));
+        let mut row = 3i32.to_be_bytes().to_vec();
+        row.extend_from_slice(&0.25f32.to_be_bytes());
+        row.extend_from_slice(&(-1.5f32).to_be_bytes());
+        b.extend_from_slice(&padded(row));
+        let (d, mut ev) = eval(b);
+        let first = [0, 1, 3, 1, 0, 0, 0];
+        assert_eq!(ev.node(&d, &first).unwrap().type_name, "Scaled column");
+        let scale = ev.node(&d, &[&first[..], &[0]].concat()).unwrap();
+        assert_eq!((scale.type_name.as_str(), scale.value), ("computed real", Value::Float(20.0)));
+        assert_eq!(ev.node(&d, &[&first[..], &[1]].concat()).unwrap().value, Value::Float(0.15));
+        let worth = [&first[..], &[2, 0, 1]].concat();
+        assert_eq!(ev.node(&d, &[&first[..], &[2, 0, 0]].concat()).unwrap().value, Value::Int(3));
+        assert_eq!(ev.node(&d, &worth).unwrap().value, Value::Float(3.0 * 20.0 + 0.15));
+        let rel = ev.relations(&d, &worth).unwrap();
+        assert_eq!((rel[0].written.as_str(), rel[0].substituted.as_str()), ("stored * scale + zero", "3 * 20 + 0.15"));
+        // The float column: each float the number on disk, and what it is
+        // worth beside it.
+        let second = [0, 1, 3, 1, 0, 0, 1];
+        assert_eq!(ev.node(&d, &second).unwrap().type_name, "Scaled column");
+        assert_eq!(ev.node(&d, &[&second[..], &[2, 1, 0]].concat()).unwrap().value, Value::Float(-1.5));
+        assert_eq!(ev.node(&d, &[&second[..], &[2, 0, 1]].concat()).unwrap().value, Value::Float(0.25 * 2.5 + 0.4));
+        assert_eq!(ev.node(&d, &[&second[..], &[2, 1, 1]].concat()).unwrap().value, Value::Float(-1.5 * 2.5 + 0.4));
+        // A card that is there and spells no number fails what reads it.
+        let cards = ["TFIELDS =                    1", "TFORM1  = '1J      '", "TSCAL1  =                2.5Ex"];
+        let mut b = primary();
+        b.extend_from_slice(&table_header(&cards, 1, 4, 0));
+        b.extend_from_slice(&padded(vec![0, 0, 0, 1]));
+        let (d, mut ev) = eval(b);
+        assert!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 2, 0, 1]).is_err());
     }
 
     /// An image says the same thing with `BZERO`, over its pixels.
@@ -1709,6 +1802,13 @@ mod tests {
         // A zero point of nothing leaves the pixels as the type BITPIX names.
         let (d, mut ev) = eval(pixels(16, "0", vec![0xff, 0xff]));
         assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().type_name, "i16 be[]");
+        // One written with an exponent, as IRAF writes them, is the real it
+        // spells; and an image of floats is scaled the same way.
+        let (d, mut ev) = eval(pixels(16, "3.276800E4", vec![0xff, 0xff]));
+        assert_eq!(ev.node(&d, &[0, 0, 3, 0, 1]).unwrap().value, Value::Float(32767.0));
+        let (d, mut ev) = eval(pixels(-32, "0.5", 2.0f32.to_be_bytes().to_vec()));
+        assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().type_name, "Scaled[]");
+        assert_eq!(ev.node(&d, &[0, 0, 3, 0, 1]).unwrap().value, Value::Float(2.5));
     }
 
     #[test]
