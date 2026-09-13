@@ -797,7 +797,9 @@ fn binary_row() -> T {
 /// written with, and the row reads `[2] flux`.
 fn row_of(cell: T) -> T {
     let name = numbered_at("TTYPE", column_number(), &["body", "value", "parts", "0", "text"]);
-    T::structure("Row", vec![("cells", T::array(cell, table_columns()))]).field_elem_named_from("cells", name)
+    T::structure("Row", vec![("cells", T::array(cell, table_columns()))])
+        .payload(&["cells"])
+        .field_elem_named_from("cells", name)
 }
 
 /// Which column a cell is: where it sits in the row, counted from one, since
