@@ -116,6 +116,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   root: ["root"],
   gwf: ["gwf"],
   grib: ["grib", "grb", "grib2"],
+  bufr: ["bufr", "bfr"],
   mseed: ["mseed", "msd"],
   mseed3: ["mseed3", "ms3"],
   sac: ["sac"],

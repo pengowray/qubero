@@ -3092,6 +3092,41 @@ button.insp-xrow-where:hover {
   overflow-wrap: anywhere;
 }
 
+/* One value of a BUFR subset: the descriptor and its name on the left,
+   wrapping, and the value on the right, so the values line up down the panel.
+   The same row lists the expanded descriptors, indented by how deep in Table
+   D each came from. */
+.insp-brows {
+  max-height: 20em;
+  overflow-y: auto;
+  /* Room for the scrollbar, which otherwise sits over the ends of the values. */
+  padding-right: 8px;
+}
+.insp-brow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 0;
+}
+.insp-brow.is-here {
+  background: var(--accent-soft);
+}
+.insp-brow-name {
+  overflow-wrap: anywhere;
+}
+.insp-brow-about,
+.insp-brow-value.is-missing {
+  color: var(--muted);
+}
+.insp-brow-value {
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* ---- report listing (mockup C v2) ---- */
 /* The heights here are the ones `listingreport.ts` adds up to place every
    item, so they are fixed rather than content-driven: a row that grew a line

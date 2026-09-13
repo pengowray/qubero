@@ -458,6 +458,66 @@ struct GribValueDto {
     packed: f64,
 }
 
+/// One descriptor of a BUFR message expanded through Table D, as deep as the
+/// sequences it came out of.
+#[derive(Serialize)]
+struct BufrDescriptorDto {
+    code: f64,
+    depth: f64,
+    name: String,
+}
+
+/// One value of a BUFR subset, as the panel lists it.
+#[derive(Serialize)]
+struct BufrValueDto {
+    code: f64,
+    /// "element" | "count" | "quality" | "associated" | "reference" | "local" | "characters" | "marker"
+    role: &'static str,
+    name: String,
+    text: String,
+    unit: String,
+    missing: bool,
+    /// The element an associated field, a marker, quality information or a
+    /// new reference value is about, as its descriptor and name. Empty
+    /// otherwise.
+    about: String,
+}
+
+/// The BUFR value under the cursor, with what it was read from.
+#[derive(Serialize)]
+struct BufrCursorDto {
+    /// Its place in `values`, or -1 where it is not among those listed.
+    index: f64,
+    value: BufrValueDto,
+    /// Where its bits start, from section 4's first bit, and how wide it is.
+    bit: f64,
+    width: f64,
+    scale: f64,
+    reference: f64,
+    numeric: bool,
+    /// Null where there is no packed number: text, or a missing value.
+    packed: Option<f64>,
+    /// A compressed value's smallest packed number and difference width, or
+    /// null for an uncompressed message.
+    base: Option<f64>,
+    increment_width: Option<f64>,
+    /// Every subset's value, the first few dozen, for a compressed message.
+    /// An empty string is a missing value.
+    across: Vec<String>,
+}
+
+fn bufr_value_dto(v: qubero_core::formats::bufr_data::PanelValue) -> BufrValueDto {
+    BufrValueDto {
+        code: f64::from(v.code),
+        role: v.role,
+        name: v.name,
+        text: v.text,
+        unit: v.unit,
+        missing: v.missing,
+        about: v.about.unwrap_or_default(),
+    }
+}
+
 /// One Steim frame of a miniSEED record: how many differences its codes named,
 /// and how many of them became samples.
 #[derive(Serialize)]
@@ -642,6 +702,30 @@ enum ExplainDto {
         total: f64,
         /// The value the cursor is on, or null where it is not on one.
         at: Option<GribValueDto>,
+        problem: String,
+    },
+    /// A BUFR message's section 4 read through the tables. See
+    /// `qubero_core::formats::bufr_data::Panel`.
+    Bufr {
+        edition: f64,
+        /// The version section 1 names, and the version that was used.
+        master_table_version: f64,
+        tables_version: f64,
+        subsets: f64,
+        compressed: bool,
+        steps: Vec<String>,
+        /// Section 3's descriptors expanded through Table D, the first
+        /// thousand or so, and how many there are.
+        descriptors: Vec<BufrDescriptorDto>,
+        descriptors_total: f64,
+        /// Which subset `values` belong to, counted from 0, where in that
+        /// subset's values the list starts, and how many values it has.
+        subset: f64,
+        values: Vec<BufrValueDto>,
+        values_start: f64,
+        values_total: f64,
+        /// The value under the cursor, or null where the cursor is on none.
+        cursor: Option<BufrCursorDto>,
         problem: String,
     },
     Page {
@@ -1336,6 +1420,41 @@ fn explain_dto(e: Explain) -> ExplainDto {
             problem: problem.unwrap_or_default(),
             steps: chunk_steps(steps),
         },
+        Explain::BufrData(p) => {
+            let p = *p;
+            ExplainDto::Bufr {
+                edition: f64::from(p.edition),
+                master_table_version: f64::from(p.master_table_version),
+                tables_version: f64::from(p.tables_version),
+                subsets: f64::from(p.subsets),
+                compressed: p.compressed,
+                steps: p.steps,
+                descriptors: p
+                    .descriptors
+                    .into_iter()
+                    .map(|d| BufrDescriptorDto { code: f64::from(d.code), depth: f64::from(d.depth), name: d.name })
+                    .collect(),
+                descriptors_total: p.descriptors_total as f64,
+                subset: f64::from(p.subset),
+                values: p.values.into_iter().map(bufr_value_dto).collect(),
+                values_start: p.values_start as f64,
+                values_total: p.values_total as f64,
+                cursor: p.cursor.map(|c| BufrCursorDto {
+                    index: c.index.map_or(-1.0, |i| i as f64),
+                    value: bufr_value_dto(c.value),
+                    bit: c.bit as f64,
+                    width: f64::from(c.width),
+                    scale: f64::from(c.scale),
+                    reference: c.reference as f64,
+                    numeric: c.numeric,
+                    packed: c.packed.map(|v| v as f64),
+                    base: c.base.map(|v| v as f64),
+                    increment_width: c.increment_width.map(f64::from),
+                    across: c.across,
+                }),
+                problem: p.problem.unwrap_or_default(),
+            }
+        }
         Explain::GribValues {
             template,
             spatial_order,
