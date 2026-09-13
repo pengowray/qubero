@@ -130,6 +130,10 @@
 //!   name  literal  call()   everything else
 //! ```
 //!
+//! Three places take a bracket whatever the table says, because the reading
+//! without one is not the only reading: what `not` negates, what `start of`
+//! names, and a ternary inside a ternary on either side of the colon.
+//!
 //! A name is a field declared earlier, in this structure or in one it sits
 //! inside. `a.b` is a path down into an earlier field. `index` is this
 //! element's place in the list it sits in. `remaining` is from here to the end
@@ -1047,8 +1051,8 @@ pub fn readable(e: &Expr) -> Option<String> {
 
 /// The same expression with the leaves spelled by `leaf` instead of by the
 /// template: what the relations panel writes to put each field's value in its
-/// place. Everything between the leaves — the operators, the brackets, the
-/// words for `min` and `ceil` — is written here, so the two forms of one
+/// place. Everything between the leaves is written here: the operators, the
+/// brackets, the words for `min` and `ceil`. So the two forms of one
 /// relationship differ only where they are meant to. See
 /// [`crate::eval::relate`].
 ///
