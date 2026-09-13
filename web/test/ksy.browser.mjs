@@ -181,6 +181,65 @@ try {
   assert.deepEqual(errors, [], "page errors");
   console.log("screenshots in", outDir);
   await page.close();
+
+  // A .ksy dropped with nothing open. It says how to read a file, so the start
+  // screen asks for one rather than opening the .ksy as the document.
+  const start = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+  const startErrors = [];
+  start.on("pageerror", (e) => startErrors.push(e.message));
+  await start.goto(process.env.TEST_URL || "http://localhost:17283");
+  await start.waitForSelector(".welcome", { timeout: 10000 });
+  await start.evaluate((text) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([text], "gif.ksy", { type: "text/plain" }));
+    document.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+  }, gifKsy);
+  await start.waitForFunction(() => (document.querySelector(".welcome-status")?.textContent ?? "") !== "", { timeout: 5000 });
+  const welcome = await start.evaluate(() => ({
+    status: document.querySelector(".welcome-status").textContent,
+    stillWelcome: document.querySelector(".welcome") !== null,
+  }));
+  console.log("welcome", JSON.stringify(welcome));
+  assert.match(welcome.status, /^Open a file first/, "the start screen said nothing about the dropped .ksy");
+  assert.equal(welcome.stillWelcome, true, "the dropped .ksy was opened as a document");
+  assert.deepEqual(startErrors, [], "page errors on the start screen");
+  await start.close();
+
+  // A .ksy dropped on a tab of unpacked bytes, which no template of the
+  // reader's choosing reads.
+  const unpacked = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const unpackedErrors = [];
+  unpacked.on("pageerror", (e) => unpackedErrors.push(e.message));
+  await unpacked.goto(process.env.TEST_URL || "http://localhost:17283");
+  const zlib = join(samples, "compressed/hello.zz");
+  const zlibChooser = unpacked.waitForEvent("filechooser");
+  await unpacked.getByRole("button", { name: "Open a file", exact: true }).click();
+  await (await zlibChooser).setFiles({ name: basename(zlib), buffer: await readFile(zlib) });
+  await unpacked.waitForSelector(".rp-row, .hv-hex", { timeout: 20000 });
+  await unpacked.getByRole("button", { name: "Listing", exact: true }).click();
+  // The row offering the unpacked stream arrives with the walk, not with the
+  // file, and the button on it shows when its row is pointed at, so it is
+  // clicked where it is rather than moved to.
+  await unpacked.waitForSelector(".rp-unpacked", { state: "attached", timeout: 20000 });
+  await unpacked.evaluate(() => document.querySelector(".rp-unpacked").click());
+  await unpacked.waitForFunction(() => document.querySelectorAll(".tab").length > 1, { timeout: 20000 });
+  await unpacked.evaluate((text) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([text], "gif.ksy", { type: "text/plain" }));
+    document.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+  }, gifKsy);
+  await unpacked.waitForFunction(() => (document.querySelector(".tabpage:not([hidden]) .tb-msg")?.textContent ?? "") !== "", {
+    timeout: 5000,
+  });
+  const refused = await unpacked.evaluate(() => ({
+    message: document.querySelector(".tabpage:not([hidden]) .tb-msg").textContent,
+    panels: document.querySelectorAll(".tabpage:not([hidden]) .kp").length,
+  }));
+  console.log("unpacked", JSON.stringify(refused));
+  assert.match(refused.message, /unpacked stream/, "dropping a .ksy on unpacked bytes said nothing");
+  assert.equal(refused.panels, 0, "the converter opened over unpacked bytes");
+  assert.deepEqual(unpackedErrors, [], "page errors on the unpacked tab");
+  await unpacked.close();
 } finally {
   await browser.close();
 }

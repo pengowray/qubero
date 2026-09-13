@@ -234,6 +234,9 @@ export class KsyPanel {
     // A heading with nothing under it is not something to open, so it is not
     // offered as one. Its count is still the news: nothing was left behind.
     if (lines.length === 0) {
+      // Both classes land on the one element here, so the stylesheet's
+      // `.kp-gaps > .kp-group-heading` does not reach it: an empty group is
+      // grey, and the colour is kept for a count of something.
       const empty = el("p", { className: `kp-group kp-group-heading is-empty ${className}`, textContent: heading });
       if (title !== null) empty.title = title;
       return empty;

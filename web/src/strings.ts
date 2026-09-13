@@ -2895,7 +2895,7 @@ export const KSY = {
   gapsTitle:
     "These parts of the .ksy have no equivalent in a template. Each field is read as plain bytes instead, never guessed at.",
   notesHeading: (n: number): string => `Converted another way (${n.toLocaleString()})`,
-  notesTitle: "The same reading, reached differently: a string compared as the number its bytes spell, say.",
+  notesTitle: "The same reading, reached differently: a string compared as its bytes read as one big-endian number, say.",
   fieldsHeading: (n: number): string => `What each field became (${n.toLocaleString()})`,
   /** On every report line. Clicking one moves the cursor to that line of the
    *  .ksy, which is not what a line of a report usually does. */
