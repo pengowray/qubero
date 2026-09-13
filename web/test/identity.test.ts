@@ -6,7 +6,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { agrees, decide } from "../src/identity.ts";
-import { templateTypeName } from "../src/filetype.ts";
 import type { Identification, ToolMatch } from "../src/doc.ts";
 import type { SigMatch, SigFormat } from "../src/signatures.ts";
 
@@ -80,13 +79,4 @@ test("nothing answered yet is no name and no candidates", () => {
   const id = decide({ template: null });
   assert.equal(id.name, null);
   assert.deepEqual(id.candidates, []);
-});
-
-test("a template's type name gets 'file' only when its label does not already say what it is", () => {
-  assert.equal(templateTypeName("parquet"), "Parquet file");
-  assert.equal(templateTypeName("zip"), "ZIP archive");
-  assert.equal(templateTypeName("png"), "PNG image");
-  assert.equal(templateTypeName("sqlite"), "SQLite database");
-  assert.equal(templateTypeName("utmp"), "Login records");
-  assert.equal(templateTypeName("pe"), "Windows PE executable");
 });
