@@ -927,7 +927,7 @@ fn reading() -> T {
     let units = [("s", Time::unix()), ("ms", Time::unix_millis()), ("us", Time::unix_micros()), ("ns", Time::unix_nanos())];
     for (i, (unit, time)) in units.iter().enumerate() {
         let i = i as i128;
-        cases.push((INSTANT + i, timed(&format!("timestamp[{unit}, UTC]"), i64le.clone(), 8, time.clone())));
+        cases.push((INSTANT + i, timed(&format!("timestamp[{unit}, zoned]"), i64le.clone(), 8, time.clone())));
         cases.push((WALL_CLOCK + i, timed(&format!("timestamp[{unit}]"), i64le.clone(), 8, time.clone().zone_unknown())));
     }
     T::switch(E::placer(E::field("reading")), cases, T::bytes(E::Remaining))
