@@ -245,37 +245,3 @@ export function cleanPattern(value, encodings) {
   return { skip: "no encoding given and not clearly hex" };
 }
 
-/**
- * How many bytes of a pattern are pinned to a value: the measure of how much
- * a match says. Alternatives count their shortest option, and ranges and
- * wildcards count nothing.
- */
-export function fixedBytes(pattern) {
-  let n = 0;
-  let depth = 0;
-  let alt = [];
-  for (let i = 0; i < pattern.length; ) {
-    const c = pattern[i];
-    if (c === "(") {
-      depth = 1;
-      alt = [0];
-      i += 1;
-    } else if (c === "|") {
-      alt.push(0);
-      i += 1;
-    } else if (c === ")") {
-      n += Math.min(...alt);
-      depth = 0;
-      i += 1;
-    } else if (c === "{") i = pattern.indexOf("}", i) + 1;
-    else if (c === "[") i = pattern.indexOf("]", i) + 1;
-    else if (c === "*") i += 1;
-    else if (c === "?") i += 2;
-    else {
-      if (depth) alt[alt.length - 1] += 1;
-      else n += 1;
-      i += 2;
-    }
-  }
-  return n;
-}
