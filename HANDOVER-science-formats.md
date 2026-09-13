@@ -30,6 +30,9 @@ cases only.
 
 | Was | Commit |
 |---|---|
+| S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
+| S2: HDF5 paged fixed arrays | 508fa3b |
+| S2: HDF5 implicit-index chunks | 508fa3b |
 
 ## Bugs
 
@@ -69,12 +72,6 @@ the footer. `data_index_bloom_encoding_stats.parquet` proves it.
 
 **Unblocks, all in HDF5:**
 
-- Extensible-array data blocks and secondary blocks past the index block. How
-  many addresses of each the index block holds is worked out from the array's
-  size with a base-2 logarithm.
-- Paged fixed arrays. A page's worth of entries is a power of two.
-- Implicit-index chunks. The chunk count is each dimension of the dataspace
-  divided by the chunk dimension, rounded up, multiplied together.
 - Fractal-heap indirect blocks, for a heap grown past its largest direct block.
 - Children of a version 2 B-tree node below the root
   (`HANDOVER-open-hazards.md` "Still open" 4). `hdf5_tree.rs` already does the

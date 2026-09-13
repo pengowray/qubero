@@ -61,6 +61,20 @@
 //! an unfiltered chunk reads as elements, since the chunk dimensions
 //! multiplied together are how many bytes one chunk comes to.
 //!
+//! Three of the five lay their chunks out by counting, and none of the three
+//! writes the counting down. An implicit index's run is as many chunks as the
+//! largest extent the dataspace allows rounds up to, a dimension at a time. A
+//! fixed array with more entries than a page holds keeps them in pages of a
+//! power of two, behind a bitmap of which pages were ever written. An
+//! extensible array keeps a few entries in its index block, then the
+//! addresses of data blocks, then the addresses of secondary blocks that hold
+//! more data block addresses, the blocks doubling as the array grows and
+//! paged once they are past a page; how many addresses of each kind the index
+//! block has is a base-2 logarithm of numbers in the header away. All of it is
+//! worked out here the way the library works it out, every block and page of
+//! both arrays is placed with its checksum, and every chunk they name is
+//! reached.
+//!
 //! That last multiplication is why a version 4 message cannot be read as a
 //! version 3 one with the numbers moved about. Version 3 writes the chunk
 //! dimensions in four bytes each and the size of an element beside them;
@@ -104,21 +118,12 @@
 //! indirect blocks rather than direct ones. Telling those apart takes a base
 //! two logarithm, which the expressions here do not have.
 //!
-//! The same logarithm is what stops the chunk indexes short. An extensible
-//! array past its index block keeps the rest of its entries in data blocks and
-//! then in secondary blocks of doubling size, and how many addresses of each
-//! the index block holds is worked out from the array's size rather than
-//! written down; so the entries in the index block are read and the addresses
-//! after them are not. A fixed array whose entry count is past what one page
-//! holds is paged, and a page's worth of entries is a power of two the same
-//! way, so a paged data block is left as it stands. Neither array's checksums
-//! are placed.
-//!
-//! An implicit index's chunks are not placed either, for a different reason:
-//! the run is the chunk count times the chunk size, and the count is the
-//! dataspace rounded up a chunk at a time in every dimension, which is a
-//! division this has no fold for. The address is read and says where they
-//! start.
+//! The chunk indexes' checksums are placed and not checked. A page of array
+//! entries that was set aside and never written keeps its bytes: nothing wrote
+//! entries there, and read as entries they would be addresses of whatever the
+//! file held in that room before. An implicit index's run includes the chunks
+//! a dataset has room to grow into, since they were written when it was made,
+//! so it can show more chunks than the dataset's current extent covers.
 //!
 //! A virtual dataset is read as far as the global heap collection holding its
 //! mapping. What is in that object, the selections in this dataset and the
