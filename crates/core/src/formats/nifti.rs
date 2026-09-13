@@ -1274,6 +1274,10 @@ mod tests {
         assert!(!broken(&|v| v[44..46].copy_from_slice(&0i16.to_le_bytes())), "a dimension of nothing");
         assert!(!broken(&|v| v[70] = 3), "no such datatype");
         assert!(!is_analyze(&analyze_bytes(false)[..300], 300));
+        // And the whole of recognition agrees, with NIfTI asked first.
+        assert_eq!(crate::formats::sniff(&analyze_bytes(true), 348), Some("analyze"));
+        assert_eq!(crate::formats::sniff(&with_voxels(&Header::new(true), 24), 400), Some("nifti"));
+        assert_eq!(crate::formats::sniff(&nifti2(false, 0.0, 0.0), 588), Some("nifti"));
     }
 
     #[test]

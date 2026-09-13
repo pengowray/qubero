@@ -250,6 +250,10 @@ const PROBES: &[Probe] = &[
     // been checked, and a start time that reads as a date one way round and
     // not the other.
     Probe::Is("mseed", mseed::is_mseed),
+    // A brain scan. NIfTI-1 signs the end of its header rather than the front
+    // and NIfTI-2 signs four bytes in, so neither is a prefix; what agrees
+    // with the magic is the header size in front of it, read either way round.
+    Probe::Is("nifti", nifti::is_nifti),
     // A PICO-8 cartridge, which is a PNG of exactly one size and shape. Asked
     // before the signature table so that it wins over plain `png`.
     Probe::Is("p8png", |h, _| pico8::is_p8png(h)),
@@ -299,6 +303,9 @@ const PROBES: &[Probe] = &[
     // word of evidence and no front marker at all, so every format that does
     // mark its front is asked first.
     Probe::Is("sac", sac::is_sac),
+    // The header NIfTI-1 grew from, which has its size and no magic at all:
+    // recognised by that size and by the dimensions and voxel type agreeing.
+    Probe::Is("analyze", nifti::is_analyze),
     // A record of who logged in, which has no header at all: it is recognised
     // by every record in it being the right size and shape.
     Probe::Is("utmp", utmp::is_utmp),
