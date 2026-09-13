@@ -2346,6 +2346,34 @@ fn a_field_can_take_its_displayed_name_from_the_file() {
 }
 
 #[test]
+fn the_elements_of_a_list_can_take_their_displayed_names_from_the_file() {
+    // Two names in a table, and a list of three numbers named by position in
+    // it: the third has no name written for it.
+    let t = T::structure(
+        "Root",
+        vec![
+            ("labels", T::array(T::utf8(E::lit(4)), E::lit(2))),
+            ("vals", T::array(T::u8(), E::lit(3))),
+            ("after", T::computed(E::elem_field("vals", E::lit(1), &[]))),
+        ],
+    )
+    .field_elem_named_from("vals", E::elem_field("labels", E::idx(), &[]));
+    let d = doc(b"fluxtime\x07\x09\x0b");
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().name, "[0] flux");
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().name, "[1] time");
+    // Nothing to read for the third, so it keeps its index and nothing fails.
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().name, "[2]");
+    // The list itself is not renamed: the declaration is about its elements.
+    assert_eq!(ev.node(&d, &[1]).unwrap().name, "vals");
+    // The index is still the name an expression reaches an element by.
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(9));
+    // And the connection is exposed, as a name rather than as a value.
+    let seen: Vec<_> = ev.origins(&d, &[1, 1]).unwrap().into_iter().map(|o| (o.role, o.label)).collect();
+    assert_eq!(seen, vec![(Role::Name, "labels[1]".to_string())]);
+}
+
+#[test]
 fn a_bit_field_of_a_number_is_a_shift_and_a_mask() {
     // A word packing six-bit differences, the way a Steim2 word does, read as
     // fields of the number rather than as bits of the bytes.

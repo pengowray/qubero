@@ -174,15 +174,47 @@ fn a_logical_array_is_bytes_with_a_flag_on_it() {
     assert!(matches!(&flags.value, Value::Flags { set, .. } if set.iter().any(|f| f == "logical")), "{:?}", flags.value);
 }
 
-/// A structure's fields are elements of their own, with the names beside them.
+/// A structure's fields are elements of their own, with the names beside them,
+/// and each is labelled with its name. A structure inside a field names its own
+/// fields from its own list, not from the one around it.
 #[test]
 fn a_structure_names_its_fields_before_it_writes_them() {
     let (d, mut ev) = open!("teststructnest_7.4_GLNX86.mat");
     assert_eq!(number(&d, &mut ev, &[IN_ZLIB, &[0, 2]].concat()), 2, "struct");
     assert_eq!(number(&d, &mut ev, &[IN_ZLIB, &[3, 0, 2, 0]].concat()), 4, "four bytes to a name");
-    assert_eq!(text(&d, &mut ev, &[IN_ZLIB, &[3, 1, 2]].concat()), "one\0two\0");
+    // The names are one element, read as a name per four bytes rather than as
+    // `one\0two\0`.
+    assert_eq!(text(&d, &mut ev, &[IN_ZLIB, &[3, 1, 2, 0]].concat()), "one");
+    assert_eq!(text(&d, &mut ev, &[IN_ZLIB, &[3, 1, 2, 1]].concat()), "two");
     let fields = ev.node(&d, &[IN_ZLIB, &[3, 2]].concat()).unwrap();
     assert_eq!(fields.child_count, 2);
+    assert_eq!(at(&d, &mut ev, &[IN_ZLIB, &[3, 2, 0]].concat()).0, "[0] one");
+    assert_eq!(at(&d, &mut ev, &[IN_ZLIB, &[3, 2, 1]].concat()).0, "[1] two");
+    // `two` is a structure of one field, `three`.
+    let inner = [IN_ZLIB, &[3, 2, 1, 2, 3, 2, 0]].concat();
+    assert_eq!(at(&d, &mut ev, &inner).0, "[0] three");
+}
+
+/// The names as scipy reads them, on a big-endian file whose names are 32
+/// bytes wide, and the path to a field is still its index.
+#[test]
+fn every_field_of_a_structure_is_labelled_with_its_name() {
+    let (d, mut ev) = open!("teststruct_6.1_SOL2.mat");
+    let fields = [1, 0, 2, 3, 2];
+    let labels: Vec<String> = (0..3).map(|i| at(&d, &mut ev, &[fields.as_slice(), &[i]].concat()).0).collect();
+    assert_eq!(labels, ["[0] stringfield", "[1] doublefield", "[2] complexfield"]);
+    assert_eq!(ev.child_named(&d, &fields, "1").unwrap(), Some([fields.as_slice(), &[1]].concat()));
+    assert_eq!(ev.child_named(&d, &fields, "doublefield").unwrap(), None);
+}
+
+/// A 1 by 2 structure array writes both fields of its first structure and then
+/// both of its second, so the names go round again.
+#[test]
+fn a_structure_array_repeats_its_names_for_each_structure() {
+    let (d, mut ev) = open!("teststructarr_7.4_GLNX86.mat");
+    let fields = [IN_ZLIB, &[3, 2]].concat();
+    let labels: Vec<String> = (0..4).map(|i| at(&d, &mut ev, &[fields.as_slice(), &[i]].concat()).0).collect();
+    assert_eq!(labels, ["[0] one", "[1] two", "[2] one", "[3] two"]);
 }
 
 /// A short tag packs the byte count and the type into one word, the count in

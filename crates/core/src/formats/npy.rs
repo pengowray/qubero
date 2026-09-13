@@ -24,23 +24,19 @@
 //!
 //! A dtype of one kind reads as an array of that type, complex numbers as the
 //! pairs of floats they are, a date as the count of the unit its dtype names,
-//! and a fixed-width string as text. A structured dtype, which is written as a
-//! list of tuples, reads as the list of names and formats it is, and the
-//! numbers under it stay bytes.
-//!
-//! What is not read here:
+//! and a fixed-width string as text.
 //!
 //! A structured dtype, `[('a', '<i8'), ('b', '<f4')]`, is read as the records
 //! it describes: the list of `('name', 'format')` pairs is read from the
 //! header, and each value of each record is typed by the format in its own
-//! entry of that list. Only the plain form, where the fields lie one after
-//! another in the order they are named.
+//! entry of that list and labelled with the name in it, `[0] a` and `[1] b`.
+//! The label is only what the row says: a record's values are a list, so an
+//! expression or an edit still reaches the second one as `values[1]`. Only
+//! the plain form, where the fields lie one after another in the order they
+//! are named.
 //!
 //! What is not read here:
 //!
-//! - What a field of a record is called. The names are in the list and a
-//!   structure's field names are fixed when the template is built, so a
-//!   record's values are numbered rather than named.
 //! - A structured dtype with explicit `offsets`, which may leave gaps between
 //!   its fields. The fields are laid one after another here and would land on
 //!   the wrong bytes.
@@ -302,7 +298,11 @@ fn record_data() -> T {
         default: std::sync::Arc::new(T::bytes(E::Remaining)),
     };
     let fields = || E::within(&["header", "record"]);
-    let record = T::structure("Record", vec![("values", T::array(value, fields()))]).counted_as("record");
+    // Each value is labelled with the name its entry of the list gives it,
+    // `[1] y`, and is still `values[1]` to anything that reaches it.
+    let record = T::structure("Record", vec![("values", T::array(value, fields()))])
+        .field_elem_named_from("values", E::elem_within(&["header", "record"], E::idx(), &["name"]))
+        .counted_as("record");
     // A dtype that is not a list of fields at all: the list is empty, and a
     // run of records of no length would never end.
     T::switch(E::lit(0).less_than(fields()), vec![(1, T::repeat(record, Until::End))], T::bytes(E::Remaining))
@@ -544,6 +544,11 @@ mod tests {
         assert_eq!(ev.node(&d, &[5, 0, 0]).unwrap().child_count, 2);
         assert_eq!(ev.node(&d, &[5, 0, 0, 0]).unwrap().type_name, "i64 le");
         assert_eq!(ev.node(&d, &[5, 0, 0, 1]).unwrap().type_name, "f32 le");
+        // Each value is labelled with the name its entry gives it, and is
+        // still reached by its index.
+        assert_eq!(ev.node(&d, &[5, 1, 0, 0]).unwrap().name, "[0] a");
+        assert_eq!(ev.node(&d, &[5, 1, 0, 1]).unwrap().name, "[1] b");
+        assert_eq!(ev.child_named(&d, &[5, 1, 0], "b").unwrap(), None);
         assert_eq!(ev.node(&d, &[5, 0]).unwrap().size_bits, 12 * 8);
         // The second record starts after the first, so the fields of a run of
         // records line up with the bytes.

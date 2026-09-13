@@ -218,17 +218,13 @@ impl Evaluator {
     /// This is worked out here rather than when the node is resolved, because
     /// it means reading a sibling and resolving has to stay cheap.
     pub(super) fn label<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<String> {
-        // A pointer-list child borrows the name of the record its offset came
-        // from: tensor data called `[7] x_embedder.bias` says which weights
-        // these are, where `[7]` says nothing. A record with no name of its
-        // own contributes nothing, and the child keeps its index.
-        if let Some(name) = self.pointed_from_name(doc, path) {
-            return Ok(name);
-        }
         // A field whose displayed name the format writes somewhere: a FITS
         // column is `col3` in every path and `col3 flux` on the row. The
         // declared name comes first, because that is the one an expression or
-        // an edit has to be written with. See `Field::name_from`.
+        // an edit has to be written with. See `Field::name_from`, and
+        // `Field::elem_name_from` for the elements of a list, which read
+        // `[1] y`. Asked before the borrowed name below, since this one the
+        // template asked for by name.
         if let Some(from) = self.name_from(path) {
             let here = Some((r.offset, r.limit));
             if let Ok(text) = self.text_at(doc, path, &from, here) {
@@ -237,6 +233,13 @@ impl Evaluator {
                     return Ok(format!("{} {text}", r.name.text()));
                 }
             }
+        }
+        // A pointer-list child borrows the name of the record its offset came
+        // from: tensor data called `[7] x_embedder.bias` says which weights
+        // these are, where `[7]` says nothing. A record with no name of its
+        // own contributes nothing, and the child keeps its index.
+        if let Some(name) = self.pointed_from_name(doc, path) {
+            return Ok(name);
         }
         let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.text()) };
         let Some(by) = s.named_by.clone() else { return Ok(r.name.text()) };
@@ -280,10 +283,23 @@ impl Evaluator {
     /// Where the field at `path` gets its displayed name from, when its
     /// structure says the file holds one. A property of the parent's
     /// declaration, the same as `contents` and `machinery` are.
+    ///
+    /// An element of a list is asked one level further out: the list is a
+    /// field of a structure, and that field says what its elements are called.
+    /// See [`crate::template::Field::elem_name_from`]. Either way the
+    /// expression is worked out from `path` itself, so for an element `Idx`
+    /// is its own index.
     pub(super) fn name_from(&self, path: &[usize]) -> Option<Expr> {
         let (&idx, parent) = path.split_last()?;
-        let Ty::Struct(s) = self.memo.get(parent)?.ty.base() else { return None };
-        s.fields.get(idx)?.name_from.clone()
+        match self.memo.get(parent)?.ty.base() {
+            Ty::Struct(s) => s.fields.get(idx)?.name_from.clone(),
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } => {
+                let (&list, grand) = parent.split_last()?;
+                let Ty::Struct(s) = self.memo.get(grand)?.ty.base() else { return None };
+                s.fields.get(list)?.elem_name_from.clone()
+            }
+            _ => None,
+        }
     }
 
     /// Whether the field at `path` is a second reading of bytes something else

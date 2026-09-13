@@ -15,6 +15,7 @@
 // file under `node --test`, which strips the types but does not rewrite a
 // `.js` specifier back to the file it came from.
 import type { Span } from "./doc.ts";
+import { isElementName } from "./elementname.ts";
 import { GAP_LABEL } from "./strings.ts";
 import { chipDetail, chipLayout, chipWidth, runDetail, type ChipMeasure } from "./chipfit.ts";
 
@@ -38,15 +39,12 @@ export type ChipText = { readonly name: string; readonly detail: string };
  *  past `shown` is counted rather than drawn. */
 export type ChipBlock = { entries: Chip[]; texts: ChipText[]; shown: number };
 
-/** The name a list gives its elements. */
-const ELEMENT = /^\[\d+\]$/;
-
 /** Whether a span is an element of a list that reads as one of many, so that
  *  a run of its siblings on one row can be one chip. Text is not: each string
  *  is worth reading. Nor is a structure that reads on one line, for the same
  *  reason, or a run the core has already folded. */
 export function foldable(s: Span): boolean {
-  return !s.gap && s.count === 0 && s.line === null && s.kind !== "str" && ELEMENT.test(s.name);
+  return !s.gap && s.count === 0 && s.line === null && s.kind !== "str" && isElementName(s.name);
 }
 
 /** Whether two spans are elements of the same list, read the same way. */

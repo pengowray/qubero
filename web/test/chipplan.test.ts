@@ -60,6 +60,10 @@ const CHAR: ChipMeasure = { name: (s) => s.length, value: (s) => s.length };
 
 test("an element of a list reads as one of many", () => {
   assert.equal(foldable(element(0, 0)), true);
+  // Still one of many when the file names it: an NPY record's dtype field.
+  assert.equal(foldable({ ...element(0, 0), name: "[0] channel_0000" }), true);
+  // A name that only starts with a bracket is a name.
+  assert.equal(foldable({ ...element(0, 0), name: "[0]x" }), false);
 });
 
 test("text, a one-line structure, an already folded run and a gap each stay their own chip", () => {

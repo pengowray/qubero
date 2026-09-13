@@ -31,6 +31,11 @@
 //! `miUINT8` and reads as one here. The class says what MATLAB hands back;
 //! the element type says what is on disk, and this reads the disk.
 //!
+//! A structure writes its field names in one element, each padded to the same
+//! width, and then one element per field in the same order. Each of those is
+//! labelled with its name, `[0] stringfield`, while its path stays
+//! `fields[0]`.
+//!
 //! Level 4, which is what `save -v4` still writes and what a `.mat` from
 //! before MATLAB 5 is, has no header and no magic number. A file is a run of
 //! matrices, each opening with five 32-bit integers: a packed description, the
@@ -54,10 +59,6 @@
 //! - The subsystem data the header points at, which is where MATLAB keeps
 //!   objects of a class: a `mxOPAQUE` element names a class and an offset into
 //!   it, and the offset lands in a region this reads as bytes.
-//! - A structure's fields are the elements they are, in order, but they are
-//!   not labelled with the names beside them. The names are in the file and
-//!   read as text; joining each to its field would mean an array's rows taking
-//!   a name from a run of fixed-width text in a sibling element.
 //! - A sparse array's row indices and column starts read as the numbers they
 //!   are, not as the positions they describe.
 //! - Level 4 on a VAX or a Cray, whose floating point is neither of the two
@@ -262,14 +263,22 @@ fn hdf5_body() -> T {
 /// data is the four bytes after the tag; zero means the long one, where the
 /// count is a word of its own and the data follows eight bytes in.
 fn element(e: Endian, as_text: bool) -> T {
+    tagged(e, &|size| body(e, size, as_text))
+}
+
+/// Either form of tag, and `data` for what its bytes read as, handed the byte
+/// count wherever that form keeps it. Every element reads its bytes by
+/// [`body`] except a structure's field names, which are the same tag around a
+/// different reading; see [`field_names`].
+fn tagged(e: Endian, data: &dyn Fn(E) -> T) -> T {
     T::switch(
         E::peek(32, e).shr(E::lit(16)).at_most(E::lit(1)),
-        vec![(1, short_element(e, as_text))],
-        long_element(e, as_text),
+        vec![(1, short_element(e, data))],
+        long_element(e, data),
     )
 }
 
-fn long_element(e: Endian, as_text: bool) -> T {
+fn long_element(e: Endian, data: &dyn Fn(E) -> T) -> T {
     T::structure_named(
         "Element",
         "type",
@@ -277,7 +286,7 @@ fn long_element(e: Endian, as_text: bool) -> T {
         vec![
             ("type", T::enumeration("DataType", T::u32(e), DATA_TYPES)),
             ("bytes", T::u32(e)),
-            ("data", body(e, E::field("bytes"), as_text)),
+            ("data", data(E::field("bytes"))),
             // Every element but a compressed one is padded out to a multiple
             // of eight, and the next tag starts after the padding.
             (
@@ -300,7 +309,7 @@ fn long_element(e: Endian, as_text: bool) -> T {
 ///
 /// Four bytes is the whole of the form, so whatever the count does not reach
 /// is padding, and an element of this shape is eight bytes either way.
-fn short_element(e: Endian, as_text: bool) -> T {
+fn short_element(e: Endian, data: &dyn Fn(E) -> T) -> T {
     let kind = || T::enumeration("DataType", T::u16(e), DATA_TYPES);
     let count = || T::u16(e);
     let mut fields = match e {
@@ -308,7 +317,7 @@ fn short_element(e: Endian, as_text: bool) -> T {
         Big => vec![("bytes", count()), ("type", kind())],
     };
     let size = E::field("bytes").at_most(E::lit(4));
-    fields.push(("data", body(e, size.clone(), as_text)));
+    fields.push(("data", data(size.clone())));
     fields.push(("padding", T::bytes(E::lit(4).sub(size))));
     T::structure_named("Element", "type", "data", fields).machinery(&["padding"])
 }
@@ -462,15 +471,52 @@ fn cells(e: Endian) -> T {
 /// A structure, and an object, which is a structure with a class name in
 /// front of it. The names are one element of fixed-width text; the values are
 /// one element each, in the order the names are in.
+///
+/// Each value is labelled with its name, `[1] doublefield`, and is still
+/// `fields[1]` to anything that reaches it. A structure array writes every
+/// field of its first structure, then every field of its second, and so on,
+/// so the name of element `i` is name `i` counted round the list of names:
+/// a 1 by 2 array of `one` and `two` has four elements, named `one`, `two`,
+/// `one`, `two`. There is no remainder in an expression, so it is `i` less
+/// the whole lists of names before it.
 fn fields(e: Endian, named_class: bool) -> T {
     let mut f: Vec<(&str, T)> = Vec::new();
     if named_class {
         f.push(("class_name", T::Named(text_element_name(e).into())));
     }
     f.push(("field_name_length", T::Named(element_name(e).into())));
-    f.push(("field_names", T::Named(text_element_name(e).into())));
+    f.push(("field_names", field_names(e)));
     f.push(("fields", T::repeat(T::Named(element_name(e).into()), Until::End).counted_as("field")));
-    T::structure("Struct", f)
+    let names = || E::within(&["field_names", "data"]).at_least(E::lit(1));
+    let which = E::idx().sub(E::idx().div(names()).mul(names()));
+    T::structure("Struct", f).field_elem_named_from("fields", E::elem_within(&["field_names", "data"], which, &[]))
+}
+
+/// A structure's field names: one element of text, each name padded with NULs
+/// to the width the element before it gives, and read as that many names
+/// rather than as one run. One run would read `one\0two\0`, and a label has to
+/// be able to reach name `i` on its own.
+///
+/// MATLAB writes the names as `miINT8`. Bytes and UTF-8 are read the same way
+/// in case a writer picks one of those; anything else keeps its bytes, and the
+/// fields keep their bare indices.
+fn field_names(e: Endian) -> T {
+    // The width is the one number in the element before, and never nothing, so
+    // a file that says nought divides by one rather than failing.
+    let width = E::elem_within(&["field_name_length", "data"], E::lit(0), &[]).at_least(E::lit(1));
+    tagged(e, &|size: E| {
+        let names = |enc: Encoding| {
+            let name = T::text(StrLen::Padded { size: width.clone(), pad: 0 }, enc);
+            // Sized, so that a count of bytes that is not a whole number of
+            // names still leaves the padding after it where the tag says.
+            T::sized(size.clone(), T::array(name, size.clone().div(width.clone())))
+        };
+        T::switch(
+            E::field("type"),
+            vec![(1, names(Encoding::Latin1)), (2, names(Encoding::Latin1)), (16, names(Encoding::Utf8))],
+            T::bytes(size),
+        )
+    })
 }
 
 /// A sparse array. `row_index` holds a row for each stored value and
@@ -720,6 +766,59 @@ mod tests {
         let (name, value) = read(&v, &[1, 0, 0]);
         assert_eq!(name, "type");
         assert_eq!(value, "Enum { raw: 5, name: Some(\"int32\"), hex: false }");
+    }
+
+    /// One little-endian array element: its flags, a 1 by 1 size, a name, and
+    /// whatever `contents` holds.
+    fn array_bytes(class: u8, name: &[u8], contents: &[u8]) -> Vec<u8> {
+        let mut a = Vec::new();
+        a.extend(6u32.to_le_bytes());
+        a.extend(8u32.to_le_bytes());
+        a.extend([class, 0, 0, 0]);
+        a.extend(0u32.to_le_bytes());
+        a.extend(5u32.to_le_bytes());
+        a.extend(8u32.to_le_bytes());
+        a.extend(1i32.to_le_bytes());
+        a.extend(1i32.to_le_bytes());
+        // A short name element, four bytes of room.
+        a.extend(1u16.to_le_bytes());
+        a.extend((name.len() as u16).to_le_bytes());
+        let mut room = name.to_vec();
+        room.resize(4, 0);
+        a.extend(room);
+        a.extend(contents);
+        let mut v = 14u32.to_le_bytes().to_vec();
+        v.extend((a.len() as u32).to_le_bytes());
+        v.extend(a);
+        v
+    }
+
+    #[test]
+    fn a_structure_labels_each_field_with_its_name() {
+        // A double of one byte, which is how MATLAB writes a small whole number.
+        let double = |n: u8| {
+            let mut real = 2u16.to_le_bytes().to_vec();
+            real.extend(1u16.to_le_bytes());
+            real.extend([n, 0, 0, 0]);
+            array_bytes(6, b"", &real)
+        };
+        let mut s = Vec::new();
+        // Names four bytes wide, then `a` and `bb` padded to that.
+        s.extend(5u16.to_le_bytes());
+        s.extend(4u16.to_le_bytes());
+        s.extend(4i32.to_le_bytes());
+        s.extend(1u32.to_le_bytes());
+        s.extend(8u32.to_le_bytes());
+        s.extend(b"a\0\0\0bb\0\0");
+        s.extend(double(7));
+        s.extend(double(9));
+        let mut v = header_bytes(b"IM", [0, 1]);
+        v.extend(array_bytes(2, b"s", &s));
+        let fields = [1, 0, 2, 3, 2];
+        assert_eq!(read(&v, &[fields.as_slice(), &[0]].concat()).0, "[0] a");
+        assert_eq!(read(&v, &[fields.as_slice(), &[1]].concat()).0, "[1] bb");
+        // The names are read one at a time, not as `a\0\0\0bb`.
+        assert_eq!(read(&v, &[1, 0, 2, 3, 1, 2, 1]).1, "Str(\"bb\")");
     }
 
     #[test]
