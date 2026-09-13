@@ -64,60 +64,71 @@ fn optional_string() -> T {
 }
 
 pub fn gzip() -> Template {
-    Template::new(
-        "gzip",
-        T::structure(
-            "GZIP",
-            vec![
-                ("magic", T::magic(b"\x1f\x8b")),
-                ("method", T::enumeration("Method", T::u8(), &[(8, "deflate")])),
-                ("flg", T::flags("Flags", T::u8(), FLAGS)),
-                // Seconds since 1970, or zero when the compressor had no time
-                // to give: gzip writes zero for input it read from a pipe.
-                ("mtime", T::u32(Little)),
-                ("extra_flags", T::enumeration("ExtraFlags", T::u8(), &[(2, "best compression"), (4, "fastest")])),
-                ("os", T::enumeration("Os", T::u8(), OS)),
-                ("extra", T::switch(bit(2), vec![(1, extra_field())], T::bytes(E::lit(0)))),
-                ("name", T::switch(bit(3), vec![(1, optional_string())], T::bytes(E::lit(0)))),
-                ("comment", T::switch(bit(4), vec![(1, optional_string())], T::bytes(E::lit(0)))),
-                // Two bytes when the bit says so and nothing at all when it
-                // does not, like the three fields above. A number rather than
-                // the run of bytes it used to be: it is a sixteen-bit check
-                // written little-endian, and reading it as bytes left the one
-                // thing about it that matters, which way round it goes, written
-                // down nowhere.
-                ("header_crc", T::switch(bit(1), vec![(1, T::u16(Little))], T::bytes(E::lit(0)))),
-                // Deflate. The last eight bytes are the trailer, so the stream
-                // is everything before them. The run keeps its own length and
-                // stays where it is; what comes out of it is read as fields of
-                // its own, and what the decoder read on the way is read as the
-                // blocks it read them from.
-                ("compressed", T::decoded(E::Remaining.sub(E::lit(8)), Codec::Deflate, super::decoded_text())),
-                ("crc32", T::u32(Little)),
-                // The size of what was compressed, modulo four gigabytes,
-                // which is why a large file's number looks wrong.
-                ("original_size", T::u32(Little)),
-            ],
-        )
-        // Everything written before it, which for a header is everything there
-        // is: the check is the last thing in it. Only when the flag put it
-        // there at all, since a field of no bytes reads as zero and zero is a
-        // number a sixteen-bit sum can honestly come to.
-        .field_check("header_crc", Check::of(Checksum::Crc32Low16, Covers::UpToHere).only_when(bit(1)))
-        // Zero is not the first instant of 1970 here: it is what the compressor
-        // wrote because it had none, which the comment on the field says and
-        // the reader is owed as well.
-        .field_time("mtime", Time::unix().unset(0))
-        // The file that went in, not the deflate stream it came out as. What
-        // the trailer says that comes to is only for deciding whether to unpack
-        // it unasked; it is written modulo four gigabytes and a large file's
-        // number is smaller than the file.
-        .field_check(
-            "crc32",
-            Check::of(
-                Checksum::Crc32,
-                Covers::Unpacked { name: Named::here("compressed"), len: Some(E::field("original_size")) },
-            ),
+    Template::new("gzip", member("GZIP", extra_field(), super::decoded_text()))
+}
+
+/// One gzip member, which is the whole of a gzip file and one block of a BGZF
+/// file. `extra` is what the extra field reads as when its flag is set, and
+/// `contents` what the deflate stream opens into.
+///
+/// Shared because a BGZF block is a gzip member to the byte, and a second copy
+/// of the header, the flags and the two checks would drift from this one. What
+/// BGZF adds is the names inside the extra field and a size for the whole
+/// member, and the member itself is unchanged: its stream still runs to eight
+/// bytes before the end of whatever window it is read in, which for a BGZF
+/// block is the block.
+pub(crate) fn member(name: &str, extra: T, contents: T) -> T {
+    T::structure(
+        name,
+        vec![
+            ("magic", T::magic(b"\x1f\x8b")),
+            ("method", T::enumeration("Method", T::u8(), &[(8, "deflate")])),
+            ("flg", T::flags("Flags", T::u8(), FLAGS)),
+            // Seconds since 1970, or zero when the compressor had no time
+            // to give: gzip writes zero for input it read from a pipe.
+            ("mtime", T::u32(Little)),
+            ("extra_flags", T::enumeration("ExtraFlags", T::u8(), &[(2, "best compression"), (4, "fastest")])),
+            ("os", T::enumeration("Os", T::u8(), OS)),
+            ("extra", T::switch(bit(2), vec![(1, extra)], T::bytes(E::lit(0)))),
+            ("name", T::switch(bit(3), vec![(1, optional_string())], T::bytes(E::lit(0)))),
+            ("comment", T::switch(bit(4), vec![(1, optional_string())], T::bytes(E::lit(0)))),
+            // Two bytes when the bit says so and nothing at all when it
+            // does not, like the three fields above. A number rather than
+            // the run of bytes it used to be: it is a sixteen-bit check
+            // written little-endian, and reading it as bytes left the one
+            // thing about it that matters, which way round it goes, written
+            // down nowhere.
+            ("header_crc", T::switch(bit(1), vec![(1, T::u16(Little))], T::bytes(E::lit(0)))),
+            // Deflate. The last eight bytes are the trailer, so the stream
+            // is everything before them. The run keeps its own length and
+            // stays where it is; what comes out of it is read as fields of
+            // its own, and what the decoder read on the way is read as the
+            // blocks it read them from.
+            ("compressed", T::decoded(E::Remaining.sub(E::lit(8)), Codec::Deflate, contents)),
+            ("crc32", T::u32(Little)),
+            // The size of what was compressed, modulo four gigabytes,
+            // which is why a large file's number looks wrong.
+            ("original_size", T::u32(Little)),
+        ],
+    )
+    // Everything written before it, which for a header is everything there
+    // is: the check is the last thing in it. Only when the flag put it
+    // there at all, since a field of no bytes reads as zero and zero is a
+    // number a sixteen-bit sum can honestly come to.
+    .field_check("header_crc", Check::of(Checksum::Crc32Low16, Covers::UpToHere).only_when(bit(1)))
+    // Zero is not the first instant of 1970 here: it is what the compressor
+    // wrote because it had none, which the comment on the field says and
+    // the reader is owed as well.
+    .field_time("mtime", Time::unix().unset(0))
+    // The file that went in, not the deflate stream it came out as. What
+    // the trailer says that comes to is only for deciding whether to unpack
+    // it unasked; it is written modulo four gigabytes and a large file's
+    // number is smaller than the file.
+    .field_check(
+        "crc32",
+        Check::of(
+            Checksum::Crc32,
+            Covers::Unpacked { name: Named::here("compressed"), len: Some(E::field("original_size")) },
         ),
     )
 }

@@ -68,6 +68,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
+    (bam::BAM_MAGIC, "bam"),
+    (bam::BAI_MAGIC, "bai"),
+    (bam::CSI_MAGIC, "csi"),
     (b"\x1f\x9d", "compress"),
     (bzip2::MAGIC, "bzip2"),
     (lzip::MAGIC, "lzip"),
@@ -290,6 +293,7 @@ const PROBES: &[Probe] = &[
     // and the bytes before it could open anything.
     Probe::Is("tar", |h, _| tar::is_tar(h)),
     Probe::Which(assimp_format),
+    Probe::Is("bgzf", |h, _| bam::is_bgzf(h)),
     Probe::Signatures,
     // The Amiga container, whose form type says which format it holds.
     Probe::Which(|h, _| match h.len() >= 12 && h.starts_with(b"FORM") {

@@ -886,6 +886,39 @@ impl Evaluator {
         Ok((0, 0, 0))
     }
 
+    /// The alignment records that start in the BGZF block the cursor is in,
+    /// read by [`bam_records`] from the front of the file. `None` where the
+    /// cursor is not in a BGZF block of the file itself.
+    ///
+    /// Not an [`Explain`] yet, because nothing draws one: the panel would be a
+    /// list of steps and records, and it waits on the shared step list the
+    /// other readers' panels are to move to. Until then this is how a test or
+    /// an example asks.
+    ///
+    /// Any node inside the block answers, including the fields of the first
+    /// block's header and the bytes a later block unpacks to, since those are
+    /// where the cursor is. A BGZF file inside another stream is not walked:
+    /// the reader reads the file, and that file is not this one.
+    pub fn bam_block<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<crate::formats::bam_records::Block>> {
+        use crate::formats::bam_records;
+        for len in (1..=path.len()).rev() {
+            let at = &path[..len];
+            self.resolve(doc, at)?;
+            let r = self.memo.get(at).expect("resolved").clone();
+            let Ty::Struct(def) = &r.ty else { continue };
+            if def.packed.as_deref() != Some(bam_records::PACKING) {
+                continue;
+            }
+            if r.space != 0 {
+                return Ok(None);
+            }
+            let block = r.offset / 8;
+            let read = |at: u64, n: u64| self.read_in(doc, 0, at * 8, n * 8);
+            return bam_records::records_in_block(read, doc.len_bytes(), block).map(Some);
+        }
+        Ok(None)
+    }
+
     /// A chunk of a dataset, undone.
     ///
     /// Everything needed to undo it is written elsewhere in the object header:
