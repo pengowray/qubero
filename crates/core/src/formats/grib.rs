@@ -775,8 +775,23 @@ fn bitmap() -> T {
 ///
 /// Complex packing reads as its values too, by way of the three tables the
 /// groups are described by; see [`complex_packed_data`]. What one of those
-/// values is worth takes the formula above and then two more steps, and the
-/// second of them is a running sum no expression can write. See
+/// values is worth takes the same formula and one or three more steps in front
+/// of it. For 5.2, X is not what is written: what is written is how far the
+/// point is above its own group's reference, so
+///
+/// ```text
+/// X = group_references[g] + written
+/// ```
+///
+/// For 5.3 what is written is not the value at all but a difference: between
+/// each value and the one before it at first order, or between those
+/// differences at second order, with the smallest difference in the message
+/// taken off every one of them so that none is negative. Undoing that is to
+/// add the minimum back, put the first one or two values back as section 7
+/// wrote them whole, and then run the sum forward over the whole grid. A
+/// running sum is the one thing no expression here could ever be, however much
+/// arithmetic were added to the IR: every value depends on the one before it.
+/// So it is a reading in Rust, next to the template rather than in it. See
 /// [`grib_values`](super::grib_values).
 ///
 /// An image-packed section holds a whole codestream of another format. The PNG

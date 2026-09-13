@@ -75,6 +75,7 @@ mod godot_pck;
 mod godot_text;
 mod gif;
 mod grib;
+pub mod grib_values;
 mod grubenv;
 mod gdbm;
 mod gwf;

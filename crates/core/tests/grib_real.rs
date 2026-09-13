@@ -238,6 +238,109 @@ fn complex_packing_reads_as_groups_of_different_widths() {
     assert_eq!((reference, first), (0, 639));
 }
 
+/// Section 5's numbers and section 7's bytes, gathered from the tree the way a
+/// panel would, so the side reader can be asked what the message holds.
+fn packing_and_data(name: &str, message: usize) -> Option<(qubero_core::formats::grib_values::Packing, Vec<u8>)> {
+    let path = sample(name)?;
+    let raw = std::fs::read(&path).unwrap();
+    let d = Document::new(MemSource(raw.clone()));
+    let mut ev = Evaluator::new(formats::builtin("grib").unwrap());
+    let head = [message, 1, 4, 5, 2];
+    let body = ev.node(&d, &head).ok()?;
+    let spatial = body.child_count == 19;
+    let at = |ev: &mut Evaluator, i: usize| -> i64 {
+        let mut p = head.to_vec();
+        p.push(i);
+        ev.node(&d, &p).unwrap().value.as_int().unwrap() as i64
+    };
+    // Section 5's reference value and its two scale factors, which section 7
+    // does not copy in: nothing it places depends on them.
+    let five = [message, 1, 4, 3, 2, 2];
+    let float = |ev: &mut Evaluator, i: usize| -> f32 {
+        let mut p = five.to_vec();
+        p.push(i);
+        match ev.node(&d, &p).unwrap().value {
+            qubero_core::eval::Value::Float(f) => f as f32,
+            other => panic!("reference value is {other:?}"),
+        }
+    };
+    let signed = |ev: &mut Evaluator, i: usize| -> i32 {
+        let mut p = five.to_vec();
+        p.push(i);
+        ev.node(&d, &p).unwrap().value.as_int().unwrap() as i32
+    };
+    let p = qubero_core::formats::grib_values::Packing {
+        reference: float(&mut ev, 0),
+        binary_scale: signed(&mut ev, 1),
+        decimal_scale: signed(&mut ev, 2),
+        bits_per_value: at(&mut ev, 0) as u32,
+        n_groups: at(&mut ev, 1) as u32,
+        group_widths_reference: at(&mut ev, 2) as u32,
+        group_widths_bits: at(&mut ev, 3) as u32,
+        group_lengths_reference: at(&mut ev, 4) as u32,
+        group_length_increment: at(&mut ev, 5) as u32,
+        last_group_length: at(&mut ev, 6) as u32,
+        group_lengths_bits: at(&mut ev, 7) as u32,
+        spatial_order: if spatial { at(&mut ev, 8) as u32 } else { 0 },
+        extra_bytes: if spatial { at(&mut ev, 9) as u32 } else { 0 },
+    };
+    let from = (body.offset_bits / 8) as usize;
+    let to = from + (body.size_bits / 8) as usize;
+    Some((p, raw[from..to].to_vec()))
+}
+
+/// What the numbers are worth, against ecCodes 2.48 reading the same files.
+/// The template says where every packed number is; this is the other half,
+/// and the numbers on the right of these assertions came out of ecCodes.
+#[test]
+fn the_values_a_complex_packed_message_stands_for_match_another_reader() {
+    use qubero_core::formats::grib_values::complex;
+    let Some((p, bytes)) = packing_and_data("regular_ll_complex.grib2", 0) else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // Complex packing without differencing: a group reference and a scaling,
+    // and nothing else.
+    let r = complex(&p, &bytes);
+    assert_eq!(r.problem, None);
+    assert_eq!(r.values.len(), 16 * 31);
+    let near = |a: f64, b: f64| assert!((a - b).abs() < 5e-4, "{a} is not {b}");
+    near(r.values[0], 272.9888);
+    near(r.values[1], 279.5513);
+    near(r.values[2], 285.3638);
+    near(*r.values.last().unwrap(), 254.5825);
+
+    // And the operational one, which is second-order spatial differencing on
+    // top of that: the running sum over 65,160 points has to land on the same
+    // number ecCodes lands on, at both ends.
+    let Some((p, bytes)) = packing_and_data("gfs-1p00-3messages.grib2", 0) else { return };
+    assert_eq!((p.spatial_order, p.extra_bytes), (2, 2));
+    let r = complex(&p, &bytes);
+    assert_eq!(r.problem, None);
+    assert_eq!(r.values.len(), 360 * 181);
+    near(r.values[0], 101124.03125);
+    near(*r.values.last().unwrap(), 104141.83125);
+    let lo = r.values.iter().cloned().fold(f64::INFINITY, f64::min);
+    let hi = r.values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    near(lo, 94732.43125);
+    near(hi, 107593.43125);
+
+    // The third message is the other end of the range: a decimal scale of 9,
+    // so every value is a millionth of what the sum came to.
+    let Some((p, bytes)) = packing_and_data("gfs-1p00-3messages.grib2", 2) else { return };
+    let r = complex(&p, &bytes);
+    assert_eq!(r.problem, None);
+    let tiny = |a: f64, b: f64| assert!((a - b).abs() < 1e-13, "{a} is not {b}");
+    tiny(r.values[0], 8.52e-07);
+    tiny(*r.values.last().unwrap(), 4.0e-09);
+
+    // Every step is named, in the order it was done, and the last is the
+    // scaling that turns a packed number into a measurement.
+    let steps: Vec<&str> = r.steps.iter().map(|s| s.what.as_str()).collect();
+    assert_eq!(steps.len(), 8, "{steps:?}");
+    assert!(steps.last().unwrap().contains("10^9"), "{:?}", steps.last());
+}
+
 /// A section 7 that holds a PNG opens as one, the way a stored ZIP member
 /// opens as whatever it holds.
 #[test]
