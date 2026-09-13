@@ -33,6 +33,9 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| FITS tile-compressed images: the table named as a compressed image, and a side reader (`fits_tile.rs`) decoding RICE_1 (1, 2, 4 bytes), GZIP_1, GZIP_2, NOCOMPRESS and the fallback columns, un-quantizing with the standard's dither sequence. Every pixel of 8 images in 4 samples matches astropy. The chunk and page panels now share `steplist.ts`. | 89614b1, ffac1dd |
+| HDF5 compound datatypes read by member name (versions 1 to 5, nested compounds), variable-length sequences read as their base type, and the version 2 B-tree walk counting from the HDF5 file's start so MATLAB 7.3 trees walk. Checked against h5py. | 84bb213, 35657aa, 6137b28 |
+| GWF: every class checked against three files' own dictionaries, class names taken from the file, version 6 frames (14-byte structure header, fixed from a wrong 10), gzip vectors as spaces, differenced and zero-suppressed vectors in a side reader. GWOSC strain equals its HDF5 twin. | e69bdbd, 37adb5b, aeb0362 |
 | HDF4 references across descriptor blocks: one `Ty::Gather` index over every block's table, searched by `Tagged`, so every group and ref in every sample opens (one vgroup member names ref 0, which nothing can have). Also: members kept as special elements found under the `0x4000` tag, version 4 vgroups read in the library's order (they were read with the vdata header layout), labels/units/formats per dimension, by-field vdata as columns. | 290dd24, 742748d |
 | ROOT RNTuple: header and footer envelopes as frames (fields named, columns typed), each cluster group followed to its page list, every page placed with its checksum, and page values by column type where the header is stored. Matches uproot 5.7.6 on both samples. A tree walk names 25,113 of 25,318 bytes of `staff`, up from 1,296 (the hex view does not show it; see ROOT below). | 48f2d4b, a3fadfe, 3801d23 |
 | miniSEED samples: a side reader (`mseed_steim.rs`) undoes Steim1/Steim2 differences, decodes the fixed-width encodings, CDSN and SRO, checks the reverse integration constant, and shows a samples panel. Exact match with obspy on all 22 records of 2.4 files; miniSEED 3 matches obspy's reading of libmseed's 2.x twins. | 54dca11, caef124 |
@@ -335,33 +338,50 @@ Reads further than any other scientific format. Left:
 - Filtered chunks are bytes in the template; `hdf5_chunk.rs` decodes deflate,
   shuffle, fletcher32 as a side reader. szip, nbit, scaleoffset and filters
   32000+ stop the walk.
-- Variable-length sequences (not strings) stay bytes until the base type in
-  the datatype's properties is read.
-- Compound datatypes are one element of the right size.
 - Virtual dataset mappings are bytes.
 - Huge and tiny fractal-heap objects, free-space managers.
 - 4-byte offsets are read wrong rather than refused.
 - Checksums on the chunk index blocks and pages are placed as fields but not
   verified: the crate has no lookup3.
-- `hdf5_tree.rs`'s version 2 walk ignores the superblock's base address, so
-  behind a user block (every MATLAB 7.3 file) its nodes come back with no
-  template path and the B-trees panel cannot open them in the Listing.
+- **The B-trees panel and the HDF5 contents list still do not open for
+  `.mat` files.** The walk now works behind a user block, but three places
+  gate on the template name being `"hdf5"`: `contents` and `btree` in
+  `crates/wasm/src/lib.rs`, `syncTabs` in `web/src/overviewpanel.ts` (the
+  tab), and the `hdf5` adapter in `web/src/logicaloutline.ts`. Allowing
+  `"mat"` everywhere would offer a B-trees tab on every level 5 MAT file,
+  which has no trees, under an empty-state sentence about groups and chunked
+  datasets. It wants a cheap "this MAT file is HDF5 inside" signal (the MAT
+  template's root switch already picks a 7.3 arm) and the tab offered on that.
+- Compound members go as deep as the file nests compounds; arrays,
+  enumerations and sequence element types go two levels, then keep their
+  bytes. True version 3 compound bytes and version 1 member dimensions are
+  checked only by hand-built unit tests (h5py writes version 5).
+- Every compound element walks its member records again when opened. Old
+  `.h5ad` files keep `obs`/`var` as one compound row per cell; if one is slow,
+  look here.
+- Every dataset's `Data` struct gained a `datatype` field before `elements`,
+  so hard-coded paths into datasets moved by one.
 - `Expr::Sibling` searches back through every earlier element of every list
-  around the field asking. Chunks under the array indexes now read a copy of
-  the datatype instead, but a version 1 b-tree's chunk entries (bounded by 64
-  per node) and the filtered-chunk explain panel in `eval/explain.rs` still
-  pay it.
-- `hdf5.rs` is about 3,700 lines. The chunk index code (implicit index, both
-  arrays, `array_entry`, `entries`, `page`, `page_written`, `datatype_copy`) is
-  about 500 lines with a clean edge and would split out as `hdf5_index.rs`.
+  around the field asking. Chunks under the array indexes read a copy of the
+  datatype instead, but a version 1 b-tree's chunk entries (bounded by 64 per
+  node) and the filtered-chunk explain panel in `eval/explain.rs` still pay
+  it.
 
 ### FITS
 
 Scaling, the column cap, axes and `CONTINUE` cards are closed (see Closed).
 Seven samples. Left:
 
-- Tile-compressed images: the tiles' compressed bytes are in the heap;
-  nothing inflates a Rice or gzip tile into pixels (decoder tier).
+- Tile-compressed images decode (see Closed); PLIO_1 and HCOMPRESS_1 are
+  named and not decoded. The gzip fallback column is tested with f32 only.
+- **Evaluator bug:** a table's heap fails with "unknown field cards" once a
+  later HDU's rows have been read (open `gzip2.fits`, read HDU 3's rows, and
+  HDU 1's heap no longer resolves). Also true on main before the tile work.
+  `fits_real` works round it with a fresh evaluator; a task was filed.
+- `fits_tile.rs` is about 1,370 lines; the Rice decoder and the quantization
+  code would each make a module. `explain.rs` grows by one decoder a time;
+  a small trait (which ancestor, where the data is, how to decode) would let
+  miniSEED, Parquet pages, FITS tiles and GWF vectors share the dispatch.
 - The joined value of a `CONTINUE` string is not one node: each card reads as
   its piece, and nothing in the IR reads text out of several runs at once.
   A text-joining `Ty` is the missing piece.
@@ -455,10 +475,23 @@ Samples decode (see Closed), for 2.4 and 3, with a samples panel. Left:
 
 ### GWF
 
-- One sample. Eleven classes come from FrameL source and have never been
-  checked against bytes.
-- Compressed FrVect contents are not unpacked.
-- Versions 6 and 7 past their structure headers are bytes.
+All 18 classes checked against file dictionaries, version 6 read, compressed
+vectors unpacked (see Closed). Five samples. Left:
+
+- **The vector panel uses HDF5's words.** `explain_gwf_vect` returns
+  `Explain::Hdf5Chunk`, so a GWF vector's panel says "Inside this chunk" and
+  "Filters, in the order they were undone". Give it its own variant, or make
+  the chunk panel's headings neutral.
+- Zero-suppressed vectors unpack only in the panel; a packing that carries a
+  count expression would open them as a space like gzip ones.
+- Unchecked against bytes: FrStatData and the static-data table-of-contents
+  groups in version 6, zero suppression of 4- and 8-byte words, scheme 3
+  (differences then gzip), complex vectors under zero suppression. Version 7
+  stays bytes past its check words.
+- `spans_probe` on the GWOSC file names 29 bytes fewer than before, around
+  the last-block padding of zlib-decoded nodes (PNG and CDF share it).
+- `gwf.rs` holds the v6 and v8 tables and bodies side by side; the class
+  bodies would split out as `gwf_classes.rs`.
 
 ### NetCDF classic
 
