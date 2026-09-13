@@ -33,6 +33,8 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| miniSEED samples: a side reader (`mseed_steim.rs`) undoes Steim1/Steim2 differences, decodes the fixed-width encodings, CDSN and SRO, checks the reverse integration constant, and shows a samples panel. Exact match with obspy on all 22 records of 2.4 files; miniSEED 3 matches obspy's reading of libmseed's 2.x twins. | 54dca11, caef124 |
+| MAT subsystem data: placed from the header offset, read as its own small MAT file, the `FileWrapper__` table's classes, objects and properties labelled by name, and each `MCOS` variable's object reference. Sparse arrays read as columns with a computed `row` per entry. A VAX level 4 file is recognised (it was not). Two BSD-3 samples from foreverallama/matio. | 007fbe9, 19c5cc1, 845c824 |
 | Parquet page payloads: open by the chunk's codec (snappy and brotli new, plus gzip, zstd, LZ4_RAW, stored); dictionary pages and `DATA_PAGE_V2` values as fields; every page in the 16 samples read to its values by a side reader with a step panel, bar two brotli pages claiming 2 GB. Pinned against pyarrow. | c7cfeab, e54ecd9, d73b009 |
 | GRIB complex packing (5.2, 5.3) as fields: the three group tables with their byte padding, and each group's run at `uint_expr(width)`. A side reader (`grib_values.rs`) undoes the differencing and matches ecCodes on all 195,480 GFS values. PNG-packed sections open as PNG. Two ecCodes-repacked samples. | 33f0f20, 7d3556b |
 | S5. `Expr::StartOf`, `E::tagged_in_by`, and a tag index shared by every referrer to one list: an HDF5 variable-length string reads as its text, over its own bytes. Two generated samples, one behind a 512-byte user block. | 240ca28, fea1214 |
@@ -397,17 +399,44 @@ Complex packing (5.2, 5.3) reads as fields and PNG packing opens as a PNG
 
 ### MAT
 
-- Subsystem data (objects, and so MATLAB `string` and `table`) is bytes.
-- Sparse row indices and column starts read as numbers, not positions.
+Subsystem data, sparse arrays by column and VAX/Cray level 4 recognition are
+closed (see Closed). Left, where the reverse-engineered MCOS documentation
+(foreverallama/matio, tbeu/matio) runs out:
+
+- Two unknown words in each class and object entry, regions 6 and 7, and the
+  first of the three shared cells read as numbers.
+- Only version 4 `FileWrapper__` tables have been seen.
+- An object held in a property (a bare `uint32` column with the marker).
+- A MATLAB `string`'s UTF-16 text inside its `uint64` value cell.
+- The link is one way: a variable shows its object id but not what the
+  object holds, since the variable is written before the table.
+- scipy 1.18.1's `whosmat` raises `TypeError` on any file with an opaque
+  variable; the cross-check used `loadmat`.
+- An empty name reads as `ascii[]` in the type column and a filled one as
+  `computed text`.
+- VAX and Cray level 4 numbers are still read as IEEE and are wrong.
 
 ### miniSEED
 
-- Steim1/2 read as differences; undoing them into samples is not done (a
-  decoder-tier side reader, the `hdf5_chunk.rs` pattern).
-- miniSEED 3 reads (see Closed). Its CRC-32C is placed and not verified, and
-  obspy cannot read the format, so the sample facts were checked by a
-  `struct.unpack` walk rather than a second reader.
-- Steim3 and HGLP encodings are bytes.
+Samples decode (see Closed), for 2.4 and 3, with a samples panel. Left:
+
+- GEOSCOPE (12/13/14), US National Network, Graefenberg and IPG Strasbourg
+  have no documented rule in SEED 2.4 Appendix D or libmseed, so they say
+  "Not decoded" rather than guess. Steim3 and HGLP are bytes.
+- The cursor on a 32 or 64-bit float sample gets the float bit-layout panel,
+  because float types are handled before packings; the data array still
+  shows the samples panel. A test records it.
+- The SRO, 4096-byte CDSN, and little-endian Steim1/Steim2 reference files
+  from libmseed were checked once and are not in the collection; copying them
+  in would make those checks permanent.
+- miniSEED 3's CRC-32C is placed and not verified.
+- `ExplainDto` is one flat struct carrying every panel's fields, about 20
+  more per panel; a tagged enum mirrored as a TypeScript union on `kind`
+  would stop that. `explain_packed`'s chain of packing-name checks is the
+  Rust half of the same problem.
+- `chunkpanel.ts` puts its row of values in the 4em label column, so they
+  stack one per line; the samples panel has an `.is-values` fix the chunk
+  panel does not use yet.
 
 ### GWF
 

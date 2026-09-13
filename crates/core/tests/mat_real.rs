@@ -244,7 +244,36 @@ fn a_sparse_array_writes_its_positions_before_its_values() {
     let starts = ev.node(&d, &[IN_ZLIB, &[3, 1, 2]].concat()).unwrap();
     assert_eq!(rows.type_name, "i32 le[]");
     assert_eq!(starts.type_name, "i32 le[]");
-    assert_eq!(ev.node(&d, &[IN_ZLIB, &[3, 3, 2]].concat()).unwrap().type_name, "f64 le[]");
+    assert_eq!(ev.node(&d, &[IN_ZLIB, &[3, 3, 2]].concat()).unwrap().type_name, "Column[]");
+}
+
+/// The values of a sparse array read a column at a time, each beside its row,
+/// and put back where they belong they are the matrix scipy's `loadmat` reads:
+///
+/// ```text
+/// [[1+1j, 2, 3, 4, 5],
+///  [2,    0, 0, 0, 0],
+///  [3,    0, 0, 0, 0]]
+/// ```
+#[test]
+fn a_sparse_array_is_the_matrix_scipy_reads() {
+    let (d, mut ev) = open!("testsparsecomplex_7.4_GLNX86.mat");
+    let dense = |ev: &mut Evaluator, part: usize| {
+        let mut m = [[0.0f64; 5]; 3];
+        let columns = [IN_ZLIB, &[3, part, 2]].concat();
+        assert_eq!(ev.node(&d, &columns).unwrap().child_count, 5);
+        for k in 0..5 {
+            let entries = [columns.as_slice(), &[k, 1]].concat();
+            for i in 0..ev.node(&d, &entries).unwrap().child_count as usize {
+                let row = number(&d, ev, &[entries.as_slice(), &[i, 0]].concat()) as usize;
+                let Value::Float(v) = at(&d, ev, &[entries.as_slice(), &[i, 1]].concat()).1 else { panic!("not a float") };
+                m[row][k] = v;
+            }
+        }
+        m
+    };
+    assert_eq!(dense(&mut ev, 2), [[1.0, 2.0, 3.0, 4.0, 5.0], [2.0, 0.0, 0.0, 0.0, 0.0], [3.0, 0.0, 0.0, 0.0, 0.0]]);
+    assert_eq!(dense(&mut ev, 3), [[1.0, 0.0, 0.0, 0.0, 0.0], [0.0; 5], [0.0; 5]]);
 }
 
 /// A MATLAB string is an opaque array: no dimensions after its flags, and two
@@ -257,6 +286,173 @@ fn an_opaque_array_names_the_class_it_stands_for() {
     assert_eq!(text(&d, &mut ev, &[IN_ZLIB, &[2, 2]].concat()), "matstring1");
     assert_eq!(text(&d, &mut ev, &[IN_ZLIB, &[3, 0, 2]].concat()), "MCOS");
     assert_eq!(text(&d, &mut ev, &[IN_ZLIB, &[3, 1, 2]].concat()), "string");
+}
+
+/// Where a path goes, by the names along it rather than by the numbers: a
+/// field by the name it was declared with, and an element of a list as `#i`.
+/// The subsystem is twenty levels down, and a path of twenty numbers says
+/// nothing about which of them is wrong.
+fn find(d: &Document<MemSource>, ev: &mut Evaluator, names: &[&str]) -> Vec<usize> {
+    let mut path = Vec::new();
+    for name in names {
+        if let Some(i) = name.strip_prefix('#') {
+            path.push(i.parse().unwrap());
+            continue;
+        }
+        let count = ev.node(d, &path).unwrap_or_else(|e| panic!("{path:?}: {e:?}")).child_count as usize;
+        let spaced = format!("{name} ");
+        let found = (0..count).find(|&j| {
+            let label = ev.node(d, &[path.as_slice(), &[j]].concat()).map(|n| n.name).unwrap_or_default();
+            label == *name || label.starts_with(&spaced)
+        });
+        path.push(found.unwrap_or_else(|| panic!("nothing called {name} under {path:?}")));
+    }
+    path
+}
+
+fn count_at(d: &Document<MemSource>, ev: &mut Evaluator, names: &[&str]) -> usize {
+    let path = find(d, ev, names);
+    ev.node(d, &path).unwrap().child_count as usize
+}
+
+fn number_at(d: &Document<MemSource>, ev: &mut Evaluator, names: &[&str]) -> i128 {
+    let path = find(d, ev, names);
+    number(d, ev, &path)
+}
+
+fn text_at(d: &Document<MemSource>, ev: &mut Evaluator, names: &[&str]) -> String {
+    let path = find(d, ev, names);
+    text(d, ev, &path)
+}
+
+/// What the row is labelled with after its index: `[1] BasicClass` is
+/// `BasicClass`, and a row with nothing after its index is empty.
+fn label_at(d: &Document<MemSource>, ev: &mut Evaluator, names: &[&str]) -> String {
+    let path = find(d, ev, names);
+    let name = at(d, ev, &path).0;
+    name.split_once("] ").map_or(String::new(), |(_, rest)| rest.to_string())
+}
+
+/// From the subsystem element to the file inside it.
+const SUBSYSTEM: &[&str] = &["subsystem", "data", "data", "data", "contents", "real", "data"];
+/// From there to the `FileWrapper__` object's cells: the first element is the
+/// structure with a field for each type system, and `MCOS` is its first field.
+const WRAPPER: &[&str] = &["elements", "#0", "data", "contents", "fields", "#0", "data", "contents", "reference", "data", "contents"];
+/// From the cells to the table in the first of them.
+const LINKING: &[&str] = &["linking", "data", "contents", "real", "data"];
+/// From a variable to the words of its object reference.
+const REFERENCE: &[&str] = &["data", "data", "data", "contents", "reference", "data", "contents", "real", "data"];
+
+/// A path into the table, from the root.
+fn table(names: &[&'static str]) -> Vec<&'static str> {
+    [SUBSYSTEM, WRAPPER, LINKING, names].concat()
+}
+
+/// The subsystem is the element the header's offset lands on, after the
+/// variables, and it is read as the small MAT file its bytes are rather than
+/// as 1280 numbers.
+#[test]
+fn the_subsystem_is_the_element_the_header_points_at() {
+    let (d, mut ev) = open!("testmatlabstring_7_WIN64.mat");
+    assert_eq!(ev.node(&d, &[]).unwrap().child_count, 3, "header, body, subsystem");
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 2, "two variables and no more");
+    let offset = number(&d, &mut ev, &[0, 1]);
+    assert_eq!(offset, 306);
+    let subsystem = find(&d, &mut ev, &["subsystem"]);
+    assert_eq!(ev.node(&d, &subsystem).unwrap().offset_bits / 8, offset as u64);
+    assert_eq!(number_at(&d, &mut ev, &[SUBSYSTEM, &["version"]].concat()), 0x0100);
+    assert_eq!(text_at(&d, &mut ev, &[SUBSYSTEM, &["endian_marker"]].concat()), "IM");
+    // One field, for the one type system the file uses, holding the object
+    // whose class is the subsystem's own.
+    assert_eq!(label_at(&d, &mut ev, &[SUBSYSTEM, &WRAPPER[..6]].concat()), "MCOS");
+    assert_eq!(text_at(&d, &mut ev, &[SUBSYSTEM, &WRAPPER[..8], &["class_name", "data"]].concat()), "FileWrapper__");
+}
+
+/// An `MCOS` variable holds no value, only which object it is: the marker
+/// 0xDD000000, its dimensions, an object id for each object, and a class id.
+/// These are the numbers scipy's `loadmat` hands back as `_ObjectMetadata`.
+#[test]
+fn an_mcos_variable_is_an_object_id_and_a_class_id() {
+    let (d, mut ev) = open!("testmatlabstring_7_WIN64.mat");
+    let word = |ev: &mut Evaluator, names: &[&str]| number_at(&d, ev, &[&["body", "#1"][..], REFERENCE, names].concat());
+    let words = find(&d, &mut ev, &[&["body", "#1"][..], REFERENCE].concat());
+    assert_eq!(ev.node(&d, &words).unwrap().type_name, "ObjectReference");
+    assert_eq!(word(&mut ev, &["marker"]), 0xdd00_0000);
+    assert_eq!(word(&mut ev, &["dimension_count"]), 2);
+    assert_eq!(word(&mut ev, &["object_ids", "#0"]), 2, "matstring2 is the second object");
+    assert_eq!(word(&mut ev, &["class_id"]), 1);
+}
+
+/// The table in the subsystem's first cell, for two strings: two names, one
+/// class, two objects that each keep their text under a property called `any`,
+/// and a cell for each of the two values.
+#[test]
+fn the_subsystem_table_names_the_classes_and_properties() {
+    let (d, mut ev) = open!("testmatlabstring_7_WIN64.mat");
+    assert_eq!(number_at(&d, &mut ev, &table(&["version"])), 4);
+    assert_eq!(text_at(&d, &mut ev, &table(&["names", "#1"])), "string");
+    assert_eq!(count_at(&d, &mut ev, &table(&["classes"])), 2, "the empty class nought, and string");
+    assert_eq!(label_at(&d, &mut ev, &table(&["classes", "#1"])), "string");
+    assert_eq!(count_at(&d, &mut ev, &table(&["objects"])), 3);
+    assert_eq!(label_at(&d, &mut ev, &table(&["objects", "#2"])), "string");
+    assert_eq!(number_at(&d, &mut ev, &table(&["objects", "#2", "saveobj_id"])), 2);
+    assert_eq!(label_at(&d, &mut ev, &table(&["saveobj_properties", "#2", "properties", "#0"])), "any");
+    assert_eq!(number_at(&d, &mut ev, &table(&["saveobj_properties", "#2", "properties", "#0", "value"])), 1);
+    let values = [SUBSYSTEM, WRAPPER, &["values"]].concat();
+    assert_eq!(count_at(&d, &mut ev, &values), 2, "seven cells, less the two before and three after");
+}
+
+/// Objects of classes with properties of their own: each class named with its
+/// namespace, each object with its class, and each property with its name and
+/// the cell its value is in.
+#[test]
+fn every_property_of_every_object_is_named() {
+    let (d, mut ev) = open!("test_user_defined_v7.mat");
+    let classes: Vec<String> = ["#1", "#2", "#3", "#4"].iter().map(|i| label_at(&d, &mut ev, &table(&["classes", *i]))).collect();
+    assert_eq!(classes, ["BasicClass", "DefaultClass", "string", "HandleClass"]);
+    assert_eq!(text_at(&d, &mut ev, &table(&["classes", "#1", "namespace"])), "TestClasses");
+    assert_eq!(text_at(&d, &mut ev, &table(&["classes", "#3", "namespace"])), "", "string has none");
+    assert_eq!(count_at(&d, &mut ev, &table(&["objects"])), 14);
+    // obj_with_vals is object 2, whose properties are the second list, and
+    // its `a` was set to 10.
+    assert_eq!(number_at(&d, &mut ev, &table(&["objects", "#2", "normal_id"])), 2);
+    let names: Vec<String> =
+        ["#0", "#1", "#2"].iter().map(|i| label_at(&d, &mut ev, &table(&["properties", "#2", "properties", *i]))).collect();
+    assert_eq!(names, ["a", "b", "c"]);
+    assert_eq!(number_at(&d, &mut ev, &table(&["properties", "#2", "properties", "#0", "value"])), 3);
+    let ten = find(&d, &mut ev, &[SUBSYSTEM, WRAPPER, &["values", "#3", "data", "contents", "real", "data", "#0"]].concat());
+    assert!(matches!(at(&d, &mut ev, &ten).1, Value::Float(v) if v == 10.0));
+    // A 2 by 2 array of objects is four object ids, and two variables holding
+    // one handle hold the same one.
+    let ids = |ev: &mut Evaluator, variable: &'static str| {
+        let n = count_at(&d, ev, &[&["body", variable][..], REFERENCE, &["object_ids"]].concat());
+        (0..n).map(|i| number_at(&d, ev, &[&["body", variable][..], REFERENCE, &["object_ids", format!("#{i}").as_str()]].concat())).collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&mut ev, "#4"), [9, 10, 11, 12]);
+    assert_eq!(ids(&mut ev, "#5"), ids(&mut ev, "#6"));
+    // Every property whose value is in a cell names a cell there is.
+    let cells = count_at(&d, &mut ev, &[SUBSYSTEM, WRAPPER, &["values"]].concat()) as i128;
+    assert_eq!(cells, 32);
+    let lists = find(&d, &mut ev, &table(&["properties"]));
+    for l in 0..ev.node(&d, &lists).unwrap().child_count as usize {
+        let props = [lists.as_slice(), &[l, 1]].concat();
+        for p in 0..ev.node(&d, &props).unwrap().child_count as usize {
+            let entry = [props.as_slice(), &[p]].concat();
+            if number(&d, &mut ev, &[entry.as_slice(), &[1]].concat()) == 1 {
+                assert!(number(&d, &mut ev, &[entry.as_slice(), &[2]].concat()) < cells, "{entry:?}");
+            }
+        }
+    }
+}
+
+/// A MATLAB table is an object, and everything in it is in the subsystem.
+#[test]
+fn a_table_is_an_object_like_any_other() {
+    let (d, mut ev) = open!("test_tables_v7.mat");
+    assert_eq!(ev.node(&d, &[]).unwrap().child_count, 3, "nothing after the subsystem");
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 32);
+    assert_eq!(label_at(&d, &mut ev, &table(&["classes", "#1"])), "table");
+    assert_eq!(label_at(&d, &mut ev, &table(&["objects", "#2"])), "table", "table_numeric");
 }
 
 /// Level 7.3 is the same header with an HDF5 file behind it, in the user block

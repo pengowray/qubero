@@ -455,17 +455,43 @@ type ExtensibleArray {
                 }
                 3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes /
                     element_size]
-                9 => switch element_size {
-                  16 => sized(element_size) GlobalHeapId {
-                    length: u32le
-                    collection_address: u64le
-                    object_index: u32le
-                    collection: switch collection_address {
-                      0xffffffffffffffff => bytes[0]
-                      _ => at(collection_address from origin) GlobalHeap
-                    }
-                  }[run_bytes / element_size]
-                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                  1 => switch element_size {
+                    16 => sized(element_size) GlobalHeapId (named by object) {
+                      length: u32le
+                      collection_address: u64le
+                      object_index: u32le
+                      collection: switch collection_address {
+                        0xffffffffffffffff => bytes[0]
+                        _ => at(collection_address from origin) GlobalHeap
+                      }
+                      object: switch collection_address {
+                        0xffffffffffffffff => bytes[0]
+                        _ => at(start of collection.objects[object_index = object_index].payload
+                            from origin) sized(collection.objects[object_index =
+                            object_index].size) text[remaining] utf8
+                      }  aside
+                    }[run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  }
+                  _ => switch element_size {
+                    16 => sized(element_size) GlobalHeapId (named by object) {
+                      length: u32le
+                      collection_address: u64le
+                      object_index: u32le
+                      collection: switch collection_address {
+                        0xffffffffffffffff => bytes[0]
+                        _ => at(collection_address from origin) GlobalHeap
+                      }
+                      object: switch collection_address {
+                        0xffffffffffffffff => bytes[0]
+                        _ => at(start of collection.objects[object_index = object_index].payload
+                            from origin) sized(collection.objects[object_index =
+                            object_index].size) bytes[remaining]
+                      }  aside
+                    }[run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  }
                 }
                 _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
               }
@@ -564,17 +590,47 @@ type ExtensibleArray {
                       }
                       3 => (sized(element_size) text[element_size] padded with 0x00
                           utf8)[run_bytes / element_size]
-                      9 => switch element_size {
-                        16 => sized(element_size) GlobalHeapId {
-                          length: u32le
-                          collection_address: u64le
-                          object_index: u32le
-                          collection: switch collection_address {
-                            0xffffffffffffffff => bytes[0]
-                            _ => at(collection_address from origin) GlobalHeap
-                          }
-                        }[run_bytes / element_size]
-                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                        1 => switch element_size {
+                          16 => sized(element_size) GlobalHeapId (named by object) {
+                            length: u32le
+                            collection_address: u64le
+                            object_index: u32le
+                            collection: switch collection_address {
+                              0xffffffffffffffff => bytes[0]
+                              _ => at(collection_address from origin) GlobalHeap
+                            }
+                            object: switch collection_address {
+                              0xffffffffffffffff => bytes[0]
+                              _ => at(start of collection.objects[object_index =
+                                  object_index].payload from origin)
+                                  sized(collection.objects[object_index = object_index].size)
+                                  text[remaining] utf8
+                            }  aside
+                          }[run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
+                        }
+                        _ => switch element_size {
+                          16 => sized(element_size) GlobalHeapId (named by object) {
+                            length: u32le
+                            collection_address: u64le
+                            object_index: u32le
+                            collection: switch collection_address {
+                              0xffffffffffffffff => bytes[0]
+                              _ => at(collection_address from origin) GlobalHeap
+                            }
+                            object: switch collection_address {
+                              0xffffffffffffffff => bytes[0]
+                              _ => at(start of collection.objects[object_index =
+                                  object_index].payload from origin)
+                                  sized(collection.objects[object_index = object_index].size)
+                                  bytes[remaining]
+                            }  aside
+                          }[run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
+                        }
                       }
                       _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
@@ -699,18 +755,47 @@ type ExtensibleArray {
                               }
                               3 => (sized(element_size) text[element_size] padded with 0x00
                                   utf8)[run_bytes / element_size]
-                              9 => switch element_size {
-                                16 => sized(element_size) GlobalHeapId {
-                                  length: u32le
-                                  collection_address: u64le
-                                  object_index: u32le
-                                  collection: switch collection_address {
-                                    0xffffffffffffffff => bytes[0]
-                                    _ => at(collection_address from origin) GlobalHeap
-                                  }
-                                }[run_bytes / element_size]
-                                _ => (sized(element_size) bytes[element_size])[run_bytes /
-                                    element_size]
+                              9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                                1 => switch element_size {
+                                  16 => sized(element_size) GlobalHeapId (named by object) {
+                                    length: u32le
+                                    collection_address: u64le
+                                    object_index: u32le
+                                    collection: switch collection_address {
+                                      0xffffffffffffffff => bytes[0]
+                                      _ => at(collection_address from origin) GlobalHeap
+                                    }
+                                    object: switch collection_address {
+                                      0xffffffffffffffff => bytes[0]
+                                      _ => at(start of collection.objects[object_index =
+                                          object_index].payload from origin)
+                                          sized(collection.objects[object_index =
+                                          object_index].size) text[remaining] utf8
+                                    }  aside
+                                  }[run_bytes / element_size]
+                                  _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                      element_size]
+                                }
+                                _ => switch element_size {
+                                  16 => sized(element_size) GlobalHeapId (named by object) {
+                                    length: u32le
+                                    collection_address: u64le
+                                    object_index: u32le
+                                    collection: switch collection_address {
+                                      0xffffffffffffffff => bytes[0]
+                                      _ => at(collection_address from origin) GlobalHeap
+                                    }
+                                    object: switch collection_address {
+                                      0xffffffffffffffff => bytes[0]
+                                      _ => at(start of collection.objects[object_index =
+                                          object_index].payload from origin)
+                                          sized(collection.objects[object_index =
+                                          object_index].size) bytes[remaining]
+                                    }  aside
+                                  }[run_bytes / element_size]
+                                  _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                      element_size]
+                                }
                               }
                               _ => (sized(element_size) bytes[element_size])[run_bytes /
                                   element_size]
@@ -810,18 +895,47 @@ type ExtensibleArray {
                                 }
                                 3 => (sized(element_size) text[element_size] padded with 0x00
                                     utf8)[run_bytes / element_size]
-                                9 => switch element_size {
-                                  16 => sized(element_size) GlobalHeapId {
-                                    length: u32le
-                                    collection_address: u64le
-                                    object_index: u32le
-                                    collection: switch collection_address {
-                                      0xffffffffffffffff => bytes[0]
-                                      _ => at(collection_address from origin) GlobalHeap
-                                    }
-                                  }[run_bytes / element_size]
-                                  _ => (sized(element_size) bytes[element_size])[run_bytes /
-                                      element_size]
+                                9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                                  1 => switch element_size {
+                                    16 => sized(element_size) GlobalHeapId (named by object) {
+                                      length: u32le
+                                      collection_address: u64le
+                                      object_index: u32le
+                                      collection: switch collection_address {
+                                        0xffffffffffffffff => bytes[0]
+                                        _ => at(collection_address from origin) GlobalHeap
+                                      }
+                                      object: switch collection_address {
+                                        0xffffffffffffffff => bytes[0]
+                                        _ => at(start of collection.objects[object_index =
+                                            object_index].payload from origin)
+                                            sized(collection.objects[object_index =
+                                            object_index].size) text[remaining] utf8
+                                      }  aside
+                                    }[run_bytes / element_size]
+                                    _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                        element_size]
+                                  }
+                                  _ => switch element_size {
+                                    16 => sized(element_size) GlobalHeapId (named by object) {
+                                      length: u32le
+                                      collection_address: u64le
+                                      object_index: u32le
+                                      collection: switch collection_address {
+                                        0xffffffffffffffff => bytes[0]
+                                        _ => at(collection_address from origin) GlobalHeap
+                                      }
+                                      object: switch collection_address {
+                                        0xffffffffffffffff => bytes[0]
+                                        _ => at(start of collection.objects[object_index =
+                                            object_index].payload from origin)
+                                            sized(collection.objects[object_index =
+                                            object_index].size) bytes[remaining]
+                                      }  aside
+                                    }[run_bytes / element_size]
+                                    _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                        element_size]
+                                  }
                                 }
                                 _ => (sized(element_size) bytes[element_size])[run_bytes /
                                     element_size]
@@ -947,17 +1061,45 @@ type FixedArray {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -1049,17 +1191,45 @@ type FixedArray {
                     }
                     3 => (sized(element_size) text[element_size] padded with 0x00
                         utf8)[run_bytes / element_size]
-                    9 => switch element_size {
-                      16 => sized(element_size) GlobalHeapId {
-                        length: u32le
-                        collection_address: u64le
-                        object_index: u32le
-                        collection: switch collection_address {
-                          0xffffffffffffffff => bytes[0]
-                          _ => at(collection_address from origin) GlobalHeap
-                        }
-                      }[run_bytes / element_size]
-                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                      1 => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                text[remaining] utf8
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
+                      _ => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                bytes[remaining]
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
                     }
                     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
@@ -1135,12 +1305,13 @@ type GlobalHeap {
     1 => Padding {
       padding: bytes[remaining]
     }
-    _ => HeapObject (named by object_index, contents data) {
+    _ => HeapObject (named by object_index, contents payload) {
       object_index: u16le
       reference_count: u16le
       reserved: u32le
       size: u64le
-      data: switch object_index {0 => bytes[remaining], _ => bytes[(size + 7) / 8 * 8]}
+      payload: switch object_index {0 => bytes[remaining], _ => bytes[size]}
+      padding: switch object_index {0 => bytes[0], _ => bytes[(size + 7) / 8 * 8 - size]}
     }
   }
 }
@@ -1449,17 +1620,45 @@ type Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -1546,17 +1745,45 @@ type Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -1638,17 +1865,45 @@ type Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -1721,17 +1976,45 @@ type Message (named by type, contents body) {
                     }
                     3 => (sized(element_size) text[element_size] padded with 0x00
                         utf8)[run_bytes / element_size]
-                    9 => switch element_size {
-                      16 => sized(element_size) GlobalHeapId {
-                        length: u32le
-                        collection_address: u64le
-                        object_index: u32le
-                        collection: switch collection_address {
-                          0xffffffffffffffff => bytes[0]
-                          _ => at(collection_address from origin) GlobalHeap
-                        }
-                      }[run_bytes / element_size]
-                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                      1 => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                text[remaining] utf8
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
+                      _ => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                bytes[remaining]
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
                     }
                     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
@@ -1820,17 +2103,45 @@ type Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -1903,17 +2214,45 @@ type Message (named by type, contents body) {
                     }
                     3 => (sized(element_size) text[element_size] padded with 0x00
                         utf8)[run_bytes / element_size]
-                    9 => switch element_size {
-                      16 => sized(element_size) GlobalHeapId {
-                        length: u32le
-                        collection_address: u64le
-                        object_index: u32le
-                        collection: switch collection_address {
-                          0xffffffffffffffff => bytes[0]
-                          _ => at(collection_address from origin) GlobalHeap
-                        }
-                      }[run_bytes / element_size]
-                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                      1 => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                text[remaining] utf8
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
+                      _ => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                bytes[remaining]
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
                     }
                     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
@@ -2033,18 +2372,47 @@ type Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -2187,18 +2555,47 @@ type Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -2300,17 +2697,45 @@ type Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -2383,17 +2808,45 @@ type Message (named by type, contents body) {
                     }
                     3 => (sized(element_size) text[element_size] padded with 0x00
                         utf8)[run_bytes / element_size]
-                    9 => switch element_size {
-                      16 => sized(element_size) GlobalHeapId {
-                        length: u32le
-                        collection_address: u64le
-                        object_index: u32le
-                        collection: switch collection_address {
-                          0xffffffffffffffff => bytes[0]
-                          _ => at(collection_address from origin) GlobalHeap
-                        }
-                      }[run_bytes / element_size]
-                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                      1 => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                text[remaining] utf8
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
+                      _ => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                bytes[remaining]
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
                     }
                     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
@@ -2513,18 +2966,47 @@ type Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -2667,18 +3149,47 @@ type Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -2840,17 +3351,43 @@ type Message (named by type, contents body) {
           }
           3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes /
               element_size]
-          9 => switch element_size {
-            16 => sized(element_size) GlobalHeapId {
-              length: u32le
-              collection_address: u64le
-              object_index: u32le
-              collection: switch collection_address {
-                0xffffffffffffffff => bytes[0]
-                _ => at(collection_address from origin) GlobalHeap
-              }
-            }[run_bytes / element_size]
-            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+          9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+            1 => switch element_size {
+              16 => sized(element_size) GlobalHeapId (named by object) {
+                length: u32le
+                collection_address: u64le
+                object_index: u32le
+                collection: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(collection_address from origin) GlobalHeap
+                }
+                object: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(start of collection.objects[object_index = object_index].payload from
+                      origin) sized(collection.objects[object_index = object_index].size)
+                      text[remaining] utf8
+                }  aside
+              }[run_bytes / element_size]
+              _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+            }
+            _ => switch element_size {
+              16 => sized(element_size) GlobalHeapId (named by object) {
+                length: u32le
+                collection_address: u64le
+                object_index: u32le
+                collection: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(collection_address from origin) GlobalHeap
+                }
+                object: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(start of collection.objects[object_index = object_index].payload from
+                      origin) sized(collection.objects[object_index = object_index].size)
+                      bytes[remaining]
+                }  aside
+              }[run_bytes / element_size]
+              _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+            }
           }
           _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
         }
@@ -3080,17 +3617,45 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -3177,17 +3742,45 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -3269,17 +3862,45 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -3352,17 +3973,45 @@ type MessageV2 = Message (named by type, contents body) {
                     }
                     3 => (sized(element_size) text[element_size] padded with 0x00
                         utf8)[run_bytes / element_size]
-                    9 => switch element_size {
-                      16 => sized(element_size) GlobalHeapId {
-                        length: u32le
-                        collection_address: u64le
-                        object_index: u32le
-                        collection: switch collection_address {
-                          0xffffffffffffffff => bytes[0]
-                          _ => at(collection_address from origin) GlobalHeap
-                        }
-                      }[run_bytes / element_size]
-                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                      1 => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                text[remaining] utf8
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
+                      _ => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                bytes[remaining]
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
                     }
                     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
@@ -3451,17 +4100,45 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -3534,17 +4211,45 @@ type MessageV2 = Message (named by type, contents body) {
                     }
                     3 => (sized(element_size) text[element_size] padded with 0x00
                         utf8)[run_bytes / element_size]
-                    9 => switch element_size {
-                      16 => sized(element_size) GlobalHeapId {
-                        length: u32le
-                        collection_address: u64le
-                        object_index: u32le
-                        collection: switch collection_address {
-                          0xffffffffffffffff => bytes[0]
-                          _ => at(collection_address from origin) GlobalHeap
-                        }
-                      }[run_bytes / element_size]
-                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                      1 => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                text[remaining] utf8
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
+                      _ => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                bytes[remaining]
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
                     }
                     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
@@ -3664,18 +4369,47 @@ type MessageV2 = Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -3818,18 +4552,47 @@ type MessageV2 = Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -3931,17 +4694,45 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
@@ -4014,17 +4805,45 @@ type MessageV2 = Message (named by type, contents body) {
                     }
                     3 => (sized(element_size) text[element_size] padded with 0x00
                         utf8)[run_bytes / element_size]
-                    9 => switch element_size {
-                      16 => sized(element_size) GlobalHeapId {
-                        length: u32le
-                        collection_address: u64le
-                        object_index: u32le
-                        collection: switch collection_address {
-                          0xffffffffffffffff => bytes[0]
-                          _ => at(collection_address from origin) GlobalHeap
-                        }
-                      }[run_bytes / element_size]
-                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                      1 => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                text[remaining] utf8
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
+                      _ => switch element_size {
+                        16 => sized(element_size) GlobalHeapId (named by object) {
+                          length: u32le
+                          collection_address: u64le
+                          object_index: u32le
+                          collection: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(collection_address from origin) GlobalHeap
+                          }
+                          object: switch collection_address {
+                            0xffffffffffffffff => bytes[0]
+                            _ => at(start of collection.objects[object_index =
+                                object_index].payload from origin)
+                                sized(collection.objects[object_index = object_index].size)
+                                bytes[remaining]
+                          }  aside
+                        }[run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                      }
                     }
                     _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
@@ -4144,18 +4963,47 @@ type MessageV2 = Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -4298,18 +5146,47 @@ type MessageV2 = Message (named by type, contents body) {
                         }
                         3 => (sized(element_size) text[element_size] padded with 0x00
                             utf8)[run_bytes / element_size]
-                        9 => switch element_size {
-                          16 => sized(element_size) GlobalHeapId {
-                            length: u32le
-                            collection_address: u64le
-                            object_index: u32le
-                            collection: switch collection_address {
-                              0xffffffffffffffff => bytes[0]
-                              _ => at(collection_address from origin) GlobalHeap
-                            }
-                          }[run_bytes / element_size]
-                          _ => (sized(element_size) bytes[element_size])[run_bytes /
-                              element_size]
+                        9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+                          1 => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    text[remaining] utf8
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
+                          _ => switch element_size {
+                            16 => sized(element_size) GlobalHeapId (named by object) {
+                              length: u32le
+                              collection_address: u64le
+                              object_index: u32le
+                              collection: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(collection_address from origin) GlobalHeap
+                              }
+                              object: switch collection_address {
+                                0xffffffffffffffff => bytes[0]
+                                _ => at(start of collection.objects[object_index =
+                                    object_index].payload from origin)
+                                    sized(collection.objects[object_index = object_index].size)
+                                    bytes[remaining]
+                              }  aside
+                            }[run_bytes / element_size]
+                            _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                element_size]
+                          }
                         }
                         _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
@@ -4471,17 +5348,43 @@ type MessageV2 = Message (named by type, contents body) {
           }
           3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes /
               element_size]
-          9 => switch element_size {
-            16 => sized(element_size) GlobalHeapId {
-              length: u32le
-              collection_address: u64le
-              object_index: u32le
-              collection: switch collection_address {
-                0xffffffffffffffff => bytes[0]
-                _ => at(collection_address from origin) GlobalHeap
-              }
-            }[run_bytes / element_size]
-            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+          9 => switch datatype.bit_field - datatype.bit_field / 16 * 16 {
+            1 => switch element_size {
+              16 => sized(element_size) GlobalHeapId (named by object) {
+                length: u32le
+                collection_address: u64le
+                object_index: u32le
+                collection: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(collection_address from origin) GlobalHeap
+                }
+                object: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(start of collection.objects[object_index = object_index].payload from
+                      origin) sized(collection.objects[object_index = object_index].size)
+                      text[remaining] utf8
+                }  aside
+              }[run_bytes / element_size]
+              _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+            }
+            _ => switch element_size {
+              16 => sized(element_size) GlobalHeapId (named by object) {
+                length: u32le
+                collection_address: u64le
+                object_index: u32le
+                collection: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(collection_address from origin) GlobalHeap
+                }
+                object: switch collection_address {
+                  0xffffffffffffffff => bytes[0]
+                  _ => at(start of collection.objects[object_index = object_index].payload from
+                      origin) sized(collection.objects[object_index = object_index].size)
+                      bytes[remaining]
+                }  aside
+              }[run_bytes / element_size]
+              _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+            }
           }
           _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
         }
@@ -4605,17 +5508,45 @@ type Node = switch peek(u32be) {
                   }
                   3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
                       / element_size]
-                  9 => switch element_size {
-                    16 => sized(element_size) GlobalHeapId {
-                      length: u32le
-                      collection_address: u64le
-                      object_index: u32le
-                      collection: switch collection_address {
-                        0xffffffffffffffff => bytes[0]
-                        _ => at(collection_address from origin) GlobalHeap
-                      }
-                    }[run_bytes / element_size]
-                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                  9 => switch earlier(body.bit_field) - earlier(body.bit_field) / 16 * 16 {
+                    1 => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              text[remaining] utf8
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
+                    _ => switch element_size {
+                      16 => sized(element_size) GlobalHeapId (named by object) {
+                        length: u32le
+                        collection_address: u64le
+                        object_index: u32le
+                        collection: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(collection_address from origin) GlobalHeap
+                        }
+                        object: switch collection_address {
+                          0xffffffffffffffff => bytes[0]
+                          _ => at(start of collection.objects[object_index =
+                              object_index].payload from origin)
+                              sized(collection.objects[object_index = object_index].size)
+                              bytes[remaining]
+                        }  aside
+                      }[run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
+                    }
                   }
                   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
