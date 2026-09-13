@@ -141,18 +141,20 @@ unpacked RNTuple envelope needs one more step rule, through a `Decoded`'s child
 
 The heap tables and the B-tree children are closed (see the Closed table).
 Both are checked by `fractal-heap-deep.h5`, whose group of 2,000 links puts
-176 of them under a second heap table and indexes them with a tree of depth 2.
+160 of them under a second heap table and indexes them with a tree of depth 2.
 What the B-tree work left for the web side is a string: `BTREES.notInListing`
 and the `rootOnly` form of `BTREES.hint` still say only the root of a version
 2 tree is in the Listing. Both now show only for a node the template places
 somewhere other than where `hdf5_tree.rs` read it, which a well-formed file
 never has, so they want rewording rather than removing.
 
-While making that file: two thousand hard links to one object make
-`kinds_real`'s `every_sample_adds_up` fail, covering 9.1 Mbit of a 4.9 Mbit
-file, because the kind walk counts an object header once for every link that
-reaches it. The sample uses soft links to stay clear of it. Any real HDF5 file
-with many hard links to one object will show the same over-count.
+The same file's links are all hard links to one dataset, which made
+`kinds_real`'s `every_sample_adds_up` count that object header once per link,
+9.1 Mbit covered of a 4.9 Mbit file. The kind walk now counts a thing an `At`
+reaches once, by its start and length (`KindWalk::reached_by_address` in
+`eval/kinds.rs`). Pointer lists and chains are not deduplicated, to keep a
+large chunk index out of a set, so a graph built from those would still count
+twice.
 
 Every HDF5 gap here also applies to NetCDF-4, MATLAB 7.3 and `.h5ad`, which are
 HDF5 files.

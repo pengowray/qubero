@@ -219,7 +219,7 @@ fn gather(
 /// `fractal-heap-deep.h5` is the one file in the collection whose heap has
 /// grown past its direct rows, so it is the one that says a table's row count
 /// and which of its rows are tables were worked out right: get either wrong
-/// and the 176 links under the second table are not reached, or are read out
+/// and the 160 links under the second table are not reached, or are read out
 /// of the wrong bytes. The names are known without h5py, because the
 /// generator writes them as a number and a fixed tail, and h5py lists exactly
 /// those.
@@ -250,7 +250,7 @@ fn every_link_in_a_heap_grown_past_its_direct_rows_is_named() {
     assert_eq!(got.len(), want.len(), "{}: {} links named in the heap", path.display(), got.len());
     let wrong: Vec<&String> = got.iter().zip(&want).filter(|(g, w)| g != w).map(|(g, _)| g).take(3).collect();
     assert!(wrong.is_empty(), "{}: names read that were not written: {wrong:?}", path.display());
-    assert_eq!(found.nested, 176, "{}: links under a table under the root table", path.display());
+    assert_eq!(found.nested, 160, "{}: links under a table under the root table", path.display());
 
     assert_eq!(found.trees.len(), 1, "{}: {:?}", path.display(), found.trees);
     let tree = qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, &found.trees[0], 4096)
@@ -279,8 +279,8 @@ struct Found {
 }
 
 /// Every link under `path`, following only the one link that leads to the big
-/// group and not the one to the dataset. `tables` is how many heap tables the
-/// walk is inside.
+/// group, so the two thousand hard links to one dataset are not each walked
+/// into it. `tables` is how many heap tables the walk is inside.
 fn links(
     ev: &mut Evaluator,
     doc: &Document<FileSource>,
