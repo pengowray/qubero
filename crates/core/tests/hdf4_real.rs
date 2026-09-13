@@ -102,6 +102,9 @@ struct Reached {
     datasets: (usize, usize),
     /// Members of groups and vgroups that were found, and all of them.
     members: (usize, usize),
+    /// Attributes of vdatas and vgroups whose value was found, and all of
+    /// them. Counted once each: a vdata header is read again under its rows.
+    attributes: (usize, usize),
     /// Descriptors read through another with the same reference number (a
     /// table's rows, an image, scales, a maximum and minimum) that were read
     /// that way, and all of them.
@@ -124,6 +127,13 @@ fn reached(ev: &mut Evaluator, doc: &Document<MemSource>, found: &BTreeMap<Strin
             }
         }
     }
+    let mut attributes = std::collections::BTreeMap::new();
+    for at in found.get("Hdf4VdataAttribute").cloned().unwrap_or_default() {
+        let offset = ev.node(doc, &at).unwrap().offset_bits;
+        let placed = value(ev, doc, &[at, vec![3]].concat()) != Value::Int(0);
+        attributes.insert(offset, placed);
+    }
+    out.attributes = (attributes.values().filter(|p| **p).count(), attributes.len());
     let reads_as = [(1963, "Hdf4VdataRecords"), (302, "Hdf4RasterImage"), (703, "Hdf4SdScales"), (707, "Hdf4MaxAndMin")];
     for at in found.get("Hdf4Descriptor").cloned().unwrap_or_default() {
         let tag = match value(ev, doc, &[at.clone(), vec![0]].concat()) {
@@ -161,17 +171,18 @@ fn every_reference_is_followed_whichever_block_holds_what_it_names() {
         let got = reached(&mut ev, &doc, &found);
         eprintln!("{name}: {got:?}");
         let want = match name.as_str() {
-            "Image_with_Palette.hdf" => Reached { datasets: (0, 0), members: (5, 5), by_ref: (1, 1) },
+            "Image_with_Palette.hdf" => Reached { datasets: (0, 0), members: (5, 5), attributes: (0, 0), by_ref: (1, 1) },
             // The last vgroup names a vgroup with reference number 0, which
             // no descriptor can have, and that member points nowhere.
-            "grtdfui83.hdf" => Reached { datasets: (0, 0), members: (11, 12), by_ref: (4, 4) },
-            "litend.hdf" => Reached { datasets: (8, 8), members: (16, 16), by_ref: (0, 0) },
-            "ntcheck.hdf" => Reached { datasets: (8, 8), members: (36, 36), by_ref: (14, 14) },
+            "grtdfui83.hdf" => Reached { datasets: (0, 0), members: (11, 12), attributes: (0, 0), by_ref: (4, 4) },
+            "litend.hdf" => Reached { datasets: (8, 8), members: (16, 16), attributes: (0, 0), by_ref: (0, 0) },
+            "ntcheck.hdf" => Reached { datasets: (8, 8), members: (36, 36), attributes: (0, 0), by_ref: (14, 14) },
             // Every dataset's values are in linked blocks, so no dataset
-            // opens, and the six members naming those values name the plain
-            // tag while the file holds only the special element's.
-            "tdata.hdf" => Reached { datasets: (0, 3), members: (30, 36), by_ref: (3, 3) },
-            "tvattr.hdf" => Reached { datasets: (0, 0), members: (2, 2), by_ref: (17, 17) },
+            // opens. The six members naming those values name the plain tag
+            // while the file holds only the special element's, and are found
+            // under that, the way pyhdf's library finds them.
+            "tdata.hdf" => Reached { datasets: (0, 3), members: (36, 36), attributes: (0, 0), by_ref: (3, 3) },
+            "tvattr.hdf" => Reached { datasets: (0, 0), members: (2, 2), attributes: (11, 11), by_ref: (17, 17) },
             other => panic!("{other} is in the collection with nothing counted of it"),
         };
         assert_eq!(got, want, "{name}");

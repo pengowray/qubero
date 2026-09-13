@@ -406,6 +406,19 @@ fn found(k: E) -> E {
     E::lit(0).less_than(look(k, &["offset"]))
 }
 
+/// Where the thing a `tag` and `ref` beside this field name is: `offset` or
+/// `length`, and zero where the file holds no such thing.
+///
+/// Looked for under the tag as written and then under its special twin, which
+/// is how the HDF4 library looks too. A group names a dataset's values as tag
+/// 702 however they are kept, and values kept in linked blocks have a
+/// descriptor tagged 0x4000 more than that and none tagged 702, so without the
+/// second look every member naming such values points nowhere.
+fn place_of_member(path: &[&str]) -> E {
+    let k = E::field("tag").mul(E::lit(65536)).add(E::field("ref"));
+    look(k.clone(), path).or(look(k.add(E::lit(0x4000 * 65536)), path))
+}
+
 /// A tag and a reference number together, which is how a group names one of
 /// the things in it, and where in the file that thing is.
 ///
@@ -413,7 +426,6 @@ fn found(k: E) -> E {
 /// a place, so that a reader looking at a group can see what it holds rather
 /// than a pair of numbers to go and find by hand.
 fn tag_ref() -> T {
-    let k = || E::field("tag").mul(E::lit(65536)).add(E::field("ref"));
     T::structure_named(
         "Hdf4GroupMember",
         "tag",
@@ -421,8 +433,8 @@ fn tag_ref() -> T {
         vec![
             ("tag", tag()),
             ("ref", u16be()),
-            ("offset", T::computed(look(k(), &["offset"]))),
-            ("length", T::computed(look(k(), &["length"]))),
+            ("offset", T::computed(place_of_member(&["offset"]))),
+            ("length", T::computed(place_of_member(&["length"]))),
         ],
     )
 }
@@ -442,7 +454,6 @@ fn group() -> T {
 /// rows put the two back together and add where each pair points. They take
 /// no bytes of their own.
 fn members(tag_from: E, ref_of: E, count: E) -> T {
-    let k = || E::field("tag").mul(E::lit(65536)).add(E::field("ref"));
     T::array(
         T::structure_named(
             "Hdf4VgroupMember",
@@ -451,8 +462,8 @@ fn members(tag_from: E, ref_of: E, count: E) -> T {
             vec![
                 ("tag", tag_of(T::computed(tag_from))),
                 ("ref", T::computed(ref_of)),
-                ("offset", T::computed(look(k(), &["offset"]))),
-                ("length", T::computed(look(k(), &["length"]))),
+                ("offset", T::computed(place_of_member(&["offset"]))),
+                ("length", T::computed(place_of_member(&["length"]))),
             ],
         ),
         count,
@@ -947,7 +958,8 @@ fn scientific_data_group() -> T {
 ///
 /// A field index of -1 is an attribute of the whole thing rather than of one
 /// of its columns. The value itself is a vdata of one record, named by the tag
-/// and ref here.
+/// and ref here, and `offset` and `length` say where that vdata's header is,
+/// the same way a group member says where its member is.
 fn version_four_attributes() -> Vec<(&'static str, T)> {
     vec![
         ("flags", T::present_if(E::lit(3).less_than(E::field("version")), u32be())),
@@ -957,7 +969,13 @@ fn version_four_attributes() -> Vec<(&'static str, T)> {
             T::array(
                 T::structure(
                     "Hdf4VdataAttribute",
-                    vec![("field_index", T::i32(Big)), ("tag", tag()), ("ref", u16be())],
+                    vec![
+                        ("field_index", T::i32(Big)),
+                        ("tag", tag()),
+                        ("ref", u16be()),
+                        ("offset", T::computed(place_of_member(&["offset"]))),
+                        ("length", T::computed(place_of_member(&["length"]))),
+                    ],
                 ),
                 E::field("nattrs").at_least(E::lit(0)),
             ),
@@ -1253,14 +1271,17 @@ mod tests {
         v
     }
 
-    /// A vgroup naming the table in its own block and the image in the next
-    /// one.
+    /// A vgroup naming the table in its own block, the image in the next one,
+    /// and values two blocks on that are kept in linked blocks and so have
+    /// only a special element's tag.
     fn vg() -> Vec<u8> {
-        let mut v = be16(2);
+        let mut v = be16(3);
         v.extend(be16(1962));
         v.extend(be16(302));
+        v.extend(be16(702));
         v.extend(be16(4));
         v.extend(be16(7));
+        v.extend(be16(13));
         v.extend(nm("grp"));
         v.extend(nm(""));
         v.extend(be16(0)); // extension tag
@@ -1324,21 +1345,32 @@ mod tests {
         v
     }
 
+    /// The header of values kept in one linked block, as the special element
+    /// descriptor for them points at.
+    fn linked() -> Vec<u8> {
+        let mut v = be16(1); // linked blocks
+        v.extend(be32(12)); // twelve bytes of values
+        v.extend(be32(12)); // in blocks of twelve
+        v.extend(be32(1)); // one block
+        v.extend(be16(14)); // whose table is reference number 14
+        v
+    }
+
     /// A file of three blocks. The first holds the version record, a table's
     /// rows and then the header that describes them, a vgroup, and a second
-    /// table's rows whose header is the last thing in the file; the second
-    /// holds an image before the dimension record that says how wide it is,
-    /// and a scientific dataset with the group that names its parts; the third
-    /// holds a second group whose members are all a block back, an image whose
-    /// dimension record is here but whose number type record is nowhere, an
-    /// empty slot, and that header. Both orders are on purpose: an HDF4 writer
-    /// puts a thing before the thing that describes it as often as after, and
-    /// in whatever block has room.
+    /// table's rows whose header is the last thing in the file but one; the
+    /// second holds an image before the dimension record that says how wide
+    /// it is, and a scientific dataset with the group that names its parts; the
+    /// third holds a second group whose members are all a block back, an image
+    /// whose dimension record is here but whose number type record is nowhere,
+    /// an empty slot, that header, and a special element. Both orders are on
+    /// purpose: an HDF4 writer puts a thing before the thing that describes it
+    /// as often as after, and in whatever block has room.
     fn file() -> Vec<u8> {
         let (v, h, r, g) = (ver(), vh(), vs(), vg());
         let (image, ntype, dims) = (vec![10u8, 11, 12, 13, 14, 15], nt(21, 8, 1), id(7));
         let (values, shape, kind, grp) = (sd(), sdd(), nt(22, 16, 4), ndg());
-        let far = id(60);
+        let (far, special) = (id(60), linked());
         let none = Vec::new();
         let first: [(u16, u16, &Vec<u8>); 5] =
             [(30, 1, &v), (1963, 4, &r), (1962, 4, &h), (1965, 2, &g), (1963, 12, &r)];
@@ -1351,8 +1383,14 @@ mod tests {
             (106, 8, &kind),
             (720, 9, &grp),
         ];
-        let third: [(u16, u16, &Vec<u8>); 5] =
-            [(720, 11, &grp), (302, 50, &image), (300, 50, &far), (1, 0, &none), (1962, 12, &h)];
+        let third: [(u16, u16, &Vec<u8>); 6] = [
+            (720, 11, &grp),
+            (302, 50, &image),
+            (300, 50, &far),
+            (1, 0, &none),
+            (1962, 12, &h),
+            (0x4000 + 702, 13, &special),
+        ];
         let block_at = |n: usize, from: usize| from + 6 + 12 * n;
         let b1 = block_at(first.len(), 4);
         let b2 = block_at(second.len(), b1);
@@ -1400,7 +1438,7 @@ mod tests {
         // The last block, found by following the chain, with its own slots. It
         // has no next of its own, so the walk stops rather than pointing back
         // at the signature.
-        assert_eq!(e.node(&d, &[3, 2, 2]).unwrap().child_count, 5);
+        assert_eq!(e.node(&d, &[3, 2, 2]).unwrap().child_count, 6);
     }
 
     #[test]
@@ -1461,8 +1499,8 @@ mod tests {
     }
 
     /// The second table's rows are the last slot of the first block, and the
-    /// header they need is the last slot of the third: forward, and past a
-    /// whole block that holds neither.
+    /// header they need is in the third: forward, and past a whole block that
+    /// holds neither.
     #[test]
     fn a_tables_rows_find_their_header_two_blocks_on() {
         assert_eq!(read(&[3, 0, 2, 4, 4, 0]).type_name, "Hdf4VdataRecords");
@@ -1523,13 +1561,25 @@ mod tests {
     /// block and the second is an image in the next.
     #[test]
     fn a_vgroup_says_where_its_members_are_whichever_block_they_are_in() {
-        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3]).child_count, 2);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3]).child_count, 3);
         let first = read(&[3, 0, 2, 3, 4, 0, 3, 0, 0]);
         assert_eq!(first.value, Value::Enum { raw: 1962, name: Some("vdata description".into()), hex: false });
         assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 0, 3]).value, Value::Int(vh().len() as i128));
         let image_at = read(&[3, 1, 2, 0, 2]).value.as_int();
         assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 1, 2]).value.as_int(), image_at);
         assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 1, 3]).value, Value::Int(6));
+    }
+
+    /// The vgroup's third member names values as tag 702, and the file holds
+    /// them only as a special element, 0x4000 more. The member is found under
+    /// that tag, which is where the library looks when the plain one is not
+    /// there, and it points at the special element's header.
+    #[test]
+    fn a_member_kept_as_a_special_element_is_found_under_that_tag() {
+        assert_eq!(read(&[3, 2, 2, 5, 4, 0]).type_name, "Hdf4SpecialElement");
+        let special_at = read(&[3, 2, 2, 5, 2]).value.as_int();
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 2, 2]).value.as_int(), special_at);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 2, 3]).value, Value::Int(linked().len() as i128));
     }
 
     /// The index is every block's twelve bytes read a second way, as one list,
@@ -1539,7 +1589,7 @@ mod tests {
     fn the_index_is_one_list_over_every_block_and_owns_no_bytes() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        assert_eq!(e.node(&d, &[2]).unwrap().child_count, 5 + 7 + 5);
+        assert_eq!(e.node(&d, &[2]).unwrap().child_count, 5 + 7 + 6);
         // The sixth entry is the first descriptor of the second block, and sits
         // on its bytes without covering them.
         let entry = e.node(&d, &[2, 5]).unwrap();
