@@ -2294,7 +2294,7 @@ fn a_gather_places_elements_from_records_two_lists_deep() {
     let list = ev.node(&d, &[1]).unwrap();
     // Flat: one element per record, however deep the records were.
     assert_eq!(list.child_count, 3);
-    assert_eq!(list.type_name, "gathered \u{2192} bytes[]");
+    assert_eq!(list.type_name, "descriptors \u{2192} bytes[]");
     // The region is what the window gave it, not what its elements come to.
     assert_eq!(list.size_bits, 12 * 8);
     // Numbered in the order the walk found the records, and placed where each

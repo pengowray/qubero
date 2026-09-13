@@ -1848,7 +1848,10 @@ export class Inspector {
     if (shape.status !== "ok") return null;
     const placed = shape.node.placed;
     const named = from.get("position") ?? [];
-    const one = only(named);
+    // A gathered element's first position is the descriptor that placed it,
+    // and the fields after it are what the offset was read from. The clause
+    // names the descriptor, so it takes the first rather than asking for one.
+    const one = placed === "gathered" ? (named[0] ?? null) : only(named);
     const up = path.slice(0, -1);
     const upNode = this.doc.templateNode(up);
     const upInfo = upNode.status === "ok" ? upNode.node : null;

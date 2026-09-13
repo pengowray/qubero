@@ -2828,9 +2828,12 @@ impl Ty {
             // Not `offsets → x`: those come from a table read before the
             // children, and these come one from each child.
             Ty::Chain { elem, .. } => format!("chain \u{2192} {}", elem.display_name()),
-            // Not `offsets → x` either: there is no one table, and the offsets
-            // are gathered from records wherever the template found them.
-            Ty::Gather { elem, .. } => format!("gathered \u{2192} {}", elem.display_name()),
+            // Not `offsets → x` either: there is no one table beside the list,
+            // and each child is placed by a record of its own, wherever the
+            // template found it. "Descriptor" is the word for such a record in
+            // the formats that have one, a FITS heap array's among them, and
+            // the same word the panel and the formula rows use for it.
+            Ty::Gather { elem, .. } => format!("descriptors \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),

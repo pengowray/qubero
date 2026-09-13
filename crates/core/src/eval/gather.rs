@@ -136,6 +136,11 @@ impl Evaluator {
                 other => other?,
             };
             let g = self.gather_mut(list);
+            // Reading a step can put nodes back and take nodes away, and a walk
+            // whose own frames went with them has nothing left to stand on.
+            if g.frames.len() != k + 1 {
+                return fail("the gathered walk lost its place");
+            }
             match got {
                 Some((j, child)) => {
                     g.frames[k].next = j;
@@ -311,7 +316,7 @@ impl Evaluator {
         self.extend_gather_to(doc, list, idx)?;
         match self.list(list).gather.as_deref().and_then(|g| g.records.get(idx)) {
             Some(record) => Ok(record.clone()),
-            None => fail("nothing in the gathered list placed this"),
+            None => fail("no descriptor placed this element"),
         }
     }
 
@@ -319,7 +324,7 @@ impl Evaluator {
     /// that placed the gathered element `at` is, or is inside.
     pub(super) fn placer_frame<S: Source>(&mut self, doc: &Document<S>, at: &[usize]) -> R<(Vec<usize>, Option<(u64, u64)>)> {
         let Some((list, idx)) = self.gathered_in(at) else {
-            return fail("nothing placed this: only an element of a gathered list has a record to ask");
+            return fail("no descriptor placed this field, so it has none to ask");
         };
         let record = self.gathered_record(doc, &list, idx)?;
         self.record_frame(doc, &record)

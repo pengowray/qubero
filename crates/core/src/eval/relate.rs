@@ -329,8 +329,15 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::Sibling(f) | Expr::Within(f) => f.join("."),
         // A question for another record, so it says whose: the names inside
         // are that record's fields, and written bare they would read as fields
-        // beside this one.
-        Expr::Placer(e) => format!("placer({})", write_at(e, 0)?),
+        // beside this one. A name or a path reads as a path into the
+        // descriptor, `descriptor.count`; anything longer is bracketed whole,
+        // since qualifying only its first name would claim the rest were
+        // fields beside this one.
+        Expr::Placer(e) => match &**e {
+            Expr::Ref(n) => format!("descriptor.{n}"),
+            Expr::Within(f) => format!("descriptor.{}", f.join(".")),
+            other => format!("descriptor.({})", write_at(other, 0)?),
+        },
         // The list, the question asked of each element, and what is read from
         // the one that answers. A search over the elements before this one has
         // no field to name, so it is named for what it searches: `earlier`.
@@ -391,6 +398,19 @@ mod tests {
         // to be reached by.
         let earlier = E::sibling_tagged(&["class_num"], E::field("class"), &["name"]);
         assert_eq!(write_expr(&earlier).as_deref(), Some("earlier[class_num = class].name"));
+    }
+
+    #[test]
+    fn a_question_for_the_descriptor_says_whose_fields_it_names() {
+        let count = E::placer(E::field("count"));
+        assert_eq!(write_expr(&count).as_deref(), Some("descriptor.count"));
+        // Inside something larger it is still one term.
+        let at_most = count.at_most(E::Remaining);
+        assert_eq!(write_expr(&at_most).as_deref(), Some("min(descriptor.count, remaining)"));
+        // And a longer question is bracketed whole, so the second name is not
+        // read as a field beside the element.
+        let product = E::placer(E::field("count").mul(E::field("width")));
+        assert_eq!(write_expr(&product).as_deref(), Some("descriptor.(count * width)"));
     }
 
     #[test]

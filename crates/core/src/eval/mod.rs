@@ -1169,7 +1169,7 @@ impl Evaluator {
             let anchor = *anchor;
             self.extend_gather_to(doc, parent, idx)?;
             let Some(&at) = self.list(parent).gather.as_ref().and_then(|g| g.starts.get(idx)) else {
-                return fail("past the end of the gathered list");
+                return fail("past the last element its descriptors place");
             };
             escapes = Some(self.gather_room(doc, parent, &pr, anchor));
             at
