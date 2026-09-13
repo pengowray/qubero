@@ -143,6 +143,16 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>, selectors: bool) {
             ty_refs(inner, out, selectors);
         }
         Ty::Origin { inner } => ty_refs(inner, out, selectors),
+        // Whether a field is there at all is the same kind of answer a switch
+        // gives, so the field that decides it counts as a selector and not as
+        // a measurer: a flag word that says which optional fields a record
+        // carries is usually the word the record is about.
+        Ty::When { cond, inner } => {
+            if selectors {
+                expr_refs(cond, out);
+            }
+            ty_refs(inner, out, selectors);
+        }
         Ty::Switch { on, cases, default } => {
             if selectors {
                 expr_refs(on, out);

@@ -203,6 +203,10 @@ struct NodeDto {
     /// True for the one node a stream holds. Its parent is the stream, so this
     /// is where the listing offers Open unpacked.
     space_root: bool,
+    /// True when the file did not write this field: the condition on an
+    /// optional one came to nothing. Told apart from a size of zero, which
+    /// several kinds of field that are there also have.
+    absent: bool,
     /// What the format's own description says this field is, where the
     /// template carries it. Null for a field nobody wrote prose for, which is
     /// most of them.
@@ -1584,6 +1588,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         refused: n.refused,
         decoded: n.decoded,
         space_root: n.space_root,
+        absent: n.absent,
         doc: n.doc,
     }
 }

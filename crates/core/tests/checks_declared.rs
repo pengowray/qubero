@@ -71,6 +71,7 @@ fn every_name<'a>(
         | Ty::Sized { inner, .. }
         | Ty::SizedBits { inner, .. }
         | Ty::Origin { inner }
+        | Ty::When { inner, .. }
         | Ty::Decoded { inner, .. }
         | Ty::Enum { inner, .. }
         | Ty::Flags { inner, .. } => every_name(inner, types, seen, out),
@@ -104,6 +105,7 @@ fn any_check<'a>(ty: &'a Ty, types: &'a HashMap<String, Ty>, seen: &mut HashSet<
         | Ty::Sized { inner, .. }
         | Ty::SizedBits { inner, .. }
         | Ty::Origin { inner }
+        | Ty::When { inner, .. }
         | Ty::Decoded { inner, .. }
         | Ty::Enum { inner, .. }
         | Ty::Flags { inner, .. } => any_check(inner, types, seen),
@@ -173,6 +175,7 @@ impl<'a> Walk<'a> {
             | Ty::Sized { inner, .. }
             | Ty::SizedBits { inner, .. }
             | Ty::Origin { inner }
+            | Ty::When { inner, .. }
             | Ty::Decoded { inner, .. }
             | Ty::Enum { inner, .. }
             | Ty::Flags { inner, .. } => self.ty(inner, types),

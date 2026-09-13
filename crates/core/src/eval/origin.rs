@@ -420,6 +420,14 @@ impl Evaluator {
                 // answers for the node that is actually at that address.
                 Ty::At { inner, .. } => ty = *inner,
                 Ty::Origin { inner } => ty = *inner,
+                // Whether the field is here at all, which is a fact about
+                // what it is: a row that is not there is not a row of some
+                // other type. The same role a switch's expression has, since
+                // both answer "which of these is this field".
+                Ty::When { cond, inner } => {
+                    self.from_expr(doc, path, &cond, Role::Type, out)?;
+                    ty = *inner;
+                }
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.from_expr(doc, path, &on, Role::Type, out)?;
                     return Ok(());
@@ -610,6 +618,11 @@ impl Evaluator {
             // Padding is decided by whatever said how long the run before it
             // was, which is the field worth pointing at.
             Expr::PadTo { n, .. } => self.from_expr(doc, at, n, role, out)?,
+            // One bit of a number is still that number's field. Left out
+            // until now, which showed as a field guarded by a flag naming
+            // nothing at all, and the flag word is exactly the field a reader
+            // asking why the row is there wants to go to.
+            Expr::Bit(a, _) => self.from_expr(doc, at, a, role, out)?,
             _ => {}
         }
         Ok(())

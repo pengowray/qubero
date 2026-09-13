@@ -61,6 +61,7 @@ fn any_time<'a>(ty: &'a Ty, types: &'a HashMap<String, Ty>, seen: &mut HashSet<&
         | Ty::Sized { inner, .. }
         | Ty::SizedBits { inner, .. }
         | Ty::Origin { inner }
+        | Ty::When { inner, .. }
         | Ty::Decoded { inner, .. }
         | Ty::Enum { inner, .. }
         | Ty::Flags { inner, .. } => any_time(inner, types, seen),
@@ -115,6 +116,7 @@ impl<'a> Walk<'a> {
             | Ty::Sized { inner, .. }
             | Ty::SizedBits { inner, .. }
             | Ty::Origin { inner }
+            | Ty::When { inner, .. }
             | Ty::Decoded { inner, .. }
             | Ty::Enum { inner, .. }
             | Ty::Flags { inner, .. } => self.ty(inner, types),
@@ -181,6 +183,7 @@ fn reads_as_a_number(ty: &Ty) -> bool {
         | Ty::Sized { inner, .. }
         | Ty::SizedBits { inner, .. }
         | Ty::Origin { inner }
+        | Ty::When { inner, .. }
         | Ty::Enum { inner, .. }
         | Ty::Flags { inner, .. } => reads_as_a_number(inner),
         // One reading of it is enough, and requiring all of them was wrong. A

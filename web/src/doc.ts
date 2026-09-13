@@ -198,6 +198,10 @@ export type TemplateNode = {
    *  one per space and it is always drawn, which the stream itself need not be,
    *  so this is where the listing offers Open unpacked. */
   readonly space_root: boolean;
+  /** True when the file did not write this field at all: the condition on an
+   *  optional one came to nothing. Not the same as a size of zero, which a
+   *  field the file did write can also have. */
+  readonly absent: boolean;
   /** What the format's own description says this field is, where the template
    *  carries it: the field's own prose, or failing that the prose on the
    *  structure it is. Absent for a field nobody wrote prose for, which is most

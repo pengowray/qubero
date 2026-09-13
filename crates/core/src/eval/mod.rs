@@ -101,7 +101,7 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 fn says_only_bytes(ty: &Ty) -> bool {
     match ty {
         Ty::Bytes(_) | Ty::Str { .. } => true,
-        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => says_only_bytes(inner),
+        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::When { inner, .. } => says_only_bytes(inner),
         Ty::Struct(s) => s.fields.len() == 1 && says_only_bytes(&s.fields[0].ty),
         _ => false,
     }
@@ -264,6 +264,14 @@ pub struct NodeInfo {
     /// a structure is a value with parts rather than a part of the file.
     /// See `StructDef::inline`.
     pub inline: bool,
+    /// True when the file did not write this field at all: the condition on a
+    /// [`crate::template::Ty::When`] came to nothing.
+    ///
+    /// Apart from a size of zero, which several other things are: a run of no
+    /// bytes the format wrote a length of zero for, a computed field, a
+    /// pointer. Those are fields the file has. This one is not there, and the
+    /// difference is what a reader counting a record's fields is looking at.
+    pub absent: bool,
     /// What the format's own description says this field is, when the template
     /// carries it. See [`crate::template::Field::doc`].
     ///
@@ -671,6 +679,10 @@ impl Evaluator {
         let size = self.size_of(doc, path)?;
         let r = self.memo.get(path).expect("resolved").clone();
         let (value, child_count, composite) = match &r.ty {
+            // A field the file left out. No children to count and no bytes to
+            // read a value from, and not a composite either: there is nothing
+            // to open. `absent` below is what says so.
+            Ty::When { .. } => (Value::Composite { count: 0 }, 0, false),
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
             Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => {
                 let n = self.child_count(doc, path)?;
@@ -748,6 +760,9 @@ impl Evaluator {
             machinery,
             contents,
             inline: matches!(r.ty.base(), Ty::Struct(s) if s.inline),
+            // A `When` that is still a `When` once resolved is one the file
+            // did not write: a field that is there resolves to what is inside.
+            absent: matches!(r.ty, Ty::When { .. }),
             doc: self.doc_of(path, &r.ty),
         })
     }
@@ -1027,7 +1042,7 @@ impl Evaluator {
         for _ in 0..8 {
             match elem {
                 Ty::Named(n) => elem = self.template.types.get(&**n)?.base(),
-                Ty::Origin { inner } => elem = inner.base(),
+                Ty::Origin { inner } | Ty::When { inner, .. } => elem = inner.base(),
                 _ => break,
             }
         }
@@ -1664,6 +1679,34 @@ impl Evaluator {
                         Some((_, t)) => t.clone(),
                         None => (*default).clone(),
                     };
+                }
+                // A field the file may not have written. Asked in the frame
+                // the field would have been read in, so the question may name
+                // an earlier sibling or look at the bytes about to be read.
+                Ty::When { cond, inner } => {
+                    if self.eval_expr_at(doc, path, &cond, Some((offset, limit)))? != 0 {
+                        ty = *inner;
+                        continue;
+                    }
+                    // Absent: no bytes, nothing inside, and nowhere to read.
+                    // The node keeps the `When` as its type, which is the one
+                    // thing that only ever happens when the field is not
+                    // there, so `NodeInfo::absent` is exact without anything
+                    // else having to be remembered.
+                    return Ok(Resolved {
+                        name,
+                        ty: Ty::When { cond, inner },
+                        offset,
+                        cursor: offset,
+                        limit: offset,
+                        declared_size: Some(0),
+                        sized_how: Some(shape::Sizing::Nothing),
+                        origin,
+                        size: Some(0),
+                        computed: None,
+                        space,
+                        payload: None,
+                    });
                 }
                 Ty::Match { on, cases, default } => {
                     let v = self.text_at(doc, path, &on, Some((offset, limit)))?;

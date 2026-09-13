@@ -121,6 +121,13 @@ impl Evaluator {
                 // the `At` parent handled above.
                 Ty::At { inner, .. } => ty = *inner,
                 Ty::Origin { inner } => ty = *inner,
+                // Whether the field is here, written out like the question a
+                // switch asks: `flags & 8` reading as `12 & 8 = 8` is the
+                // whole of why a row is there or is not.
+                Ty::When { cond, inner } => {
+                    self.relation(doc, path, &cond, Role::Type, None, &mut out);
+                    ty = *inner;
+                }
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.relation(doc, path, &on, Role::Type, None, &mut out);
                     break;

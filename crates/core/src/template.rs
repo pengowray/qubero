@@ -2143,6 +2143,29 @@ pub enum Ty {
     /// a switch with thirteen cases is cloned once per element of a list
     /// that may run to millions.
     Switch { on: Expr, cases: Arc<[(i128, Ty)]>, default: Arc<Ty> },
+    /// A field that is there only while `cond` comes to something other than
+    /// zero, and is not there at all when it comes to zero.
+    ///
+    /// Not there means not there: no bytes, no children, no value, and a row
+    /// that says the field is absent rather than one that says it is empty.
+    /// Nothing after it moves, because a field of no bytes moves nothing.
+    ///
+    /// A [`Ty::Switch`] on the same expression with one case and a default of
+    /// no bytes reads the same bytes and says something else. It puts a switch
+    /// in the type column where the format says "if", it leaves an empty run
+    /// of bytes where the format has nothing at all, and a reader counting the
+    /// fields of a record gets a row for every field that is not in it. That
+    /// is the idiom this replaces.
+    ///
+    /// `cond` is worked out where the field was declared and in the frame the
+    /// field would have been read in, the same as a switch's expression is: it
+    /// may name any earlier sibling, look at the bytes about to be read, and
+    /// ask what room is left.
+    ///
+    /// Room is not part of the question. [`Ty::if_room`] and
+    /// [`Ty::present_if`] are the ones that ask whether a container still has
+    /// space, which is a different thing a format does and still theirs.
+    When { cond: Expr, inner: Box<Ty> },
     /// An integer type whose values have names.
     Enum { inner: Box<Ty>, def: Arc<EnumDef> },
     /// An integer type whose bits have names.
@@ -2936,6 +2959,11 @@ impl Ty {
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
+    /// A field that is there only when `cond` comes to something other than
+    /// zero, and absent when it does not. See [`Ty::When`].
+    pub fn when(cond: Expr, inner: Ty) -> Ty {
+        Ty::When { cond, inner: Box::new(inner) }
+    }
     /// A field that is there only while its container still has room for it.
     ///
     /// What a format that grew a field at a time needs. A systemd journal
@@ -3122,6 +3150,12 @@ impl Ty {
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Match { .. } => "switch".into(),
+            // The word first, then what it would have been: a reader looking
+            // at the column wants to know the field may not be here before
+            // they want to know what it would have held. A node that resolved
+            // to this is one the file left out, since a field that is there
+            // resolves to the type inside.
+            Ty::When { inner, .. } => format!("optional {}", inner.display_name()),
             Ty::Json(shape, schema) => match schema.as_ref().and_then(|s| s.type_name.clone()) {
                 Some(name) => name,
                 None => shape.name().to_string(),

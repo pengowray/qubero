@@ -302,7 +302,9 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         Ty::Nullable { inner, .. } => kind_of(template, inner),
         // A resolved node has these unwrapped already, and they are answered
         // anyway so that a caller holding a declared type gets the same answer.
-        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => kind_of(template, inner),
+        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::When { inner, .. } => {
+            kind_of(template, inner)
+        }
         Ty::Named(n) => match template.types.get(&**n) {
             Some(t) => kind_of(template, t),
             None => "named".to_string(),
@@ -385,7 +387,9 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         // Wrappers that say where a field is or how wide its window is, and
         // nothing about what it holds.
         Ty::Nullable { inner, .. } => value_kind(template, inner),
-        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => value_kind(template, inner),
+        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::When { inner, .. } => {
+            value_kind(template, inner)
+        }
         Ty::Named(n) => match template.types.get(&**n) {
             // A name nothing defines is a template that cannot be read, and
             // the bytes under it are all anyone can say about it.
