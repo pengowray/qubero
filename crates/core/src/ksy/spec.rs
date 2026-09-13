@@ -448,7 +448,7 @@ impl ClassSpec {
 		is_top_level: bool,
 		meta_def: &MetaSpec,
 	) -> Result<Self, KsyError> {
-		let entries = node.as_map()?;
+		node.as_map()?;
 		let vendor = legal_keys(
 			node,
 			&["meta", "doc", "doc-ref", "to-string", "params", "seq", "types", "instances", "enums"],
@@ -518,7 +518,6 @@ impl ClassSpec {
 			}
 		}
 
-		let _ = entries;
 		Ok(ClassSpec {
 			path: path.to_string(),
 			is_top_level,
@@ -835,7 +834,6 @@ struct AttrArgs {
 	terminator: Option<Vec<u8>>,
 	contents: Option<Vec<u8>>,
 	enum_ref: Option<String>,
-	parent: Option<Expr>,
 	has_process: bool,
 }
 
@@ -923,7 +921,6 @@ impl AttrSpec {
 			terminator: terminator.clone(),
 			contents: contents.clone(),
 			enum_ref: enum_ref.clone(),
-			parent: parent.clone(),
 			has_process: process.is_some(),
 		};
 
@@ -1141,7 +1138,7 @@ fn type_from_str(
 	if args.enum_ref.is_some() && !matches!(ty, TypeRef::Int { .. } | TypeRef::Bits { .. }) {
 		return Err(KsyError::new(path, format!("tried to resolve non-integer {ty} to enum")));
 	}
-	let _ = &args.parent;
+
 	Ok(ty)
 }
 
