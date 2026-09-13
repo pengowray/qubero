@@ -16,7 +16,12 @@
 
 use std::path::PathBuf;
 
-use qubero_core::{document::Document, eval::Evaluator, eval::Value, formats, source::MemSource};
+use qubero_core::{
+    document::Document,
+    eval::{Evaluator, Moment, TimeInfo, Value},
+    formats,
+    source::MemSource,
+};
 
 fn cdf_samples() -> Option<PathBuf> {
     let mut roots = Vec::new();
@@ -137,6 +142,65 @@ impl Cdf {
         out
     }
 
+    /// Where every value of a variable is, in the same order as [`Cdf::values`].
+    fn value_paths(&mut self, name: &str) -> Vec<Vec<usize>> {
+        let vdr = self.variable(name);
+        let index = self.field(&vdr, "values_index");
+        let mut out = Vec::new();
+        for i in 0..self.count(&index) {
+            let blocks = self.under(&index, &[i, 2, 6]);
+            for b in 0..self.count(&blocks) {
+                let record = self.under(&blocks, &[b, 3, 0]);
+                let values = match self.value(&self.under(&record, &[1])) {
+                    Value::Enum { raw: 13, .. } => self.under(&record, &[2, 2, 0, 1]),
+                    _ => self.under(&record, &[2, 1]),
+                };
+                for r in 0..self.count(&values) {
+                    let row = self.under(&values, &[r]);
+                    for v in 0..self.count(&row) {
+                        out.push(self.under(&row, &[v]));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The moment at `at`, which has to be declared as one.
+    fn moment(&mut self, at: &[usize]) -> TimeInfo {
+        self.ev.time_of(&self.doc, at).unwrap_or_else(|e| panic!("{at:?}: {e:?}")).unwrap_or_else(|| panic!("{at:?} is not a time"))
+    }
+
+    /// The first value of every entry of the attribute of this name that is a
+    /// time, whichever variable it is set on: a time variable's FILLVAL,
+    /// VALIDMIN and VALIDMAX, in the order the file chains them.
+    fn attribute_moments(&mut self, want: &str) -> Vec<TimeInfo> {
+        let list = self.under(&self.gdr.clone(), &[16]);
+        let mut out = Vec::new();
+        for i in 0..self.count(&list) {
+            let adr = self.under(&list, &[i, 2]);
+            let name = self.field(&adr, "name");
+            if self.text(&name).trim_end() != want {
+                continue;
+            }
+            for entries in ["g_entries", "z_entries"] {
+                let entries = self.field(&adr, entries);
+                for e in 0..self.count(&entries) {
+                    let entry = self.under(&entries, &[e, 2]);
+                    let value = self.field(&entry, "value");
+                    // Text has no elements to ask.
+                    if self.count(&value) == 0 {
+                        continue;
+                    }
+                    if let Some(t) = self.ev.time_of(&self.doc, &self.under(&value, &[0])).unwrap() {
+                        out.push(t);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The value of the global attribute of this name, as text.
     fn global_attribute(&mut self, want: &str) -> String {
         let list = self.under(&self.gdr.clone(), &[16]);
@@ -179,6 +243,27 @@ fn floats(values: &[Value]) -> Vec<f64> {
 /// like with like against what `cdflib` printed.
 fn singles(values: &[Value]) -> Vec<f32> {
     floats(values).into_iter().map(|f| f as f32).collect()
+}
+
+/// What `cdflib.cdfepoch.encode` printed, as the moment it names:
+/// `1982-01-01T00:00:00.000`, to however many places of a second it gave.
+///
+/// Parsed here rather than written out as seconds from 1970, so the test reads
+/// against the reference's own output and a reader can check one against the
+/// other by eye.
+fn encoded(s: &str) -> Moment {
+    let n = |a: usize, b: usize| s[a..b].parse::<i64>().unwrap();
+    let (year, month, day, hour, minute, second) = (n(0, 4), n(5, 7), n(8, 10), n(11, 13), n(14, 16), n(17, 19));
+    let fraction = s.get(20..).unwrap_or("");
+    let nanos = format!("{fraction:0<9}")[..9].parse::<u32>().unwrap();
+    // Howard Hinnant's days from civil, as `time.rs` has it.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    let unix_seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
+    Moment::At { unix_seconds, nanos }
 }
 
 fn strings(values: &[Value]) -> Vec<String> {
@@ -280,6 +365,14 @@ fn the_fast_analyser_reads_through_two_layers_of_packing() {
 
     assert_eq!(cdf.global_attribute("Logical_source"), "fa_esa_l2_eeb");
     assert_eq!(cdf.global_attribute("PI_name"), "J. P. McFadden");
+
+    // Two CDF_EPOCH variables with no records, whose attributes are still
+    // times: the fill value -1.0E31, which `cdflib` encodes as the last
+    // millisecond of 9999 and reads as no time, and the range of the mission.
+    let moments = |t: Vec<TimeInfo>| t.into_iter().map(|t| t.moment).collect::<Vec<_>>();
+    assert_eq!(moments(cdf.attribute_moments("FILLVAL")), vec![Moment::Unset; 2]);
+    assert_eq!(moments(cdf.attribute_moments("VALIDMIN")), vec![encoded("1996-08-21T00:00:00.000"); 2]);
+    assert_eq!(moments(cdf.attribute_moments("VALIDMAX")), vec![encoded("2009-05-01T00:00:00.000"); 2]);
 }
 
 /// One file, or a note that it is not there. The three files below ship with
@@ -335,9 +428,21 @@ fn a_version_two_file_reads_its_values_by_the_dimensions_that_vary() {
     assert_eq!(&sst[sst.len() - 3..], &[-1.7999999523162842; 3]);
 
     // And the time varies along neither, so one value for the whole grid. It
-    // is a CDF_EPOCH, which is a count of milliseconds in a float and reads
-    // here as that number rather than as a date.
+    // is a CDF_EPOCH, which is a count of milliseconds in a float, and reads
+    // as that number with the moment it counts to beside it.
     assert_eq!(floats(&cdf.values("EPOCH")), vec![62545910400000.0]);
+    let epoch = cdf.value_paths("EPOCH");
+    let time = cdf.moment(&epoch[0]);
+    assert_eq!(time.moment, encoded("1982-01-01T00:00:00.000"));
+    assert_eq!(time.step_nanos, 1_000_000);
+    // Its range, in two attributes of its own type.
+    let moments = |t: Vec<TimeInfo>| t.into_iter().map(|t| t.moment).collect::<Vec<_>>();
+    assert_eq!(moments(cdf.attribute_moments("VALIDMIN")), vec![encoded("1982-01-01T00:00:00.000")]);
+    assert_eq!(moments(cdf.attribute_moments("VALIDMAX")), vec![encoded("1992-12-01T00:00:00.000")]);
+    // And its pad value, which `cdflib` gives as 0.0: no time.
+    let vdr = cdf.variable("EPOCH");
+    let pad = cdf.field(&vdr, "pad_value");
+    assert_eq!(cdf.moment(&pad).moment, Moment::Unset);
 
     assert_eq!(cdf.global_attribute("TITLE"), "Climate Analysis Center SST blended analysis");
 }
@@ -361,6 +466,16 @@ fn a_version_two_point_six_file_reads_its_z_variables() {
     assert_eq!(&velocity[98..], &[-422.4188537597656, 47.61986541748047]);
 
     assert_eq!(cdf.global_attribute("Source_name"), "GEOTAIL>Geomagnetic Tail");
+
+    // The times themselves are in a block `cdflib` cannot open, so what is
+    // checked is the attributes about them, which it can.
+    let moments = |t: Vec<TimeInfo>| t.into_iter().map(|t| t.moment).collect::<Vec<_>>();
+    assert_eq!(moments(cdf.attribute_moments("VALIDMIN")), vec![encoded("1992-09-08T00:00:00.000")]);
+    assert_eq!(moments(cdf.attribute_moments("VALIDMAX")), vec![encoded("2020-12-31T20:00:00.000")]);
+    // Its FILLVAL is -1.0E31 too, but written as a CDF_REAL8 rather than a
+    // CDF_EPOCH, which `cdflib`'s `attget` says as well. A double is not
+    // declared a time whatever number is in it, so there is none here.
+    assert_eq!(moments(cdf.attribute_moments("FILLVAL")), vec![]);
 }
 
 /// A file from before version 2.5, which leaves 128 bytes of nothing in the

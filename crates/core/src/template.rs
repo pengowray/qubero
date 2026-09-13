@@ -1473,8 +1473,8 @@ pub struct Field {
 pub struct Time {
     pub epoch: Epoch,
     pub zone: Zone,
-    /// The value the format writes when it has no time to record, if it has
-    /// one.
+    /// The values the format writes when it has no time to record, if it has
+    /// any.
     ///
     /// A gzip `mtime` of zero means the compressor had no time to put there,
     /// not the first instant of 1970, and a reader shown `1970-01-01 00:00:00`
@@ -1482,7 +1482,16 @@ pub struct Time {
     /// epoch: a Unix `mtime` of zero is a sentinel in gzip and a real answer in
     /// a `tar` written by a build that sets it, so only the formats that mean
     /// it declare it.
-    pub unset: Option<i128>,
+    ///
+    /// A list, because a format can have two. A CDF time has a fill value, which
+    /// is what a writer puts where a measurement is missing, and a pad value,
+    /// which is what the library writes into a record nobody wrote at all; both
+    /// mean no time, and read as a count both come out as confident dates,
+    /// 1707 for a TT2000. Integer or float, compared exactly and only against a
+    /// count of the same kind: a CDF_EPOCH's fill value is -1.0E31, which is
+    /// not an integer any `i128` holds, and a float field holding 0.0 is not the
+    /// integer 0 a gzip means.
+    pub unset: Vec<Unset>,
 }
 
 /// Where a count of time starts, and what it counts in.
@@ -1525,6 +1534,16 @@ pub enum Epoch {
 }
 
 /// A count of fixed steps from a fixed instant.
+///
+/// The count is whatever number the field holds, integer or float. A float
+/// field is a count with a fraction in it, and nothing here needs saying so: a
+/// CDF_EPOCH is a double counting milliseconds from the year 0, so
+/// `63745142399123.5` is half a millisecond past one and the step is still a
+/// millisecond. The whole part is taken exactly and only the fraction is
+/// rounded, to the nearest nanosecond, because a millisecond count in 2020
+/// multiplied out to nanoseconds is past where a double holds every integer,
+/// and doing that multiplication in floating point would move a whole second
+/// by a few thousand nanoseconds and print the wrong millisecond.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Counted {
     /// Where the count's zero is, as seconds from 1970-01-01T00:00:00Z.
@@ -1568,6 +1587,11 @@ pub enum Zone {
     Unknown,
 }
 
+/// 0000-01-01T00:00:00 in the proleptic Gregorian calendar, as seconds from
+/// 1970-01-01T00:00:00Z: 719,528 days of 86,400 seconds before it. Where a
+/// NASA CDF_EPOCH counts from.
+pub const YEAR_ZERO: i64 = -62_167_219_200;
+
 impl Time {
     /// Seconds from 1970-01-01T00:00:00Z, which is what most of these are.
     pub fn unix() -> Time {
@@ -1595,20 +1619,41 @@ impl Time {
     pub fn filetime() -> Time {
         Time::counted(-11_644_473_600, 100)
     }
+    /// Milliseconds from 0000-01-01T00:00:00, in a double, with every day
+    /// 86,400 seconds long: a NASA CDF_EPOCH.
+    ///
+    /// Both of CDF's values for no time are declared. -1.0E31 is the fill value
+    /// a writer puts where a measurement is missing, and 0.0 is the pad value
+    /// the library writes into a record nobody gave a value; `cdflib` reads
+    /// both as no time. The year 0 is outside the years this names anyway, so
+    /// a count a few milliseconds past the pad value is not a date either.
+    pub fn cdf_epoch() -> Time {
+        Time::counted(YEAR_ZERO, 1_000_000).unset_float(-1.0e31).unset_float(0.0)
+    }
+    /// Whole seconds from the same instant, in a double: the first of the two
+    /// doubles a CDF_EPOCH16 is, with the same two values for no time.
+    ///
+    /// The second double, picoseconds within that second, is not folded in. A
+    /// moment is a count of nanoseconds, so the last three digits would go
+    /// whichever way this was done, and a count here is one field; the
+    /// picoseconds are on their own row beside it.
+    pub fn cdf_epoch16_seconds() -> Time {
+        Time::counted(YEAR_ZERO, 1_000_000_000).unset_float(-1.0e31).unset_float(0.0)
+    }
     /// MS-DOS's packed date and time in one thirty-two bit field. Local, since
     /// that is what MS-DOS had. See [`Epoch::Dos`].
     pub fn dos() -> Time {
-        Time { epoch: Epoch::Dos, zone: Zone::Local, unset: None }
+        Time { epoch: Epoch::Dos, zone: Zone::Local, unset: Vec::new() }
     }
     /// The same pair split across the two named fields. See
     /// [`Epoch::DosHalves`].
     pub fn dos_halves(date: &str, time: &str) -> Time {
-        Time { epoch: Epoch::DosHalves { date: date.into(), time: time.into() }, zone: Zone::Local, unset: None }
+        Time { epoch: Epoch::DosHalves { date: date.into(), time: time.into() }, zone: Zone::Local, unset: Vec::new() }
     }
     /// A count of `step_nanos`-long steps from `zero` seconds after the Unix
     /// epoch. For an epoch none of the constructors above names.
     pub fn counted(zero: i64, step_nanos: u64) -> Time {
-        Time { epoch: Epoch::Counted(Counted { zero, step_nanos }), zone: Zone::Utc, unset: None }
+        Time { epoch: Epoch::Counted(Counted { zero, step_nanos }), zone: Zone::Utc, unset: Vec::new() }
     }
     /// Wall-clock digits whose zone the file does not record. See
     /// [`Zone::Local`].
@@ -1619,10 +1664,17 @@ impl Time {
     pub fn zone_unknown(self) -> Time {
         Time { zone: Zone::Unknown, ..self }
     }
-    /// The value this format writes when it has no time to record. See
-    /// [`Time::unset`].
-    pub fn unset(self, value: i128) -> Time {
-        Time { unset: Some(value), ..self }
+    /// A value this format writes when it has no time to record. See
+    /// [`Time::unset`]. Said once per value, for a format that has more than
+    /// one.
+    pub fn unset(mut self, value: i128) -> Time {
+        self.unset.push(Unset::Int(value));
+        self
+    }
+    /// The same for a float field. See [`Time::unset`].
+    pub fn unset_float(mut self, value: f64) -> Time {
+        self.unset.push(Unset::Float(value));
+        self
     }
 }
 

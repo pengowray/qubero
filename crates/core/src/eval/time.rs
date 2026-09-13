@@ -20,7 +20,7 @@
 //! interface, as [`Verdict`](super::Verdict)'s two strings do.
 
 use super::*;
-use crate::template::{Counted, Epoch, Time, Zone};
+use crate::template::{Counted, Epoch, Time, Unset, Zone};
 
 /// The moment the field at a path means, and what is honest to say about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,33 @@ pub const LAST_SECOND: i64 = 253_402_300_799;
 
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 
+/// The number in a field, as the kind of number it is.
+///
+/// Kept apart rather than widened to one type, because each kind has a way of
+/// going wrong the other does not. An integer count multiplied out is exact and
+/// only has to be checked for overflow. A float count is a double counting
+/// milliseconds, which is a CDF_EPOCH, and the same multiplication done in
+/// floating point moves a whole second by thousands of nanoseconds; it is also
+/// the only kind that can be NaN. And a sentinel is compared against its own
+/// kind only: 0.0 in a double is not the 0 a gzip writes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Count {
+    Int(i128),
+    Float(f64),
+}
+
+impl Count {
+    /// Whether this is one of the values the format writes when it has no time
+    /// to record.
+    fn is_unset(self, unset: &[Unset]) -> bool {
+        unset.iter().any(|u| match (u, self) {
+            (Unset::Int(want), Count::Int(v)) => *want == v,
+            (Unset::Float(want), Count::Float(v)) => *want == v,
+            _ => false,
+        })
+    }
+}
+
 impl Evaluator {
     /// The moment the field at `path` means, or nothing when it means none.
     ///
@@ -100,7 +127,7 @@ impl Evaluator {
     pub fn time_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<TimeInfo>> {
         let Some(time) = self.time_at(doc, path)? else { return Ok(None) };
         let Some(value) = self.moment_number(doc, path)? else { return Ok(None) };
-        if time.unset == Some(value) {
+        if value.is_unset(&time.unset) {
             return Ok(Some(TimeInfo { moment: Moment::Unset, zone: time.zone, step_nanos: step_of(&time.epoch) }));
         }
         let moment = match &time.epoch {
@@ -109,9 +136,13 @@ impl Evaluator {
                 // The date is the top half and the time the bottom, and a value
                 // wider than the thirty-two bits this is packed into is not one
                 // of these at all rather than one to be masked down to size.
-                match u32::try_from(value) {
-                    Ok(v) => dos(v >> 16, v & 0xffff),
-                    Err(_) => Moment::Impossible,
+                // Nor is a float, which no format packs a date into.
+                match value {
+                    Count::Int(v) => match u32::try_from(v) {
+                        Ok(v) => dos(v >> 16, v & 0xffff),
+                        Err(_) => Moment::Impossible,
+                    },
+                    Count::Float(_) => Moment::Impossible,
                 }
             }
             Epoch::DosHalves { date, time } => {
@@ -140,28 +171,26 @@ impl Evaluator {
     /// The list itself is never a moment, which falls out of
     /// [`Evaluator::moment_number`]: a composite reads as its count, and a
     /// count is not a number this will accept.
+    ///
+    /// And a list of lists is the same thing again, so the walk climbs through
+    /// as many lists as there are to the first structure. A CDF variable's
+    /// values are rows of values, one row per record, and the declaration is
+    /// on the field holding the rows: the second level of list is no more a
+    /// place to hang one than the first was. The walk stops at a structure
+    /// whether or not its field is declared, so a list of structures does not
+    /// lend its declaration to the fields inside them.
     fn time_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Time>> {
         self.resolve(doc, path)?;
-        let Some((&idx, parent)) = path.split_last() else { return Ok(None) };
-        if let Some(t) = self.declared(parent, idx) {
-            return Ok(Some(t));
-        }
-        let Some((&pidx, grand)) = parent.split_last() else { return Ok(None) };
-        if !matches!(
-            self.memo.get(parent).map(|r| &r.ty),
-            Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::PointerList { .. })
-        ) {
-            return Ok(None);
-        }
-        Ok(self.declared(grand, pidx))
-    }
-
-    /// The declaration on field `idx` of the structure at `parent`, if that is
-    /// a structure and the field has one.
-    fn declared(&self, parent: &[usize], idx: usize) -> Option<Time> {
-        match self.memo.get(parent).map(|r| &r.ty) {
-            Some(Ty::Struct(s)) => s.fields.get(idx).and_then(|f| f.time.clone()),
-            _ => None,
+        let Some((mut idx, mut parent)) = path.split_last().map(|(i, p)| (*i, p)) else { return Ok(None) };
+        loop {
+            match self.memo.get(parent).map(|r| &r.ty) {
+                Some(Ty::Struct(s)) => return Ok(s.fields.get(idx).and_then(|f| f.time.clone())),
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::PointerList { .. }) => {
+                    let Some((&up, rest)) = parent.split_last() else { return Ok(None) };
+                    (idx, parent) = (up, rest);
+                }
+                _ => return Ok(None),
+            }
         }
     }
 
@@ -176,20 +205,26 @@ impl Evaluator {
     /// number the format wrote in text: an `ar` member's `mtime` is twelve
     /// bytes of ASCII decimal and a cpio header's is eight of ASCII hex, and
     /// both read as [`Value::Int`] before they get here.
-    fn moment_number<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<i128>> {
+    ///
+    /// A float is accepted as the count it is, fraction and all: a CDF_EPOCH
+    /// is milliseconds in a double. See [`Counted`] for how it is multiplied
+    /// out without losing the second it lands on.
+    fn moment_number<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Count>> {
+        fn number(v: &Value) -> Option<Count> {
+            match v {
+                Value::UInt(v) => i128::try_from(*v).ok().map(Count::Int),
+                Value::Int(v) => Some(Count::Int(*v)),
+                Value::Float(v) => Some(Count::Float(*v)),
+                _ => None,
+            }
+        }
         Ok(match &self.node(doc, path)?.value {
-            Value::UInt(v) => i128::try_from(*v).ok(),
-            Value::Int(v) => Some(*v),
-            Value::Enum { raw, .. } => Some(*raw),
+            Value::Enum { raw, .. } => Some(Count::Int(*raw)),
             // A slot the format leaves empty is still the number written there,
             // and a format that has both a sentinel of its own and a declared
             // unset value should have them agree.
-            Value::Unset(inner) => match &**inner {
-                Value::UInt(v) => i128::try_from(*v).ok(),
-                Value::Int(v) => Some(*v),
-                _ => None,
-            },
-            _ => None,
+            Value::Unset(inner) => number(inner),
+            other => number(other),
         })
     }
 
@@ -201,7 +236,7 @@ impl Evaluator {
     /// works and is already tested.
     fn half<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<u32>> {
         let Some(p) = self.field_out_from(doc, path, name)? else { return Ok(None) };
-        let Some(v) = self.moment_number(doc, &p)? else { return Ok(None) };
+        let Some(Count::Int(v)) = self.moment_number(doc, &p)? else { return Ok(None) };
         Ok(u32::try_from(v).ok().filter(|v| *v <= 0xffff))
     }
 }
@@ -224,11 +259,47 @@ fn step_of(epoch: &Epoch) -> u64 {
 /// field can be wider, so the multiplication is checked rather than assumed and
 /// an overflow is the same answer an out-of-range instant gets. Never a panic,
 /// and never a wrap.
-fn counted(value: i128, c: Counted) -> Moment {
-    let Some(steps) = value.checked_mul(c.step_nanos as i128) else { return Moment::Impossible };
+fn counted(value: Count, c: Counted) -> Moment {
+    let Some(steps) = nanos_of(value, c.step_nanos) else { return Moment::Impossible };
     let Some(nanos) = (c.zero as i128).checked_mul(NANOS_PER_SECOND).and_then(|z| steps.checked_add(z)) else {
         return Moment::Impossible;
     };
+    instant(nanos)
+}
+
+/// How many nanoseconds a count of `step_nanos`-long steps comes to, or
+/// nothing when that is not a number at all.
+///
+/// A float is split before it is multiplied. The whole part of a double is
+/// exact, and so is that part times the step once it is an integer; the
+/// fraction is less than one step and is the only thing rounded, to the
+/// nearest nanosecond, since a double counting milliseconds is only ever an
+/// approximation of the decimal fraction the writer meant. Multiplying the
+/// whole double out first is what goes wrong: `62545910400000.0` milliseconds
+/// is 6.25e19 nanoseconds, where adjacent doubles are eight thousand apart,
+/// and a count on the second prints as one a few microseconds short of it.
+///
+/// NaN and the infinities are no count. So is a double too large to be an
+/// integer an `i128` holds, which is also far outside the years this names;
+/// CDF's fill value of -1.0E31 is one, and is caught as a sentinel before it
+/// gets here when the template declares it.
+fn nanos_of(value: Count, step_nanos: u64) -> Option<i128> {
+    match value {
+        Count::Int(v) => v.checked_mul(step_nanos as i128),
+        Count::Float(v) => {
+            if !v.is_finite() || v.abs() >= 1e30 {
+                return None;
+            }
+            let whole = v.trunc();
+            let part = ((v - whole) * step_nanos as f64).round() as i128;
+            (whole as i128).checked_mul(step_nanos as i128)?.checked_add(part)
+        }
+    }
+}
+
+/// Nanoseconds from 1970-01-01T00:00:00Z as the instant they are, or
+/// [`Moment::Impossible`] outside the years this names.
+fn instant(nanos: i128) -> Moment {
     // Euclidean, so the fraction of an instant before 1970 is still a fraction
     // forwards: -1500 milliseconds is two seconds back and half of one on, not
     // one second back and half of one further back, which would print as a
@@ -520,6 +591,103 @@ mod tests {
         let mut ev = Evaluator::new(Template::new("made-up", root));
         let doc = Document::new(MemSource(b"1234567890  ".to_vec()));
         assert_eq!(at(ev.time_of(&doc, &[0]).unwrap()), (KNOWN, 0));
+    }
+
+    fn f64le(v: f64) -> Vec<u8> {
+        v.to_le_bytes().to_vec()
+    }
+
+    /// A CDF_EPOCH, milliseconds from the year 0 in a double. The number is
+    /// `cacsst2.cdf`'s one time, which `cdflib` encodes as
+    /// `1982-01-01T00:00:00.000`. A whole second, and multiplied out to
+    /// nanoseconds in floating point it would not be one.
+    #[test]
+    fn a_float_count_on_the_second_stays_on_it() {
+        let info = one(T::F64(Little), Time::cdf_epoch(), f64le(62545910400000.0));
+        assert_eq!(at(info), (378_691_200, 0));
+        assert_eq!(info.unwrap().step_nanos, 1_000_000, "printed to the millisecond, as CDF's own tools do");
+    }
+
+    /// And a count with a fraction keeps it: half a millisecond past
+    /// 2020-01-01T23:59:59.123, which `cdflib` encodes to the millisecond as
+    /// `2020-01-01T23:59:59.123`.
+    #[test]
+    fn a_float_count_keeps_its_fraction() {
+        let info = one(T::F64(Little), Time::cdf_epoch(), f64le(63745142399123.5));
+        assert_eq!(at(info), (1_577_923_199, 123_500_000));
+    }
+
+    /// The fraction runs forwards before the epoch too, the same as an
+    /// integer count's does.
+    #[test]
+    fn a_negative_float_count_keeps_its_fraction_positive() {
+        let info = one(T::F64(Little), Time::unix_millis(), f64le(-1500.25));
+        assert_eq!(at(info), (-2, 499_750_000));
+    }
+
+    /// NaN is what a float field holds when nobody measured anything, and it
+    /// is not a count of anything.
+    #[test]
+    fn a_float_that_is_not_a_number_is_not_a_date() {
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(v))), Moment::Impossible, "{v}");
+        }
+    }
+
+    /// CDF's two values for no time. -1.0E31 is the fill value, and without the
+    /// declaration it is still not a date, since it is far outside the years
+    /// this names; 0.0 is the pad value, and is the first instant of the year
+    /// 0, which is outside them too. Both are declared, so both say what they
+    /// mean rather than only what they are not.
+    #[test]
+    fn a_cdf_epochs_fill_and_pad_values_are_no_time() {
+        for v in [-1.0e31, 0.0] {
+            assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(v))), Moment::Unset, "{v}");
+        }
+        assert_eq!(moment(one(T::F64(Little), Time::unix_millis(), f64le(-1.0e31))), Moment::Impossible);
+    }
+
+    /// The ends of a CDF_EPOCH. A day past the pad value is 0000-01-02, which
+    /// `cdflib` encodes and this does not name, since the year 0 is not one of
+    /// the years it will; 9999-12-31T23:59:59.999 is the last millisecond it
+    /// will, and one more is past it.
+    #[test]
+    fn a_cdf_epoch_at_the_year_0_and_the_year_9999() {
+        assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(86_400_000.0))), Moment::Impossible);
+        let last = one(T::F64(Little), Time::cdf_epoch(), f64le(315_569_519_999_999.0));
+        assert_eq!(at(last), (super::LAST_SECOND, 999_000_000));
+        assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(315_569_520_000_000.0))), Moment::Impossible);
+        // And the first instant of the year 1, which is.
+        let first = one(T::F64(Little), Time::cdf_epoch(), f64le(31_622_400_000.0));
+        assert_eq!(at(first), (super::FIRST_SECOND, 0));
+    }
+
+    /// A sentinel is compared against a count of its own kind. A gzip's 0 is an
+    /// integer, and a float field holding 0.0 is not it.
+    #[test]
+    fn an_integer_sentinel_does_not_match_a_float() {
+        let info = one(T::F64(Little), Time::unix().unset(0), f64le(0.0));
+        assert_eq!(moment(info), Moment::At { unix_seconds: 0, nanos: 0 });
+    }
+
+    /// A CDF variable's values are rows of values, one row per record, and the
+    /// declaration on the rows reaches every value in them. The rows are not
+    /// moments, any more than a list of them is.
+    #[test]
+    fn a_declaration_on_a_list_of_lists_reaches_the_numbers_at_the_bottom() {
+        let rows = T::array(T::array(T::F64(Big), E::lit(2)), E::lit(2));
+        let root = T::structure("Made", vec![("rows", rows)]).field_time("rows", Time::cdf_epoch());
+        let mut ev = Evaluator::new(Template::new("made-up", root));
+        let mut bytes = Vec::new();
+        for ms in [62545910400000.0f64, 62545910401000.0, 62545910402000.0, -1.0e31] {
+            bytes.extend(ms.to_be_bytes());
+        }
+        let doc = Document::new(MemSource(bytes));
+        assert_eq!(at(ev.time_of(&doc, &[0, 0, 1]).unwrap()), (378_691_201, 0));
+        assert_eq!(at(ev.time_of(&doc, &[0, 1, 0]).unwrap()), (378_691_202, 0));
+        assert_eq!(moment(ev.time_of(&doc, &[0, 1, 1]).unwrap()), Moment::Unset);
+        assert!(ev.time_of(&doc, &[0, 1]).unwrap().is_none(), "a row is not itself a moment");
+        assert!(ev.time_of(&doc, &[0]).unwrap().is_none(), "nor are the rows");
     }
 
     /// A field nothing declared is not a time, and the query says so rather

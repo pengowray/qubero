@@ -632,6 +632,8 @@ fn time_text(t: &Time) -> String {
             (0, 1) => "unix nanos".to_string(),
             (-2_082_844_800, 1_000_000_000) => "mac".to_string(),
             (-11_644_473_600, 100) => "filetime".to_string(),
+            (YEAR_ZERO, 1_000_000) => "year zero millis".to_string(),
+            (YEAR_ZERO, 1_000_000_000) => "year zero".to_string(),
             (zero, step) => format!("counted from {zero} by {step}ns"),
         },
         Epoch::Dos => "dos".to_string(),
@@ -643,8 +645,8 @@ fn time_text(t: &Time) -> String {
         Zone::Unknown => "zone unknown",
     };
     let mut s = format!("time {epoch} {zone}");
-    if let Some(u) = t.unset {
-        let _ = write!(s, " unset {u}");
+    for u in &t.unset {
+        let _ = write!(s, " unset {}", unset_text(u));
     }
     s
 }
