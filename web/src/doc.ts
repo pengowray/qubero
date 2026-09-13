@@ -780,7 +780,12 @@ export type DiagramRow = {
 
 /** One type of the format, and its fields. */
 export type DiagramBox = {
+  /** What the type is called: the structure's own name in the template
+   *  (`IHDR`, `Chunk`), or what a switch reads (`switch on class`). */
   readonly name: string;
+  /** Where the walk first reached it (`png.chunks.data.'IHDR'`). A type read in
+   *  nine places has one box and this is the first of the nine ways to it. */
+  readonly path: string;
   readonly kind: DiagramBoxKind;
   /** The type this one was written inside, for a box the template gave no name
    *  of its own (`Header.entry`). Absent for a named type. */
@@ -798,7 +803,7 @@ export type DiagramEdge = {
   /** Row index in that box. Absent for an edge to the box as a whole, which is
    *  what naming a type is. */
   readonly to_row?: number;
-  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "case";
   /** The expression the edge stands for, as the template writes it. Empty for a
    *  declaration rather than an expression. */
   readonly label: string;

@@ -920,7 +920,11 @@ fn int_lit(v: i128) -> String {
 /// counts with: a case of a switch, a label on a record. A tag of 256 or more
 /// is written in hex, which is the form a specification writes it in and the
 /// form a reader checks against the bytes.
-fn tag_lit(v: i128) -> String {
+/// Public to the crate because the diagram prints the same constants: a switch
+/// case is `'IHDR'` in the IR text and must be `'IHDR'` in the box beside it,
+/// or the two readings of one template disagree in the one place a reader
+/// checks them against each other.
+pub(crate) fn tag_lit(v: i128) -> String {
     if let Some(text) = as_ascii(v) {
         return format!("'{text}'");
     }

@@ -749,7 +749,11 @@ struct DiagramRowDto {
 /// One type of the format, and its fields.
 #[derive(Serialize)]
 struct DiagramBoxDto {
+    /// What the type is called: the structure's own name in the template.
     name: String,
+    /// Where the walk first reached it, for the reader who wants to know how
+    /// they would get there.
+    path: String,
     /// "seq" | "instances" | "switch"
     kind: &'static str,
     /// The type this one was written inside, for a box the template gave no
@@ -770,7 +774,7 @@ struct DiagramEdgeDto {
     /// is what naming a type is.
     #[serde(skip_serializing_if = "Option::is_none")]
     to_row: Option<f64>,
-    /// "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case"
+    /// "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "case"
     role: &'static str,
     /// The expression the edge stands for, as the template writes it. Empty for
     /// a declaration rather than an expression.
@@ -793,6 +797,7 @@ fn diagram_dto(d: Diagram) -> DiagramDto {
             .into_iter()
             .map(|b| DiagramBoxDto {
                 name: b.name,
+                path: b.path,
                 kind: b.kind.as_str(),
                 parent: b.parent,
                 rows: b
