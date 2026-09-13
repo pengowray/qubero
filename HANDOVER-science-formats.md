@@ -35,17 +35,11 @@ cases only.
 | S3. Field names taken from a sibling list. Now `Field::elem_name_from`: an expression worked out per element of a list, with `Idx` as that element's index, labelling it `[1] y` while the path stays `[1]`. | a47f1ed |
 | NPY structured dtype field names: `[0] channel_0000` | ec4812d |
 | MAT struct fields labelled with their names, struct arrays included: `[2] one` | e0d9fa3 |
+| B1. `spans` never settled in goes on `parquet/delta_binary_packed.parquet`. Not slow and not a loop: a whole pass is 580 ms and 11,709 steps. The list walks in `walk.rs` charged a step for every element they stepped over, placed or not, and `spans` starts again from the top of its window each go, so going back over what the last go listed (7,854 steps of it here) used up a go of 5,000 before anything new was read. Only placing an element is charged now. The same fix settles 16 more samples `spans_probe` gave up on (ELF, PE, LE, Mach-O, DOS, firmware), nearly all of them full 4,000-row windows of code. | 83aba76 |
 
 ## Bugs
 
-### B1. `spans_probe` never settles on `parquet/delta_binary_packed.parquet`
-
-73 KB. Every other Parquet sample finishes. `spans_probe` gives the evaluator
-200 slices of 5,000 steps each and this file is still `Busy` after all of them.
-`check_tree` passes it because it never evaluates every column chunk. Whether
-this is a slow path (the footer is large: many columns, each with statistics)
-or a loop is the first thing to find out. The Listing in the web app uses the
-same `spans` call, so this is what a person opening the file waits on.
+None open. B1 is in the table above.
 
 ## IR additions that close gaps in more than one format
 

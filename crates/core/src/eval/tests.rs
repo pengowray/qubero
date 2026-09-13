@@ -1247,6 +1247,50 @@ fn counting_a_long_run_a_bit_at_a_time_costs_no_more_than_counting_it_at_once() 
 }
 
 #[test]
+fn a_listing_asked_again_in_goes_gets_further_every_go() {
+    // The shape of a Thrift footer: runs that end on a stop record, inside
+    // runs, so every row of the listing sits two walks deep. `spans` starts
+    // again from the top of its window each time it is asked, and going back
+    // over the rows the last go reached used to be charged as if they were
+    // being read for the first time. Once that cost more than a go allows,
+    // every go ran out in the same place: a Parquet file of 73 KB never
+    // finished at 5,000 a go and finished in one at 12,000.
+    let item = T::structure("Item", vec![("kind", T::u8()), ("v", T::u8())]);
+    let group = T::structure("Group", vec![("items", T::repeat(item, Until::FieldValue { field: "kind".into(), value: 0 }))]);
+    let t = Template::new("t", T::repeat(group, Until::End));
+    let mut bytes = Vec::new();
+    for _ in 0..30 {
+        for f in 1..=20u8 {
+            bytes.extend_from_slice(&[1, f]);
+        }
+        bytes.extend_from_slice(&[0, 0]);
+    }
+    let d = doc(&bytes);
+    let len = d.len_bits();
+    let want = Evaluator::new(t.clone()).spans(&d, 0, len, 4000).unwrap();
+    assert!(want.len() > 1000, "one row per field, not one per run: {}", want.len());
+
+    let mut ev = Evaluator::new(t);
+    ev.set_slice(Some(200));
+    let mut goes = 0;
+    let got = loop {
+        goes += 1;
+        assert!(goes <= 50, "asking again is not getting anywhere");
+        ev.begin_slice();
+        match ev.spans(&d, 0, len, 4000) {
+            Ok(v) => break v,
+            Err(e) if e.interrupted() => continue,
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    assert!(goes > 1, "the listing was not interrupted, so this proves nothing");
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(&want) {
+        assert_eq!((g.offset_bits, g.size_bits, &g.name), (w.offset_bits, w.size_bits, &w.name));
+    }
+}
+
+#[test]
 fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
     // Strings of growing length, so every element sits at an offset only the
     // walk can find, and one the test can work out for itself.
