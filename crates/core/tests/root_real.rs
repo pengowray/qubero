@@ -784,9 +784,9 @@ fn rntuple_pages_are_placed_where_uproot_finds_them() {
         let mut covered = 0;
         for (j, (elements, size, offset)) in pages.iter().enumerate() {
             let column = at(&columns, &[j]);
-            assert_eq!(ev.node(&d, &at(&column, &[2])).unwrap().child_count, 1, "{file} column {j}");
-            assert_eq!(ev.node(&d, &at(&column, &[4])).unwrap().value, Value::UInt(settings as u128), "{file} column {j}");
-            let entry = at(&column, &[2, 0]);
+            assert_eq!(ev.node(&d, &at(&column, &[5])).unwrap().child_count, 1, "{file} column {j}");
+            assert_eq!(ev.node(&d, &at(&column, &[7])).unwrap().value, Value::UInt(settings as u128), "{file} column {j}");
+            let entry = at(&column, &[5, 0]);
             assert_eq!(ev.node(&d, &at(&entry, &[1])).unwrap().value.as_int(), Some(*elements), "{file} column {j}");
             // Negative, because a checksum follows.
             assert_eq!(ev.node(&d, &at(&entry, &[0])).unwrap().value.as_int(), Some(-*elements), "{file} column {j}");
@@ -797,5 +797,122 @@ fn rntuple_pages_are_placed_where_uproot_finds_them() {
             covered += size + 8;
         }
         eprintln!("--- {file}: {} pages placed, {covered} of {} bytes", pages.len(), d.len_bytes());
+    }
+}
+
+/// How many bytes of the file some field of the tree names: the union of every
+/// field with no children, in the file's own space. `skip` names fields whose
+/// contents are not walked, which is how the same file is measured as the
+/// template read it before page lists were followed.
+fn named_bytes(d: &Document<MemSource>, ev: &mut Evaluator, skip: &dyn Fn(&str, &[usize]) -> bool) -> u64 {
+    let mut spans = Vec::new();
+    let mut stack = vec![Vec::new()];
+    while let Some(p) = stack.pop() {
+        let Ok(node) = ev.node(d, &p) else { continue };
+        if skip(&node.name, &p) {
+            continue;
+        }
+        // Walked into whatever space it is in, since a page list read out of
+        // a compressed footer places its pages back in the file; counted only
+        // where it is the file's own bytes.
+        if node.child_count == 0 {
+            if node.size_bits > 0 && node.space == 0 {
+                spans.push((node.offset_bits, node.offset_bits + node.size_bits));
+            }
+            continue;
+        }
+        for i in 0..node.child_count as usize {
+            stack.push([p.as_slice(), &[i]].concat());
+        }
+    }
+    spans.sort();
+    let (mut total, mut reach) = (0, 0);
+    for (start, end) in spans {
+        let start = start.max(reach);
+        if end > start {
+            total += end - start;
+            reach = end;
+        }
+    }
+    total / 8
+}
+
+#[test]
+fn rntuple_pages_read_as_the_values_uproot_reads() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // Stored as they stand, header and all, so every column's type can be read
+    // from its page list and every page reads as its values: a string's offsets
+    // are where each one ends, and its characters are all of them one after
+    // another.
+    let first = [
+        "Jakob", "Philippe", "Axel", "Danilo", "Simon", "Bertrand", "Max", "Javier", "Enrico", "Sergey", "Giovanna",
+        "Jerry", "Florine Willemijn", "Bernhard Manfred", "Vincenzo Eduardo", "Jolly", "Alaettin Serhan", "Jonas",
+        "Maciej", "Giacomo", "Grigori", "Special thanks",
+    ];
+    let last = [
+        "Blomer", "Canal", "Naumann", "Piparo", "Leisibach", "Bellenot", "Orok", "Lopez-Gomez", "Guiraud", "Linev",
+        "Lazzari Miotto", "Ling", "de Geus", "Gruber", "Padulano", "Chen", "Mete", "Hahnfeld", "Szymanski", "Parolini",
+        "Rybkine", "to all framework developers in the experiments",
+    ];
+    let file = "rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root";
+    let (d, mut ev) = rntuple_sample(&folder, file);
+    let anchor = rntuple_anchor(&d, &mut ev);
+    let (_, payload) = page_list_payload(&d, &mut ev, &anchor);
+    let columns = [payload.as_slice(), &[2, 2, 0, 2]].concat();
+    let at = |base: &[usize], more: &[usize]| [base, more].concat();
+    for (k, (field, names)) in [("firstName", first), ("lastName", last)].into_iter().enumerate() {
+        let (index, chars) = (at(&columns, &[2 * k]), at(&columns, &[2 * k + 1]));
+        assert_eq!(ev.node(&d, &index).unwrap().name, format!("[{}] {field}", 2 * k));
+        assert_eq!(enum_name(ev.node(&d, &at(&index, &[3])).unwrap().value), "Index64");
+        assert_eq!(enum_name(ev.node(&d, &at(&chars, &[3])).unwrap().value), "Char");
+        let offsets = at(&index, &[5, 0, 3, 0, 0]);
+        let mut end = 0u128;
+        for (i, name) in names.iter().enumerate() {
+            end += name.len() as u128;
+            assert_eq!(ev.node(&d, &at(&offsets, &[i])).unwrap().value, Value::UInt(end), "{field} [{i}]");
+        }
+        assert_eq!(ev.node(&d, &offsets).unwrap().child_count, 22);
+        let text = ev.node(&d, &at(&chars, &[5, 0, 3, 0, 0])).unwrap().value;
+        assert_eq!(text, Value::Str(names.concat()), "{field}");
+    }
+
+    // Compressed, header and all, so no page can learn its column's type (see
+    // `typed` in the template). Each page still opens, because it opens as a
+    // zstd block, and what comes out is as long as its elements at the width
+    // the header gives them: 7,811 characters of `Division` is what uproot
+    // reads as 3,354 strings.
+    let file = "ntpl001_staff_rntuple_v1-0-1-0.root";
+    let (d, mut ev) = rntuple_sample(&folder, file);
+    let anchor = rntuple_anchor(&d, &mut ev);
+    let (_, payload) = page_list_payload(&d, &mut ev, &anchor);
+    let columns = [payload.as_slice(), &[2, 2, 0, 2]].concat();
+    let widths = [4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 1, 8, 1];
+    for (j, ((elements, size, _), width)) in STAFF_PAGES.iter().zip(widths).enumerate() {
+        let column = at(&columns, &[j]);
+        assert!(ev.node(&d, &at(&column, &[3])).unwrap().absent, "column {j} has a type it cannot have read");
+        let data = at(&column, &[5, 0, 3, 0, 0]);
+        assert_eq!(ev.node(&d, &data).unwrap().size_bits / 8, *size);
+        let block = at(&data, &[0]);
+        assert_eq!(enum_name(ev.node(&d, &at(&block, &[0])).unwrap().value), "zstd", "column {j}");
+        let opened = ev.node(&d, &at(&block, &[4, 1, 0, 0])).unwrap();
+        assert_ne!(opened.space, 0);
+        assert_eq!(opened.size_bits / 8, (*elements as u64) * width, "column {j}");
+    }
+
+    // What the tree names of each file, with the page lists followed and as it
+    // was before they were: the anchor and its envelopes and nothing they point
+    // at. `spans` cannot say this for a ROOT file, because it indexes a placed
+    // field only once its walk has passed the field that places it, and every
+    // key list is written after the records it lists.
+    for file in ["ntpl001_staff_rntuple_v1-0-1-0.root", "rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root"] {
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let before = named_bytes(&d, &mut ev, &|name, _| name == "page_list");
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let after = named_bytes(&d, &mut ev, &|_, _| false);
+        eprintln!("--- {file}: {before} bytes named without the page lists, {after} with, of {}", d.len_bytes());
+        assert!(after > before, "{file}");
     }
 }

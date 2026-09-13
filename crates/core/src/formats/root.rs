@@ -38,6 +38,11 @@
 //! format already has here. `L4` is the odd one, and is read here rather than
 //! borrowed: ROOT writes an eight-byte checksum and then a bare LZ4 block, not
 //! an LZ4 frame, so there is no magic number and no frame header to read.
+//!
+//! An RNTuple is the exception to all of that. Its anchor is the one streamed
+//! object in it, and everything the anchor points at is a format of its own
+//! with a published layout, read field by field in [`rntuple`]: the header and
+//! footer envelopes, the page lists, and every page, placed in the file.
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 use super::{xz, zlib, zstd};

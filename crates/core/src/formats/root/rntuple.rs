@@ -28,6 +28,32 @@
 //! An envelope, like a page, may be compressed with the same nine-byte blocks a
 //! ROOT record uses, and it is compressed exactly when the length it takes in
 //! the file is short of the length it comes to. Nothing else says so.
+//!
+//! Every page is placed where its locator says, whatever space the locator was
+//! read in, so a page list unpacked out of a compressed envelope still puts its
+//! pages in the file. In `ntpl001_staff_rntuple_v1-0-1-0.root` the pages are
+//! 23,623 of 25,318 bytes. A page that reads as a list of plain values does,
+//! and a split, delta or bit-packed page keeps its bytes under a name saying how
+//! they are laid out.
+//!
+//! ## What a page cannot find out
+//!
+//! What a page holds is set by its column's type, and the type is in the
+//! header, which is a different envelope from the page list. Reaching a field
+//! of another envelope takes a path down into it, and a path cannot go into a
+//! compressed run. So when the header was compressed, which in a compressed
+//! ntuple it almost always is, a page cannot learn its type: it is placed, its
+//! block is opened when it opens like one, and what came out keeps its bytes.
+//! The staff sample is that case, and every one of its pages opens and none is
+//! read as values; an ntuple written uncompressed reads all the way down. See
+//! [`header_stored`] for the IR change that would close it.
+//!
+//! Not read: a locator of any kind but the standard one (the large locator is
+//! the only other kind defined, and places nothing here), an envelope or page
+//! larger than one sixteen-mebibyte block, whose blocks keep their bytes, and a
+//! payload ROOT split across several keys because it was larger than the
+//! anchor's maximum key size. No checksum is checked, since the IR has no
+//! xxhash-3.
 
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 
@@ -220,8 +246,7 @@ fn field() -> T {
 /// Column types by the number the format gives them. The `Split` ones have
 /// their bytes rearranged, all the first bytes of the elements and then all the
 /// second, and the signed ones among them zigzag each value first and the index
-/// ones store differences; see [`super::rntuple`]'s page contents for which of
-/// these read as values.
+/// ones store differences; see [`values`] for which of these read as values.
 pub(super) const COLUMN_TYPE: &[(i128, &str)] = &[
     (0x00, "Bit"),
     (0x01, "Byte"),
@@ -445,20 +470,89 @@ fn cluster_summary() -> T {
 /// there are no pages and no compression settings. The settings are the
 /// algorithm times a hundred and the level, the same packing a ROOT file's
 /// header uses: 505 is zstd at level 5.
+///
+/// Nothing in the page list says what the column's elements are; the header
+/// does, and the column is known only by where it is in this list. So the three
+/// fields of no bits before the pages read that from the header: the column's
+/// number, its type, and the name of the field it belongs to. They are there
+/// only when the header can be read from here at all, which is when it was
+/// stored as it stands. See [`typed`] for why a compressed header cannot be.
 fn column_pages() -> T {
+    let header_column = |field: &str| E::elem_within(&["header", "payload", "columns", "items"], E::field("column_id"), &[field]);
     T::sized(
         frame_len(),
-        T::structure(
+        T::structure_named(
             "RNTupleColumnPages",
+            "field",
+            "",
             vec![
                 ("size", i64le()),
                 ("page_count", T::u32(Little)),
+                ("column_id", T::computed(E::idx())),
+                (
+                    "column_type",
+                    T::when(typed(), T::enumeration_hex("RNTupleColumnType", T::computed(column_field("type")), COLUMN_TYPE)),
+                ),
+                ("field", T::when(in_header(), T::computed_text(header_column("field")))),
                 ("pages", T::array(page_entry(), E::field("page_count"))),
                 ("element_offset", i64le()),
                 ("compression_settings", T::when(E::lit(-1).less_than(E::field("element_offset")), T::u32(Little))),
             ],
         )
-        .machinery(&["size"]),
+        .machinery(&["size", "column_id"]),
+    )
+}
+
+/// Whether the anchor's header envelope is in the file as it stands, and so
+/// can be read from somewhere else in the ntuple.
+///
+/// A page needs its column's type to be read, and the type is in the header,
+/// in another envelope. An expression reaches a field of another envelope by a
+/// path down into it, and a path goes through structures, lists and `At`s but
+/// not into a compressed run: what came out of a `Decoded` is not a field of
+/// it that a name can reach. So when the header was compressed, which in a
+/// compressed ntuple it nearly always is, a page cannot find out what it holds
+/// and reads as its bytes, opened when they are a compressed block. What would
+/// change that is a path stepping into a decoded run the way it steps through
+/// an `At`, and a way to name the run whatever codec wrote it.
+fn header_stored() -> E {
+    E::lit(0).less_than(E::field("seek_header")).both(E::field("nbytes_header").equal_to(E::field("len_header")))
+}
+
+/// How many columns the header describes, and how many the footer's schema
+/// extension adds after them. The extension's numbers carry on from the
+/// header's, so a column past the header's count is in the extension.
+fn header_columns() -> E {
+    E::within(&["header", "payload", "columns", "count"])
+}
+
+fn extension_columns() -> E {
+    E::cond(
+        E::within(&["schema_extension", "size"]).greater_than(E::lit(8)),
+        E::within(&["schema_extension", "columns", "count"]),
+        E::lit(0),
+    )
+}
+
+/// Whether this column's description can be read from here: the header is
+/// stored, and the column is one it or the extension describes.
+fn typed() -> E {
+    header_stored().both(E::field("column_id").less_than(header_columns().add(extension_columns())))
+}
+
+/// The same, for a column the header itself describes, which is the only kind
+/// whose field can be named by the number it gives. See [`schema`].
+fn in_header() -> E {
+    header_stored().both(E::field("column_id").less_than(header_columns()))
+}
+
+/// The field `name` of this column's description, from the header or from the
+/// footer's schema extension. Only to be asked where [`typed`] holds.
+fn column_field(name: &str) -> E {
+    E::cond(
+        E::field("column_id").less_than(header_columns()),
+        E::elem_within(&["header", "payload", "columns", "items"], E::field("column_id"), &[name]),
+        E::elem_within(&["schema_extension", "columns", "items"], E::field("column_id").sub(header_columns()), &[name]),
     )
 }
 
@@ -482,14 +576,96 @@ fn page_entry() -> T {
 
 /// A page, where its locator puts it: the bytes the locator counts, and the
 /// checksum after them when the page list said there is one.
+///
+/// A page says nowhere whether it was compressed. What says so is its size
+/// against the size its elements come to, which is the element count times the
+/// column's bits on storage, and where the column's type cannot be read (see
+/// [`typed`]) the page's own first bytes are asked instead: a ROOT block opens
+/// with one of the algorithm's two letters and a compressed size that fits in
+/// the page. A page written as it stands could open that way by chance, and
+/// then it reads as a block that does not open.
 fn page() -> T {
+    let unpacked = E::field("elements").mul(column_field("bits_on_storage")).add(E::lit(7)).div(E::lit(8));
+    let packed = E::cond(typed(), E::Remaining.less_than(unpacked), looks_like_block());
     T::structure(
         "RNTuplePage",
         vec![
-            ("data", T::sized(E::within(&["locator", "size"]), T::bytes(E::Remaining))),
+            (
+                "data",
+                T::sized(
+                    E::within(&["locator", "size"]),
+                    T::switch(
+                        packed,
+                        vec![(1, T::repeat(super::compressed(T::Named("RNTupleValues".into())), Until::End))],
+                        T::Named("RNTupleValues".into()),
+                    ),
+                ),
+            ),
             ("checksum", T::when(E::field("element_count").less_than(E::lit(0)), T::u64(Little))),
         ],
     )
+}
+
+/// Whether the bytes here open the way a ROOT compressed block does: one of the
+/// algorithms' two letters, and a compressed size that the nine-byte header and
+/// it leave room for.
+fn looks_like_block() -> E {
+    let tag = E::peek(16, Big);
+    let named = super::ALGORITHM.iter().fold(E::lit(0), |any, (code, _)| any.either(tag.clone().equal_to(E::lit(*code))));
+    E::lit(9)
+        .less_or_equal(E::Remaining)
+        .both(named)
+        .both(E::peek_at(E::lit(24), 24, Little).add(E::lit(9)).less_or_equal(E::Remaining))
+}
+
+/// What a page's bytes hold, once they are out of any block, by the type of
+/// its column.
+///
+/// The fixed-width types are their values one after another, little-endian,
+/// and read as them. `Index32` and `Index64` are too: each is where the next
+/// entry's elements start in the column under it, counted from the start of
+/// the cluster. The rest keep their bytes, named for how they are laid out,
+/// because reading them needs arithmetic over the whole page that no field
+/// does: a `Split` column has all the first bytes of its elements and then all
+/// the second, a signed one zigzags each value before that, a split index
+/// column stores each value less the one before, and `Bit`, `Real32Trunc` and
+/// `Real32Quant` pack each element into fewer bits than a byte-wide field.
+///
+/// How many values fit is worked out from the room there is rather than from
+/// the page's element count. A page of more than sixteen mebibytes is several
+/// blocks, and each is read on its own.
+fn values() -> T {
+    let each = |ty: T, bytes: i128| T::array(ty, E::Remaining.div(E::lit(bytes)));
+    let laid = |name: &str| T::structure_named(name, "", "bytes", vec![("bytes", T::bytes(E::Remaining))]);
+    let mut cases = vec![
+        (0x00, laid("RNTupleBitPacked")),
+        (0x01, T::bytes(E::Remaining)),
+        (0x02, T::utf8(E::Remaining)),
+        (0x03, each(T::Int { bits: 8, endian: Little }, 1)),
+        (0x04, each(T::u8(), 1)),
+        (0x05, each(T::Int { bits: 16, endian: Little }, 2)),
+        (0x06, each(T::u16(Little), 2)),
+        (0x07, each(T::i32(Little), 4)),
+        (0x08, each(T::u32(Little), 4)),
+        (0x09, each(i64le(), 8)),
+        (0x0a, each(T::u64(Little), 8)),
+        (0x0b, each(T::F16(Little), 2)),
+        (0x0c, each(T::F32(Little), 4)),
+        (0x0d, each(T::F64(Little), 8)),
+        (0x0e, each(T::u32(Little), 4)),
+        (0x0f, each(T::u64(Little), 8)),
+        // Where the entry's value is in the column of the variant member it
+        // holds, and which member that is.
+        (0x10, each(T::structure("RNTupleSwitch", vec![("index", T::u64(Little)), ("tag", T::u32(Little))]), 12)),
+        (0x1a, laid("RNTupleDeltaSplit")),
+        (0x1b, laid("RNTupleDeltaSplit")),
+        (0x1c, laid("RNTupleBitPacked")),
+        (0x1d, laid("RNTupleBitPacked")),
+    ];
+    // Split, and zigzagged first where the type is signed.
+    cases.extend([0x12, 0x14, 0x16, 0x17, 0x18, 0x19].map(|c| (c, laid("RNTupleSplit"))));
+    cases.extend([0x11, 0x13, 0x15].map(|c| (c, laid("RNTupleZigzagSplit"))));
+    T::switch(E::cond(typed(), E::field("column_type"), E::lit(-1)), cases, T::bytes(E::Remaining))
 }
 
 /// A linked attribute set: another RNTuple, in the same file, holding metadata
@@ -518,6 +694,7 @@ pub(super) fn with_types(t: Template) -> Template {
         .with_type("RNTupleField", field())
         .with_type("RNTupleColumnPages", column_pages())
         .with_type("RNTuplePage", page())
+        .with_type("RNTupleValues", values())
 }
 
 #[cfg(test)]
@@ -739,7 +916,7 @@ pub(super) mod tests {
 
     /// The page `k` of a column, where its locator put it.
     fn placed_page(column: usize, k: usize) -> Vec<usize> {
-        down(&column_pages(column), &[2, k, 3, 0])
+        down(&column_pages(column), &[5, k, 3, 0])
     }
 
     /// A footer with nothing added to the schema and no cluster groups.
@@ -898,7 +1075,7 @@ pub(super) mod tests {
         let mut ev = Evaluator::new(root());
         for (column, pages) in placed.iter().enumerate() {
             let list = column_pages(column);
-            assert_eq!(ev.node(&d, &down(&list, &[2])).unwrap().child_count as usize, pages.len());
+            assert_eq!(ev.node(&d, &down(&list, &[5])).unwrap().child_count as usize, pages.len());
             for (k, (offset, size)) in pages.iter().enumerate() {
                 let page = placed_page(column, k);
                 let data = ev.node(&d, &down(&page, &[0])).unwrap();
@@ -909,7 +1086,7 @@ pub(super) mod tests {
         // The first page of doubles says it has a checksum with a negative
         // count, and the eight bytes after it are that checksum; the second
         // says nothing of the kind and has none.
-        let entry = down(&column_pages(0), &[2, 0]);
+        let entry = down(&column_pages(0), &[5, 0]);
         assert_eq!(ev.node(&d, &down(&entry, &[0])).unwrap().value, Value::Int(-3));
         assert_eq!(ev.node(&d, &down(&entry, &[1])).unwrap().value, Value::Int(3));
         let sum = ev.node(&d, &down(&placed_page(0, 0), &[1])).unwrap();
@@ -918,8 +1095,8 @@ pub(super) mod tests {
         assert!(ev.node(&d, &down(&placed_page(0, 1), &[1])).unwrap().absent);
         // After the pages, inside the same frame: the element offset and the
         // compression settings.
-        assert_eq!(ev.node(&d, &down(&column_pages(0), &[3])).unwrap().value, Value::Int(0));
-        assert_eq!(ev.node(&d, &down(&column_pages(0), &[4])).unwrap().value, Value::UInt(101));
+        assert_eq!(ev.node(&d, &down(&column_pages(0), &[6])).unwrap().value, Value::Int(0));
+        assert_eq!(ev.node(&d, &down(&column_pages(0), &[7])).unwrap().value, Value::UInt(101));
     }
 
     #[test]
@@ -930,10 +1107,90 @@ pub(super) mod tests {
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(root());
         let list = column_pages(4);
-        assert_eq!(ev.node(&d, &down(&list, &[2])).unwrap().child_count, 0);
-        assert_eq!(ev.node(&d, &down(&list, &[3])).unwrap().value, Value::Int(i64::MIN.into()));
-        assert!(ev.node(&d, &down(&list, &[4])).unwrap().absent);
+        assert_eq!(ev.node(&d, &down(&list, &[5])).unwrap().child_count, 0);
+        assert_eq!(ev.node(&d, &down(&list, &[6])).unwrap().value, Value::Int(i64::MIN.into()));
+        assert!(ev.node(&d, &down(&list, &[7])).unwrap().absent);
         // The column before it is untouched by it.
-        assert_eq!(ev.node(&d, &down(&column_pages(3), &[4])).unwrap().value, Value::UInt(101));
+        assert_eq!(ev.node(&d, &down(&column_pages(3), &[7])).unwrap().value, Value::UInt(101));
+    }
+
+    /// The values under a page's `data`, as numbers.
+    fn numbers(ev: &mut Evaluator, d: &Document<MemSource>, at: &[usize]) -> Vec<Value> {
+        let n = ev.node(d, at).unwrap().child_count as usize;
+        (0..n).map(|i| ev.node(d, &down(at, &[i])).unwrap().value).collect()
+    }
+
+    #[test]
+    fn a_page_reads_as_the_values_its_column_type_says() {
+        let (bytes, _) = ntuple(&plain_pages(), false);
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(root());
+        // The column list says which column it is, what type, and whose.
+        assert_eq!(ev.node(&d, &column_pages(0)).unwrap().name, "[0] x");
+        assert_eq!(ev.node(&d, &column_pages(3)).unwrap().name, "[3] _0");
+        assert_eq!(
+            ev.node(&d, &down(&column_pages(4), &[3])).unwrap().value,
+            Value::Enum { raw: 0x13, name: Some("SplitInt32".into()), hex: true }
+        );
+        let data = |c, k| down(&placed_page(c, k), &[0]);
+        let floats = |v: &[f64]| v.iter().map(|x| Value::Float(*x)).collect::<Vec<_>>();
+        assert_eq!(numbers(&mut ev, &d, &data(0, 0)), floats(&[1.5, -2.0, 3.25]));
+        assert_eq!(numbers(&mut ev, &d, &data(0, 1)), floats(&[4.0, 5.5]));
+        assert_eq!(numbers(&mut ev, &d, &data(1, 0)), [3u128, 3, 8, 8, 8].map(Value::UInt).to_vec());
+        assert_eq!(ev.node(&d, &data(2, 0)).unwrap().value, Value::Str("abcdefgh".into()));
+        assert_eq!(numbers(&mut ev, &d, &data(3, 0)), floats(&[0.5, 1.0, 2.0]));
+        // A split column keeps its bytes, and says how they are laid out.
+        let split = ev.node(&d, &data(4, 0)).unwrap();
+        assert_eq!(split.type_name, "RNTupleZigzagSplit");
+        assert_eq!(ev.node(&d, &down(&data(4, 0), &[0])).unwrap().size_bits, 20 * 8);
+    }
+
+    #[test]
+    fn a_compressed_page_opens_and_holds_the_same_values() {
+        let mut columns = plain_pages();
+        let many = vec![7.0; 40];
+        columns[0].as_mut().unwrap()[1] = Page { data: doubles(&many), elements: 40, checksum: true, packed: true };
+        let (bytes, placed) = ntuple(&columns, false);
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(root());
+        let data = down(&placed_page(0, 1), &[0]);
+        let node = ev.node(&d, &data).unwrap();
+        assert_eq!((node.offset_bits / 8, node.size_bits / 8), (placed[0][1].0, placed[0][1].1 as u64));
+        // The block, the zlib stream in it, the deflate run, and the values
+        // that came out.
+        assert_eq!(
+            ev.node(&d, &down(&data, &[0, 0])).unwrap().value,
+            Value::Enum { raw: 0x5a4c, name: Some("zlib".into()), hex: true }
+        );
+        let values = down(&data, &[0, 4, 6, 0]);
+        assert_ne!(ev.node(&d, &values).unwrap().space, 0);
+        assert_eq!(numbers(&mut ev, &d, &values), vec![Value::Float(7.0); 40]);
+        // The stored page beside it is still read as it stands.
+        assert_eq!(ev.node(&d, &down(&placed_page(0, 0), &[0])).unwrap().child_count, 3);
+    }
+
+    #[test]
+    fn with_the_header_compressed_a_page_is_opened_by_its_bytes_and_left_untyped() {
+        let mut columns = plain_pages();
+        columns[0].as_mut().unwrap()[1] = Page { data: doubles(&[7.0; 40]), elements: 40, checksum: false, packed: true };
+        let (bytes, placed) = ntuple(&columns, true);
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(root());
+        // Nothing here can reach the column's description, so there is no type
+        // and no field name, and the column is known by its number.
+        assert!(ev.node(&d, &down(&column_pages(0), &[3])).unwrap().absent);
+        assert!(ev.node(&d, &down(&column_pages(0), &[4])).unwrap().absent);
+        assert_eq!(ev.node(&d, &column_pages(0)).unwrap().name, "[0]");
+        // The compressed page still opens, because it opens like a block, and
+        // what comes out is its bytes.
+        let data = down(&placed_page(0, 1), &[0]);
+        assert_eq!(ev.node(&d, &data).unwrap().size_bits / 8, placed[0][1].1 as u64);
+        let opened = ev.node(&d, &down(&data, &[0, 4, 6, 0])).unwrap();
+        assert_eq!(opened.value, Value::Bytes { len: 320, preview: 7.0f64.to_le_bytes().repeat(2) });
+        // The stored ones are bytes as they stand.
+        assert_eq!(ev.node(&d, &down(&placed_page(2, 0), &[0])).unwrap().value.clone(), Value::Bytes {
+            len: 8,
+            preview: b"abcdefgh".to_vec()
+        });
     }
 }
