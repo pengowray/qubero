@@ -61,9 +61,11 @@
 //! - A writer that puts the keys in another order, which the format allows and
 //!   numpy has never done, gets the whole dict as one run of text and its
 //!   numbers as bytes.
-//! - An NPZ is a ZIP of these, and reads as the ZIP it is. Typing a member as
-//!   an NPY would need a ZIP entry to take a template by the name it is stored
-//!   under, and nothing in the IR says that.
+//! - An NPZ is a ZIP of these and reads as the ZIP it is, and each member
+//!   opens as an NPY in a space of its own: a ZIP entry's data is a decoded
+//!   run whose template says only "bytes", and a space like that is sniffed,
+//!   so the magic at the front of the member is what types it. Nothing here
+//!   had to know the member's name. Checked by `tests/npy_real.rs`.
 
 use crate::template::{Encoding, Endian, Endian::Big, Endian::Little, Expr as E, StrLen, Template, Ty as T, Until};
 

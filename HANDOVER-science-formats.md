@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| S6, NPZ half: members already open as NPY through the ZIP entry's decoded space being sniffed; a test pins it and the stale doc is gone. Zarr ZipStore chunks remain (a reader, not an IR change). | see below |
 | S1. `Ty::Gather` and `Expr::Placer`: children placed at offsets read from records the template walks to, and a child asking its record again. | `2153c96` |
 | FITS heap: every `P`/`Q` descriptor's array placed in the heap, sized by its count and typed by its letter. `comp.fits` names all 86,400 bytes, up from a heap of one gap. | `b5c4fd2` |
 | `hdf5.rs` split: the four array chunk indexes and their tests moved to `hdf5_index.rs` (3,112 + 968 lines) | `1e1d5cd` |
@@ -177,13 +178,12 @@ HDF5 files.
 - **S6. A ZIP entry takes a template by its name.** NPZ members as NPY, the
   chunks of a Zarr ZipStore.
 
-  **Note (Fable, 2026-09-13).** Probably half done by accident: a ZIP
-  entry's data is `T::decoded(.., decoded_text())`, a one-field text struct,
-  so `says_only_bytes` holds and `template_for` sniffs the unpacked bytes,
-  and `npy::MAGIC` is in the sniff table. So a stored or deflated NPZ member
-  should already open as NPY in its own space; nothing tests it
-  (`npy/two-arrays.npz`) and `npy.rs` still says it cannot be done. First
-  step: that test, then the doc. `Match` on the entry name over another
+  **NPZ half closed (2026-09-13).** A ZIP entry's data is
+  `T::decoded(.., decoded_text())`, a one-field text struct, so
+  `says_only_bytes` holds and `template_for` sniffs the unpacked bytes, and
+  `npy::MAGIC` is in the sniff table: both members of `two-arrays.npz` open
+  as `npy` spaces. `tests/npy_real.rs` checks it now and the `npy.rs` doc no
+  longer says it cannot be done. `Match` on the entry name over another
   template's `Named` types is possible mechanically but buys nothing here
   (`Match` is an exact compare and `Expr` has no suffix or concatenation).
   Zarr chunks are not a name-to-template problem: dtype, shape, order and

@@ -91,3 +91,31 @@ fn a_real_structured_dtype_lists_the_fields_it_names() {
     let last = n as usize - 1;
     assert_eq!(ev.node(&d, &[5, 1, 0, last]).unwrap().name, format!("[{last}] channel_{last:04}"));
 }
+
+/// An NPZ is a ZIP of NPY files. The ZIP template opens every stored or
+/// deflated entry as a space of its own, and a space whose template says
+/// only "bytes" is sniffed, so each member should come up as an NPY without
+/// the ZIP entry having to know its name.
+#[test]
+fn a_real_npz_opens_each_member_as_an_npy() {
+    let Some(path) = sample("two-arrays.npz") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let d = Document::new(MemSource(std::fs::read(&path).unwrap()));
+    let mut ev = Evaluator::new(formats::builtin("zip").unwrap());
+    let mut opened = Vec::new();
+    for i in 0..2 {
+        // records[i].body.data is the entry's run of bytes, a `Decoded`.
+        let body = &[0, i, 1];
+        let n = ev.node(&d, body).unwrap();
+        let data = (0..n.child_count as usize).find(|k| ev.node(&d, &[0, i, 1, *k]).unwrap().name == "data").unwrap();
+        let at = [0, i, 1, data];
+        let id = ev.open_space(&d, 0, &at).expect("resolves").expect("the entry opens");
+        let space = ev.space(id).expect("just opened");
+        opened.push((space.template.clone(), space.len_bytes()));
+    }
+    assert_eq!(opened[0].0, "npy", "counts.npy should open as an NPY, not as {:?}", opened[0]);
+    assert_eq!(opened[1].0, "npy", "weights.npy should open as an NPY, not as {:?}", opened[1]);
+    assert_eq!((opened[0].1, opened[1].1), (208, 168));
+}
