@@ -24,10 +24,14 @@
 //! **The values.** A variable points at an index of index records, each entry
 //! of which says which records of the variable it covers and where their bytes
 //! are. Those bytes are read here as the numbers they are: one row per record
-//! of the variable, and inside it one value per element of the shape the
-//! variable declared, so a record of a three-vector of floats reads as three
-//! floats. An attribute entry's value and a variable's pad value are read the
-//! same way, by the type each of them names.
+//! of the variable, and inside it that record's values, so a record of a
+//! three-vector of floats reads as three floats. How many values that is, is
+//! the block's own room divided by how many records it holds and by how wide
+//! one value is, rather than the variable's dimensions multiplied together: a
+//! dimension a variable says it does not vary along is one value repeated and
+//! is not written at all, so the shape has more numbers in it than the block
+//! has values. An attribute entry's value and a variable's pad value are read
+//! the same way, by the type each of them names.
 //!
 //! How to read any of them depends on the encoding named in the descriptor
 //! record at the front of the file, which may be any of a dozen machines'
@@ -46,11 +50,11 @@
 //!
 //! A block of values may be compressed, in which case the block is a record of
 //! its own holding a stream. CDF squeezes with gzip, with a run-length coding
-//! of zeroes, or with one of two Huffman codings; the first two are read here
-//! and the Huffman ones are not, so such a block keeps its bytes. A compressed
-//! block is told from an uncompressed one by its record type, and which codec
-//! it holds by the gzip signature at the front of the stream, since the record
-//! that names the codec is the variable's and not the block's.
+//! of zeroes, or with one of two Huffman codings. Which of the four is in the
+//! variable's own compression parameters rather than in the block, so what is
+//! asked here is the stream: a gzip member opens with two bytes that say so,
+//! and the other three open with nothing in particular. A block packed one of
+//! those other ways keeps its bytes.
 //!
 //! A compressed file says so in its second word and holds one compressed
 //! record, which is the whole of the uncompressed file squeezed. That is
@@ -80,16 +84,18 @@
 //! reach.
 //!
 //! What is still not read. The two Huffman codings are not opened, so a file
-//! or a block squeezed with one keeps its bytes; nor are a sparse variable's
-//! missing records worked out from its pad value or the record before. A
-//! record's values are a flat run, in the order the file wrote them: how to
-//! fold them into the variable's shape is what the majority flag and the
-//! dimension variances say, and doing that folding is a reader's job rather
-//! than this one's. And a CDF_EPOCH and a CDF_TIME_TT2000 read as the numbers
-//! they are rather than as moments: the first is a count of milliseconds in a
-//! float, which no counted epoch here takes, and the second counts leap
-//! seconds from an instant that is not a whole second, which none of them can
-//! state. A date this could only get wrong is one it does not show.
+//! or a block squeezed with one keeps its bytes, and neither is a block
+//! squeezed with the run-length coding, which has no signature to be told by.
+//! Nor are a sparse variable's missing records worked out from its pad value
+//! or the record before. A record's values are a flat run, in the order the
+//! file wrote them: how to fold them into the variable's shape is what the
+//! majority flag and the dimension variances say, and doing that folding is a
+//! reader's job rather than this one's. And a CDF_EPOCH and a CDF_TIME_TT2000
+//! read as the numbers they are rather than as moments: the first is a count
+//! of milliseconds in a float, which no counted epoch here takes, and the
+//! second counts leap seconds from an instant that is not a whole second,
+//! which none of them can state. A date this could only get wrong is one it
+//! does not show.
 
 use crate::codec::Codec;
 use crate::template::{
