@@ -3743,18 +3743,23 @@ fn a_tagged_search_finds_an_element_written_out_of_order() {
     );
     let t = Template::new("t", T::structure("Root", vec![("refs", T::array(reference, E::lit(3)))]));
 
-    // Three references, asking for the last label written first, so that the
-    // two after it are answered from what that search had already read.
+    // Three references, and a list with the label 7 in it twice. The first
+    // search stops in the middle of the list, the second carries on from there
+    // and passes the second 7 on its way, and the third asks for 7: the answer
+    // is the first element carrying it, which is the one the search would have
+    // reached and is behind where the walk had got to.
     let d = doc(&[
-        6, 5, 6, 7, 6, 3, //
+        6, 5, 6, 9, 6, 7, //
         7, 1, b'a', //
         3, 2, b'b', b'c', //
-        5, 3, b'd', b'e', b'f',
+        5, 3, b'd', b'e', b'f', //
+        7, 4, b'g', b'h', b'i', b'j', //
+        9, 1, b'k',
     ]);
     let mut ev = Evaluator::new(t);
     assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().value.as_int(), Some(3), "label 5 is the third element");
-    assert_eq!(ev.node(&d, &[0, 1, 3]).unwrap().value.as_int(), Some(1), "label 7 is the first");
-    assert_eq!(ev.node(&d, &[0, 2, 3]).unwrap().value.as_int(), Some(2), "label 3 is the second");
+    assert_eq!(ev.node(&d, &[0, 1, 3]).unwrap().value.as_int(), Some(1), "label 9 is the last");
+    assert_eq!(ev.node(&d, &[0, 2, 3]).unwrap().value.as_int(), Some(1), "label 7 is the first, not the fourth");
 }
 
 /// Where a field is, rather than what it says.

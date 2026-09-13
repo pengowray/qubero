@@ -18,9 +18,10 @@
 //! Reading `encoding-type` is what the global heap was for. The attribute's
 //! value is a variable-length string, which is a length, the address of a heap
 //! collection and an index into it; the objects in a collection have no fixed
-//! size, so the one with that index is found by walking the collection from its
-//! first object. A field cannot do that walk. A reader can, and this is the
-//! reader.
+//! size, so the one with that index is found by walking the collection. That
+//! walk used to be written out here, because a field could not do it. It can
+//! now: the note carries an `object` field placed at whatever the search
+//! found, and what is left here is one step through the address.
 //!
 //! The walk is bounded: a file with more objects than [`LIMIT`] says how many
 //! it showed and how many there were, rather than growing without end. Group

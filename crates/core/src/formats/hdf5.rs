@@ -162,11 +162,15 @@
 //! field.
 //!
 //! A variable-length element is a length, the address of a global heap
-//! collection and an index into it. All three are shown, and the collection is
-//! placed, so the bytes are one step from the note that names them. Which
-//! object in the collection is the one is left to the reader: the objects have
-//! no fixed size, so the fifteenth is wherever the fourteen before it ended,
-//! and there is no expression here for "the element whose index is this".
+//! collection and an index into it. All three are shown, the collection is
+//! placed, and so is the object itself: the collection is searched for the
+//! object carrying that index, and `Expr::StartOf` turns where that object was
+//! found into an address to place a field at. The objects have no fixed size,
+//! so the fifteenth is wherever the fourteen before it ended and the search is
+//! a walk; what one walk learned is kept by the stretch of bytes it covered,
+//! so a column of two thousand strings is one walk and not two thousand. The
+//! bytes are counted in the collection and not in the column, since several
+//! notes can point at one object.
 //!
 //! An attribute's value reads as elements too, by the datatype written inside
 //! the attribute rather than beside it. That is the one thing the IR could not

@@ -184,7 +184,13 @@ impl Memo {
             entry.full = true;
             return;
         }
-        if entry.found.insert(key, idx).is_none() {
+        // Written once and never changed. A label can appear twice in a list,
+        // and a search answers with the first element carrying it; a walk that
+        // resumes and meets the second would otherwise replace the answer with
+        // it. FITS headers do this: `COMMENT` and `HISTORY` are written as
+        // often as anyone likes.
+        if let std::collections::hash_map::Entry::Vacant(slot) = entry.found.entry(key) {
+            slot.insert(idx);
             self.tag_entries += 1;
         }
     }
