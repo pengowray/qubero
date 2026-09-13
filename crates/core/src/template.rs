@@ -1066,6 +1066,29 @@ pub struct Field {
     /// Nothing when the text cannot be read or comes to nothing, which leaves
     /// the field with the name it had.
     pub name_from: Option<Expr>,
+    /// The same, for each *element* of this field, when the field is a list
+    /// whose elements the file names.
+    ///
+    /// A list has no `Field` per element to hang [`Field::name_from`] on, and
+    /// the formats that need this write one name per element somewhere else:
+    /// an NPY with a structured dtype lists `('name', 'format')` pairs in its
+    /// header and then writes each record as one value per pair, and a MATLAB
+    /// structure writes its field names as a run of fixed-width text and then
+    /// one element per field, in the same order. So the expression is worked
+    /// out once per element, from that element, and [`Expr::Idx`] is where
+    /// the element sits in this list: `[1]` reads its name from entry 1 of
+    /// the header's list and is labelled `[1] y`.
+    ///
+    /// Kept apart from `name_from` rather than folded into it, for the reason
+    /// [`Field::elem_check`] is: a list is a field too, and "what this field
+    /// is called" and "what each of its elements is called" are two claims a
+    /// template may want to make about one declaration.
+    ///
+    /// The same rules as `name_from`. The index stays the name, so a path, an
+    /// expression and an edit all still say `[1]`; the label is the index and
+    /// then the text; and an element whose text cannot be read, or reads as
+    /// nothing, keeps the bare index.
+    pub elem_name_from: Option<Expr>,
     /// True when this field is a second reading of bytes another field already
     /// describes, rather than bytes of its own.
     ///
@@ -2172,6 +2195,7 @@ impl Ty {
                     name: n.into(),
                     ty,
                     name_from: None,
+                    elem_name_from: None,
                     aside: false,
                     checks: Vec::new(),
                     elem_check: None,
@@ -2209,6 +2233,21 @@ impl Ty {
                 let mut s = (*s).clone();
                 if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
                     f.name_from = Some(from);
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+    /// Say where each element of the list called `field` gets its displayed
+    /// name from, with [`Expr::Idx`] standing for that element's index. The
+    /// index stays the path name. See [`Field::elem_name_from`].
+    pub fn field_elem_named_from(self, field: &str, from: Expr) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.elem_name_from = Some(from);
                 }
                 Ty::Struct(Arc::new(s))
             }
