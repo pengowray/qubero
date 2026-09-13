@@ -33,6 +33,9 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| FITS `TSCALn`/`TZEROn` and `BSCALE`/`BZERO`: the stored integer keeps its bytes and a zero-bit `worth = zero + scale * stored` hangs off it. Not read as the unsigned type: the convention is a bias, and `scaled.fits` shows physical 0 on disk as signed -32768. | ef3e54f |
+| FITS columns past 32: a row is a list of cells, each working out its own `TFORMn` from `Idx`, so the cap is the standard's 999. Labels are `[2] flux` now, were `col3 flux`. Axes past 9 read; `NAXISn = 0` reads as no data. | cdb051f |
+| FITS `CONTINUE` cards read as the pieces they hold; a bare `TFORM1 = 'I'` reads as one binary value (it went down the ASCII path and failed, which broke three of four astropy-written samples). | c2dcf36, ecd6b31 |
 | HDF4: vdata rows with named columns, scientific datasets with scales, rasters and palettes, vgroups, special elements. Spans on `grtdfui83.hdf` 155 to 1,047 (bytes named cannot move: every descriptor already claimed its run). Four samples from the HDF Group's test files. | 65137af, 73719b7 |
 | CDF values: VXR chain, VVR and CVVR values typed by the variable, attribute and pad values, byte order from the encoding, gzip and run-length (new `Codec::CdfRle`) unpacked for blocks and whole files, versions 2.5 to 2.7. `psp_fld_...cdf` names 70,002 of 70,003 bytes, up from 48,749. | 6f39711, 78faa34 |
 | ROOT: a reader beside the template (`root_streamer.rs`, `root_tree.rs`) decodes `StreamerInfo` and every `TTree`: classes, branches, leaves, every basket's offset and entry range, and simple leaves' values, listed in the Logical tab as `ROOT contents`. Checked against uproot on all eight samples. The template still cannot place the baskets (see S4's correction). | 8ab3571 |
@@ -324,20 +327,32 @@ Reads further than any other scientific format. Left:
 
 ### FITS
 
-- `TSCALn`/`TZEROn` not applied, so unsigned 16-bit columns read as signed.
-- Tile-compressed images read as a binary table of compressed tiles, and now
-  the tiles' compressed bytes in the heap; nothing inflates a Rice or gzip
-  tile into pixels.
-- Every cell asks the header for its `TFORMn` again, so large tables are slow,
-  and the heap walk visits every cell of every row before the heap has any
-  children.
-- Columns past 32, axes past 9, `CONTINUE` cards.
-- Columns keep `Field::name_from`, one per column, rather than moving to
-  `elem_name_from` (S3). A row is 32 fields and not a list because each
-  column's type comes from a `TFORMn` card found by its keyword, and a list
-  would need that keyword built from `Idx` (`TFORM` and a number, as text),
-  which no expression can do. Worth revisiting only if that is added, and it
-  would lift the 32-column cap too.
+Scaling, the column cap, axes and `CONTINUE` cards are closed (see Closed).
+Seven samples. Left:
+
+- Tile-compressed images: the tiles' compressed bytes are in the heap;
+  nothing inflates a Rice or gzip tile into pixels (decoder tier).
+- The joined value of a `CONTINUE` string is not one node: each card reads as
+  its piece, and nothing in the IR reads text out of several runs at once.
+  A text-joining `Ty` is the missing piece.
+- Every cell still asks the header for its `TFORMn`. Hoisting through a
+  `columns` list was built and measured slower, because the memo keeps what a
+  node *is* and never what it *reads as*: a `Computed` field re-runs its
+  expression on every ask. **A value cache beside the shape cache in
+  `eval/memo.rs`** is the fix, and it would help every format that hangs
+  computed fields off records. Meanwhile nested `Switch` replaced
+  `Expr::equals` for the scaling guard (`equals` is two comparisons, so two
+  header walks per ask): `manyrows.fits` 3.7 s to 2.1 s, `comp.fits` 1.2 s
+  to 0.28 s for a full deep walk.
+- A scale or zero point written with an exponent (`2.0E+01`, cfitsio's
+  default) is declined rather than misread; the cards show beside the
+  column and the sum is left to the reader.
+- `Expr::Idx` answers only for the nearest enclosing list, so a
+  variable-length cell needed a `Descriptors` wrapper to keep its column
+  index; an `Expr` naming a level out would remove it.
+- `fits.rs` is about 900 lines before tests; the card reading (`card`,
+  bodies, `tform_value`, `real_value`) would split from the data reading
+  (rows, cells, heap, axes).
 
 ### GRIB
 
