@@ -54,11 +54,40 @@
 //! origin of its own and its addresses are counted from there. See
 //! [`Anchor::Origin`](crate::template::Anchor::Origin).
 //!
+//! The subsystem data is where MATLAB keeps objects of a class, which is what
+//! a `string`, a `table` and a `datetime` all are. A variable holding one is an
+//! opaque array with nothing in it but the class's name and a column of
+//! numbers saying which objects it holds. The objects themselves are in the
+//! subsystem: an element written after the variables, found by the offset in
+//! the header, holding a run of bytes that are a small MAT file of their own.
+//! That file is a structure with a field called `MCOS`, and in the field one
+//! more opaque array, of class `FileWrapper__`, whose cells are a table of
+//! every class and object in the file followed by the values of their
+//! properties. MathWorks has never described any of it; the layout followed
+//! here, and how it was checked, is written above [`file_wrapper`].
+//!
+//! So each class in the table is labelled with its name, each object with its
+//! class, and each property with its name, and a variable's object ids are
+//! read as the numbers the objects are listed by. The link goes that one way:
+//! a variable is written before the table and cannot read anything in it, so
+//! its row shows which object it is and not what the object holds.
+//!
 //! What else is not read here:
 //!
-//! - The subsystem data the header points at, which is where MATLAB keeps
-//!   objects of a class: a `mxOPAQUE` element names a class and an offset into
-//!   it, and the offset lands in a region this reads as bytes.
+//! - A property's value is read as the array it is written as, and no
+//!   further. A `string` keeps its text in a column of 64-bit words, its
+//!   dimensions and the length of each string first and then the UTF-16 code
+//!   units packed eight bytes to a word, and it reads as those words. Nothing
+//!   in a value's cell says which object's property it is; the property says
+//!   which cell, by number, and the cell is written after it.
+//! - An object held in a property is not an opaque array but a bare `uint32`
+//!   column with the same marker, and reads as numbers.
+//! - What the writeups do not know either: the two words after each class's
+//!   name and after each object's class, regions 6 and 7 of the table, and
+//!   the first of the three cells shared by a class.
+//! - A table of a version before 4. Only version 4 has been seen, and an
+//!   older table keeps every cell after the second as a plain value.
+//! - The subsystem of a level 7.3 file, which is HDF5 and read as that.
 //! - A sparse array's row indices and column starts read as the numbers they
 //!   are, not as the positions they describe.
 //! - Level 4 on a VAX or a Cray, whose floating point is neither of the two
@@ -92,6 +121,11 @@ const V73: i128 = 0x0200;
 
 /// The 116 bytes of text, the subsystem offset, the version and the marker.
 const HEADER_LEN: i128 = 128;
+
+/// Where the header keeps the subsystem offset and the version, counted from
+/// the front of the file.
+const SUBSYSTEM_OFFSET_AT: i128 = 116;
+const VERSION_AT: i128 = 124;
 
 /// The user block a level 7.3 file leaves in front of its HDF5 superblock.
 pub const USER_BLOCK: u64 = 512;
@@ -163,6 +197,8 @@ pub fn mat() -> Template {
     for e in [Little, Big] {
         t = t.with_type(element_name(e), element(e, false));
         t = t.with_type(text_element_name(e), element(e, true));
+        t = t.with_type(file_wrapper_name(e), file_wrapper(e));
+        t = t.with_type(object_reference_name(e), object_reference(e));
     }
     t
 }
@@ -205,21 +241,76 @@ fn text_element_name(e: Endian) -> &'static str {
 
 // ---------------------------------------------------------------- level 5
 
+/// A level 5 file, and where its subsystem data is when it has any.
+///
+/// The subsystem is an element like any other, written after the variables,
+/// and nothing about its tag says what it is: the header's offset is the only
+/// thing that does. So the variables are read in a window that ends where the
+/// offset says, and the element there is read as the subsystem. The offset is
+/// looked at before the header is read, since which fields the file has
+/// depends on it, and it is trusted only when it lands past the header, leaves
+/// room for a tag, and finds an array or a compressed element there. Anything
+/// else, spaces and nought included, is a file with no subsystem, or one this
+/// cannot place, and reads as a run of elements the way it always has.
 fn level5(e: Endian) -> T {
-    T::structure(
-        "MAT-file",
-        vec![
-            ("header", header(e)),
-            (
-                "body",
-                T::switch(
-                    E::within(&["header", "version"]),
-                    vec![(V73, hdf5_body())],
-                    T::repeat(T::Named(element_name(e).into()), Until::End).counted_as("element"),
-                ),
-            ),
-        ],
+    let offset = || E::peek_at(E::lit(SUBSYSTEM_OFFSET_AT * 8), 64, e);
+    let inside = E::lit(HEADER_LEN - 1).less_than(offset()).mul(offset().add(E::lit(7)).less_than(E::Remaining));
+    let not_hdf5 = E::lit(1).sub(E::peek_at(E::lit(VERSION_AT * 8), 16, e).equals(E::lit(V73)));
+    T::switch(inside.mul(not_hdf5), vec![(1, placed_subsystem(e))], level5_file(e, Subsystem::None))
+}
+
+/// Which of the three shapes a level 5 file's fields take.
+#[derive(Clone, Copy, PartialEq)]
+enum Subsystem {
+    None,
+    /// The subsystem is the last element, which is where MATLAB writes it.
+    Last,
+    /// Something follows it.
+    Followed,
+}
+
+/// The element the subsystem offset lands on, when it is one: its tag says
+/// how long it is, which says whether anything is written after it.
+fn placed_subsystem(e: Endian) -> T {
+    let offset = || E::peek_at(E::lit(SUBSYSTEM_OFFSET_AT * 8), 64, e);
+    let count = || E::peek_at(offset().add(E::lit(4)).mul(E::lit(8)), 32, e);
+    // A compressed element is not padded; an array is, to a multiple of eight.
+    let ends = |padded: bool| {
+        let end = offset().add(E::lit(8)).add(count());
+        if padded { end.add(count().pad_to(8)) } else { end }
+    };
+    let shape = |padded: bool| {
+        T::switch(
+            ends(padded).less_than(E::Remaining),
+            vec![(1, level5_file(e, Subsystem::Followed))],
+            level5_file(e, Subsystem::Last),
+        )
+    };
+    T::switch(
+        E::peek_at(offset().mul(E::lit(8)), 32, e),
+        vec![(MI_COMPRESSED, shape(false)), (MI_MATRIX, shape(true))],
+        level5_file(e, Subsystem::None),
     )
+}
+
+fn level5_file(e: Endian, subsystem: Subsystem) -> T {
+    let elements = || T::repeat(T::Named(element_name(e).into()), Until::End);
+    let mut fields = vec![("header", header(e))];
+    match subsystem {
+        Subsystem::None => fields.push((
+            "body",
+            T::switch(E::within(&["header", "version"]), vec![(V73, hdf5_body())], elements()),
+        )),
+        Subsystem::Last | Subsystem::Followed => {
+            let before = E::within(&["header", "subsystem_offset"]).sub(E::lit(HEADER_LEN));
+            fields.push(("body", T::sized(before, elements())));
+            fields.push(("subsystem", subsystem_element(e)));
+            if subsystem == Subsystem::Followed {
+                fields.push(("after_subsystem", elements()));
+            }
+        }
+    }
+    T::structure("MAT-file", fields)
 }
 
 fn header(e: Endian) -> T {
@@ -348,7 +439,7 @@ fn body(e: Endian, size: E, as_text: bool) -> T {
             (9, run(T::F64(e), 8)),
             (12, run(T::Int { bits: 64, endian: e }, 8)),
             (13, run(T::u64(e), 8)),
-            (MI_MATRIX, T::sized(size.clone(), matrix(e))),
+            (MI_MATRIX, nonempty(size.clone(), matrix(e))),
             // A zlib stream holding one element, which is where MATLAB 7 puts
             // every variable a file has.
             (MI_COMPRESSED, T::decoded(size.clone(), Codec::Zlib, T::Named(element_name(e).into()))),
@@ -365,6 +456,13 @@ fn body(e: Endian, size: E, as_text: bool) -> T {
 /// An array: the flags that say what it is, how big it is, what it is called,
 /// and then whatever its class carries.
 fn matrix(e: Endian) -> T {
+    array_of(e, contents(e, vec![], numbers(e)))
+}
+
+/// An array whose contents are `contents`, for the few places that know more
+/// about an array than its class says: the subsystem, and the arrays inside
+/// it that are a table rather than a variable.
+fn array_of(e: Endian, contents: T) -> T {
     T::structure(
         "Array",
         vec![
@@ -377,25 +475,44 @@ fn matrix(e: Endian) -> T {
                 T::switch(E::within(&["array_flags", "class"]), vec![(MX_OPAQUE, T::bytes(E::lit(0)))], dimensions(e)),
             ),
             ("name", T::Named(text_element_name(e).into())),
-            (
-                "contents",
-                T::switch(
-                    E::within(&["array_flags", "class"]),
-                    vec![
-                        (MX_CELL, cells(e)),
-                        (MX_STRUCT, fields(e, false)),
-                        (MX_OBJECT, fields(e, true)),
-                        (MX_OBJECT_NEW, fields(e, true)),
-                        (MX_CHAR, characters(e)),
-                        (MX_SPARSE, sparse(e)),
-                        (MX_FUNCTION, function(e)),
-                        (MX_OPAQUE, opaque(e)),
-                    ],
-                    numbers(e),
-                ),
-            ),
+            ("contents", contents),
         ],
     )
+}
+
+/// What an array's class carries after its name. `special` reads a class some
+/// other way than it would be read anywhere else, and `numeric` is what every
+/// class this does not name reads as.
+fn contents(e: Endian, special: Vec<(i128, T)>, numeric: T) -> T {
+    let mut cases = special;
+    for (class, reading) in [
+        (MX_CELL, cells(e)),
+        (MX_STRUCT, fields(e, false)),
+        (MX_OBJECT, fields(e, true)),
+        (MX_OBJECT_NEW, fields(e, true)),
+        (MX_CHAR, characters(e)),
+        (MX_SPARSE, sparse(e)),
+        (MX_FUNCTION, function(e)),
+        (MX_OPAQUE, opaque(e)),
+    ] {
+        if !cases.iter().any(|(c, _)| *c == class) {
+            cases.push((class, reading));
+        }
+    }
+    T::switch(E::within(&["array_flags", "class"]), cases, numeric)
+}
+
+/// An element that is an array, read by `array`, and anything else read the
+/// way any element is.
+fn array_element(e: Endian, array: &dyn Fn() -> T) -> T {
+    tagged(e, &|size: E| T::switch(E::field("type"), vec![(MI_MATRIX, nonempty(size.clone(), array()))], body(e, size, false)))
+}
+
+/// An array in `size` bytes, or no array at all when there are none. MATLAB
+/// writes an `miMATRIX` of no bytes where a cell holds nothing, which is what
+/// the second cell of the subsystem's table always is.
+fn nonempty(size: E, array: T) -> T {
+    T::switch(size.clone(), vec![(0, T::bytes(E::lit(0)))], T::sized(size, array))
 }
 
 /// The first subelement, which is always the long form and always two words:
@@ -544,16 +661,338 @@ fn function(e: Endian) -> T {
 /// `string` is. Two names say which class it is: the system that stores it,
 /// which is `MCOS` for everything MATLAB has written this decade, and the
 /// class itself. The array after them holds the numbers that find the object
-/// in the subsystem data, which this does not follow.
+/// in the subsystem data.
+///
+/// For `MCOS` those numbers are read as what they are, an object id for each
+/// object in the array and the id of its class; see [`object_reference`]. The
+/// one opaque array whose class is `FileWrapper__` is the subsystem's own
+/// table of every object in the file, and its array is read as that table;
+/// see [`file_wrapper`]. A `java` object, or anything else, keeps its array
+/// as an ordinary element.
 fn opaque(e: Endian) -> T {
+    let reference = T::matches(
+        E::within(&["class_name", "data"]),
+        vec![("FileWrapper__", T::Named(file_wrapper_name(e).into()))],
+        T::matches(
+            E::within(&["storage", "data"]),
+            vec![("MCOS", T::Named(object_reference_name(e).into()))],
+            T::Named(element_name(e).into()),
+        ),
+    );
     T::structure(
         "Opaque",
         vec![
             ("storage", T::Named(text_element_name(e).into())),
             ("class_name", T::Named(text_element_name(e).into())),
-            ("reference", T::Named(element_name(e).into())),
+            ("reference", reference),
         ],
     )
+}
+
+// --------------------------------------------------------------- subsystem
+//
+// MathWorks has never described any of what follows. The layout is the one
+// written up by the `matio` Python package (foreverallama/matio, BSD-3, its
+// `docs/subsystem_data_format.md`) and read the same way by the C `matio`
+// library's `mcos.c` (tbeu/matio, BSD-2), checked here against two files
+// byte for byte: every region offset lands inside the table and they run in
+// order, every block in a region is as long as its count says, the regions
+// come out exactly as long as the offsets make them, and every index into
+// the names lands on a name. What neither writeup knows is left as numbers.
+
+fn file_wrapper_name(e: Endian) -> &'static str {
+    match e {
+        Little => "mat.FileWrapper.le",
+        Big => "mat.FileWrapper.be",
+    }
+}
+
+fn object_reference_name(e: Endian) -> &'static str {
+    match e {
+        Little => "mat.ObjectReference.le",
+        Big => "mat.ObjectReference.be",
+    }
+}
+
+/// The word an `MCOS` object reference opens with.
+const REFERENCE_MARKER: i128 = 0xdd00_0000;
+
+/// The subsystem element: an array of bytes, compressed or not, whose bytes
+/// are a small MAT file of their own.
+fn subsystem_element(e: Endian) -> T {
+    let array = || array_of(e, contents(e, vec![], subsystem_values(e)));
+    tagged(e, &|size: E| {
+        T::switch(
+            E::field("type"),
+            vec![
+                (MI_COMPRESSED, T::decoded(size.clone(), Codec::Zlib, array_element(e, &array))),
+                (MI_MATRIX, nonempty(size.clone(), array())),
+            ],
+            body(e, size, false),
+        )
+    })
+}
+
+/// The subsystem array's values. MATLAB writes them as `miUINT8` whatever
+/// class the array says, and a run of them long enough to hold the header is
+/// read as the file inside; anything else is the numbers it is.
+fn subsystem_values(e: Endian) -> T {
+    let run = tagged(e, &|size: E| {
+        let file = E::field("type").equals(E::lit(2)).mul(E::lit(7).less_than(size.clone()));
+        T::switch(file, vec![(1, T::sized(size.clone(), subsystem_file()))], body(e, size, false))
+    });
+    T::structure("Values", vec![("real", run), ("imaginary", imaginary(e))])
+}
+
+/// The file inside the subsystem: the last four bytes of a MAT header, which
+/// are the version and the two letters that say which way round, padded to
+/// eight, and then elements. MATLAB writes a structure with a field for each
+/// type system the file uses, `MCOS` being the one there always is, and after
+/// it, sometimes, a second subsystem file with nothing in it.
+fn subsystem_file() -> T {
+    let file = |e: Endian| {
+        T::structure(
+            "Subsystem",
+            vec![
+                ("version", T::enumeration_hex("Version", T::u16(e), &[(V5, "level 5")])),
+                ("endian_marker", T::text(StrLen::Fixed(E::lit(2)), Encoding::Ascii)),
+                ("padding", T::bytes(E::lit(4).at_most(E::Remaining))),
+                ("elements", T::repeat(T::Named(element_name(e).into()), Until::End)),
+            ],
+        )
+        .machinery(&["padding"])
+    };
+    T::switch(
+        E::peek_at(E::lit(16), 16, Big),
+        vec![(INTEL, file(Little)), (MOTOROLA, file(Big))],
+        T::bytes(E::Remaining),
+    )
+}
+
+/// An `MCOS` object's array: a `uint32` column whose words are the marker
+/// 0xDD000000, the number of dimensions, the dimensions, one object id for
+/// each object in the array, and the id of the class. An id is the object's
+/// index in the subsystem's table of objects, and a class id its index in the
+/// table of classes, both counted from one; see [`linking`].
+///
+/// A column that does not open with the marker keeps its numbers.
+fn object_reference(e: Endian) -> T {
+    let words = || {
+        T::structure(
+            "ObjectReference",
+            vec![
+                ("marker", T::enumeration_hex("ReferenceMarker", T::u32(e), &[(REFERENCE_MARKER, "object reference")])),
+                ("dimension_count", T::u32(e)),
+                ("dimensions", T::array(T::u32(e), E::field("dimension_count"))),
+                ("object_ids", T::array(T::u32(e), E::product_of("dimensions"))),
+                ("class_id", T::u32(e)),
+            ],
+        )
+    };
+    let run = tagged(e, &|size: E| {
+        let marked = T::switch(E::peek(32, e), vec![(REFERENCE_MARKER, T::sized(size.clone(), words()))], body(e, size.clone(), false));
+        // Twelve bytes is the least a reference can be, and fewer cannot be
+        // peeked at.
+        let room = E::field("type").equals(E::lit(6)).mul(E::lit(11).less_than(size.clone()));
+        T::switch(room, vec![(1, marked)], body(e, size, false))
+    });
+    let values = T::structure("Values", vec![("real", run), ("imaginary", imaginary(e))]);
+    array_element(e, &|| array_of(e, contents(e, vec![], values.clone())))
+}
+
+/// The `FileWrapper__` object's array, which is a cell array and the whole of
+/// what the subsystem knows: a table linking every object to its class and
+/// its properties in the first cell, an empty cell, one cell for each
+/// property value any object has, and, in version 4 of the table, three cells
+/// shared by every object of a class.
+///
+/// Of those three, the last holds each class's default property values and
+/// the one before it each class's alias; what the first is for, neither
+/// writeup knows. Only version 4 has been seen. The C library reads one shared
+/// cell rather than three in the versions before it, and nothing here has
+/// been checked against such a file, so an older table keeps every cell after
+/// the second in `values` rather than naming cells it cannot place.
+fn file_wrapper(e: Endian) -> T {
+    let size = |i: i128| E::elem_within(&["dimensions", "sizes"], E::lit(i), &[]);
+    let version4 = || E::within(&["linking", "data", "contents", "real", "data", "version"]).equals(E::lit(4));
+    let element = || T::Named(element_name(e).into());
+    let shared = || T::switch(version4(), vec![(1, element())], T::bytes(E::lit(0)));
+    let cells = T::structure(
+        "FileWrapper",
+        vec![
+            ("linking", array_element(e, &|| array_of(e, contents(e, vec![], linking_values(e))))),
+            ("reserved", element()),
+            ("values", T::array(element(), size(0).mul(size(1)).sub(E::lit(2)).sub(version4().mul(E::lit(3))).at_least(E::lit(0)))),
+            ("unknown", shared()),
+            ("class_aliases", shared()),
+            ("defaults", shared()),
+        ],
+    );
+    array_element(e, &|| array_of(e, contents(e, vec![(MX_CELL, cells.clone())], numbers(e))))
+}
+
+/// The first cell's values: `miUINT8`, and read as the table they are once
+/// there are enough of them for its first forty bytes.
+fn linking_values(e: Endian) -> T {
+    let run = tagged(e, &|size: E| {
+        let table = E::field("type").equals(E::lit(2)).mul(E::lit(39).less_than(size.clone()));
+        T::switch(table, vec![(1, T::sized(size.clone(), linking(e)))], body(e, size, false))
+    });
+    T::structure("Values", vec![("real", run), ("imaginary", imaginary(e))])
+}
+
+/// The table in the first cell. A version, how many names there are, eight
+/// offsets counted from the front of the table, the names, and then the
+/// regions the offsets mark out, which MATLAB writes in the order they are
+/// listed. Each region opens with an entry of zeros standing for id nought,
+/// so an entry's index in its list is its id.
+///
+/// Every index into the names counts from one, with nought meaning none, and
+/// each entry that holds one is shown with the name beside it.
+fn linking(e: Endian) -> T {
+    let at = |region: &str| E::within(&["offsets", region]);
+    let span = |from: &str, to: &str| at(to).sub(at(from)).at_least(E::lit(0)).at_most(E::Remaining);
+    let offsets = T::structure(
+        "RegionOffsets",
+        ["classes", "saveobj_properties", "objects", "properties", "dynamic_properties", "region_6", "region_7", "end"]
+            .into_iter()
+            .map(|n| (n, T::u32(e)))
+            .collect(),
+    );
+    let name = T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Latin1);
+    T::structure(
+        "LinkingMetadata",
+        vec![
+            ("version", T::u32(e)),
+            ("name_count", T::u32(e)),
+            ("offsets", offsets),
+            ("names", T::array(name, E::field("name_count"))),
+            (
+                "names_padding",
+                T::bytes(at("classes").sub(E::lit(40)).sub(E::size_of("names")).at_least(E::lit(0)).at_most(E::Remaining)),
+            ),
+            // Region 1: the namespace and name of each class.
+            (
+                "classes",
+                T::sized(span("classes", "saveobj_properties"), T::array(class_entry(e), span("classes", "saveobj_properties").div(E::lit(16)))),
+            ),
+            // Region 2: the properties of the objects whose class saves them
+            // through a `saveobj` method, which is what a `string` does, under
+            // a single property called `any`.
+            ("saveobj_properties", T::sized(span("saveobj_properties", "objects"), T::repeat(property_list(e), Until::End))),
+            // Region 3: each object's class, and which of the two lists of
+            // properties its own are in.
+            ("objects", T::sized(span("objects", "properties"), T::array(object_entry(e), span("objects", "properties").div(E::lit(24))))),
+            // Region 4: the properties of every other object.
+            ("properties", T::sized(span("properties", "dynamic_properties"), T::repeat(property_list(e), Until::End))),
+            // Region 5: the objects that are an object's dynamic properties.
+            ("dynamic_properties", T::sized(span("dynamic_properties", "region_6"), T::repeat(dynamic_list(e), Until::End))),
+            // Regions 6 and 7 have only ever been seen empty or as zeros.
+            ("region_6", T::bytes(span("region_6", "region_7"))),
+            ("region_7", T::bytes(span("region_7", "end"))),
+        ],
+    )
+    .machinery(&["names_padding"])
+}
+
+/// The name an index into the table's names stands for, or nothing for
+/// nought.
+fn name_at(index: &str) -> T {
+    T::switch(
+        E::field(index),
+        vec![(0, T::text(StrLen::Fixed(E::lit(0)), Encoding::Ascii))],
+        T::computed_text(E::elem_within(&["names"], E::field(index).sub(E::lit(1)), &[])),
+    )
+}
+
+fn class_entry(e: Endian) -> T {
+    T::structure_named(
+        "Class",
+        "name",
+        "",
+        vec![
+            ("namespace_index", T::u32(e)),
+            ("name_index", T::u32(e)),
+            ("unknown", T::array(T::u32(e), E::lit(2))),
+            ("namespace", name_at("namespace_index")),
+            ("name", name_at("name_index")),
+        ],
+    )
+}
+
+/// One object. Only one of the two property ids is set: `saveobj_id` counts
+/// through the saved-object properties and `normal_id` through the others.
+/// `dependency_id` is the last object id this one depends on, which is how a
+/// nested object is found.
+fn object_entry(e: Endian) -> T {
+    let class = T::switch(
+        E::field("class_id"),
+        vec![(0, T::text(StrLen::Fixed(E::lit(0)), Encoding::Ascii))],
+        T::computed_text(E::elem_within(
+            &["names"],
+            E::elem_within(&["classes"], E::field("class_id"), &["name_index"]).sub(E::lit(1)),
+            &[],
+        )),
+    );
+    T::structure_named(
+        "Object",
+        "class",
+        "",
+        vec![
+            ("class_id", T::u32(e)),
+            ("unknown", T::array(T::u32(e), E::lit(2))),
+            ("saveobj_id", T::u32(e)),
+            ("normal_id", T::u32(e)),
+            ("dependency_id", T::u32(e)),
+            ("class", class),
+        ],
+    )
+}
+
+/// One object's properties: how many, each as a name, a kind and a value, and
+/// padding to a multiple of eight.
+fn property_list(e: Endian) -> T {
+    T::structure(
+        "PropertyList",
+        vec![
+            ("count", T::u32(e)),
+            ("properties", T::array(property(e), E::field("count"))),
+            ("padding", T::bytes(E::size_of("properties").add(E::lit(4)).pad_to(8).at_most(E::Remaining))),
+        ],
+    )
+    .machinery(&["padding"])
+}
+
+/// One property. What `value` is depends on the kind: for a property it is
+/// the index of the cell holding the value, counted from the first cell of
+/// `values`; for an attribute it is the value itself; and for an enumeration
+/// member it is an index into the names.
+fn property(e: Endian) -> T {
+    T::structure_named(
+        "Property",
+        "name",
+        "",
+        vec![
+            ("name_index", T::u32(e)),
+            ("kind", T::enumeration("PropertyKind", T::u32(e), &[(0, "enumeration member"), (1, "property"), (2, "attribute")])),
+            ("value", T::u32(e)),
+            ("name", name_at("name_index")),
+        ],
+    )
+}
+
+/// One object's dynamic properties, as the ids of the objects that hold them,
+/// padded to a multiple of eight.
+fn dynamic_list(e: Endian) -> T {
+    T::structure(
+        "DynamicProperties",
+        vec![
+            ("count", T::u32(e)),
+            ("object_ids", T::array(T::u32(e), E::field("count"))),
+            ("padding", T::bytes(E::size_of("object_ids").add(E::lit(4)).pad_to(8).at_most(E::Remaining))),
+        ],
+    )
+    .machinery(&["padding"])
 }
 
 // ---------------------------------------------------------------- level 4
@@ -819,6 +1258,48 @@ mod tests {
         assert_eq!(read(&v, &[fields.as_slice(), &[1]].concat()).0, "[1] bb");
         // The names are read one at a time, not as `a\0\0\0bb`.
         assert_eq!(read(&v, &[1, 0, 2, 3, 1, 2, 1]).1, "Str(\"bb\")");
+    }
+
+    /// A long-form `miINT32` element of one number, padded to sixteen bytes.
+    fn int32_bytes(n: i32) -> Vec<u8> {
+        let mut v = 5u32.to_le_bytes().to_vec();
+        v.extend(4u32.to_le_bytes());
+        v.extend(n.to_le_bytes());
+        v.extend([0; 4]);
+        v
+    }
+
+    #[test]
+    fn the_subsystem_offset_splits_the_elements_where_it_lands() {
+        // A variable, the subsystem, and a variable written after it. The
+        // subsystem is an array of bytes holding the eight-byte header of a
+        // MAT file with nothing after it.
+        let mut run = 2u32.to_le_bytes().to_vec();
+        run.extend(8u32.to_le_bytes());
+        run.extend([0, 1, b'I', b'M', 0, 0, 0, 0]);
+        let mut v = header_bytes(b"IM", [0, 1]);
+        let offset = (v.len() + 16) as u64;
+        v[116..124].copy_from_slice(&offset.to_le_bytes());
+        v.extend(int32_bytes(7));
+        v.extend(array_bytes(9, b"", &run));
+        v.extend(int32_bytes(9));
+        let fields = |v: &[u8]| {
+            let doc = Document::new(MemSource(v.to_vec()));
+            let mut ev = Evaluator::new(mat());
+            let n = ev.node(&doc, &[]).expect("root").child_count as usize;
+            (0..n).map(|i| ev.node(&doc, &[i]).expect("field").name).collect::<Vec<_>>()
+        };
+        assert_eq!(fields(&v), ["header", "body", "subsystem array", "after_subsystem"]);
+        assert_eq!(read(&v, &[1]).1, "Composite { count: 1 }", "one variable before it");
+        assert_eq!(read(&v, &[2, 2, 3, 0, 2, 1]).1, "Str(\"IM\")");
+        // An offset past the end of the file places nothing.
+        let mut past = v.clone();
+        past[116..124].copy_from_slice(&(v.len() as u64).to_le_bytes());
+        assert_eq!(fields(&past), ["header", "body"]);
+        // Nor does one that lands on an element that is not an array.
+        let mut number = v.clone();
+        number[116..124].copy_from_slice(&128u64.to_le_bytes());
+        assert_eq!(fields(&number), ["header", "body"]);
     }
 
     #[test]
